@@ -11,7 +11,7 @@ import { handleClientIntegrationCommand, handleGrokCommand, handleClaudeIntercep
 import { handleModelsRuntimeCommand } from "../../src/cli/models-runtime";
 import { handleProviderRuntimeCommand } from "../../src/cli/provider-runtime";
 import { providerQuotaLine } from "../../src/cli/account-extended";
-import { formatAccountTable } from "../../src/cli/account";
+import { cmdAccount, formatAccountTable } from "../../src/cli/account";
 import { handleConnectCommand } from "../../src/cli/connect";
 import { CAPABILITIES, capabilityInvocation } from "../../src/cli/capabilities";
 import { codexRestartLines, handleSystemCommand } from "../../src/cli/system-command";
@@ -540,6 +540,7 @@ describe("headless GUI parity CLI", () => {
       // for. Listed here so the parity sweep stays exhaustive rather than silently
       // skipping the endpoint.
       ["/api/github/star", "(none — GUI-only)"],
+      ["/api/oauth/accounts/probe", "ocx account probe"],
       ["/api/oauth", "ocx account"],
       // The unified pool-settings route (#695 wp5c). One path answers for every pool
       // kind, and `ocx account strategy` / `ocx account sticky` / `ocx account auto-switch`
@@ -552,6 +553,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/provider-", "ocx provider/models"],
       ["/api/selected-models", "ocx models"],
       ["/api/custom-models", "ocx models"],
+      ["/api/model-discovery/refresh", "ocx models discover"],
       ["/api/model", "ocx models"],
       // Forcing a public price-list refresh is a dashboard button. The route registry records
       // the CLI verb as owed (deferred-verb, owner structure/pricing.md).
@@ -680,6 +682,35 @@ describe("headless GUI parity CLI", () => {
       method: "PATCH",
       body: { baseUrl: "https://example.test/v1", apiKeyTransport: "bearer", disabled: true, liveModels: true },
     }]);
+  });
+
+  test("account probe routes one alias or the entire Antigravity roster through management", async () => {
+    const body = { provider: "google-antigravity" };
+    const receipt = { provider: body.provider, results: [{ accountId: "acct1", status: "permission_denied", httpStatus: 403, reason: "PERMISSION_DENIED", message: null }] };
+    const runtime = fakeRuntime(req => req.method === "GET" ? { accounts: [{ id: "acct1", alias: "Work" }] } : receipt);
+    const logs = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await cmdAccount(["probe", body.provider, "work", "--json"], runtime.deps)).toBe(0);
+      expect(JSON.parse(String(logs.mock.calls[0]?.[0]))).toEqual(receipt);
+      expect(await cmdAccount(["probe", body.provider], runtime.deps)).toBe(0);
+      expect(String(logs.mock.calls[1]?.[0])).toContain("HTTP 403 · PERMISSION_DENIED");
+      expect(runtime.requests).toEqual([
+        { method: "GET", path: "/api/oauth/accounts?provider=google-antigravity", body: null },
+        { method: "POST", path: "/api/oauth/accounts/probe", body: { ...body, accountId: "acct1" } },
+        { method: "POST", path: "/api/oauth/accounts/probe", body },
+      ]);
+    } finally { logs.mockRestore(); }
+  });
+
+  test("unsupported providers and ambiguous aliases never send a probe", async () => {
+    const runtime = fakeRuntime(() => ({ accounts: [{ id: "acct1", alias: "work" }, { id: "acct2", alias: "Work" }] }));
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await cmdAccount(["probe", "anthropic"], runtime.deps)).toBe(1);
+      expect(runtime.requests).toEqual([]);
+      expect(await cmdAccount(["probe", "google-antigravity", "work"], runtime.deps)).toBe(1);
+      expect(runtime.requests.map(request => request.method)).toEqual(["GET"]);
+    } finally { errors.mockRestore(); }
   });
 
   test.each(["on", "off"])("provider edit --xai-chat %s shares the GUI wire selector", async value => {

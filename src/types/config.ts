@@ -48,6 +48,8 @@ export interface OcxProtocolsConfig {
      * answered through the direct encoders, with no internal Responses body in either direction.
      */
     antigravityDirect?: boolean;
+    /** Preserve native Gemini payloads for concrete Antigravity OAuth routes on /v1beta. Default off. */
+    geminiNativeAntigravity?: boolean;
     /** Compare the dispatch plan with the observed path; never sends a second request. */
     shadowPlan?: boolean;
   };
@@ -1352,6 +1354,8 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
   codexPinnedTransientPolicy?: "hold" | "detour-new-threads";
   /** Opt-in: retain one Codex WebSocket per account and thread across turns. Default off. */
   codexWsReuseAcrossTurns?: boolean;
+  /** Opt-in native WS upload deltas; implies cross-turn reuse. Default off. */
+  codexWsIncrementalUpload?: boolean;
   /**
    * Opt-in provider-origin circuit threshold for proven pre-connection reachability failures.
    * Default 0 (disabled); range 0..20. The circuit never counts timeouts or HTTP responses.
@@ -1375,6 +1379,8 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
    * and every other destination are unchanged. Compression runs synchronously on the event loop.
    */
   upstreamRequestCompression?: "off" | "gzip" | "zstd";
+  /** Optional lossy shortening of historical native Codex images/tool text. */
+  upstreamHistorySlim?: "off" | "codex";
   /**
    * Opt-in ceiling, in bytes, on a decompressed INBOUND data-plane request body (#3573).
    *
@@ -1549,6 +1555,8 @@ export interface OcxComboConfig {
    */
   reasoningEffortMode?: OcxComboReasoningEffortMode;
   jevEffortMode?: import("./combo-jev-effort-mode").OcxComboJevEffortMode; // wire-effort owner on a `jev` combo; omitted = "decide"
+  capabilityPolicy?: import("./combo-capability-policy").OcxComboCapabilityPolicy; // omitted = "intersection"
+  onUnservable?: import("./combo-capability-policy").OcxComboOnUnservable; // `union` only; omitted = "degrade"
   /**
    * Disable image input even when every target supports it.
    * Omitted / `"auto"` keeps automatic capability derivation (default: enabled when

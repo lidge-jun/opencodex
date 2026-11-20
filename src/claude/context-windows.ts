@@ -13,6 +13,7 @@
 import { aliasForNative, aliasForRoute, currentClaudeAliasSpelling, legacyAliasForNative, legacyAliasForRoute, resolveAlias } from "./alias";
 import { desktop3pAlias } from "./desktop-3p";
 import { nativeOpenAiContextWindow, type CatalogModel, type NativeContextLimitsInput } from "../codex/catalog";
+import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
 import { ANTHROPIC_MODEL_CONTEXT_WINDOWS } from "../providers/registry/model-seeds";
 import type { OcxClaudeCodeConfig } from "../types";
 import { AUTO_COMPACT_WINDOW_DEFAULT, AUTO_CONTEXT_FLOOR, ONE_MILLION } from "./long-context";
@@ -20,13 +21,14 @@ import { AUTO_COMPACT_WINDOW_DEFAULT, AUTO_CONTEXT_FLOOR, ONE_MILLION } from "./
 export { AUTO_COMPACT_WINDOW_DEFAULT, AUTO_CONTEXT_FLOOR } from "./long-context";
 
 /**
- * The native id each Claude Code tier alias resolves to (2.1.296: `--model opus` sends
- * `claude-opus-5-5`, `sonnet` sends `claude-sonnet-5-5`, `fable` sends `claude-fable-5-1`).
- * Behind a gateway Claude Code accounts an unmarked id at 200k, so an unset tier slot is filled
- * with this id when the map marks it (#5755). A marked alias cannot stand in: Claude Code sends
- * `sonnet[1m]` upstream unresolved. Haiku has no entry; its 200k window never marks.
+ * Behind a gateway Claude Code accounts an unmarked id at 200k, so unset tier slots use
+ * concrete model ids when the map marks them (#5755). Claude Code sends a marked alias
+ * such as `sonnet[1m]` upstream unresolved. Haiku has no automatic fill.
  */
-const CLAUDE_CODE_NATIVE_TIERS = { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", fable: "claude-fable-5-1" } as const;
+const CLAUDE_CODE_NATIVE_TIERS = { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5" } as const;
+const FABLE_52_MODEL = "claude-fable-5-2";
+// Anthropic rejects Fable 5.2 with a Claude Code identity below this floor.
+const FABLE_52_MIN_CLAUDE_CODE = parseStrictSemver("2.1.290")!;
 
 /** Binary-verified accepted range for CLAUDE_CODE_AUTO_COMPACT_WINDOW (2.1.207: pSo=1e5, yDs=1e6). */
 export const AUTO_COMPACT_WINDOW_MIN = 100_000;
@@ -243,6 +245,24 @@ export interface ClaudeTierModels {
   fable?: string;
 }
 
+type ModelEnvConfig = AutoContextConfigSlice & {
+  model?: string;
+  smallFastModel?: string;
+  tierModels?: ClaudeTierModels;
+};
+
+/** Only probe if the installed CLI can affect the automatic Fable selection. */
+export async function probeClaudeCodeVersionForTierFill(
+  claudeCode: ModelEnvConfig | undefined,
+  windows: Record<string, number>,
+): Promise<string | null> {
+  if (claudeCode?.tierModels?.fable !== undefined || claudeCode?.contextAccounting === "200k" || !windows[FABLE_52_MODEL]) {
+    return null;
+  }
+  const { probeInstalledClaudeCodeVersion } = await import("./subagent-force-status");
+  return probeInstalledClaudeCodeVersion();
+}
+
 /**
  * The exact env map Claude Code consumes for model slots (audit R4#4):
  * ANTHROPIC_MODEL + the four tier defaults + the legacy small-fast alias.
@@ -250,9 +270,10 @@ export interface ClaudeTierModels {
  * value injected into BOTH haiku variables.
  */
 export function effectiveModelEnv(
-  claudeCode: { model?: string; smallFastModel?: string; tierModels?: ClaudeTierModels; autoContext?: boolean; autoCompactWindow?: number; maxContextTokens?: number; contextAccounting?: string } | undefined,
+  claudeCode: ModelEnvConfig | undefined,
   windows: Record<string, number>,
   autoOverride?: AutoContextMode,
+  claudeCodeVersion?: string | null,
 ): Record<string, string> {
   const out: Record<string, string> = {};
   const auto = autoOverride ?? resolveAutoContext(claudeCode);
@@ -270,7 +291,10 @@ export function effectiveModelEnv(
   set("ANTHROPIC_MODEL", claudeCode?.model);
   set("ANTHROPIC_DEFAULT_OPUS_MODEL", tier(claudeCode?.tierModels?.opus, CLAUDE_CODE_NATIVE_TIERS.opus));
   set("ANTHROPIC_DEFAULT_SONNET_MODEL", tier(claudeCode?.tierModels?.sonnet, CLAUDE_CODE_NATIVE_TIERS.sonnet));
-  set("ANTHROPIC_DEFAULT_FABLE_MODEL", tier(claudeCode?.tierModels?.fable, CLAUDE_CODE_NATIVE_TIERS.fable));
+  const installed = parseStrictSemver(claudeCodeVersion);
+  const fable = installed && compareStrictSemver(installed, FABLE_52_MIN_CLAUDE_CODE) >= 0
+    ? FABLE_52_MODEL : "claude-fable-5-1";
+  set("ANTHROPIC_DEFAULT_FABLE_MODEL", tier(claudeCode?.tierModels?.fable, fable));
   const effectiveHaiku = claudeCode?.tierModels?.haiku ?? claudeCode?.smallFastModel;
   set("ANTHROPIC_DEFAULT_HAIKU_MODEL", effectiveHaiku);
   set("ANTHROPIC_SMALL_FAST_MODEL", effectiveHaiku);

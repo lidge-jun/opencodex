@@ -205,6 +205,22 @@ describe("Claude account pool conditions", () => {
     expect(host.querySelector<HTMLInputElement>('input[aria-describedby="anthropic-pool-native-messages-help"]')!.checked).toBe(false);
   });
 
+  test("a native Messages edit preserves the loaded reset-near-weighted strategy", async () => {
+    const writes: unknown[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        writes.push(JSON.parse(String(init.body)));
+        return new Response(null, { status: 204 });
+      }
+      return Response.json({ enabled: true, kind: "anthropic", strategy: "reset-near-weighted" });
+    }) as typeof fetch;
+    const host = await mount(2);
+    expect(host.querySelector("#anthropic-pool-strategy")?.textContent).toContain("Weighted by nearest reset");
+    await act(async () => { nativeOf(host).click(); await flush(); });
+    expect(writes).toEqual([expect.objectContaining({ provider: "anthropic", strategy: "reset-near-weighted", nativeMessages: false })]);
+    expect(host.querySelector("#anthropic-pool-strategy")?.textContent).toContain("Weighted by nearest reset");
+  });
+
   test("native Messages toggle rolls back after a failed save and stays disabled after a failed load", async () => {
     stubPool({ enabled: true, nativeMessages: true }, 500);
     const host = await mount(2);

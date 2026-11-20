@@ -11,11 +11,13 @@ import { getDebugLogEntries, resetDebugLogBufferForTests } from "../../src/lib/d
 import { resetDebugSettingsForTests } from "../../src/lib/debug-settings";
 import { setDraining } from "../../src/server/lifecycle";
 import { startServer } from "../../src/server";
+import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 import { findAvailablePort } from "../../src/server/ports";
 import { readDisplaySafeErrorText } from "../../src/server/responses/core";
 import { formatPassthroughUpstreamError } from "../../src/server/responses/passthrough-error";
 import type { OcxConfig, OcxParsedRequest } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { redirectCanonicalCodexTo } from "../helpers/pool-retry-harness";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -23,21 +25,10 @@ const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const previousOcxDebug = process.env.OCX_DEBUG;
 const originalGlobalFetch = globalThis.fetch;
+const originalWebSocket = globalThis.WebSocket;
 const TEST_DIR = join(import.meta.dir, ".tmp-issue-452-empty-503");
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
-function redirectCanonicalCodexTo(baseUrl: string): void {
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    const url = new URL(requestUrl);
-    const prefix = "/backend-api/codex";
-    if (url.hostname === "chatgpt.com" && url.pathname.startsWith(prefix)) {
-      const target = new URL(`${url.pathname.slice(prefix.length)}${url.search}`, baseUrl);
-      return originalGlobalFetch(target, init);
-    }
-    return originalGlobalFetch(input, init);
-  }) as typeof fetch;
-}
 
 beforeEach(() => {
   isolatedCodexHome = installIsolatedCodexHome("ocx-issue-452-");
@@ -48,6 +39,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalGlobalFetch;
+  globalThis.WebSocket = originalWebSocket;
   setDraining(false);
   if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
@@ -234,7 +226,7 @@ async function withPoolPassthrough(
   });
   updateAccountQuota("pool-a", 10);
 
-  const server = startServer(0);
+  const server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
   try {
     await run(server.url.toString());
   } finally {

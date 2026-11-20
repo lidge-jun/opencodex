@@ -17,6 +17,10 @@ attempt-loss marker.
 `tests/usage/usage-client-attribution.test.ts` and
 `tests/usage/request-log-normalization.test.ts` cover those boundaries.
 
+A completed JEV decision stays on the parent usage row when the post-decision consent and scope
+recheck refuses, is cancelled or throws. Responses, translated Chat and translated Messages each finalize that row through
+their HTTP request logger.
+
 Request-log rows and usage.jsonl rows carry `requestBody` (#3023): `wireBytes` as received, the `encoding` (`identity`, `zstd`, `gzip` or `deflate`) and `decodedBytes`. `readBoundedJsonRequestBody` in `src/server/request-decompress.ts` records them in `src/server/request-body-facts.ts` once a body was read and decoded in full, into a holder keyed by the Request; `src/server/admitted-http-turn.ts` binds the holder of the request it hands to the handler to that turn's log context, so every admitted JSON data route records it and a route that reads no JSON body records nothing. `src/usage/request-body.ts` validates the field on every write and read; a row without it, or with a malformed one, keeps every other field, and a reader that predates the field drops it because `src/usage/log.ts` rebuilds rows from known fields. `/api/logs` and `ocx logs --json` show it as part of the row. Coverage: `tests/usage/request-body-log.test.ts`.
 
 `src/usage/source-filter.ts` defines app and device filters. A Codex filter includes recognized
@@ -197,6 +201,40 @@ newly scoped by that rule. `src/server/hub-usage.ts` binds a client-filtered dat
 key and emits a safe scope echo; `src/remote/hub-usage.ts` projects it without key IDs, and
 `src/client/hub-client.ts` rejects a missing or mismatched echo.
 
+## Credential recovery attempts
+
+`noteProviderAttemptSend` in `src/server/request-log.ts` closes a sent attempt before a
+credential recovery even when the provider and opaque account label are unchanged, such as a
+same-account OAuth refresh after 401. `credentialRecoveryStatus` in
+`src/server/request-log-attempt-recovery.ts` maps the closed credential-recovery roster to its
+401, 402, 403 or 429 refusal status; an already recorded upstream status takes precedence.
+The existing in-place split preserves the active object, keeps the refused send's usage on its
+sealed row and records the replacement send on a fresh row. The sealed tier outcome is a snapshot;
+the replacement retains the live adapter observer's outcome so response-tier confirmation updates
+only the replacement. `src/server/credential-recovery-attempt.ts` seals the observed refusal
+before a credential replay. If pacing or final admission refuses the replacement, finalization
+keeps the physical status and separately records the logical request outcome. Responses
+recovery publishes the rebuilt tier, reasoning, account and input estimate at physical dispatch.
+A combo preserves a sealed child refusal through success, failure and cancellation finalization.
+`src/server/responses/run-turn-execution.ts` uses a guarded receipt from the provider executor,
+the Cursor transport or the CLI spawn to bind the replacement and count its dispatch.
+CodeBuddy, Claude CLI and Qoder report sends through the shared runner after the spawn
+permit is consumed. The import-free `src/lib/executor-physical-send-receipt.ts` shares the
+final-admission receipt between the HTTP executor and adapter dispatch. Copilot continuation
+recovery checks the attempt identity and send count on the inference response, and pacing
+preserves that receipt when it wraps the body.
+`src/server/responses/compact.ts` creates its native attempt on the first dispatch receipt and
+seals a 401 before starting credential refresh.
+A Responses-to-Chat handoff carries this pending replay into translated dispatch and hosted
+sidecars. At replacement dispatch, `src/server/passive-route-linker.ts` resolves the passive Lab
+subject from the routed provider configuration, inbound wire and effective adapter. Matching
+policy and production adapters retain the resolved service-tier flags. A change to the request URL
+alone can keep the same subject.
+A recovery before the first send creates no extra row. Same-account waits and transport resends remain on the existing attempt.
+`tests/usage/key-attribution.test.ts` covers the split and non-split kinds; the loopback server
+case in `tests/server/server-google-antigravity-oauth-401-replay.test.ts` records separate 401
+and 200 rows for a same-account refresh.
+
 ## Anthropic pool account tag
 
 Anthropic pool attempts carry no `accountLogLabel`; the pool folds the account into the logged
@@ -209,3 +247,7 @@ and the request-log hydration keep only `p` plus six lowercase hex digits and dr
 Per-account summaries still key on `accountLogLabel` and ignore the tag
 (`tests/usage/request-log-anthropic-account-tag.test.ts`).
 Remote Link rows may carry an optional `link` object (transport, continuation, hashed thread and turn refs) while the link WebSocket feature is on; it is validated in `src/usage/link-log-fields.ts` and spread into the row, the persisted entry and hydration, and described in `structure/remote-link.md`.
+
+Opted-in native Gemini delivery uses `src/server/gemini-native-log.ts` for client and admission attribution,
+status and latency. It does not inspect source payloads or report token usage; see
+[Native Gemini Inbound](data-planes/gemini-native.md).

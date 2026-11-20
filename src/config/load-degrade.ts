@@ -1,4 +1,3 @@
-import { setCodexWsReuseAcrossTurns } from "./codex-ws-reuse-setting";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -63,6 +62,7 @@ import {
   spendSchema,
   telemetryConfigSchema,
   chatgptDesktopConfigIssue,
+  isValidCreditPriceUsd,
 } from "./schema/leaf-validators";
 import { hasWarnedInheritedFastWireConflict, markWarnedInheritedFastWireConflict } from "./warn-memo";
 
@@ -152,7 +152,6 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   if (nativeReasoningRetentionConfigError(rawParsed)) console.warn("⚠️  invalid nativeReasoningRetention disabled; model and account switch allowances remain off");
   if (workflowBudgetConfigError(rawParsed)) console.warn("⚠️  invalid workflowBudget ignored; the built-in workflow ceilings stay in force");
   if (routedCatalogDefaultsConfigError(rawParsed)) console.warn("⚠️  invalid routedCatalogDefaults ignored; routed catalog rows keep their derived values");
-  setCodexWsReuseAcrossTurns(validated.codexWsReuseAcrossTurns === true);
   const retentionWarning = degradedReasoningRetentionWarning(rawParsed, validated);
   if (retentionWarning) console.warn(retentionWarning);
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");
@@ -522,6 +521,24 @@ export function sanitizeModelCostsForLoad(parsed: unknown, warn: (message: strin
       delete p.modelCosts;
       warn(`⚠️  config.json providers.${safeProviderName}.modelCosts has no valid rows left — removing the overlay`);
     }
+  }
+}
+
+/**
+ * Load-time degradation for `providers.<name>.creditPriceUsd`, mirroring
+ * {@link sanitizeModelCostsForLoad}: an invalid hand-edited price is dropped with a warning
+ * instead of failing the parse and falling back to defaults. The schema still rejects it on writes.
+ */
+export function sanitizeCreditPriceForLoad(parsed: unknown, warn: (message: string) => void = console.warn): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const providers = (parsed as Record<string, unknown>).providers;
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
+  for (const provider of Object.values(providers as Record<string, unknown>)) {
+    if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
+    const p = provider as Record<string, unknown>;
+    if (p.creditPriceUsd === undefined || isValidCreditPriceUsd(p.creditPriceUsd)) continue;
+    delete p.creditPriceUsd;
+    warn("⚠️  config.json provider has an invalid creditPriceUsd — ignoring the credit price");
   }
 }
 

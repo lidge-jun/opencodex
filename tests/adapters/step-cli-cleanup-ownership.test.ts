@@ -1,0 +1,409 @@
+import { beforeAll, expect, spyOn, test } from "bun:test";
+import * as childProcess from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PassThrough } from "node:stream";
+import { promisify } from "node:util";
+import { killWindowsProcessTreeAsync } from "../../src/adapters/coding-agent/process-tree";
+import { handleRuntimeEvent } from "../../src/adapters/step-cli/events";
+import { beginTurn, rememberQuery } from "../../src/adapters/step-cli/registry";
+import { StepSessionPool } from "../../src/adapters/step-cli/session-pool";
+import type { StepSessionDeps, StepSessionOptions } from "../../src/adapters/step-cli/session";
+import type { AdapterEvent } from "../../src/types";
+import {
+  registerAsyncOptionalShutdownHook,
+  resetOptionalShutdownHooksForTests,
+  runOptionalShutdownHooks,
+} from "../../src/lib/optional-shutdown-hooks";
+import { fixturePath } from "../helpers/repo-root";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { event } from "../helpers/step-cli-ownership";
+
+function options(cwd: string): StepSessionOptions {
+  return { binary: process.execPath, args: [], env: { PATH: process.env.PATH ?? "",
+    ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) }, cwd,
+    handshakeTimeoutMs: 500, requestTimeoutMs: 500, reverseRequestHoldMs: 500,
+    idleTimeoutMs: 60_000, killGraceMs: 30 };
+}
+
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
+}
+
+function terminateNativeFixture(pid: number): void {
+  if (!alive(pid)) return;
+  if (process.platform === "win32") {
+    execFileSync(`${process.env.SystemRoot}\\System32\\taskkill.exe`, ["/PID", String(pid), "/T", "/F"],
+      { windowsHide: true, timeout: 5_000, stdio: "pipe" });
+  } else process.kill(pid, "SIGTERM");
+}
+
+async function waitForNativeTreeExit(pids: number[], exits: Promise<void>[]): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  // On POSIX, the direct child's exit event is the reaping receipt. Windows taskkill can
+  // remove the tree while Bun still retains the handle and has not delivered the event.
+  if (process.platform !== "win32") {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([Promise.all(exits), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("native fixture child did not exit")), 5_000);
+      })]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  const remaining = () => pids.filter(alive);
+  for (let live = remaining(); live.length; live = remaining()) {
+    if (Date.now() >= deadline) throw new Error(`native fixture PIDs still present: ${live.join(", ")}`);
+    await Bun.sleep(10);
+  }
+}
+
+async function nativePool(recover: boolean) {
+  const cwd = await mkdtemp(join(tmpdir(), "ocx-step-cleanup-owned-"));
+  const worker = join(cwd, "worker.ts"), parent = join(cwd, "parent.ts");
+  const pidFile = join(cwd, "pids.json"), dispatcher = join(cwd, "step.cmd");
+  await writeFile(worker, "setInterval(() => {}, 1000);\n");
+  await writeFile(parent, `
+    import { spawn } from "node:child_process";
+    import { writeFileSync, renameSync } from "node:fs";
+    const worker = spawn(process.execPath, [process.argv[2]], { stdio: "ignore", windowsHide: true });
+    if (process.platform !== "win32") {
+      // Reap the grandchild before the parent exits, even where PID 1 never reaps orphans.
+      const keepAlive = setInterval(() => {}, 1000);
+      process.on("SIGTERM", () => worker.kill("SIGKILL"));
+      worker.once("exit", () => { clearInterval(keepAlive); process.removeAllListeners("SIGTERM"); });
+    } else {
+      setInterval(() => {}, 1000);
+    }
+    const pidFile = process.argv[3];
+    writeFileSync(pidFile + ".tmp", JSON.stringify({ parent: process.pid, worker: worker.pid }));
+    renameSync(pidFile + ".tmp", pidFile);
+  `);
+  await writeFile(dispatcher, `@echo off\r\n"${process.execPath}" "${parent}" "${worker}" "${pidFile}"\r\n`);
+  const roots: number[] = [];
+  const children: ChildProcess[] = [];
+  const exits: Promise<void>[] = [];
+  let pids: { parent: number; worker: number } | undefined;
+  let attempts = 0;
+  const pool = new StepSessionPool({ openCodexHome: cwd, idleTimeoutMs: 60_000,
+    buildOptions: () => ({ ...options(cwd), binary: process.platform === "win32" ? dispatcher : process.execPath,
+      args: process.platform === "win32" ? [] : [parent, worker, pidFile] }) }, { onEvent: () => {} }, {
+    platform: "win32",
+    spawn: (file, args, opts) => {
+      const child = spawn(file, args, opts);
+      children.push(child);
+      roots.push(child.pid!);
+      exits.push(new Promise<void>(resolve => { child.once("exit", () => resolve()); }));
+      return child;
+    },
+    killWindowsProcessTree: async pid => {
+      attempts++;
+      if (!recover || attempts === 1) {
+        throw Object.assign(new Error("injected taskkill spawn failure"), { code: "ENOENT", syscall: "spawn taskkill.exe" });
+      }
+      if (process.platform === "win32") await killWindowsProcessTreeAsync(pid);
+      else terminateNativeFixture(pid);
+    },
+  });
+  const ref = { handle: "same-owned-caller", sessionId: "" };
+  const session = await pool.open(ref);
+  const waitForTreeExit = () => waitForNativeTreeExit([...new Set([
+    ...roots, ...(pids ? [pids.parent, pids.worker] : []),
+  ])], exits);
+  const dispose = async () => {
+    try {
+      for (const pid of roots) terminateNativeFixture(pid);
+      await waitForTreeExit();
+    } finally {
+      // Failed adapter cleanup intentionally retains the child and its stdio handles.
+      for (const child of children) {
+        child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy(); child.unref();
+      }
+      await pool.closeAll().catch(() => {});
+    }
+  };
+  try {
+    const deadline = Date.now() + 10_000;
+    while (!pids && Date.now() < deadline) {
+      try { pids = JSON.parse(await readFile(pidFile, "utf8")); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      if (!pids) await Bun.sleep(10);
+    }
+    if (!pids) throw new Error("native fixture did not publish its descendant PIDs");
+    expect(alive(pids.parent)).toBe(true);
+    expect(alive(pids.worker)).toBe(true);
+    return { pool, session, ref, roots, pids, attempts: () => attempts, waitForTreeExit, dispose };
+  } catch (error) { await dispose(); throw error; }
+}
+
+test("failed native tree cleanup quarantines the handle after bounded retries", async () => {
+  const fixture = await nativePool(false);
+  try {
+    const closing = fixture.session.close();
+    await expect(closing).rejects.toThrow(/quarantined/i);
+    expect(fixture.attempts()).toBe(2);
+    expect(fixture.pool.size).toBe(1);
+    expect(alive(fixture.roots[0]!)).toBe(true);
+    expect(alive(fixture.pids.worker)).toBe(true);
+    await expect(fixture.pool.open(fixture.ref)).rejects.toThrow(/cleanup|quarantined/i);
+    expect(fixture.roots).toHaveLength(1);
+    expect(fixture.session.close()).toBe(closing);
+    await expect(fixture.pool.closeAll()).rejects.toThrow(/quarantined/i);
+    expect(fixture.attempts()).toBe(2);
+  } finally { await fixture.dispose(); }
+}, 30_000);
+
+test("a transient taskkill launch failure recovers before releasing the handle", async () => {
+  const fixture = await nativePool(true);
+  try {
+    await fixture.session.close();
+    expect(fixture.attempts()).toBe(2);
+    expect(fixture.pool.size).toBe(0);
+    await fixture.waitForTreeExit();
+    for (const pid of [fixture.roots[0]!, fixture.pids.parent, fixture.pids.worker]) expect(alive(pid)).toBe(false);
+  } finally { await fixture.dispose(); }
+}, 30_000);
+
+test.each([
+  ["wrapper exited before cleanup", 0],
+  ["wrapper exited during taskkill", 1],
+  ["taskkill timed out without a wrapper exit event", 1],
+] as const)("Windows cleanup quarantines when %s", async (scenario, expectedCalls) => {
+  const cwd = await mkdtemp(join(tmpdir(), "ocx-step-windows-ownership-"));
+  const child = Object.assign(new EventEmitter(), {
+    pid: process.pid, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+    exitCode: null, signalCode: null,
+  });
+  const calls: number[] = [];
+  const pool = new StepSessionPool({ openCodexHome: cwd, idleTimeoutMs: 60_000, buildOptions: () => options(cwd) },
+    { onEvent: () => {} }, {
+      platform: "win32",
+      spawn: () => child as unknown as ChildProcess,
+      killWindowsProcessTree: async pid => {
+        calls.push(pid);
+        if (scenario === "wrapper exited during taskkill") child.emit("exit", 0, null);
+        throw Object.assign(new Error("inert taskkill timed out"), { killed: true, signal: "SIGKILL" });
+      },
+    });
+  const ref = { handle: "windows-ownership", sessionId: "" };
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const session = await pool.open(ref);
+    if (expectedCalls === 0) child.emit("exit", 0, null);
+    const closing = session.close();
+    const [receipt] = await Promise.allSettled([closing]);
+    expect(calls).toEqual(Array(expectedCalls).fill(child.pid));
+    expect(receipt).toMatchObject({ status: "rejected", reason: { code: "step_cli_cleanup_failed" } });
+    expect(session.close()).toBe(closing);
+    expect(pool.size).toBe(1);
+    expect(pool.get(ref)).toBeUndefined();
+    await expect(pool.open(ref)).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+    await expect(pool.closeAll()).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+    expect(warn.mock.calls).toEqual([
+      ["StepCode Windows process cleanup is incomplete because ownership of the wrapper PID could not be confirmed."],
+    ]);
+  } finally {
+    await pool.closeAll().catch(() => {});
+    warn.mockRestore();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+async function controlledPool(idle = false) {
+  const cwd = await mkdtemp(join(tmpdir(), "ocx-step-cleanup-drain-"));
+  let signal!: () => void, idleCallback: (() => void) | undefined, now = 0;
+  const killing = new Promise<void>(resolve => { signal = resolve; });
+  const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(),
+    stderr: new PassThrough(), exitCode: null, signalCode: null, kill: () => { signal(); return true; } });
+  const deps: StepSessionDeps = { spawn: () => child as unknown as ChildProcess };
+  if (idle) Object.assign(deps, { now: () => now,
+    setTimeout: ((callback: () => void) => { idleCallback = callback; return 1; }) as unknown as typeof setTimeout,
+    clearTimeout: (() => {}) as unknown as typeof clearTimeout });
+  const pool = new StepSessionPool({ openCodexHome: cwd, idleTimeoutMs: 60_000,
+    buildOptions: () => options(cwd) }, { onEvent: () => {} }, deps);
+  const ref = { handle: "previous-close", sessionId: "" };
+  const session = await pool.open(ref);
+  return { cwd, pool, ref, session, child, killing, expire: () => { now = 60_001; idleCallback!(); } };
+}
+
+for (const idle of [false, true]) {
+  test(`shutdown drains cleanup already started by ${idle ? "the idle timer" : "the adapter"}`, async () => {
+    const fixture = await controlledPool(idle);
+    if (idle) fixture.expire();
+    const cleanup = fixture.session.close();
+    await fixture.killing;
+    let settled = false;
+    const drain = fixture.pool.closeAll().then(() => { settled = true; });
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(settled).toBe(false);
+      expect(fixture.pool.size).toBe(1);
+      await expect(fixture.pool.open(fixture.ref)).rejects.toThrow(/closing/);
+    } finally { fixture.child.emit("close", 0, "SIGTERM"); await Promise.all([cleanup, drain]); }
+    expect(settled).toBe(true);
+    expect(fixture.pool.size).toBe(0);
+  });
+}
+
+test("shutdown propagates a cleanup failure that started before the drain", async () => {
+  const fixture = await controlledPool();
+  fixture.child.kill = () => { throw new Error("injected cleanup failure"); };
+  const cleanup = fixture.session.close();
+  await expect(cleanup).rejects.toThrow();
+  try {
+    await expect(fixture.pool.closeAll()).rejects.toThrow(/cleanup|quarantined/i);
+    expect(fixture.pool.size).toBe(1);
+  } finally { fixture.child.emit("close", 0, "SIGTERM"); }
+});
+
+test("a terminal event delivers done once and leaves failed cleanup to the pool", async () => {
+  const { cwd, pool, ref, session, child } = await controlledPool();
+  child.kill = () => { throw new Error("injected cleanup failure"); };
+  const endInput = spyOn(session, "endInput").mockRejectedValue(new Error("injected input-end failure"));
+  const close = spyOn(session, "close");
+  const events: AdapterEvent[] = [];
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    beginTurn(session, { ref, pool, emit: event => events.push(event), settle: () => {},
+      emittedNames: new Map(), catalogKey: "test" });
+    rememberQuery(session, "q_1");
+    const terminal = event("q_1", { type: "status", status: "turn_complete" });
+    handleRuntimeEvent(session, terminal);
+    handleRuntimeEvent(session, terminal);
+    expect(events.map(event => event.type)).toEqual(["done"]);
+    expect(endInput).toHaveBeenCalledTimes(1);
+    expect(endInput).toHaveBeenCalledWith("q_1");
+
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(close).toHaveBeenCalledTimes(1);
+    await expect(session.close()).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+    expect(pool.get(ref)).toBeUndefined();
+    await expect(pool.open(ref)).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+    await expect(pool.closeAll()).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+
+    // Let the runtime report any rejection derived from the already-settled cleanup receipt.
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    close.mockRestore();
+    endInput.mockRestore();
+    child.emit("close", 0, null);
+    await pool.closeAll().catch(() => {});
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("a closing handle refuses replacement until cleanup is confirmed", async () => {
+  const fixture = await controlledPool();
+  const cleanup = fixture.session.close();
+  await fixture.killing;
+  let released = false;
+  fixture.session.onExit(() => { released = true; });
+  try {
+    expect(fixture.pool.size).toBe(1);
+    expect(released).toBe(false);
+    await expect(fixture.pool.open(fixture.ref)).rejects.toThrow(/cleanup|closing/i);
+  } finally { fixture.child.emit("close", 0, "SIGTERM"); await cleanup; await fixture.pool.closeAll(); }
+  expect(released).toBe(true);
+});
+
+async function mockedWindowsPool(count: number, terminate: () => Promise<void>) {
+  const cwd = await mkdtemp(join(tmpdir(), "ocx-step-async-cleanup-"));
+  const children = Array.from({ length: count }, () => Object.assign(new EventEmitter(), {
+    // Only the PID's liveness is probed. The injected taskkill never signals the test runner.
+    pid: process.pid, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+    exitCode: null, signalCode: null,
+  }));
+  let spawned = 0;
+  let killed = 0;
+  const pool = new StepSessionPool({ openCodexHome: cwd, idleTimeoutMs: 60_000,
+    buildOptions: () => options(cwd) }, { onEvent: () => {} }, {
+    platform: "win32",
+    spawn: () => children[spawned++] as unknown as ChildProcess,
+    killWindowsProcessTree: () => {
+      // The wrapper can close before taskkill confirms that its descendants are gone.
+      children[killed++]!.emit("close", 0, null);
+      return terminate();
+    },
+  });
+  for (let i = 0; i < count; i++) await pool.open({ handle: String(i), sessionId: "" });
+  return { pool, killed: () => killed };
+}
+
+test("the async Windows helper bounds taskkill and rejects a failed tree receipt", async () => {
+  type Complete = (error: Error | null) => void;
+  let complete!: Complete;
+  const exec = spyOn(childProcess, "execFile").mockImplementation((
+    (_file: string, _args: string[], _options: object, callback: Complete) => {
+      complete = callback;
+      return new EventEmitter() as ChildProcess;
+    }
+  ) as typeof execFile);
+  try {
+    const result = killWindowsProcessTreeAsync(4_294_967_295);
+    expect(exec).toHaveBeenCalledWith(
+      expect.stringMatching(/\\System32\\taskkill\.exe$/i),
+      ["/PID", "4294967295", "/T", "/F"],
+      { windowsHide: true, timeout: 5_000, killSignal: "SIGKILL" },
+      expect.any(Function),
+    );
+    const failure = new Error("taskkill fixture timed out");
+    complete(failure);
+    await expect(result).rejects.toBe(failure);
+  } finally {
+    exec.mockRestore();
+  }
+});
+
+test("the shutdown hook times out while a Windows tree termination receipt is pending", async () => {
+  const receipt = Promise.withResolvers<void>();
+  const { pool, killed } = await mockedWindowsPool(1, () => receipt.promise);
+  resetOptionalShutdownHooksForTests();
+  registerAsyncOptionalShutdownHook("step-cli-fixture", () => pool.closeAll());
+  try {
+    expect(await runOptionalShutdownHooks({ deadlineMs: Date.now() + 5 })).toBe(false);
+    expect(killed()).toBe(1);
+    expect(pool.size).toBe(1);
+  } finally {
+    receipt.resolve();
+    await pool.closeAll();
+    resetOptionalShutdownHooksForTests();
+  }
+  expect(pool.size).toBe(0);
+});
+
+test("shutdown starts multiple Windows tree kills with bounded parallelism", async () => {
+  const release = Promise.withResolvers<void>();
+  const { pool, killed } = await mockedWindowsPool(6, () => release.promise);
+  const closing = pool.closeAll();
+  try {
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(killed()).toBe(4);
+  } finally {
+    release.resolve();
+    await closing;
+  }
+  expect(killed()).toBe(6);
+  expect(pool.size).toBe(0);
+});
+
+const registryFixture = fixturePath("step-cli-cleanup-registry.ts");
+beforeAll(async () => {
+  await warmModuleGraph({ graph: "step-cli-cleanup-registry", entry: registryFixture });
+}, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
+test("clearing the registry preserves quarantined pool ownership", async () => {
+  // The process isolates a deliberately retained registry; its deadline must precede the test's.
+  const { stdout } = await promisify(execFile)(process.execPath, [registryFixture],
+    { env: process.env, encoding: "utf8", windowsHide: true, timeout: INTERNAL_DEADLINE_MS });
+  expect(JSON.parse(stdout)).toEqual({ clearRejected: true, samePool: true, replacementRejected: true });
+}, SPAWN_BUDGET_MS);

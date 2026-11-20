@@ -1,5 +1,6 @@
 import { hasUnreadableEncryptedAgentTask, sanitizeEncryptedContentInPlace } from "../../src/server/responses/encrypted-payload";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as retry from "../../src/lib/upstream-retry";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { warnAgentTaskRecoveryStartup } from "../../src/server";
 import {
@@ -1498,23 +1499,24 @@ describe("agent task recovery transient retry (#3661)", () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
-  test("a Retry-After inside the deadline is honoured as a floor, not capped", async () => {
-    let fetches = 0;
-    let firstAt = 0;
-    let secondAt = 0;
-    caseFixture.stub((async () => {
-      fetches += 1;
-      if (fetches === 1) {
-        firstAt = Date.now();
-        return new Response("private failure", { status: 503, headers: { "retry-after": "2.5" } });
-      }
-      secondAt = Date.now();
-      return new Response(recoverySse("Recovered after outage."));
-    }) as typeof fetch);
-    expect(await recoverEncryptedAgentTaskWithResult(req(), encryptedInput(), { retries: 1 }, routedConfig()))
-      .toEqual({ recovered: true });
-    expect(fetches).toBe(2);
-    // 2.5 s exceeds RECOVERY_RETRY_MAX_DELAY_MS (2 s), so a capped wait would resend sooner.
-    expect(secondAt - firstAt).toBeGreaterThanOrEqual(2_400);
-  }, 10_000);
+  test.each([
+    ["2.5", 2_500],
+    ["5.0", 5_000],
+  ] as const)("agent recovery honors a fractional Retry-After of %s seconds", async (header, delay) => {
+    const sleep = spyOn(retry, "sleepWithAbort").mockResolvedValue(undefined);
+    const random = spyOn(Math, "random").mockReturnValue(0.5);
+    try {
+      let fetches = 0;
+      caseFixture.stub((async () => ++fetches === 1
+        ? new Response("private failure", { status: 503, headers: { "retry-after": header } })
+        : new Response(recoverySse("Recovered after outage."))) as typeof fetch);
+      expect(await recoverEncryptedAgentTaskWithResult(req(), encryptedInput(), { retries: 1 }, routedConfig()))
+        .toEqual({ recovered: true });
+      expect(fetches).toBe(2);
+      expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([delay]);
+    } finally {
+      random.mockRestore();
+      sleep.mockRestore();
+    }
+  });
 });

@@ -5,14 +5,16 @@ import { foldUsageAppRows, MAX_PARTITION_APP_KEYS, usageAppIdentity, usageAppKey
 import { isLegacyCodexUsage, matchesUsageSource, snapshotConfiguredKeyIds, type UsageSourceFilter } from "./source-filter";
 import type { UsageTimeWindow } from "./time-range";
 import { isUnresolvedRequestedModel, usageModelPriceOptions } from "./model-identity";
+import { cacheObservationFromUsage, cacheTokensFromUsage } from "./cache-provenance";
 import {
-  classifyCacheTelemetryProvenance,
   isCodexUsageAccountLogLabel,
   type CacheTelemetryProvenance,
   type PersistedUsageEntry,
   type UsageStatus,
 } from "./log";
 import { type AttemptCostEstimate, type CostEstimate, estimateAttemptCost, estimateRequestCost, isMeasuredStatus, serviceTierContext, type ServiceTierContext, tokensPerSecond } from "./cost";
+
+export { cacheObservationFromUsage, cacheTokensFromUsage } from "./cache-provenance";
 
 /**
  * Canonical range members. The warm-up loop in the management usage route
@@ -253,44 +255,6 @@ export interface EntryCostInfo {
   attemptEstimates?: (AttemptCostEstimate | null)[];
   costTotal: number;
   isPriced: boolean;
-}
-
-export function cacheTokensFromUsage(usage?: PersistedUsageEntry["usage"]): {
-  read: number | undefined;
-  creation: number | undefined;
-  hasCacheTelemetry: boolean;
-} {
-  if (!usage) return { read: undefined, creation: undefined, hasCacheTelemetry: false };
-  const creation = usage.cacheCreationInputTokens;
-  const read = typeof usage.cacheReadInputTokens === "number"
-    ? usage.cacheReadInputTokens
-    : typeof usage.cachedInputTokens === "number" && typeof creation === "number"
-      ? Math.max(0, usage.cachedInputTokens - creation)
-      : usage.cachedInputTokens;
-  const hasCacheTelemetry = typeof usage.cachedInputTokens === "number"
-    || typeof usage.cacheReadInputTokens === "number"
-    || typeof usage.cacheCreationInputTokens === "number";
-  return { read, creation, hasCacheTelemetry };
-}
-
-/**
- * Cache tokens plus the provenance that says whether they may be averaged.
- *
- * A persisted `cacheProvenance` wins; a row written before the field existed is reconstructed
- * from its own shape, which reproduces the previous reading exactly (telemetry present is
- * observed, absent is unknown) so historical rows do not change meaning. Only `observed` reaches
- * a hit-rate denominator: a synthesized zero was emitted for wire compatibility and an unknown
- * was never measured, and averaging either as a zero is how a cold pool reports a warm cache.
- */
-export function cacheObservationFromUsage(
-  usage: PersistedUsageEntry["usage"],
-  provenance: CacheTelemetryProvenance | undefined,
-): { read: number | undefined; creation: number | undefined; provenance: CacheTelemetryProvenance } {
-  const { read, creation, hasCacheTelemetry } = cacheTokensFromUsage(usage);
-  // A row cannot have observed what it does not carry, so a stored label never opens the
-  // denominator for a record with no cache fields in it.
-  if (!usage || !hasCacheTelemetry) return { read, creation, provenance: "unknown" };
-  return { read, creation, provenance: provenance ?? classifyCacheTelemetryProvenance(usage) };
 }
 
 export function calculateCacheHitRate(

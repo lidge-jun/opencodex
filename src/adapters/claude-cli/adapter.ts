@@ -184,6 +184,7 @@ export function withClaudeLoginHint(emit: (event: AdapterEvent) => void): (event
 export function createClaudeCliAdapter(provider: OcxProviderConfig, deps: ClaudeCliAdapterDeps = {}): ProviderAdapter {
   return {
     name: "claude-cli",
+    reportsPhysicalSends: true,
 
     buildRequest(): AdapterRequest {
       return { url: provider.baseUrl, method: "POST", headers: {}, body: "" };

@@ -82,6 +82,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   modelMaxOutputTokens: "record",
   modelCosts: "record",
   priceMultiplier: "none",
+  creditPriceUsd: "none",
   autoReviewModel: "none",
   autoReviewModelOverrides: "record",
   headers: "none",

@@ -422,7 +422,7 @@ The history read API reports a median effective token estimate and interval samp
 
 Live bindings obey the cache-affinity release policy: `pool.cacheAffinity` is on by default, so threshold crossing alone retains a healthy account. A bound thread that does leave may move only onto an account with genuine quota headroom and strictly lower usage. Manual preference, scoped health and shared-cursor guards remain authoritative. Set the flag false to restore threshold rebinding of bound tasks, except for a conversation carrying live uploaded-file references. Independent `spark`/`reserve` quota scopes resolve reset-first to existing quota selection because shared reset timestamps do not describe those windows. The configured value stays unchanged.
 
-The Codex parser in `src/oauth/pool-kernel.ts` is reexported by the compatibility facade and used by both `/api/pool/settings` and the legacy Codex settings route. Generic and Anthropic parsers reject reset-first. The dashboard offers it only for Codex; API, CLI and translated guides preserve the same contract.
+The Codex parser in `src/oauth/pool-kernel.ts` is reexported by the compatibility facade and used by both `/api/pool/settings` and the legacy Codex settings route. The dashboard offers reset-first only for Codex. Codex and Anthropic also support [reset-near-weighted](reset-near-weighted.md) for new assignments.
 
 The account-pool strategy control and `ocx account pool get openai strategy` summarize how the
 configured threshold applies to the active strategy. Manual-switch warnings use the routing usage

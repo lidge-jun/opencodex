@@ -14,7 +14,7 @@ const PROVIDER_KEY = "provider-fixture-key";
 const saved = { home: process.env.OPENCODEX_HOME, data: process.env.OPENCODEX_API_AUTH_TOKEN, admin: process.env.OPENCODEX_ADMIN_AUTH_TOKEN };
 let home = "";
 let mode: "text" | "tools" | "error400" = "text";
-let seen: { auth: string | null; url: string; body: Record<string, unknown> }[] = [];
+let seen: { auth: string | null; url: string; headers: Headers; body: Record<string, unknown> }[] = [];
 let upstream: ReturnType<typeof Bun.serve>;
 
 const chunk = (choices: unknown[], extra: Record<string, unknown> = {}) =>
@@ -24,7 +24,7 @@ beforeAll(() => {
   upstream = Bun.serve({ port: 0, async fetch(req) {
     if (req.method === "GET") return Response.json({ object: "list", data: [{ id: "m1", object: "model" }] });
     const body = await req.json() as Record<string, unknown>;
-    seen.push({ auth: req.headers.get("authorization"), url: req.url, body });
+    seen.push({ auth: req.headers.get("authorization"), url: req.url, headers: req.headers, body });
     if (mode === "error400") return Response.json({ error: { message: "fixture upstream rejected the request", type: "invalid_request_error" } }, { status: 400 });
     const usage = { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 };
     const toolCall = { id: "call_fixture", type: "function", function: { name: "lookup", arguments: "{\"q\":\"x\"}" } };
@@ -97,7 +97,7 @@ describe("Gemini-compatible inbound routes", () => {
     await withServer(async base => {
       const list = await fetch(new URL("/v1beta/models", base), { headers: googKey });
       expect(list.status).toBe(200);
-      expect(await list.json()).toEqual({ models: [{ name: "models/fx/m1", displayName: "fx/m1", supportedGenerationMethods: ["generateContent", "streamGenerateContent"] }] });
+      expect(await list.json()).toEqual({ models: [{ name: "models/fx/m1", displayName: "fx/m1", supportedGenerationMethods: ["generateContent", "streamGenerateContent", "countTokens"] }] });
       for (const path of ["/v1beta/models/fx/m1", "/v1beta/models/models/fx/m1", "/v1beta/models/fx%2Fm1"]) {
         const one = await fetch(new URL(path, base), { headers: googKey });
         expect(one.status).toBe(200);
@@ -125,6 +125,28 @@ describe("Gemini-compatible inbound routes", () => {
       await Bun.sleep(20);
       expect(newRows()).toHaveLength(1);
       expect(newRows()[0]!.status).toBe(200);
+    });
+  });
+
+  test("native ingress keeps ACP turn labels out of other providers' requests", async () => {
+    const metadata = JSON.stringify({ request_kind: "memory" });
+    const headers = { "x-openai-memgen-request": "true", "x-codex-turn-metadata": metadata };
+    await withServer(async base => {
+      const gemini = await post(base, "/v1beta/models/fx/m1:generateContent",
+        request({ client_metadata: { "x-codex-turn-metadata": metadata } }), { ...googKey, ...headers });
+      expect(gemini.status).toBe(200);
+      await gemini.text();
+
+      const ollama = await post(base, "/api/generate", { model: "fx/m1", prompt: "hi", stream: false },
+        { "x-opencodex-api-key": DATA_TOKEN, ...headers });
+      expect(ollama.status).toBe(200);
+      await ollama.text();
+
+      expect(seen).toHaveLength(2);
+      for (const upstreamRequest of seen) {
+        for (const name of Object.keys(headers)) expect(upstreamRequest.headers.has(name)).toBe(false);
+        expect(upstreamRequest.body).not.toHaveProperty("client_metadata");
+      }
     });
   });
 
@@ -257,7 +279,8 @@ describe("Gemini-compatible inbound routes", () => {
 
   test("unsupported methods answer 501 and wrong HTTP methods 405", async () => {
     await withServer(async base => {
-      for (const method of ["countTokens", "embedContent", "batchEmbedContents"]) {
+      // countTokens is served (tests/server/server-gemini-inbound-fidelity.test.ts); the embed methods are not.
+      for (const method of ["embedContent", "batchEmbedContents"]) {
         const res = await post(base, `/v1beta/models/fx/m1:${method}`, {});
         expect(res.status).toBe(501);
         expect(await res.json()).toMatchObject({ error: { code: 501, status: "UNIMPLEMENTED" } });

@@ -58,6 +58,49 @@ rates, compatibility, Combo and Fast/Priority behavior.
 It also verifies Automatic Haiku overrides at 99,999/100,000/100,001 inclusive prompt tokens,
 including cache reads/writes and the inherited catalog band for both Anthropic OAuth pools.
 
+## Credit-billed providers
+
+A provider that bills credits reports a measured count instead of a token allocation, so
+`src/usage/credit-billing.ts` owns the bounds and the billing basis that `src/usage/cost.ts`
+attaches to an estimate. `providers.<name>.creditPriceUsd` is bounded to `0..1_000_000` by the
+same predicate the config schema and load degradation use; a single attempt may report at most
+`1_000_000_000` credits, and token pricing allows at most `1_000_000_000_000` tokens per bucket.
+Bounding only one factor is not enough: `1e308 x 1e308` is `Infinity`, which `JSON.stringify`
+writes as `null`.
+
+A cost estimate therefore carries an optional `billing` field. `{ source: "provider-credits",
+providerCredits, creditPriceUsd }` means the total is `providerCredits x creditPriceUsd` and the
+four token component fields carry no allocation; a Combo reports it only when every attempt shared
+one credit price, and reports `{ source: "mixed" }` when the attempts were billed differently, so
+the parent total is real but its split exists only per attempt. Absent `billing` means a token
+price. A retained valid reading on an older row can use the currently configured credit rate.
+Credit estimates require a model price match and measured usage status. An invalid token
+breakdown leaves `tokens: null` on a valid credit estimate and does not affect its amount.
+The credit amount's estimated flag follows usage provenance alone.
+
+`priorityLowerBound` follows the rate that produced each amount. A token-only Combo requires
+every attempt to be a floor. A mixed Combo requires at least one token-priced floor and every
+token-priced attempt to be exact or a known floor. An exact token leg requires a non-estimated
+amount and observed cache detail. `src/usage/cache-provenance.ts` supplies the same observation
+check to the estimator and Logs DTO. Credit charges are exact at the configured
+price, so credit-only totals carry no floor marker. `gui/src/pages/logs-cost-format.ts` uses the
+proxy's mixed-row marker and suppresses stale token-price markers and reasons on credit-only rows.
+In a token-only conversation, every priced row must be a floor for the total to show `≥`.
+When credit pricing participates, all included rows must have an exact amount or a known floor,
+and at least one must have a known floor. A credit-priced row whose count or price
+cannot produce a representable amount is unavailable with
+`credit_cost_unrepresentable` rather than falling back to a token estimate. A missing credit reading
+with no output is also unavailable because the charge is unknown. Combined attempts retain incomplete
+credit evidence when any attempt lacks a reading and another has one, including a retry HTTP failure. The empty-completion and terminal guards count sent attempts even when the whole usage object is absent; their initial accumulator is not an attempt. A dispatched empty-completion retry that ends
+after output with no terminal emits the existing `adapter_eof` incomplete outcome with combined usage.
+Locally answered and unsent request-log attempts do not participate in credit completeness.
+A token-priced row whose
+normalized token count exceeds the bound is `invalid_usage`.
+`tests/usage/usage-provider-credit-price.test.ts`, `tests/usage/usage-credit-ledger-regressions.test.ts`,
+`tests/server/management-api-logs-metrics.test.ts`
+and `gui/tests/logs-cost-credit-billing.test.tsx` cover the bounds, the mixed aggregation and the
+rendered detail.
+
 `src/usage/user-cost-overlays.ts` copies the complete policy into its versioned registry:
 policy-only edits invalidate price memoization and usage caches; identical reloads remain stable.
 `tests/server/model-costs-pricing-cache.test.ts` exercises warmed cache invalidation and reset.

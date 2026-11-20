@@ -16,7 +16,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * sanitized repair can spend instead, but never both.
  */
 import { sharedSpendPolicy, type SpendSeed, type SpendScopes, type SpendReservationProof, type SpendAdmissionPolicy, type SpendUsage } from "./spend-reservation-ledger";
-import type { TransientSendBudget } from "./upstream-retry";
+import { SendBudgetExhaustedError, type RetryRecoveryAdmission, type TransientSendBudget } from "./upstream-retry";
 
 export type SendClass =
   | "initial"
@@ -77,9 +77,11 @@ export interface DispatchIntent {
    * different thing and must not be folded in here.
    */
   readonly targetKey: string;
-  /** Auxiliary inference uses its own provider scopes without rebasing the routed target. */
+  /** Selected spend scopes can differ from the budget owner's default route and account. */
   readonly spendScopes?: Pick<SpendScopes, "identityId" | "poolId">;
   readonly spendEstimate?: { inputTokens: number; outputCeilingTokens: number };
+  /** Require fresh spend admission for a Codex cache-miss resend. */
+  readonly incrementalRecovery?: { readonly prepaidDelta?: SpendReservationProof; readonly inputEstimateTokens?: number };
   /**
    * False refuses the dispatch outright. A request whose execution state upstream is unknown
    * is not replayable just because budget remains (RFC 9110 9.2.2).
@@ -165,7 +167,7 @@ export interface RequestSendObserver {
    * would cross a ceiling never joins the total, the total stays just under, and the ceiling
    * never fires for any later request either.
    */
-  charge(options?: { alreadySent?: boolean; deferDispatch?: boolean; workflowAlreadyCounted?: boolean; onReserved?: (proof: SpendReservationProof) => void; targetKey?: string; scopes?: Pick<SpendScopes, "identityId" | "poolId">; auxiliary?: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number } }): boolean;
+  charge(options?: { alreadySent?: boolean; deferDispatch?: boolean; workflowAlreadyCounted?: boolean; onReserved?: (proof: SpendReservationProof) => void; targetKey?: string; scopes?: Pick<SpendScopes, "identityId" | "poolId">; auxiliary?: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number }; incrementalRecovery?: DispatchIntent["incrementalRecovery"] }): boolean;
   /** Confirm the exact reservation once its dispatch is known. */
   readonly enforced?: boolean;
   readonly policyStarted?: boolean;
@@ -346,7 +348,9 @@ export function hasWorkflowSendObserver(budget: TransientSendBudget): boolean {
 const dispatchSpendProofs = new WeakMap<SingleUseDispatchPermit, {
   owner: SharedSendLedger;
   claim(): SpendReservationProof | undefined;
+  dispatched(): SpendReservationProof | undefined;
   report(): boolean;
+  pending(): boolean;
 }>();
 
 /** One preflight for the exact prepaid dispatch, never another budget or a replayed permit. */
@@ -384,26 +388,39 @@ export function reportDispatchSends(
 type RecordPhysicalSendUsage = (usage: Partial<SpendUsage> | null) => void;
 /** A helper owns its starts and can never consume another helper's receipts. */
 export type PhysicalSendReporter = ((sends: number) => void) & {
+  remaining?: () => number;
   beforeSend?: (reserveRetrySpend?: boolean) => boolean;
   close?: () => void;
-  execute?: <T>(run: () => Promise<T>) => Promise<T>;
+  execute?: <T>(run: () => Promise<T>, recoveryAdmission?: RetryRecoveryAdmission) => Promise<T>;
   bind?: (target: SpendScopes & { targetKey?: string }) => boolean;
   /** Null gives this send exclusive ownership of its usage, even if none arrives. */
   recordUsage?: RecordPhysicalSendUsage;
   captureUsageRecorder?: () => RecordPhysicalSendUsage | undefined;
+  recover?: (send: Parameters<PhysicalSendRecovery>[0], admission: RetryRecoveryAdmission, inputEstimateTokens?: number) => Promise<boolean>;
 };
-const activePhysicalReporters = new AsyncLocalStorage<PhysicalSendReporter>();
+export type PhysicalSendRecovery = (send: (dispatch: () => void) => Promise<void>, inputEstimateTokens?: number) => Promise<boolean>;
+const activePhysicalReporters = new AsyncLocalStorage<{
+  reporter: PhysicalSendReporter;
+  recoveryAdmission?: RetryRecoveryAdmission;
+}>();
 export function recordCurrentPhysicalSendUsage(usage: Partial<SpendUsage> | null): void {
-  activePhysicalReporters.getStore()?.recordUsage?.(usage);
+  activePhysicalReporters.getStore()?.reporter.recordUsage?.(usage);
 }
 /** Retain the receipt of this exact dispatch across a later recovery decision. */
 export function captureCurrentPhysicalSendUsage(): RecordPhysicalSendUsage | undefined {
-  return activePhysicalReporters.getStore()?.captureUsageRecorder?.();
+  return activePhysicalReporters.getStore()?.reporter.captureUsageRecorder?.();
+}
+/** Capture before entering a socket callback; missing ownership never authorizes another send. */
+export function capturePhysicalSendRecovery(): PhysicalSendRecovery | undefined {
+  const active = activePhysicalReporters.getStore();
+  const recover = active?.reporter.recover;
+  const admission = active?.recoveryAdmission;
+  if (recover && admission) return (send, inputEstimateTokens) => recover(send, admission, inputEstimateTokens);
 }
 /** Selection owners rebind this helper's current start before invoking the executor. */
 export function rebindPhysicalSend(budget: TransientSendBudget | undefined, target: SpendScopes & { targetKey?: string }): boolean {
   if (!(budget as RequestExecutionBudget | undefined)?.spendEnforced) return true;
-  return activePhysicalReporters.getStore()?.bind?.(target) ?? true;
+  return activePhysicalReporters.getStore()?.reporter.bind?.(target) ?? true;
 }
 /**
  * Bind observations to this helper's starts and matching permit receipt.
@@ -415,7 +432,7 @@ export function createPhysicalSendReporter(
   target: () => SpendScopes & { targetKey?: string; estimate?: { inputTokens: number; outputCeilingTokens: number }; explicitEstimate?: boolean },
   permit?: SingleUseDispatchPermit,
   telemetry?: (sends: number) => void,
-  options: { explicitContinuation?: boolean } = {},
+  options: { explicitContinuation?: boolean; receiptOwned?: boolean } = {},
 ): PhysicalSendReporter {
   const counter = sharedSendLedgers.get(budget as RequestExecutionBudget);
   const observer = counter?.observer;
@@ -425,7 +442,10 @@ export function createPhysicalSendReporter(
   let started = 0;
   let reported = 0;
   let currentOrdinal: number | undefined;
-  const report: PhysicalSendReporter = (sends) => {
+  let executions = 0;
+  let outerReported = 0;
+  let earlyReported = 0;
+  const record = (sends: number) => {
     if (closed) return;
     if (!producer) {
       if (observer?.enforced === true) return;
@@ -448,14 +468,39 @@ export function createPhysicalSendReporter(
       telemetry?.(count);
     }
   };
-  if (cappedCaller) report.beforeSend = () => {
+  const recordEarly = (sends: number): void => {
+    record(sends);
+    earlyReported += sends;
+  };
+  const report: PhysicalSendReporter = sends => {
+    if (options.receiptOwned) return;
+    outerReported += sends;
+    const prepaid = Math.min(earlyReported, sends);
+    earlyReported -= prepaid;
+    record(sends - prepaid);
+  };
+  if (!options.receiptOwned && isRequestExecutionBudget(budget)) report.remaining = () => {
+    if (closed) return 0;
+    // The caller already admitted this helper's initial send. Preserve that grant;
+    // only subsequent retries must reconcile the allowance spent inside the helper.
+    if (executions === 0 && outerReported === 0) return Infinity;
+    const pending = cappedCaller ? 0 : Math.max(0, executions - outerReported - earlyReported);
+    const receipt = permit && dispatchSpendProofs.get(permit);
+    const prepaid = receipt?.owner === counter && receipt?.pending() ? 1 : 0;
+    // Deferred reports still consume allowance. Only this reporter's pending booking
+    // authorizes its prepaid send; recovery and other owners have already charged theirs.
+    return Math.max(0, Math.min(budget.policy.baseSendAllowance, budget.policy.maxTotalModelSends,
+      budget.explicitSendCeiling ?? Infinity)
+      - budget.used - pending + prepaid);
+  };
+  if (!options.receiptOwned && cappedCaller) report.beforeSend = () => {
     // An opaque caller cannot share a prepaid receipt. Ordinary sends must still fit the
     // caller's live allowance and be charged before a second leg can claim the same send.
     if (closed || permit || (budget as RequestExecutionBudget).remainingBaseSends(1) < 1) return false;
     const next = budget.used + 1;
     return Reflect.set(cappedCaller, "used", next) && cappedCaller.used === next;
   };
-  else if (observer?.startRequest || observer?.enforced === true) report.beforeSend = reserveRetrySpend => {
+  else if (!options.receiptOwned && (observer?.startRequest || observer?.enforced === true)) report.beforeSend = reserveRetrySpend => {
     if (closed) return false;
     const selected = target();
     if ((budget as RequestExecutionBudget).startRequest) (budget as RequestExecutionBudget).startRequest!(selected);
@@ -468,7 +513,7 @@ export function createPhysicalSendReporter(
     producer ??= observer.beginReporter?.();
     // A recovery leg may have reused an earlier anchor for its first send. Book that send
     // before a funded retry checks how many tokens remain.
-    if (reserveRetrySpend) report(started - reported);
+    if (reserveRetrySpend) recordEarly(started - reported);
     const receipt = permit && dispatchSpendProofs.get(permit);
     const proof = !reserveRetrySpend && receipt?.owner === counter ? receipt?.claim() : undefined;
     const seed = observer.ensureSeed?.(reserveRetrySpend ? { ...selected, freshRetry: true } : selected, proof);
@@ -482,7 +527,44 @@ export function createPhysicalSendReporter(
     started++;
     return true;
   };
-  report.execute = run => activePhysicalReporters.run(report, run);
+  report.execute = (run, recoveryAdmission) => {
+    // Receipt-owned sends are settled at dispatch. Only the nested recovery uses this scope.
+    executions++;
+    return activePhysicalReporters.run({ reporter: report, recoveryAdmission }, run);
+  };
+  report.recover = async (send, admission, inputEstimateTokens) => {
+    if (closed || !admission.canSend() || !isRequestExecutionBudget(budget)) return false;
+    // Retry helpers report on return. Settle their in-flight send before asking for another,
+    // then subtract that early report when the helper eventually reports its own sends.
+    const pending = options.receiptOwned ? 0 : Math.max(0, executions - outerReported - earlyReported);
+    recordEarly(pending);
+    const selected = target();
+    // Only the first execution can consume this exact Combo booking. Later attempts
+    // get their own booking through the dispatch callback, outside this reporter.
+    const receipt = options.receiptOwned && executions === 1 && permit ? dispatchSpendProofs.get(permit) : undefined;
+    const decision = budget.reserveDispatch({
+      sendClass: "transient",
+      targetKey: budget.lastTargetKey ?? selected.targetKey ?? JSON.stringify(selected),
+      spendScopes: { poolId: selected.poolId, identityId: selected.identityId ?? "" },
+      incrementalRecovery: {
+        prepaidDelta: receipt && receipt.owner === counter ? receipt.dispatched() : undefined,
+        inputEstimateTokens,
+      },
+    });
+    if (!decision.allowed) return false;
+    const recovery = decision.permit;
+    const run = () => send(() => {
+      if (!admission.claim(() => recovery.use())) throw new SendBudgetExhaustedError();
+      telemetry?.(1);
+    });
+    try {
+      await (recovery.execute ? recovery.execute(run) : run());
+      return true;
+    } catch (error) {
+      if (error instanceof SendBudgetExhaustedError) return false;
+      throw error;
+    } finally { recovery.release(); }
+  };
   report.bind = (selected: SpendScopes & { targetKey?: string }) => {
     if (!producer || currentOrdinal === undefined || observer?.enforced !== true) return true;
     return producer.rebindTarget(selected, currentOrdinal);
@@ -497,7 +579,7 @@ export function createPhysicalSendReporter(
   };
   report.close = () => {
     if (closed) return;
-    try { if (producer) report(started - reported); }
+    try { if (producer) record(started - reported); }
     finally { closed = true; producer?.close(); }
   };
   return report;
@@ -686,19 +768,23 @@ function createRequestExecutionBudgetWithLedger(
       // Each rung therefore needs fresh normal-capacity spend admission; it cannot reuse
       // an earlier seed to turn a request-total exception into a token-ceiling exception.
       const spendTargetKey = recovery
-        ? `${recovery.reservationPrefix}:${++recovery.reservationSequence}` : intent.targetKey;
-      const spendTarget = { ...(auxiliary ? { ...intent.spendScopes, estimate: intent.spendEstimate, auxiliary: true } : {}), targetKey: spendTargetKey };
+        ? `${recovery.reservationPrefix}:${++recovery.reservationSequence}`
+        : intent.incrementalRecovery ? `fresh-spend:${++logicalRequestSeq}` : intent.targetKey;
+      const spendTarget = { ...intent.spendScopes, targetKey: spendTargetKey,
+        ...(auxiliary ? { estimate: intent.spendEstimate, auxiliary: true } : {}) };
       budget.startRequest?.(spendTarget);
       const freshRetry = intent.freshRetrySpend === true && !countedExternally && observer?.enforced === true;
       // Adapter-owned sends following configured native compact can reserve before pacing.
       // Pool moves instead opt into fresh admission at use(), once the alternate is known.
-      const prepayRetry = !freshRetry && !countedExternally && !auxiliary && observer?.enforced === true
+      const prepayRetry = !intent.incrementalRecovery && !freshRetry && !countedExternally && !auxiliary
+        && observer?.enforced === true
         && counter.explicitSendCeiling !== undefined && counter.spent > 0;
       const retrySeed = prepayRetry ? observer.ensureSeed?.({ ...spendTarget, freshRetry: true }) : undefined;
       if (prepayRetry && !retrySeed) return { allowed: false, reason: "spend-exhausted" };
       let spendProof: SpendReservationProof | undefined;
-      if (observer && !freshRetry && !retrySeed && !observer.charge({ targetKey: spendTargetKey,
-        ...(auxiliary ? { scopes: intent.spendScopes, estimate: intent.spendEstimate, auxiliary: true } : {}),
+      if (observer && !freshRetry && !retrySeed && !observer.charge({ targetKey: spendTargetKey, scopes: intent.spendScopes,
+        ...(auxiliary ? { estimate: intent.spendEstimate, auxiliary: true } : {}),
+        ...(intent.incrementalRecovery ? { incrementalRecovery: intent.incrementalRecovery } : {}),
         deferDispatch: true, onReserved: proof => { spendProof = proof; } })) {
         return { allowed: false, reason: "spend-exhausted" };
       }
@@ -720,9 +806,14 @@ function createRequestExecutionBudgetWithLedger(
       let producer: ReturnType<NonNullable<RequestSendObserver["beginReporter"]>> | undefined;
       let executing = false;
       let physicalOrdinal: number | undefined;
+      let selectedTarget: SpendScopes & { targetKey?: string } | undefined;
       const startPhysical = (): boolean => {
         if (observer?.enforced !== true) return auxiliary ? budget.claimWorkflowSend!(true) : budget.claimWorkflowSend!();
-        const seed = retrySeed ?? observer.ensureSeed?.(freshRetry ? { ...spendTarget, freshRetry: true } : spendTarget, spendProof);
+        const selected = { ...spendTarget, ...selectedTarget, targetKey: selectedTarget?.targetKey ?? spendTargetKey };
+        // A prepaid retry seed predates credential selection; rebook it on the selected target.
+        if (retrySeed && selectedTarget) observer.releaseSeed?.(retrySeed);
+        const seed = retrySeed && !selectedTarget ? retrySeed
+          : observer.ensureSeed?.(freshRetry || retrySeed ? { ...selected, freshRetry: true } : selected, spendProof);
         if (!seed) return false;
         const ordinal = auxiliary ? budget.claimPhysicalSend?.(true) : budget.claimPhysicalSend?.();
         if (ordinal === undefined) { observer.releaseSeed?.(seed); return false; }
@@ -739,9 +830,12 @@ function createRequestExecutionBudgetWithLedger(
           if (executing) throw new Error("Dispatch permit executor already active");
           executing = true;
           const binding: PhysicalSendReporter = () => {};
-          binding.bind = (target: SpendScopes & { targetKey?: string }) => physicalOrdinal === undefined || !producer
-            ? true : producer.rebindTarget(target, physicalOrdinal);
-          try { return await activePhysicalReporters.run(binding, run); }
+          binding.bind = (target: SpendScopes & { targetKey?: string }) => {
+            if (physicalOrdinal !== undefined && producer) return producer.rebindTarget(target, physicalOrdinal);
+            selectedTarget = target;
+            return true;
+          };
+          try { return await activePhysicalReporters.run({ reporter: binding }, run); }
           finally {
             executing = false;
             try { producer?.report(1); } finally { producer?.close(); }
@@ -786,14 +880,14 @@ function createRequestExecutionBudgetWithLedger(
         },
       };
       let preflightClaimed = false;
-      dispatchSpendProofs.set(permit, { owner: counter, report: () => {
+      dispatchSpendProofs.set(permit, { owner: counter, pending: () => counter.pendingExternalSends.has(receipt), report: () => {
         if (!counter.pendingExternalSends.has(receipt)) return false;
         if (spendProof) observer?.dispatch?.(spendProof);
         counter.pendingExternalSends.delete(receipt);
         // Reset-only helpers report just BEFORE calling the dispatch thunk. Its one use()
         // remains available, but release/proof cannot refund or reuse this reported receipt.
         return true;
-      }, claim: () => {
+      }, dispatched: () => settled === "used" ? spendProof : undefined, claim: () => {
         if (preflightClaimed || settled === "released"
           || (countedExternally ? !counter.pendingExternalSends.has(receipt) : settled !== "open")) return undefined;
         preflightClaimed = true;

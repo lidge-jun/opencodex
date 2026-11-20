@@ -4,6 +4,7 @@ import { loadConfig } from "../config";
 import { readRuntimePort } from "../config/process-state";
 import { directLocalHttpFetch } from "../server/direct-local-http";
 import { configuredAdminToken } from "./admin-secrets";
+import { PROXY_STOP_EXIT_GRACE_MS } from "./shutdown-budget";
 
 export function isProcessAlive(pid: number): boolean {
   try {
@@ -350,9 +351,9 @@ async function stopProxyGracefullyDetailed(
 
 function drainDeadlineMs(): number {
   try {
-    return (loadConfig().shutdownTimeoutMs ?? 5000) + 3000;
+    return Math.max(0, loadConfig().shutdownTimeoutMs ?? 5000) + PROXY_STOP_EXIT_GRACE_MS;
   } catch {
-    return 8000;
+    return 5000 + PROXY_STOP_EXIT_GRACE_MS;
   }
 }
 

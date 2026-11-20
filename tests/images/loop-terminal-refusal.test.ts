@@ -41,8 +41,9 @@ test.each(cases)("a refused image_gen iteration stops and meters usage: %j", asy
     buildRequest: async () => {
       return { url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" };
     },
-    fetchResponse: async () => {
+    fetchResponse: async (_request, ctx) => {
       routedRequests++;
+      ctx?.onPhysicalSend?.({ ordinal: 1 });
       return new Response("ok", { status: path === "rotated" && routedRequests === 2 ? 429 : 200 });
     },
     async *parseStream() {

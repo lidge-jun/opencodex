@@ -1,5 +1,6 @@
 import { anthropicSubscriptionLabel } from "../../../../src/providers/anthropic-subscription";
 import { anthropicInstanceRowShapeMatches, isAnthropicInstanceId } from "../../../../src/providers/anthropic-instance-id";
+import { normalizeCloudCodeAppealText, normalizeCloudCodeAppealUrl } from "../../../../src/lib/cloud-code-appeal-link";
 /**
  * ProviderAuthPanel — OAuth accounts, API-key pool, and forward-auth
  * embedding for the workspace Settings tab (WP091). Consumes WP040+WP060
@@ -13,12 +14,9 @@ import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-workspace/auth";
 import { oauthCredentialSlot } from "../../../../src/oauth/credential-siblings";
 import { oauthLabel } from "../../pages/providers-shared";
-import { displayAccountId } from "../../lib/privacy";
 import AccountAutoSwitchControl from "../AccountAutoSwitchControl";
 import {
-  formatOAuthHealthLabel,
   formatOAuthHealthSummary,
-  oauthHealthBadgeClass,
   oauthHealthIsCooldown,
   oauthHealthShowsReauth,
 } from "../../oauth-health-display";
@@ -28,6 +26,11 @@ import ClaudeNativePassthroughSetting from "./ClaudeNativePassthroughSetting";
 import { LoginHint as LoginHintView } from "../login-url-block";
 import { OpenBrowserPrefToggle } from "../open-browser-pref-toggle";
 import ProviderAccountQuota from "./ProviderAccountQuota";
+import { AccountProbeButton, AccountProbeResultLine } from "./AccountProbe";
+import { ACCOUNT_PROBE_PROVIDERS, useAccountProbe } from "../../hooks/useAccountProbe";
+import { AccountQuotaTable } from "./AccountQuotaTable";
+import { accountQuotaFromReport } from "../../provider-workspace/report";
+import { uncoveredWindows } from "../../provider-workspace/account-quota-table";
 import { GrokCouponBadge, GrokResetCouponModal } from "./GrokResetCoupons";
 import { AnthropicGrantBadge, AnthropicResetGrantModal } from "./AnthropicResetGrants";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
@@ -284,6 +287,9 @@ export default function ProviderAuthPanel({
   const setGrantAccount = (account: OAuthAccountRow | null) => {
     setGrantSelection(account ? { scope: grantScope, account } : null);
   };
+  // Read-only per-account probe (stored token, no refresh); only providers the server implements.
+  const accountProbe = useAccountProbe(apiBase, item.name);
+  const probeEnabled = isOauth && ACCOUNT_PROBE_PROVIDERS.has(item.name) && accounts.length > 0;
   const refreshQuota = async () => {
     if (!onRefreshQuota || refreshingQuota) return;
     const generation = ++quotaRefreshGeneration.current;
@@ -304,6 +310,20 @@ export default function ProviderAuthPanel({
       <section className="pwi-section pwi-auth-section" aria-label={t("pws.availableAccounts")}>
         <h3 className="pwi-section-title">{t("pws.availableAccounts")}</h3>
         <div className="pwi-auth-body">
+          {codexController && codexController.accounts.length > 1 && (
+            <AccountQuotaTable
+              strategy={(codexController.readLastActive() as { accountPoolStrategy?: string } | undefined)?.accountPoolStrategy}
+              accounts={codexController.accounts.map(account => ({
+                id: account.id, label: account.alias ?? (account.email || t("codexAuth.mainAccount")), plan: account.plan ?? null,
+                active: account.id === codexController.activeId, paused: account.paused, needsReauth: account.needsReauth, health: account.health,
+                quota: account.quota && {
+                  ...account.quota,
+                  fiveHourPercent: account.quota.fiveHourPercent ?? account.quota.shortPercent,
+                  fiveHourResetAt: account.quota.fiveHourResetAt ?? account.quota.shortResetAt,
+                },
+              }))}
+            />
+          )}
           <CodexAccountPool
             apiBase={apiBase}
             targetKey={targetKey}
@@ -449,8 +469,9 @@ export default function ProviderAuthPanel({
       */}
       <div className="pwi-auth-head">
         <h3 className="pwi-section-title">{isOauth ? t("pws.availableAccounts") : t("pws.apiKeys")}</h3>
-        {((isOauth && loggedIn) || isKeyAuth) && canRefreshQuota && (
+        {((((isOauth && loggedIn) || isKeyAuth) && canRefreshQuota) || probeEnabled) && (
           <div className="pwi-auth-head-actions">
+            {((isOauth && loggedIn) || isKeyAuth) && canRefreshQuota && <>
             {quotaRefreshResult && (
               <span role="status" className={quotaRefreshResult.ok ? "pws-status-ok" : "pws-status-warn"}>
                 {quotaRefreshResult.text}
@@ -466,6 +487,14 @@ export default function ProviderAuthPanel({
               {" "}
               {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
             </button>
+            </>}
+            {probeEnabled && (
+              <button type="button" className="btn btn-ghost btn-sm" title={t("acctProbe.hint")}
+                aria-busy={accountProbe.allPending} disabled={accountProbe.busy}
+                onClick={() => { void accountProbe.probeAll(accounts.map(account => account.id)); }}>
+                {accountProbe.allPending ? t("acctProbe.testing") : t("acctProbe.testAll")}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -629,115 +658,134 @@ export default function ProviderAuthPanel({
                 {t("pws.sharedAccountsNote", { provider: oauthLabel(oauthCredentialSlot(item.name)) })}
               </div>
             )}
-            {accounts.length > 0 && (
-              <ul className="pwi-auth-list">
-                {accounts.map(account => {
-                  const label = oauthAccountDisplayLabel(accounts, account, t);
-                  const planLabel = isAnthropicPool ? anthropicSubscriptionLabel(account.plan) : item.name === "google-antigravity" ? account.plan : undefined;
-                  const switching = switchingAccountId === account.id;
-                  const pausing = pausingAccountId === account.id;
-                  const healthStatus = account.health?.status;
+            {accounts.length > 0 && (() => {
+              const byId = new Map(accounts.map(account => [account.id, account]));
+              const controlsLocked = Boolean(switchingAccountId) || Boolean(pausingAccountId);
+              return (
+              <AccountQuotaTable
+                accounts={accounts.map(account => {
+                  const probe = accountProbe.entries[account.id];
+                  return {
+                    id: account.id, label: oauthAccountDisplayLabel(accounts, account, t), plan: account.plan,
+                    planLabel: isAnthropicPool ? anthropicSubscriptionLabel(account.plan) : undefined,
+                    active: account.active, paused: account.paused === true, needsReauth: accountShowsReauth(account),
+                    verifyRequired: account.needsReauthReason === "verify_account",
+                    ...(account.paused && account.pauseDetails?.reason === "account_permission_denied" ? { banned: {
+                      message: account.pauseEvidence?.message,
+                      pausedAt: account.pauseDetails.pausedAt,
+                      statusCode: account.pauseEvidence?.statusCode,
+                    } } : {}),
+                    health: account.health, quota: accountQuotaFromReport({ quota: account.quota }), quotaUnavailable: account.quotaUnavailable,
+                    ...(probe && "result" in probe ? { probe: { status: probe.result.status, latencyMs: probe.result.latencyMs } } : {}),
+                  };
+                })}
+                renderRowContent={row => {
+                  const account = byId.get(row.account.id)!;
+                  const organizationName = isAnthropicPool ? account.organizationName : undefined;
                   const showReauth = accountShowsReauth(account);
-                  const inCooldown = oauthHealthIsCooldown(healthStatus);
-                  const maskedId = displayAccountId(account.id);
-                  const healthLabel = formatOAuthHealthLabel(t, account.health);
-                  const healthSummary = isAnthropicPool ? null : formatOAuthHealthSummary(t, item.name, account.id, account.health);
-                  return (
-                  <li key={account.id} className={`pwi-auth-acct${account.active ? " pwi-auth-acct--active" : ""}`}>
-                    <div className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}>
-                    <button type="button" className="pwi-auth-row-main"
-                      onClick={() => { if (!account.active && !account.paused && !showReauth && !inCooldown && !switchingAccountId && !pausingAccountId) void authHandlers.onSwitchAccount(item.name, account); }}
+                  const inCooldown = oauthHealthIsCooldown(account.health?.status);
+                  const kiroReason = kiroSkipReasonKey(account, item.name);
+                  const accountCell = (
+                    <button type="button" className="aqt-account-main"
+                      onClick={() => { if (!account.active && !account.paused && !showReauth && !inCooldown && !controlsLocked) void authHandlers.onSwitchAccount(item.name, account); }}
                       aria-current={account.active ? "true" : undefined}
-                      aria-label={`${label}${planLabel ? ` — ${planLabel}` : ""}${account.active ? ` — ${t("pws.accountCurrent")}` : ""}`}
-                      disabled={Boolean(account.paused || showReauth || inCooldown || switchingAccountId || pausingAccountId)}>
+                      aria-label={`${row.account.label}${organizationName ? ` — ${organizationName}` : ""}${row.plan ? ` — ${row.plan}` : ""}${account.active ? ` — ${t("pws.accountCurrent")}` : ""}`}
+                      title={account.paused && account.pauseDetails ? formatAccountPauseTooltip(t, locale, account.pauseDetails) : undefined}
+                      disabled={Boolean(account.paused || showReauth || inCooldown || controlsLocked)}>
                       <span className={`pwi-auth-dot ${showReauth ? "pwi-auth-dot--warn" : account.active && !account.paused ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
-                      <span className="pwi-auth-row-copy">
-                        <span className="pwi-auth-row-heading"><span className="pwi-auth-row-label">{label}</span>{planLabel && <span className="badge badge-green">{planLabel}</span>}</span>
-                        {!isAnthropicPool && <span className="pwi-auth-row-secondary">{`${t("prov.accountId")}: ${maskedId}`}</span>}
-                        {healthSummary && (
-                          <span className="pwi-auth-row-secondary faint">{healthSummary}</span>
-                        )}
-                        {inCooldown && (
-                          <span className="pwi-auth-row-secondary faint">{t("pws.healthCooldownHint")}</span>
-                        )}
-                        {account.paused && (
-                          <span className="pwi-auth-row-secondary faint">{t("pws.accountPausedHint")}</span>
-                        )}
+                      <span className="aqt-account-copy">
+                        <span className="aqt-account-label">{row.account.label}</span>
+                        {account.maskedLabel && account.maskedLabel !== row.account.label &&
+                          <span className="aqt-account-secondary faint">{account.maskedLabel}</span>}
+                        {organizationName && <span className="aqt-account-secondary aqt-account-organization faint">{organizationName}</span>}
                       </span>
-                      {healthLabel && (
-                        <span className={oauthHealthBadgeClass(healthStatus)}>{healthLabel}</span>
-                      )}
-                      {showReauth && !healthLabel && <span className="badge badge-amber">{t("pws.reauth")}</span>}
-                      {kiroSkipReasonKey(account, item.name) && <span className="badge badge-amber">{t(kiroSkipReasonKey(account, item.name)!)}</span>}
-                      {account.paused && <span className="badge badge-muted" title={account.pauseDetails ? formatAccountPauseTooltip(t, locale, account.pauseDetails) : undefined}>{t("codexAuth.paused")}</span>}
                       {account.active && !account.paused && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
-                      {switching && <span className="badge badge-muted">{t("pws.accountSwitching")}</span>}
+                      {kiroReason && <span className="badge badge-amber">{t(kiroReason)}</span>}
+                      {switchingAccountId === account.id && <span className="badge badge-muted">{t("pws.accountSwitching")}</span>}
                     </button>
-                    {typeof account.paused === "boolean" && authHandlers.onPauseAccount && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        aria-label={`${t(account.paused ? "codexAuth.resume" : "codexAuth.pause")} — ${label}`}
-                        title={account.paused ? t("pws.accountPausedHint") : undefined}
-                        aria-busy={pausing}
-                        disabled={busy || Boolean(switchingAccountId) || Boolean(pausingAccountId)}
-                        onClick={() => void authHandlers.onPauseAccount(item.name, account, !account.paused)}
-                      >
-                        {t(account.paused ? "codexAuth.resume" : "codexAuth.pause")}
-                      </button>
-                    )}
-                    {showReauth && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        disabled={busy || Boolean(switchingAccountId) || Boolean(pausingAccountId)}
-                        onClick={() => void authHandlers.onReauth(item.name, account.id)}
-                      >
-                        {t("pws.reauthenticate")}
-                      </button>
-                    )}
-                    {grokCouponsEnabled && !showReauth && (
-                      <GrokCouponBadge
-                        entry={grokCoupons.entries[account.id]}
-                        t={t}
-                        onClick={() => setCouponAccount(account)}
-                      />
-                    )}
+                  );
+                  const actions = <>
                     {claudeGrantsEnabled && !showReauth && (
                       <AnthropicGrantBadge entry={claudeGrants.entries[account.id]} t={t} onClick={() => setGrantAccount(account)} />
                     )}
+                    {grokCouponsEnabled && !showReauth && (
+                      <GrokCouponBadge entry={grokCoupons.entries[account.id]} t={t} onClick={() => setCouponAccount(account)} />
+                    )}
+                    {showReauth && (
+                      <button type="button" className="btn btn-ghost btn-sm" disabled={busy || controlsLocked}
+                        onClick={() => void authHandlers.onReauth(item.name, account.id)}>
+                        {t("pws.reauthenticate")}
+                      </button>
+                    )}
+                    {typeof account.paused === "boolean" && authHandlers.onPauseAccount && (
+                      <button type="button" className="btn btn-ghost btn-sm"
+                        aria-label={`${t(account.paused ? "codexAuth.resume" : "codexAuth.pause")} — ${row.account.label}`}
+                        aria-busy={pausingAccountId === account.id}
+                        disabled={busy || controlsLocked}
+                        onClick={() => void authHandlers.onPauseAccount(item.name, account, !account.paused)}>
+                        {t(account.paused ? "codexAuth.resume" : "codexAuth.pause")}
+                      </button>
+                    )}
+                    {probeEnabled && (
+                      <AccountProbeButton controller={accountProbe} accountId={account.id} label={row.account.label}
+                        disabled={accountProbe.busy} />
+                    )}
                     <button type="button" className="btn btn-ghost btn-sm"
+                      aria-label={`${t("prov.editAlias")} — ${row.account.label}`}
                       onClick={() => void authHandlers.onEditAlias(item.name, "oauth", account.id, account.alias)}>
                       {t("prov.editAlias")}
                     </button>
                     <button type="button" className="btn btn-ghost btn-sm pwi-auth-row-remove"
-                      aria-label={`${t("common.remove")} — ${label}`}
-                      title={`${t("common.remove")} — ${label}`}
-                      disabled={Boolean(switchingAccountId) || Boolean(pausingAccountId)}
+                      aria-label={`${t("common.remove")} — ${row.account.label}`}
+                      title={`${t("common.remove")} — ${row.account.label}`}
+                      disabled={controlsLocked}
                       onClick={() => void authHandlers.onRemoveAccount(item.name, account)}>
                       <IconTrash style={{ width: 13, height: 13 }} aria-hidden="true" />
                     </button>
-                    </div>
-                    <div className="pwi-auth-acct-quota">
-                      {isAnthropicPool && account.autoSwitchThresholdOverride !== undefined
-                        && account.autoSwitchThreshold !== undefined && authHandlers.onAccountThreshold && (
-                        <AccountAutoSwitchControl
-                          accountLabel={label} inputId={`anthropic-threshold-${account.id}`}
-                          globalThreshold={account.autoSwitchThreshold} override={account.autoSwitchThresholdOverride}
-                          hintText={t("pws.anthropicAccountThresholdHint")}
-                          disabled={busy || Boolean(switchingAccountId) || Boolean(pausingAccountId)}
-                          onChange={threshold => authHandlers.onAccountThreshold!(item.name, account, threshold)}
-                        />
-                      )}
-                      <ProviderAccountQuota quotaMode={account.quotaMode} quota={account.quota}
+                  </>;
+                  const healthSummary = isAnthropicPool ? null : formatOAuthHealthSummary(t, item.name, account.id, account.health);
+                  const covered = Object.keys(row.cells).length > 0;
+                  // Windows the pool columns already show are not repeated; anything else (per-model
+                  // rows, monthly, credits) still renders here so the list drops no reading.
+                  const rest = covered && row.account.quota ? accountQuotaFromReport({ quota: {
+                    ...row.account.quota,
+                    customWindows: uncoveredWindows(row.account.quota.customWindows),
+                    ...(row.cells.subscription ? { fiveHourPercent: undefined, fiveHourResetAt: undefined, weeklyPercent: undefined, weeklyResetAt: undefined } : {}),
+                  } }) : null;
+                  const appealUrl = account.paused ? normalizeCloudCodeAppealUrl(account.pauseEvidence?.appealUrl) : undefined;
+                  const probeEntry = probeEnabled ? accountProbe.entries[account.id] : undefined;
+                  const threshold = isAnthropicPool && account.autoSwitchThresholdOverride !== undefined
+                    && account.autoSwitchThreshold !== undefined && authHandlers.onAccountThreshold;
+                  const parts = [
+                    healthSummary && <p key="health">{healthSummary}</p>,
+                    inCooldown && <p key="cooldown">{t("pws.healthCooldownHint")}</p>,
+                    account.paused && row.flag !== "banned" && <p key="paused">{t("pws.accountPausedHint")}</p>,
+                    appealUrl && (
+                      <a key="appeal" className="text-highlight underline" href={appealUrl} target="_blank" rel="noopener noreferrer">
+                        {normalizeCloudCodeAppealText(account.pauseEvidence?.appealText) ?? t("accountPause.submitAppeal")}
+                      </a>
+                    ),
+                    probeEntry && <AccountProbeResultLine key="probe" entry={probeEntry} />,
+                    threshold && (
+                      <AccountAutoSwitchControl key="threshold"
+                        accountLabel={row.account.label} inputId={`anthropic-threshold-${account.id}`}
+                        globalThreshold={account.autoSwitchThreshold!} override={account.autoSwitchThresholdOverride!}
+                        hintText={t("pws.anthropicAccountThresholdHint")}
+                        disabled={busy || controlsLocked}
+                        onChange={value => authHandlers.onAccountThreshold!(item.name, account, value)}
+                      />
+                    ),
+                    (!covered || rest || account.quotaUnavailable) && (
+                      <ProviderAccountQuota key="quota" quotaMode={account.quotaMode} quota={account.quota}
                         quotaUnavailable={account.quotaUnavailable} quotaPending={account.quotaPending} quotaFailure={account.quotaFailure}
-                        quotaReadAt={account.quotaReadAt} />
-                    </div>
-                  </li>
-                  );
-                })}
-              </ul>
-            )}
+                        quotaReadAt={account.quotaReadAt} uncoveredQuota={covered ? rest : undefined} />
+                    ),
+                  ].filter(Boolean);
+                  return { account: accountCell, actions, details: parts };
+                }}
+              />
+              );
+            })()}
             {couponAccount && (
               <GrokResetCouponModal
                 accountId={couponAccount.id}

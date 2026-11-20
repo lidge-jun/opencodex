@@ -17,6 +17,10 @@ export interface AccountPauseEvidence {
   statusCode: number;
   /** Display-safe upstream message (whitespace collapsed, redacted, at most 300 characters). */
   message?: string;
+  /** Validated HTTPS URL supplied with a conclusive first-party Cloud Code Assist ban. */
+  appealUrl?: string;
+  /** Short, plain vendor label for the validated appeal link. */
+  appealText?: string;
 }
 export interface AccountAutoPausePolicy {
   /**

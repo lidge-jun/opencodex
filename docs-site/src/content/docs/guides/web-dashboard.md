@@ -308,6 +308,9 @@ on. **Logs** works the same way with `#logs` and `#logs/debug`. An older `#provi
 bookmark now lands on `#providers`.
 
 Cost values in **Logs** and **Usage** are API list-price equivalents calculated from reported tokens.
+For a **Logs** Combo that mixes credit and token charges, `≥` means at least one token-priced
+attempt has a known lower bound and every other token-priced attempt is either a known lower
+bound or has a non-estimated amount with observed cache detail.
 For a custom usage interval, the server must confirm the exact requested start and end times.
 If an older running proxy does not support those bounds, the dashboard and CLI reject its report;
 upgrade and restart that proxy before retrying. Resetting a manual model price affects only that

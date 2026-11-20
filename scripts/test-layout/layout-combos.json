@@ -1,13 +1,19 @@
 {
+  "machine-weighted-routing.test.ts": "routing",
   "combo-cooldown-reprobe.test.ts": "codex-integration",
   "server-combo-stream-hosted-tool-contract.test.ts": "server",
   "server-combo-stream-send-contract.test.ts": "server",
   "server-combo-quota-code-provenance.test.ts": "server",
   "combo-codex-ws-overload-failover.test.ts": "responses",
+  "combo-committed-terminal-cooldown.test.ts": "routing",
+  "combo-stream-prelude-guards.test.ts": "routing",
   "combo-stream-attempt-timing.test.ts": "responses",
   "combo-cooldown-persistence.test.ts": "routing",
   "combo-unoffered-tool-refusal.test.ts": "routing",
   "server-combo-cooldown-recording.test.ts": "server",
+  "combo-capability-policy.test.ts": "codex-integration",
+  "combo-request-capability.test.ts": "codex-integration",
+  "combo-capability-policy-config.test.ts": "config",
   "combo-selection-keepalive.test.ts": "routing",
   "server-combo-selection-keepalive.test.ts": "server"
 }

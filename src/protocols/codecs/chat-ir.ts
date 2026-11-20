@@ -11,7 +11,7 @@
  * Contract: for every Chat body the bridge accepts, `chatConversationToIr(body, model)` equals
  * the `context` of `parseRequest(chatCompletionsToResponsesBody(body))`, and every body the bridge
  * refuses is refused here with the same `ChatCompletionsRequestError` message in the same order.
- * `tests/protocols/chat-ir-parity.test.ts` holds both sides over a fixture corpus. The rules
+ * `tests/responses/protocol-chat-ir-parity.test.ts` holds both sides over a fixture corpus. The rules
  * mirrored here are the Chat translator's walk (leading-system hoist, held mid-batch
  * instructions, tool-call naming, legacy function pairing) and the parser's assembly for the item
  * kinds that walk produces (pending reasoning, the assistant placeholder, reasoning that arrives
@@ -21,6 +21,7 @@
  * they travel through the Responses core on `chatSettingsToResponsesBody`, so effort policy,
  * tier and routing keep their single owner.
  */
+import { providerMetadataFromResponsesFunctionCall } from "../../responses/provider-opaque-metadata";
 import {
   assistantReasoningText,
   ChatCompletionsRequestError,
@@ -257,9 +258,11 @@ export function chatConversationToIr(raw: unknown, modelId: string): ChatIrConve
     }
     return holder;
   };
-  const pushToolCall = (callId: string, name: string, args: string): void => {
+  const pushToolCall = (callId: string, name: string, args: string, extra?: unknown): void => {
     emitted = true;
-    const call: OcxToolCall = { type: "toolCall", id: callId, name, arguments: functionCallArgumentsFromText(callId, args) };
+    // Same normalized carrier the bridge reads (src/chat/inbound.ts), so both lanes agree.
+    const providerMetadata = providerMetadataFromResponsesFunctionCall({ extra_content: extra });
+    const call: OcxToolCall = { type: "toolCall", id: callId, name, arguments: functionCallArgumentsFromText(callId, args), ...(providerMetadata ? { providerMetadata } : {}) };
     assistantHolder().content.push(call);
     awaitingToolResult.add(callId);
   };
@@ -370,7 +373,7 @@ export function chatConversationToIr(raw: unknown, modelId: string): ChatIrConve
             if (!name) name = knownNameByCallId.get(callId) ?? "";
             if (!name) throw new ChatCompletionsRequestError("tool_calls entries require function.name");
             knownNameByCallId.set(callId, name);
-            pushToolCall(callId, name, args);
+            pushToolCall(callId, name, args, entry.extra_content);
           }
         }
         if (msg.function_call !== undefined && msg.function_call !== null) {

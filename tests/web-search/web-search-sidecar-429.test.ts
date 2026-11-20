@@ -1,4 +1,5 @@
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as retry from "../../src/lib/upstream-retry";
 import { runWebSearch as runOpenAiWebSearch } from "../../src/web-search/executor";
 import { listOpenAiForwardSidecarCandidates } from "../../src/providers/openai-sidecar";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
@@ -69,6 +70,23 @@ describe("web-search sidecar 429 replays", () => {
     });
     expect(calls).toBe(2);
     expect(outcome.error).toBeUndefined();
+  });
+
+  test("web search honors a fractional Retry-After of 5.0 seconds", async () => {
+    const sleep = spyOn(retry, "sleepWithAbort").mockResolvedValue(undefined);
+    const random = spyOn(Math, "random").mockReturnValue(0.5);
+    try {
+      let calls = 0;
+      const outcome = await searchWith(async () => ++calls === 1
+        ? new Response("rate limited", { status: 429, headers: { "retry-after": "5.0" } })
+        : sseDone());
+      expect(calls).toBe(2);
+      expect(outcome.error).toBeUndefined();
+      expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([5_000]);
+    } finally {
+      random.mockRestore();
+      sleep.mockRestore();
+    }
   });
 
   test("a persistent 429 ends with the 429 after bounded attempts", async () => {

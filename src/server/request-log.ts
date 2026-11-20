@@ -6,13 +6,12 @@ import { finalizeProviderCacheAffinity } from "./request-log-cache-affinity";
 import { aggregateAttemptUsage } from "./request-log-attempt-usage";
 export { aggregateAttemptUsage } from "./request-log-attempt-usage";
 
-import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
 export { sealRequestAttemptIdentity };
+import { credentialRecoveryStatus, retainRefusedAccount, sealedCredentialRefusals } from "./request-log-attempt-recovery";
 export { noteAttemptRecoveryWithheld } from "./request-log-attempt-recovery";
 import { bareVerdictRowErrorCode, captureUpstreamTerminalDiagnostics, guardedRowCopy, linkLogField, notifyLinkTurnFinal, upstreamDiagnosticLogFields, type LinkRequestLogCarrier, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
 export { noteUpstreamRequestId } from "./request-log-terminal-status";
-import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { ResponsesTerminalStatus } from "../bridge";
 import {
   classifyError,
@@ -21,6 +20,7 @@ import {
   isClientClosedMessage,
   isCyberPolicyCode,
   isUpstreamResetReplayRefusedMessage,
+  responsesCompletionError,
   upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
@@ -36,6 +36,8 @@ import type { RequestSpendSettlement } from "./responses/request-spend";
 import type { AdapterTierMetadata } from "../providers/fastwire";
 import { UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../lib/upstream-retry";
 import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
+export { registerCommittedTerminalCooldownHandler } from "./request-log-committed-terminal";
+import { reportCommittedTerminalCooldown, type CommittedComboLogFields } from "./request-log-committed-terminal";
 import type { UpstreamCondition } from "../lib/upstream-condition";
 import { boundedServiceTier, errorDetailFor, projectErrorDetail } from "../usage/error-detail";
 import { incompleteReasonDetail, upstreamErrorIsLocal, type FailureDetail } from "./request-log-failure-detail";
@@ -125,7 +127,7 @@ export function cacheDiagnosticsObserving(): boolean {
   return cacheDiagnosticHooks()?.enabled() === true;
 }
 
-export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyLogContext {
+export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyLogContext, CommittedComboLogFields {
   model: string;
   provider: string;
   client?: UsageClient;
@@ -840,7 +842,7 @@ export function recordFirstOutput(
   if (!Number.isFinite(requestStartedAt) || !Number.isFinite(now)) return;
   const requestElapsed = Math.max(0, now - requestStartedAt);
   if (logCtx.firstOutputMs === undefined) logCtx.firstOutputMs = requestElapsed;
-  if (logCtx.activeAttempt && logCtx.activeAttempt.firstOutputMs === undefined) {
+  if (logCtx.activeAttempt && !sealedCredentialRefusals.has(logCtx.activeAttempt) && logCtx.activeAttempt.firstOutputMs === undefined) {
     const attemptStartedAt = logCtx.activeAttemptStartedAt ?? requestStartedAt;
     logCtx.activeAttempt.firstOutputMs = Math.max(0, now - attemptStartedAt);
   }
@@ -849,7 +851,7 @@ export function recordFirstOutput(
 /** Snapshot target-specific requested effort even for runTurn adapters with no AdapterRequest. */
 export function recordAttemptRequestedEffort(logCtx: RequestLogContext): void {
   const attempt = logCtx.activeAttempt;
-  if (!attempt) return;
+  if (!attempt || sealedCredentialRefusals.has(attempt)) return;
   delete attempt.requestedEffort;
   try {
     if (typeof logCtx.requestedEffort === "string" && logCtx.requestedEffort) {
@@ -865,6 +867,7 @@ export function recordAdapterReasoning(
   logCtx: RequestLogContext,
   request: AdapterRequest,
 ): void {
+  if (logCtx.activeAttempt && sealedCredentialRefusals.has(logCtx.activeAttempt)) return;
   delete logCtx.effectiveEffort;
   delete logCtx.reasoningWireField;
   delete logCtx.reasoningWireValue;
@@ -923,6 +926,7 @@ export function recordAdapterTierMetadata(
   logCtx: RequestLogContext,
   metadata: AdapterTierMetadata | undefined,
 ): void {
+  if (logCtx.activeAttempt && sealedCredentialRefusals.has(logCtx.activeAttempt)) return;
   delete logCtx.tierOutcome;
   delete logCtx.activeTierMetadata;
   const attempt = logCtx.activeAttempt;
@@ -1036,7 +1040,7 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
       ? (response as { status?: unknown }).status
       : (payload as { status?: unknown }).status;
     if (eventType === "response.completed") {
-      logCtx.observedTerminalStatus = "completed";
+      logCtx.observedTerminalStatus = responsesCompletionError(payload) == null ? "completed" : "failed";
     } else if (eventType === "response.failed") {
       logCtx.observedTerminalStatus = "failed";
     } else if (eventType === "response.incomplete") {
@@ -1063,7 +1067,7 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
   if (usage) {
     if (!recordKeyWireAttemptUsage(logCtx, usage)) {
       logCtx.usage = usage;
-      if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
+      if (logCtx.activeAttempt && !sealedCredentialRefusals.has(logCtx.activeAttempt)) logCtx.activeAttempt.usage = usage;
     }
     // Counts taken off a wire, not reported raw. The zero-default token-detail objects strict
     // clients require are indistinguishable here from a measured zero, so the cache detail these
@@ -1444,7 +1448,7 @@ function cloneKeyUsage(usage: OcxUsage | undefined): OcxUsage | undefined {
 export function recordKeyWireAttemptUsage(logCtx: RequestLogContext, usage: OcxUsage | undefined): boolean {
   if (!usage) return false;
   const attempt = logCtx.activeAttempt;
-  if (!attempt || !keyUsageOwners.has(attempt) || !keyWireUsageBaselines.has(attempt)) return false;
+  if (!attempt || sealedCredentialRefusals.has(attempt) || !keyUsageOwners.has(attempt) || !keyWireUsageBaselines.has(attempt)) return false;
   const baseline = keyWireUsageBaselines.get(attempt);
   const current = { ...usage };
   attempt.usage = baseline
@@ -1513,7 +1517,8 @@ function writeFinalRequestLog(
   const closeReason = effectiveStatus === 499
     ? "client_cancel"
     : meta?.closeReason;
-  if (logCtx.activeAttempt) {
+  const sealedRefusal = retainRefusedAccount(logCtx);
+  if (logCtx.activeAttempt && !sealedRefusal) {
     finishRequestAttempt(
       logCtx.activeAttempt,
       attemptStatus ?? effectiveStatus,
@@ -1543,7 +1548,7 @@ function writeFinalRequestLog(
     // A coordinated write derives the request pair from a copy and re-derives the attempt's own.
     ...(logCtx.activeAttempt ? { attempt: attemptStatus === undefined ? logCtx.activeAttempt : { ...logCtx.activeAttempt } } : {}),
   });
-  if (attemptStatus !== undefined && logCtx.activeAttempt) attributePhysicalAttempt(logCtx.activeAttempt);
+  if (attemptStatus !== undefined && logCtx.activeAttempt && !sealedRefusal) attributePhysicalAttempt(logCtx.activeAttempt);
   // The one seam every request passes exactly once, whatever transport served it and however
   // it ended. The ledger gives per-send usage precedence over terminal usage and keeps unknown
   // physical spend unresolved.
@@ -1630,6 +1635,7 @@ function writeFinalRequestLog(
   // Keyed by the live attempt objects, not the detached copies above.
   const protocolTrace = protocolTraceForRequest(logCtx, logCtx.attempts);
   // Projected before any writer (an injected one too): the row keeps only proxy-owned error facts.
+  reportCommittedTerminalCooldown(logCtx, meta, attempts, effectiveStatus);
   addLog(projectErrorDetail({
     requestId,
     ...(isLogicalRequestId(logicalRequestId) ? { logicalRequestId } : {}),
@@ -1822,31 +1828,10 @@ export function beginRequestAttempt(
   };
 }
 
-/** Preserve metered JSON failures before recovery consumes/cancels their body. */
-export async function recordKeyAttemptFailure(logCtx: RequestLogContext, response: Response, signal?: AbortSignal,
-  includeUnattributed = false): Promise<OcxUsage | undefined> {
-  const attempt = logCtx.activeAttempt;
-  const keyAttempt = attempt && KEY_ACCOUNT_LOG_LABEL_RE.test(attempt.accountLogLabel ?? "") ? attempt : undefined;
-  if (!keyAttempt && !includeUnattributed) return;
-  if (keyAttempt) keyAttempt.status = response.status;
-  const cancelOriginal = (): void => { try { void response.body?.cancel().catch(() => {}); } catch { /* closed */ } };
-  signal?.addEventListener("abort", cancelOriginal, { once: true });
-  try {
-    if (signal?.aborted) { cancelOriginal(); return; }
-    const body = await readBoundedResponseBody(response.clone(), { signal, totalTimeoutMs: 1000, inactivityTimeoutMs: 1000 });
-    if (body.truncated || body.oversized) return;
-    const value = JSON.parse(body.text);
-    const usage = usageFromResponsesPayload(value?.usage ?? value?.response?.usage);
-    if (usage && keyAttempt) recordKeyWireAttemptUsage(logCtx, usage);
-    return usage;
-  } catch { /* Absent/malformed usage remains unknown; recovery still owns the response. */ }
-  finally { signal?.removeEventListener("abort", cancelOriginal); }
-}
-
 /** Add raw per-response usage before a bridge combines multiple rounds for the client. */
 export function recordKeyAttemptUsage(logCtx: RequestLogContext, usage: OcxUsage | undefined): void {
   const attempt = logCtx.activeAttempt;
-  if (!attempt || !usage) return;
+  if (!attempt || sealedCredentialRefusals.has(attempt) || !usage) return;
   attempt.usage = attempt.usage
     ? aggregateAttemptUsage([{ ...attempt, usageStatus: attempt.usage.estimated ? "estimated" : "reported" },
       { ...attempt, usage, usageStatus: usage.estimated ? "estimated" : "reported" }]).usage
@@ -1869,20 +1854,18 @@ export function noteProviderAttemptSend(
   stampApiKeyAccountLabel(logCtx, providerName, provider);
   const next = logCtx.accountLogLabel;
   if (attempt && usesApiKeyAccount(provider)) keyUsageOwners.add(attempt);
-  if (attempt && attempt.sendCount > 0 && (attemptAccountChanged(previous, next, attempt.provider, logCtx.provider)
+  const recoveryStatus = credentialRecoveryStatus(recovery);
+  if (attempt && attempt.sendCount > 0 && (sealedCredentialRefusals.has(attempt) || recoveryStatus !== undefined
+    || attemptAccountChanged(previous, next, attempt.provider, logCtx.provider)
     || resolved && (attempt.model !== resolved.model || attempt.adapter !== resolved.adapter))) {
-    // An input estimate is not evidence that a failed send used that many tokens.
-    delete attempt.inputTokenEstimate;
-    // An account-scoped recovery kind names the status the sealed account answered.
-    finishRequestAttempt(attempt, attempt.status >= 100 ? attempt.status
-      : recovery === "key-401" || recovery === "oauth-401" ? 401 : recovery === "oauth-account-403" ? 403
-        : recovery === "oauth-account-402" ? 402 : recovery?.includes("429") ? 429 : 502,
-    Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()), attempt.usage);
-    // This attempt is being sealed because a NAMED recovery rejected it, so the recovery kind
-    // is direct evidence here rather than an inference from history. Without this the sealed
-    // attempt would reach the ledger with no attribution at all: the finalization seam below
-    // only ever sees the last attempt of the request.
-    attributeSealedAttempt(attempt, recovery);
+    if (!sealedCredentialRefusals.delete(attempt)) {
+      delete attempt.inputTokenEstimate;
+      finishRequestAttempt(attempt, attempt.status >= 100 ? attempt.status
+        : recoveryStatus ?? (recovery === "rate-limit-429" ? 429 : 502),
+      Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()), attempt.usage);
+      // Finalization sees only the live segment, so attribute this refusal before snapshotting it.
+      attributeSealedAttempt(attempt, recovery);
+    }
     const completed = { ...attempt, recoveryKinds: [...attempt.recoveryKinds],
       ...(attempt.usage ? { usage: { ...attempt.usage } } : {}),
       ...(attempt.deliverySummary ? { deliverySummary: { ...attempt.deliverySummary } } : {}),
@@ -1892,10 +1875,16 @@ export function noteProviderAttemptSend(
     if (index >= 0) attempts.splice(index, 0, completed);
     else attempts.push(completed, attempt);
     const fresh = beginRequestAttempt(completed.ordinal + 1, providerName, completed.model, completed.adapter);
+    if (completed.labRouteSubjectId && completed.provider === logCtx.provider
+      && (!resolved || (completed.model === resolved.model && completed.adapter === resolved.adapter))) {
+      fresh.labRouteSubjectId = completed.labRouteSubjectId;
+    }
     // Effort/tier metadata describes the request and is captured before the physical send.
-    for (const key of ["requestedEffort", "effectiveEffort", "reasoningWireField", "reasoningWireValue", "tierOutcome"] as const) {
+    for (const key of ["requestedEffort", "effectiveEffort", "reasoningWireField", "reasoningWireValue"] as const) {
       if (completed[key] !== undefined) Object.assign(fresh, { [key]: completed[key] });
     }
+    // The response observer owns this live object; the sealed row keeps its snapshot.
+    if (attempt.tierOutcome) fresh.tierOutcome = attempt.tierOutcome;
     for (const key of Object.keys(attempt)) delete (attempt as unknown as Record<string, unknown>)[key];
     Object.assign(attempt, fresh);
     delete logCtx.usage;
@@ -1919,7 +1908,7 @@ export function recordAttemptCredentialSource(
   provider: Pick<OcxProviderConfig, "authMode" | "baseUrl" | "adapter">,
   adapterName: string = provider.adapter,
 ): void {
-  if (!attempt) return;
+  if (!attempt || sealedCredentialRefusals.has(attempt)) return;
   // Rebinding an attempt to an unrecognized route must not retain its previous attribution.
   delete attempt.credentialSource;
   if (providerName !== "xai"
@@ -1944,7 +1933,7 @@ export function noteAttemptSend(
   inputTokenEstimate: number | undefined,
   recovery?: AttemptRecoveryKind,
 ): void {
-  if (!attempt) return;
+  if (!attempt || sealedCredentialRefusals.has(attempt)) return;
   attempt.sendCount += 1;
   if (typeof inputTokenEstimate === "number"
     && Number.isFinite(inputTokenEstimate)
@@ -1967,6 +1956,7 @@ export function finishRequestAttempt(
   durationMs: number,
   usage?: OcxUsage,
 ): PersistedUsageAttempt {
+  if (sealedCredentialRefusals.has(attempt)) return attempt;
   const finalized = finalizedUsage(
     attempt.adapter,
     usage ?? attempt.usage,

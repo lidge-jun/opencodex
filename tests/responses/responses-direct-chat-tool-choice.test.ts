@@ -75,6 +75,32 @@ test("direct translated Chat rejects an unrepresentable computer_use choice befo
   expect(sent).toEqual([]);
 });
 
+test.each(["reject", "degrade"] as const)("union applies %s when only the tool-incompatible member accepts images", async onUnservable => {
+  const { config, sent } = fixture();
+  config.providers.chat!.inputModalities = ["text", "image"];
+  config.providers.chat!.autoToolChoiceOnlyModels = ["model"];
+  config.providers.responses!.inputModalities = ["text"];
+  config.visionSidecar = { enabled: false };
+  config.combos = { tools: {
+    capabilityPolicy: "union", onUnservable,
+    targets: [{ provider: "chat", model: "model" }, { provider: "responses", model: "model" }],
+  } };
+  const imageUrl = "data:image/png;base64,AA==";
+  const input = [{ role: "user", content: [{ type: "input_image", image_url: imageUrl }] }];
+  const response = await handleResponses(request("required", [{ type: "computer_use" }], "combo/tools", input), config, {});
+  const text = await response.text();
+  if (onUnservable === "reject") {
+    expect(response.status, text).toBe(400);
+    expect(text).toContain("No target of this combo can accept image input");
+    expect(sent).toEqual([]);
+  } else {
+    expect(response.status, text).toBe(200);
+    expect(sent.map(row => row.provider)).toEqual(["responses"]);
+    expect(sent[0]!.body.tool_choice).toBe("required");
+    expect(JSON.stringify(sent[0]!.body)).not.toContain(imageUrl);
+  }
+});
+
 test.each(["computer_use", "computer_use_preview", "file_search", "code_interpreter"])(
   "required with only a dropped %s tool is refused before Chat sends", async type => {
     const { config, sent } = fixture();

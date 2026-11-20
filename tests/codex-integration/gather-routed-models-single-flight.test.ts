@@ -6,9 +6,13 @@ import {
   resetCatalogRuntimeStateForTests,
   type ComboCatalogOmission,
 } from "../../src/codex/catalog";
-import { clearModelCache } from "../../src/codex/model-cache";
+import {
+  clearModelCache, expireModelCache, getProviderDiscoveryStatus, getStaleCached,
+  isModelsFetchCoolingDown, setCached,
+} from "../../src/codex/model-cache";
 import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
 import type { OcxConfig } from "../../src/types";
+import { gatherRoutedModelsForCatalogGather } from "../../src/codex/catalog/routed-gather";
 import { CatalogGatherBusyError } from "../../src/codex/catalog/provider-fetch";
 
 const originalFetch = globalThis.fetch;
@@ -24,6 +28,46 @@ afterEach(() => {
 });
 
 describe("gatherRoutedModels single-flight", () => {
+  test("a newer 429 fences an older live success and preserves the last good rows", async () => {
+    const name = "ordered-catalog";
+    const config: OcxConfig = { providers: { [name]: {
+      adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "fixture-old-key", liveModels: true,
+    } } };
+    const oldStarted = Promise.withResolvers<void>();
+    const releaseOld = Promise.withResolvers<void>();
+    const lastGood = [{ provider: name, id: "last-good" }];
+    setCached(name, lastGood);
+    expect(expireModelCache(name)).toBe(true);
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (new Headers(init?.headers).get("authorization") === "Bearer fixture-old-key") {
+        oldStarted.resolve();
+        await releaseOld.promise;
+        return Response.json({ data: [{ id: "superseded-live-model" }] });
+      }
+      return new Response(null, { status: 429 });
+    }) as typeof fetch;
+
+    const older = gatherRoutedModels(config);
+    const failure = { status: "failed", reason: "http", httpStatus: 429 };
+    try {
+      await oldStarted.promise;
+      const newer = await gatherRoutedModels({ providers: { [name]: {
+        ...config.providers[name]!, apiKey: "fixture-new-key",
+      } } }, { onlyProvider: name });
+      expect(newer.map(model => model.id)).toEqual(["last-good"]);
+      expect(getProviderDiscoveryStatus(name)).toEqual(failure);
+      releaseOld.resolve();
+      expect((await older).map(model => model.id)).toEqual(["superseded-live-model"]);
+
+      expect(getProviderDiscoveryStatus(name)).toEqual(failure);
+      expect(isModelsFetchCoolingDown(name)).toBe(true);
+      expect(getStaleCached(name)).toEqual(lastGood);
+    } finally {
+      releaseOld.resolve();
+      await older;
+    }
+  });
+
   test("concurrent callers with the same provider set share one upstream discovery", async () => {
     let fetchCount = 0;
     let release!: () => void;
@@ -62,6 +106,38 @@ describe("gatherRoutedModels single-flight", () => {
     expect(fetchCount).toBe(1);
     expect(a.map(m => `${m.provider}/${m.id}`)).toEqual(["slow/model-a"]);
     expect(b).toEqual(a);
+  });
+
+  test("refreshing and observed full gathers keep separate provider fetches", async () => {
+    const name = "separate-gathers";
+    const config: OcxConfig = { providers: { [name]: {
+      adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "fixture-key", liveModels: true,
+    } } };
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      if (++sends === 1) {
+        started.resolve();
+        await release.promise;
+        return Response.json({ data: [{ id: "first-model" }] });
+      }
+      return Response.json({ data: [{ id: "second-model" }] });
+    }) as typeof fetch;
+    const first = gatherRoutedModels(config);
+    await started.promise;
+    const second = gatherRoutedModelsForCatalogGather(withStubbedProviderFetch(config), { authStoreBuffer: null });
+    try {
+      const rows = await Promise.race([second, Bun.sleep(100).then(() => null)]);
+      expect(rows?.map(row => row.id)).toEqual(["second-model"]);
+      expect(sends).toBe(2);
+      release.resolve();
+      expect((await first).map(row => row.id)).toEqual(["first-model"]);
+      expect(getStaleCached(name)?.map(row => row.id)).toEqual(["second-model"]);
+    } finally {
+      release.resolve();
+      await Promise.all([first, second]);
+    }
   });
 
   test("joiners still receive comboOmissions from the shared flight", async () => {

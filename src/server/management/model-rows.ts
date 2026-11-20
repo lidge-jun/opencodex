@@ -11,7 +11,7 @@
 import { modelCapabilitySourceResolver, type ModelCapabilitySourceFields } from "./model-capability-sources";
 import type { CatalogModel } from "../../codex/catalog";
 import { antigravityFamilyDisabled } from "../../providers/antigravity-effort-families";
-import { observeModelCacheRevision } from "../../codex/model-cache";
+import { expireModelCache, getProviderDiscoveryStatus, observeModelCacheRevision } from "../../codex/model-cache";
 import { isPassiveRead } from "../../lib/passive-read";
 import {
   captureExportConfigAdmission,
@@ -50,14 +50,42 @@ import type { OcxConfig } from "../../types";
 import { enrichProviderFromRegistry } from "../../providers/derive";
 import { ensureCodexEntitlementFreshness } from "../../codex/model-entitlements";
 import { fetchAllModels } from "./shared";
-import { CatalogGatherBusyError } from "../../codex/catalog/routed-gather";
+import { CatalogGatherBusyError, gatherRoutedModels, type GatherRoutedModelsOptions } from "../../codex/catalog/routed-gather";
+import { isProviderDiscoveryInFlight, withProviderDiscoveryInFlight } from "../../codex/catalog/provider-models";
 import { captureModelDiscoveryBaseline, finalizeModelDiscovery } from "../../providers/new-model-policy-runtime";
 import { reconcileSuccessfulModelDiscoveries } from "../../providers/new-model-policy";
 import { initialModelSelectionPending, pendingModelSelectionProviders } from "../../providers/initial-model-selection";
+import { captureInitialSelectionBaseline, finalizeInitialModelSelection } from "../../providers/initial-model-selection-runtime";
 import { catalogFastRowEligible, fastRowId } from "../fast-row";
 import { knownEffortRowIds } from "../effort-row";
 import { visionSidecarConsumerClassifier } from "../../vision/eligibility";
 import { modelRowPrice, type ModelRowPrice } from "./model-row-price";
+
+/** Admit one manual discovery without joining work started by any caller. */
+export async function refreshProviderDiscovery(config: OcxConfig, name: string) {
+  const provider = config.providers[name];
+  if (!provider || provider.disabled || provider.adapter === "jev-decision") return undefined;
+  if (isProviderDiscoveryInFlight(name)) return "in-progress" as const;
+  if (!expireModelCache(name)) return getProviderDiscoveryStatus(name);
+  return withProviderDiscoveryInFlight(name, async () => {
+    const baseline = captureModelDiscoveryBaseline(config);
+    const initial = initialModelSelectionPending(provider) ? captureInitialSelectionBaseline(config) : null;
+    const outcomes: NonNullable<GatherRoutedModelsOptions["providerModelOutcomes"]> = [];
+    const revisions = new Map<string, string>();
+    const models = await gatherRoutedModels(config, {
+      onlyProvider: name, providerModelOutcomes: outcomes, providerContentRevisions: revisions,
+    });
+    // A later full gather can start while this action runs. Its publication is not this action's receipt.
+    if (observeModelCacheRevision(name) !== revisions.get(name)) return undefined;
+    const discovery = getProviderDiscoveryStatus(name);
+    if (discovery?.status === "ok" && outcomes.some(outcome => outcome.state === "authoritative")) {
+      if (initial) finalizeInitialModelSelection(config, { ...initial, providers: [name] },
+        uniqueCatalogModelsForPublicList(models), [name]);
+      if (!finalizeModelDiscovery(config, baseline, models, [name], revisions)) throw new CatalogGatherBusyError();
+    }
+    return discovery;
+  });
+}
 
 /**
  * One row of the `/api/models` list. Routed rows spread a `CatalogModel`, so the shape is
@@ -315,6 +343,7 @@ export async function listManagementModelRows(
   options: {
     entitlementWaitMs?: number;
     models?: readonly CatalogModel[];
+    allowSuperseded?: boolean;
     /** Filled with each provider's content revision as of the moment its rows were chosen. */
     providerContentRevisions?: Map<string, string>;
   } = {},
@@ -330,7 +359,11 @@ export async function listManagementModelRows(
   // A passive read (#6959) also skips the entitlement refresh, which reaches the Codex accounts.
   const models = options.models === undefined
     ? isPassiveRead() ? [] : (await Promise.all([
-      fetchAllModels(config, options.providerContentRevisions, projection => { config = projection; }),
+      fetchAllModels(config, {
+        providerContentRevisions: options.providerContentRevisions,
+        allowSuperseded: options.allowSuperseded,
+        publishProjection: projection => { config = projection; },
+      }),
       ensureCodexEntitlementFreshness(config, {
         waitMs: options.entitlementWaitMs ?? 3_000,
       }),

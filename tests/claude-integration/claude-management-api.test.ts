@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, setDefaultTimeout, spyOn, test } from "b
 import { managementFetch as fetch } from "../helpers/management-auth";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { loadConfig, saveConfig, saveConfigPreservingClaudeCode } from "../../src/config";
 import * as configModule from "../../src/config";
 import { startServer as startServerImpl } from "../../src/server";
@@ -11,13 +11,14 @@ import { writeDesktop3pConfig, removeDesktop3pStandardPivot } from "../../src/cl
 import * as desktopProfiles from "../../src/claude/desktop-profile";
 import { buildClaudeDesktopState } from "../../src/server/management/shared";
 import * as systemEnv from "../../src/server/system-env";
+import { claudeLaunchPlan, fetchClaudeCodeState } from "../../src/cli/claude";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../../src/server/management/body";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { desktopFirstPartyTarget } from "../../src/claude/desktop-first-party";
 import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
-import { claudeKeychainReader } from "../../src/oauth/claude-keychain-read";
+import { CLAUDE_KEYCHAIN_PROBE_TIMEOUT_MS, claudeKeychainReader } from "../../src/oauth/claude-keychain-read";
 import { WindowsSecretAclSettleTimeoutError } from "../../src/lib/windows-secret-acl";
 
 let keychainProbe: ReturnType<typeof spyOn>;
@@ -102,6 +103,88 @@ test("GET /api/claude-code returns defaults + available + aliases", async () => 
     expect(d.aliases.some((a: { id: string }) => a.id === "ocx-claude-mock--test-model")).toBe(true);
     expect(typeof d.port).toBe("number");
   } finally {
+    await server.stop(true);
+  }
+});
+
+test.each([
+  ["2.1.280", "claude-fable-5-1[1m]"],
+  ["2.1.290", "claude-fable-5-2[1m]"],
+  ["unknown", "claude-fable-5-1[1m]"],
+])("the Claude Code snapshot fills Fable for CLI version %s", async (version, expected) => {
+  const config = loadConfig();
+  config.claudeCode = { authMode: "subscription" };
+  saveConfig(config);
+  const bin = join(testDir, "bin");
+  mkdirSync(bin);
+  const windows = process.platform === "win32";
+  writeFileSync(join(bin, windows ? "claude.cmd" : "claude"), windows
+    ? `@echo off\r\necho ${version}\r\n`
+    : `#!/bin/sh\nprintf '%s (Claude Code)\\n' '${version}'\n`, { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  const server = startServer(0);
+  try {
+    process.env.PATH = [bin, previousPath].filter(Boolean).join(delimiter);
+    const response = await fetch(new URL("/api/claude-code", server.url));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { effectiveModelEnv: Record<string, string> };
+    expect(body.effectiveModelEnv.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe(expected);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await server.stop(true);
+  }
+});
+
+test.skipIf(process.platform === "win32")("GET /api/claude-code stays within budget when the Fable version probe times out", async () => {
+  const config = loadConfig();
+  config.claudeCode = { authMode: "subscription" };
+  saveConfig(config);
+  writeFileSync(join(testDir, "claude"), '#!/bin/sh\ntrap "" TERM\nprintf "probe\\n" >> "$0.calls"\nexec /bin/sleep 4\n', { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  const server = startServer(0);
+  try {
+    process.env.PATH = [testDir, previousPath].filter(Boolean).join(delimiter);
+    const url = new URL("/api/claude-code", server.url);
+    const started = performance.now();
+    for (let i = 0; i < 2; i++) {
+      const response = await fetch(url);
+      expect(response.status).toBe(200);
+      const body = await response.json() as { effectiveModelEnv: Record<string, string> };
+      expect(body.effectiveModelEnv.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5-1[1m]");
+      expect(Math.round(performance.now() - started)).toBeLessThan(2100);
+    }
+    expect(readFileSync(join(testDir, "claude.calls"), "utf8")).toBe("probe\n");
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await server.stop(true);
+  }
+});
+
+test.skipIf(process.platform === "win32")("Claude launcher reads the daemon routing state when both probes are slow", async () => {
+  const config = loadConfig();
+  config.claudeCode = { enabled: false, authModeMigratedAt: "2026-07-26T00:00:00.000Z" };
+  saveConfig(config);
+  keychainProbe.mockImplementation(async () => {
+    await Bun.sleep(CLAUDE_KEYCHAIN_PROBE_TIMEOUT_MS);
+    return "unknown";
+  });
+  const claude = join(testDir, "claude");
+  writeFileSync(claude, '#!/bin/sh\nprintf "probe\\n" >> "$0.calls"\nexec /bin/sleep 4\n', { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  const server = startServer(0);
+  try {
+    process.env.PATH = [testDir, previousPath].filter(Boolean).join(delimiter);
+    const state = await fetchClaudeCodeState(config, server.port!);
+    expect(keychainProbe).toHaveBeenCalledTimes(1);
+    expect(state.enabled).toBe(false);
+    expect(state.contextWindows["claude-fable-5-2"]).toBe(1_000_000);
+    expect(claudeLaunchPlan(true, state.enabled).kind).toBe("native");
+    expect(existsSync(`${claude}.calls`)).toBe(false);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
     await server.stop(true);
   }
 });

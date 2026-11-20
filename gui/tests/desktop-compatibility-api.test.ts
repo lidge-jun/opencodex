@@ -53,14 +53,15 @@ test("Desktop authorization checks its own status, keeps codes out of errors and
   await expect(runCompatibilityAction("", { target: "runtime", action: "stop" }, new AbortController().signal)).rejects.toThrow("desktop_authorization_required");
   expect(paths).toHaveLength(1);
 });
-test("build assessment projection is strict, optional and never marks another version verified", () => {
+test("build assessment projection is strict, optional and keeps observed and assessed versions distinct", () => {
   const base = { supported: true, phase: "off", running: false };
   expect(parseCompatibilityRuntime(base).buildAssessment).toBeUndefined();
   expect(parseCompatibilityRuntime({ ...base, buildAssessment: null }).buildAssessment).toBeNull();
   const assessed = { assessedVersion: "26.924.2738.0", observedVersion: "26.1007.9446.0", verified: false, completedAt: 1770000000000 };
   expect(parseCompatibilityRuntime({ ...base, buildAssessment: assessed }).buildAssessment).toEqual(assessed);
   expect(parseCompatibilityRuntime({ ...base, buildAssessment: { ...assessed, observedVersion: "26.924.2738.0", verified: true } }).buildAssessment?.verified).toBe(true);
-  for (const invalid of [{ ...assessed, verified: true }, { ...assessed, assessedVersion: "26.924" }, { ...assessed, observedVersion: "C:\\path" },
+  expect(parseCompatibilityRuntime({ ...base, buildAssessment: { ...assessed, verified: true } }).buildAssessment).toMatchObject({ observedVersion: "26.1007.9446.0", verified: true });
+  for (const invalid of [{ ...assessed, verified: true, observedVersion: null }, { ...assessed, assessedVersion: "26.924" }, { ...assessed, observedVersion: "C:\\path" },
     { ...assessed, verified: "true" }, { ...assessed, completedAt: 1.5 }, { ...assessed, completedAt: Infinity },
     { ...assessed, observedVersion: undefined }, "C:\\Program Files\\WindowsApps", 42])
     expect(() => parseCompatibilityRuntime({ ...base, buildAssessment: invalid })).toThrow("invalid_runtime_status");
