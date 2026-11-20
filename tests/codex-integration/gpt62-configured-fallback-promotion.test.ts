@@ -20,25 +20,31 @@ function mergeRetained(row: RawEntry): RawEntry {
   }).find(entry => entry.slug === row.slug)!;
 }
 
-/** The row an earlier release wrote for a configured gpt-6.2-* slug: GPT-6.1 Sol's payload, neutralized. */
+/**
+ * The row an earlier release wrote for a configured gpt-6.2-* slug: every GPT-6.1 Sol field,
+ * identity-neutralized, plus the fields the catalog build derives (checked against rows generated
+ * at c320932c19^, the commit before GPT-6.2 was pinned).
+ */
 function historicalConfiguredRow(slug: string): RawEntry {
   const temporary = "gpt-6.2-before-registration";
   setConfiguredNativeOpenAiModels([temporary]);
-  let row: RawEntry;
-  try { row = structuredClone(buildCatalogEntries(null, [temporary], [])[0]!); } finally { setConfiguredNativeOpenAiModels([]); }
+  let built: RawEntry;
+  try { built = structuredClone(buildCatalogEntries(null, [temporary], [])[0]!); } finally { setConfiguredNativeOpenAiModels([]); }
   const sol61 = structuredClone(upstreamNativeEntry("gpt-6.1-sol")!);
+  delete sol61.prefer_websockets;
+  delete sol61.availability_nux;
   const messages = sol61.model_messages as Record<string, unknown>;
   return {
-    ...row,
+    ...sol61,
+    auto_compact_token_limit: built.auto_compact_token_limit,
+    shell_type: built.shell_type,
+    effective_context_window_percent: built.effective_context_window_percent,
+    opencodex_native_source_priority: built.opencodex_native_source_priority,
     slug,
     display_name: configuredNativeOpenAiDisplayName(slug),
     description: HISTORICAL_DESCRIPTION,
     base_instructions: neutralizeIdentity(sol61.base_instructions as string),
     model_messages: { ...messages, instructions_template: neutralizeIdentity(messages.instructions_template as string) },
-    experimental_supported_tools: sol61.experimental_supported_tools,
-    service_tiers: sol61.service_tiers,
-    additional_speed_tiers: sol61.additional_speed_tiers,
-    default_service_tier: sol61.default_service_tier,
   };
 }
 
@@ -54,7 +60,7 @@ for (const slug of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
       expect(result.display_name).toBe(own.display_name);
     });
 
-    test("sync keeps a fallback whose instructions, tools or speed tiers the user edited", () => {
+    test("sync keeps a fallback with any user edit, including fields outside the instructions and tools", () => {
       for (const edit of [
         { base_instructions: "User's instructions" },
         { model_messages: { instructions_template: "User's template" } },
@@ -63,6 +69,9 @@ for (const slug of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
         { additional_speed_tiers: ["fast", "ultrafast"] },
         { default_service_tier: "ultrafast" },
         { description: "User's description" },
+        { input_modalities: ["text"] },
+        { tool_mode: "user-custom" },
+        { operator_note: "kept" },
       ]) {
         const result = mergeRetained({ ...historicalConfiguredRow(slug), ...edit });
         for (const [key, value] of Object.entries(edit)) expect(result[key]).toEqual(value);

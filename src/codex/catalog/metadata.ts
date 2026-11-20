@@ -745,25 +745,27 @@ export function shouldUpgradeToUpstreamEntry(entry: RawEntry): boolean {
 }
 
 // Before a model had its own pinned row (GPT-6.2 until #8893), a providers.openai.models entry for
-// it borrowed an older Sol row. Promote that fallback to the model's own pin only while the
-// borrowed payload is byte-for-byte unchanged; user-edited instructions, tools or tiers survive.
+// it borrowed an older Sol row. Promote that fallback to the model's own pin only while every
+// borrowed field is unchanged and no field was added, so any user edit keeps the row. The exempt
+// fields are identity and values the catalog build derives on every sync, never user intent.
 const HISTORICAL_CONFIGURED_TEMPLATES = [NATIVE_GPT61_SOL_MODEL, NATIVE_GPT6_SOL_MODEL] as const;
 const HISTORICAL_CONFIGURED_DESCRIPTION = /^OpenAI native model added through providers\.openai\.models; uses GPT-[0-9.]+-Sol capabilities\.$/;
-const BORROWED_FALLBACK_FIELDS = [
-  "base_instructions", "model_messages", "experimental_supported_tools",
-  "service_tiers", "additional_speed_tiers", "default_service_tier",
-] as const;
+const DERIVED_FALLBACK_FIELDS: ReadonlySet<string> = new Set([
+  "slug", "display_name", "description", "auto_compact_token_limit", "shell_type", "prefer_websockets",
+  "effective_context_window_percent", "opencodex_native_source_priority", "availability_nux",
+]);
 
 function isUnchangedHistoricalConfiguredFallback(entry: RawEntry): boolean {
   const slug = entry.slug as string;
   if (entry.display_name !== configuredNativeOpenAiDisplayName(slug)) return false;
   if (typeof entry.description !== "string" || !HISTORICAL_CONFIGURED_DESCRIPTION.test(entry.description)) return false;
   return HISTORICAL_CONFIGURED_TEMPLATES.some(template => {
-    const source = PINNED_UPSTREAM_MODELS.get(template);
-    if (!source || template === slug) return false;
-    const borrowed = structuredClone(withDerivedBaseInstructions(source)) as RawEntry;
+    // The projected template is what an earlier build copied, minus fields catalog rows never carry.
+    const borrowed = template === slug ? null : upstreamNativeEntry(template);
+    if (!borrowed) return false;
     neutralizeBorrowedInstructions(borrowed);
-    return BORROWED_FALLBACK_FIELDS.every(field => Bun.deepEquals(entry[field], borrowed[field]));
+    const fields = new Set([...Object.keys(entry), ...Object.keys(borrowed)]);
+    return [...fields].every(field => DERIVED_FALLBACK_FIELDS.has(field) || Bun.deepEquals(entry[field], borrowed[field]));
   });
 }
 
