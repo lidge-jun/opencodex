@@ -13,6 +13,22 @@ const WINDOWS_SHELL_REFUSAL = /is not recognized as (?:an internal or external c
 /** ssh's own failure status: the remote shell never ran, so there is nothing to ask. */
 const SSH_TRANSPORT_FAILURE = 255;
 
+/** Platform discovery reached the host but could not prove what it runs; the message is safe to show as a hint. */
+export class RemotePlatformError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RemotePlatformError";
+  }
+}
+
+/**
+ * Is this line cmd's answer to WINDOWS_OS_PROBE? Windows OpenSSH has been seen to hand the command
+ * line to cmd so that it echoes a stray quote (`Windows_NT"`), so one surrounding quote is ignored.
+ */
+export function isWindowsOsAnswer(line: string): boolean {
+  return line.trim().replace(/^"|"$/g, "") === "Windows_NT";
+}
+
 /** Remote argv that prints the kernel name; under cmd or PowerShell, `sh` itself is refused. */
 export const REMOTE_UNAME_ARGV: readonly string[] = ["sh", "-c", "uname -s 2>/dev/null", "ocx-platform"];
 const REMOTE_FRAMED_UNAME_ARGV: readonly string[] = ["sh", "-c", "printf 'ocx-platform:%s\\n' \"$(uname -s 2>/dev/null)\"", "ocx-platform"];
@@ -45,7 +61,7 @@ export function mayBeWindowsShell(result: SshRunResult): boolean {
 export async function confirmWindowsShell(runner: SshRunner, alias: string, route: ExplicitRoute | null, knownHostsFile: string, timeoutMs = 30_000): Promise<boolean> {
   try {
     const result = await runner.run(buildWindowsProbeArgv({ alias, knownHostsFile, route }), { timeoutMs });
-    return result.code === 0 && result.stdout.trim().split(/\r?\n/)[0]?.trim() === "Windows_NT";
+    return result.code === 0 && isWindowsOsAnswer(result.stdout.trim().split(/\r?\n/)[0] ?? "");
   } catch { return false; }
 }
 
@@ -69,23 +85,23 @@ export async function requireRemotePlatform(
   const timeoutMs = over.timeoutMs ?? 10_000;
   const runOptions = over.signal ? { timeoutMs, signal: over.signal } : { timeoutMs };
   const windows = await runner.run(buildWindowsProbeArgv({ alias, knownHostsFile, destination: over.destination, route }), runOptions);
-  if (windows.code === 255) throw new Error("SSH platform discovery failed");
-  if (windows.code === 0 && windows.stdout.trim() === "Windows_NT") return "windows";
+  if (windows.code === 255) throw new RemotePlatformError("SSH platform discovery failed");
+  if (windows.code === 0 && isWindowsOsAnswer(windows.stdout)) return "windows";
   const result = await runner.run(buildExecArgv({ alias, knownHostsFile, destination: over.destination, argv: REMOTE_UNAME_ARGV, route }), runOptions);
   const platform = classifyRemotePlatform(result);
-  if (platform === "unknown") throw new Error("Remote platform could not be determined");
+  if (platform === "unknown") throw new RemotePlatformError("Remote platform could not be determined");
   return platform;
 }
 
 /** Fan-out ignores login-shell output and trusts only one framed uname line. */
 export async function requireRemotePlatformFramed(runner: Pick<SshRunner, "run">, alias: string, route: ExplicitRoute | null, knownHostsFile: string): Promise<"posix" | "windows"> {
   const windows = await runner.run(buildWindowsProbeArgv({ alias, knownHostsFile, route }), { timeoutMs: 10_000 });
-  if (windows.code === SSH_TRANSPORT_FAILURE) throw new Error("SSH platform discovery failed");
-  if (windows.code === 0 && windows.stdout.split(/\r?\n/).some(line => line.trim() === "Windows_NT")) return "windows";
+  if (windows.code === SSH_TRANSPORT_FAILURE) throw new RemotePlatformError("SSH platform discovery failed");
+  if (windows.code === 0 && windows.stdout.split(/\r?\n/).some(isWindowsOsAnswer)) return "windows";
   const result = await runner.run(buildExecArgv({ alias, knownHostsFile, argv: REMOTE_FRAMED_UNAME_ARGV, route }), { timeoutMs: 10_000 });
-  if (result.code === SSH_TRANSPORT_FAILURE) throw new Error("SSH platform discovery failed");
+  if (result.code === SSH_TRANSPORT_FAILURE) throw new RemotePlatformError("SSH platform discovery failed");
   const frames = result.stdout.split(/\r?\n/).filter(line => line.startsWith("ocx-platform:"));
   const name = frames.length === 1 ? frames[0]!.slice("ocx-platform:".length) : "";
-  if (result.code !== 0 || !POSIX_UNAME.test(name)) throw new Error("Remote platform could not be determined");
+  if (result.code !== 0 || !POSIX_UNAME.test(name)) throw new RemotePlatformError("Remote platform could not be determined");
   return WINDOWS_UNAME.test(name) ? "windows" : "posix";
 }

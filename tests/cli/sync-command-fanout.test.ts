@@ -224,7 +224,7 @@ test("fan-out discovers unstored platforms despite shell startup output", async 
     expect(await runSyncCommand(deps)).toBe(0);
     expect(JSON.parse(output.at(-1)!).children[0]).toMatchObject({ state: "synced", reason: null });
     expect(commands.at(-1)).toContain("sh ");
-    expect(probes[0]!.at(-1)).toBe("cmd /c echo %OS%");
+    expect(probes[0]!.at(-1)).toBe("cmd.exe /c echo %OS%");
     expect(probes[1]!.at(-1)).toContain("ocx-platform:%s");
     expect(probes[1]).toContain("StrictHostKeyChecking=yes");
     responses = [{ code: 0, stdout: `${startup} Windows_NT \n`, stderr: startup }]; output.length = 0; commands.length = 0; probes.length = 0;

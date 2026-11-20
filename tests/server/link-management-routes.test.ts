@@ -101,7 +101,7 @@ function harness() {
 
 function childProbe(remote: string, h: ReturnType<typeof harness>): SshRunResult | null {
   if (remote === "echo ocx-link-probe") return { code: 0, stdout: "ocx-link-probe\n", stderr: "" };
-  if (remote === "cmd /c echo %OS%") return { code: 127, stdout: "", stderr: "cmd absent" };
+  if (remote === "cmd.exe /c echo %OS%") return { code: 127, stdout: "", stderr: "cmd absent" };
   if (remote.includes("ocx-platform")) return { code: 0, stdout: "Linux\n", stderr: "" };
   if (remote === remoteOcx(["config", "show", "--json"])) return { code: 0, stdout: '{"port":10100}', stderr: "" };
   if (remote === quoteRemote(REMOTE_CURL_PREFLIGHT)) return { code: 0, stdout: "", stderr: "" };
@@ -164,7 +164,7 @@ function versionRunner(remote: { probeCode: number; probeStderr: string; code: n
       const text = argv.join(" ");
       if (text.includes("ssh-keygen")) return { code: 0, stdout: "256 SHA256:abcdefghijklmnop host (ED25519)", stderr: "" };
       if (isBareOcx(argv)) return BARE_OCX;
-      if (argv.at(-1) === "cmd /c echo %OS%") return { code: 127, stdout: "", stderr: "cmd absent" };
+      if (argv.at(-1) === "cmd.exe /c echo %OS%") return { code: 127, stdout: "", stderr: "cmd absent" };
       if (argv.at(-1)?.includes("ocx-platform")) return { code: 0, stdout: "Linux\n", stderr: "" };
       if (argv.at(-1) === remoteOcx(["--version"])) return { code: remote.code, stdout: remote.stdout, stderr: remote.stderr };
       const knownHostOption = argv.find(value => value.startsWith("UserKnownHostsFile="));
@@ -803,6 +803,30 @@ describe("link management routes", () => {
     expect(await confirmed!.json()).toEqual({ alias: "home", fingerprint: "SHA256:abcdefghijklmnop", ocxVersion: "2.70.0-rc.1+build.7" });
   });
 
+  test("probe accepts the quoted cmd answer and hints when the platform cannot be determined", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-probe-platform-"));
+    const h = harness();
+    const base = versionRunner({ probeCode: 0, probeStderr: "", code: 0, stdout: "opencodex 2.66.0\n", stderr: "" });
+    let windowsAnswer: SshRunResult = { code: 0, stdout: "Windows_NT\"\r\n", stderr: "" };
+    const runner: SshRunner = {
+      ...base,
+      async run(argv, options) {
+        if (argv.at(-1) === "cmd.exe /c echo %OS%") return windowsAnswer;
+        // A localized cmd refusing `sh`: no English text to recognize.
+        if (argv.at(-1)?.includes("ocx-platform")) return { code: 1, stdout: "", stderr: "El sistema no puede encontrar la ruta especificada.\r\n" };
+        return base.run(argv, options);
+      },
+    };
+    const deps = { ...h.deps, sshRunner: runner };
+    const post = () => call("/api/link/probe", "POST", { alias: "home" }, deps, "gui-session", true, "pairing", true, h.config);
+
+    expect((await post())?.status).toBe(200);
+    windowsAnswer = { code: 1, stdout: "", stderr: "" };
+    const failed = await post();
+    expect(failed?.status).toBe(502);
+    expect(await failed!.json()).toEqual({ error: { code: "probe_failed", message: "SSH host probing failed.", hint: "Remote platform could not be determined" } });
+  });
+
   test("confirm-host enforces the remote ocx floor, maps failures, and keeps the probe for a retry", async () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-link-version-floor-"));
     const h = harness();
@@ -1384,7 +1408,7 @@ for (const remotePlatform of [undefined, "windows", "posix"] as const) {
     const runner: SshRunner = {
       async run(argv) {
         expect(argv).toContain("StrictHostKeyChecking=yes");
-        if (argv.at(-1) === "cmd /c echo %OS%") return { code: 0, stdout: "Windows_NT\r\n", stderr: "" };
+        if (argv.at(-1) === "cmd.exe /c echo %OS%") return { code: 0, stdout: "Windows_NT\r\n", stderr: "" };
         expect(argv.at(-1)).toBe(quoteRemote(remoteOcxArgv(["disconnect", "--expect-link", id], selected)));
         return { code: 0, stdout: "", stderr: "" };
       },

@@ -23,6 +23,7 @@ import {
   SSH_OUTPUT_CAP_BYTES,
   SshRunnerError,
 } from "../../src/link/ssh-runner";
+import { isWindowsOsAnswer } from "../../src/link/remote-platform";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
@@ -89,9 +90,14 @@ test("Windows %OS% probe is a fixed literal that trusts only an already recorded
   expect(argv.slice(0, 2)).toEqual(["ssh", "-T"]);
   expectCommonTrustOptions(argv, "yes", knownHostsFile);
   expect(argv).toContain("ClearAllForwardings=yes");
-  expect(argv.slice(-3)).toEqual(["--", "gamma.example.test", "cmd /c echo %OS%"]);
-  expect(WINDOWS_OS_PROBE).toBe("cmd /c echo %OS%");
+  expect(argv.slice(-3)).toEqual(["--", "gamma.example.test", "cmd.exe /c echo %OS%"]);
+  expect(WINDOWS_OS_PROBE).toBe("cmd.exe /c echo %OS%");
   expect(() => buildWindowsProbeArgv({ alias: "-oProxyCommand=x", knownHostsFile })).toThrow(LinkSshArgumentError);
+});
+
+test("the %OS% answer tolerates line endings and the stray quote Windows OpenSSH adds to bare cmd", () => {
+  for (const answer of ["Windows_NT", "Windows_NT\r\n", "Windows_NT\"\r\n", "\"Windows_NT\"\r\n"]) expect(isWindowsOsAnswer(answer)).toBe(true);
+  for (const answer of ["", "%OS%", "Windows_NT\"\"", "Linux", "sh: cmd.exe: not found"]) expect(isWindowsOsAnswer(answer)).toBe(false);
 });
 
 test("probe argv uses accept-new only with its temporary known_hosts file", () => {

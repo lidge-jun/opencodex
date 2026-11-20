@@ -371,10 +371,11 @@ export function buildRouteProbeArgv(options: RouteProbeArgvOptions): string[] {
 
 /**
  * Locale-independent Windows check for a host whose SSH shell is cmd.exe or PowerShell. Both run
- * `cmd /c echo %OS%`, and cmd expands it to `Windows_NT` regardless of display language. The
- * command is a fixed literal; a POSIX shell answers "command not found" and nothing else.
+ * `cmd.exe /c echo %OS%`, and cmd expands it to `Windows_NT` regardless of display language. The
+ * command is a fixed literal; a POSIX shell answers "command not found" and nothing else. The bare
+ * `cmd` form is avoided: under Windows OpenSSH it answers `Windows_NT"` with a stray quote.
  */
-export const WINDOWS_OS_PROBE = "cmd /c echo %OS%";
+export const WINDOWS_OS_PROBE = "cmd.exe /c echo %OS%";
 
 /** Run WINDOWS_OS_PROBE against an already trusted (pinned or just-probed) host key only. */
 export function buildWindowsProbeArgv(options: { alias: string; knownHostsFile: string; destination?: string; route: ExplicitRoute | null }): string[] {

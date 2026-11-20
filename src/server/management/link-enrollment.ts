@@ -8,7 +8,7 @@ import { parseFingerprintLine } from "../../link/fingerprint";
 import { confirmedLineTrust as confirmedLineTrustIn, type ConfirmedLineTrust } from "../../link/route-trust";
 import { isDetachedEphemeralChildConfig } from "../../link/ephemeral-child";
 import { classifyChildAttachConflict, classifyPlantFailure, inspectRemoteChildRuntime, parseFullInstallCensus, remoteFullInstallCensusArgv, remotePlantChildArgv, remotePurgePlantedChildArgv } from "../../link/remote-plant";
-import { requireRemotePlatform } from "../../link/remote-platform";
+import { RemotePlatformError, requireRemotePlatform } from "../../link/remote-platform";
 import { LINK_CATALOG_MAX_BYTES, LINK_RELAY_VERIFY_MS, isChildHealth, linkCommandBudget, linkRestartBudget, parseChildHttp, remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../link/remote-probe";
 import { newLinkId, type LinkStore } from "../../link/store";
 import { residualRecovery } from "../../link/residual-recovery";
@@ -145,7 +145,11 @@ export async function probe(ctx: ManagementContext, state: LinkRouteState): Prom
       state.pendingHosts.set(alias, { alias, fingerprint: parsed.fingerprint, keyType: parsed.keyType, knownHostLine: line, probedAt: now(), sshLatencyMs: latency, remotePlatform, ...bound });
       state.confirmedHosts?.delete(alias);
       return Response.json({ alias, fingerprint: parsed.fingerprint, keyType: parsed.keyType, ...(ocxVersion === undefined ? {} : { ocxVersion }) });
-    } catch (error) { return fail("probe_failed", "SSH host probing failed.", 502, sshRunnerErrorHint(error)); }
+    } catch (error) {
+      // A platform-detection failure is not an SSH outage; say so instead of an empty 502.
+      const hint = sshRunnerErrorHint(error) ?? (error instanceof RemotePlatformError ? boundHint(error.message) : undefined);
+      return fail("probe_failed", "SSH host probing failed.", 502, hint);
+    }
     finally { rmSync(dir, { recursive: true, force: true }); }
   });
 }
