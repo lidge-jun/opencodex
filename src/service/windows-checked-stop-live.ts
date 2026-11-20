@@ -100,14 +100,15 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
     return;
   }
   let file: string;
+  let native: WindowsProcessNativeApi | null;
+  let readExitCode: (() => number | null) | null = null;
   try {
     file = programPath(program);
+    native = program === "schtasks" && args.includes("/hresult") ? windowsProcessNative() : null;
   } catch (error) {
     resolve({ status: null, stdout: "", stderr: error instanceof Error ? error.message : String(error), timedOut: false });
     return;
   }
-  const native = program === "schtasks" && args.includes("/hresult") ? windowsProcessNative() : null;
-  let readExitCode: (() => number | null) | null = null;
   const helper = execFile(file, args, { encoding: "buffer", timeout, windowsHide: true, maxBuffer: 1024 * 1024 },
     (error, stdout, stderr) => {
       const text = (value: Buffer | string | undefined): string =>
