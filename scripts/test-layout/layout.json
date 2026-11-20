@@ -1514,6 +1514,7 @@
     "reserve-passive-revocation.test.ts": "codex-integration",
     "reserve-quota-scope.test.ts": "codex-integration",
     "resolved-model-policy-consumers.test.ts": "routing",
+    "resolved-model-policy-catalog-reuse.test.ts": "providers",
     "resolved-model-policy.test.ts": "providers",
     "response-log-inspection.test.ts": "server",
     "response-model-identity.test.ts": "server",
