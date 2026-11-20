@@ -68,3 +68,10 @@ The route-independent Claude bridge pool key agrees with final Codex selection; 
 Right after continuation expansion, and only for a request that carries a Remote Link turn observer (a link WebSocket turn, or a relayed request with the link relay's internal token header), `request-prepare.ts` reports the expanded input to `src/server/link-turn.ts`; an expansion miss reports a failure. A request without an observer runs no code there, and the header is removed before anything is forwarded (`structure/remote-link.md`). The same seam receives the chain outcome (expanded, unexpanded or none) and, at the two refusals of an unexpanded continuation, marks the row's link continuation as a miss with reason missing.
 
 When the selected route targets canonical ChatGPT and its continuation cannot be expanded, request preparation logs the selected provider and model with `previous_response_not_found` and synthetic provenance. If preparation made no inference send, the row has `local-refusal` and no physical attempt. Opt-in encrypted-task recovery can send before a reroute to native fallback. In that case the row preserves the recovery attempts with their own model, status, and any reported usage. A client resend carrying the full history is a separate request.
+
+Translated union Combo admission and final child preparation share the hosted Advisor destination check. This operates on scoped tool declarations independently of response-turn membership.
+
+A combo bridge child inherits the intersection of the ingress scope and the current
+configured-key scope at dispatch.
+
+A strict replay miss ends preparation before recovery or upstream dispatch. For a direct canonical ChatGPT route, request preparation records the requested model and effort, provider, and route trace using request metadata and a route preview. `tests/codex-integration/issue-702-expired-replay-state.test.ts` covers the resulting zero-send log row.

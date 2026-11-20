@@ -138,6 +138,7 @@ describe("account pool strategy helpers", () => {
     expect(normalizeAccountPoolStrategy("round-robin")).toBe("round-robin");
     expect(normalizeAccountPoolStrategy("fill-first")).toBe("fill-first");
     expect(normalizeAccountPoolStrategy("reset-first")).toBe("reset-first");
+    expect(normalizeAccountPoolStrategy("reset-near-weighted")).toBe("reset-near-weighted");
     expect(normalizeAccountPoolStrategy("weighted")).toBe(DEFAULT_ACCOUNT_POOL_STRATEGY);
     expect(normalizeAccountPoolStrategy(undefined)).toBe("quota");
   });
@@ -587,6 +588,30 @@ describe("CodexPoolStrategySetting optimistic strategy select", () => {
     expect(strategyTrigger(host).textContent).toContain("Round-robin");
     expect(strategyTrigger(host).disabled).toBe(false);
     expect(host.textContent).toContain("New/unbound assignments before rotate");
+  });
+
+  test("a Codex sticky-limit edit preserves the loaded reset-near-weighted strategy", async () => {
+    const puts: unknown[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        puts.push(JSON.parse(String(init.body)));
+        return new Response(null, { status: 204 });
+      }
+      return Response.json({ accountPoolStrategy: "reset-near-weighted", accountPoolStickyLimit: 1 });
+    }) as typeof fetch;
+    const host = testWindow.document.createElement("div");
+    testWindow.document.body.appendChild(host as never);
+    const { createRoot } = await import("react-dom/client");
+    await act(async () => {
+      mountedRoot = createRoot(host);
+      mountedRoot.render(<LanguageProvider><CodexPoolStrategySetting apiBase="http://proxy" /></LanguageProvider>);
+      await flush();
+    });
+    expect(strategyTrigger(host).textContent).toContain("Weighted by nearest reset");
+    const increment = host.querySelector<HTMLButtonElement>('button[aria-label="Increase sticky limit"]')!;
+    await act(async () => { increment.click(); await flush(); });
+    expect(puts).toEqual([{ provider: "openai", stickyLimit: 2 }]);
+    expect(strategyTrigger(host).textContent).toContain("Weighted by nearest reset");
   });
 
   test("rolls back strategy when save fails", async () => {

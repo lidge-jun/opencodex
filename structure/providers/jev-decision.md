@@ -253,6 +253,32 @@ or an opencodex model route, with the timeout and a Test probe; there is no sepa
 
 ## Session pin
 
+Combo admission runs once per request against `snapshotComboAdmission` in
+`src/server/responses/combo-admission-snapshot.ts`: a detached copy of the request-start combo
+roster, provider and custom-model capability metadata, context caps and Vision Sidecar settings.
+The copy takes own data descriptors at every level and skips accessors without invoking them, so a
+lazily resolved credential is never read. The gate computes every member's route and capability
+verdict before it awaits image planning. Credential resolution stays in the routing and sidecar paths.
+Before forming JEV candidates and authorizing a decision backend, the combo keeps only members that
+live metered consent admits and intersects the ingress scope with the configured key's current scope.
+A denied decision destination yields an unbilled local fallback.
+After a paid decision the combo does not rerun admission. It filters the request-start choices by
+current availability over the request-start roster (cooldowns and the original reprobe
+reservation), by live metered consent and by the current key scope. An edit to capabilities,
+sidecars, protocol policy, mandatory-tool support or the roster made while the decision was in
+flight applies to the next request.
+The parent records completed decision usage before that recheck, so a refusal, a cancellation (499),
+a recheck exception and the local `503 combo_unavailable` each keep it exactly once without
+dispatching a child or repeating the decision. Responses, Chat and Messages finalize that row
+through the terminal HTTP response. Every child dispatch, including a pin reused without a paid
+decision, passes the [dispatch-time consent and scope check](../runtime.md#request-local-target-compatibility).
+Dispatch uses the admitted combo policy, including the refusal or omission rule if a required
+image description fails. Every image-description probe and the child it admits plan with the
+snapshot's Vision Sidecar settings (`comboVisionSidecar`, read through `responsesVisionConfig` in
+`src/server/responses/request-sidecar-auth.ts`); only the helper credential resolves live.
+The turn captures JEV effort ownership at ingress so the
+wire effort and its request log label follow the same mode.
+
 `sessionPin: { ttlMs }` is an opt-in, JEV-only Combo field (#7525); `src/combos/jev-session-pin-config.ts`
 owns its 60000..86400000 ms range, the CLI duration grammar and the closed `pinReason` vocabulary.
 The shared JEV Decision method editor exposes a pin checkbox and an exact millisecond idle window.
@@ -316,3 +342,5 @@ detection, and folds identities beyond 255 concrete rows into one explicit overf
 preserving global totals. Up to four JEV projections participate in the same app-owned memory budget
 and eviction path as ordinary usage aggregates. Read failure returns HTTP 500 rather than a partial
 projection.
+
+Union admission shares the hosted Advisor eligibility check with child preparation. The detached admission snapshot includes the destination’s `forwardAdvisorTool` policy; a change made after the request starts applies to the next request.

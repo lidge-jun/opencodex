@@ -497,13 +497,16 @@ export async function executeResponsesSidecars(
         "auth-recovery",
         `${route.providerName}|${route.modelId}|sidecar-anthropic-429`,
       );
-      const nextAccountId = await rotateAnthropicAccountOnResponseForInstance(anthropicInstance,
-        originalResponse ?? new Response(null, { status: 429, headers: responseHeaders ?? (retryAfter ? { "retry-after": retryAfter } : undefined) }), {
-          config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
-          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: options.abortSignal,
-          allow429Recovery: !sidecarHasCommittedOutput(), allowAccountRefusal: !sidecarHasCommittedOutput(),
-          canRetry: hop.allowed && transportState.anthropicPoolFailovers < transportState.anthropicFailoverLimit,
-        });
+      let nextAccountId: string | null;
+      try {
+        nextAccountId = await rotateAnthropicAccountOnResponseForInstance(anthropicInstance,
+          originalResponse ?? new Response(null, { status: 429, headers: responseHeaders ?? (retryAfter ? { "retry-after": retryAfter } : undefined) }), {
+            config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
+            model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: options.abortSignal,
+            allow429Recovery: !sidecarHasCommittedOutput(), allowAccountRefusal: !sidecarHasCommittedOutput(),
+            canRetry: hop.allowed && transportState.anthropicPoolFailovers < transportState.anthropicFailoverLimit,
+          });
+      } catch (error) { hop.permit?.release(); throw error; }
       if (!nextAccountId) {
         hop.permit?.release();
         return null;
@@ -601,7 +604,7 @@ export async function executeResponsesSidecars(
         }
       }
     } };
-  const sidecarRequestFetch = (request: AdapterRequest, iterParsed: OcxParsedRequest, adapter: ProviderAdapter, recovery?: AttemptRecoveryKind) => {
+  const sidecarRequestFetch = (request: AdapterRequest, iterParsed: OcxParsedRequest, adapter: ProviderAdapter, recovery?: AttemptRecoveryKind, onPhysicalDispatch?: () => void) => {
     const staged = pendingSidecarReplay?.kind === recovery ? pendingSidecarReplay : undefined;
     if (!staged) pendingSidecarReplay = undefined;
     const handoff = transportState.credentialReplayHandoff;
@@ -631,6 +634,7 @@ export async function executeResponsesSidecars(
           published = true;
         }
         sentSidecarInference = true;
+        onPhysicalDispatch?.();
       },
     });
   };
@@ -644,10 +648,10 @@ export async function executeResponsesSidecars(
   // A loop's hidden rounds before a rotation were spent by the account it left. Bill them to that
   // attempt while it is still open. A staged credential replay also starts a new row even
   // when the account label stays the same. In-place retries keep the loop’s accumulated usage.
-  const billRotatedUsage = (usage: OcxUsage): boolean => {
+  const billRotatedUsage = (usage: OcxUsage | undefined): boolean => {
     const attempt = logCtx.activeAttempt;
     if (!attempt || (!pendingSidecarReplay && !attemptAccountChanged(attempt.accountLogLabel, logCtx.accountLogLabel, attempt.provider, logCtx.provider))) return false;
-    transportState.bindKeyUsageFromBridge(usage);
+    if (usage) transportState.bindKeyUsageFromBridge(usage);
     return true;
   };
   const configureModelSendAllowance = !options.comboAttempt && !options.comboInitialSend && !routedCompaction
@@ -841,6 +845,8 @@ export async function executeResponsesSidecars(
         ...sidecarBudget.fetchOptions(transportState.adapter),
       })(input, init)) as typeof globalThis.fetch;
     const loopResponse = await runWithWebSearch({
+      terminalContinuationGuard: route.provider.terminalContinuationGuard === true
+        && !options.comboAttempt && !routedCompaction,
       configureModelSendAllowance,
       emptyCompletionRetry: emptyCompletionRetryEnabled(config) && !options.comboAttempt && !routedCompaction,
       dispatchSidecarSend: sendBudgetState.dispatchSidecarSend,
@@ -851,7 +857,8 @@ export async function executeResponsesSidecars(
       ...(imageRecovery ? { imageRecovery } : {}),
       clientToolCatalogRestriction: route.provider.authMode === "forward" ? undefined : requestState.clientToolCatalogRestriction,
       onIterationEnd: releaseSidecarHop,
-      fetchForRequest: sidecarRequestFetch,
+      fetchForRequest: (...args) =>
+        Object.assign(sidecarRequestFetch(...args), { reportsPhysicalDispatch: true as const }),
       incomingMeta: {
         headers: requestState.selectedForwardHeaders,
         providerName: route.providerName,

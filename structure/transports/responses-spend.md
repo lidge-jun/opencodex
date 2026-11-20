@@ -171,6 +171,9 @@ A credential rotation inside one provider's roster reserves a hop from the reque
 budget before it knows whether a rotation is even possible, because the reservation is the charge:
 `reserveDispatch` spends, `permit.use()` only confirms which leg sent, and `permit.release()` is
 idempotent and a no-op once used. Every ladder therefore owes the budget an answer on every exit.
+Anthropic sidecar rotation releases its still-unused hop when rotation throws or returns `null`,
+without dispatching a replacement. A thrown error is rethrown unchanged; cancellation during the
+inline throttle wait makes rotation return `null`, so the sidecar releases the hop and returns `null`.
 
 Generic OAuth and Anthropic OAuth snapshot the eligible roster before dispatch. Their rotation ceiling
 is `max(3, min(eligibleCount, 6) - 1)`; live selection still removes accounts in cooldown, so the snapshot
@@ -223,7 +226,7 @@ physical-dispatch receipt; when it is active the shared physical-send reporter k
 a send is never charged by both. Other callers keep early settlement only when enforcement is inactive;
 enforced permits stay refundable until execution.
 For a Codex WebSocket request, the receipt runs before the frame is sent and at most once across
-the WS attempt and its HTTP fallback. If WS send then fails and HTTP refuses before dispatch, that
+the WS attempt and its HTTP fallback. See [cache-miss spend admission](upload-reduction.md#cache-miss-spend-admission) for incremental resends. If WS send then fails and HTTP refuses before dispatch, that
 accepted booking remains charged even though no physical send occurred.
 The existing `refundableAdapterDispatchBudget` view stays available to direct Antigravity search;
 its legacy already-settled-hop replacement still requires a fresh admitted reservation.

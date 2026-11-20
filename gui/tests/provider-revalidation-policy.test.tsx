@@ -312,7 +312,8 @@ for (const kind of ["oauth", "api-key"] as const) {
       .find(button => /Accounts|Keys/.test(button.textContent ?? ""));
     expect(accountsTab).toBeDefined();
     await act(async () => { accountsTab!.click(); });
-    expect(container.querySelector(".pwi-auth-acct--active")?.textContent).toContain("Choice A");
+    const activeAccountSelector = kind === "oauth" ? 'button[aria-current="true"]' : ".pwi-auth-acct--active";
+    expect(container.querySelector(activeAccountSelector)?.textContent).toContain("Choice A");
     expect(subscriptions).toBe(1);
     const quotaReads = () => reads.filter(path => path.includes("quota=1") || path.startsWith("/api/provider-quotas")).length;
     const initialQuotas = quotaReads();
@@ -321,8 +322,8 @@ for (const kind of ["oauth", "api-key"] as const) {
     expect(reads.length).toBeGreaterThan(initialReads);
     selected = "b";
     await act(async () => { send("account-selection", { provider: name, kind, revision: 1 }); });
-    expect(container.querySelector(".pwi-auth-acct--active")?.textContent).toContain("Choice B");
-    expect(container.querySelector(".pwi-auth-acct--active")?.textContent).not.toContain("Choice A");
+    expect(container.querySelector(activeAccountSelector)?.textContent).toContain("Choice B");
+    expect(container.querySelector(activeAccountSelector)?.textContent).not.toContain("Choice A");
     expect(quotaReads()).toBe(initialQuotas);
     expect(subscriptions).toBe(1);
     expect(pollBucketCountForTests()).toBe(1);
@@ -358,7 +359,7 @@ for (const kind of ["oauth", "api-key"] as const) {
     await retry(250);
     expect(subscriptions).toBe(2);
     await act(async () => { send("ready", { revision: 0 }); });
-    expect(container.querySelector(".pwi-auth-acct--active")?.textContent).toContain("Choice A");
+    expect(container.querySelector(activeAccountSelector)?.textContent).toContain("Choice A");
     expect(quotaReads()).toBe(initialQuotas);
 
     await act(async () => { stream.error(new Error("connection interrupted")); });
@@ -372,7 +373,7 @@ for (const kind of ["oauth", "api-key"] as const) {
     expect(subscriptions).toBe(8);
     selected = "b";
     await act(async () => { send("ready", { revision: 0 }); });
-    expect(container.querySelector(".pwi-auth-acct--active")?.textContent).toContain("Choice B");
+    expect(container.querySelector(activeAccountSelector)?.textContent).toContain("Choice B");
     expect(quotaReads()).toBe(initialQuotas);
 
     // Cleanup cancels scheduled retries, and a callback already dequeued cannot orphan a loop.

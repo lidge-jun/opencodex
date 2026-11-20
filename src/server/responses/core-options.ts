@@ -2,7 +2,7 @@ import type { ClientFacingModelLabel } from "../../lib/error-destination";
 import type { HostedAdvisorSelection } from "../../claude/inbound-content-options";
 import type { CodexAccountModelRefusal } from "../../combos/failover";
 import type { NativeResponseControl } from "./native-response-control";
-import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig, OcxProviderConfig } from "../../types";
+import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig, OcxProviderConfig, OcxVisionSidecarConfig } from "../../types";
 import type { RouteResult } from "../../router";
 import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import type { CodexAuthPolicyConfig, CodexAuthContext } from "../../codex/auth-context";
@@ -29,6 +29,7 @@ import type { PolicyRequestScope } from "./policy-request-scope";
 import type { SpendAdmissionPolicy } from "../../lib/spend-reservation-ledger";
 import type { OcxParsedRequest } from "../../types";
 import type { PolicyRequestEvidence } from "../../routing/evaluator";
+import type { ConnectionReplayScope } from "../../responses/state/connection-scope";
 
 export interface HostedAdvisorSpendScope {
   readonly ceilings: SpendAdmissionPolicy;
@@ -91,6 +92,8 @@ export interface ClientEncoderOption {
   stream: boolean;
   model: string;
   inputTokenFloor?: number;
+  /** Chat only: the client set `stream_options.include_usage`. */
+  includeUsage?: boolean;
   /**
    * `direct` when the request side also skipped the internal Responses body (the Antigravity
    * direct lane), so the attempt's request path is traced as `[inbound, ir, upstream]`.
@@ -170,6 +173,14 @@ export interface HandleResponsesOptions {
    * holder with no principal preserves keyless replay; never populate it from client data.
    */
   replayPrincipal?: Readonly<{ clientPrincipalId: string | undefined }>;
+  /**
+   * Internal connection-owned replay scope minted by the /v1/responses WebSocket upgrade for an
+   * unidentified loopback caller (src/responses/state/connection-scope.ts). Memory-only, bound to
+   * that socket's handshake thread, never sent to the client. It backfills only the replay owner
+   * key when no caller principal resolved; it is not a credential, grants no data-plane, history
+   * or notes authority, and must never be populated from client data.
+   */
+  replayScope?: ConnectionReplayScope;
   /** Captured for the logical request and inherited by retries and combo children. */
   readonly plaintextV2Decision?: boolean;
   /** Called at most once after the complete client body is read and accepted for dispatch. */
@@ -267,6 +278,18 @@ export interface HandleResponsesOptions {
   callerDirectAuth?: CallerDirectAuth | null;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /** `union` combo with no member whose window fits: the child keeps the loose direct admission. */
+  comboContextDegraded?: boolean;
+  /** A union combo admitted this image-bearing child through a dispatchable vision plan. */
+  comboRequiresVisionPlan?: boolean;
+  /** The union combo exhausted its image-serving targets and selected omission. */
+  comboOmitImages?: boolean;
+  /**
+   * The request-start Vision Sidecar settings the combo admitted this request under. Vision
+   * planning reads `settings` instead of the live `visionSidecar`, so an edit made while the
+   * request is in flight applies to the next request. Credentials still resolve from live config.
+   */
+  comboVisionSidecar?: { settings: OcxVisionSidecarConfig | undefined };
   /**
    * Set by the combo loop for each child. A child logs into its own context, which the combo
    * copies once when the child commits, and the bridge reports usage after that, at the terminal

@@ -56,7 +56,8 @@ for (const transport of ["runTurn", "fetch"] as const) {
           events = next(request);
           return { url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" };
         },
-        fetchResponse: async () => {
+        fetchResponse: async (_req, ctx) => {
+          ctx?.onPhysicalSend?.({ ordinal: 1 });
           providerSends.push(seen.length);
           return failAfterSearch && seen.length > 1
             ? new Response("refused", { status: 429 }) : new Response("wire");

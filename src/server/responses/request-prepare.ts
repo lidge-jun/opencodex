@@ -1,4 +1,4 @@
-import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
+import { selectResponseReplayOwner } from "./replay-owner";
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { attributePhysicalAttempt } from "../request-log-failure-attribution";
@@ -11,8 +11,8 @@ import type { HandleResponsesOptions, ResponsesRequestContext, ResponsesAdmissio
 import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
 import { addProtocolEntryReason, markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
-import { nativeMessagesToolScopeDenial } from "../messages-native-scope";
-import { ADVISOR_SERVER_TOOL_NAME, advisorServerToolDestination, planAnthropicServerTools } from "../../adapters/anthropic/advisor-tool";
+import { admitsHostedAdvisor, scopedAnthropicServerTools } from "../messages-native-scope";
+import { advisorServerToolDestination } from "../../adapters/anthropic/advisor-tool";
 import { isAntigravityRoute } from "../antigravity-direct-eligibility";
 import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, markPolicyCandidateRefusal, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
 import {
@@ -96,6 +96,7 @@ import type { PersistedUsageAttempt } from "../../usage/log";
 import type { RouteResult } from "../../router";
 import {
   captureRouteStaticPolicy,
+  previewRouteModel,
   routeConcreteModel,
   routeCompactionModel,
   routeModel,
@@ -103,6 +104,7 @@ import {
   AnthropicSecondaryInstanceUnavailableError,
 } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
+import { resolvePolicyProfileId } from "../../routing/profile";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { resolveNativeReasoningRetention } from "../../config/schema/native-reasoning-retention";
 import { isThreadSpawnRequest } from "../effort-policy";
@@ -446,7 +448,7 @@ export async function prepareResponsesRequest(
   const replayPrincipal = options.replayPrincipal
     ? options.replayPrincipal.clientPrincipalId : resolveContextPrincipal(req, config, options.admission);
   const strictReplay = options.plaintextV2Decision ?? isPlaintextV2AgentMessagesEnabled(config);
-  const replayOwnerKey = strictReplay ? responseReplayOwnerKey(replayPrincipal, inboundOwnThreadId) : undefined;
+  const { replayOwnerKey, replayConnectionScope } = selectResponseReplayOwner(strictReplay, replayPrincipal, inboundOwnThreadId, options);
   const replayThreadId = strictReplay ? inboundOwnThreadId : inboundClientThreadId;
   const cursorClientThreadId = codexPoolAffinityKey(req.headers);
   const originalBody = body;
@@ -462,9 +464,33 @@ export async function prepareResponsesRequest(
     // Local replay failures require full client replay.
     if (replayFailure) {
       failLinkTurnExpansion(options.linkTurn, req, logCtx, body, replayFailure.reason);
+      const { code } = replayFailure;
+      if (strictReplay) {
+        logCtx.errorCode = code;
+        if (logCtx.attempts?.some(attempt => attempt.sendCount > 0)) logCtx.terminalSource = "synthetic";
+        else markLocalRequestLogRefusal(logCtx, code);
+        // Attribute a direct native refusal using only request metadata and a route preview.
+        // A miss never enters auth, subagent fallback or encrypted-task recovery for logging.
+        const { model, reasoning } = body as { model?: unknown; reasoning?: unknown };
+        try {
+          const parsed = parseRequest({ model, reasoning });
+          logCtx.requestedModel ??= options.mainHardLockFallbackOverride?.sourceModel
+            ?? options.compactionRoutingOverride?.sourceModel ?? parsed.modelId;
+          logCtx.requestedEffort ??= parsed.options.reasoning;
+          if (!concreteSelection && !memoryModelApplies && !shadowCallMatches
+            && !resolveComboId(config, parsed.modelId) && !resolvePolicyProfileId(config, parsed.modelId)) {
+            const preview = previewRouteModel(config, parsed.modelId);
+            if (isCanonicalOpenAiForwardProvider(preview.provider)) {
+              logCtx.provider = preview.providerName;
+              logCtx.model = preview.modelId;
+              logCtx.routeDecision = preview.routeDecision;
+            }
+          }
+        } catch { /* Unavailable attribution does not change the replay refusal. */ }
+      }
       return markProxyError(formatErrorResponse(
         400,
-        "previous_response_not_found",
+        code,
         "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
       ));
     }
@@ -645,6 +671,7 @@ export async function prepareResponsesRequest(
   options.onRequestBodyRead?.();
   const responseStateOptions = (force = false) => ({
     replayOwnerKey,
+    ...(replayConnectionScope ? { connectionScope: replayConnectionScope } : {}),
     compiledPlaintext: parsed._plaintextV2EverPrepared === true,
     ...(force ? { force: true } : {}),
     ...((strictReplay ? inboundOwnThreadId : parsed._clientThreadId) ? { clientThreadId: strictReplay ? inboundOwnThreadId : parsed._clientThreadId } : {}),
@@ -1583,8 +1610,7 @@ export async function prepareResponsesRequest(
   // A typed Advisor runs its own model server-side on this provider (#8448). An out-of-scope
   // declaration is withheld. A named selection also needs that declaration on the final route.
   const serverTools = parsed._anthropicServerTools;
-  const scopedServerTools = serverTools?.filter(tool =>
-    !nativeMessagesToolScopeDenial(admissionScope, route.providerName, route.modelId, { tools: [tool] }));
+  const scopedServerTools = scopedAnthropicServerTools(admissionScope, route, serverTools);
   if (serverTools && scopedServerTools && scopedServerTools.length !== serverTools.length) {
     parsed._anthropicServerTools = scopedServerTools;
     if (advisorServerToolDestination(route.provider)) addProtocolEntryReason(logCtx, "advisor-tool-outside-model-scope");
@@ -1594,9 +1620,7 @@ export async function prepareResponsesRequest(
       return markProxyError(formatErrorResponse(400, "invalid_request_error",
         "The hosted Advisor tool_choice is ambiguous because multiple tools are named advisor."));
     }
-    const admittedAdvisor = planAnthropicServerTools(route.provider, scopedServerTools, undefined,
-      new Set(parsed.context.tools?.map(tool => tool.name)), false).declared.some(tool => tool.name === ADVISOR_SERVER_TOOL_NAME);
-    if (!admittedAdvisor) {
+    if (!admitsHostedAdvisor(route.provider, scopedServerTools, parsed.context.tools)) {
       return markPolicyCandidateRefusal(markProxyError(formatErrorResponse(400, "invalid_request_error",
         "The selected hosted Advisor tool is unavailable for this route or model scope.")));
     }
@@ -1645,7 +1669,7 @@ export async function prepareResponsesRequest(
     // A combo child is the one caller that can afford a strict gate: skipping a target it
     // cannot fit is safe before any upstream bytes are sent, and the ladder continues. A
     // direct request has nowhere to go, so it keeps the loose pathological-input gate.
-    const inputAdmission = options.comboAttempt
+    const inputAdmission = options.comboAttempt && options.comboContextDegraded !== true
       ? checkComboTargetInputAdmission(parsed, route.provider, route.providerName, parsed.modelId, nativeContextLimits(config))
       : checkInputAdmission(parsed, route.provider, route.providerName, parsed.modelId, nativeContextLimits(config));
     if (!inputAdmission.admitted) {

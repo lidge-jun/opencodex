@@ -36,6 +36,12 @@ comportamiento. Las rutas nativas directas siguen siendo un ámbito separado. La
 
 Con `stream: true`, los destinos nativos Responses de un combo también rechazan una elección obligatoria o por nombre incumplida con `required_tool_contract_unsatisfied`. La elección del cliente sigue siendo vinculante aunque un destino filtre la herramienta o reduzca la elección saliente a `none`. Las sustituciones configuradas por imágenes alojadas solo satisfacen la elección original si se aplican a la solicitud realmente enviada, también después de revalidarla en cola. Una respuesta completa de solo texto retenida puede avanzar a otro destino elegible. Los eventos conocidos de razonamiento se retienen como máximo un segundo desde el primero; los siguientes no amplían el plazo. Al vencer, se libera el flujo y se fija el destino, conservando cualquier lectura pendiente del proveedor. El texto, los eventos de herramientas, la salida opaca o desconocida y los límites del búfer también fijan el destino. Los selectores de namespace y los ecos de llamadas comparten la restauración autorizada de alias. Después de ese límite, la ausencia de llamadas produce `response.failed` sin solicitar otro destino; la salida y el uso ya entregados se conservan. La evidencia de ejecución alojada también impide la repetición aunque la instantánea final la omita. Auto/none, los resultados incompletos y los contratos desconocidos conservan sus reglas.
 
+Si un evento `response.completed` o su respuesta anidada comunica un fallo en `error` o `last_error`,
+el combo conserva ese destino. Los clientes de streaming reciben el evento terminal del proveedor.
+Los clientes que esperan una respuesta completa reciben un error JSON con el estado HTTP
+correspondiente. OpenCodex registra el fallo y el uso declarado sin guardar la respuesta para
+reutilizarla mediante `previous_response_id`.
+
 <a id="required-tools-on-translated-chat-routes"></a>
 
 ## Herramientas obligatorias en rutas Chat traducidas
@@ -148,6 +154,8 @@ Por separado, en cada cable de entrada, una llamada con espacio de nombres `defa
 | Dictado de streaming | `WS /v1/audio/transcriptions/stream` | No se requiere | Dictado de escritorio JSON eventos |
 | Voz y tiempo real | `POST /v1/live`, `POST /v1/realtime/calls` | Respuesta retransmitida de creación de llamadas | Una banda lateral separada WebSocket retransmite tramas en ambas direcciones |
 | Responses compactación | `POST /v1/responses/compact` | Historial de reemplazo JSON | No se requiere |
+| API de Gemini | `POST /v1beta/models/{model}:generateContent` | JSON de respuesta Gemini | SSE de `:streamGenerateContent` con `alt=sse`, si no un único array JSON |
+| Interacciones de Gemini | `POST /v1beta/interactions` | JSON `interaction` | Eventos SSE de Interactions |
 
 <a id="file-transcription"></a>
 
@@ -310,6 +318,8 @@ Cada objeto de uso del terminal Responses incluye ambos objetos de detalle, incl
 
 Cuando esté disponible, `input_tokens_details` También puede incluir `cache_write_tokens`. El siempre presente Los objetos de detalle son una garantía de compatibilidad para clientes Responses estrictos; cero puede significar "no" No necesariamente "el proveedor no realizó tal trabajo".
 
+Cuando el guardián de continuación del terminal vuelve a preguntar dentro de un turno, una respuesta correcta que informa el uso muestra el uso del último tramo de esa nueva pregunta. En Chat Completions esto incluye `prompt_tokens`, que refleja el contexto enviado en el último tramo. Una nueva pregunta de Chat con búsqueda alojada sigue la misma regla. Cuando un reintento por respuesta vacía vuelve a preguntar, el uso informado también incluye el intento vacío descartado. Una respuesta que termina incompleta o fallida muestra el uso sumado de todos los tramos, al igual que un último tramo que no informa uso propio. Una respuesta incompleta incluye la que se detiene en el límite de tokens de salida. El registro de solicitudes incluye una sola vez el uso informado de cada tramo, y el presupuesto de envíos cuenta cada tramo. El libro de gasto liquida el envío de cada tramo con el uso que ese tramo informó. Un envío que no informó uso queda sin resolver con su reserva. Si la recuperación OAuth cambia de cuenta, cada intento registra el uso informado por su propia cuenta. Si un tramo no informa uso, el total de créditos del proveedor de ese intento se marca como incompleto. Un reintento del proveedor enviado mientras todavía se lee una respuesta, como el reintento de finalización de Kiro, se liquida con el uso que informó su propia respuesta, y el primer envío conserva su propia lectura. Un reintento cuya respuesta no informa uso de tokens propio queda sin resolver con su reserva, aunque el cliente y el registro de solicitudes muestren una estimación local para él. Un turno de Chat Completions en streaming que falla termina con un fragmento de error en lugar de un fragmento final. Si el cliente estableció `stream_options.include_usage`, justo antes de ese fragmento de error llega un fragmento con `choices` vacío que lleva el uso del turno fallido. El cuerpo de error de Chat sin streaming no tiene campo de uso.
+
 Para Anthropic aguas arriba, un `usage.output_tokens_details.thinking_tokens` reportado se conserva como Responses `output_tokens_details.reasoning_tokens` y Chat `completion_tokens_details.reasoning_tokens`, para JSON y respuestas de transmisión. Ya está incluido en el total del token de salida, no se agrega nuevamente; los detalles faltantes o no válidos no se estiman a partir del texto de pensamiento visible. Véase [Contrato de uso de Anthropic](https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost).
 
 <a id="correlating-a-response-with-its-request-log"></a>
@@ -453,9 +463,21 @@ Sin `format=desktop-config`, los contratos de catálogo ordinarios son:
 
 La combinación de este formato con `ids=cli` o cualquier `client_version` devuelve HTTP 400. Sin el selector de formato, los contratos ordinarios anteriores permanecen sin cambios. Cuando Claude está deshabilitado, la instantánea es `{ "version": 1, "models": [] }`; Connected Desktop apply trata esto como no disponible y no escribe un perfil de reemplazo. Los antiguos hubs que devuelven un catálogo ordinario en lugar de la versión 1 no son compatibles; el cliente no recurre a los ID generados localmente.
 
+Si una operación de descubrimiento más reciente sustituye a la actual, el concentrador devuelve HTTP 503 con el código de error `desktop_snapshot_busy` y la cabecera `Retry-After: 1`. Al aplicar la configuración desde un cliente conectado, se conserva intacto el perfil de Claude Desktop existente.
+
 La instantánea sigue siendo un contrato de lista de modelos de solo lectura; no es una rotación de claves ni una carga de perfil API. La migración, recuperación y desconexión de claves de escritorio conectadas funcionan a través del ciclo de vida del cliente existente. La rotación conserva las entradas y selecciones del modelo; CLI `rotation` distingue `committed` de `rolled_back`. Desconectar restaura la configuración propia o informa de una reserva estándar heredada conocida, preservando los campos de usuario y selecciones válidas posteriores. Los conflictos o la recuperación incompleta impiden una reclamación de finalización. Reinicie el escritorio para cargar los cambios de disco; la desconexión no revoca automáticamente la clave de concentrador. Véase [Claude Desktop ciclo de vida](/es/guides/claude-code/). La repetición de pensamiento y el trabajo de caché rápida permanecen separados en [#3719](https://github.com/lidge-jun/opencodex/issues/3719).
 
 <a id="post-v1live-and-realtime-sideband"></a>
+
+## API de Gemini: `/v1beta/models` y `/v1beta/interactions`
+
+Los clientes de Gemini, como el SDK google-genai con una URL base personalizada, la CLI `agy` o un cliente que lee `GOOGLE_GEMINI_BASE_URL`, pueden usar las rutas de proveedor configuradas con la forma REST de Google. El proxy normalmente traduce la generación a su ruta de Chat Completions, que admite cualquier proveedor. La generación elegible con Antigravity puede usar la [ruta nativa](#gemini-nativo-con-antigravity) si está habilitada. Autentíquese con una clave API del proxy en `x-goog-api-key` o en el parámetro de consulta `?key=`; la clave se quita de la URL y de las cabeceras antes de registrar o reenviar la solicitud. Los errores usan la forma de Google `{ "error": { "code", "message", "status" } }`.
+
+- `GET /v1beta/models` lista `models/<provider>/<model>` para las rutas que la clave puede usar, y `GET /v1beta/models/{model}` devuelve una. Un modelo incluye `inputTokenLimit` y `outputTokenLimit` cuando se conocen. Para `inputTokenLimit`, tienen prioridad los límites de entrada y de ventana de contexto configurados en el proveedor, seguidos de `customModels[].contextWindow` del modelo correspondiente y de los metadatos generados.
+- `:generateContent` y `:streamGenerateContent`, bajo `/v1beta/models/` o `/v1/models/`, traducen `contents`, `systemInstruction`, imágenes en línea, declaraciones y llamadas de funciones, y `generationConfig`. Las firmas de pensamiento de las partes `functionCall` viajan en ambos sentidos. Con `alt=sse` el flujo es SSE; sin él la respuesta es un único array JSON, como lo envía la API REST de Google. Las herramientas alojadas de Gemini se ignoran. Un `candidateCount` distinto de 1, datos en línea que no son imágenes y partes de archivo se rechazan con 400.
+- `:countTokens` devuelve `{ "totalTokens": n }` a partir de una estimación local y no envía nada al proveedor. `:embedContent` y `:batchEmbedContents` responden 501.
+- `POST /v1beta/interactions`, o `POST /v1/interactions`, crea una interacción a partir de `input` (texto, imágenes base64 o pasos que incluyen `function_call` y `function_result`), `system_instruction`, herramientas `function`, `generation_config` y un `response_format` de texto. Un flujo usa los eventos de Interactions `interaction.created`, `step.start`, `step.delta`, `step.stop` e `interaction.completed`. Un turno que termina en llamadas de funciones tiene el estado `requires_action`. Los campos que el proxy no puede respetar se rechazan con 400: `agent`, `background: true`, `webhook_config`, `environment`, `agent_config`, `safety_settings`, herramientas alojadas, contenido de entrada que no sea texto ni imagen, y salida que no sea texto. El proveedor seleccionado aplica su propia política de seguridad.
+- `previous_interaction_id` continúa una interacción guardada. El proxy guarda las interacciones solo en memoria, como máximo 24 horas desde la última escritura, y solo la clave que creó una puede leerla, continuarla o borrarla; los llamantes de loopback sin clave comparten un único propietario. La retención no está garantizada: cada clave guarda como máximo 200 interacciones y 16 MiB, el proxy guarda como máximo 1.000 y 64 MiB en total, y el presupuesto de memoria del proxy puede eliminarlas antes. Cuando el almacén está lleno, una clave que no tiene nada propio que desalojar recibe su respuesta sin que la interacción se guarde, y lo mismo ocurre con una interacción mayor que 8 MiB o que el límite de cuerpo de entrada configurado, el que sea menor. Una respuesta no transmitida en flujo indica si se guardó en `x-opencodex-interaction-stored: true|false`. Un reinicio las olvida todas, y un id que falta o caducó responde 404, así que el cliente debe conservar su historial para reenviarlo. Una solicitud con `store: false` no se guarda. `GET /v1beta/interactions/{id}` devuelve una interacción guardada, `DELETE` la elimina y `POST /v1beta/interactions/{id}/cancel` responde 400 porque nada se ejecuta en segundo plano. Ambos alias de Interactions devuelven `Cache-Control: no-store`.
 
 ## `POST /v1/live` y banda lateral en tiempo real
 
@@ -617,3 +639,45 @@ Las solicitudes enrutadas toleran los argumentos de función serializados mal fo
 Al traducir Chat Completions a Responses de OpenAI o al backend ChatGPT, las herramientas de función mantienen el valor no estricto de Chat: si se omite `strict`, se envía false; los booleanos explícitos se conservan. Las `functions` heredadas tampoco se vuelven estrictas. Los argumentos opcionales —incluidos los selectores alternativos de índice y coordenadas de `computer_use`— siguen siendo opcionales. No se reescribe el esquema ni cambian los predeterminados de Responses nativo, destinos Chat o proveedores Responses externos.
 
 Una entrada de compactación retenida de OpenCodex mal formada (`ocx2:`) devuelve HTTP 400 con `error.type: "invalid_request_error"` antes de enrutar, elegir cuenta, refrescar credenciales o enviar al proveedor. No provoca reintentos ni registra un fallo contra una cuenta Codex del pool.
+
+<a id="native-gemini-with-antigravity"></a>
+
+## Gemini nativo con Antigravity
+
+Habilita el proveedor canónico `google-antigravity`, inicia sesión con
+`ocx login google-antigravity` y añade esta opción a la configuración JSON de OpenCodex:
+
+```json
+{
+  "protocols": {
+    "rollout": {
+      "geminiNativeAntigravity": true
+    }
+  }
+}
+```
+
+La opción está desactivada por defecto. Usa la API compatible con Gemini en `/v1beta` y
+envía una clave de admisión de OpenCodex en `x-goog-api-key` o `?key=`. Un selector como
+`google-antigravity/gemini-3.8-flash` usa el transporte nativo para `generateContent` y
+`streamGenerateContent`. El proxy elige el modelo de Cloud Code Assist a partir de la ruta
+resuelta y usa el token y el proyecto de la cuenta OAuth activa. Las solicitudes de
+`/v1` y las de otros proveedores usan el puente de Chat.
+
+El proxy conserva el JSON de la solicitud y de las respuestas correctas, incluidos los
+campos desconocidos, los enteros grandes, los argumentos de funciones y las firmas de
+razonamiento. La transmisión usa SSE con `alt=sse` y una matriz JSON en los demás casos.
+El listado mediante `GET /v1beta/models` y la consulta de modelos conservan el catálogo permitido por la clave e
+incluyen los alias nativos que se enrutan al modelo de Antigravity correspondiente.
+
+Si una respuesta del proveedor contiene credenciales de la cuenta vinculada, el proxy devuelve
+un error genérico de Gemini. Un `[DONE]` válido del proveedor o un error de Gemini pone fin a la transmisión.
+
+Envía JSON con codificación `identity`. El cuerpo de la solicitud, la respuesta almacenada
+en búfer y cada evento SSE tienen un límite de 16 MiB. Si `maxInboundBodyBytes` es menor,
+se aplica a la solicitud. La inactividad durante la carga tiene su propio tiempo de
+espera. El envío inicial y un reintento como máximo tras un 401 de la misma cuenta cuentan
+para el límite de envíos del flujo. Un límite de tokens aplicable al flujo raíz, a la
+identidad o al grupo devuelve 503 con `gemini_native_spend_limits_unsupported` porque el
+transporte nativo no contabiliza los tokens. Desactiva la opción para contabilizarlos en
+esta ruta de Gemini.

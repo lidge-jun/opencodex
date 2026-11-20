@@ -39,3 +39,21 @@ ciphertext to the new provider; declining with `opaque-state-stripped` sends the
 the bridge, where the non-Anthropic gate retains only the plaintext projection. Reasoning details
 in other providers' formats — including signed entries explicitly marked foreign — remain
 eligible for native passthrough.
+
+## Gemini thought signatures on the Chat wire
+
+A Gemini thought signature crosses the Chat wire on `tool_calls[].extra_content.google.thought_signature`,
+the carrier the Responses wire already uses (`src/responses/provider-opaque-metadata.ts`). Inbound, both lanes
+read it through `normalizedClientExtraContent`, so only a bounded string survives and a malformed or oversized
+value is dropped instead of failing the request: the bridge in `src/chat/inbound.ts` (`toolCallsToItems`) and
+the Antigravity direct lane in `src/protocols/codecs/chat-ir.ts` (`pushToolCall`), held equal by
+`tests/responses/protocol-chat-ir-parity.test.ts`. Outbound, `src/chat/outbound.ts` copies a function_call
+item's `extra_content` onto the streamed and buffered tool call and keeps it when folding Chat SSE, and the
+direct-encoder lane passes the adapter's provider metadata from `tool_call_start` through
+`src/protocols/encoders/adapter-events.ts` to `src/protocols/encoders/chat.ts`. Only the Google adapter sets that
+metadata, so no other route emits the field. Native Chat forwards message objects verbatim, so `src/server/chat-native-eligibility.ts` declines a body whose
+assistant tool calls carry `extra_content` with `opaque-state-stripped` unless the destination is a
+Google host (`generativelanguage.googleapis.com`, `aiplatform.googleapis.com`), whose OpenAI-compatible endpoint
+reads the field; the bridge then drops it for every other vendor. Coverage:
+`tests/responses/chat-google-thought-signature.test.ts` (both lanes, stream and buffered, echo after the
+server-side store is cleared, malformed and oversized echoes, another vendor).

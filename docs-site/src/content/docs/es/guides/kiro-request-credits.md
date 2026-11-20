@@ -1,0 +1,88 @@
+---
+title: Créditos por solicitud de Kiro
+description: Validación y rechazos de Kiro, registro de créditos en opencodex y estimación de su costo en USD.
+---
+
+Cuando el turno admite herramientas, opencodex retiene el texto de Kiro hasta validar la
+respuesta. Si Kiro informa de `END_TURN` con texto y sin invocar una herramienta real ni la
+herramienta privada de respuesta final, opencodex puede hacer un único reintento y mostrar
+la respuesta final resultante. Una detención por `MAX_TOKENS` deja el turno incompleto sin
+otro envío. El progreso que acompaña a una llamada real sigue siendo visible. Si Kiro invoca
+su herramienta de respuesta final, el turno termina sin reintento.
+
+Si el filtro de seguridad de Kiro detiene un turno (`CONTENT_FILTERED`, por ejemplo, el
+clasificador `BIO` de Claude), la solicitud termina con un rechazo que los clientes no
+reintentan. Los clientes de Claude reciben `stop_reason: "refusal"` y Codex recibe una respuesta
+fallida con la categoría y la explicación de Kiro. Si el filtro detiene el reintento, no se
+muestra una respuesta final. En los turnos de texto ordinario, el progreso retenido y el texto
+parcial del reintento aparecen como comentarios antes del rechazo. Las solicitudes de salida
+estructurada reciben el rechazo sin esos comentarios.
+
+Cuando Kiro informa de un consumo de créditos, opencodex lo conserva como `usage.providerCredits`
+en los registros de solicitudes y en el historial de uso persistente. Los recuentos de tokens
+pueden seguir siendo estimados. Si hay un reintento de finalización, los créditos se suman cuando
+todos los intentos tienen una lectura. Las API de registros e historial omiten el dato si no hay
+una lectura válida y completa. Un cero explícito indica que Kiro informó de un consumo de cero.
+
+## Precio de los créditos en USD
+
+Para estimar el costo de una solicitud a partir de los créditos cobrados por Kiro, configura
+`providers.kiro.creditPriceUsd` con el precio en USD de un crédito de tu plan.
+
+```json
+{ "providers": { "kiro": { "creditPriceUsd": 0.02 } } }
+```
+
+La opción es voluntaria y carece de valor predeterminado porque el precio depende del plan.
+Como referencia, [kiro.dev/pricing](https://kiro.dev/pricing/) muestra 1.000 créditos por 20 USD
+en el plan Pro (0,02 USD por crédito) y 0,04 USD por crédito adicional. Usa el precio de tu plan.
+
+Con un precio configurado, se aplican estas reglas.
+
+- Una fila con lectura válida se estima con `providerCredits x creditPriceUsd`. Los tokens
+  estimados siguen registrados. El cálculo por créditos también se puede hacer si no es posible
+  normalizar el desglose de tokens.
+- Si faltan los créditos y no hay salida, el costo queda como no disponible. Una lectura explícita
+  de cero sí se traduce en costo cero.
+- Si hay salida y Kiro no informó de créditos, se conserva la estimación por tokens.
+- Las filas con un sufijo de cuenta, como `kiro-<account>`, usan el precio del proveedor.
+  Una configuración con nombre exacto tiene prioridad. Un proveedor configurado como
+  `kiro-team` sin precio propio no hereda el de `kiro`.
+- El precio por crédito solo se aplica cuando se resuelve un precio por token para el modelo.
+  `kiro-auto`, el modelo predeterminado de Kiro, y cualquier otro modelo sin precio por token
+  siguen apareciendo entre las solicitudes sin precio.
+- Si omites la opción, se mantiene la estimación por tokens.
+
+Para las filas cobradas por créditos, el panel de detalles del registro muestra el costo estimado,
+el total y la fórmula `<credits> credits × <price> per credit` en el idioma del dashboard. Los
+cuatro componentes por tokens se omiten para evitar mostrar `$0.0000` en cada uno junto a un
+total distinto de cero. Cuando un Combo mezcla intentos cobrados por créditos
+y por tokens, o incluye dos precios por crédito, el panel muestra un total combinado.
+La tabla del Combo muestra el costo estimado en USD de cada intento y el cálculo de los intentos con precio por crédito.
+La API de administración expone la base del cálculo en el campo opcional `billing` de la estimación.
+
+El cargo por créditos es exacto para el precio configurado. Un Combo mixto muestra `≥` cuando al
+menos un intento cobrado por tokens tiene un costo mínimo conocido y todos los intentos cobrados
+por tokens tienen un costo exacto o un mínimo conocido. Si un cargo estimado por tokens carece de
+un mínimo conocido, el importe combinado se muestra como una estimación ordinaria.
+
+### Límites y valores no representables
+
+`creditPriceUsd` debe estar **entre 0 y 1.000.000**. La API de administración rechaza valores
+fuera del intervalo. Si editas el archivo de configuración, al cargarlo opencodex descarta el
+valor inválido, emite un aviso sobre el campo omitido y conserva el resto de la entrada.
+Cambiar un precio vuelve a estimar las filas existentes en la siguiente actualización.
+
+Un intento puede informar de hasta 1.000.000.000 de créditos. Al calcular el costo por tokens,
+cada categoría admite hasta 1.000.000.000.000 de tokens. Estos límites están muy por encima del consumo
+real. Limitar ambos factores evita que productos como `1e308 x 1e308` den `Infinity`, que
+`JSON.stringify` serializa como `null`.
+
+Cuando una fila se cobra por créditos y no es posible calcular un costo representable, la
+estimación se marca como no disponible con el motivo `credit_cost_unrepresentable`. Esto incluye
+una lectura incompleta, no finita o fuera del intervalo, y un producto que excede la capacidad
+numérica. Para las filas cobradas por tokens, un recuento fuera de rango se clasifica como
+`invalid_usage` incluso cuando existe un precio.
+
+El precio solo interviene en la estimación local. La facturación del proveedor, la selección de
+cuenta y las cuotas siguen las reglas del proveedor.

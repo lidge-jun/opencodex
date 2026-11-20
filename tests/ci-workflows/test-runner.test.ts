@@ -338,7 +338,7 @@ describe("test runner isolation", () => {
     expect(existsSync(isolated.root)).toBe(false);
   });
 
-  test("drops the developer's live install settings and keeps the rest of the environment", () => {
+  test("drops the developer's live credentials, service identity, and install settings while keeping fixture environment", () => {
     const isolated = createIsolatedTestEnvironment({
       PATH: "/test/bin",
       FIXTURE: "unchanged",
@@ -346,16 +346,62 @@ describe("test runner isolation", () => {
       OPENCODEX_ADMIN_AUTH_TOKEN: "live-admin-token",
       OCX_API_TOKEN_FILE: "/real/home/.opencodex/service-api-token",
       OCX_MANAGED_RELEASE: "1",
+      OCX_SERVICE: "1",
+      OCX_SERVICE_MANAGED: "1",
+      OCX_WINDOWS_WRAPPER_PROTOCOL: "1",
+      OCX_DESKTOP_SUPERVISED: "1",
     });
     try {
       for (const name of LIVE_INSTALL_ENV) expect(name in isolated.env).toBe(false);
       expect("OCX_MANAGED_RELEASE" in isolated.env).toBe(false);
+      expect(isolated.env.OCX_SERVICE).toBeUndefined();
+      expect(isolated.env.OCX_SERVICE_MANAGED).toBeUndefined();
+      expect(isolated.env.OCX_WINDOWS_WRAPPER_PROTOCOL).toBeUndefined();
+      expect(isolated.env.OCX_DESKTOP_SUPERVISED).toBeUndefined();
       expect(isolated.env.FIXTURE).toBe("unchanged");
       expect(isolated.env.PATH).toBe("/test/bin");
     } finally {
       isolated.cleanup();
     }
   });
+
+  for (const platform of ["win32", "linux", "darwin"] as const) {
+    test(`matches live environment names with ${platform} case semantics`, () => {
+      const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+      const baseEnv = {
+        opencodex_api_auth_token: "fixture-data",
+        OpenCodex_Admin_Auth_Token: "fixture-admin",
+        ocx_api_token_file: "fixture-token-file",
+        ocx_service: "1",
+        Ocx_Service_Managed: "1",
+        Ocx_Windows_Wrapper_Protocol: "1",
+        ocx_desktop_supervised: "1",
+        OCX_SERVICE: "1",
+        OPENCODEX_API_AUTH_TOKEN: "fixture-uppercase",
+        OCX_SERVICE_EXTRA: "keep",
+        FIXTURE: "unchanged",
+      };
+      let isolated: ReturnType<typeof createIsolatedTestEnvironment> | undefined;
+      try {
+        Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+        isolated = createIsolatedTestEnvironment(baseEnv);
+        for (const key of [
+          "opencodex_api_auth_token", "OpenCodex_Admin_Auth_Token", "ocx_api_token_file",
+          "ocx_service", "Ocx_Service_Managed", "Ocx_Windows_Wrapper_Protocol", "ocx_desktop_supervised",
+        ] as const) {
+          expect(isolated.env[key]).toBe(platform === "win32" ? undefined : baseEnv[key]);
+        }
+        expect(isolated.env.OCX_SERVICE).toBeUndefined();
+        expect(isolated.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
+        expect(isolated.env.OCX_SERVICE_EXTRA).toBe("keep");
+        expect(isolated.env.FIXTURE).toBe("unchanged");
+        expect(baseEnv.ocx_service).toBe("1");
+      } finally {
+        Object.defineProperty(process, "platform", descriptor);
+        isolated?.cleanup();
+      }
+    });
+  }
 
   test.if(process.platform === "win32")("gives the Windows sandbox a real profile shape", () => {
     const isolated = createIsolatedTestEnvironment({ PATH: "C:\\test\\bin" });
@@ -944,7 +990,13 @@ describe("bun test argv", () => {
     mkdirSync(sentinelTemp);
     writeFileSync(
       fixturePath,
-      `import { test } from "bun:test"; import { writeFileSync } from "node:fs"; test("smoke", () => writeFileSync(${JSON.stringify(markerPath)}, "executed"));\n`,
+      `import { expect, test } from "bun:test";
+        import { writeFileSync } from "node:fs";
+        test("smoke", () => {
+          const child = Bun.spawnSync([process.execPath, "-e", "process.exit(Number('OCX_WINDOWS_WRAPPER_PROTOCOL' in process.env))"]);
+          expect(child.exitCode).toBe(0);
+          writeFileSync(${JSON.stringify(markerPath)}, "executed");
+        });\n`,
     );
     try {
       const result = Bun.spawnSync([
@@ -959,6 +1011,7 @@ describe("bun test argv", () => {
           TMP: sentinelTemp,
           TMPDIR: sentinelTemp,
           OCX_TEST_NO_QUEUE: "1",
+          OCX_WINDOWS_WRAPPER_PROTOCOL: "1",
         },
         stdout: "pipe",
         stderr: "pipe",
@@ -974,6 +1027,40 @@ describe("bun test argv", () => {
       removeTreeWithRetry(fixtureRoot);
     }
   }, { timeout: SPAWN_BUDGET_MS });
+
+  test.each(["serial", "parallel"] as const)(
+    "refuses a bare %s run with a live-install marker before executing the test file",
+    mode => {
+      const fixtureRoot = mkdtempSync(join(tmpdir(), "opencodex-bare-live-install-"));
+      const fixturePath = join(fixtureRoot, "bare-live-install.test.ts");
+      const markerPath = join(fixtureRoot, "loaded.marker");
+      writeFileSync(fixturePath, `
+        import { test } from "bun:test";
+        import { writeFileSync } from "node:fs";
+        writeFileSync(${JSON.stringify(markerPath)}, "loaded");
+        test("fixture", () => {});
+      `);
+      try {
+        const envName = mode === "serial" ? "OPENCODEX_API_AUTH_TOKEN"
+          : process.platform === "win32" ? "Ocx_Windows_Wrapper_Protocol" : "OCX_WINDOWS_WRAPPER_PROTOCOL";
+        const result = Bun.spawnSync([
+          process.execPath, "test", ...(mode === "parallel" ? ["--parallel=1"] : []), fixturePath,
+        ], {
+          cwd: repoRoot(),
+          env: { ...process.env, [envName]: "1", OCX_TEST_NO_QUEUE: "1" },
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: INTERNAL_DEADLINE_MS,
+        });
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr.toString()).toContain("bun run test");
+        expect(existsSync(markerPath)).toBe(false);
+      } finally {
+        removeTreeWithRetry(fixtureRoot);
+      }
+    },
+    { timeout: SPAWN_BUDGET_MS },
+  );
 
   test.each(["pass", "fail"] as const)(
     "a bare %s run removes its preload-owned TEMP root",
