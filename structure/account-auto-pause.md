@@ -1,6 +1,6 @@
 # Account Auto-Pause
 
-Opt-in policy, credential ownership, durable pause metadata, and bounded recovery for
+Opt-in policy (with one Cloud Code Assist default), credential ownership, durable pause metadata, and bounded recovery for
 permanent account refusals. Counters are process-local; persisted pauses require explicit resume.
 
 ## Opt-in account refusal observation
@@ -8,8 +8,9 @@ permanent account refusals. Counters are process-local; persisted pauses require
 `src/server/responses/fetch-helpers.ts` accepts an optional caller-owned observer factory for physical
 Codex/runTurn response observation; the transport leaf imports no account or OAuth policy. OAuth/key HTTP overrides capture after reselection in
 `src/server/responses/request-transport.ts`; native Chat/Messages capture at their send
-boundaries. `src/oauth/account-auto-pause.ts` is dormant unless the named provider explicitly
-enables the policy, writes only fixed pause metadata, and preserves upstream responses if
+boundaries. `src/oauth/account-auto-pause.ts` is dormant unless `effectiveAccountAutoPause` in
+`src/config/account-auto-pause-revisions.ts` resolves a policy for the named provider (an explicit
+opt-in, or the Cloud Code Assist default below), writes pause metadata, and preserves upstream responses if
 optional persistence fails. Counters and asynchronous decisions belong to the runtime
 config object; completed pauses belong to the existing durable account stores. A response is counted only when the final destination and credential
 headers, reported by `sendWithConnectionPolicy` after plugin rewrites and queued rebuilds, match the
@@ -27,11 +28,31 @@ counters. Their transport and lifetime follow the [Responses image replay contra
 ## Permanent account refusal policy
 
 `providers.<name>.accountAutoPause` is optional, default off, with an integer
-`consecutiveFailures` in 1–100 (default 2). `src/config/schema/account-auto-pause.ts` validates
+`consecutiveFailures` in 1–100 (default 2). The one default (#8752): a row with no
+`accountAutoPause` key, `adapter: "google"`, `googleMode: "cloud-code-assist"`, `authMode: "oauth"`
+and a first-party Cloud Code Assist `baseUrl` (`isCanonicalAntigravityUrl`) resolves to
+threshold 1 with `conclusiveOnly`, so only `isConclusiveAccountBan` (the Terms of Service account ban
+in `src/oauth/account-auto-pause-policy.ts`) counts. The observer checks the sending provider and
+the final-send destination against the same host allowlist, so a custom `baseUrl` or a rewritten
+dial never gains the default's authority; such a route pauses only with an explicit opt-in. Any present key, including `{}` or
+`enabled: false`, replaces the default; `enabled: true` counts every permanent refusal as before. `src/config/schema/account-auto-pause.ts` validates
 the policy and allowlisted reason/timestamp DTO. OAuth pause metadata is stored with the
 auth row; Codex metadata/revision fences use `codexAccountPauseState`; key pools retain
-`disabled`, `pauseDetails` and `pauseRevision` per entry. Runtime counters are process-local.
-Manual resume (including an already enabled key) clears details and changes the revision, fencing already-sent refusals.
+`disabled`, `pauseDetails` and `pauseRevision` per entry. Both explicit and implicit OAuth
+auto-pauses store a sibling `pauseEvidence` with the decisive refusal's HTTP `statusCode`
+and optional message. The message comes from `error.message`, with redaction applied before
+and after collapsing whitespace, followed by the 300-character cap. A Cloud Code Assist appeal sentence
+survives when the qualifying message contains it. A confirmed first-party Cloud Code Assist OAuth
+send can also contribute `appealUrl` and optional `appealText` from the same conclusive ban's
+Google RPC ErrorInfo with reason `TOS_VIOLATION` and domain `cloudcode-pa.googleapis.com`.
+`src/lib/cloud-code-appeal-link.ts` caps the URL at 512 characters and permits HTTPS without userinfo
+or a port on `forms.gle`, `support.google.com`, and `docs.google.com` under `/forms/`.
+It strips fragments and preserves query parameters only on the two forms hosts.
+It bounds the plain-text label to 80 characters. The store reader and dashboard revalidate those fields.
+When the link is first persisted for an account, the process logs a fixed availability notice.
+Older builds can still read the strict `pauseDetails` and any evidence fields they recognize.
+Runtime counters are process-local. Manual resume clears the pause metadata and changes
+the revision (including an already enabled key), fencing already-sent refusals.
 
 ## Explicit health-gated resume and login (#8398)
 
@@ -67,11 +88,15 @@ write commits. An operator pause has no details and stays. Coverage:
 `src/server/responses/request-transport.ts` observes exact physical account outcomes before
 retry wrappers replace the response. Threshold-triggered OAuth/key pauses rebuild the
 request through `src/server/responses/account-auto-pause-recovery.ts` and the existing selection owner, with at most three account moves funded by the existing recovery owner. Before rebuilding, the transport binds replay and continuation ownership to the refreshed credential on both the retry request and the outer request used for persistence.
+The replacement becomes a usage attempt at physical dispatch under the
+[credential recovery accounting contract](usage-client-attribution.md#credential-recovery-attempts).
 `src/server/responses/passthrough-dispatch.ts` and
 `src/server/responses/core-codex-account.ts` admit a confirmed Codex auto-pause to the
 existing alternate-account ladder without reclassifying subscription refusal as a dead
-credential. `src/server/responses/compact.ts` observes the same pool contexts; custom gateway sends stay outside Codex pool outcome recording and recovery. Fixed
-account selectors and uploaded-file constraints continue to suppress alternate moves.
+credential. `src/server/responses/compact.ts` observes the same pool contexts. Keyed compaction
+receives final-wire ownership evidence alongside its dispatch accounting. Custom gateway sends
+stay outside Codex pool outcome recording and recovery. Fixed account selectors and
+uploaded-file constraints continue to suppress alternate moves.
 
 ## Permanent account refusal auto-pause
 
@@ -96,18 +121,19 @@ Regression coverage: `tests/oauth/oauth-account-auto-pause.test.ts` and
 ## Policy-change fence
 
 `src/config/account-auto-pause-revisions.ts` keeps `accountAutoPausePolicyRevisions`, a per-provider
-UUID that changes whenever a tracked provider's effective policy fingerprint changes (policy enabled,
-threshold, provider disabled, base URL, adapter, auth mode). A provider is tracked once it has ever
-configured `accountAutoPause`; providers that never opted in leave no map in the file. Only
+UUID that changes whenever a tracked provider's effective policy fingerprint changes (effective
+threshold and `conclusiveOnly`, provider disabled, base URL, adapter, auth mode). A provider is tracked
+once it has ever configured `accountAutoPause` or resolved the Cloud Code Assist default; other
+providers that never opted in leave no map in the file. Only
 `persistConfigUnlocked` mints values, from the literal pre-write file, so caller-supplied revisions never
 authorize anything. Each process also keeps an observed map with a local generation, bumped on
 fingerprint changes adopted by reload and save-time reconciliation, and on disk-to-disk changes seen
 by any load; a detached load never compares itself with the live fingerprint. A capture records
-the revision, generation, threshold and route. A pause commits only while all of these are still
+the revision, generation, threshold, `conclusiveOnly` and route. A pause commits only while all of these are still
 equal, both in memory and in the fresh persisted file inside the config mutation lock. The OAuth
 automatic commit runs its final check and auth publication under that lock, and contention means
 no pause. API-key commits use the same disk check in their selection mutation, and Codex commits
-check it beside `src/codex/account-pause.ts` state. Revision records exist only for providers present after disk-only provider
+check it beside `src/codex/account-pause.ts` state; pausing `__main__` there also ends any retained native-main login ([native-main login retention](providers/native-main-login-retention.md)). Revision records exist only for providers present after disk-only provider
 preservation: deleting a provider reclaims its record, and both the persisted and the observed
 maps stay bounded by the provider list. Every new observed record and every generation advance draws
 from one process-wide counter, so a deleted and recreated provider can never reproduce an older
@@ -124,8 +150,13 @@ Regression coverage: `tests/oauth/oauth-account-auto-pause-revision.test.ts` and
 ## Auto-paused account recovery
 
 OAuth and Codex account-list DTOs project optional `pauseDetails` (fixed reason plus epoch
-ms timestamp) beside the existing pause flag. The CLI preserves those fields and includes
-the reason in account listings. `src/server/management/oauth-account-routes.ts` also serves
+ms timestamp) beside the existing pause flag. The OAuth account list API also returns
+the sibling `pauseEvidence` when present. The dashboard shows a validated appeal link on the
+paused account row with a localized label when vendor text is absent or rejected.
+The CLI preserves `pauseDetails` and includes the
+reason in account listings. `tests/server/management-account-auto-pause.test.ts` covers the
+OAuth evidence projection and its removal after resume.
+`src/server/management/oauth-account-routes.ts` also serves
 `PUT /api/providers/keys/pause` with provider `name`, key `id` and boolean `paused`, through
 the existing management authorization boundary. Its success response reports the committed
 `activeAccountId` (or `null`) and whether the active key changed. Key listings expose `disabled`

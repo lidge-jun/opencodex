@@ -113,10 +113,10 @@ describe("GitHub Actions hardening", () => {
     // Job-scoped: a global count still passes if values are swapped between jobs.
     // Pin ownership explicitly. The Windows leg is sharded like the Linux ones
     // since 8034cd7c0 — a single leg reached 30m on a green suite and was killed
-    // in cleanup, so each shard now holds the same 15m a Linux shard holds. A
-    // shard that needs longer is wedged, not slow.
+    // in cleanup. Linux shards hold 20m: hosted runners were cancelled at 15m in
+    // their last batches with no failing tests (#8651). Far longer is wedged.
     expect(ci.jobs?.["select-windows-runner"]?.["timeout-minutes"]).toBe(2);
-    expect(ci.jobs?.test?.["timeout-minutes"]).toBe(15);
+    expect(ci.jobs?.test?.["timeout-minutes"]).toBe(20);
     expect(ci.jobs?.gates?.["timeout-minutes"]).toBe(15);
     // 30 with four shards: run 43508374033 cancelled all four at the 20-minute
     // wall with no failing tests, and no fifth macOS slot exists for another
@@ -844,11 +844,11 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toMatch(/gh release create[\s\S]*?--notes-file "\$notes_file"/);
     // The release is created as a draft and published only after the verified
     // bundle is attached, because a published release is immutable and rejects
-    // every later upload. That draft flip is the one edit allowed: notes still
-    // come from the validated notes file, never from an edit or a regeneration.
+    // every later upload. That draft flip is the one publication edit. Notes come only from the validated
+    // notes file: at creation, or when a resumed run reuses a draft and rewrites its body from its own file (#7207).
     for (const edit of workflow.match(/gh release edit[^\n]*/g) ?? []) {
-      expect(edit).toContain("--draft=false");
-      expect(edit).not.toContain("--notes");
+      if (edit.includes("--notes")) expect(edit).toBe('gh release edit "$release_tag" --notes-file "$notes_file" ;;');
+      else { expect(edit).toContain("--draft=false"); expect(edit).not.toMatch(/\s-[nF]/); }
     }
     expect(workflow).not.toContain("--generate-notes");
 

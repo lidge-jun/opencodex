@@ -1,6 +1,6 @@
 # Streaming Health And WebSocket
 
-Management provider-validation calls use the [initialization-independent relative send-path validation](../config.md#provider-relative-send-paths) before persistence.
+Optional upload reduction follows [its contract](upload-reduction.md). Management provider-validation calls use the [initialization-independent relative send-path validation](../config.md#provider-relative-send-paths) before persistence.
 
 Native and translated delivery now have separate owners in the
 [core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.
@@ -65,8 +65,8 @@ may be billable; `OCX_EMPTY_COMPLETION_RETRY=0` is a disable-only emergency over
 buffered HTTP adapters plus `runTurn` transports share the same guard, while combo attempts and
 routed compaction stay excluded. Pre-content reasoning is retained under named event-count and byte
 caps and emits liveness heartbeats while held. A second empty result or retry failure becomes typed
-502 `empty_completion_retry_failed`; usage is merged across sends, and the Logs attempt records
-recovery kind `empty-completion`. Native OpenGateway passthrough follows its [separate completion contract](../providers/opengateway.md), with destination-specific default recovery and terminal-only replay.
+502 `empty_completion_retry_failed`. HTTP adapter delivery preserves `undeclared_tool_call` from the retry. Usage is merged across sends.
+The Logs attempt records recovery kind `empty-completion`. Native OpenGateway passthrough follows its [separate completion contract](../providers/opengateway.md), with destination-specific default recovery and terminal-only replay.
 
 The fetch and runTurn web-search loops honor `streamRoutedModelOutput`: leading text and reasoning
 stream live until the first tool boundary, and final replay omits already delivered events.
@@ -111,8 +111,8 @@ reader without awaiting a potentially broken cancellation promise.
 
 `src/server/responses/passthrough-execution.ts` applies the guard after native
 response classification, outside the direct relay and lifetime wrappers. Native
-SSE, including the missing-Content-Type fallback, retains its original Response
-identity and existing watchdog/terminal ownership. Bounded JSON and error readers
+SSE, including the missing-Content-Type fallback, retains its Response identity and
+is guarded only by an explicit budget ([native SSE stall](timeouts.md#native-responses-sse-stall)). Bounded JSON and error readers
 are not wrapped again. Direct bodies and returned redirect bodies are guarded;
 bytes, response headers and status are preserved.
 

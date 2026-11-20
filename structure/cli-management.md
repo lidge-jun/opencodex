@@ -1,5 +1,7 @@
 # CLI management and discovery
 
+Connected Hub clients can use the local admin token for the [scoped passive management reads](remote-link.md#hub-transport-relay). Relay key rows retain active and paused status for account listing and use positional display IDs. The stored relay lease is provisioned during connect and replaced after a committed key rotation.
+
 `src/cli/` contains the terminal management interface. Process ownership, startup, stop and service contracts remain in [Runtime](runtime.md); this document owns command discovery, help, management-client presentation and the generated operating reference.
 
 `ocx v2 mode v2-plaintext` requires `--acknowledge-plaintext-agent-messages` when entering the mode, locally or with `--live`. Local selection admission re-reads the mode and rechecks entry consent before either native or proxy writes, so a mode changed during the wait cannot reuse earlier idempotent permission. Generic config set/import refuse a new plaintext-mode entry and direct the operator to that coordinated transition; already-active restoration and exits remain allowed. The live client sends a scoped acknowledgment and validates the returned mode, capability and plaintext state. Its global feature remains disabled; the [surface contract](subagent-capacity.md#multi-agent-surface-selection) defines task-text retention and unchanged transport authentication. Existing independent plaintext preferences are preserved when leaving the mode.
@@ -121,11 +123,15 @@ live and latest durable rows are captured under the same mutation lock as deleti
 
 ## Account policy and runtime-setting results
 
+`ocx account probe google-antigravity` sends the management probe for the whole roster or resolves one account ID or alias through the passive Antigravity account list. `ocx models discover` requests a provider’s live-model refresh and reports the resulting arrival state or the recorded failure during cooldown. Both use the same endpoints as the dashboard.
+
 `src/cli/account-policy.ts` and `src/cli/account-policy-dto.ts` use the selected runtime's supported pool fields and validated roster. `src/cli/account-target.ts` shares pure selection precedence with the existing async helper; new policy writers never use the legacy transport fallback. Per-account threshold, one/all paid-credit permission, display preference and quota-window activation remain distinct operations. Reset-grant status is a typed GET with possible upstream status work; consumption/session acquisition is not exposed.
 
 `ocx account use-remaining openai <id-or-main> on|off|status` in `src/cli/account-policy.ts` resolves the selected runtime's roster and validates the authenticated API receipt, including the effective thresholds. It controls the [remaining included-quota preference](providers/openai-accounts.md#main-account-policy-observations), which is separate from paid-credit permission; status is read-only, and account selection is a separate command.
 
 `src/cli/account-auth.ts` validates branch-specific login options before code input and pins its login flow requests. A device grant has no paste step, so `--device` with `--code` is refused as a usage error before stdin is read or the target is probed: accepting both would spend the caller's stdin on a paste the device flow cannot settle. `src/oauth/login-cli.ts` escapes provider-supplied verification URLs and instruction lines at the terminal boundary (`terminalSafeText` in `src/lib/terminal-safe-text.ts`, re-exported by `src/cli/runtime-api.ts`); the launcher and structured output still receive the exact value. The escape covers the same block the link hint sanitizers strip — C0, DEL, C1, the zero-width and bidi formatting area including the overrides and isolates, and the BOM — plus U+2028/U+2029, written as `\xNN`/`\uNNNN` rather than removed, so a pasted report still reproduces the value. ZWNJ and ZWJ are excluded on purpose: they are script shaping and emoji joiners, not disguise. The account login renderer escapes URL and device-code fields before composing lines, and renders xAI device instructions as a single untrusted field; other providers retain their multiline instructions. A completed xAI device flow succeeds independently of the active account login state. xAI device login with `--json` requires `--no-wait` and is refused before target discovery otherwise; the single JSON document is the handoff. JSON keeps the original handoff fields. Public handoff/state fields are rebuilt without tokens or arbitrary backend text. `src/cli/logout-command.ts` owns target parsing before credential access: local atomic removed/not-found behavior and live OAuth success remain different receipts, with no cross-target fallback. Native main signout is not an OAuth logout synonym.
+
+For Codex pool login with `--code -`, the start response determines whether code input is allowed. If the deferred stdin read fails, `src/cli/account-auth.ts` requests cancellation of the returned flow on the pinned proxy before reporting the input error. Automatic Codex login cleanup has a two-second request deadline and displays the terminal-safe flow ID when the proxy cannot confirm cancellation.
 
 `src/cli/agent-settings.ts` writes strict full memory/compaction override blocks via their canonical schemas. Empty memory blocks and null clears restore existing/default routing rather than disabling pipelines. `src/cli/system-settings-parity.ts` projects new settings observations; ultraFastTier is read back because its mutation receipt omits it. `src/cli/agent-runtime-settings.ts` keeps supported injection/guidance and sidecar field ownership, including web reasoning persistence despite reply omission. The actual window spellings and sidecar limits come from their owners, not similar flag names.
 
@@ -138,6 +144,9 @@ live and latest durable rows are captured under the same mutation lock as deleti
 ## Integration inspection, recovery and maintenance
 
 `src/cli/capabilities-integrations.ts` declares `commandcode restore` and its dedicated restore/preview routes separately from generic integration restore. Its generated operating reference preserves the client-bound command, supported flags, and refusal on older proxies without those routes.
+
+The same capability catalog declares `connect antigravity` and `connect agy` separately. Only the
+[Antigravity desktop app connection](clients/antigravity-gateway.md#target-and-the-secret-rule) accepts `--model`.
 
 `src/cli/integration-input.ts` shares pure profile paths/validation and owns exact optional Droid-map/fingerprint and [export naming](clients/export-model-names.md) grammar. `src/cli/integration-preview.ts` handles explicit preview and new-option writes; `src/cli/integration-plan-dto.ts` validates value-free plans without runtime imports from GUI/planner/writer code. The original direct mutation bodies remain when new options are absent. Refused and no-op previews are completed observations; stale commits return a re-preview instruction without adopting a replacement token. The server owns coordinated binding and writes.
 
@@ -180,6 +189,8 @@ window labels identify resets while separate display text carries the amounts an
 The operating guide's eight-domain workflow table is navigation rather than parity measurement. Handwritten JSON, recipe, recovery and target docs qualify bounded windows, model-only search, partial/default results and human-only/session actions. Generated chapter counts still derive exclusively from capability declarations. Each chapter renders mutation and JSON mode together so additive declarations retain all metadata within the chapter line budget. File integration help includes Gentle Shell through the `gentle-shell` client target.
 
 ## ocx command selection
+
+`src/cli/claude-context-settings.ts` preserves the original arguments and launch environment and skips generated per-model compact settings if any argument exactly matches `remote-control`, `rc`, `bridge`, `remote`, or `sync`, including option values and arguments after `--`. The `--remote-control` session option still supports generated settings.
 
 `capabilities --contracts` and `update` remain on the invoked package path even when a Desktop command record is present.
 All `capabilities` calls, sync calls and update calls carrying orchestration flags skip root automatic Codex shim repair, including malformed calls. Sync holds a separate home-scoped sync/update mutex for its work and performs eligible shim repair only after acquiring it.

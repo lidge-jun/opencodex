@@ -185,7 +185,7 @@ test("independent preconditions refuse before writing the preference", async () 
     persistPreference: () => { throw new Error("must not persist"); },
     proxyPort: () => 10201,
     configDir: root,
-    platform: "linux",
+    platform: "freebsd",
     applyProfile: (() => ({ ok: true, changed: true, path: "" })) as never,
     removeProfile: (() => ({ ok: true, changed: false })) as never,
     inspectProfile: (() => ({ kind: "absent" })) as never,
@@ -281,12 +281,12 @@ test("caller-added trust is compensated on an early refusal", async () => {
 });
 
 test("offline status explains why a picker cannot run", () => {
-  expect(offlinePickerStatus(config(), "linux")).toMatchObject({ reason: "unsupported_platform", effective: false, supported: false });
+  expect(offlinePickerStatus(config(), "freebsd")).toMatchObject({ reason: "unsupported_platform", effective: false, supported: false });
   expect(offlinePickerStatus(config({ claudeCode: { desktopMode: "gateway" } }), "darwin").reason).toBe("not_first_party");
 });
 
 test("offline cleanup reports residual work", async () => {
-  const result = await removeDesktopPickerArtifacts({ configDir: root, platform: "linux", security: async () => ({ code: 1, stdout: "", stderr: "" }) });
+  const result = await removeDesktopPickerArtifacts({ configDir: root, platform: "freebsd", security: async () => ({ code: 1, stdout: "", stderr: "" }) });
   expect(result.ok).toBe(true);
 });
 

@@ -154,7 +154,9 @@ chooses entries, so the byte limit measures the truncated strings.
 `OCX_KIRO_TOOL_DESCRIPTION_LIMIT=off` (`KIRO_TOOL_DESCRIPTION_LIMIT_ENV`) are operator opt-outs
 read at request-conversion time. Turning the budget off removes both limits, so the priority sort
 and the `exec` reservation have nothing to exclude: every declared tool goes on the wire in
-declaration order and no omission notice is emitted. An oversized catalog therefore reaches Kiro
+declaration order and no omission notice is emitted. Admission does not build or measure projected
+catalogs when the budget is off, so it performs linear work in the number of converted entries.
+An oversized catalog therefore reaches Kiro
 intact and the upstream `ValidationException` becomes the failure mode instead of a trimmed
 request. The default remains bounded because that is the shape a fresh Kiro account is measured to
 accept.
@@ -170,8 +172,14 @@ set. Its list writes 27 items because `if/then/else` stands for three keys, whic
 29 keys of the set, while the report states that total as 28 — one fewer than the keys its list
 names. The accepted keys, not the stated count, are what the exception encodes. It reports a
 constrained tool probe on `claude-opus-5.5` and `claude-sonnet-5.5` naming `pattern` and
-`maximum`; only those two keys survive for those ids. The report does not establish the other
-schema keys.
+`maximum`; only those two keys survive for `claude-sonnet-5.5`.
+
+`claude-opus-5.5` also keeps the twelve keys the Claude Desktop (116 tools) and Claude Code
+(25 tools) catalogs carry: `$schema`, `additionalProperties`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`, `exclusiveMinimum`, `minItems`, `maxItems`, `propertyNames`.
+Five days of production traffic with `OCX_KIRO_TOOL_BUDGET=off` sent those catalogs in full to
+this id with every key intact: 10,565
+HTTP 200 and no `ValidationException`. The other seventeen keys appear in neither catalog and
+stay stripped.
 
 The remaining Claude ids on this provider (`claude-opus-5`, `claude-opus-4.8`,
 `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5`, `claude-sonnet-4.6`,
@@ -443,8 +451,10 @@ only frame that yields a measured count: the parser marks the usage `upstreamRep
 estimated mark. The parser preserves
 `meteringEvent` unit/usage (`amount` is an alias) and optional `unitPlural`; credit readings populate
 `OcxUsage.providerCredits` independently of token metadata. The latest reading within a response
-is a snapshot; separate completion-fallback responses add their credits. Missing metering stays
-absent and measured zero stays zero. `initial-response` carries `conversationId` through the same
+is a snapshot; separate completion-fallback responses add their credits only when both report them.
+Partially observed credits use the invalid-reading sentinel and the configured credit charge is
+unavailable; both missing readings retain the legacy absent form, and measured zero stays zero. A retry failure after physical dispatch leaves credits incomplete; a failure before dispatch preserves the first reading. When either the initial or fallback transport dispatches more than once, only its final response can supply a reading, so any observed credit total remains incomplete.
+`initial-response` carries `conversationId` through the same
 validated provider-state path as `messageMetadataEvent`. Unknown event types produce opt-in
 `debugProviderDiagnostic` entries containing only the event-type length, never the raw header or payload.
 The final usage row records summed request spend across billed physical sends; sealed attempt

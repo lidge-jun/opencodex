@@ -21,6 +21,12 @@ o `$VARIABLE`, el descubrimiento se detiene en lugar de probar otra credencial, 
 solicitudes se niegan a empezar. Cuando el listado no se puede leer completo, OpenCodex conserva los
 modelos anteriores o configurados en lugar de publicar solo una parte.
 
+El descubrimiento en vivo y las pruebas de conexión requieren un endpoint HTTPS de Google:
+`aiplatform.googleapis.com` o `<location>-aiplatform.googleapis.com`, con el puerto HTTPS estándar
+y sin usuario ni contraseña en la URL. Los endpoints de gateways personalizados no reciben las
+credenciales de Vertex. Restablece el endpoint de Google para usar el descubrimiento en vivo;
+los modelos configurados siguen disponibles cuando no se puede verificar el destino.
+
 Los niveles de razonamiento siguen el preajuste: Gemini 4 Hydrogen ofrece low, medium, high (el
 predeterminado) y xhigh; Gemini 4 Carbon y Argon ofrecen low, medium y high. Un modelo al que el
 preajuste no asigna niveles, como `gemini-3-pro`, no muestra ninguno, porque sus solicitudes no

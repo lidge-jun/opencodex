@@ -16,6 +16,7 @@ import {
   DEFAULT_MODEL_CACHE_TTL_MS,
   getFreshCached,
   getStaleCached,
+  observeModelCacheRevision,
   isModelsFetchCoolingDown,
   isModelCacheGenerationCurrent,
   markModelsFetchFailure,
@@ -192,14 +193,19 @@ export function clearGatherRoutedModelsInflight(): void {
 }
 export async function gatherRoutedModels(
   config: OcxConfig,
-  options?: GatherRoutedModelsOptions,
+  options?: GatherRoutedModelsOptions & { onlyProvider?: string },
 ): Promise<CatalogModel[]> {
-  return gatherRoutedModelsWithAuth(
-    config,
-    `refreshing:${gatherFlightKey(config)}`,
-    () => refreshingModelsAuthResolver,
-    options,
-  );
+  if (options?.onlyProvider !== undefined) {
+    const lease = gatherGate.tryAcquire();
+    if (!lease) throw new CatalogGatherBusyError();
+    try {
+      const capture = captureGatherFlight(config, () => refreshingModelsAuthResolver, options.onlyProvider);
+      return projectGatherResult(await gatherRoutedModelsUncached(config, capture, options.onlyProvider), options);
+    } finally {
+      lease.release();
+    }
+  }
+  return gatherRoutedModelsWithAuth(config, `refreshing:${gatherFlightKey(config)}`, () => refreshingModelsAuthResolver, options);
 }
 
 /**
@@ -261,6 +267,10 @@ async function gatherRoutedModelsWithAuth(
     gatherInflight.set(key, bucket);
     entry = ownedEntry;
   }
+  return projectGatherResult(await entry.promise, options);
+}
+
+function projectGatherResult(result: GatherFlightResult, options?: GatherRoutedModelsOptions): CatalogModel[] {
   const {
     models,
     comboOmissions,
@@ -268,7 +278,7 @@ async function gatherRoutedModelsWithAuth(
     providerModelOutcomes,
     discoveryPolicySnapshots,
     providerContentRevisions,
-  } = await entry.promise;
+  } = result;
   if (options?.comboOmissions) {
     options.comboOmissions.length = 0;
     options.comboOmissions.push(...comboOmissions);
@@ -323,6 +333,7 @@ function boundCustomNativeReasoning(
 async function gatherRoutedModelsUncached(
   config: OcxConfig,
   capture: GatherFlightCapture,
+  onlyProvider?: string,
 ): Promise<GatherFlightResult> {
   // Flight-local list: joiners copy from the resolved promise, not a process-global last write.
   const localOmissions: ComboCatalogOmission[] = [];
@@ -408,7 +419,7 @@ async function gatherRoutedModelsUncached(
   //   힌트(modelContextWindows 등)로 native 모델의 context window를 오버라이드한 경우
   //   반영되지 않음. 하지만 nativeOpenAiContextWindow가 이미 config 오버라이드를
   //   우선시하므로 실제 충돌 가능성은 낮음.
-  if (!hasComboTargets(config)) {
+  if (onlyProvider !== undefined || !hasComboTargets(config)) {
     // Skip the native slug injection entirely when no combos are configured — avoids
     // calling nativeOpenAiSlugs() (which reads the live Codex catalog from disk) for
     // configs that will never need it.
@@ -465,7 +476,7 @@ async function gatherRoutedModelsUncached(
   //   catalog production and warning behavior, while this map is already private to combo input.
   // - 장점, 단점 및 영향: custom context/modality/reasoning/tool-mode declarations now constrain
   //   their combos without widening unrelated rows; omitted fields retain provider/native limits.
-  for (const custom of config.customModels ?? []) {
+  for (const custom of onlyProvider === undefined ? config.customModels ?? [] : []) {
     const key = `${custom.provider}/${custom.modelId}`;
     const inherited = memberByKey.get(key) ?? {
       provider: custom.provider,
@@ -487,7 +498,7 @@ async function gatherRoutedModelsUncached(
       ...(custom.codexToolMode !== undefined ? { codexToolMode: custom.codexToolMode } : {}),
     });
   }
-  for (const id of listComboIds(config)) {
+  for (const id of onlyProvider === undefined ? listComboIds(config) : []) {
     const combo = getCombo(config, id);
     if (!combo) continue;
     const comboNativeLimits = nativeContextLimits(config);
@@ -540,7 +551,10 @@ async function gatherRoutedModelsUncached(
     }
     else warnUncataloguedComboOnce(id, combo, members, localOmissions);
   }
-  replaceLastComboCatalogOmissions(localOmissions);
+  if (onlyProvider === undefined && providerResults.every(({ outcome, contentRevision }) =>
+    observeModelCacheRevision(outcome.provider) === contentRevision)) {
+    replaceLastComboCatalogOmissions(localOmissions);
+  }
   // Preserve declaratively ordered discovery (and cold-start seed order); other presets
   // retain their historical alphabetical order. Renamed/custom transport scoping still applies.
   // Read the captured discovery policy, never the live registry: a flight must keep the

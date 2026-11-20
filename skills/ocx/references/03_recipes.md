@@ -705,8 +705,9 @@ ocx account pool anthropic --json
 The target's `supported` list decides which fields can be written. Preserve null,
 `enabledEffective`, and optional `inert`: null is not false, stored policy is not
 proof of an available account, and threshold zero is not the pool enable switch.
-OpenAI has no pool `--enabled` or `--quota-window` writer. `reset-first` strategy
-is for OpenAI and generic OAuth pools, never Anthropic; `least-loaded` is Kiro-only. Anthropic pool windows are
+OpenAI has no pool `--enabled` or `--quota-window` writer. `reset-first` is for OpenAI
+and generic OAuth pools. `reset-near-weighted` is for Codex and Anthropic pools and
+weights new assignments toward the nearest qualifying weekly reset. `least-loaded` is Kiro-only. Anthropic pool windows are
 `five-hour`, `weekly`, `max-utilization`. For a requested supported policy edit:
 
 ```bash
@@ -822,7 +823,8 @@ ocx agent sidecar status --json
 ```
 
 System boolean options are `--show-codex-credits`, `--account-picker`,
-`--main-account-hard-lock`, `--ultra-fast-tier`, `--fast-rows`, each on/off.
+`--main-account-hard-lock`, `--ultra-fast-tier`, `--fast-rows`, `--reserve`, each on/off.
+`--reserve` is Luna Reserve compatibility, independent of `--desktop-authless`.
 Credit display does not authorize paid use, and system Ultra Fast is separate
 from provider Fast. New-option writes report only observed task fields;
 Ultra Fast requires the command's same-target GET read-back. Pending catalog,

@@ -64,6 +64,8 @@ export interface ClaudeCodeState {
    * `contextAccounting` before the next GET; the manual snippet must not mix the two.
    */
   servedContextAccounting?: "1m" | "200k";
+  /** Fable slot from the same read as `effectiveModelEnv`, empty when unconfigured. */
+  servedFableModel?: string;
   /** Configured main slot. The manual snippet uses it to tell an explicit `[1m]` from an automatic one. */
   model?: string;
   injectAgents: boolean;

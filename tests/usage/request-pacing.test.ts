@@ -7,9 +7,12 @@ import {
   resetProviderRequestPacingForTest,
   setProviderRequestPacingLimitsForTest,
   setProviderRequestPacingRuntimeForTest,
+  trackProviderRequestSlotBody,
   waitForProviderRequestSlot,
   type RequestPacingRuntime,
 } from "../../src/providers/request-pacing";
+import { BOUNDED_BODY_MAX_BYTES } from "../../src/lib/bounded-body";
+import { retainPacedRetryResponse } from "../../src/lib/upstream-retry";
 import { providerFetch } from "../../src/server/responses/fetch-helpers";
 import { fetchWithHeaderTimeout } from "../../src/server/responses/fetch-helpers";
 import { requestPacingOverloadResponse } from "../../src/server/responses/pacing-overload";
@@ -436,6 +439,33 @@ describe("provider request pacing queue", () => {
 });
 
 describe("provider request concurrency", () => {
+  test("retry retention releases the upstream slot and preserves bounded raw bytes", async () => {
+    const configured = provider({ enabled: true, maxConcurrentRequests: 1 });
+    const slot = await waitForProviderRequestSlot("demo", configured);
+    const bytes = Uint8Array.of(0xef, 0xbb, 0xbf, 0x61, 0xff);
+    const upstream = trackProviderRequestSlotBody(slot, new Response(bytes, { status: 503 }));
+
+    const retained = await retainPacedRetryResponse(upstream);
+
+    expect(providerRequestPacingStatus("demo", configured).inFlight).toBe(0);
+    expect(retained.status).toBe(503);
+    expect(new Uint8Array(await retained.arrayBuffer())).toEqual(bytes);
+  });
+
+  test("retry retention releases the upstream slot and keeps an oversize read failure", async () => {
+    const configured = provider({ enabled: true, maxConcurrentRequests: 1 });
+    const slot = await waitForProviderRequestSlot("demo", configured);
+    const upstream = trackProviderRequestSlotBody(slot, new Response(new Uint8Array(BOUNDED_BODY_MAX_BYTES + 1), {
+      status: 503,
+    }));
+
+    const retained = await retainPacedRetryResponse(upstream);
+
+    expect(providerRequestPacingStatus("demo", configured).inFlight).toBe(0);
+    expect(retained.status).toBe(503);
+    await expect(retained.arrayBuffer()).rejects.toHaveProperty("name", "QuotaExceededError");
+  });
+
   test("Cursor counts overlapping RunSSE and BidiAppend as one held turn", async () => {
     let sends = 0;
     const fetchImpl = Object.assign(async () => {

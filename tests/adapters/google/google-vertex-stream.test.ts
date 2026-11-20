@@ -73,7 +73,8 @@ describe("vertex parseStream fail-closed truncation", () => {
     expect(done).toBeDefined();
     const usage = (done as Extract<AdapterEvent, { type: "done" }>).usage;
     expect(usage?.inputTokens).toBe(5);
-    expect(usage?.outputTokens).toBe(2);
+    // candidates 2 + thoughts 1: output includes thinking.
+    expect(usage?.outputTokens).toBe(3);
     expect(usage?.reasoningOutputTokens).toBe(1);
     expect(usage?.cachedInputTokens).toBe(3);
     expect(usage?.estimated).toBeUndefined();

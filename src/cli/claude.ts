@@ -9,10 +9,11 @@
  */
 import { resolveSubagentForceModel } from "../claude/subagent-model";
 import { spawn } from "node:child_process";
+import { withClaudeContextSettings } from "./claude-context-settings";
 import { loadConfig } from "../config";
 import { injectClaudeAgentDefs } from "../claude/agents-inject";
 import { CLAUDE_ALIAS_PREFIX_CURRENT, CLAUDE_ALIAS_PREFIX_CURRENT_V2, CLAUDE_ALIAS_PREFIX_V1, CLAUDE_ALIAS_PREFIX_V2 } from "../claude/alias";
-import { claudeTierDisplayName, claudeToolSearchEnv, effectiveModelEnv, isClaudeTierLabelSlot, resolveAutoContext } from "../claude/context-windows";
+import { claudeTierDisplayName, claudeToolSearchEnv, effectiveModelEnv, isClaudeTierLabelSlot, probeClaudeCodeVersionForTierFill, resolveAutoContext } from "../claude/context-windows";
 import { claudeConfigDir, fetchGatewayModels, writeGatewayModelCache } from "../claude/gateway-cache";
 import { commandInvocation } from "../lib/win-exec";
 import { isProxyAdmissionSecret } from "../server/auth-cors";
@@ -41,9 +42,9 @@ import { withoutSupervisorMarkers } from "../lib/supervisor-markers";
 
 /**
  * The environment of the detached `ocx start` that `ocx claude` launches (the spawn adds the runtime
- * provenance stamp): an ordinary owner. It
- * carries OCX_SERVICE=1 but no service manager's marker, which is how a restart tells it apart from
- * a manager-launched process (src/client/runtime-restart.ts classifyClientRestartSupervisor).
+ * provenance stamp): an ordinary owner. It carries OCX_SERVICE=1 but no service manager's marker, so a
+ * manager-launched process is told apart from it; a client runtime cannot tell it from a service registered before
+ * the marker existed, and its restart is refused as legacy-flag (src/client/runtime-restart.ts, #8545).
  */
 export function claudeProxyStartEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return withoutSupervisorMarkers(withoutSiblingMarker({ ...base, OCX_SERVICE: "1" }));
@@ -63,6 +64,7 @@ export interface ClaudeRoutingTarget {
  * launch base so detection and the spawned process can never disagree (audit R3-3).
  */
 export type ClaudeEnvDeps = {
+  claudeCodeVersion?: string | null;
   forceAvailable?: readonly string[];
   forceAvailableSelectors?: readonly string[];
   authDetect?: Omit<Partial<AuthDetectDeps>, "env" | "ownTokens">;
@@ -433,7 +435,7 @@ export function buildClaudeEnv(
   // Model slots (devlog 260712 B2): default + four tier defaults + legacy small-fast,
   // with automatic [1m] context-variant marking when the slot's target model has an
   // authoritative >=1M window (Claude Code then accounts 1M, compaction preserved).
-  for (const [name, value] of Object.entries(effectiveModelEnv(config.claudeCode, contextWindows, auto))) {
+  for (const [name, value] of Object.entries(effectiveModelEnv(config.claudeCode, contextWindows, auto, deps.claudeCodeVersion))) {
     // A tier slot this launch wrote gets its picker label too (#6926). A slot the user exported
     // stays unlabelled, and a `<slot>_NAME` the user exported wins.
     if (setDefault(name, value) && isClaudeTierLabelSlot(name)) setDefault(`${name}_NAME`, claudeTierDisplayName(value));
@@ -463,7 +465,7 @@ export async function fetchClaudeCodeState(config: OcxConfig, port: number, time
     const headers = new Headers();
     const token = configuredAdminToken();
     if (token) headers.set("x-opencodex-api-key", token);
-    const res = await fetch(`${localManagementOrigin(config, port)}/api/claude-code`, {
+    const res = await fetch(`${localManagementOrigin(config, port)}/api/claude-code?view=launch`, {
       headers,
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -874,12 +876,15 @@ export async function cmdClaude(args: string[]): Promise<number> {
     contextWindows = liveState.contextWindows;
     forceAvailable = liveState.forceAvailable ?? [];
   }
-  const gateway = await fetchGatewayModels(route, { admissionConfig: config });
+  const [gateway, claudeCodeVersion, keychainPresence] = await Promise.all([
+    fetchGatewayModels(route, { admissionConfig: config }),
+    probeClaudeCodeVersionForTierFill(config.claudeCode, contextWindows),
+    resolveClaudeKeychainPresence(config.claudeCode?.authMode),
+  ]);
   const forceAvailableSelectors = typeof route === "number" ? undefined : gateway?.models.map(model => model.id) ?? [];
   const allowRootSkipPermissions = shouldAllowRootSkipPermissions(args);
-  const keychainPresence = await resolveClaudeKeychainPresence(config.claudeCode?.authMode);
   const env = buildClaudeEnv(config, route, process.env, contextWindows, {
-    allowRootSkipPermissions, forceAvailable, forceAvailableSelectors, authDetect: { keychainProbe: () => keychainPresence },
+    allowRootSkipPermissions, forceAvailable, forceAvailableSelectors, claudeCodeVersion, authDetect: { keychainProbe: () => keychainPresence },
   });
   if (allowRootSkipPermissions) {
     console.error(rootSkipPermissionsNotice(env));
@@ -915,7 +920,10 @@ export async function cmdClaude(args: string[]): Promise<number> {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`⚠ Claude agent definitions could not be synced: ${message}`);
   }
-  return spawnClaude(args, env);
+  const launch = withClaudeContextSettings(args, env, config, contextWindows, process.env, {
+    selectors: gateway?.models.map(model => model.id) ?? [],
+  });
+  return spawnClaude(launch.args, launch.env);
 }
 
 async function launchNativeClaude(config: OcxConfig, args: string[], notice: string): Promise<number> {

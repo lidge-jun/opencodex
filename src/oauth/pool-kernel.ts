@@ -10,14 +10,15 @@ export const POOL_KEY_ANTHROPIC = "anthropic";
  * with the two dedicated kinds, and so `reconcilePoolRotationState` can recognise
  * the entry as sweepable rather than skipping it as unknown.
  */
-export function genericPoolKey(providerName: string): string {
-  return `generic:${providerName}`;
+export function genericPoolKey(providerName: string, family?: string): string {
+  return family ? `generic:${providerName}:${family}` : `generic:${providerName}`;
 }
 
 interface SelectionState {
   activeKey?: string;
   successes: number;
   currentWeights: Map<string, number>;
+  hasWeightedScores: boolean;
 }
 
 const selectionState = new Map<string, SelectionState>();
@@ -27,7 +28,7 @@ const DEFAULT_STICKY_LIMIT = 1;
 const MIN_STICKY_LIMIT = 1;
 const MAX_STICKY_LIMIT = 100;
 const DEFAULT_STRATEGY: OcxAccountPoolRotationStrategy = "quota";
-const VALID_STRATEGIES = new Set<OcxAccountPoolRotationStrategy>(["quota", "round-robin", "fill-first"]);
+const VALID_STRATEGIES = new Set<OcxAccountPoolRotationStrategy>(["quota", "round-robin", "fill-first", "reset-near-weighted"]);
 
 /** Selection order for an account with no stored preference: one flat tier. */
 export const DEFAULT_ACCOUNT_PRIORITY = 0;
@@ -135,7 +136,7 @@ export function selectPriorityTier(
 function getOrCreateState(poolKey: string): SelectionState {
   let state = selectionState.get(poolKey);
   if (!state) {
-    state = { successes: 0, currentWeights: new Map() };
+    state = { successes: 0, currentWeights: new Map(), hasWeightedScores: false };
     selectionState.set(poolKey, state);
   }
   return state;
@@ -146,16 +147,17 @@ function cloneSelectionState(state: SelectionState): SelectionState {
     activeKey: state.activeKey,
     successes: state.successes,
     currentWeights: new Map(state.currentWeights),
+    hasWeightedScores: state.hasWeightedScores,
   };
 }
 
-function smoothWeightedIndex(ids: readonly string[], state: SelectionState): number {
+function smoothWeightedIndex(ids: readonly string[], state: SelectionState, weights?: readonly number[]): number {
   let best = -1;
   let bestScore = Number.NEGATIVE_INFINITY;
   let total = 0;
-  const weight = 1;
   for (let i = 0; i < ids.length; i++) {
     const id = ids[i]!;
+    const weight = weights?.[i] ?? 1;
     const score = (state.currentWeights.get(id) ?? 0) + weight;
     state.currentWeights.set(id, score);
     total += weight;
@@ -180,10 +182,18 @@ function pickRoundRobinFromState(
   stickyLimit: number,
   state: SelectionState,
   commitSticky: boolean,
+  weightOf?: (id: string) => number,
 ): string | null {
   if (eligibleIds.length === 0) return null;
 
   const limit = normalizeAccountPoolStickyLimit(stickyLimit);
+  const weights = weightOf && eligibleIds.map(id => weightOf(id));
+  const weighted = weights?.some(weight => weight !== weights[0]) ?? false;
+  // A completed weighted pick leaves scores that would skew a fresh equal cycle.
+  if (state.hasWeightedScores && !weighted) {
+    state.currentWeights.clear();
+    state.hasWeightedScores = false;
+  }
 
   if (state.activeKey && eligibleIds.includes(state.activeKey)) {
     return state.activeKey;
@@ -194,7 +204,8 @@ function pickRoundRobinFromState(
     state.successes = 0;
   }
 
-  const index = smoothWeightedIndex(eligibleIds, state);
+  const index = smoothWeightedIndex(eligibleIds, state, weighted ? weights : undefined);
+  state.hasWeightedScores = weighted;
   if (index < 0) return null;
 
   const picked = eligibleIds[index]!;
@@ -209,8 +220,9 @@ export function pickRoundRobinAccount(
   poolKey: string,
   eligibleIds: readonly string[],
   stickyLimit: number,
+  weightOf?: (id: string) => number,
 ): string | null {
-  return pickRoundRobinFromState(eligibleIds, stickyLimit, getOrCreateState(poolKey), true);
+  return pickRoundRobinFromState(eligibleIds, stickyLimit, getOrCreateState(poolKey), true, weightOf);
 }
 
 /**
@@ -221,12 +233,13 @@ export function peekRoundRobinAccount(
   poolKey: string,
   eligibleIds: readonly string[],
   stickyLimit: number,
+  weightOf?: (id: string) => number,
 ): string | null {
   const live = selectionState.get(poolKey);
   const scratch = live
     ? cloneSelectionState(live)
-    : { successes: 0, currentWeights: new Map<string, number>() };
-  return pickRoundRobinFromState(eligibleIds, stickyLimit, scratch, false);
+    : { successes: 0, currentWeights: new Map<string, number>(), hasWeightedScores: false };
+  return pickRoundRobinFromState(eligibleIds, stickyLimit, scratch, false, weightOf);
 }
 
 export function notePoolRotationSuccess(
@@ -266,6 +279,7 @@ export function seedPoolRotationAccount(poolKey: string, accountId: string): voi
   state.activeKey = accountId;
   state.successes = 0;
   state.currentWeights.clear();
+  state.hasWeightedScores = false;
 }
 
 export function clearPoolRotationState(poolKey?: string): void {
@@ -309,7 +323,7 @@ export function reconcilePoolRotationState(context: GenerationContext): number {
       : poolKey === POOL_KEY_CODEX || poolKey.startsWith(`${POOL_KEY_CODEX}:`)
         ? context.codexAccountIds
         : poolKey.startsWith("generic:")
-          ? genericIds.get(poolKey.slice("generic:".length)) ?? new Set<string>()
+          ? genericIds.get(poolKey.slice("generic:".length).split(":")[0]!) ?? new Set<string>()
           : null;
     if (!valid) continue;
     if (valid.size === 0) {

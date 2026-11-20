@@ -1,13 +1,14 @@
 /**
  * In-process Windows process primitives for the checked service stop (#7771).
  *
- * Four questions the checked stop asks of the kernel and the SCM:
+ * Process evidence the stop paths ask of the kernel and the SCM:
  *
  * - when was this process created (GetProcessTimes), so a PID that was reused between
  *   bind and terminate is told apart from the process that was bound;
- * - terminate exactly the bound process: OpenProcess, read the creation time on THAT
- *   handle, compare, TerminateProcess on the same handle, close. There is no gap between
- *   the identity check and the kill in which the PID could be reused;
+ * - does a live process share the caller's token user, and what is its creation identity
+ *   and optional command line (all read through the same handle for Link stop);
+ * - terminate exactly the bound process: verify its creation time and token user on
+ *   the same handle passed to TerminateProcess, so PID reuse cannot redirect the stop;
  * - has a bound process exited (WaitForSingleObject with a zero timeout on a handle
  *   opened at bind time), so the wait needs neither an enumeration nor PowerShell;
  * - which process hosts the Task Scheduler service (QueryServiceStatusEx on "Schedule"),
@@ -17,13 +18,11 @@
  * (every importer loads this module on every platform), the DLLs load from the
  * GetSystemDirectoryW path so the search order cannot substitute them, a failed load is
  * cached as null, and every handle is closed in a finally. Windows ARM64 and every other
- * platform get null here; src/service/windows-process-evidence.ts then uses the spawned
- * fallbacks. A test that simulates a platform never reaches the real kernel.
- *
- * Nothing calls this module yet; the stop paths move to it in a later change.
+ * platform get null here. A test that simulates a platform never reaches the real kernel.
  */
 import { join } from "node:path";
 
+import { readWindowsProcessCommandLineFromHandle } from "../config/windows-process-command-line";
 import { resolveTrustedWindowsSystemDirectory } from "../lib/windows-elevation";
 
 const PROCESS_TERMINATE = 0x0001;
@@ -41,19 +40,20 @@ const SERVICE_RUNNING = 4;
 const SERVICE_STATUS_PROCESS_BYTES = 36;
 const SERVICE_STATUS_STATE_OFFSET = 4;
 const SERVICE_STATUS_PID_OFFSET = 28;
+/** 100 ns intervals between 0001-01-01 (.NET) and 1601-01-01 (FILETIME). */
+const FILETIME_DOTNET_EPOCH = 504_911_232_000_000_000n;
 /** 100 ns intervals between 1601-01-01 and 1970-01-01. */
 const FILETIME_UNIX_EPOCH = 116_444_736_000_000_000n;
 const TERMINATE_EXIT_CODE = 1;
 
 /** Result of one checked terminate. Only "terminated" means this call ended the process. */
-export type WindowsTerminateStatus = "terminated" | "gone" | "reused" | "denied" | "unavailable";
+export type WindowsTerminateStatus = "terminated" | "gone" | "reused" | "denied" | "unavailable" | "owner-unverified";
 
 export interface WindowsTerminateResult {
   status: WindowsTerminateStatus;
   /**
-   * True when the primitive itself observed the process exit after terminating it. The
-   * x64 primitive does not wait (the checked stop waits on its bind-time handles); the
-   * ARM64 fallback reads the exit back inside its script and reports it here.
+   * True when the primitive itself observed the process exit after terminating it.
+   * The native primitive leaves exit confirmation to the bind-time watch.
    */
   exited?: boolean;
 }
@@ -66,10 +66,17 @@ export type WindowsProcessWatch =
 export interface WindowsProcessNativeApi {
   /** Creation time in epoch ms (FILETIME truncated to ms), or null when unreadable. */
   creationTime(pid: number): number | null;
-  terminate(pid: number, boundStartTime: number): WindowsTerminateResult;
+  /** Creation in .NET ticks at CIM precision from a live process with the same token user. */
+  sameUserIdentity(pid: number, withCommandLine?: boolean): { ticks: bigint; commandLine?: string } | null;
+  terminate(pid: number, boundStartTime: number | bigint): WindowsTerminateResult;
   openWatch(pid: number, boundStartTime: number): WindowsProcessWatch;
   /** PID of the running Task Scheduler service host, or null when it cannot be read. */
   scheduleServicePid(): number | null;
+}
+
+/** Keep compatibility with CIM timestamps in saved runtime and teardown records. */
+function fileTimeToCimTicks(fileTime: bigint): bigint {
+  return (fileTime + FILETIME_DOTNET_EPOCH) / 10n * 10n;
 }
 
 /** FILETIME (100 ns since 1601) to epoch ms, truncated. Zero or pre-1970 is unreadable. */
@@ -121,12 +128,13 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
   if (nativeApi !== undefined) return nativeApi;
   nativeApi = null;
   if (process.platform !== "win32" || process.arch !== "x64") return null;
-  let ptr: typeof import("bun:ffi").ptr;
+  let ffi: typeof import("bun:ffi");
+  let readWindowsCurrentSid: typeof import("../codex/windows-current-sid").readWindowsCurrentSid;
   let kernel32;
   let advapi32;
   try {
-    const ffi = require("bun:ffi") as typeof import("bun:ffi");
-    ptr = ffi.ptr;
+    ffi = require("bun:ffi") as typeof import("bun:ffi");
+    ({ readWindowsCurrentSid } = require("../codex/windows-current-sid") as typeof import("../codex/windows-current-sid"));
     const systemDirectory = resolveTrustedWindowsSystemDirectory();
     kernel32 = ffi.dlopen(join(systemDirectory, "kernel32.dll"), {
       OpenProcess: { args: ["u32", "i32", "u32"], returns: "u64" },
@@ -135,24 +143,44 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
       TerminateProcess: { args: ["u64", "u32"], returns: "i32" },
       WaitForSingleObject: { args: ["u64", "u32"], returns: "u32" },
       GetLastError: { args: [], returns: "u32" },
+      GetCurrentProcess: { args: [], returns: "u64" },
+      LocalFree: { args: ["ptr"], returns: "ptr" },
     }).symbols;
     advapi32 = ffi.dlopen(join(systemDirectory, "advapi32.dll"), {
       OpenSCManagerW: { args: ["ptr", "ptr", "u32"], returns: "u64" },
       OpenServiceW: { args: ["u64", "ptr", "u32"], returns: "u64" },
       QueryServiceStatusEx: { args: ["u64", "i32", "ptr", "u32", "ptr"], returns: "i32" },
       CloseServiceHandle: { args: ["u64"], returns: "i32" },
+      OpenProcessToken: { args: ["u64", "u32", "ptr"], returns: "i32" },
+      GetTokenInformation: { args: ["u64", "u32", "ptr", "u32", "ptr"], returns: "i32" },
+      ConvertSidToStringSidW: { args: ["ptr", "ptr"], returns: "i32" },
     }).symbols;
   } catch {
     return null;
   }
   const k = kernel32;
   const a = advapi32;
+  const { ptr, read } = ffi;
 
-  const handleCreationTime = (handle: Handle): number | null => {
+  const handleUserSid = (handle: Handle): string => readWindowsCurrentSid({
+    openProcessToken: (access, token) => a.OpenProcessToken(handle, access, ptr(token)),
+    getTokenInformation: (token, kind, buffer, length) =>
+      a.GetTokenInformation(token, kind, ptr(buffer), buffer.byteLength, ptr(length)),
+    convertSidToStringSid: (sid, output) => a.ConvertSidToStringSidW(sid as import("bun:ffi").Pointer, ptr(output)),
+    readCodeUnit: (address, offset) => read.u16(address as import("bun:ffi").Pointer, offset),
+    localFree: address => { k.LocalFree(address as import("bun:ffi").Pointer); },
+    closeHandle: token => { k.CloseHandle(token); },
+  });
+
+  const handleFileTime = (handle: Handle): bigint | null => {
     const times = new BigUint64Array(4);
     const base = ptr(times);
     const ok = k.GetProcessTimes(handle, base, base + 8, base + 16, base + 24);
-    return ok ? fileTimeToEpochMs(times[0]!) : null;
+    return ok && times[0]! > FILETIME_UNIX_EPOCH ? times[0]! : null;
+  };
+  const handleCreationTime = (handle: Handle): number | null => {
+    const ticks = handleFileTime(handle);
+    return ticks === null ? null : fileTimeToEpochMs(ticks);
   };
   // true = exited, false = running, null = unreadable.
   const handleExited = (handle: Handle): boolean | null => {
@@ -180,16 +208,37 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
         k.CloseHandle(handle);
       }
     },
+    sameUserIdentity(pid, withCommandLine) {
+      const handle = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid);
+      if (!handle) return null;
+      try {
+        const fileTime = handleFileTime(handle);
+        if (fileTime === null || handleUserSid(handle) !== handleUserSid(k.GetCurrentProcess())) return null;
+        const commandLine = withCommandLine ? readWindowsProcessCommandLineFromHandle(handle) : undefined;
+        if (handleExited(handle) !== false) return null;
+        return { ticks: fileTimeToCimTicks(fileTime), commandLine };
+      } catch {
+        return null;
+      } finally {
+        k.CloseHandle(handle);
+      }
+    },
     terminate(pid, boundStartTime) {
       const handle = k.OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid);
       if (!handle) return { status: openFailure() };
       try {
-        const created = handleCreationTime(handle);
-        if (created === null) return { status: "unavailable" };
+        const fileTime = handleFileTime(handle);
+        if (fileTime === null) return { status: "unavailable" };
+        const created = typeof boundStartTime === "number" ? fileTimeToEpochMs(fileTime) : fileTimeToCimTicks(fileTime);
         if (created !== boundStartTime) return { status: "reused" };
         const before = handleExited(handle);
         if (before === true) return { status: "gone" };
         if (before === null) return { status: "unavailable" };
+        try {
+          if (handleUserSid(handle) !== handleUserSid(k.GetCurrentProcess())) return { status: "owner-unverified" };
+        } catch {
+          return { status: handleExited(handle) === true ? "gone" : "owner-unverified" };
+        }
         if (k.TerminateProcess(handle, TERMINATE_EXIT_CODE)) return { status: "terminated" };
         const error = Number(k.GetLastError()) >>> 0;
         // TerminateProcess on a process that exited meanwhile also fails with access denied.

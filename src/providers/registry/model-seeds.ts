@@ -226,7 +226,8 @@ export const OPENAI_API_GPT56_REASONING_EFFORTS = ["low", "medium", "high", "xhi
  * (https://developers.openai.com/api/docs/models/gpt-6.1-sol, checked 2026-09-30).
  */
 // GPT-6.1 Terra (2026-10-26): same API limits; its none..max ladder is set per model.
-export const OPENAI_GPT6_MODELS = ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"];
+// GPT-6.2 Sol and Astra publish the same API limits and disallow none.
+export const OPENAI_GPT6_MODELS = ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"];
 /*
  * Meta Model API (https://api.meta.ai/v1) — published ladder, deliberately NOT the
  * house set. dev.meta.ai/docs/reasoning lists "none", "minimal", "low", "medium",
@@ -334,6 +335,8 @@ export const OPENROUTER_GPT56_CONTEXT_WINDOWS = {
   "openai/gpt-6-luna": OPENROUTER_GPT56_CONTEXT_WINDOW,
   // Live /api/v1/models on 2026-09-30: context_length 1,050,000, max_completion_tokens 128,000.
   "openai/gpt-6.1-sol": OPENROUTER_GPT56_CONTEXT_WINDOW,
+  "openai/gpt-6.2-sol": 1_050_000,
+  "openai/gpt-6.2-astra": 1_050_000,
   // OpenRouter listing checked 2026-10-27: context_length 1,050,000.
   "openai/gpt-6.1-terra": OPENROUTER_GPT56_CONTEXT_WINDOW,
 };
@@ -1218,6 +1221,48 @@ export const OPPER_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fro
   OPPER_MODELS.map(id => [id, OPPER_TEXT_ONLY_MODELS.includes(id) ? ["text"] : ["text", "image"]]),
 );
 
+/**
+ * Step Plan catalog as the StepCode CLI serves it (`GET {step_plan}/v1/models`, 2026-10-17).
+ *
+ * Verified against a signed-in `step_plan` login, including `max_input_tokens` and the per-model
+ * `reasoning_effort_support_list`. The four `stepaudio-*` entries the same endpoint returns are
+ * deliberately absent: they are speech models, they hold no chat tools, and a row that routes a text
+ * turn into them answers `model_invalid`. `liveModels` stays false on the registry row for the same
+ * reason Claude Code's row does — the CLI, not the adapter's own HTTP path, owns discovery.
+ */
+export const STEP_CLI_MODELS = [
+  "step-5-preview",
+  "step-3.7-flash",
+  "step-3.5-flash",
+  "step-3.5-flash-2603",
+  "step-router-v1",
+];
+
+export const STEP_CLI_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "step-5-preview": 1_024_000,
+  "step-3.7-flash": 262_144,
+  "step-3.5-flash": 262_144,
+  "step-3.5-flash-2603": 262_144,
+  "step-router-v1": 262_144,
+};
+
+/**
+ * Every published model is text-only for this route.
+ *
+ * `step-5-preview` and `step-3.7-flash` do accept images upstream, but nothing verifies that a
+ * headless StepCode turn hands those bytes to the model, and the adapter refuses image input for the
+ * same reason the Qoder and Claude Code rows do. Advertising a modality the route cannot honour makes
+ * route selection pick this row for a picture it then answers blind; the vision sidecar still
+ * captions images into text before they arrive.
+ */
+export const STEP_CLI_NO_VISION_MODELS = [...STEP_CLI_MODELS];
+
+/**
+ * The three档 Step advertises. `xhigh` and `max` are not advertised and must not be offered: the
+ * service maps them onto `high` server-side, so publishing them would let the client believe it chose
+ * a depth it did not.
+ */
+export const STEP_CLI_REASONING_EFFORTS = ["low", "medium", "high"];
 // AI Stupid Level routing modes, as listed by the authenticated GET /v1/models on 2026-10-26
 // (https://aistupidlevel.info/router/docs#strategies). Each mode picks a model per request, so it
 // declares conservative limits that hold for any pick: a 262,144-token window (the pool's smallest,
@@ -1295,3 +1340,54 @@ export const MORPH_ULTRA_REASONING_EFFORT_MAPS: Record<string, Record<string, st
   "morph-kimik31": { none: "none" },
   "morph-dsv41flash-1017": { none: "none", medium: "high" },
 };
+
+/*
+ * AbliteratedLLM catalog as listed by the public GET https://api.abliteratedllm.dev/v1/models on
+ * 2026-11-14 (https://abliteratedllm.dev/docs/models). glm-5.3-flash-abliterated is the service's
+ * abliterated model and the default; every other row is a stock model (the vendor's original
+ * weights). Windows are each row's `context_length`. Modalities are each row's `input_modalities`:
+ * glm-5.3 and glm-5.3-fast are text only, and the gateway answers an image part sent to a model
+ * that does not list images with 400 `unsupported_content`. glm-5.3-flash also lists video, which
+ * the Codex catalog cannot carry, so it is seeded as text and image. The preset uses this seeded
+ * list (liveModels: false): the public model list answers without a key and cannot validate one.
+ */
+export const ABLITERATEDLLM_MODELS = [
+  "glm-5.3-flash-abliterated",
+  "deepseek-v4.1-flash-1017",
+  "deepseek-v4.1-flash-1017-ultrafast",
+  "deepseek-v4.1-flash-original",
+  "glm-5.3-flash",
+  "glm-5.3",
+  "glm-5.3-fast",
+  "kimi-k3",
+  "kimi-k3.1-pro",
+  "kimi-k3-fast",
+  "ember-1",
+  "muse-spark-open",
+  "qwen3.8-max",
+  "qwen3.8-2.4t-a95b",
+  "minimax-m3",
+];
+export const ABLITERATEDLLM_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "glm-5.3-flash-abliterated": 1_048_576,
+  "deepseek-v4.1-flash-1017": 1_048_576,
+  "deepseek-v4.1-flash-1017-ultrafast": 1_048_576,
+  "deepseek-v4.1-flash-original": 1_048_576,
+  "glm-5.3-flash": 1_048_576,
+  "glm-5.3": 1_048_576,
+  "glm-5.3-fast": 1_048_576,
+  "kimi-k3": 1_048_576,
+  "kimi-k3.1-pro": 1_048_576,
+  "kimi-k3-fast": 1_048_576,
+  "ember-1": 1_048_576,
+  "muse-spark-open": 1_048_576,
+  "qwen3.8-max": 262_144,
+  "qwen3.8-2.4t-a95b": 262_144,
+  "minimax-m3": 512_000,
+};
+const ABLITERATEDLLM_TEXT_ONLY_MODELS = ["glm-5.3", "glm-5.3-fast"];
+export const ABLITERATEDLLM_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
+  ABLITERATEDLLM_MODELS.map(id => [
+    id, ABLITERATEDLLM_TEXT_ONLY_MODELS.includes(id) ? ["text"] : ["text", "image"],
+  ]),
+);

@@ -161,7 +161,8 @@ if (kind.startsWith("native-pacing")) {
   produced = admissionModelDeniedResponse(new AdmissionModelDeniedError(clientFacingModelLabel(KEY), { providerName: "fixture", modelId: "model" }));
 } else if (kind === "combo-count") {
   const { comboUnavailable } = await import("../../src/server/responses/core-errors");
-  produced = comboUnavailable(KEY, Date.now(), "provider disabled: 3" as never); absent = "3";
+  produced = comboUnavailable(KEY, Date.now(), { reasons: "provider disabled: 3" as never,
+    diagnostics: { cause: "unavailable", targets: 3, attempted: 0, causes: { unavailable: 3 } } }); absent = "3";
 } else if (kind === "combo") {
   const { comboUnavailable } = await import("../../src/server/responses/core-errors"); produced = comboUnavailable(KEY);
 } else if (kind === "config") {

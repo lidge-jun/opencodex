@@ -1,5 +1,7 @@
 # Usage client attribution
 
+The [scoped Hub management relay](remote-link.md#hub-transport-relay) uses the same enrolled-key usage projection as `GET /v1/usage`, including post-read authorization and omission of account breakdowns and ledger-wide window metadata.
+
 `src/usage/client.ts` defines the closed client-attribution roster and recognizes bounded
 request-header signatures without retaining the header values. HTTP request contexts in
 `src/server/index/` and the Responses WebSocket handshake carry that observational label through
@@ -9,11 +11,15 @@ cannot replace the inbound label. The label is caller-supplied evidence, not an 
 decision. New direct log writes without a valid client record `unknown`; reading an older row
 without the field still preserves its absence. The live log detaches mutable caller rows so a
 later caller mutation cannot replace a recorded client with raw text; frozen normalized rows with
-only data properties can retain their identity. Client values and bounded failure details are
+only data properties can retain their identity. Client values and [bounded failure details](data-planes/error-detail.md#proxy-owned-error-detail) are
 captured before error projection, and normalizing a new write also preserves any existing
 attempt-loss marker.
 `tests/usage/usage-client-attribution.test.ts` and
 `tests/usage/request-log-normalization.test.ts` cover those boundaries.
+
+A completed JEV decision stays on the parent usage row when the post-decision consent and scope
+recheck refuses, is cancelled or throws. Responses, translated Chat and translated Messages each finalize that row through
+their HTTP request logger.
 
 Request-log rows and usage.jsonl rows carry `requestBody` (#3023): `wireBytes` as received, the `encoding` (`identity`, `zstd`, `gzip` or `deflate`) and `decodedBytes`. `readBoundedJsonRequestBody` in `src/server/request-decompress.ts` records them in `src/server/request-body-facts.ts` once a body was read and decoded in full, into a holder keyed by the Request; `src/server/admitted-http-turn.ts` binds the holder of the request it hands to the handler to that turn's log context, so every admitted JSON data route records it and a route that reads no JSON body records nothing. `src/usage/request-body.ts` validates the field on every write and read; a row without it, or with a malformed one, keeps every other field, and a reader that predates the field drops it because `src/usage/log.ts` rebuilds rows from known fields. `/api/logs` and `ocx logs --json` show it as part of the row. Coverage: `tests/usage/request-body-log.test.ts`.
 
@@ -42,12 +48,17 @@ row offset during ingest, and `readUsageLedgerRowsAtOffsets` re-reads only the s
 same identity, row-ceiling and torn-suffix rules. The first filtered query after the index is missing
 or invalid pays one cooperative full ingest; appends ingest only new bytes, and every later filter
 reuses the projection. Candidate offsets are selected and consumed in bounded keyset pages, with a
-timer yield between pages; each page rechecks the published generation before it is read, so broad
-filters neither retain the complete offset set nor monopolize the event loop. A replaced, truncated
+timer yield between pages; each page rechecks the published generation before it is read. Within a
+page, decoding and accumulation share the scanner's 8 ms cooperative slice, with one row atomic and
+cancellation checked after yielding. The accumulator consumes rows directly instead of retaining a
+page of parsed entries. A replaced, truncated
 or same-size rewritten ledger rebuilds it, a write
 observed during a row read re-verifies the selected bytes before publishing them, and a recorded
 offset that no longer frames a complete row drops the projection instead of serving a partial
 answer. `usage.jsonl` stays authoritative and is never truncated or rewritten.
+Row callbacks are provisional until validation completes; failed rebuilds discard their accumulator
+and failed appends discard their clone. A verification pass clears the cached read window, yields
+between rows, and rejects identity, size or revision changes during that pass before publication.
 
 Each candidate page is one keyset statement per branch, and every branch index is ordered
 `(generation, <equality prefix>, byte_offset, ...)` so its own `ORDER BY byte_offset LIMIT` is
@@ -190,6 +201,40 @@ newly scoped by that rule. `src/server/hub-usage.ts` binds a client-filtered dat
 key and emits a safe scope echo; `src/remote/hub-usage.ts` projects it without key IDs, and
 `src/client/hub-client.ts` rejects a missing or mismatched echo.
 
+## Credential recovery attempts
+
+`noteProviderAttemptSend` in `src/server/request-log.ts` closes a sent attempt before a
+credential recovery even when the provider and opaque account label are unchanged, such as a
+same-account OAuth refresh after 401. `credentialRecoveryStatus` in
+`src/server/request-log-attempt-recovery.ts` maps the closed credential-recovery roster to its
+401, 402, 403 or 429 refusal status; an already recorded upstream status takes precedence.
+The existing in-place split preserves the active object, keeps the refused send's usage on its
+sealed row and records the replacement send on a fresh row. The sealed tier outcome is a snapshot;
+the replacement retains the live adapter observer's outcome so response-tier confirmation updates
+only the replacement. `src/server/credential-recovery-attempt.ts` seals the observed refusal
+before a credential replay. If pacing or final admission refuses the replacement, finalization
+keeps the physical status and separately records the logical request outcome. Responses
+recovery publishes the rebuilt tier, reasoning, account and input estimate at physical dispatch.
+A combo preserves a sealed child refusal through success, failure and cancellation finalization.
+`src/server/responses/run-turn-execution.ts` uses a guarded receipt from the provider executor,
+the Cursor transport or the CLI spawn to bind the replacement and count its dispatch.
+CodeBuddy, Claude CLI and Qoder report sends through the shared runner after the spawn
+permit is consumed. The import-free `src/lib/executor-physical-send-receipt.ts` shares the
+final-admission receipt between the HTTP executor and adapter dispatch. Copilot continuation
+recovery checks the attempt identity and send count on the inference response, and pacing
+preserves that receipt when it wraps the body.
+`src/server/responses/compact.ts` creates its native attempt on the first dispatch receipt and
+seals a 401 before starting credential refresh.
+A Responses-to-Chat handoff carries this pending replay into translated dispatch and hosted
+sidecars. At replacement dispatch, `src/server/passive-route-linker.ts` resolves the passive Lab
+subject from the routed provider configuration, inbound wire and effective adapter. Matching
+policy and production adapters retain the resolved service-tier flags. A change to the request URL
+alone can keep the same subject.
+A recovery before the first send creates no extra row. Same-account waits and transport resends remain on the existing attempt.
+`tests/usage/key-attribution.test.ts` covers the split and non-split kinds; the loopback server
+case in `tests/server/server-google-antigravity-oauth-401-replay.test.ts` records separate 401
+and 200 rows for a same-account refresh.
+
 ## Anthropic pool account tag
 
 Anthropic pool attempts carry no `accountLogLabel`; the pool folds the account into the logged
@@ -202,3 +247,7 @@ and the request-log hydration keep only `p` plus six lowercase hex digits and dr
 Per-account summaries still key on `accountLogLabel` and ignore the tag
 (`tests/usage/request-log-anthropic-account-tag.test.ts`).
 Remote Link rows may carry an optional `link` object (transport, continuation, hashed thread and turn refs) while the link WebSocket feature is on; it is validated in `src/usage/link-log-fields.ts` and spread into the row, the persisted entry and hydration, and described in `structure/remote-link.md`.
+
+Opted-in native Gemini delivery uses `src/server/gemini-native-log.ts` for client and admission attribution,
+status and latency. It does not inspect source payloads or report token usage; see
+[Native Gemini Inbound](data-planes/gemini-native.md).

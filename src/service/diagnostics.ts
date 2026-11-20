@@ -61,6 +61,8 @@ export interface ServiceDiagnostic {
   conflict: boolean;
   backend: ServiceBackend | "launchd" | "systemd" | null;
   summary: string;
+  /** Set only by a backend that positively verified a stopped registration. */
+  confirmedStopped?: boolean;
 }
 
 /** Windows tray may restart a healthy-but-stopped native service; stale/conflicting installs remain blocked. */
@@ -236,6 +238,7 @@ export function deriveLaunchdServiceDiagnostic(inputs: LaunchdServiceDiagnosticI
     conflict: false,
     backend: "launchd",
     summary,
+    ...(installed && load.state === "not-loaded" ? { confirmedStopped: true } : {}),
   };
 }
 
@@ -288,25 +291,33 @@ export function diagnoseService(): ServiceDiagnostic {
 }
 
 /**
- * What a FOREGROUND `ocx start` tells the operator when the managed service this home
- * registered is installed but not serving. `ocx status` renders that state at length
- * (`deriveLaunchdServiceDiagnostic` and the platform derive functions above it, and the
- * tray/update paths act on it), but start historically said nothing before binding: the
- * foreground proxy then ends with the terminal that launched it, nothing restarts it, and
- * the outage outlives the person who typed the command. Pure so every verdict is testable
- * without a live manager.
- *
- * Silent on purpose when nothing is wrong (running), when no service is installed, on
- * unsupported platforms, and when another manager holds a conflict — the conflict's own
- * summary already says who owns the port, and `repair` must not be aimed at a foreign
- * registration.
+ * Only verified stops may suggest repair. Inconclusive backend diagnostics can include
+ * recovery instructions themselves; never echo that summary in the unknown branch.
  */
 export function foregroundStartServiceAdvisoryLines(service: ServiceDiagnostic): readonly string[] {
   if (!service.supported || !service.installed || service.running || service.conflict) return [];
+  if (!service.confirmedStopped) {
+    return [
+      "⚠️  Could not confirm that the managed background service is serving.",
+      "   This foreground proxy does not verify supervision; check 'ocx status' for service details.",
+    ];
+  }
   return [
-    `⚠️  The managed background service is not serving (${service.summary}).`,
+    `⚠️  The managed background service is not loaded (${service.summary}).`,
     "   This foreground proxy ends with this terminal and nothing restarts it; consider 'ocx service repair' to restore the supervised service instead.",
   ];
+}
+
+/** Best effort, not asynchronous: a diagnostic or warning failure must not prevent a bind. */
+export function warnForegroundStartService(
+  probe: () => ServiceDiagnostic,
+  warn: (line: string) => void,
+): void {
+  try {
+    for (const line of foregroundStartServiceAdvisoryLines(probe())) warn(line);
+  } catch {
+    // Diagnostics are advisory only.
+  }
 }
 
 export interface SystemdServiceDiagnosticInputs {

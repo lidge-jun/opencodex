@@ -16,16 +16,34 @@ through the disk reader. A row keeps:
   keeps Meta's Muse Code subscription refusal in `subscription_required` rather than
   `permission_denied`: a 403 whose whole `error.message` is that sentence names a plan restriction on
   a valid key, so the row must not read as an expired credential that needs a re-login.
+  For the [xAI OAuth Legacy privacy mode refusal](../providers/xai-grok.md#legacy-privacy-mode-403),
+  the proved account policy supplies the `policy-refusal` failure cause. The client-facing
+  privacy refusal uses a fixed HTTP 403 `permission_denied` envelope.
 - `upstreamCondition`, a member of the closed set in `src/lib/upstream-condition.ts`, derived only for a
   failed row with upstream evidence; a client close (499, `client_closed_request`, `client_cancelled`) gets
   none, and a stored condition is kept only under the same rules. Text set through
   `recordLocalFailureDetail` is not upstream evidence unless the caller passes `upstreamEvidence: true`
   (the Messages passthrough restating an upstream status and closed type); `upstreamErrorIsLocal` keeps
-  it out of the final row's evidence. The Messages passthrough classifies the condition where it parses the
+  it out of the final row's evidence, including the upstream code/type diagnostics of the failed frame the
+  proxy wrote itself and any condition already stored on the context.
+  `src/server/request-log-terminal-status.ts` captures terminal status and suppresses upstream
+  service warnings when the local provenance marker is present. The web-search loop records its
+  header deadline, routed-model byte stall and downstream handoff deadline as `header_timeout`,
+  `generation_timeout` and `turn_inactivity` respectively. The row keeps the bounded
+  `failureDetail` and omits `upstreamCondition`. A body stall retains `failureCause: upstream-fault` and `terminalSource: upstream`.
+  A context reused across attempts drops the previous attempt's local verdict at the attempt
+  boundary (`takeLocalFailureState` in policy fallback, compaction recovery and the opaque-blob reset) and
+  puts it back only when that attempt is rolled back without dispatching (`restoreLocalFailureState`).
+  A Responses combo carries that local verdict when it adopts a child. A deadline recorded after
+  the child commits is forwarded before the terminal frame reaches the request logger.
+  The Messages passthrough classifies the condition where it parses the
   upstream error and stores only the member on the context (`upstreamCondition`), so a native Anthropic
   overflow is recorded as `context_overflow`. `classifyUpstreamCondition` reads status, bounded structured
-  tokens and, for 4xx only, fixed lowercase keyword sets: 401 is authoritative, structured tokens come next
-  (account usage-limit codes `usage_limit_exceeded` and `1308` are billing exhaustion), context overflow
+  tokens and, for 4xx only, fixed lowercase keyword sets. HTTP 401 is authoritative. The exact transport
+  codes `upstream_reset_replay_refused`, `upstream_closed_before_response` and `upstream_no_response`
+  then take precedence over other structured evidence, including Chat's generic `rate_limit_error`
+  type, and map to `upstream_failed`. Other structured tokens come next, including the account
+  usage-limit codes `usage_limit_exceeded` and `1308`, which map to billing exhaustion. Context overflow
   from text needs the definite verdict `isDefiniteContextOverflow` in the dependency-free
   `src/lib/context-overflow-verdict.ts` (the one combo failover uses, re-exported by
   `src/combos/failover.ts`), including bounded provider wording that a conversation/input has reached or passed the model context limit, that a prompt is too long for that window, or that the window is full/exhausted/over its limit, and a string-valued JSON `error` field. A negator governing that wording, and capacity prose about the service, stay outside the verdict, so a validation error that quotes "prompt is too long" stays rejected, a 429 that
@@ -63,6 +81,15 @@ partial bodies produce status-only diagnostics.
 `boundedFailureDetail` revalidates those pairs on live projection, usage append/read, hydration and
 GUI rendering. The dashboard appends the machine field/type pairs to its localized provider-error
 label. No upstream-authored free text is retained, and client-facing messages retain their existing policy.
+On the same provider bodies (the `providerBody` callers of `recordUpstreamValidationDetail`: native Chat,
+translated adapter dispatch and a combo child's raw upstream response), a 4xx with no structured
+`detail[]` whose error message names a developer-role rejection through the fixed lowercase phrases in
+`src/lib/developer-role-rejection.ts` (DashScope `developer is not one of`, Moonshot
+`role 'developer' is not allowed`, serde `` unknown variant `developer` ``) records the closed pair
+`messages.role`/`enum` (#8864). The message is read once within the 4096-character scan and dropped; a
+body this proxy formatted keeps validation-only capture. `tests/lib/developer-role-rejection.test.ts`
+and `tests/server/developer-role-rejection-boundary.test.ts` cover the match, a non-match and the
+absence of upstream text in the client body, live row, `usage.jsonl`, hydration and console output.
 
 A provider failure also keeps its closed class without validation pairs (#8446).
 `recordUpstreamProviderErrorDetail` reads `error.type`, Google's `error.status` (an object or the first
@@ -240,20 +267,19 @@ the original label in process-local options. Compact captures that label from th
 profile id to the message or request row. Command Code plan refusals use fixed wording because
 the adapter request contains the resolved wire model. Local model refusals project their request
 rows to client or catalog model identities and validated provider ids, omitting an untrusted routing decision. `projectAdmissionModelDeniedLog` in `src/server/admission-model-scope.ts` applies that bound before any Chat, Claude or native Messages final-log write, and before returning late guard, compact and sidecar refusals. The response builder only builds the owned envelope. The projected original selector (or fixed placeholder) is recorded explicitly even when compact routing has not initialized the context. Input-admission projection runs before either buffered or streaming delivery. Input-only ceilings are named as input limits; the actual shared context window remains separate in both direct refusals and combo-exhaustion wording. No provider diagnostic
-is interpolated into those local messages. No serialized flag, code or header mints identity.
+is interpolated into those local messages. No serialized flag, code or header mints identity. The combo ladder checks the resolved child route against both the ingress model scope and the current configured-key scope. A refused member is skipped for an eligible sibling first; when none remains, the local scope refusal uses the original client selector. Locally generated combo exhaustion returns HTTP 503 across all three wires. Chat Completions uses `server_error` with code `server_is_overloaded`. Messages uses `api_error` with code `combo_unavailable`, and Responses uses `server_error` with code `combo_unavailable`.
 The shared builders live in `src/combos/resolve.ts`, `src/server/admission-model-scope.ts`,
-`src/server/responses/input-admission.ts` and `src/oauth/generic-account-failover.ts`.
-`src/lib/upstream-retry.ts` owns the retry constructors. For a transient 5xx, `fetchWithTransientRetry`
-does not resend a response whose bounded body prefix proves context overflow. It reads at most 16,384
-bytes from a clone within 250ms or until cancellation, leaving the returned body intact. Event streams
-and bodies without an observed verdict retain the normal retry; a verdict observed before a slow or
-endless body stalls still stops retry. Hypothetical, negated, question-form and configuration-failure
-mentions are excluded per sentence in the unwrapped provider message, so they cannot hide a definite
-overflow in another sentence. A throttle worded only as "too many tokens" is not a verdict, while an
-explicit "prompt is too long" remains a verdict when no throughput signal is present.
+`src/server/responses/input-admission.ts` and `src/oauth/generic-account-failover.ts`. See [combo output headroom](../transports/responses-failover.md#combo-output-headroom) for the strict pre-dispatch gate, including the input margin and reserve when `max_output_tokens` is omitted.
+`src/lib/upstream-retry.ts` accepts finite numeric Retry-After seconds, including fractions, or dates
+accepted by `Date.parse`. Negative delays and past dates give zero.
+`fetchWithTransientRetry` stops on a transient 5xx whose bounded body prefix proves context overflow. It reads at most 16,384
+bytes from a clone within 250 ms or until cancellation, leaving the original body intact. Event streams and bodies without a
+verdict retain the normal retry. An observed verdict still stops retry if the body later stalls. Hypothetical, negated, question-form
+and configuration-failure mentions are excluded per sentence in the unwrapped provider message. A throttle worded only as "too
+many tokens" is insufficient. An explicit "prompt is too long" suffices in the absence of a throughput signal.
 Body inspection time does not count toward the upstream slow-attempt budget, and empty chunks cannot
-starve the deadline or cancellation. The retry and cancellation
-contracts are exercised in `tests/lib/upstream-retry.test.ts`.
+starve the deadline or cancellation. `tests/lib/upstream-retry.test.ts` covers retry and cancellation.
+Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader. The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status.
 `InvalidSendBudgetError` displays only a finite non-negative number or `invalid`.
 `UpstreamRetryEvidenceError` uses fixed retry-evidence wording and retains the original rejection
 only as `Error.cause`. Chat request-read failures keep typed local size/encoding messages; other
@@ -278,7 +304,7 @@ decisions; upstream attempt codes are separate. Account auto-pause identity sele
 for an upstream refusal after a persisted pause decision; it does not make that response's text local.
 Native local validation and admission sites retain their own messages by call-site provenance.
 Synthetic incomplete events carry producer provenance: the direct adapter driver marks its watchdog
-and EOF terminal objects by identity. The Zed adapter marks only its generated EOF event. The
+and EOF terminal objects by identity. The watchdog resets on parsed adapter events. The Zed adapter marks only its generated EOF event. The
 Responses bridge and native terminal repair register their generated reasons in a request-scoped
 WeakMap, shared with the returned stream and the request context through owned wrappers and combo
 commitment. Sidecar loops carry that same context. The Chat converter accepts synthetic reasons only
@@ -290,7 +316,10 @@ A closed exact-message map covers malformed/empty completion diagnostics, missin
 explicit-empty-tool-catalog refusal. Its values are complete proxy literals: arbitrary suffixes,
 reason strings and tool-name slots never match. The actionable plan-refusal map recognizes only
 `MODEL_NOT_IN_PLAN` and emits its own complete remediation message, preserving the proxy's token
-without copying surrounding text. Every failure with unknown provenance receives owned wording.
+without copying surrounding text. The same function selects the fixed `DEVELOPER_ROLE_REFUSAL_MESSAGE` for a
+4xx whose evidence the developer-role verdict above recognizes, only with no contract and a null or
+`invalid_request_error` code, so Chat and Messages clients learn to send `system` or record
+`foldDeveloperRoleToSystem` without any provider text. Every failure with unknown provenance receives owned wording.
 
 `src/server/chat-native-sse.ts` builds nested terminal errors as canonical owned error envelopes.
 Flat `type: "error"` payloads and `event: error` frames that the ordinary relay accepts retain that relay's
@@ -487,7 +516,22 @@ delay. A final error uses one full JSON parse and the shared private diagnostic 
 `src/lib/messages-error-body.ts`: truthy top-level message, otherwise whole-value serialization,
 with the pinned SDK's parsed-or-raw SSE fallback. Empty named errors retain generic SDK dispatch.
 `src/lib/messages-sse-error-presentation.ts` renders closed type/code/message literals and carries
-complete-frame construction identity. The single pre-echo flag authorizes owned data under the
+complete-frame construction identity. While looking for `message_start`, the native model echo
+uses the shared byte delimiter scanner for CR, LF, CRLF and mixed blank lines. A blank line
+ending in CR completes the frame immediately. A subsequent LF belongs to that delimiter and
+is relayed for ordinary frames. The scanner grows incomplete frame storage geometrically and
+reads through fragments until a frame is ready, the scan window ends, or EOF arrives. It scans
+at most 64 KiB of raw bytes, including any LF continuation within the window. A complete
+`message_start` ending at the limit can be rewritten. Frames that need bytes beyond the
+limit are relayed unchanged, regardless of upstream chunk boundaries. The echo joins SSE
+data fields with LF before parsing JSON. It writes the rewritten payload to the first data
+field and leaves later data fields empty, preserving control lines and all line endings.
+Starts whose last event field is `error` retain their canonical form.
+The empty-tool guard relays a late LF as part of the preceding CR delimiter without buffering
+it as part of the next frame. Complete-frame origin tracking stays attached to that next frame.
+The native Messages tap
+refreshes its pending-read stall deadline on each nonempty raw chunk before frame buffering.
+The single pre-echo flag authorizes owned data under the
 existing message_start name; guard replacements retire that flag. Local guard and tap products
 keep their original observer bytes and separate fixed client products. Stall/cap text omits numbers;
 reader errors omit exception suffixes. Guard callbacks, tap accounting/settlement, budgets,
@@ -509,6 +553,8 @@ success/internal row and explicitly lists the ten changed error-response normali
 `tests/server/messages-sse-error-filter.test.ts`,
 `tests/server/messages-sse-error-lifecycle.test.ts` and the Messages SSE integration siblings cover
 first-field eligibility, formatting, bounds, identity handoffs, teardown and both exceptions.
+The native and builtin differential lanes expect the overwritten error field and final ping
+field to survive the model echo while every other byte matches the recorded baseline.
 `tests/claude-integration/messages-sse-control-fields.test.ts` covers final-error fields and rename replay.
 `tests/claude-integration/messages-sse-continuation.test.ts` checks later-event and EOF delivery after
 a suppressed split-CRLF continuation; pull completion depends on actual client output.

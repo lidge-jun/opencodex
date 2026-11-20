@@ -10,8 +10,13 @@ change reactive failover activation. Bindings are scoped to configuration home, 
 principal, store only a hashed session key, account ID and selection receipt, and expire after 24 idle
 hours within a process-wide 2,000-entry bound. Pause, reauth, model/family ineligibility and persisted
 selection-revision changes release them. Cross-process revisions are checked on every lookup.
+For `google-antigravity` a binding is kept per quota family (`gem`, `cla`) with the family-less key
+as a read fallback, so a conversation alternating Gemini and Claude keeps one account per family. Each bind therefore writes two entries per session (the family key and the family-less key), and both count toward the 2,000-entry cap.
 `src/oauth/session-affinity-key.ts` supplies the existing client-thread/header/cache-key precedence
 for both generic and Anthropic callers; shared Desktop cache cohorts do not establish identity.
+
+`src/oauth/pool-settings-capability.ts` restricts [reset-near-weighted](reset-near-weighted.md) to Codex and built-in
+Anthropic pool settings. Generic pool writes using that value return HTTP 400.
 
 `src/server/responses/request-transport.ts` admits every automatic generic affinity-mode choice
 without persisting an active-account change, including new/unkeyed sessions and failovers. The
@@ -37,6 +42,8 @@ one new resolution attempt. Callers carrying discovery authority keep the cancel
 stale outcomes, including post-dispatch uncertainty, never receive this automatic retry.
 
 Antigravity model routing in `src/oauth/generic-account-failover.ts` ranks siblings by configured strategy or family headroom only within the best readiness/model-support tier. A known omission stays excluded, and unknown support stays usable. Reactive model-404 rotation excludes accounts already attempted in the request and prefers positive support before unknown support without changing account-wide auth or cooldown state.
+
+Antigravity round-robin runs one ring per quota family: `genericPoolKey(provider, family)` in `src/oauth/pool-kernel.ts` keys the ring, and `preferredInitialAccount`, `noteGenericPoolSelection`, the model-listing reroute and reactive rotation all read the same model- and exhaustion-filtered candidate list, so the committed pick matches the peeked one and a Gemini request never advances the Claude ring. After the model-listing filter, `preferKiroModelSupport` drops accounts whose family quota is known to be spent unless every listing account is spent; unknown quota counts as headroom. A manual selection seeds the provider ring and both family rings through `seedGenericPoolSelection`, and `reconcilePoolRotationState` treats `generic:<provider>:<family>` keys as part of their provider. `tests/adapters/google/antigravity-account-roster.test.ts` covers the rings, the per-family affinity and the exhaustion filter.
 
 `src/server/responses/core-combo.ts` asks `src/oauth/generic-account-failover.ts` whether a refused
 account has an eligible sibling before cooling the whole target. This probe records the refused

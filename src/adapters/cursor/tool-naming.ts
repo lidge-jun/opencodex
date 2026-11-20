@@ -1,4 +1,4 @@
-import { namespacedToolName, toolChoiceAliases, type OcxRequestOptions, type OcxTool } from "../../types";
+import { isQualifiedToolChoiceName, namespacedToolName, toolChoiceAliases, type OcxRequestOptions, type OcxTool } from "../../types";
 
 export const OCX_RESPONSES_TOOL_PROVIDER = "opencodex-responses";
 export const CODEX_EXEC_COMMAND_TOOL = "exec_command";
@@ -278,8 +278,8 @@ export function cursorToolAllowedByChoice(
 ): boolean {
   if (!toolChoice || toolChoice === "auto" || toolChoice === "required") return true;
   if (toolChoice === "none") return false;
-  if ("allowedTools" in toolChoice) {
-    return toolChoice.allowedTools.some(choiceName => cursorToolChoiceMatches(tool, choiceName, catalog));
-  }
-  return cursorToolChoiceMatches(tool, toolChoice.name, catalog);
+  const matches = (name: string) => isQualifiedToolChoiceName(toolChoice, name)
+    ? namespacedToolName(tool.namespace, tool.name) === name
+    : cursorToolChoiceMatches(tool, name, catalog);
+  return "allowedTools" in toolChoice ? toolChoice.allowedTools.some(matches) : matches(toolChoice.name);
 }

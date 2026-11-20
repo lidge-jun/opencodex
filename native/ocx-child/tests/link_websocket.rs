@@ -410,6 +410,41 @@ fn with_the_gate_an_advertising_home_carries_frames_both_ways() {
     );
 }
 
+#[test]
+fn a_coalesced_fragment_burst_keeps_the_relay_and_other_clients_usable() {
+    let scratch = Scratch::new("link-ws-fragment-burst");
+    let home = home(true, false);
+    let relay = relay(&scratch, home.port, &home.parity, true);
+    relayed_http(relay.port);
+    let (status, _, _, mut codex, leftover) = upgrade(relay.port, "");
+    assert_eq!(status, 101);
+
+    // A small real-relay burst complements the scaled-capacity frame-reader regression without
+    // relying on allocator exhaustion or OS-specific memory limits.
+    let mask = Some([0, 0, 0, 0]);
+    let mut first = frame_header(1, 0, mask);
+    first[0] &= 0x7f;
+    let message = [first, frame_header(0, 0, mask)].concat();
+    codex.write_all(&message.repeat(16)).unwrap();
+    assert_eq!(
+        read_codex(&mut codex, &leftover, 16),
+        (0..16)
+            .map(|_| FrameEvent::Text("echo:".into()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        echo_round_trip(&mut codex, &[], "after-burst"),
+        vec![FrameEvent::Text("echo:after-burst".into())]
+    );
+
+    let (status, _, _, mut other, leftover) = upgrade(relay.port, "");
+    assert_eq!(status, 101);
+    assert_eq!(
+        echo_round_trip(&mut other, &leftover, "other-client"),
+        vec![FrameEvent::Text("echo:other-client".into())]
+    );
+}
+
 /// Discovery: only a verified preflight of the serving process turns the state on, a failed
 /// one teaches nothing, the parity loop is not needed, and a Home that switches off ends on HTTP.
 #[test]

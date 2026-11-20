@@ -1,5 +1,6 @@
 import { lstatSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import {
   getConfigDir,
   getConfigPath,
@@ -29,6 +30,16 @@ export type ClientConnectionState =
 
 export function isLinkConnection(c: OcxClientConnectionConfig | undefined): boolean {
   return c?.transport === "link";
+}
+
+/** The serving Link's ownership, independent of selection and catalog sync observations. */
+export function linkStopConnectionOwner(connection: OcxClientConnectionConfig): string | undefined {
+  if (connection.transport !== "link" || !connection.link) return;
+  return createHash("sha256").update(JSON.stringify([
+    connection.serverUrl, connection.managementUrl, connection.managementTransport,
+    connection.apiKeyId, connection.connectedAt, connection.tokenFingerprint,
+    connection.link.linkId, connection.link.tunnelPort,
+  ])).digest("hex");
 }
 
 const pendingConnectPath = (): string => join(getConfigDir(), "client-connect-pending");
@@ -160,6 +171,20 @@ export function assertNoClientDisconnectPending(): void {
   if (receipt.kind === "valid" && receipt.value.phase !== "complete") {
     throw new Error("client_disconnect_pending");
   }
+}
+
+/**
+ * The message client startup refuses with. A pending disconnect names the command that clears it:
+ * under the desktop app or a service the supervisor only logs this line, and on 2.100.2 a person
+ * had to move desktop-remote/ aside by hand because nothing said a retry would finish or roll back.
+ */
+export function clientStartupRefusalMessage(reason: string): string {
+  if (reason !== "client_disconnect_pending") return `client startup refused: ${reason}`;
+  const receipt = readDesktopDisconnectReceipt();
+  const valid = receipt.kind === "valid" ? receipt.value : null;
+  const command = valid?.keepCatalog ? "ocx disconnect --keep-catalog" : "ocx disconnect";
+  return `client startup refused: an ocx disconnect on this machine stopped part way${valid ? ` at phase ${valid.phase}` : ""}. `
+    + `Run ${command} again to finish it or roll it back. (code client_disconnect_pending)`;
 }
 
 /** Full snapshot CAS for work returning from an await, including selection and rotation state. */

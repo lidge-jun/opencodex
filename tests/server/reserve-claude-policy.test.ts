@@ -133,7 +133,7 @@ async function claudePolicyFixture() {
     }, { preconnect() {} });
 
     saveConfig({ port: 0, hostname: "127.0.0.1", defaultProvider: "openai", openaiProviderTierVersion: 2,
-      codexDesktopAuthless: false, codexMainAccountHardLock: false, subagentModels: [], codexAccounts: [],
+      codexDesktopAuthless: false, codexReserveEnabled: false, codexMainAccountHardLock: false, subagentModels: [], codexAccounts: [],
       providers: { openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
         upstreamWebsocket: false, baseUrl: "https://chatgpt.com/backend-api/codex" } },
       webSearchSidecar: { enabled: false, model: "global-search", timeoutMs: 12_345 },
@@ -180,6 +180,7 @@ async function claudePolicyFixture() {
         expect(policy).toBe(original);
         expect(replayConfig).not.toBe(original);
         expect(replayConfig?.codexDesktopAuthless).toBe(false);
+        expect(replayConfig?.codexReserveEnabled).toBe(false);
         expect(replayConfig?.webSearchSidecar).toMatchObject({ model: "claude-search", timeoutMs: 12_345, enabled: false });
         expect(replayConfig?.visionSidecar).toMatchObject({ model: "claude-vision", timeoutMs: 23_456, enabled: false });
         expect(original.webSearchSidecar?.model).toBe("global-search");
@@ -203,7 +204,7 @@ describe("Claude replay preserves live Reserve policy", () => {
         ]);
         expect(first).toBe("paced");
         fixture.assertReplayBoundary();
-        if (enableWhilePaced) fixture.original.codexDesktopAuthless = true;
+        if (enableWhilePaced) fixture.original.codexReserveEnabled = true;
         fixture.release();
         const outcome = await observed;
         if (outcome.kind !== "response") throw outcome.error;

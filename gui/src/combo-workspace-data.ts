@@ -106,6 +106,7 @@ export function intersectComboEfforts(
 }
 
 export interface ComboTarget {
+  metered?: boolean;
   provider: string;
   model: string;
   weight?: number;
@@ -127,6 +128,7 @@ let comboTargetKeySeq = 0;
 
 export function newComboTarget(partial: Partial<ComboTarget> = {}): ComboTarget {
   return {
+    ...(partial.metered === true ? { metered: true } : {}),
     provider: partial.provider ?? "",
     model: partial.model ?? "",
     ...(partial.weight !== undefined ? { weight: partial.weight } : {}),
@@ -174,6 +176,7 @@ export interface ComboItem {
   decisionTimeoutMs?: number | null;
   /** `jev` only: undefined preserves an omitted setting; null explicitly turns the pin off. */
   sessionPin?: JevSessionPinConfig | null;
+  allowMeteredTargets?: boolean;
   targets: ComboTarget[];
 }
 
@@ -295,6 +298,7 @@ export function parseComboList(payload: unknown): ComboItem[] {
       targets.push(newComboTarget({
         provider,
         model,
+        metered: tr.metered === true,
         ...(weight !== undefined ? { weight } : {}),
         ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
         ...(typeof tr.modelProfile === "string" ? { modelProfile: tr.modelProfile } : {}),
@@ -311,6 +315,7 @@ export function parseComboList(payload: unknown): ComboItem[] {
         : comboPublicModelId(id, normalizeAlias(r.alias)),
       alias: normalizeAlias(r.alias),
       nativeAlias: r.nativeAlias === true,
+      ...(r.allowMeteredTargets === true ? { allowMeteredTargets: true } : {}),
       displayName: normalizeAlias(r.displayName),
       strategy: normalizeStrategy(r.strategy),
       stickyLimit: normalizeStickyLimit(r.stickyLimit),
@@ -498,6 +503,7 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
       || (a.decisionTimeoutMs ?? null) !== (b.decisionTimeoutMs ?? null)
       || (a.sessionPin === undefined) !== (b.sessionPin === undefined)
       || (a.sessionPin?.ttlMs ?? null) !== (b.sessionPin?.ttlMs ?? null)
+      || (a.sessionPin?.effort ?? null) !== (b.sessionPin?.effort ?? null)
     ))
   ) return false;
   if (a.targets.length !== b.targets.length) return false;

@@ -1,6 +1,6 @@
 /** Ownership captured before a physical send, independent of subsequent cooldown observations. */
 import type { OAuthAccessSnapshot } from "./index";
-import { credentialGeneration, getAccountSet, type AuthStore } from "./store";
+import { anthropicCredentialEvidenceKey, credentialGeneration, getAccountSet, type AuthStore } from "./store";
 import { isAnthropicInstanceId, type AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { anthropicCooldownRecoveryFor } from "../providers/quota/anthropic-cooldown-recovery";
 import { captureProviderAccountQuotaEpoch } from "../providers/quota/account-cache";
@@ -10,6 +10,7 @@ export type AnthropicPhysicalSendOwnership = Readonly<{
   accountId: string;
   accessToken: string;
   generation: string;
+  credentialKey: string;
   accountIncarnation: number;
   loginId?: string;
   addedAt?: number;
@@ -25,6 +26,7 @@ export function captureAnthropicPhysicalSendOwnership(snapshot: OAuthAccessSnaps
   return Object.freeze({
     provider: snapshot.provider, accountId: snapshot.accountId,
     accessToken: snapshot.accessToken, generation: snapshot.generation,
+    credentialKey: anthropicCredentialEvidenceKey(row),
     accountIncarnation: anthropicCooldownRecoveryFor(snapshot.provider).reserveAnthropicAccountIncarnation(snapshot.accountId),
     loginId: row.loginId, addedAt: row.addedAt,
     quotaEpoch: captureProviderAccountQuotaEpoch(snapshot.provider),
@@ -34,8 +36,7 @@ export function captureAnthropicPhysicalSendOwnership(snapshot: OAuthAccessSnaps
 /** Pure ownership read: never adopt or reserve the replacement account's current incarnation. */
 export function anthropicPhysicalSendOwnershipIsCurrent(owner: AnthropicPhysicalSendOwnership, store?: AuthStore): boolean {
   const row = (store ? store[owner.provider] : getAccountSet(owner.provider))?.accounts.find(account => account.id === owner.accountId);
-  return !!row && row.loginId === owner.loginId && row.addedAt === owner.addedAt
-    && row.credential.access === owner.accessToken && credentialGeneration(row.credential) === owner.generation
+  return !!row && anthropicCredentialEvidenceKey(row) === owner.credentialKey
     && anthropicCooldownRecoveryFor(owner.provider).anthropicAccountIncarnation(owner.accountId) === owner.accountIncarnation
     && captureProviderAccountQuotaEpoch(owner.provider) === owner.quotaEpoch;
 }

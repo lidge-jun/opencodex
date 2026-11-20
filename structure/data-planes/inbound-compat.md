@@ -3,7 +3,7 @@
 Native Chat/Messages and Claude passthrough use the
 [local timeout contract](../transports/timeouts.md):
 local JSON inactivity is independent of header arrival and total generation; public JSON defaults
-retain their previous allowance. No disabled header clock detaches client cancellation.
+retain their previous allowance. No disabled header clock detaches client cancellation. Gemini `/v1beta` uses the shared dispatcher with an [optional source-preserving Antigravity leg](gemini-native.md).
 
 Thinking enablement is separate from strength: `src/responses/schema.ts` accepts the OCX `reasoning.enabled` boolean and `src/responses/parser.ts` retains it as `options.thinkingEnabled`, independently of `options.reasoning`. Chat `thinking.type` and Anthropic `thinking.type` preserve this choice through their inbound translators; the existing Anthropic disabled-effort sentinel remains for legacy destinations. `src/clients/reasoning-controls.ts` decodes effort-only client aliases for declared toggle-only models before strength caps run. Route fallback restores the original choice alongside effort in `src/server/effort-policy.ts`; a cleared strength list does not clear a thinking switch. Regression coverage lives in `tests/responses/responses-parser.test.ts`, `tests/responses/chat-inbound-reasoning-none.test.ts`, `tests/claude-integration/claude-inbound.test.ts`, and `tests/codex-integration/effort-policy.test.ts`.
 
@@ -456,12 +456,12 @@ Claude Code enables its message-threads beta only against first-party Anthropic,
 OpenCodex through the first-party intercept. A threaded request carries a `thread` object; a
 `continue` sends only the messages after `previous_message_id` and may leave `system` and `tools`
 to the thread Anthropic stores. `src/server/claude-messages.ts` forwards the request unchanged on
-native passthrough. On the translated path, before compatibility analysis or inference, it
-answers any `thread` object with the 400 from `src/claude/message-threads.ts`, whose
+native passthrough. Weekly reserve steering skips threaded requests. On the translated path, the
+handler answers any `thread` object with the 400 from `src/claude/message-threads.ts`, whose
 `error.details.error_code` is `thread_unsupported_request` and whose request-log error code is
 `claude_thread_unsupported`. A translated `count_tokens` request with a `thread` object gets the
-same 400, because counting the delta would undercount the conversation. Claude Code then resends the turn with the full conversation and keeps
-that model stateless for the session. Translating the delta instead would drop the task,
+same 400, because counting the delta would undercount the conversation. Claude Code then resends
+the full turn and keeps that model stateless for the session. Translating the delta would drop the task,
 instructions and earlier turns without an error.
 
 ## Shared inbound Chat image recognition

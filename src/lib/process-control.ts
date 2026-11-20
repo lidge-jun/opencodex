@@ -4,6 +4,7 @@ import { loadConfig } from "../config";
 import { readRuntimePort } from "../config/process-state";
 import { directLocalHttpFetch } from "../server/direct-local-http";
 import { configuredAdminToken } from "./admin-secrets";
+import { PROXY_STOP_EXIT_GRACE_MS } from "./shutdown-budget";
 
 export function isProcessAlive(pid: number): boolean {
   try {
@@ -350,9 +351,9 @@ async function stopProxyGracefullyDetailed(
 
 function drainDeadlineMs(): number {
   try {
-    return (loadConfig().shutdownTimeoutMs ?? 5000) + 3000;
+    return Math.max(0, loadConfig().shutdownTimeoutMs ?? 5000) + PROXY_STOP_EXIT_GRACE_MS;
   } catch {
-    return 8000;
+    return 5000 + PROXY_STOP_EXIT_GRACE_MS;
   }
 }
 
@@ -421,6 +422,7 @@ async function waitForStoppedPort(
       // Only the process we just stopped — never kill a newly started twin proxy.
       killOcxHolders: mayKill && !!(stoppedPid && stoppedPid > 0),
       onlyKillPids: mayKill && stoppedPid && stoppedPid > 0 ? [stoppedPid] : [],
+      ...(io.forceKill ? { killFn: io.forceKill } : io.mayTerminate ? { killFn: (pid: number) => killProxy(pid, io.mayTerminate) } : {}),
     });
   } catch {
     /* best-effort — callers that need a hard guarantee reclaim again before bind */

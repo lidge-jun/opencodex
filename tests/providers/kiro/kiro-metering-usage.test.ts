@@ -62,3 +62,24 @@ test("a stream error preserves credits already reported", async () => {
   ]);
   expect(result).toMatchObject({ type: "error", usage: { providerCredits: credit } });
 });
+
+
+test("retry factory failure before dispatch preserves first credit reading", async () => {
+  const frames: Array<[string, unknown]> = [
+    ["assistantResponseEvent", { content: "Checking." }],
+    ["meteringEvent", { unit: "credit", usage: 2 }],
+  ];
+  const response = new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const [type, payload] of frames) controller.enqueue(encodeMessage({ ":message-type": "event", ":event-type": type }, new TextEncoder().encode(JSON.stringify(payload))));
+      controller.close();
+    },
+  }));
+  let retryCalls = 0;
+  const events = await Array.fromAsync(parseKiroStream(
+    response, createTestTranslatorBudget(), undefined, 0, undefined, undefined, undefined, "required",
+    async () => { retryCalls++; throw new Error("before dispatch"); },
+  ));
+  expect(retryCalls).toBe(1);
+  expect(events.at(-1)).toMatchObject({ type: "error", usage: { providerCredits: 2 } });
+});

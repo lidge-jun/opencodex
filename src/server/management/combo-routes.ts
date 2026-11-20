@@ -94,7 +94,9 @@ function sparseComboConfig<T extends {
   reasoningEffortMode?: "strict" | "adaptive";
   defaultEffortMode?: "fallback" | "force";
   jevEffortMode?: "decide" | "client";
-}>(combo: T): Omit<T, "cooldownMs" | "waitForCooldownMs" | "cooldownWaitPolicy" | "imageInput" | "reasoningEffortMode" | "defaultEffortMode" | "jevEffortMode"> & {
+  capabilityPolicy?: "intersection" | "union";
+  onUnservable?: "degrade" | "reject";
+}>(combo: T): Omit<T, "cooldownMs" | "waitForCooldownMs" | "cooldownWaitPolicy" | "imageInput" | "reasoningEffortMode" | "defaultEffortMode" | "jevEffortMode" | "capabilityPolicy" | "onUnservable"> & {
   cooldownMs?: number;
   waitForCooldownMs?: number;
   cooldownWaitPolicy?: OcxComboCooldownWaitPolicy;
@@ -102,6 +104,8 @@ function sparseComboConfig<T extends {
   reasoningEffortMode?: "adaptive";
   defaultEffortMode?: "force";
   jevEffortMode?: "client";
+  capabilityPolicy?: "union";
+  onUnservable?: "reject";
 } {
   const {
     cooldownMs,
@@ -111,6 +115,8 @@ function sparseComboConfig<T extends {
     reasoningEffortMode,
     defaultEffortMode,
     jevEffortMode,
+    capabilityPolicy,
+    onUnservable,
     ...rest
   } = combo;
   return {
@@ -126,6 +132,8 @@ function sparseComboConfig<T extends {
     ...(reasoningEffortMode === "adaptive" ? { reasoningEffortMode: "adaptive" as const } : {}),
     ...(defaultEffortMode === "force" ? { defaultEffortMode: "force" as const } : {}),
     ...(jevEffortMode === "client" ? { jevEffortMode: "client" as const } : {}),
+    ...(capabilityPolicy === "union" ? { capabilityPolicy: "union" as const } : {}),
+    ...(onUnservable === "reject" ? { onUnservable: "reject" as const } : {}),
   };
 }
 
@@ -169,6 +177,12 @@ function parseVisionSidecarTargets(
 /** Handle the `/api/combos` management routes (list, save, delete and related combo endpoints), validating and preserving the opt-in quota signal fields; null when no route matches. */
 export async function handleComboRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
+
+  // Only the Combos page reads the suggested combos' excluded-provider list; load it on demand.
+  if (url.pathname === "/api/combo-suggestions" || url.pathname === "/api/combo-suggestions/save") {
+    const { handleComboSuggestionRoutes } = await import("./combo-suggestion-routes");
+    return handleComboSuggestionRoutes(ctx);
+  }
 
   if (url.pathname === "/api/combos" && req.method === "GET") {
     const { comboPublicModelId, getCombo, listComboIds } = await import("../../combos");
@@ -256,6 +270,12 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
         : {}),
       ...(!Object.hasOwn(requestedCombo, "imageInput") && previous?.imageInput !== undefined
         ? { imageInput: previous.imageInput }
+        : {}),
+      ...(!Object.hasOwn(requestedCombo, "capabilityPolicy") && previous?.capabilityPolicy !== undefined
+        ? { capabilityPolicy: previous.capabilityPolicy }
+        : {}),
+      ...(!Object.hasOwn(requestedCombo, "onUnservable") && previous?.onUnservable !== undefined
+        ? { onUnservable: previous.onUnservable }
         : {}),
       // #7229: the dashboard does not edit the row description, so a round trip that omits it
       // (including a rename) keeps it. An explicit empty string still clears it.

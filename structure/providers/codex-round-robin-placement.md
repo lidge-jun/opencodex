@@ -3,6 +3,8 @@
 `accountPoolStrategy: "round-robin"` uses the effective per-account `autoSwitchThreshold` only when it
 places a conversation that has no live binding. The threshold resolution itself is described under
 [per-account auto-switch thresholds](openai-accounts.md#per-account-auto-switch-thresholds).
+`reset-near-weighted` uses the same placement candidates and applies the
+[weighted reset preference](reset-near-weighted.md) within the ring.
 
 ## Placement prefers headroom
 

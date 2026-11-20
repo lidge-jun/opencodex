@@ -1,8 +1,10 @@
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { expandUserPath } from "../config";
 import { defaultCodexHome } from "./home";
 import { codexHomeIsAbsent } from "./codex-home-owner";
+import { rootAssignmentKey, rootSourceLines, sourceAssignment } from "./toml-source-lines";
 
 function resolveCodexHome(): string {
   const raw = process.env.CODEX_HOME?.trim();
@@ -131,12 +133,11 @@ export function parseTomlString(raw: string): string {
 }
 
 export function readRootTomlString(content: string, key: string): string | null {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex(l => /^\s*\[/.test(l));
-  const rootLines = firstTable === -1 ? lines : lines.slice(0, firstTable);
-  for (const line of rootLines) {
-    const m = line.match(new RegExp(`^\\s*${key}\\s*=\\s*(\"(?:\\\\.|[^\"])*\"|'[^']*')`));
-    if (m) return parseTomlString(m[1]);
+  const { lines, rootEnd } = rootSourceLines(content);
+  for (let i = 0; i < rootEnd; i++) {
+    if (!lines[i].structural || rootAssignmentKey(lines[i].text) !== key) continue;
+    const value = sourceAssignment(lines, i, rootEnd)?.value;
+    if (typeof value === "string") return value;
   }
   return null;
 }
@@ -196,18 +197,61 @@ export function isDefaultCatalogPath(path: string): boolean {
   return samePath(path, activeDefaultCatalogPath());
 }
 
-export function readCodexCatalogPath(): string {
-  const home = activeCodexHome();
-  if (home) return readCodexCatalogPathForHome(home);
+function catalogPathApi(configPath: string) {
+  return process.platform === "win32" || /^(?:[a-z]:[\\/]|\\\\)/i.test(configPath) ? win32 : posix;
+}
+
+/** Resolve a catalog binding against the config directory, with Codex's POSIX home expansion. */
+export function resolveCodexCatalogPath(configPath: string, binding: string): string {
+  const path = catalogPathApi(configPath);
+  if (path === posix && (binding === "~" || binding.startsWith("~/"))) {
+    const home = homedir();
+    if (home) binding = path.join(home, binding.slice(2));
+  }
+  return path.resolve(path.dirname(configPath), binding);
+}
+
+export function defaultCodexCatalogPathForConfig(configPath: string): string {
+  return resolveCodexCatalogPath(configPath, basename(DEFAULT_CATALOG_PATH));
+}
+
+/** Compare resolved catalog paths, including legacy Windows spellings and aliases of the config directory. */
+export function sameCodexCatalogPath(configPath: string, left: string, right: string): boolean {
+  const path = catalogPathApi(configPath);
+  const a = resolveCodexCatalogPath(configPath, left);
+  const b = resolveCodexCatalogPath(configPath, right);
+  const windows = path === win32;
+  const comparable = (value: string) => windows ? win32.toNamespacedPath(value).toLowerCase() : value;
+  if (comparable(a) === comparable(b)) return true;
+  // Canonicalize the parent only. A catalog-file symlink cannot identify a managed binding.
+  const aName = path.basename(a), bName = path.basename(b);
+  if (windows !== (process.platform === "win32")
+    || (windows ? aName.toLowerCase() !== bName.toLowerCase() : aName !== bName)) return false;
   try {
-    const configPath = activeCodexConfigPath();
-    if (existsSync(configPath)) {
-      const toml = readFileSync(configPath, "utf-8");
-      const path = readRootTomlString(toml, "model_catalog_json");
-      if (path) return resolveActiveCodexConfigPath(path);
-    }
-  } catch { /* ignore */ }
-  return activeDefaultCatalogPath();
+    return comparable(realpathSync.native(path.dirname(a))) === comparable(realpathSync.native(path.dirname(b)));
+  } catch {
+    return false;
+  }
+}
+
+/** The sibling form works in both Windows and WSL when they share a Codex home. */
+export function codexCatalogBindingForPath(configPath: string, catalogPath: string): string {
+  const name = catalogPathApi(configPath).basename(catalogPath);
+  return sameCodexCatalogPath(configPath, name, catalogPath) ? name : catalogPath;
+}
+
+/** Read the configured binding, with no fallback when it cannot be read or is absent. */
+export function readCodexCatalogBinding(configPath?: string, configText?: string): string | null {
+  try {
+    configPath ??= activeCodexConfigPath();
+    const binding = readRootTomlString(configText ?? readFileSync(configPath, "utf8"), "model_catalog_json");
+    return binding ? resolveCodexCatalogPath(configPath, binding) : null;
+  } catch { return null; }
+}
+
+export function readCodexCatalogPath(): string {
+  const configPath = activeCodexConfigPath();
+  return readCodexCatalogBinding(configPath) ?? defaultCodexCatalogPathForConfig(configPath);
 }
 
 /**
@@ -219,13 +263,6 @@ export function readCodexCatalogPath(): string {
  * file the caller is holding. Omitting it keeps the original behaviour.
  */
 export function readCodexCatalogPathForHome(codexHome: string, configText?: string): string {
-  try {
-    const configPath = join(codexHome, "config.toml");
-    if (configText !== undefined || existsSync(configPath)) {
-      const toml = configText ?? readFileSync(configPath, "utf-8");
-      const path = readRootTomlString(toml, "model_catalog_json");
-      if (path) return resolve(codexHome, path);
-    }
-  } catch { /* ignore */ }
-  return join(codexHome, "opencodex-catalog.json");
+  const configPath = join(codexHome, "config.toml");
+  return readCodexCatalogBinding(configPath, configText) ?? defaultCodexCatalogPathForConfig(configPath);
 }

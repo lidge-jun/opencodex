@@ -167,10 +167,27 @@ function plainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** An absent or empty `output` array; anything else may already be visible to the client. */
-function emptyOutput(response: Record<string, unknown>): boolean {
-  const output = response.output;
-  return output === undefined || (Array.isArray(output) && output.length === 0);
+const CODEX_WS_OUTPUT_FIELDS = [
+  "item", "items", "delta", "part", "content", "output_text", "arguments", "input", "refusal",
+  "annotated_text", "annotation", "annotations", "logprobs", "summary", "encrypted_content",
+  "audio", "transcript", "partial_image_b64",
+] as const;
+
+function hasNoOutputFields(record: Record<string, unknown>): boolean {
+  const { output } = record;
+  return (output === undefined || (Array.isArray(output) && output.length === 0))
+    && !CODEX_WS_OUTPUT_FIELDS.some(field => Object.hasOwn(record, field));
+}
+
+/** Check the wire event and its optional response snapshot before withholding either from the client. */
+function codexWsFrameHasNoOutput(payload: Record<string, unknown>): boolean {
+  if (!hasNoOutputFields(payload) || Object.hasOwn(payload, "text")) return false;
+  const { response } = payload;
+  if (response === undefined) return true;
+  if (!plainRecord(response) || !hasNoOutputFields(response)) return false;
+  // A snapshot's text configuration is request metadata. Event text and other text shapes may be output.
+  const { text } = response;
+  return text == null || (plainRecord(text) && Object.keys(text).every(key => key === "format" || key === "verbosity"));
 }
 
 /**
@@ -201,32 +218,33 @@ export function codexWsPreOutputRefusalHold(connectMs: number, now = Date.now())
   return { maxMs: Math.min(CODEX_WS_PRE_OUTPUT_REFUSAL_HOLD_MAX_MS, half), until: now + half };
 }
 
+/** Only an absent mark or boolean false permits replay, on both the event and its snapshot. */
+export function responsesFrameIsReplayUnsafe(payload: Record<string, unknown>): boolean {
+  const marked = (frame: Record<string, unknown>) => Object.hasOwn(frame, "replayUnsafe") && frame.replayUnsafe !== false;
+  return marked(payload) || (plainRecord(payload.response) && marked(payload.response));
+}
+
 /**
  * A lifecycle frame that commits nothing the client could see or act on (#6969): created,
  * in-progress or queued, carrying a response object whose output is absent or empty, or the
- * heartbeat that only keeps the connection alive. A snapshot with any output item,
- * an unknown event, or a frame addressed to another stream is not one.
+ * heartbeat that only keeps the connection alive. Output at either level commits the frame.
  *
  * A heartbeat qualifies only while it carries no output, no field this contract does not know, and
- * at most its numeric sequence marker. A replay-unsafe mark already ran a side effect and is never
- * held; only an absent mark or the boolean false proves there was none, so any other value fails
- * closed rather than trusting a malformed type.
+ * at most its numeric sequence marker.
  */
 export function isEmptyCodexWsLifecycleEvent(payload: Record<string, unknown>): boolean {
-  if (payload.stream_id !== undefined) return false;
+  if (payload.stream_id !== undefined || responsesFrameIsReplayUnsafe(payload) || !codexWsFrameHasNoOutput(payload)) return false;
   if (payload.type === "response.heartbeat") {
-    if ((Object.hasOwn(payload, "replayUnsafe") && payload.replayUnsafe !== false)
-      || Object.keys(payload).some(key =>
+    if (Object.keys(payload).some(key =>
       key !== "type" && key !== "response" && key !== "replayUnsafe" && key !== "sequence_number")) return false;
     if (payload.sequence_number !== undefined
       && !(typeof payload.sequence_number === "number" && Number.isSafeInteger(payload.sequence_number)
         && payload.sequence_number >= 0)) return false;
-    return payload.response === undefined
-      || (plainRecord(payload.response) && emptyOutput(payload.response));
+    return true;
   }
   if (payload.type !== "response.created" && payload.type !== "response.in_progress"
     && payload.type !== "response.queued") return false;
-  return plainRecord(payload.response) && emptyOutput(payload.response);
+  return plainRecord(payload.response);
 }
 
 const QUOTA_REFUSAL_IDENTITIES: ReadonlySet<string> = new Set(["usage_limit_reached", "usage_not_included"]);
@@ -241,15 +259,15 @@ function quotaRefusalIdentity(value: string): boolean {
  * The status of an authoritative upstream refusal that ended a turn before any output (#6969),
  * or undefined.
  *
- * Only structured evidence counts: a bare `error` frame's single wrapper status (the alias the
- * native client turns into an HTTP error of that status, see {@link codexWsWrapperStatus}), or,
- * with no wrapper alias at all, the recognized overload class; and a `response.failed` with an
- * empty output whose error is the recognized overload class. The status must be a transient
+ * Only structured evidence counts. Both the frame and its snapshot must be output-free. A bare
+ * `error` requires a single wrapper status (see {@link codexWsWrapperStatus}) or, with no wrapper
+ * alias at all, the recognized overload class. A `response.failed` requires the recognized
+ * overload class. The status must be a transient
  * gateway status. Message wording never authorizes anything here; it can only veto, so a 5xx whose
  * error names quota or a rate limit keeps the routing it has today.
  */
 export function codexWsPreOutputRefusalStatus(payload: Record<string, unknown>): number | undefined {
-  if (payload.stream_id !== undefined) return undefined;
+  if (payload.stream_id !== undefined || responsesFrameIsReplayUnsafe(payload) || !codexWsFrameHasNoOutput(payload)) return undefined;
   let error: unknown;
   let status: number | undefined;
   if (payload.type === "error") {
@@ -262,7 +280,7 @@ export function codexWsPreOutputRefusalStatus(payload: Record<string, unknown>):
     if (status === undefined && plainRecord(error)) status = recognizedUpstreamError(error)?.httpStatus;
   } else if (payload.type === "response.failed") {
     const response = payload.response;
-    if (!plainRecord(response) || !emptyOutput(response)) return undefined;
+    if (!plainRecord(response)) return undefined;
     error = response.error;
     if (!plainRecord(error)) return undefined;
     status = recognizedUpstreamError(error)?.httpStatus;
@@ -537,7 +555,10 @@ export type ResponsesWsRelayEvent = {
  * settle the turn and the socket close cannot be mistaken for a drop. Unknown
  * or missing status values fail closed instead of being reported as success.
  */
-export function normalizeResponsesWsRelayEvent(text: string): ResponsesWsRelayEvent | null {
+export function normalizeResponsesWsRelayEvent(
+  text: string,
+  observe?: (payload: Record<string, unknown>) => void,
+): ResponsesWsRelayEvent | null {
   let payload: unknown;
   try {
     payload = JSON.parse(text);
@@ -545,6 +566,7 @@ export function normalizeResponsesWsRelayEvent(text: string): ResponsesWsRelayEv
     return null;
   }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  observe?.(payload as Record<string, unknown>);
   const record = normalizeResponsesIncompleteReason(payload as Record<string, unknown>);
   if (typeof record.type !== "string") return null;
   // A native error may be pretty-printed JSON. SSE prefixes one data line;

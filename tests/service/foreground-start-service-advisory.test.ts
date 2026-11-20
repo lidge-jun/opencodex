@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { foregroundStartServiceAdvisoryLines } from "../../src/service/diagnostics";
+import { deriveLaunchdServiceDiagnostic, foregroundStartServiceAdvisoryLines, warnForegroundStartService } from "../../src/service/diagnostics";
 import type { ServiceDiagnostic } from "../../src/service/diagnostics";
 
 const diagnostic = (overrides: Partial<ServiceDiagnostic> = {}): ServiceDiagnostic => ({
@@ -13,6 +13,7 @@ const diagnostic = (overrides: Partial<ServiceDiagnostic> = {}): ServiceDiagnost
   conflict: false,
   backend: "launchd",
   summary: "installed, not loaded (launchd; ok)",
+  confirmedStopped: true,
   ...overrides,
 });
 
@@ -20,7 +21,7 @@ describe("foregroundStartServiceAdvisoryLines", () => {
   test("advises when the managed service is installed but not serving", () => {
     const lines = foregroundStartServiceAdvisoryLines(diagnostic());
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain("not serving");
+    expect(lines[0]).toContain("not loaded");
     expect(lines[0]).toContain("installed, not loaded");
     expect(lines[1]).toContain("'ocx service repair'");
   });
@@ -52,10 +53,39 @@ describe("foregroundStartServiceAdvisoryLines", () => {
     expect(lines[1]).toContain("'ocx service repair'");
   });
 
-  test("advises for non-launchd backends too", () => {
-    for (const backend of ["systemd", "scheduler", null] as const) {
-      const lines = foregroundStartServiceAdvisoryLines(diagnostic({ backend, summary: "installed, not running" }));
-      expect(lines).toHaveLength(2);
+  test("does not treat launchd unknown as stopped, whether or not paths are stale", () => {
+    for (const stale of [false, true]) {
+      const result = deriveLaunchdServiceDiagnostic({
+        installed: true, stale, load: { state: "unknown" }, diagnostics: "fixture",
+      });
+      const lines = foregroundStartServiceAdvisoryLines(result).join("\n");
+      expect(lines).toContain("Could not confirm");
+      expect(lines).toContain("ocx status");
+      expect(lines.includes("ocx service repair")).toBe(false);
     }
+  });
+
+  test("derives confirmation from verified launchd not-loaded, not summary text", () => {
+    const result = deriveLaunchdServiceDiagnostic({
+      installed: true, stale: false, load: { state: "not-loaded" }, diagnostics: "fixture",
+    });
+    expect(foregroundStartServiceAdvisoryLines({ ...result, summary: "changed wording" })).toHaveLength(2);
+  });
+
+  test("keeps status guidance across unknown and non-launchd backends without copying repair hints", () => {
+    for (const backend of ["systemd", "native", "scheduler", null] as const) {
+      const lines = foregroundStartServiceAdvisoryLines(diagnostic({
+        backend, confirmedStopped: undefined, summary: "stale assets — run ocx service repair",
+      })).join("\n");
+      expect(lines).toContain("Could not confirm");
+      expect(lines).toContain("ocx status");
+      expect(lines.includes("ocx service repair")).toBe(false);
+    }
+  });
+
+  test("probe or warning exceptions cannot propagate to bind", () => {
+    const fail = (): never => { throw new Error("fixture"); };
+    expect(() => warnForegroundStartService(fail, fail)).not.toThrow();
+    expect(() => warnForegroundStartService(() => diagnostic(), fail)).not.toThrow();
   });
 });

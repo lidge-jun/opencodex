@@ -20,7 +20,7 @@ Utilice `gpt-5.6-sol` desnudo con la opción Pool / Direct en la página de prov
 
 Si el proveedor `openai` integrado no está disponible o está desactivado, el selector de cuentas del panel de control y la página Codex Auth pueden restaurarlo: las filas ausentes se crean a partir del preajuste canónico, las filas canónicas deshabilitadas se vuelven a habilitar sin reemplazar la configuración del modelo o modo guardado, y no canónicas a las filas `openai` no se les ofrece esa ruta de recuperación.
 
-La compatibilidad con Luna Reserve es una capacidad de cuenta ChatGPT en la ruta de avance canónica OpenAI, no un derecho de clave OpenAI API. Su selector manual de almacenamiento principal requiere un modo de escritorio local efectivo y un permiso de flujo ascendente actual vinculado a credenciales; una entrada de catálogo por sí sola no autoriza una solicitud. Consulte [Luna Reserve junto a modelos enrutados](/es/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models) para ver la configuración, el orden de reinicio, los requisitos de autorización y los ayudantes no compatibles.
+La compatibilidad con Luna Reserve es una capacidad de cuenta ChatGPT en la ruta de avance canónica OpenAI, no un derecho de clave OpenAI API. Su selector manual de almacenamiento principal requiere el ajuste `codexReserveEnabled` en un proxy loopback que no es cliente y un permiso de flujo ascendente actual vinculado a credenciales; una entrada de catálogo por sí sola no autoriza una solicitud. Consulte [Luna Reserve junto a modelos enrutados](/es/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models) para ver la configuración, el orden de reinicio, los requisitos de autorización y los ayudantes no compatibles.
 
 Para añadir una cuenta con cuota agotada y finalizar su validación diferida, véase [Codex calentamiento de la cuenta](/es/guides/codex-integration/#codex-account-warmup).
 
@@ -142,7 +142,13 @@ GLM y Large 4 siguen la [guía de razonamiento Mistral](https://docs.mistral.ai/
 
 Cuando el catálogo de suscripción de Grok publica ventanas de contexto seleccionables, opencodex usa el nivel más amplio: `[256000, 500000]` expone 500k para Grok 4.5–4.7, incluida la ruta Fast de 4.7. La ventana configurada del modelo y el límite de contexto habilitado pueden reducir ese valor. Si tu plan ofrece menos, configura ese límite: el catálogo no verifica el derecho de acceso de la cuenta.
 
-Cursor, Kiro, Zed Hosted AI y Nous Portal son solo de inicio de sesión y no tienen el equivalente de clave API. Google Antigravity también es solo para iniciar sesión: `ocx login google-antigravity` inicia sesión con su cuenta Google a través del cable de Cloud Code Assist, y el ajuste preestablecido `google` al lado es el AI Studio Gemini API, un producto diferente al que se llega con su propia clave, no un modo de clave para el mismo inicio de sesión. Si el inicio de sesión de Antigravity no descubre un proyecto de Cloud Code Assist, el fallo incluye un resumen saneado de `loadCodeAssist` y de la última respuesta `onboardUser`: estado HTTP, categoría de respuesta, presencia de finalización o error y tipos de los campos de proyecto conocidos. Distingue un rechazo HTTP, JSON inutilizable, una raíz no válida, una incorporación sin terminar y una finalización con error o sin proyecto. Omite valores del proveedor, nombres arbitrarios de claves e identificadores de cuentas o proyectos. El inicio de sesión sigue requiriendo un proyecto descubierto; no se guarda ninguna cuenta si el descubrimiento falla.
+Cursor, Kiro, Zed Hosted AI y Nous Portal son solo de inicio de sesión y no tienen el equivalente de clave API. Google Antigravity también es solo para iniciar sesión: `ocx login google-antigravity` inicia sesión con su cuenta Google a través del cable de Cloud Code Assist, y el ajuste preestablecido `google` al lado es el AI Studio Gemini API, un producto diferente al que se llega con su propia clave, no un modo de clave para el mismo inicio de sesión.
+
+:::danger[Google puede desactivar Gemini y Antigravity en la cuenta Google]
+El inicio de sesión de Antigravity está pensado para la propia aplicación Antigravity de Google. Usuarios de herramientas de terceros han informado de que el acceso a Gemini y Antigravity de sus cuentas Google se desactivó con "This service has been disabled in this account for violation of Terms of Service." La suspensión abarca el acceso a Gemini Code Assist y Antigravity de esa cuenta, y recuperarlo depende del proceso de apelación de Google. Inicie sesión solo con una cuenta Google independiente que pueda permitirse perder, nunca con una cuenta principal, personal, escolar o de trabajo; una clave API de Gemini es la opción más segura. OpenCodex pide una confirmación explícita antes de cada inicio de sesión, reautenticación o importación de Antigravity: una casilla en el panel, una respuesta `y` o `--accept-antigravity-risk` en la CLI.
+:::
+
+Si el inicio de sesión de Antigravity no descubre un proyecto de Cloud Code Assist, el fallo incluye un resumen saneado de `loadCodeAssist` y de la última respuesta `onboardUser`: estado HTTP, categoría de respuesta, presencia de finalización o error y tipos de los campos de proyecto conocidos. Distingue un rechazo HTTP, JSON inutilizable, una raíz no válida, una incorporación sin terminar y una finalización con error o sin proyecto. Omite valores del proveedor, nombres arbitrarios de claves e identificadores de cuentas o proyectos. El inicio de sesión sigue requiriendo un proyecto descubierto; no se guarda ninguna cuenta si el descubrimiento falla.
 
 La pestaña Cuentas Antigravity muestra un nivel de membresía observado como una insignia junto a la etiqueta de la cuenta, utilizando el ID de nivel ascendente (por ejemplo, `free-tier` o `gemini-pro`). No aparece ninguna insignia cuando el plan es desconocido; no afecta el enrutamiento ni la cuota.
 
@@ -190,6 +196,8 @@ El catálogo ChatGPT passthrough también se superpone en las identificadores GP
 
 ## 2. Inicio de sesión de la cuenta (OAuth)
 
+Para cuentas profesionales o educativas de Microsoft, consulta la [configuración de Microsoft 365 Copilot](/es/guides/m365-copilot/).
+
 Los ajustes preestablecidos del proveedor pueden usar el inicio de sesión de la cuenta, incluido el GitHub Copilot, a través de un puente experimental no oficial de flujo de dispositivos. opencodex almacena sus credenciales en `~/.opencodex/auth.json`; los tokens actualizables se actualizan automáticamente, mientras que las claves duraderas se reutilizan hasta que el proveedor las revoca. `ocx login codex` también es aceptado, pero no es uno de estos proveedores: se dirige al grupo de cuentas Codex, el mismo flujo que `ocx account login codex`, que mantiene su propio libro de cuentas y necesita un proxy en ejecución. `chatgpt` y `openai` son alias de esa ruta.
 
 ```bash
@@ -215,7 +223,7 @@ ocx logout <provider>
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth utiliza la pasarela de suscripción separada Grok CLI. La anulación de la clave API utiliza `https://api.x.ai/v1` y puede inyectar Procesamiento Prioritario. En vivo primero Grok catálogo; `grok-4.5` es el valor predeterminado. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude modelos; lista de modelos en vivo desde `/v1/models`. |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Modelos de programación de Kimi Code Plan. Usa por defecto el alias estable `kimi-for-coding` (actualmente K2.8 Preview): contexto de 1M tokens, entrada de texto e imágenes y razonamiento `low`/`high`/`max` (`max` por defecto). También incluye `k3.1-pro` y `k3.1-pro-highspeed` (K3.1 Pro), con contexto de 1M tokens y razonamiento obligatorio en los mismos niveles (`max` por defecto). Las selecciones retiradas `kimi-k2.x` migran al alias al actualizar. |
-| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | El mismo inicio de sesión de la cuenta Kimi (reutiliza la credencial `kimi` OAuth) sobre el cable OpenAI Responses. Misma lista de modelos y capacidades que `kimi`; pensando que el contenido permanece encriptado en el lado del servidor, las llamadas a herramientas y los resultados permanecen visibles. |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | El mismo inicio de sesión de la cuenta Kimi (reutiliza la credencial `kimi` OAuth) sobre el cable OpenAI Responses. Misma lista de modelos y capacidades que `kimi`; pensando que el contenido permanece encriptado en el lado del servidor, las llamadas a herramientas y los resultados permanecen visibles. Agréguelo desde el selector **Add provider** del panel (**Kimi (Responses)**) o con `ocx provider add kimi-responses --live`. No tiene inicio de sesión propio: agregarlo con la sesión de Kimi ya iniciada no pide un segundo inicio de sesión, e iniciar sesión desde su entrada del selector crea solo esta fila, sin tocar la fila `kimi`. Cerrar la sesión desde cualquiera de las dos filas (`ocx logout kimi` o `ocx logout kimi-responses`, en local o con `--live`, o con **Logout** en cualquiera de las filas del panel) quita la cuenta de Kimi activa para ambas filas y lo indica; si hay otra cuenta de Kimi guardada, pasa a ser la activa para ambas filas; ninguna fila la usa mientras esté en pausa, y si necesita volver a iniciar sesión, vuelve a iniciar sesión con ella. Eliminar una fila desde el panel (o con `--live`) conserva el inicio de sesión mientras la otra lo siga usando, y eliminar la última lo elimina; un `ocx provider remove` local deja los inicios de sesión guardados, como con otros proveedores. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research pasarela de suscripción (el mismo backend que usa Hermes Agent). El inicio de sesión de concesión de dispositivo contra `portal.nousresearch.com`; el token de acceso es la inferencia por solicitud JWT. Pago mixto + catálogo de modelos `:free` (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`,...) descubierto en vivo desde la cuenta iniciada. Los tokens de actualización son de un solo uso y se rotan en cada actualización. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Los botones de inicio de sesión y añadir cuenta del dashboard ofrecen AWS IAM Identity Center, Builder ID, Google, inicio de sesión de dispositivo con GitHub o Kiro CLI. El inicio de sesión nativo añade una cuenta sin cerrar la sesión de `kiro-cli`. La opción Kiro CLI importa o inicia una sesión de esa CLI; al añadir una cuenta, cambia temporalmente su selección y la restaura si se cancela o falla. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth sobre el cable de Cloud Code Assist. Live discovery utiliza el punto final autenticado `v1internal:fetchAvailableModels` de CCA y publica los modelos de agente disponibles para la cuenta iniciada; el catálogo mantenido sigue siendo la reserva. |
@@ -329,6 +337,8 @@ Solo `anthropic` y `anthropic2` admiten este modo; otros proveedores responden `
 
 OAuth proveedores cuyas credenciales incluyen un ID de cuenta estable o correo electrónico pueden mantener más de un inicio de sesión. La página Proveedores muestra esas cuentas en un menú desplegable, le permite agregar otra y cambia la cuenta activa sin cerrar la sesión de las otras. Un inicio de sesión normal con una credencial sin identidad Kimi reemplaza la ranura activa, mientras que un **Añadir cuenta** explícito conserva esa ranura y activa una nueva y distinta. Las cuentas de Kiro se identifican mediante el ARN del perfil y, cuando está disponible, el correo electrónico del usuario conectado. Distintos usuarios de un perfil de organización pueden conservar credenciales separadas. `chatgpt` siempre es de una sola ranura porque las cuentas de grupo Codex tienen un libro mayor separado. Los tokens permanecen en `~/.opencodex/auth.json`; `/api/oauth/accounts` devuelve solo metadatos enmascarados.
 
+Las sesiones nuevas de Codex y del grupo OAuth de Anthropic pueden usar [`reset-near-weighted`](/es/reference/configuration/providers/#reset-near-weighted) para priorizar la cuota semanal que está a punto de renovarse. La afinidad de las sesiones activas se conserva.
+
 <a id="cockpit-tools-antigravity-import"></a>
 
 ### Importación de Antigravity desde Cockpit Tools
@@ -378,13 +388,9 @@ Para el diagnóstico de compatibilidad de cuenta-interruptor, habilitar la depur
 
 <a id="kiro-request-credits"></a>
 
-### Créditos de solicitud Kiro
+### Créditos por solicitud de Kiro
 
-En los giros habilitados para herramientas, opencodex mantiene el texto ordinario de Kiro hasta que se valide la finalización. Si Kiro termina con texto sin formato en lugar de su herramienta privada de respuesta final, todavía se ejecuta un reintento limitado y solo se muestra la respuesta final resultante. El progreso que acompaña a una llamada de herramienta real sigue siendo visible. Una respuesta final privada normal no necesita reintento de finalización.
-
-Si el filtro de seguridad de Kiro detiene un turno (`CONTENT_FILTERED`, por ejemplo el clasificador `BIO` de Claude), la solicitud termina con un rechazo que los clientes no reintentan. Los clientes Claude reciben `stop_reason: "refusal"` y Codex recibe una respuesta fallida con la categoría y explicación de Kiro. Si el filtro detiene el único reintento acotado, no se muestra una respuesta final: el progreso retenido del primer intento y el texto parcial del reintento aparecen como comentarios antes del rechazo.
-
-Cuando Kiro emite la medición de crédito, los registros de solicitudes conservan el gasto reportado como `usage.providerCredits`, incluso en el libro mayor de uso persistente. Estos son Kiro créditos; los recuentos de tokens aún pueden estimarse y el valor del crédito no reemplaza las estimaciones de costos de USD. Las solicitudes de reserva de finalización agregan sus créditos reportados. Un valor ausente significa que Kiro no reportó el uso del crédito; un cero explícito significa que no reportó ningún gasto.
+La guía [Créditos por solicitud de Kiro](/es/guides/kiro-request-credits/) describe la validación de respuestas, los rechazos del filtro de seguridad, el registro de créditos y su valoración en USD.
 
 <a id="kiro-refresh-attention"></a>
 
@@ -454,6 +460,8 @@ están en la página [Catálogo de proveedores con clave API](/es/guides/api-key
 - [CodeBuddy Code CLI oficial (Global y CN)](/es/guides/api-key-catalog/#official-codebuddy-code-cli-global--cn)
 - [Oficial Qoder CLI (Global y CN)](/es/guides/api-key-catalog/#official-qoder-cli-global--cn)
 - [Claude Code CLI (suscripción)](/es/guides/api-key-catalog/#claude-code-cli-subscription)
+- [StepCode CLI (suscripción)](/es/guides/step-cli/)
+- [Antigravity CLI (ACP, local)](/es/guides/api-key-catalog/#antigravity-cli-acp-local)
 - [Cuota de crédito A6API](/es/guides/api-key-catalog/#a6api-credit-quota)
 - [Plan de codificación BigModel sobre Responses](/es/guides/api-key-catalog/#bigmodel-coding-plan-over-responses)
 - [Múltiples claves API](/es/guides/api-key-catalog/#multiple-api-keys)
@@ -512,6 +520,14 @@ Los campos de proveedor están disponibles a través de la configuración, `PATC
 La sección **Límites de solicitudes** de la descripción general de proveedores muestra las barras de utilización en vivo actualizadas desde el punto final de uso/facturación de cada proveedor cuando existe uno. Las barras muestran la cantidad de una ventana (5 horas, semanal, mensual o específica del proveedor) que ya se consume.
 
 Proveedores con una consulta activa: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi, Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax, Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code y proveedores personalizados basados en a6api o Abliteration.
+
+**Uso mensual de Anthropic.** Las cuentas con facturación por uso, como las de Enterprise,
+pueden mostrar una barra mensual cuando Anthropic indica que el uso adicional está activado
+y no informa de ventanas del plan. La barra se muestra sin fecha de restablecimiento y desaparece
+cuando Anthropic informa de ventanas del plan o confirma que el uso adicional está desactivado.
+Si la respuesta no contiene ninguna ventana de cuota utilizable, la consulta de la cuenta sigue
+indicando que la lectura no está disponible, incluso si al actualizar la cuota del proveedor se
+recibe la misma respuesta.
 
 **Cuota de Kimi Coding Plan.** Los proveedores con inicio de sesión de cuenta o clave API que usan el endpoint canónico `https://api.kimi.com/coding/v1` consultan `/usages`. Los planes que informan `usages.limit_month_total` (o `monthTotal`) muestran una barra de uso mensual; si el total no está disponible, se utiliza `limit_month_code` (o `monthCode`). La fracción `used_ratio` / `usedRatio` debe estar en `[0, 1]` antes de convertirse en porcentaje consumido; los valores inválidos se ignoran. Un contenedor `usages` vacío o inutilizable no oculta datos mensuales válidos de otro sobre compatible. Se conserva cualquier hora de restablecimiento informada. Las ventanas existentes de cinco horas, semanales y de créditos totales de suscripción siguen siendo independientes; una ventana mensual ausente no se muestra como 0%.
 

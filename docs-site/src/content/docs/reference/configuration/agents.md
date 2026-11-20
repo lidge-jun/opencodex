@@ -24,9 +24,9 @@ On the first start after upgrading, existing `subagentModels` lists receive
 old fifth choice is dropped. If `gpt-5.5` is retained, it moves to the end.
 The previous default list therefore becomes Astra, Sol, Terra, Luna, 5.5.
 An unset legacy list receives the current defaults; an explicit empty legacy list becomes
-`["gpt-6-astra"]`. Existing Astra entries are not duplicated.
+`["gpt-6.2-astra"]` after all migrations. Existing Astra entries are not duplicated.
 
-The current default is `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`. On the first
+The current default is `gpt-6.2-astra`, `gpt-6.2-sol`, `gpt-6-luna`. On the first
 start after upgrading, a stored list is cleaned of retired rows: `gpt-5.6-sol` and
 `gpt-5.6-luna` become `gpt-6-sol` and `gpt-6-luna` in the same position, and every
 other `gpt-5.5` or `gpt-5.6` model is removed. Ids with a `/` (routed
@@ -38,7 +38,11 @@ after that upgrade, a bare `gpt-6-sol` in a stored list becomes `gpt-6.1-sol` in
 position (without a duplicate if 6.1 Sol is already listed). GPT-6 Sol stays available: add it
 back afterwards and it stays.
 
-The internal `subagentModelsVersion` marker (currently `3`) makes each step a
+The version 4 upgrade replaces bare `gpt-6-astra` and `gpt-6.1-sol` with `gpt-6.2-astra`
+and `gpt-6.2-sol` in place and removes duplicates. Qualified model IDs retain their spelling.
+You can select the earlier models again after the upgrade.
+
+The internal `subagentModelsVersion` marker (currently `4`) makes each step a
 one-time upgrade. Afterwards you can reorder, remove Astra, or save an empty list
 without startup changing your choices again. Disabled models remain disabled. Astra availability
 still depends on upstream support for your account.
@@ -47,7 +51,7 @@ still depends on upstream support for your account.
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2" \| "v2-plaintext"` | `"default"` | `v1` stamps every catalog model as v1; `v2` stamps every model as v2. `default` restores upstream pins (Sol/Terra v2, Luna v1) and otherwise follows the native `multi_agent_v2` flag. `v2-plaintext` also enables experimental plaintext task delivery and disables the global override. Catalog pins apply to new sessions; enabled compilation also affects subsequent eligible requests from existing V2 sessions. |
 | `keepNativeChatGptOnV1?` | `boolean` | `false` | When `multiAgentMode` is `"v2"`, disable the global V2 override, stamp ChatGPT-native rows as v1, and keep routed rows on v2. Codex resolves the global override before catalog pins, so both parts are required for a ChatGPT parent to spawn routed children without backend-encrypted tasks ([#92](https://github.com/lidge-jun/opencodex/issues/92)). Ignored in `v1` and `default`. |
-| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids featured first in the sub-agent picker. The dashboard offers bare native and routed ids as new choices and preserves already-configured exact account-qualified ids when saving, including ids unavailable in the current catalog. To add a new exact account-qualified id, use `ocx agent subagents set` or edit the configuration. After the [one-time Astra upgrade](#astra-roster-upgrade), an explicit empty list is preserved. |
+| `subagentModels?` | `string[]` | `gpt-6.2-astra`, `gpt-6.2-sol`, `gpt-6-luna` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids featured first in the sub-agent picker. The dashboard offers bare native and routed ids as new choices and preserves already-configured exact account-qualified ids when saving, including ids unavailable in the current catalog. To add a new exact account-qualified id, use `ocx agent subagents set` or edit the configuration. After the [one-time Astra upgrade](#astra-roster-upgrade), an explicit empty list is preserved. |
 | `injectionModel?` | `string` | — | Preferred native or routed sub-agent model used in proxy-authored v2 delegation guidance. |
 | `injectionEffort?` | `string` | — | Preferred effort (`low` through `ultra`), meaningful only with `injectionModel`. |
 | `injectionPrompt?` | `string` | — | Replaces the built-in v2 guidance body. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, and `{{fallback}}`. A configured `injectionModel` is sufficient to render the custom prompt. |
@@ -231,6 +235,10 @@ Restoration uses a 10,000-identity traversal budget for each response payload. I
 that budget, bounded JSON returns HTTP 502 and a stream returns `response.failed`; neither path
 sends the private aliases to Codex or saves the refused response for `previous_response_id`
 continuation.
+
+For local replay during plaintext v2, a loopback Responses WebSocket without an opencodex caller
+identity can retain history in memory for that socket and its own `thread-id`. If a response cannot
+fit the replay budgets, the proxy declines to retain it and preserves existing replay entries.
 
 For successfully rewritten calls, the option removes application-layer encryption from agent
 message arguments. HTTPS still encrypts network transport, but message text can appear in Codex

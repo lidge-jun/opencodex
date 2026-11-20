@@ -23,6 +23,7 @@ import { ClientSyncExpectationError } from "../client/sync-expectation";
 import { SYNC_EXPECTATION_MISMATCH_EXIT } from "./sync-expectation";
 import { reapOrphanTunnel } from "../client/link-tunnel";
 import { readServiceApiTokenState } from "../lib/service-secrets";
+import { readHubCredential, type HubCredentialOwner } from "../client/hub-session";
 import type { ClientLifecycleLockDeps } from "../client/lifecycle-lock";
 import { recoverOrphanedTokens, type OrphanTokenRecoveryDeps } from "../client/orphan-token-recovery";
 import { linkKnownHostsPath } from "../link/paths";
@@ -114,6 +115,13 @@ function takeExpectLink(args: string[]): string | undefined {
   return found;
 }
 
+/** Describes the local credential file without probing the lease at the Hub. */
+function managementCredentialState(owner: HubCredentialOwner): "session" | "missing" | "unsafe" {
+  const state = readHubCredential(owner);
+  if (state.kind === "present") return "session";
+  return state.kind === "unsafe" ? "unsafe" : "missing";
+}
+
 export type ClientConnectionStatus = {
   state: "disconnected" | "connected" | "invalid" | "mismatched";
   reason?: string;
@@ -131,6 +139,8 @@ export type ClientConnectionStatus = {
   catalog: "present" | "missing" | "unsafe";
   token: "owned" | "missing" | "changed" | "unsafe";
   rotation: "clean" | "orphan-cleaned" | "recovery-required" | "unsafe";
+  /** The stored hub management credential the loopback relay stamps; its expiry is the hub's. */
+  managementCredential?: "session" | "missing" | "unsafe";
   /**
    * Whether the selected local Codex CLI can actually launch against this connection (#4207).
    *
@@ -268,6 +278,8 @@ export function collectClientConnectionStatus(
     catalog,
     token,
     rotation,
+    // Account and usage reads use a paired session independently of the inference token.
+    ...(state.value.transport === "link" ? {} : { managementCredential: managementCredentialState(state.value) }),
     readiness: readiness.kind,
     ...(readiness.kind === "ready" ? {} : { readinessReason: readiness.reason }),
   };
@@ -414,6 +426,10 @@ export function clientConnectionStatusLines(status: ClientConnectionStatus): str
     `Clients: ${status.selectedClients?.join(", ")}`,
     `Token file: ${status.token}`,
     `Key rotation: ${status.rotation}`,
+    ...(status.managementCredential
+      ? [`Management credential: ${status.managementCredential}${status.managementCredential !== "session"
+        ? " (run 'ocx connect rotate' with a fresh pairing code)" : ""}`]
+      : []),
     `Catalog: ${status.catalog}${status.catalogAgeSeconds !== undefined ? ` (${status.catalogAgeSeconds}s old)` : ""}`,
   ];
 }

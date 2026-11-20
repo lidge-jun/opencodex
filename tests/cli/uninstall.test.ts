@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   setUninstallServiceHooksForTests,
   uninstallServiceDetailed,
@@ -6,7 +6,8 @@ import {
 } from "../../src/service";
 import { pathToFileURL } from "node:url";
 import { repoRoot } from "../helpers/repo-root";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { removeOwnedConfigAfterDesktopCleanup, type UninstallClientStateDeps } from "../../src/cli/uninstall-client-state";
@@ -15,7 +16,10 @@ import { assertClientLifecycleHeld, withClientLifecycle, withClientLifecycleSync
 import { captureUninstallEndpointProof, type UninstallObservation } from "../../src/cli/uninstall-plan";
 import type { DesktopDisconnectReceipt } from "../../src/claude/desktop-remote-store";
 import type { ExportModel } from "../../src/clients/config-export";
+import { GATEWAY_CLIENTS, connectGatewayClient } from "../../src/integrations/gateway-clients";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
+import { initializeConfigOwnership, removeOwnedConfigState, type ConfigRemovalResult } from "../../src/lib/config-ownership";
+import { setUninstallElevationProbeForTests } from "../../src/lib/config-ownership-removal";
 import { createIntegrationStateStore } from "../../src/integrations/store";
 import { applyIntegration, disableIntegrationCoordinated } from "../../src/integrations/writer";
 import type { OcxConfig } from "../../src/types";
@@ -565,6 +569,7 @@ function uninstallFixture() {
       await fixture.duringIntegrationCleanup?.();
       return { attempted: 0, changed: 0 };
     },
+    gatewayContext: () => ({ home: fixtureRoot, platform: "linux", env: {}, stateDir: configDir }),
     remove: () => {
       // Real destructive work is confined to this fixture, never getConfigDir().
       assertClientLifecycleHeld(fixture.lease!);
@@ -592,6 +597,28 @@ async function withUninstallFixture(work: (f: ReturnType<typeof uninstallFixture
 }
 
 describe("uninstall client cleanup before owner-state deletion", () => {
+  test("injected uninstall dependencies require a gateway context before resolving the OS home", async () => {
+    await withUninstallFixture(async f => {
+      const { gatewayContext: _omitted, ...incompleteDeps } = f.deps;
+      const configHome = process.env.OPENCODEX_HOME;
+      process.env.OPENCODEX_HOME = f.configDir;
+      const homedir = spyOn(os, "homedir").mockImplementation(() => {
+        throw new Error("uninstall attempted to resolve the OS home");
+      });
+      try {
+        await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, incompleteDeps as UninstallClientStateDeps))
+          .rejects.toThrow("injected dependencies require a gateway context");
+        expect(homedir).not.toHaveBeenCalled();
+        expect(f.fixture.calls).toEqual({ read: 0, cleanup: 0, integrations: 0, remove: 0, finalLock: 0 });
+        expect(existsSync(f.lockPath)).toBe(false);
+      } finally {
+        homedir.mockRestore();
+        if (configHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = configHome;
+      }
+    });
+  });
+
   test("teardown refusal occurs before even reading or cleaning client state", async () => {
     await withUninstallFixture(async f => {
       f.fixture.connection = connectedFixture;
@@ -811,21 +838,23 @@ describe("uninstall restores recorded third-party integrations before deleting r
     providers: { fixture: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
   } as unknown as OcxConfig;
 
-  async function fixture() {
+  async function fixture({ gatewayOnly = false } = {}) {
     const root = mkdtempSync(join(tmpdir(), "ocx-uninstall-integrations-"));
     const home = join(root, "home");
     const configDir = join(root, "opencodex");
     const lockPath = join(root, "runtime", "lifecycle.sqlite");
     const env = {} as NodeJS.ProcessEnv;
-    mkdirSync(INTEGRATION_CLIENTS.pi.detectDir(env, home), { recursive: true });
+    mkdirSync(home);
     mkdirSync(configDir, { recursive: true });
     const clientConfig = INTEGRATION_CLIENTS.pi.configPath(env, home);
-    mkdirSync(dirname(clientConfig), { recursive: true });
-    writeFileSync(clientConfig, '{"userSetting":"keep"}\n');
     const store = createIntegrationStateStore(join(configDir, "integrations"));
-    const input = { clientId: "pi" as const, models, config, port: config.port, env, home, store };
-    expect(applyIntegration(input).ok).toBe(true);
-    const deps: UninstallClientStateDeps = {
+    if (!gatewayOnly) {
+      mkdirSync(INTEGRATION_CLIENTS.pi.detectDir(env, home), { recursive: true });
+      mkdirSync(dirname(clientConfig), { recursive: true });
+      writeFileSync(clientConfig, '{"userSetting":"keep"}\n');
+      expect(applyIntegration({ clientId: "pi", models, config, port: config.port, env, home, store }).ok).toBe(true);
+    }
+    const deps = {
       readConnection: () => ({ kind: "disconnected" }),
       inspectDesktop: () => ({ kind: "absent" }),
       readReceipt: () => ({ kind: "absent" }),
@@ -839,15 +868,216 @@ describe("uninstall restores recorded third-party integrations before deleting r
         env,
         home,
       }),
-      remove: () => {
+      gatewayContext: () => ({ home, platform: "linux", env: { SHELL: "/bin/bash" },
+        stateDir: configDir, adminSettingsPath: join(root, "admin.json"), lifecycleLockPath: lockPath }),
+      remove: (): ConfigRemovalResult => {
         rmSync(configDir, { recursive: true });
         return { status: "removed", residualPaths: [] };
       },
       aclReapPending: () => false,
       removePickerArtifacts: async () => ({ ok: true }),
-    };
+    } satisfies UninstallClientStateDeps;
     return { root, home, env, configDir, clientConfig, store, deps };
   }
+
+  function connectGateways(f: Awaited<ReturnType<typeof fixture>>) {
+    const context = f.deps.gatewayContext();
+    const settings = join(f.home, ".antigravity", "settings.json");
+    const profile = join(f.home, ".bashrc");
+    const oldSettings = '{"models":{"list":[{"modelId":"prior"}]}}';
+    const oldProfile = "# existing shell profile\n";
+    mkdirSync(dirname(settings), { recursive: true });
+    writeFileSync(settings, oldSettings);
+    writeFileSync(profile, oldProfile);
+    const gateway = { url: "http://127.0.0.1:10100", apiKey: "opencodex-local" };
+    for (const client of Object.values(GATEWAY_CLIENTS)) expect(client.connect(context, gateway).ok).toBe(true);
+    return { settings, profile, oldSettings, oldProfile };
+  }
+
+  function removeGatewayFixtureConfig(configDir: string) {
+    if (process.platform !== "win32") return removeOwnedConfigState(configDir);
+    // These fixtures exercise owned-state cleanup independently of the runner's elevation.
+    setUninstallElevationProbeForTests(() => false);
+    try { return removeOwnedConfigState(configDir); }
+    finally { setUninstallElevationProbeForTests(null); }
+  }
+
+  test("uninstall disconnects every recorded gateway client before deleting config", async () => {
+    const f = await fixture({ gatewayOnly: true });
+    try {
+      const { settings, profile, oldSettings, oldProfile } = connectGateways(f);
+      f.deps.remove = () => {
+        expect(readFileSync(settings, "utf8")).toBe(oldSettings);
+        expect(readFileSync(profile, "utf8")).toBe(oldProfile);
+        const reconnect = connectGatewayClient("agy", f.deps.gatewayContext(), config, config.port);
+        expect(reconnect).toMatchObject({ ok: false, code: "io-error" });
+        return removeGatewayFixtureConfig(f.configDir);
+      };
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toEqual({ status: "removed", residualPaths: [] });
+      expect(existsSync(f.configDir)).toBe(false);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test("uninstall removes an empty gateway directory left by an earlier restore", async () => {
+    const f = await fixture({ gatewayOnly: true });
+    try {
+      expect(initializeConfigOwnership(f.configDir)).toBe(true);
+      mkdirSync(join(f.configDir, "gateway-clients"));
+      f.deps.remove = () => removeGatewayFixtureConfig(f.configDir);
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toEqual({ status: "removed", residualPaths: [] });
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test.skipIf(process.platform === "win32")("uninstall restores agy beside a dangling untracked profile", async () => {
+    const f = await fixture({ gatewayOnly: true });
+    try {
+      const profile = join(f.home, ".zshrc");
+      const bash = join(f.home, ".bashrc");
+      const missing = join(f.home, "missing-profile");
+      const original = "# existing zsh profile\n";
+      writeFileSync(profile, original);
+      const zshContext = { ...f.deps.gatewayContext(), env: { SHELL: "/bin/zsh" } };
+      expect(connectGatewayClient("agy", zshContext, config, config.port).ok).toBe(true);
+      expect(readFileSync(profile, "utf8")).toContain("opencodex agy");
+      symlinkSync(missing, bash);
+      const remove = f.deps.remove;
+      f.deps.remove = () => {
+        expect(readFileSync(profile, "utf8")).toBe(original);
+        expect(existsSync(join(f.configDir, "gateway-clients", "agy.json"))).toBe(false);
+        return remove();
+      };
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toEqual({ status: "removed", residualPaths: [] });
+      expect(readlinkSync(bash)).toBe(missing);
+      expect(existsSync(missing)).toBe(false);
+      expect(existsSync(f.configDir)).toBe(false);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test("uninstall preserves unknown entries beside the retired gateway records", async () => {
+    const f = await fixture({ gatewayOnly: true });
+    try {
+      connectGateways(f);
+      const dir = join(f.configDir, "gateway-clients");
+      const unknown = join(dir, "user-file");
+      writeFileSync(unknown, "keep\n");
+      f.deps.remove = () => removeGatewayFixtureConfig(f.configDir);
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toMatchObject({ status: "partial", residualPaths: [dir] });
+      expect(readFileSync(unknown, "utf8")).toBe("keep\n");
+      expect(existsSync(join(dir, "antigravity.json"))).toBe(false);
+      expect(existsSync(join(dir, "agy.json"))).toBe(false);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test("uninstall aborts when a recorded gateway client refuses restoration", async () => {
+    const f = await fixture();
+    try {
+      const { settings } = connectGateways(f);
+      const edited = "{ invalid json";
+      writeFileSync(settings, edited);
+      await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps)).rejects.toThrow("antigravity");
+      expect(existsSync(join(f.configDir, "gateway-clients", "antigravity.json"))).toBe(true);
+      expect(existsSync(join(f.configDir, "gateway-clients", "agy.json"))).toBe(true);
+      expect(readFileSync(settings, "utf8")).toBe(edited);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test("uninstall refuses a CRLF lone agy marker after a reconnect attempt", async () => {
+    const f = await fixture({ gatewayOnly: true });
+    try {
+      const context = f.deps.gatewayContext();
+      const profile = join(f.home, ".bashrc");
+      const record = join(f.configDir, "gateway-clients", "agy.json");
+      const original = "# existing shell profile\r\n";
+      writeFileSync(profile, original);
+      expect(connectGatewayClient("agy", context, config, config.port).ok).toBe(true);
+      const connected = readFileSync(profile, "utf8");
+      const damaged = connected.replace("# <<< opencodex agy <<<\r\n", "");
+      const saved = readFileSync(record, "utf8");
+      expect(damaged).not.toBe(connected);
+      writeFileSync(profile, damaged);
+      expect(GATEWAY_CLIENTS.agy.disconnect(context)).toMatchObject({ ok: false, code: "agy-profile-restore-required" });
+      const reconnect = connectGatewayClient("agy", context, config, config.port + 1);
+      f.deps.remove = () => removeGatewayFixtureConfig(f.configDir);
+
+      await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .rejects.toThrow("Gateway client cleanup refused for agy");
+      expect(reconnect).toMatchObject({ ok: false, code: "agy-profile-restore-required", changed: false });
+      expect(readFileSync(profile, "utf8")).toBe(damaged);
+      expect(readFileSync(record, "utf8")).toBe(saved);
+
+      writeFileSync(profile, connected);
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toEqual({ status: "removed", residualPaths: [] });
+      expect(readFileSync(profile, "utf8")).toBe(original);
+      expect(existsSync(record)).toBe(false);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test("uninstall can retry after the whole agy block is restored beside an unrelated edit", async () => {
+    const f = await fixture({ gatewayOnly: true });
+    try {
+      const profile = join(f.home, ".bashrc");
+      const record = join(f.configDir, "gateway-clients", "agy.json");
+      const original = "# existing shell profile\n";
+      writeFileSync(profile, original);
+      expect(connectGatewayClient("agy", f.deps.gatewayContext(), config, config.port).ok).toBe(true);
+      const connected = readFileSync(profile, "utf8");
+      const completeBlock = connected.slice(connected.indexOf("# >>> opencodex agy >>>"));
+      expect(completeBlock).toContain("# <<< opencodex agy <<<");
+      const saved = readFileSync(record, "utf8");
+      const edited = original + "export USER_EDIT=1\n";
+      writeFileSync(profile, edited);
+      f.deps.remove = () => removeGatewayFixtureConfig(f.configDir);
+
+      await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .rejects.toThrow("OpenCodex could not verify the agy profile at ~/.bashrc. Restore the complete marked agy block or the saved original profile, then retry.");
+      expect(readFileSync(profile, "utf8")).toBe(edited);
+      expect(readFileSync(record, "utf8")).toBe(saved);
+
+      writeFileSync(profile, edited + completeBlock);
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toEqual({ status: "removed", residualPaths: [] });
+      expect(readFileSync(profile, "utf8")).toBe(edited);
+      expect(existsSync(record)).toBe(false);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test.each([
+    ["partial wrapper", "agy() { AGY_LLM_GATEWAY_URL='http://127.0.0.1:10100' AGY_LLM_GATEWAY_API_KEY='opencodex-local' command agy \"$@\"; }"],
+    ["URL variable", "AGY_LLM_GATEWAY_URL='http://127.0.0.1:10100'"],
+    ["key variable", "AGY_LLM_GATEWAY_API_KEY='opencodex-local'"],
+    ["protocol variable", "AGY_LLM_GATEWAY_WIRE_PROTOCOL='genai'"],
+    ["URL value", "redirect='http://127.0.0.1:10100'"],
+  ])("uninstall preserves the agy journal when a markerless profile keeps the %s", async (_label, remnant) => {
+    const f = await fixture({ gatewayOnly: true });
+    try {
+      const context = f.deps.gatewayContext();
+      const profile = join(f.home, ".bashrc");
+      const record = join(f.configDir, "gateway-clients", "agy.json");
+      const original = "# existing shell profile\n";
+      writeFileSync(profile, original);
+      expect(connectGatewayClient("agy", context, config, config.port).ok).toBe(true);
+      const saved = readFileSync(record, "utf8");
+      const damaged = original + "\n" + remnant + "\n";
+      writeFileSync(profile, damaged);
+      f.deps.remove = () => removeGatewayFixtureConfig(f.configDir);
+
+      await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .rejects.toThrow("Gateway client cleanup refused for agy");
+      expect(readFileSync(profile, "utf8")).toBe(damaged);
+      expect(readFileSync(record, "utf8")).toBe(saved);
+
+      writeFileSync(profile, original);
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toEqual({ status: "removed", residualPaths: [] });
+      expect(readFileSync(profile, "utf8")).toBe(original);
+      expect(existsSync(record)).toBe(false);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
 
   function addAsideProfiles(f: Awaited<ReturnType<typeof fixture>>) {
     const asideRoot = join(f.home, ".aside");

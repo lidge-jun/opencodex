@@ -178,15 +178,15 @@ La integración administrada de OpenCode controla dos bloques: `provider.opencod
 
 Ambos fragmentos se construyen a partir de los metadatos del modelo canónico efectivo, al igual que la exportación de Kilo y el lanzador `ocx opencode`. Una anulación explícita personalizada siempre gana, y una escalera que se vacía permanece vacía; una escalera de razonamiento o predeterminada nunca se inventa para un modelo que no declara ninguno. Un límite de contexto autorizado se lleva con un presupuesto de salida al lado: un valor de salida conocido - explícito o de metadatos de catálogo - gana, de lo contrario el esquema requerido 32000 reserva sujeta al contexto, y sin un contexto autorizado se omite todo el bloque de límite. Las capacidades, escalas de esfuerzo, valores predeterminados y un límite de entrada opcional aparecen solo cuando se conocen; el objeto de capacidades nativas del bloque V2 requiere un valor de herramientas conocido, por lo que cuando se desconoce el soporte de la herramienta se omite por completo en lugar de escribirse parcialmente, y la modalidad heredada permanece. Tampoco añade un esfuerzo seleccionable. Las variantes seleccionables anulan el valor predeterminado por modelo: `none` incluido, que se ofrece solo cuando la escalera declarada del propio modelo lo contiene. Sea lo que sea que el cliente seleccione, la política de razonamiento ascendente del proxy aún rige la solicitud que la abandona.
 
-El soporte de DSH administrado tiene un piso de compatibilidad de **DSH 0.1.0-rc.6**. DSH 0.1.7+ lee las rutas del proveedor desde `[id=llm-pi-ai].config.providers.opencodex` en el parche de perfil de escritorio, `$DSH_HOME/profiles/desktop/cordis.patch.yml`, que recarga DSH en caliente. OpenCodex escribe esa fila cuando existe el perfil de escritorio y su parche. Si existe `$DSH_HOME/profiles/desktop/package.json` pero falta `cordis.patch.yml`, Aplicar se niega: cree `cordis.patch.yml` que contiene `[]` (el parche vacío que DSH escribe para un nuevo perfil), luego habilite la integración nuevamente. Solo cuando no hay perfil de Escritorio, OpenCodex usa `llm-pi-ai.providers.opencodex` en `$DSH_HOME/settings.yaml`. OpenCodex solo posee ese fragmento de proveedor: Aplicarlo y Actualizarlo, Desactivarlo lo elimina y Restaurar devuelve una instantánea grabada. Estas operaciones no cambian el modelo predeterminado del usuario o el proveedor nativo `deepseek-official`. La integración DSH administrada es actualmente solo loopback y nunca escribe una credencial real.
+El soporte de DSH administrado tiene un piso de compatibilidad de **DSH 0.1.0-rc.6**. DSH 0.1.7+ lee las rutas del proveedor desde `[id=llm-pi-ai].config.providers.opencodex` en el parche de perfil de escritorio, `$DSH_HOME/profiles/desktop/cordis.patch.yml`, que recarga DSH en caliente. OpenCodex escribe esa fila cuando existe el perfil de escritorio y su parche. Si existe `$DSH_HOME/profiles/desktop/package.json` pero falta `cordis.patch.yml`, Aplicar se niega: cree `cordis.patch.yml` que contiene `[]` (el parche vacío que DSH escribe para un nuevo perfil), luego habilite la integración nuevamente. Solo cuando no hay perfil de Escritorio, OpenCodex usa `llm-pi-ai.providers.opencodex` en `$DSH_HOME/settings.yaml`. OpenCodex solo posee ese fragmento de proveedor: Aplicarlo y Actualizarlo, Desactivarlo lo elimina y Restaurar devuelve una instantánea grabada. Estas operaciones no cambian el modelo predeterminado del usuario o el proveedor nativo `deepseek-official`. La integración DSH administrada es actualmente solo loopback y nunca escribe una credencial real. Con el proxy en ejecución, la sincronización explícita y la actualización en segundo plano del catálogo actualizan el bloque de DSH ya conectado.
 
 MiniMax Code sigue `MINIMAX_DATA_DIR`, luego `MAVIS_DATA_DIR`, antes de caer de nuevo a `~/.minimax`. Su bloque administrado posee solo `custom_provider.opencodex`. No cambia `defaultModel`, la fuente de credenciales MiniMax seleccionada o el inicio de sesión MiniMax del usuario. Elija una entrada `custom_provider:opencodex/<provider/model>` en MCode después de conectarla. La actualización de la integración también actualiza las ventanas de contexto autorizadas por modelo y las opciones de esfuerzo de razonamiento; se omiten las capacidades desconocidas y se conserva el esfuerzo actual de MCode.
 
-Prime Agent sigue a `PRIME_AGENT_CODING_AGENT_DIR` antes de caer de nuevo a `~/.prime/agent`; un valor relativo es rechazado por lo que el proxy y el agente no pueden estar en desacuerdo sobre qué archivo se quiere decir. Su bloque administrado posee solo `providers.opencodex`, por lo que otros proveedores y cualquier `modelOverrides` que haya establecido permanecen intactos. Prime Agent lee `models.json` cuando se inicia una sesión, así que inicie una nueva sesión después de conectarla.
+Prime Agent sigue a `PRIME_AGENT_CODING_AGENT_DIR` antes de caer de nuevo a `~/.prime/agent`; un valor relativo es rechazado por lo que el proxy y el agente no pueden estar en desacuerdo sobre qué archivo se quiere decir. Su bloque administrado posee solo `providers.opencodex`, por lo que otros proveedores y cualquier `modelOverrides` que haya establecido permanecen intactos. Prime Agent lee `models.json` cuando se inicia una sesión, así que inicie una nueva sesión después de conectarla. El bloque generado establece `compat.supportsDeveloperRole` en `false`, de modo que el agente envía su indicación de sistema como `system`; varios servicios compatibles con OpenAI rechazan `developer` con un 400.
 
 Aside mantiene un catálogo de modelos separado para cada perfil registrado, incluidos los perfiles locales. OpenCodex enumera todos los perfiles registrados, incluidos los perfiles locales, y puede sincronizarlos o controlar un perfil a la vez. Cambiar una integración nunca cambia la cuenta activa de Aside. Una conexión anterior de Aside habilita todos los perfiles de forma predeterminada; las exclusiones individuales sobreviven a las sincronizaciones posteriores.
 
-Una advertencia específica de Aside: la aplicación en ejecución reescribe el propio `models.json`, por lo que se cierra y vuelve a abrir completamente Aside después de aplicar, de la misma manera que Claude Desktop necesita un reinicio. El bloque de Aside es solo loopback y nunca lleva una credencial real.
+Una advertencia específica de Aside: la aplicación en ejecución reescribe el propio `models.json`, por lo que se cierra y vuelve a abrir completamente Aside después de aplicar, de la misma manera que Claude Desktop necesita un reinicio. El bloque de Aside es solo loopback y nunca lleva una credencial real. El bloque generado establece `compat.supportsDeveloperRole` en `false`, de modo que el agente envía su indicación de sistema como `system`; varios servicios compatibles con OpenAI rechazan `developer` con un 400.
 
 La integración administrada de Raycast soporta **macOS y Windows**. Custom Providers es una característica **Raycast Pro**: en un plan gratuito, el archivo todavía está escrito, pero `ocx integration client status --client raycast` y la página **Conectar** informan una advertencia, porque Raycast no lo leerá. En macOS o Windows, abra Raycast → Ajustes → AI → **Revelar proveedores Config** una vez que exista la carpeta `ai`. En estas plataformas compatibles, opencodex utiliza esa carpeta como su señal de instalación e informa que el cliente no está instalado hasta que existe. Linux no es compatible, incluso si la carpeta existe.
 
@@ -737,3 +737,50 @@ Droid también lee el legado `config.json` y el local `settings.local.json`. Res
 **Command Code Desktop necesita su propio inicio de sesión.** Comprueba `~/.commandcode/auth.json` o `COMMAND_CODE_API_KEY` antes de mostrar un espacio de trabajo; sin ellos se queda en login. Inicia sesión allí o con `cmd login` una vez. OpenCodex nunca escribe `auth.json`: contiene credenciales reales de Command Code y otros proveedores. Activar, aplicar, reemplazar, refrescar catálogo o desactivar solo administra `providers.json` y deja ese almacén idéntico byte a byte, sin escribir el placeholder en él.
 
 T3 Code recibe IDs `provider/model` exactos y la escala declarada de esfuerzo, para elegirla y crear subagentes. Si la vista previa no tiene catálogo cargado, **Cargar catálogo y reintentar** lo lee por la carga ordinaria de la lista, no por una vista previa que lo recopile, y vuelve a pedir el plan. Aside aplica el mismo flujo a un perfil cada vez; un plan no cubre varios archivos independientes. Un conflicto abre **Conectar → Aside → Elegir perfil**; **Sincronizar todos los perfiles** es otra acción masiva sin un plan combinado.
+
+<a id="antigravity-app-and-agy-cli"></a>
+
+## App Antigravity y CLI agy
+
+La app de escritorio Antigravity de Google (2.15 y posteriores) y la CLI `agy` (1.2.15 y posteriores) pueden
+funcionar a través del gateway de OpenCodex. Conéctalas desde el panel o desde una terminal:
+
+```bash
+ocx connect antigravity --model <id>   # desktop app: ~/.antigravity/settings.json
+ocx connect agy                        # agy CLI: a marked shell function in your profiles
+ocx connect antigravity status         # or: ocx connect agy status
+ocx disconnect antigravity             # or: ocx disconnect agy
+```
+
+Usa `--model` solo con `ocx connect antigravity` para fijar el modelo predeterminado de la app de escritorio.
+
+Conectar registra lo que reemplazó. Desconectar restaura los bytes originales cuando el archivo no ha
+cambiado y, en caso contrario, revierte solo las entradas propias de OpenCodex y conserva tus otras
+ediciones. Antigravity puede restaurar la configuración aunque se reordenen las claves JSON y conserva
+el archivo y el registro de restauración si hay un conflicto con un ajuste gestionado.
+Para resolver un conflicto de Antigravity, repón el valor que aplicó OpenCodex y vuelve a intentarlo.
+Si OpenCodex muestra `agy-profile-restore-required`, abre el perfil de shell indicado en el error.
+Recupera de una copia el bloque completo de `agy`, incluidas las dos líneas de marcador y la función
+entre ellas, y vuelve a intentar la desconexión o la desinstalación. OpenCodex elimina el bloque entero
+y conserva los cambios que quedan fuera. También puedes restaurar el perfil original guardado, lo que
+reemplaza las ediciones posteriores. Un enlace simbólico de un perfil de `agy` debe apuntar a otro perfil compatible
+de la misma familia de shells dentro de tu directorio personal. El archivo de configuración de
+Antigravity debe resolverse a la ruta exacta `~/.antigravity/settings.json`. Reinicia Antigravity, o
+abre una terminal nueva para `agy`, para aplicar un cambio. Al desconectar, `agy` omite los perfiles
+sin registro de restauración si no se pueden resolver o leer.
+`ocx uninstall` desconecta los clientes con registros de restauración guardados antes de eliminar la
+configuración. Si no puede restaurar un cliente, la desinstalación se detiene y conserva su registro.
+
+OpenCodex escribe una clave de marcador de posición, nunca una credencial real, así que se niega a
+conectar cuando el bind del proxy exige una. Un archivo con comentarios o comas finales también se rechaza
+y se deja intacto. Antigravity lee primero un `admin_settings.json` de la organización, luego las
+variables `AGY_LLM_GATEWAY_*` y después la configuración del usuario. El estado advierte sobre la
+configuración de la organización y las variables de entorno que puede ver. Solo consulta el entorno
+del proceso de OpenCodex. Si la variable se fija únicamente en el proceso de Antigravity, el estado
+no la detecta. En Windows `agy` no está probado, porque Google lo publica solo para macOS y Linux.
+
+Para conservar el JSON de Gemini, inicia sesión con `ocx login google-antigravity` y configura
+`protocols.rollout.geminiNativeAntigravity` como `true` en el JSON de OpenCodex. Esta opción se
+aplica a las solicitudes de generación Gemini de `/v1beta` que se enrutan al proveedor OAuth
+canónico `google-antigravity`. Las demás rutas usan el puente de Chat.
+Consulta [Gemini nativo con Antigravity](/es/reference/proxy-formats/#native-gemini-with-antigravity).

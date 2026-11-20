@@ -20,6 +20,7 @@ import { compareCodexVersions, displayCodexRuntimePath, resolveCodexRuntimeAsync
 import type { ResolveCodexRuntimeResult } from "./runtime";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import type { OcxConfig } from "../types/config";
+import { observeNativeMainRefreshMode } from "./native-main-credentials";
 
 export type NativeMainRefreshMode = "codex" | "opencodex";
 
@@ -66,14 +67,26 @@ export function setNativeMainRefreshResolutionForTests(value: NativeMainRefreshR
   resolutionForTests = value;
 }
 
-function configuredMode(config: Pick<OcxConfig, "nativeMainRefresh"> | null | undefined): NativeMainRefreshMode | "auto" {
+/** The operator's configured refresh owner, before runtime resolution. */
+export function configuredNativeMainRefreshMode(config: Pick<OcxConfig, "nativeMainRefresh"> | null | undefined): NativeMainRefreshMode | "auto" {
   const value = config?.nativeMainRefresh;
   return value === "codex" || value === "opencodex" ? value : "auto";
 }
+const configuredMode = configuredNativeMainRefreshMode;
 
 export async function resolveNativeMainRefreshMode(
   config: Pick<OcxConfig, "nativeMainRefresh"> | null | undefined,
   deps: { resolveRuntime?: () => Promise<ResolveCodexRuntimeResult> } = {},
+): Promise<NativeMainRefreshResolution> {
+  const resolution = await resolveNativeMainRefreshOwner(config, deps);
+  // A different refresh owner ends any retained native-main login (#7345).
+  observeNativeMainRefreshMode(resolution.mode);
+  return resolution;
+}
+
+async function resolveNativeMainRefreshOwner(
+  config: Pick<OcxConfig, "nativeMainRefresh"> | null | undefined,
+  deps: { resolveRuntime?: () => Promise<ResolveCodexRuntimeResult> },
 ): Promise<NativeMainRefreshResolution> {
   if (resolutionForTests) return resolutionForTests;
   const configured = configuredMode(config);

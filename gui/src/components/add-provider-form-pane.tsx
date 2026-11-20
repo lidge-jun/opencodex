@@ -8,7 +8,7 @@ import { AddProviderField } from "./add-provider-modal-field";
 import { baseUrlForChoice } from "../base-url-choice";
 import { canConfigureResponsesReasoningReplay } from "../responses-reasoning-replay";
 import { ResponsesReasoningReplayControl } from "./responses-reasoning-replay-control";
-import { isSubscriptionCliProvider, SUBSCRIPTION_CLI_API_KEY_ALTERNATIVE } from "../provider-workspace/subscription-cli";
+import { subscriptionCliWarning } from "../provider-workspace/subscription-cli";
 
 const FORM_ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"];
 
@@ -51,7 +51,7 @@ export function AddProviderFormPane({
   onBack: () => void;
 }) {
   const t = useT();
-  const subscriptionCli = isSubscriptionCliProvider(form);
+  const subscriptionCli = subscriptionCliWarning(form);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -150,7 +150,7 @@ export function AddProviderFormPane({
         <div role="note" data-subscription-cli-warning="" className="text-label leading-relaxed" style={{ color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "10px 12px" }}>
           <strong>{t("modal.subscriptionCliTitle")}</strong>
           <div style={{ marginTop: 4 }}>
-            <Trans k="modal.subscriptionCliWarning" cmd="claude -p" vars={{ apiProvider: SUBSCRIPTION_CLI_API_KEY_ALTERNATIVE }} />
+            <Trans k={subscriptionCli.key} cmd={subscriptionCli.cmd} vars={{ ...subscriptionCli.vars, apiProvider: subscriptionCli.apiProvider }} />
           </div>
         </div>
       ) : preset.keyOptional ? (

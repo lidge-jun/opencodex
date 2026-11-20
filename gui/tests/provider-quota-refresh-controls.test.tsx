@@ -16,6 +16,7 @@ import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuth
 import { LanguageProvider } from "../src/i18n/provider";
 import { en } from "../src/i18n/en";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
+import { planDisplayName } from "../src/provider-workspace/account-quota-table";
 import type { ProviderAuthHandlers } from "../src/components/provider-workspace/types";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -209,7 +210,8 @@ test.each(["google-antigravity", "anthropic"])("%s OAuth accounts expose pause a
   ]} authHandlers={handlers} />);
   const resume = findButton("Resume");
   expect(resume).not.toBeNull();
-  expect(resume!.getAttribute("title")).toBe(en["pws.accountPausedHint"]);
+  // The paused explanation now lives in the account's detail row of the quota table, not on the Resume button.
+  expect(host.querySelector(".aqt-detail")?.textContent).toContain(en["pws.accountPausedHint"]);
   expect(host.textContent).toContain(en["pws.accountPausedHint"]);
   expect(host.textContent).not.toContain(en["codexAuth.pausedHint"]);
   expect(en["pws.accountPausedHint"]).not.toBe(en["codexAuth.pausedHint"]);
@@ -277,14 +279,18 @@ test("Antigravity badges expose canonical tier IDs across locales and preserve a
   const view = (plan?: string | null, paused = false, needsReauth = false, pausingAccountId: string | null = null) =>
     <ProviderAuthPanel item={item} apiBase="" accounts={[{ ...row, plan, paused, needsReauth }]}
       pausingAccountId={pausingAccountId} authHandlers={handlers} />;
-  const main = () => host.querySelector(".pwi-auth-row-main") as HTMLButtonElement;
-  const badge = () => main().querySelector(".pwi-auth-row-heading .badge");
+  const main = () => host.querySelector(".aqt-account-main") as HTMLButtonElement;
+  // A known plan renders as a green badge in the Plan column; an unknown plan renders a muted placeholder instead.
+  const badge = () => host.querySelector(".aqt-plan .badge-green");
   const control = (text: string) => Array.from(host.querySelectorAll("button")).find(button => button.textContent?.trim() === text) as HTMLButtonElement;
 
   for (const plan of ["free-tier", "gemini-pro", "gemini-ultra", "standard-tier"]) {
     await render(view(plan));
-    expect(badge()?.textContent).toBe(plan);
-    expect(main().getAttribute("aria-label")).toContain(` — ${plan} — `);
+    // The table shows the product name; the canonical upstream tier ID stays reachable in the badge tooltip.
+    const display = planDisplayName(plan)!;
+    expect(badge()?.textContent).toBe(display);
+    expect(badge()?.getAttribute("title")).toContain(plan);
+    expect(main().getAttribute("aria-label")).toContain(` — ${display} — `);
     expect(main().getAttribute("aria-current")).toBe("true");
     expect(main().disabled).toBe(false);
   }
@@ -292,7 +298,8 @@ test("Antigravity badges expose canonical tier IDs across locales and preserve a
   expect(calls).toEqual(["pause"]);
 
   await render(view("gemini-pro", true));
-  expect(badge()?.textContent).toBe("gemini-pro");
+  expect(badge()?.textContent).toBe(planDisplayName("gemini-pro"));
+  expect(badge()?.getAttribute("title")).toContain("gemini-pro");
   expect(main().disabled).toBe(true);
   await act(async () => { control("恢复")!.click(); });
   expect(calls).toEqual(["pause", "resume"]);

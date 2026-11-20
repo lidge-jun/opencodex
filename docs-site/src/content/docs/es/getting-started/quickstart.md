@@ -23,7 +23,7 @@ ocx init
 
 `ocx init` te guía por estos pasos:
 
-1. **Elegir un proveedor**: selecciona uno de los 108 preajustes del registro integrado o `custom` para introducir una URL base y un adaptador.
+1. **Elegir un proveedor**: selecciona uno de los 112 preajustes del registro integrado o `custom` para introducir una URL base y un adaptador.
 2. **Clave API**: pega una clave o indica una variable de entorno como `${ANTHROPIC_API_KEY}`.
 3. **Modelo predeterminado**: para proveedores con clave, locales o personalizados, acepta el preajuste o introduce un identificador de modelo.
 4. **Puerto del proxy**: `10100` de forma predeterminada.
@@ -157,7 +157,7 @@ ocx integration client enable --client <id>
 
 ## Elegir modelos de subagentes, opcional
 
-Una configuración nueva incluye `gpt-6-astra`, `gpt-6.1-sol` y `gpt-6-luna` en el selector de subagentes de Codex. Abra `ocx gui` para sustituirlos o reordenar hasta cinco modelos nativos o enrutados. El panel también permite elegir un modelo preferido de subagentes y su esfuerzo de razonamiento. Consulte [Interfaz de subagentes](/es/guides/sub-agent-surface/) para elegir v1/base/v2 y conocer cuándo se aplican las instrucciones, los valores nativos predeterminados y las alternativas.
+Una configuración nueva incluye `gpt-6.2-astra`, `gpt-6.2-sol` y `gpt-6-luna` en el selector de subagentes de Codex. Abra `ocx gui` para sustituirlos o reordenar hasta cinco modelos nativos o enrutados. El panel también permite elegir un modelo preferido de subagentes y su esfuerzo de razonamiento. Consulte [Interfaz de subagentes](/es/guides/sub-agent-surface/) para elegir v1/base/v2 y conocer cuándo se aplican las instrucciones, los valores nativos predeterminados y las alternativas.
 
 <a id="logging-in-instead-of-pasting-a-key"></a>
 

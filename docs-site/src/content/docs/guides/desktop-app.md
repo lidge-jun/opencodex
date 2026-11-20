@@ -149,13 +149,19 @@ when they verify that the app runs its bundled proxy, even without recorded owne
 CLI service repairs for that runtime. On macOS and Linux, turn on **Start at Login**
 in the OpenCodex menu instead of installing a background service. Startup safety credits the app only when its login registration is verified;
 if it cannot be verified, follow the Desktop guidance in status.
-In the dashboard's Getting started checklist, the last step under the app is
+Inside the app, the dashboard's Getting started checklist lists adding a provider and
+sending a first request, with no Start at Login step: installing the app and opening it the
+first time turns Start at Login on. In a browser dashboard for a proxy the app runs, the
+checklist's last step is
 **Turn on Start at Login** and opens the Desktop card on the Startup page. It is marked
 done only when Startup safety verifies the registration and the app runs the proxy. It
 shows as to do when Start at Login is verified off, or on macOS when the app is confirmed
 not to be running the proxy. Otherwise the step stays unmarked, which is the usual case on
 Windows (the registration is not verified) and on Linux without a verified autostart
 entry; check the item in the OpenCodex menu yourself.
+To put the checklist away, choose **Hide** on Home's Getting started card; **Show on Home**
+on the **Checklist** tab under **Route** brings it back. The choice is remembered per
+browser profile, and the app's window keeps its own.
 The Startup page shows a quiet **Start at Login not verified** note when the app's
 registration cannot be checked. A verified disabled registration is shown as action required.
 On macOS the menu's **Start at Login** item is checked only when Startup safety would
@@ -336,6 +342,24 @@ project's signed updater public key before installation. On macOS, in-app update
 `OpenCodex-<version>-macos.app.tar.gz`; the DMG is for the first installation.
 The release manifest is generated only when the updater key secret is configured and then
 requires all four platforms to be signed.
+
+On Windows you can also update without the app window, for example over SSH. Run the installation's own `ocx.exe` from an elevated terminal signed in as
+the Windows account that runs OpenCodex:
+`"C:\Program Files\OpenCodex\ocx.exe" update --desktop` (adjust the folder if you installed
+elsewhere). A service, a SYSTEM scheduled task or another account has its own OpenCodex home, does
+not find this proxy, and would leave it running the old version. It checks the same published release the tray does, verifies the MSI with the same
+updater key and refuses on any mismatch, installs it silently, and then restarts the proxy that
+is still running the old version so that the new version is the one answering. Add `--check` to
+only report what is published and what is running, and `--json` for a machine-readable result.
+Exit code 0 means done or already current; 1 means nothing was installed; 2 means the update is
+installed but the old proxy is still running (or Windows must restart first); 3 means the
+installer did not finish in time. A proxy started from another installation is never stopped;
+the message names it and says how to restart it. The tray app itself keeps running its previous
+version until you quit and reopen it.
+
+If you installed an MSI by hand, the old proxy keeps serving until it restarts. `ocx status`
+then says that the installed version is newer than the running proxy and prints the
+`ocx update --desktop` command that replaces it.
 
 ## Widget
 

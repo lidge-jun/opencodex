@@ -1,4 +1,5 @@
 import { contextTierRecordConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../../config/provider-validation";
+import { preserveOmittedLiveProviderFields } from "./provider-omitted-fields";
 import { DECLARABLE_HOSTED_TOOL_TYPES } from "../../responses/hosted-tool-policy";
 import { randomUUID } from "node:crypto";
 import { cleanupRemovedGcpCredentials, providerGcpCredentialMarkers, snapshotProviderGcpCredentialMarkers } from "../../providers/gcp-credential-cleanup";
@@ -42,7 +43,7 @@ import {
 import { commitProviderPatch } from "./provider-patch-transaction";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import { canonicalAutoReviewModelKey, mergeModelPinnedEfforts, modelPinnedEffortsConfigError, pinnedReasoningEffortConfigError } from "../../config/provider-validation";
-import { replaceProviderAccountSet } from "../../oauth/store";
+import { releaseRemovedProviderCredentials } from "./provider-credential-release";
 import { captureModelsOAuthTarget, mayResolveModelsOAuth, modelsOAuthTargetMatches } from "../../oauth/model-discovery-auth";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
@@ -82,6 +83,7 @@ import {
   type VertexDiscoveryAuth,
 } from "../../providers/google-vertex-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
+import { isXaiGrokOAuth, readXaiLegacyPrivacyError, XAI_LEGACY_PRIVACY_MESSAGE } from "../../providers/xai-privacy-mode";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { clearPassiveKeyLimits, listPassiveKeyLimits, passiveProviderOwnership } from "../../providers/passive-key-observation";
 import { providerRoutingQuota } from "./provider-routing-quota";
@@ -921,8 +923,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       retainModels: p.retainModels,
       omitReasoningEffortWithToolsModels: p.omitReasoningEffortWithToolsModels,
       upstreamHttpVersion: p.upstreamHttpVersion,
-      // As configured: unset on canonical `openai` means upstream WebSocket, so never coerce to false.
-      upstreamWebsocket: p.upstreamWebsocket,
+      transientRetryOn5xx: p.transientRetryOn5xx,
+      upstreamWebsocket: p.upstreamWebsocket, // Unset keeps upstream WebSocket enabled for canonical OpenAI.
       authMode: p.authMode,
       apiKeyTransport: p.apiKeyTransport,
       disabled: p.disabled === true,
@@ -1358,18 +1360,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (submittedModelContextTiers && liveTiers) candidate.modelContextTiers = Object.assign(Object.create(null), liveTiers, candidate.modelContextTiers ?? {});
       else if (!submittedModelContextTiers && liveTiers) candidate.modelContextTiers = { ...liveTiers };
       else if (!submittedModelContextTiers) delete candidate.modelContextTiers;
-      // Read omitted policy at publication time, after any concurrent operator edit.
-      if (!Object.hasOwn(rawProvider, "accountAutoPause")) {
-        const livePolicy = config.providers[name]?.accountAutoPause;
-        if (livePolicy === undefined) delete candidate.accountAutoPause;
-        else candidate.accountAutoPause = structuredClone(livePolicy);
-      }
-      // Full forms omit the opt-in; preserve the latest value, including a concurrent clear.
-      if (!Object.hasOwn(rawProvider, "inferContextWindow")) {
-        const liveInference = config.providers[name]?.inferContextWindow;
-        if (liveInference === undefined) delete candidate.inferContextWindow;
-        else candidate.inferContextWindow = liveInference;
-      }
+      preserveOmittedLiveProviderFields(candidate, rawProvider, config.providers[name]);
       const draft = { ...(registrationDraft ?? config), providers: { ...config.providers, [name]: candidate }, ...(body.setDefault === true ? { defaultProvider: name } : {}) };
       const validation = validateConfigCandidate(draft); if (!validation.ok) { validationError = validation.error; return; }
       try {
@@ -1651,10 +1642,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse(await probeJevDecisionProvider(config, name, { signal: req.signal }));
     }
     if (prov.liveModels === false) {
-      // A static catalog has no live discovery endpoint to test. This is neither
-      // positive connectivity evidence nor an outage, and it must stay before
-      // credential resolution/network access for providers such as Antigravity.
-      return jsonResponse({ applicable: false, reason: "static_catalog", latencyMs: 0 });
+      // No live discovery endpoint. Only Vertex ADC still has a credential to verify; every other
+      // static catalog must stay before credential resolution/network access (e.g. Antigravity).
+      const { staticCatalogConnectionTest } = await import("./static-catalog-probe");
+      return jsonResponse(await staticCatalogConnectionTest(name, prov, req.signal));
     }
     const { buildModelsRequest, getModelsOAuthAccessSnapshot, resolveModelsAuthToken } = await import("../../oauth");
     const antigravity = effectiveGoogleMode(name, prov) === "cloud-code-assist";
@@ -1671,6 +1662,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if ((prov.authMode === "oauth" || effectiveGoogleMode(name, prov) === "vertex") && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
     }
+    if (prov.adapter === "m365-copilot") return (await import("./m365-copilot-provider-probe")).probeM365CopilotProvider(name, prov, snapshot, req.signal);
     if (prov.adapter === "zed") return (await import("./zed-provider-probe")).probeZedProvider(prov, apiKey, snapshot?.providerUserId);
     if (prov.adapter === "cursor") {
       const started = Date.now();
@@ -1732,21 +1724,21 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // Same canonical-URL TUN transparency as catalog discovery: the registry's
       // own fixed discovery URL survives purely-benchmark (Clash/Surge/Mihomo
       // fake-IP) DNS without proxy env.
-      const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl,
-        beforeSend: () => (!vertexAuth || vertexDiscoveryAuthIsCurrent(prov, vertexAuth, headers))
+      const outboundDependencies = (requestUrl: string) => ({ isCanonicalUrl: isRegistryModelDiscoveryUrl,
+        beforeSend: () => (!vertexAuth || vertexDiscoveryAuthIsCurrent(prov, vertexAuth, headers, requestUrl))
           && (prov.authMode !== "oauth" || (mayResolveModelsOAuth(name, config.providers[name])
           && modelsOAuthTargetMatches(name, config.providers[name], authorizedTarget)
-          && (name !== "anthropic2" || new URL(modelsUrl).href === authorizedTarget))) };
+          && (name !== "anthropic2" || new URL(requestUrl).href === authorizedTarget))) });
       const res = method === "POST"
         ? await providerOutboundPost(name, prov, modelsUrl, {
           headers,
           body: JSON.stringify({ project }),
           signal: AbortSignal.timeout(8000),
-        }, outboundDependencies)
+        }, outboundDependencies(modelsUrl))
         : await providerOutboundGet(name, prov, modelsUrl, {
           headers,
           signal: vertexDeadline ?? AbortSignal.timeout(8000),
-        }, outboundDependencies);
+        }, outboundDependencies(modelsUrl));
       const latencyMs = Date.now() - started;
       const redirectError = await providerRedirectError(res, modelsUrl);
       if (redirectError) {
@@ -1757,6 +1749,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         });
       }
       if (!res.ok) {
+        if (isXaiGrokOAuth(name, prov) && await readXaiLegacyPrivacyError(res)) {
+          return jsonResponse({ ok: false, latencyMs, error: XAI_LEGACY_PRIVACY_MESSAGE });
+        }
         try {
           void res.body?.cancel().catch(() => undefined);
         } catch {
@@ -1782,7 +1777,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const listing = !ccaModels && vertexDeadline
         ? await collectVertexPublisherModelPages(modelsUrl, bounded.value,
           { ...discovery, firstPageBytes: vertexFirstPage?.bytes(), signal: vertexDeadline },
-          (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal }, outboundDependencies))
+          (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal }, outboundDependencies(pageUrl)))
         : { ok: true as const, value: bounded.value };
       if (!listing.ok) return jsonResponse({ ok: false, latencyMs, error: `upstream Vertex model listing is incomplete: ${listing.diagnostic}` });
       // OpenAI-style lists (and Together top-level arrays) use the same validation/dedupe/filter
@@ -1861,7 +1856,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // Deleting still succeeds; the response names the shadow-call target left without a provider.
     const shadowDependency = shadowInterceptProviderDependency(config, name);
     const droppedCustomModels = removeProviderWithGcpCredentials(config, name, fallbackDefault, save);
-    await replaceProviderAccountSet(name, null);
+    await releaseRemovedProviderCredentials(config, name);
     reconcileLiveStateStores();
     const { clearModelCache: clearCache } = await import("../../codex/model-cache");
     clearCache(name);
@@ -1986,8 +1981,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     return jsonResponse({ error: "provider string and enabled boolean are required" }, 400);
   }
 
-  // Complete GUI picker presets, derived from the canonical provider registry. The GUI is a
-  // standalone Vite package, so it consumes this runtime view instead of importing repo-root src.
+  // The standalone Vite GUI consumes these canonical registry presets through the API.
   if (url.pathname === "/api/provider-presets" && req.method === "GET") {
     return jsonResponse({ providers: deriveProviderPresets() });
   }

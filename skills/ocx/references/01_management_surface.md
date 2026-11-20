@@ -26,12 +26,12 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | Chapter | Declared capabilities |
 |---|---|
 | [lifecycle](01_surface_lifecycle.md) | 14 |
-| [providers-models](01_surface_providers-models.md) | 53 |
-| [accounts](01_surface_accounts.md) | 43 |
+| [providers-models](01_surface_providers-models.md) | 54 |
+| [accounts](01_surface_accounts.md) | 44 |
 | [agents-routing](01_surface_agents-routing.md) | 71 |
 | [integrations](01_surface_integrations.md) | 41 |
 | [observe-system](01_surface_observe-system.md) | 105 |
-| [access-remote](01_surface_access-remote.md) | 51 |
+| [access-remote](01_surface_access-remote.md) | 55 |
 | [lab](01_surface_lab.md) | 21 |
 
 ## Read-only capabilities
@@ -487,6 +487,10 @@ Original invocation order. These headings preserve links to the previous single-
 
 [Read-oriented task](01_surface_providers-models.md#ocx-models-new-arrivals)
 
+### `ocx models discover`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-discover)
+
 ### `ocx models context status`
 
 [Read-oriented task](01_surface_providers-models.md#ocx-models-context-status)
@@ -618,6 +622,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx account add-key`
 
 [State-changing task](01_surface_accounts.md#ocx-account-add-key)
+
+### `ocx account probe`
+
+[Read-oriented task](01_surface_accounts.md#ocx-account-probe)
 
 ### `ocx account import`
 
@@ -1042,6 +1050,22 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx integration native cursor local-installer`
 
 [Read-oriented task](01_surface_integrations.md#ocx-integration-native-cursor-local-installer)
+
+### `ocx connect antigravity`
+
+[State-changing task](01_surface_access-remote.md#ocx-connect-antigravity)
+
+### `ocx connect agy`
+
+[State-changing task](01_surface_access-remote.md#ocx-connect-agy)
+
+### `ocx connect antigravity status`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-connect-antigravity-status)
+
+### `ocx disconnect antigravity`
+
+[State-changing task](01_surface_access-remote.md#ocx-disconnect-antigravity)
 
 ### `ocx stop`
 
@@ -1645,6 +1669,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 399
-- of those, state-changing: 250
+- declared capabilities: 405
+- of those, state-changing: 254
 - head-resolved invocations: 2

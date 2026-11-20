@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { WorkspaceSuggestions } from "../components/route-board/WorkspaceSuggestions";
 import ComboWorkspace from "../components/ComboWorkspace";
 import { comboVisionSidecarTargets } from "../combo-capabilities";
 import {
@@ -25,6 +26,10 @@ type ProviderOption = {
   disabled?: boolean;
   hiddenFromPicker?: boolean;
   authMode?: string;
+  googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
+  canonicalOpenAiForward?: boolean;
+  knownSubscriptionOAuth?: boolean;
+  vertexCredentialKind?: "marker" | "ambient" | "reference" | "api-key";
   adapter?: string;
   baseUrl?: string;
   defaultModel?: string;
@@ -46,6 +51,10 @@ type ProviderDto = {
   defaultModel?: string;
   models?: string[];
   authMode?: string;
+  googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
+  canonicalOpenAiForward?: boolean;
+  knownSubscriptionOAuth?: boolean;
+  vertexCredentialKind?: "marker" | "ambient" | "reference" | "api-key";
 };
 type ConfigDto = { providers?: Record<string, ProviderDto> };
 type CachedCombosPage = {
@@ -54,6 +63,7 @@ type CachedCombosPage = {
   models: ModelOption[];
   capabilityModels?: ModelOption[];
   cataloguedComboIds: string[];
+  hiddenModels?: string[];
 };
 type ProviderQuotasDto = { reports?: unknown };
 
@@ -172,6 +182,10 @@ export default function Combos({
       disabled: !!p.disabled,
       hiddenFromPicker: p.adapter === "jev-decision" || !Object.hasOwn(visibleProviders, name),
       authMode: p.authMode,
+      canonicalOpenAiForward: p.canonicalOpenAiForward,
+      knownSubscriptionOAuth: p.knownSubscriptionOAuth,
+      googleMode: p.googleMode,
+      vertexCredentialKind: p.vertexCredentialKind,
       adapter: p.adapter,
       baseUrl: p.baseUrl,
       ...(typeof p.defaultModel === "string" ? { defaultModel: p.defaultModel } : {}),
@@ -180,6 +194,7 @@ export default function Combos({
 
     const models: ModelOption[] = [];
     const capabilityModels: ModelOption[] = [];
+    const hiddenModels: string[] = [];
     const catalogued = new Set<string>();
     const parseModalities = (raw: unknown): string[] | undefined =>
       Array.isArray(raw)
@@ -222,6 +237,7 @@ export default function Combos({
         ...(inputModalitiesDeclared && inputModalitiesDeclared.length > 0 ? { inputModalitiesDeclared } : {}),
         visionSidecarConsumer: model.visionSidecarConsumer === true,
       };
+      if (model.disabled === true) hiddenModels.push(`${provider}/${id}`);
       capabilityModels.push(option);
       models.push(option); // Catalog visibility does not restrict internal Combo selection.
     }
@@ -235,7 +251,7 @@ export default function Combos({
       }
     }
 
-    const next = { combos, providers, models, capabilityModels, cataloguedComboIds: [...catalogued] } satisfies CachedCombosPage;
+    const next = { combos, providers, models, capabilityModels, hiddenModels, cataloguedComboIds: [...catalogued] } satisfies CachedCombosPage;
     writeSessionListCacheEntry(cacheKey, next);
     // Retain the coherent payload here — one place, on the success path, never during
     // render. See the `retainedData` note below.
@@ -451,6 +467,21 @@ export default function Combos({
           visionEnabled={visionEnabled}
           loading={false}
           onRefresh={() => { resource.refresh(); quotaResource.refresh(); }}
+          renderSuggestions={(lockedComboId) => (
+            <WorkspaceSuggestions
+              key={apiBase}
+              apiBase={apiBase}
+              active={active}
+              combos={combos}
+              providers={providers}
+              models={models}
+              hiddenModels={data?.hiddenModels}
+              quotaReports={quotaReports}
+              quotaNow={quotaNow}
+              lockedComboId={lockedComboId}
+              onRefresh={() => resource.refresh()}
+            />
+          )}
           onSave={saveCombo}
           onRemove={removeCombo}
           onAdd={(intent = "blank") => setAddIntent(intent)}

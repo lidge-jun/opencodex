@@ -26,6 +26,7 @@ import {
 } from "../codebuddy-models";
 import { QODER_CN_MODELS, QODER_GLOBAL_MODELS, QODER_REASONING_EFFORTS } from "../qoder-models";
 import type { ProviderRegistryEntry } from "./types";
+import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "./agy-acp-models";
 import {
   ZAI_GLM_53_MODELS,
   ZAI_GLM_5X_MODELS,
@@ -111,6 +112,10 @@ import {
   OPPER_MODEL_CONTEXT_WINDOWS,
   OPPER_MODEL_MAX_OUTPUT_TOKENS,
   OPPER_MODEL_INPUT_MODALITIES,
+  STEP_CLI_MODELS,
+  STEP_CLI_MODEL_CONTEXT_WINDOWS,
+  STEP_CLI_NO_VISION_MODELS,
+  STEP_CLI_REASONING_EFFORTS,
   AISTUPIDLEVEL_ROUTING_MODES,
   AISTUPIDLEVEL_MODEL_CONTEXT_WINDOWS,
   AISTUPIDLEVEL_MODEL_MAX_OUTPUT_TOKENS,
@@ -125,6 +130,9 @@ import {
   MORPH_ULTRA_MODEL_INPUT_MODALITIES,
   MORPH_ULTRA_REASONING_EFFORTS,
   MORPH_ULTRA_REASONING_EFFORT_MAPS,
+  ABLITERATEDLLM_MODELS,
+  ABLITERATEDLLM_MODEL_CONTEXT_WINDOWS,
+  ABLITERATEDLLM_MODEL_INPUT_MODALITIES,
   ANTHROPIC_MODELS,
   ANTHROPIC_MODEL_CONTEXT_WINDOWS,
   ANTHROPIC_MODEL_INPUT_MODALITIES,
@@ -963,6 +971,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noVisionModels: ALIBABA_TOKEN_PLAN_NO_VISION,
     // The gateway accepts prompt_cache_key on every Token Plan chat model (probed 260902).
     promptCacheKey: true,
+    // DashScope compatible-mode answers `400 developer is not one of ['system','assistant','user','tool','function']`
+    // (#5664, #8864). The native /v1/chat/completions passthrough folds only on an explicit record.
+    foldDeveloperRoleToSystem: true,
   },
   {
     id: "alibaba-token-plan-intl",
@@ -1010,6 +1021,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noReasoningModels: ["kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5", "glm-5.1", "glm-5", "MiniMax-M2.5"],
     modelDefaultReasoningEfforts: { ...Object.fromEntries(QWEN38_FAMILY.map(id => [id, "xhigh"])), "deepseek-v4.1-flash-1017": "high" },
     promptCacheKey: true,
+    // DashScope compatible-mode answers `400 developer is not one of ['system','assistant','user','tool','function']`
+    // (#5664, #8864). The native /v1/chat/completions passthrough folds only on an explicit record.
+    foldDeveloperRoleToSystem: true,
   },
   // NEEDS_HUMAN 2026-07-10: kept for config compatibility, but this is a dashboard URL,
   // no /models endpoint is documented, and tools are silently ignored upstream per docs.parallel.ai.
@@ -1304,10 +1318,11 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     preserveCustomDestination: true,
     defaultModel: "gpt-5.6-terra",
     // 261027 preemptive: GPT-6.1 Terra (OpenAI API limits; TokenLab listing unverified).
-    models: ["gpt-5.6-terra", "gpt-6.1-terra"],
-    modelContextWindows: { "gpt-5.6-terra": 1_050_000, "gpt-6.1-terra": 1_050_000 },
-    modelMaxOutputTokens: { "gpt-5.6-terra": 128_000, "gpt-6.1-terra": 128_000 },
-    modelInputModalities: { "gpt-5.6-terra": ["text", "image"], "gpt-6.1-terra": ["text", "image"] },
+    // 261118 preemptive: GPT-6.2 Sol and Astra, same basis.
+    models: ["gpt-5.6-terra", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra"],
+    modelContextWindows: { "gpt-5.6-terra": 1_050_000, "gpt-6.1-terra": 1_050_000, "gpt-6.2-sol": 1_050_000, "gpt-6.2-astra": 1_050_000 },
+    modelMaxOutputTokens: { "gpt-5.6-terra": 128_000, "gpt-6.1-terra": 128_000, "gpt-6.2-sol": 128_000, "gpt-6.2-astra": 128_000 },
+    modelInputModalities: { "gpt-5.6-terra": ["text", "image"], "gpt-6.1-terra": ["text", "image"], "gpt-6.2-sol": ["text", "image"], "gpt-6.2-astra": ["text", "image"] },
     // Per-model wires from `tokenlab.accepted_request_formats` (GET /v1/models/{id}, 2026-09-30).
     // The provider stays on Chat, the released and end-to-end verified path, and every model
     // accepts it. Models that also declare Responses use it for Codex (Responses inbound) only,
@@ -1316,8 +1331,8 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // gemini-3.8-flash declares Chat + Gemini native and stays on Chat. No delivery-policy
     // header is sent: the API key's own policy stays authoritative.
     modelWireDefaults: Object.fromEntries([
-      // 261027 preemptive: GPT-6.1 Terra (mirrors TokenLab's GPT-6.1 Sol wire).
-      "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "grok-4.7",
+      // 261027 preemptive: GPT-6.1 Terra (mirrors TokenLab's GPT-6.1 Sol wire); 261118: GPT-6.2 likewise.
+      "gpt-6-astra", "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "grok-4.7",
       "deepseek-v4.1-flash", "deepseek-v4-pro", "kimi-k3", "glm-5.3",
     ].map(id => [id, { wire: "openai-responses", inbound: ["responses"] }])),
     modelDiscovery: {
@@ -1349,8 +1364,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     preserveCustomDestination: true,
     defaultModel: "glm-5.3-flash",
     // 261027 preemptive: GPT-6.1 Terra (mirrors Modelflare's GPT-6.1 Sol seed; provider listing unverified).
-    models: ["glm-5.3-flash", "claude-sonnet-5-5", "gpt-6.1-sol", "gpt-6.1-terra", "deepseek-v4-flash"],
-    note: "OpenAI-compatible relay for Claude, GPT, GLM and DeepSeek chat models. The original four seeded models were verified with chat, streaming and tool calls; GPT-6.1 Terra is a preemptive seed pending provider verification. deepseek-v4.1-flash is listed upstream but currently answers 503 and is left out. An ordinary key only reaches its own routing group's models; a Smart key reaches the verified seeded models. Image and video models are not served through this Chat preset. Upstream latency varies widely (a few seconds to about 30 s) with occasional transient 503s.",
+    // 261118 preemptive: GPT-6.2 Sol and Astra, same basis.
+    models: ["glm-5.3-flash", "claude-sonnet-5-5", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra", "deepseek-v4-flash"],
+    note: "OpenAI-compatible relay for Claude, GPT, GLM and DeepSeek chat models. The original four seeded models were verified with chat, streaming and tool calls; GPT-6.1 Terra, GPT-6.2 Sol and GPT-6.2 Astra are preemptive seeds pending provider verification. deepseek-v4.1-flash is listed upstream but currently answers 503 and is left out. An ordinary key only reaches its own routing group's models; a Smart key reaches the verified seeded models. Image and video models are not served through this Chat preset. Upstream latency varies widely (a few seconds to about 30 s) with occasional transient 503s.",
   },
   {
     // AI Stupid Level Smart Router, operated by S.C. Studio Platforms S.R.L. Contract checked
@@ -1414,6 +1430,38 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: { "deepseek-v4-1-flash": deepseekThinkingEffortsFor("deepseek-v4-1-flash") },
     modelReasoningEffortMap: { "deepseek-v4-1-flash": { ...deepseekReasoningMapFor("deepseek-v4-1-flash"), none: "none" } },
     note: "Pay-per-token API gateway for open-weight models (DeepSeek, GLM, Kimi) and Grok, billed from a prepaid USD balance. Create an API key at console.cheapaimodel.ai. Live discovery lists the models your key can call; deepseek-v4-1-flash is the default. Chat Completions only.",
+  },
+  {
+    // AbliteratedLLM. Contract checked 2026-11-14: https://abliteratedllm.dev/docs/chat-completions
+    // and https://abliteratedllm.dev/docs/models. GET /v1/models is public and answers 200 for any
+    // Bearer value, so discovery needs no key but cannot verify one (GET /v1/balance is the
+    // key-gated route). Chat Completions serves every catalog model, so every inbound stays on Chat;
+    // the stateless Responses and the Anthropic Messages endpoints are not used. reasoning_effort is
+    // documented as low, medium or high for every model, so higher Codex levels clamp to high.
+    // glm-5.3-flash-abliterated lists 131,072 output tokens; every other row's output limit equals
+    // its window. The env reference derived from the id is ${ABLITERATEDLLM_API_KEY}.
+    // Routing checked 2026-11-15: GET /v1/models listed 15 models, glm-5.3-flash-abliterated
+    // (variant "abliterated") and 14 with provider_label "Stock model". None carried "Official
+    // DeepSeek API", the label https://abliteratedllm.dev/privacy uses for requests forwarded to
+    // DeepSeek's own API; the listed models, the DeepSeek ones included, run on Fireworks AI with
+    // zero data retention. The note states only that observation, not a retention promise for any
+    // model the service lists later.
+    id: "abliteratedllm",
+    label: "AbliteratedLLM",
+    adapter: "openai-chat",
+    baseUrl: "https://api.abliteratedllm.dev/v1",
+    authKind: "key",
+    dashboardUrl: "https://abliteratedllm.dev/dashboard/keys",
+    liveModels: false,
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    defaultModel: "glm-5.3-flash-abliterated",
+    models: ABLITERATEDLLM_MODELS,
+    modelContextWindows: ABLITERATEDLLM_MODEL_CONTEXT_WINDOWS,
+    modelMaxOutputTokens: { "glm-5.3-flash-abliterated": 131_072 },
+    modelInputModalities: ABLITERATEDLLM_MODEL_INPUT_MODALITIES,
+    reasoningEfforts: ["low", "medium", "high"],
+    note: "Pay-per-token API for abliterated (refusal-removed) and stock open-weight models, prepaid in USD by card or crypto. Create an API key at abliteratedllm.dev/dashboard/keys. glm-5.3-flash-abliterated is the default. On 2026-11-15 the public model list showed 15 models: glm-5.3-flash-abliterated, the only abliterated one, and 14 labelled Stock model, the vendors' original weights. None was labelled Official DeepSeek API, the privacy policy's label for requests forwarded to DeepSeek's own API; the listed models, the DeepSeek ones included, run on Fireworks AI with zero data retention. The preset uses this seeded model list: the public model list answers without a key and cannot validate one, so live discovery is off. The preset sends every client through Chat Completions.",
   },
   // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect
   // (https://mimo.mi.com/docs/en-US/updates/deprecate), so the first-party presets default to V2.6.
@@ -1548,7 +1596,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     featured: false,
     dashboardUrl: "https://github.com/settings/copilot",
     liveModels: true,
-    models: ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "claude-sonnet-4", "gemini-2.5-pro", "gpt-5-mini", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"],
+    models: ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "claude-sonnet-4", "gemini-2.5-pro", "gpt-5-mini", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"],
     defaultModel: "gpt-4o",
     // Copilot fronts a mixed-wire catalog: these models reject /chat/completions for
     // real Codex-agent traffic (function tools + reasoning), so every inbound wire
@@ -1572,6 +1620,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       "gpt-6.1-sol": "openai-responses",
       // GPT-6.1 Terra: GA in Copilot 2026-10-26; rides Responses like GPT-6.1 Sol.
       "gpt-6.1-terra": "openai-responses",
+      // 261118 preemptive: GPT-6.2 Sol and Astra ride Responses like GPT-6.1 Sol (Copilot listing unverified).
+      "gpt-6.2-sol": "openai-responses",
+      "gpt-6.2-astra": "openai-responses",
       "grok-4.5": "openai-responses",
       "grok-4.6": "openai-responses",
       "mai-code-1.1-flash": "openai-responses",
@@ -1696,6 +1747,40 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     note: "StepFun (阶跃星辰) official OpenAI-compatible API.",
   },
   {
+    // StepCode (阶跃星辰) CLI as the transport for a Step Plan subscription (§三十一). The CLI owns the
+    // account: this row stores no Step token, reads none and injects none, so the only credential in
+    // play is the operator's own `step login`, which the CLI resolves itself.
+    //
+    // GOVERNANCE: routing a Step Plan subscription through a third-party agent harness is Step
+    // 星辰's call, not OpenCodex's — flagged for maintainer review alongside the CodeBuddy and Claude
+    // Code rows above. The Step Plan terms document `step_plan` endpoints for third-party coding
+    // tools, and `--sdk-stdio` is StepCode's own published, MIT-licensed external-client surface; that
+    // is the strongest authorization evidence available without a written permission, and it is not
+    // the same thing as one.
+    id: "step-cli",
+    label: "StepCode CLI (subscription)",
+    adapter: "step-cli",
+    // The destination the subscription's traffic reaches. OpenCodex never sends this host: the CLI
+    // performs every request, so the value exists so the adapter can fail closed when a row is
+    // repointed somewhere this route cannot speak to.
+    baseUrl: "https://api.stepfun.com/step_plan",
+    // `key` + `keyOptional` for the same reason as `claude-cli`: the traffic leaves the machine, so
+    // `local` would misreport the row, but the route is keyless, which is what `keyOptional` states.
+    authKind: "key",
+    keyOptional: true,
+    dashboardUrl: "https://platform.stepfun.com/docs/zh/step-plan/quick-start",
+    defaultModel: "step-5-preview",
+    models: [...STEP_CLI_MODELS],
+    // Static roster, exactly like the Claude Code and CodeBuddy rows. The CLI serves its catalog over
+    // the SDK stdio protocol rather than at an HTTP path the adapter polls, and a live-discovery
+    // attempt against this row would 404 and then fall back to these ids anyway.
+    liveModels: false,
+    modelContextWindows: { ...STEP_CLI_MODEL_CONTEXT_WINDOWS },
+    noVisionModels: [...STEP_CLI_NO_VISION_MODELS],
+    reasoningEfforts: [...STEP_CLI_REASONING_EFFORTS],
+    note: "Runs Step Plan subscription traffic through StepCode's own harness: the official `step` CLI over its length-prefixed SDK stdio protocol, one long-lived process per conversation. OpenCodex stores no Step token, reads none and injects none — the CLI signs in with `step login` and bills the Step Plan account itself. The sign-in is the one of the user this proxy runs as, so every request served through this row spends that same account. Tool ownership stays with the client: the adapter declares the request's tools as StepCode SDK tools and lets the CLI call back over stdio, so no tool ever executes inside Step and approval never leaves the client. Requires the StepCode CLI (`~/.stepcode/bin/step`) and a signed-in Step Plan session. This route shares the CLI family's 128-tool / 2 MiB catalog ceiling, which a real Codex client can exceed because it flattens every MCP server's tools into the function catalog (measured on Codex 0.162.0: 1749 tools, 2.5 MB); the refusal names both counts so the cause is visible, and the fix is to disable or narrow MCP servers for this provider. LIMITATIONS: StepCode carries conversation history only inside its own process, so one conversation needs one process and a process that dies cannot be reconstructed; a tool that takes longer than two minutes to come back exceeds the CLI's own tool-result window; and the CLI's session system prompt cannot be replaced, so a client instruction is prepended to the turn rather than installed as the system prompt. Routing authorization flagged for maintainer security review.",
+  },
+  {
     // Official Claude Code CLI as the transport for a Claude subscription (§三十一). The CLI owns
     // the account: this row stores no token and the adapter reads and injects none, so the request
     // path is Anthropic's own harness rather than a replayed Claude Code identity against the
@@ -1740,5 +1825,29 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token and injects none into CLI requests (quota admission only reads it in memory) — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership; text, reasoning and native image input are supported. Subscription routing authorization flagged for maintainer review.",
+  },
+  {
+    // The official Antigravity CLI over the Agent Client Protocol (`agy acp`), the owner-approved
+    // alternative to credential replay (#8480, plan 080). Like claude-cli it is keyless rather than
+    // `local`: traffic still reaches Google, through the CLI's own sign-in. One account (the CLI's),
+    // no rotation, local requests only, Gemini only, interactive use only; config validation and
+    // the adapter's policy gate enforce those. The existing google-antigravity provider is unchanged.
+    id: "antigravity-acp",
+    label: "Antigravity CLI (ACP, local)",
+    adapter: "agy-acp",
+    // Identity only: the transport is stdio and this URL is never fetched.
+    baseUrl: "https://antigravity.google/docs/cli/acp",
+    authKind: "key",
+    keyOptional: true,
+    dashboardUrl: "https://antigravity.google/docs/cli/acp",
+    defaultModel: AGY_ACP_DEFAULT_MODEL,
+    // Static seed; the ACP model options the CLI advertises at turn time decide what is accepted.
+    models: [...AGY_ACP_SEED_MODELS],
+    liveModels: false,
+    modelContextWindows: { "gemini-3.8-flash": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.7-flash": 1_048_576 },
+    // ACP prompts carry text only; client function tools are not offered to the model.
+    inputModalities: ["text"],
+    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    note: "Drives the official Antigravity CLI (`agy acp`, 1.5.3 or newer) as a local child process over the Agent Client Protocol. The CLI owns its Google sign-in (`agy acp --login`); OpenCodex never reads or stores it, so no key or account belongs on this row. Google permits this only for interactive, user-directed use: OpenCodex refuses subagent, spawned-thread and Codex memory turns, combo members and decision calls, subagent-fallback routing and requests classified as remote from the observed connection. An undeclared loopback relay that forwards no recognized forwarding headers can appear local. On the public listener, declare a reverse proxy in dashboardTrustedProxy or keep this port out of the relay. OpenCodex serves Gemini models only. Use a Gemini API key or Vertex AI for programmatic or shared workloads. Each turn runs in an empty private workspace with `--sandbox`, every permission request is refused, and client tools are not offered; allow rules in your own agy settings still apply.",
   },
 ];

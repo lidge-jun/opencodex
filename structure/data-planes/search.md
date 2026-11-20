@@ -8,7 +8,9 @@ The opt-in key-auth Responses hosted-search bridge follows the
 for Combo child inference: generic HTTP/WS reports physical dispatch; fetchResponse receives the
 live adapter budget instead. Initial headers are acquired before Response return, so unsent failures
 remain with ingress cleanup. RunTurn search retains its ordinary producer owner; standalone search
-and direct callers keep their existing behavior.
+and direct callers keep their existing behavior. Direct Responses search, including Cursor runTurn, sizes its ingress allowance
+from the loop and transport bounds before dispatch. If sibling credential preparation fails,
+hidden-round usage is recorded on the sending attempt before the refusal is sealed.
 
 On Responses, RunTurn and passthrough-bridge requests, Anthropic helper queries also use the request's
 [auxiliary inference admission](../transports/responses-spend.md#auxiliary-search-inference).
@@ -79,6 +81,22 @@ Linking snapshots compare the accumulated content indexes of both candidate part
 
 Trailing source extraction in `src/web-search/parse.ts` pairs a pending title with a following URL only when the URL sits on an unmarked continuation line with no title of its own. A list item that cannot be paired, because another list item, a self-titled citation, or a URL that starts its own list item follows it, remains answer text, and extraction continues, so every later citation line, including one whose URL `appendSafeWebSearchSource` rejects, still leaves the answer. Non-HTTP URI-like text inside an inline code span of any backtick run, such as `mode:fast`, is not treated as a citation; an HTTP(S) URL is a citation even when code-formatted, and a closing code backtick is trimmed from it. Code spans are found by pairing backtick runs in one pass and the URI scheme length is bounded, so a long Sources line is scanned in linear time.
 
-Completed-output citations are deduplicated independently of streaming annotations, so an earlier copy of a URL cannot hide its final title. A safe final title takes precedence, including one carried by a later completed annotation for a URL whose first completed annotation had no usable title; the upgraded entry keeps its first position and must still fit the byte limit. When no safe final title exists, a safe streamed title for that URL is retained. Final sources are merged before streaming-only sources, with the existing count and byte limits applied to the merged records. `tests/web-search/web-search-sources.test.ts` covers metadata precedence, fallback, ordering and sanitization.
+Completed-output citations are deduplicated independently of streaming annotations, so an earlier copy of a URL cannot hide its final title. A safe final title takes precedence, including one carried by a later completed annotation for a URL whose first completed annotation had no usable title; the upgraded entry keeps its first position and must still fit the byte limit. `src/web-search/sources.ts` validates an offered title before inspecting the retained list, so invalid duplicates do not repeat source serialization. A valid replacement checks only its serialized UTF-8 byte delta against the retained list's aggregate size, without rebuilding or revalidating other sources. When no safe final title exists, a safe streamed title for that URL is retained. Final sources are merged before streaming-only sources, with the existing count and byte limits applied to the merged records. `tests/web-search/web-search-sources.test.ts` covers metadata precedence, fallback, ordering, sanitization, duplicate processing work and exact replacement-byte limits.
 
 Single-result query and answer truncation in `src/web-search/format-result.ts` uses the same surrogate-safe prefix as batched results. The existing UTF-16 limits and truncation markers remain unchanged.
+
+## Chat empty completion recovery
+
+The global `emptyCompletionRetry` opt-in also covers clean empty final Chat iterations in `src/web-search/loop.ts`, including a turn that declares hosted search but never invokes it. One identical model-leg retry keeps gathered results without repeating hosted searches; another empty completion fails with `empty_completion_retry_failed`. The environment opt-out, combo/compaction exclusions, refusal, truncation, malformed/real tools and cancellation boundaries remain intact. Hidden attempt usage is accumulated. `tests/responses/search-empty-completion.test.ts` covers Responses requests with stream=true and stream=false.
+
+An authorized retry adds its own iteration on top of the ordinary `maxSearches + 3` bound, so repeat placeholders for a failed query cannot consume it; the ordinary bound is unchanged. Already streamed reasoning prevents an empty-completion resend. Once the search allowance is exhausted, the existing tools-disabled empty-answer recovery remains authoritative.
+
+## Chat terminal completion recovery
+
+The provider `terminalContinuationGuard` opt-in also covers final Chat iterations in `src/web-search/loop.ts`. The existing action/plan classifier performs one re-ask with gathered search results retained. Another short work announcement fails with `terminal_continuation_failed`, including ordinary Chat turns in `src/server/responses/terminal-guard.ts`. A zero continuation allowance remains off; Anthropic behavior is unchanged. Hidden usage is accumulated; explicit plans, questions, real tools, refusal, truncation and cancellation retain their existing boundaries. `tests/responses/search-terminal-continuation.test.ts` covers Responses requests with stream=true and stream=false.
+
+An authorized Chat terminal re-ask adds one iteration independently of empty-completion recovery. Ordinary iterations retain their existing allowance. Terminal analysis uses the effective iteration request, including disabled tools during empty forced-answer recovery; a tools-disabled announcement is not re-asked.
+
+The re-ask takes its history from the turn's persistent messages. If the search allowance is exhausted, the forced-answer instruction appears once, before the corrective instruction.
+
+The re-ask is an ordinary loop iteration, so it goes through the same guarded HTTP dispatch as the initial send: it is charged once against the shared request send budget, recorded as a send of the active attempt, admitted by the pool spend ledger, and refused before dispatch when the budget or a spend ceiling is exhausted. The default hosted allowance counts the re-ask's iteration; explicit and Combo caps never expand to fit it. `tests/responses/search-terminal-continuation-budget.test.ts` covers one- and two-send budgets, a one-token pool ceiling, ledger settlement and the default allowance with stream=true and stream=false.

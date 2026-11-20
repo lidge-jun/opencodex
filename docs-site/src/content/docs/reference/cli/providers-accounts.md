@@ -319,10 +319,75 @@ A code-display login's paste window is 10 minutes, and each login accepts one co
 fails, start a new login. A successful login becomes the provider's active account, exactly
 like a browser login.
 
+A Claude account that belongs to several organizations can be added once per organization: sign in
+again and pick the other organization on Claude's consent screen. When this machine has a usable
+Claude Code credential, `ocx login anthropic` imports it without showing the consent screen, so run
+`ocx login anthropic --headless` to choose another organization. Each
+organization has its own subscription and limits, so it becomes its own pool account instead of
+replacing the first. Logging in to an organization that already has an account refreshes that
+account. The dashboard shows each account's organization name under its label once Claude has
+reported it (at login or on the next token refresh). The account list exposes these names to
+dashboard sessions and full management credentials.
+
+All of this depends on organization evidence, which Claude reports at login and on token refresh;
+it is recorded only when that report succeeds. A confirmed different organization gets its own
+account. When the login's organization is known, an existing account
+with no recorded organization (for example, one saved before this release) is checked through its
+own token, if that token is still current. An account of the login's organization is preferred.
+Otherwise, if the existing account's organization stays unknown (expired token, failed check, or a
+login whose own organization was not reported), the login may replace it, as earlier releases did.
+If Claude reports the new grant's organization during sign-in and the account profile is unavailable,
+the login still preserves an active account whose confirmed organization differs.
+If Claude confirms the organization and supplies an email address without an account UUID, sign-in
+can update the single account with a matching email in that organization. The part before `@` and
+internationalized domains match exactly after trimming surrounding whitespace. Other domains are
+compared without regard to ASCII case. If no account matches in the confirmed organization, sign-in
+adds a separate account and preserves existing accounts, including older entries without an email
+or account UUID. A later sign-in with a confirmed account UUID can update the single account
+without a UUID whose email and organization match. The grants must share a refresh token or the
+saved account's profile must confirm the same account UUID. Without that confirmation, sign-in
+keeps the existing account and can add a separate one with a distinct refresh token. If another slot
+in the pool already holds the incoming refresh token, sign-in and reauthentication stop and ask you
+to try again.
+If several accounts match in the confirmed
+organization, sign-in stops without changing any of them. To reauthenticate the intended account, use
+`ocx account login anthropic --id <account-id> --reauth`. When Claude supplies only email and
+organization, reauthentication requires a matching email and a confirmed matching organization on
+the existing account, and no other account of that organization with the same email. If its
+organization is unknown, retry when Claude can return the account
+profile. You can remove a duplicate with
+`ocx account remove anthropic <account-id> --yes`.
+If an account changes during organization verification and the writer cannot confirm its current
+organization, retry the login or Claude Code credential import.
+Reauthentication also checks existing accounts through their usable tokens when their organization
+is missing. It refuses a grant for a different confirmed organization or one another account
+already holds. If an account changes during that check and its organization can no longer be
+confirmed, retry reauthentication. Sign in separately to add another organization. When Claude Code
+rotates both tokens and the same Claude account has another entry in either Anthropic pool,
+automatic adoption requires matching organization proof for the existing account and the new grant.
+
 OAuth reauthentication preserves operator settings such as model selections, pricing overrides,
 and account failover preferences. Login-owned transport/authentication fields and registry-owned
 catalog metadata are refreshed. A live-discovery provider keeps its selected default model; a
 static provider can replace a default that no longer exists in its refreshed catalog.
+
+**Google Antigravity can get Gemini and Antigravity access on your Google account disabled.** The
+Antigravity login is issued for Google's own Antigravity app, and users of third-party tools have
+reported that access on their Google accounts being disabled with
+`This service has been disabled in this account for violation of Terms of Service.`
+That ban covers the Google account's Gemini Code Assist and Antigravity access, and getting it back
+depends on Google's appeal process. Use only a separate account you can afford to lose; a Gemini API
+key (the `google` preset) is the supported way to use Gemini from other tools. Every way of adding an
+Antigravity account therefore asks first. `ocx login google-antigravity`,
+`ocx account login google-antigravity` (including `--reauth`) and
+`ocx account import google-antigravity` print the warning and continue only when a terminal answers
+`y`. A non-interactive run must pass `--accept-antigravity-risk`, which skips the question but still
+prints the warning; without it the command exits before contacting the proxy or reading an import
+document. `--stdin` imports always need the flag, because the document occupies stdin. The flag is
+refused for any other provider, and a run driven by a coding agent or CI runner is refused with or
+without it: only the account owner can accept this risk (see `AGENTS_INSTALL.md`). The dashboard asks
+through a checkbox that starts unticked every time, and the management API refuses an Antigravity
+login or import that does not carry the acknowledgement.
 
 For Antigravity, an upstream `401` can refresh the rejected account’s OAuth credential and
 retry the request once. The retry uses that credential’s Cloud Code Assist project. If refresh
@@ -331,11 +396,17 @@ reauthentication flow above. A second `401` does not start another refresh/retry
 A `403` asking to verify the account quarantines that credential as `needs-reauth(verify)`;
 when account failover is enabled, the request can retry on another eligible account. Complete
 Google's account verification, then run `ocx login google-antigravity`. Silent token refresh
-does not clear this verification requirement. If OpenCodex cannot save the quarantine, this adapter exchange preserves the original `403` without another recovery send; the account has not been durably quarantined. If a sibling request cannot be built or admitted for sending, the exchange delivers the original `403` through normal error formatting. An enclosing combo or policy route can still apply its existing fallback rules.
+does not clear this verification requirement. A `403` whose typed Google error details carry
+`TOS_VIOLATION` means Google suspended the account. For first-party Cloud Code Assist OAuth
+requests, the credential is quarantined as
+`needs-reauth(tos)` with the health "Account suspended", the client receives a fixed
+`Antigravity account suspended (TOS_VIOLATION)` message, and failover works as above. Silent token
+refresh keeps the account out of the pool. The dashboard shows an Account suspended badge and directs
+you to appeal with Google before signing in again. If OpenCodex cannot save the quarantine, this adapter exchange preserves the original `403` without another recovery send; the account has not been durably quarantined. If a sibling request cannot be built or admitted for sending, the exchange delivers the original `403` through normal error formatting. An enclosing combo or policy route can still apply its existing fallback rules.
 
 For fetch-based web-search requests, automatic sibling rotation accepts only a complete, bounded
-Google error envelope containing `error.details[].reason === "VALIDATION_REQUIRED"`. Verification
-wording alone does not rotate. This request-scoped recovery uses the sibling's token and project
+Google error envelope containing `error.details[].reason === "VALIDATION_REQUIRED"` or a `PERMISSION_DENIED`
+access denial. Verification wording alone does not rotate. This request-scoped recovery uses the sibling's token and project
 without persisting a `needs-reauth` mark; cancellation, committed output, budget exhaustion or an
 unavailable sibling preserves the failure.
 
@@ -381,12 +452,14 @@ Only fields named by `supported` may be written; null is not false, and an inert
 policy is not active pooling. Threshold zero and `enabled:false` are independent.
 Use `--enabled on|off`, `--threshold 0..100`, `--strategy`, `--sticky 1..100`, and
 `--quota-window` only where supported. OpenAI does not support pool enabled/window
-writes; `reset-first` is for OpenAI and generic OAuth pools (never Anthropic), `least-loaded` Kiro-only, and Anthropic windows
+writes; `reset-first` is for OpenAI and generic OAuth pools (never Anthropic), `reset-near-weighted` is for Codex and Anthropic only, `least-loaded` Kiro-only, and Anthropic windows
 are `five-hour`, `weekly`, `max-utilization`. Omitted fields stay unchanged.
 Read DTO fields such as routes, per-account concurrency or Anthropic `nativeMessages`
 do not imply a setter in this command; use only the listed CLI options. A save that
 returns `warning: "config_bookkeeping_failed"` was persisted but needs a fresh read to
 confirm the live state.
+
+Enable [weighted reset placement](/reference/configuration/providers/#reset-near-weighted) with `ocx account pool openai --strategy reset-near-weighted` or `ocx account pool anthropic --strategy reset-near-weighted`.
 
 ```bash
 ocx account pool anthropic --threshold 80 --quota-window five-hour --json
@@ -511,6 +584,7 @@ stay at least five minutes apart, and the next check is pulled in to the latest 
 or reauthentication-required main receives no checks before its predicted reset. A longer `Retry-After` also delays profile and token preparation. Only fresh valid usage or authoritative window-absence evidence
 can lift the block. In Pool mode, a quota `--refresh` bypasses cache freshness but still honors failed-read pacing;
 a deferred read makes no new diagnostic attempt. Other pause, reauthentication, and upstream limits remain independent.
+Before refusing a request, if the usage behind the block was last measured more than 60 seconds ago, OpenCodex may read usage once more. When that fresh reading no longer blocks under the configured thresholds, for example after a reset redeemed outside OpenCodex cleared every blocking window, the request is resolved again; a reading that still blocks, or a failed or deferred read, keeps the refusal. Concurrent refusals share that read, the main account gets at most one such read per minute, and failed-read pacing, a paused or reauthentication-required main, and native-main maintenance skip it. A request that authenticates as the main login itself uses its own credential for that read and never the stored one.
 
 Protection treats one fresh valid WHAM usage response as a replacement for the old 5h reading when
 its primary window explicitly lasts **at least 24 hours** and reports valid usage, or its primary window is
@@ -562,17 +636,23 @@ keeps Desktop's native Reserve-only picker gate inactive. It also disables Deskt
 Reserve handling: Reserve is an explicit model choice, not an automatic fallback.
 
 Keep the built-in OpenAI provider enabled in ChatGPT-forward mode, enable the account model picker,
-and configure a public selector for the stored main account. With effective loopback authless mode
-enabled, `ocx sync` includes `<main-selector>/gpt-reserve` alongside routed provider models. A bare
+and configure a public selector for the stored main account. With the Reserve setting
+(`codexReserveEnabled`) enabled on a loopback bind, `ocx sync` includes `<main-selector>/gpt-reserve` alongside routed provider models. A bare
 `gpt-reserve`, an added-account selector, and API-key model discovery are not added to the catalog.
-The authless setting is ignored for remote-client routing or a listener that needs an admission header.
+The Reserve setting is ignored for remote-client routing or a listener that needs an admission header.
 When public and local listeners run together, Reserve compatibility applies only to requests admitted
 by the local listener. An authenticated public request stays on the normal path even if it originates
 from the same machine; request headers cannot select the local policy.
 
-Enable authless Desktop mode with `ocx system settings --desktop-authless on`, run `ocx sync`,
-then fully quit and reopen Codex Desktop so it reloads the rewritten configuration and catalog.
-Follow the [canonical authless Desktop workflow](/guides/codex-integration/#authless-codex-desktop-opt-in).
+Enable Reserve with `ocx system settings --reserve on` (or `"codexReserveEnabled": true` in
+`config.json`), run `ocx sync`, then fully quit and reopen Codex Desktop so it reloads the rewritten
+catalog. Authless Desktop mode (`--desktop-authless on`) is a separate choice; see the
+[canonical authless Desktop workflow](/guides/codex-integration/#authless-codex-desktop-opt-in).
+
+Earlier versions enabled Reserve through the authless switch. An existing install keeps what it had:
+The first start of this version copies the authless value into `codexReserveEnabled` once and
+records `codexReserveMigration`; until then Reserve follows authless. After that the two settings move independently, and removing `codexReserveEnabled` turns Reserve off rather than following authless
+again. Enabling the setting grants no entitlement; the checks below still decide every request.
 
 Each compatibility request checks a credential-bound server authorization, cached for at most
 60 seconds. OpenCodex sends the Reserve capability header on an owned main-account usage read and
@@ -610,7 +690,7 @@ resume <provider> <id|alias|main>  Return a paused account to automatic selectio
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
 reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
-strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Pool placement strategy; least-loaded is Kiro-only.
+strategy <provider> [<quota|round-robin|fill-first|reset-near-weighted|least-loaded|reset-first>]  Pool placement strategy; least-loaded is Kiro-only.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
@@ -985,6 +1065,30 @@ token re-login or a plain account-list re-read. `--json` returns
 failures exit 1; an upstream quota probe that fails or times out degrades to a null or stale report
 instead (exit 0), matching the dashboard's quota bars.
 
+### `ocx account probe google-antigravity [id|alias] [--json]`
+
+Read-only per-account check for Google Antigravity. Each account gets one
+`retrieveUserQuotaSummary` request with its own stored access token, under the CLI fingerprint, and
+the result is classified as `ok`, `rate_limited`, `verification_required`, `suspended`,
+`permission_denied` or `error` (with the HTTP status and a recognized reason code). Two outcomes are decided
+locally and send nothing: `paused` (the account is paused; resume it to test it) and `token_expired`
+(the stored token has expired). The probe never refreshes a token, never writes the auth store and
+never changes pause, active, cooldown or health state. The dashboard's **Test** and **Test all**
+buttons on the Antigravity account quota table call the same endpoint, `POST /api/oauth/accounts/probe`.
+The table shows each account’s plan, remaining quota by pool, reset times, and account actions.
+If a quota refresh fails, the table keeps the cached quota and shows the failure and read times.
+A batch runs up to four checks at a time. Wait for the current check to finish before starting another.
+
+### `ocx models discover <provider> [--json]`
+
+Runs the provider's live model discovery now instead of waiting for the next scheduled refresh, and
+prints how many live models it saw and which ones are new. It is the same action as **Discover now**
+under the provider's settings (`POST /api/model-discovery/refresh`). If discovery is already running
+for that provider, the action reports it is in progress (HTTP 409, `discovery_in_progress`) without
+contacting the provider. For 30 seconds after a failed fetch, the action reports that failure
+and keeps the last good list without contacting the provider again. The separate Codex catalog
+sync can pick up the refreshed list. Providers without live discovery report that discovery is off.
+
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
 Controls the `openai` Codex pool threshold, or stores a threshold for a generic OAuth pool. `on` stores 80%, `off` stores 0%, and `threshold <n>` accepts 0–100. A generic pool threshold steers selection only while `pool.kernel` is on with `strategy: "fill-first"`; with the flag off, saving one does not enable threshold-based switching. It never changes the provider enablement override or disables reactive 429 rotation. `status` and mutation output for generic pools use the confirmed server response. For generic pools, `poolEnabled` is the stored provider override (`null` means unspecified), not inherited effective state; `inert: true` means the threshold is stored but not applied, `inert: false` means the pool is applying it, and an absent `inert` is an unknown capability, which never reports `enabled: true`. API-key providers and invalid values are rejected.
@@ -1094,6 +1198,10 @@ code separate; a returned device grant is not a successful browser launch.
 `--no-wait --json` reports the handoff, not completed login. Preserve pending,
 expired, cancelled, validation-pending and catalog-pending state; never silently
 restart a flow, capture credentials or complete verification for the operator.
+
+In browser mode, `ocx account login openai --code -` requests cancellation of the browser flow if the pipe is empty or the stdin read times out. If the proxy cannot confirm cancellation, the CLI reports the flow ID when available.
+
+When the proxy uses `codexAuthMethod: "device-only"`, the CLI refuses `--code` before reading stdin and refuses `--json` without `--no-wait`. In either case, it attempts to cancel the device grant started by the proxy. Use `ocx account login openai` for interactive device login or `ocx account login openai --no-wait --json` for a JSON handoff.
 
 `ocx account login openai --device` runs OpenAI's device-code login instead of the browser
 callback. Use it when the proxy host has no browser, or when nothing can reach its

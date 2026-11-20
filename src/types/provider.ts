@@ -75,14 +75,14 @@ export interface ResponsesItemIdRepairConfig {
  * Opt-in retry for pre-stream transient upstream statuses (500/502/503/504/520/521/522) on
  * `providers.<name>.transientRetryOn5xx`.
  *
- * Disabled unless the object is present; a bare `{}` opts in with defaults. Separate from
- * `retryOn429`, which handles rate limiting with its own waits.
+ * An object opts in for supported key-auth adapters. Canonical ChatGPT forward auth
+ * requires an explicit send total. Separate from `retryOn429`, which handles rate limiting.
  */
 export interface TransientRetryPolicy {
-  /** Master switch. Presence of the object also enables the policy (default true). */
+  /** Master switch for a qualifying policy (default true). */
   enabled?: boolean;
   /**
-   * TOTAL upstream sends allowed for one request, including the first (1..10, default 3).
+   * Total upstream sends allowed for one request, including the first (1..10, key-auth default 3).
    *
    * Not a per-layer retry count: the connection-reset and transient-status recovery layers
    * share this single budget, so `3` means at most three real requests reach the provider.
@@ -353,6 +353,21 @@ export interface OcxProviderConfig {
   codexToolMode?: "code_mode_only" | "shell";
   /** Optional outbound request-start pacing shared by this provider and its model overrides. */
   requestPacing?: ProviderRequestPacingConfig;
+  /**
+   * Per-provider override of the global `connectTimeoutMs` (response-header arrival deadline) for
+   * routed HTTP adapter sends, including routed model sends in the image/video and web-search
+   * bridges. A runTurn owns its transport and uses adapter-specific deadlines.
+   * A positive value applies verbatim, `0` disables the header deadline on covered paths,
+   * and an omitted value inherits the global setting.
+   */
+  connectTimeoutMs?: number;
+  /**
+   * Per-provider override of the global `stallTimeoutSec` for routed HTTP responses, streaming runTurn
+   * delivery, and inactivity in the image/video bridge. A positive value sets the inactivity budget,
+   * `0` disables it on covered paths, and an omitted value inherits the global setting.
+   * The web-search plan also uses the setting to size its independent bridge watchdog.
+   */
+  stallTimeoutSec?: number;
   /** Cursor MCP compatibility bounds; positive integers when configured. */
   mcpMaxTools?: number;
   mcpMaxSchemaBytes?: number;
@@ -613,13 +628,19 @@ export interface OcxProviderConfig {
    * `Authorization: Bearer <key>` instead.
    */
   apiKeyTransport?: "x-api-key" | "bearer";
+  /** Opt-in translated OAuth compatibility: move caller system instructions to user content,
+   * losing system-role precedence. Default false; API-key and native passthrough are unchanged. */
+  anthropicOAuthUserInstructions?: boolean;
   /**
    * Multi-key pool (API-key twin of OAuth multiauth). `apiKey` always mirrors the ACTIVE
    * entry so routing stays single-key; managed via /api/providers/keys. A legacy bare
    * `apiKey` seeds a one-entry pool on first management touch.
    */
   apiKeyPool?: Array<{ id: string; key: string; label?: string; addedAt?: number; disabled?: boolean; pauseDetails?: AccountPauseDetails; pauseRevision?: string }>;
-  /** Explicit opt-in permanent account refusal policy; default off. */
+  /**
+   * Permanent account refusal policy. Explicit opt-in; with no key at all, a Cloud Code Assist
+   * provider still pauses on the first Terms of Service account ban (see `effectiveAccountAutoPause`).
+   */
   accountAutoPause?: AccountAutoPausePolicy;
   /**
    * Optional proactive ordering for `apiKeyPool` when the committed key is already
@@ -751,6 +772,11 @@ export interface OcxProviderConfig {
    * all-zero entry means "not billable here" and falls through to the catalogs.
    */
   modelCosts?: Record<string, ProviderCostOverlay>;
+  /**
+   * USD per provider credit (for example Kiro credits). For a model with a matched token price
+   * and a valid `providerCredits` reading, the estimate uses credits × this price.
+   */
+  creditPriceUsd?: number;
   /**
    * Provider-wide auto-review (approval) model for routed models of this provider.
    *
@@ -965,6 +991,11 @@ export interface OcxProviderConfig {
    */
   messagePhaseInference?: boolean;
   /**
+   * Opt-in (#7427): on a native Responses route, add estimated `usage` to a completed response the
+   * provider sent without one, marked by `x-opencodex-usage-estimated`. Never used for cost, spend or quota.
+   */
+  estimateMissingUsage?: boolean;
+  /**
    * Opt-in hosted-web-search bridge for this KEY-auth Responses passthrough provider (#3761).
    * Absent or disabled leaves the passthrough byte-identical to today.
    */
@@ -1132,7 +1163,7 @@ export interface OcxProviderConfig {
   /**
    * Default to displaying provider-authored summaries when Responses summary is omitted.
    * Explicit wire summary:"none" wins; false disables a seeded provider default.
-   * Raw reasoning is never relabeled as a summary.
+   * Raw reasoning is controlled separately by rawReasoningAsSummary.
    */
   showThinkingSummary?: boolean;
   /**
@@ -1144,6 +1175,12 @@ export interface OcxProviderConfig {
    */
   hideRawReasoning?: boolean;
   /**
+   * Default-off Chat-to-Responses display compatibility: expose raw reasoning on the summary
+   * channel, verbatim (not a generated summary). hideRawReasoning and wire summary:"none" win.
+   * Native Responses passthrough and direct Chat/Messages delivery are unchanged.
+   */
+  rawReasoningAsSummary?: boolean;
+  /**
    * Opt-in same-target 429 retry policy. Codex itself never retries 429 (it retries 5xx only,
    * openai/codex#30471), and single-key pools have no failover, so the proxy waits and replays
    * the identical request on the same key before any failover. Pre-stream only: a 429 arrives
@@ -1152,8 +1189,8 @@ export interface OcxProviderConfig {
   retryOn429?: RateLimitRetryPolicy;
   /**
    * Opt-in retry for pre-stream transient upstream statuses
-   * (`providers.<name>.transientRetryOn5xx`). Disabled unless present; a bare `{}` opts in
-   * with defaults. Key-auth `openai-chat` only.
+   * (`providers.<name>.transientRetryOn5xx`). A bare `{}` opts in with defaults on supported
+   * key-auth OpenAI adapters. Canonical ChatGPT forward providers require explicit `attempts`.
    */
   transientRetryOn5xx?: TransientRetryPolicy;
   /**
@@ -1206,6 +1243,8 @@ export interface OcxProviderConfig {
    * other EOFs remain truncation errors. Absent = strict default behavior.
    */
   anthropicEofTolerance?: boolean;
+  /** Opt in to one owner-bound image-context recovery after an upstream 413. */
+  anthropicImageContextRecovery?: boolean;
   /**
    * Claude Code's typed Advisor server tool (`advisor_20260301`) on the translated Messages lane.
    * Absent: forwarded only to an `anthropic`-adapter provider on first-party `api.anthropic.com`.
@@ -1213,6 +1252,14 @@ export interface OcxProviderConfig {
    * the `advisor-tool-2026-03-01` beta too. `false`: never forwarded, even first-party.
    */
   forwardAdvisorTool?: boolean;
+  /**
+   * Experimental, default off (#6895). On an `anthropic`-adapter provider that sends to
+   * `api.anthropic.com` with an API key, a Codex conversation that changes reasoning effort keeps
+   * the top-level `output_config.effort` at its first turn's value and sends each change as an
+   * effort-only system message (beta `mid-conversation-output-config-2026-07-01`), so the prompt
+   * cache survives the change. Any turn the history cannot prove is sent exactly as without it.
+   */
+  perMessageEffort?: boolean;
   /**
    * Model ids that do NOT accept image inputs. The proxy gives them "eyes" via the vision sidecar:
    * attached images are described by a gpt vision model and replaced with text before the call.

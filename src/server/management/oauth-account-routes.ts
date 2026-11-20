@@ -1,4 +1,5 @@
 import { hasHumanDashboardSession } from "./consent-session";
+import { runPassiveReadSync } from "../../lib/passive-read";
 import { isAnthropicOAuthInstance, configuredAnthropicInstance, type AnthropicInstanceId } from "../../providers/anthropic-instance";
 import { resolveAnthropicAccountPoolConfig } from "../../oauth/anthropic-pool-config";
 import { persistAnthropicPoolPatch, writeAnthropicPoolSettings } from "./anthropic-pool-settings";
@@ -38,6 +39,14 @@ import {
   waitForLoginSettled,
 } from "../../oauth";
 import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
+import { isOAuthCredentialSiblingOf, oauthCredentialSiblingsOf, oauthCredentialSlot } from "../../oauth/credential-siblings";
+import {
+  ANTIGRAVITY_RISK_PROVIDER,
+  ANTIGRAVITY_RISK_REFUSAL_CODE,
+  antigravityRiskRefusalBody,
+  hasAntigravityRiskAcknowledgement,
+  requiresAntigravityRiskAcknowledgement,
+} from "../../oauth/antigravity-risk";
 import { cancelKiroDeviceLogin, kiroDeviceConfigBaseline, selectKiroDeviceProfile, startKiroDeviceLogin, statusKiroDeviceLogin, type KiroDeviceMethod } from "../../oauth/kiro-device-login";
 import { parseKiroIamOptions } from "../../oauth/kiro-iam-identity-center";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
@@ -241,6 +250,8 @@ function genericOAuthProviderConfig(provider: string, config: ManagementContext[
   return definition?.resolveProviderConfig?.(config) ?? definition?.providerConfig;
 }
 
+let accountProbeRunning = false;
+
 export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, principal, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -265,9 +276,24 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // the provider's loopback callback server (inside this process) captures the redirect in the
   // background, then the credential is persisted. The GUI opens the URL and polls /api/oauth/status.
   if (url.pathname === "/api/oauth/login" && req.method === "POST") {
-    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown; device?: unknown; startUrl?: unknown; region?: unknown; flowId?: unknown; profileArn?: unknown };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; row?: unknown; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown; device?: unknown; startUrl?: unknown; region?: unknown; flowId?: unknown; profileArn?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    // `row`: the sibling provider row this login publishes (Kimi (Responses) through the Kimi login).
+    if (body.row !== undefined && (typeof body.row !== "string" || !isOAuthCredentialSiblingOf(body.row, provider))) {
+      return jsonResponse({ error: "row must be a provider that shares this login" }, 400);
+    }
+    // Antigravity sign-in can get the Google account disabled. Every client asks first; this is
+    // the check none of them can skip, and it runs before any flow state is created.
+    if (requiresAntigravityRiskAcknowledgement(provider) && !hasAntigravityRiskAcknowledgement(body)) {
+      return jsonResponse(antigravityRiskRefusalBody(), 403);
+    }
+    if (provider === "m365-copilot") {
+      const { shouldOpenBrowserForLogin } = await import("../../oauth/open-browser-choice");
+      if (!shouldOpenBrowserForLogin(body.openBrowser, config)) {
+        return jsonResponse({ error: "Microsoft 365 Copilot sign-in requires an isolated window in a supported local browser." }, 400);
+      }
+    }
     // Omitted mode is the localhost-callback flow this route has always run.
     if (body.mode !== undefined && body.mode !== "callback" && body.mode !== "code") {
       return jsonResponse({ error: "mode must be \"callback\" or \"code\"" }, 400);
@@ -334,12 +360,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const persistedBaseline = readConfigDiagnostics().config;
       // addAccount / reauth forces a fresh browser identity (skips local-CLI token import).
       // The xAI device caller also needs its own flow identity for polling.
-      const flowId = codeMode || (provider === "xai" && device) ? randomUUID() : undefined;
+      const flowId = codeMode || provider === "m365-copilot" || (provider === "xai" && device) ? randomUUID() : undefined;
       const { url: authUrl, instructions, deviceCode, expiresAt } = await startLoginFlow(provider, {
         forceLogin: body.addAccount === true || reauth,
         ...(accountId ? { reauthAccountId: accountId } : {}),
         ...(codeMode ? { codeMode: true } : {}),
         ...(device ? { flow: "device" as const } : {}),
+        ...(typeof body.row === "string" ? { publishRow: body.row } : {}),
       }, {
         ...(flowId ? { flowId } : {}),
         // startLoginFlow returns the authorization URL before background persistence completes.
@@ -398,7 +425,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const result = cancelKiroDeviceLogin(body.flowId, principal ?? "admin-token");
       return result ? jsonResponse(result) : jsonResponse({ error: "unknown login flow" }, 404);
     }
-    if (provider === "xai" && body.flowId !== undefined && (typeof body.flowId !== "string" || body.flowId.length > 128)) return jsonResponse({ error: "unknown login flow" }, 404);
+    if ((provider === "m365-copilot" || (provider === "xai" && body.flowId !== undefined))
+      && (typeof body.flowId !== "string" || !body.flowId.trim() || body.flowId.length > 128)) return jsonResponse({ error: "unknown login flow" }, 404);
     const { cancelLoginFlow } = await import("../../oauth");
     // Without a flow id this cancels the provider's newest in-flight login, which is what the
     // single-user GUI has always meant by "Cancel". A host running concurrent code logins for
@@ -421,6 +449,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     const consentRequired = metaMuseConsentRequired(provider, ctx);
     if (consentRequired) return consentRequired;
+    if (provider === "m365-copilot") return jsonResponse({ ok: false, error: "no_pending_login" }, 409);
     const flowId = typeof body.flowId === "string" ? body.flowId : undefined;
     const maskEmails = emailMaskingEnabled(config);
     // Only a code flow of THIS provider gets the outcome-waiting contract; that flow is single-use,
@@ -467,7 +496,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   }
 
   if (url.pathname === "/api/oauth/status" && req.method === "GET") {
-    const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
+    const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (provider === "kiro" && url.searchParams.has("flowId")) {
       const flowId = url.searchParams.get("flowId") ?? "";
@@ -483,12 +512,24 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // Resolved here, at the request boundary that already holds the config, and passed down.
     // getLoginStatus stays free of config I/O. This route does not re-mask afterwards: it
     // consumes the already-projected status rather than redacting a second time.
-    const status = getLoginStatus(provider, emailMaskingEnabled(config), provider === "xai" ? url.searchParams.get("flowId") ?? undefined : undefined);
+    const flowId = url.searchParams.get("flowId") ?? undefined;
+    if (provider === "m365-copilot") {
+      const maskEmails = emailMaskingEnabled(config);
+      if (flowId === undefined && url.searchParams.get("summary") === "1") {
+        return jsonResponse(getLoginStatus(provider, maskEmails, ""));
+      }
+      if (!flowId || flowId.length > 128) return jsonResponse({ error: "unknown login flow" }, 404);
+      const status = getLoginStatus(provider, maskEmails, flowId);
+      return status.flowId === flowId ? jsonResponse(status) : jsonResponse({ error: "unknown login flow" }, 404);
+    }
+    const status = getLoginStatus(provider, emailMaskingEnabled(config), provider === "xai" ? flowId : undefined);
     return jsonResponse(status);
   }
 
   if (url.pathname === "/api/oauth/logout" && req.method === "POST") {
-    const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
+    // A sibling row (kimi-responses) has no login of its own: logging out of it removes the
+    // active account of the shared slot, exactly as the neighbouring account routes map it.
+    const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     await removeCredential(provider);
     reconcileLiveStateStores();
@@ -496,6 +537,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
+    for (const row of oauthCredentialSiblingsOf(provider)) clearModelCache(row);
     clearGatherRoutedModelsInflight();
     // Drop cached/last-good quota rows tied to the removed credential.
     clearQuotaCachesAfterAccountMutation(provider, true);
@@ -512,8 +554,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // one, or remove one. Emails and accountLabel follow privacy.maskEmails, maskedLabel is always
   // masked, and tokens never leave the store.
   if (url.pathname === "/api/oauth/accounts" && req.method === "GET") {
-    const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
+    const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    const showOrganizationName = principal === "gui-session" || principal === "admin-token";
     const quotaMode = providerOAuthAccountQuotaMode(provider);
     const quotaProvider = config.providers[provider];
     const { getAccountSet } = await import("../../oauth/store");
@@ -533,7 +576,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const current = getLoginStatus(provider, maskEmails);
       return {
         ...(provider === "anthropic2" ? { provider } : {}), activeAccountId: current.activeAccountId ?? null,
-        accounts: (current.accounts ?? []).map(summary => {
+        accounts: (current.accounts ?? []).map(({ organizationName, ...summary }) => {
           const full = set?.accounts.find(account => account.id === summary.id);
           const health = full
             ? projectStoredOAuthAccountHealth(provider, full)
@@ -545,8 +588,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
           // `maskedLabel` stays masked for tray surfaces; `accountLabel` follows privacy.maskEmails.
           const accountLabel = accountDisplayLabel(full?.credential.email, maskEmails);
           return { ...summary, ...(maskedLabel ? { maskedLabel } : {}), ...(accountLabel ? { accountLabel } : {}),
+            ...(showOrganizationName && organizationName ? { organizationName } : {}),
             ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
-            ...(supportsPause ? { paused: full?.paused === true, ...(full?.pauseDetails ? { pauseDetails: full.pauseDetails } : {}) } : {}),
+            ...(supportsPause ? { paused: full?.paused === true, ...(full?.pauseDetails ? { pauseDetails: full.pauseDetails,
+              ...(full.pauseEvidence ? { pauseEvidence: full.pauseEvidence } : {}) } : {}) } : {}),
             ...(isAnthropicOAuthInstance(provider) && supportsPause ? { autoSwitchThresholdOverride: full?.autoSwitchThresholdOverride ?? null,
               effectiveAutoSwitchThreshold: effectiveAnthropicAccountThresholdForInstance(provider as AnthropicInstanceId, config, full),
               autoSwitchThreshold: effectiveAnthropicAccountThresholdForInstance(provider as AnthropicInstanceId, config) } : {}),
@@ -563,7 +608,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // path rather than rejected -- the GUI sends it for every provider on a manual
     // refresh, and a 400 would report an error for what is simply a no-op.
     const passiveQuota = url.searchParams.get("quota") === "1" && quotaMode === "passive";
-    if (!wantQuota && !passiveQuota) return jsonResponse(projectAccounts());
+    if (!wantQuota && !passiveQuota) {
+      // The Antigravity CLI probe resolves its target through this GET before posting the probe.
+      const projected = provider === "google-antigravity" ? runPassiveReadSync(projectAccounts) : projectAccounts();
+      return jsonResponse(projected);
+    }
     const forceRefresh = url.searchParams.get("refresh") === "1";
     // Probing may refresh the active credential and mark needsReauth — project health
     // from the post-probe store so the response is not stale.
@@ -606,7 +655,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   }
   if (url.pathname === "/api/oauth/accounts/active" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; accountId?: string };
-    const provider = (body.provider ?? "").trim().toLowerCase();
+    const provider = oauthCredentialSlot((body.provider ?? "").trim().toLowerCase());
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (provider === "anthropic2" && !configuredAnthropicInstance(config, provider)) return jsonResponse({ error: "Anthropic pool instance is not configured" }, 409);
     if (!body.accountId) return jsonResponse({ error: "missing accountId" }, 400);
@@ -619,14 +668,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (!latest) return jsonResponse({ error: "account not found" }, 404);
       return jsonResponse({ error: latest.paused ? "account is paused" : "account selection changed" }, 409);
     }
-    const { forgetGenericFailoverRoster } = await import("../../oauth/generic-account-failover");
+    const { forgetGenericFailoverRoster, seedGenericPoolSelection } = await import("../../oauth/generic-account-failover");
     forgetGenericFailoverRoster(provider);
     // Seed the rotation cursor on the operator's pick, or a sticky round-robin ring hands the
     // very next dispatch back to whatever the pool had chosen. forgetGenericFailoverRoster
     // only drops the presence count; it has never touched the cursor. Same defect the Codex
     // side carries resetCodexRoutingForManualSelection for.
-    const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
-    seedPoolRotationAccount(genericPoolKey(provider), body.accountId);
+    seedGenericPoolSelection(provider, body.accountId);
     const anthropicRouting = isAnthropicOAuthInstance(provider)
       ? (await import("../../oauth/anthropic-routing")).anthropicRoutingFor(provider) : undefined;
     anthropicRouting?.resetAnthropicRoutingForManualSelection(body.accountId);
@@ -634,6 +682,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
+    // A shared-login row (kimi-responses) caches its roster under its own name.
+    for (const row of oauthCredentialSiblingsOf(provider)) clearModelCache(row);
     clearGatherRoutedModelsInflight();
     clearQuotaCachesAfterAccountMutation(provider, false);
     if (affinityReset && !await affinityReset) {
@@ -648,7 +698,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/oauth/accounts/pause" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {});
     if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
-    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    const provider = oauthCredentialSlot(typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "");
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (typeof body.accountId !== "string" || body.accountId.length === 0) {
       return jsonResponse({ error: "missing accountId" }, 400);
@@ -710,12 +760,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     }
     if (result.activeAccountChanged) {
       if (!anthropicRouting) {
-        const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
-        seedPoolRotationAccount(genericPoolKey(provider), result.activeAccountId);
+        const { seedGenericPoolSelection } = await import("../../oauth/generic-account-failover");
+        seedGenericPoolSelection(provider, result.activeAccountId);
       }
       const { clearModelCache } = await import("../../codex/model-cache");
       const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
       clearModelCache(provider);
+      for (const row of oauthCredentialSiblingsOf(provider)) clearModelCache(row);
       clearGatherRoutedModelsInflight();
       clearQuotaCachesAfterAccountMutation(provider, false);
     }
@@ -763,19 +814,18 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (kind !== "anthropic") return jsonResponse({ error: "nativeMessages is only part of the anthropic pool contract" }, 400);
       if (typeof fields.nativeMessages !== "boolean") return jsonResponse({ error: "nativeMessages must be a boolean" }, 400);
     }
-    // Validated by the SHARED parsers before any kind-specific write, so a bad strategy or
-    // sticky limit is refused identically whichever pool is addressed.
+    // Validate the strategy for this pool kind before any write.
     let strategy: string | undefined;
     if (fields.strategy !== undefined) {
-      // reset-first is a Codex and generic strategy. The Anthropic runtime implements only
-      // quota, round-robin and fill-first, so that kind keeps refusing it rather than storing
-      // a strategy it would silently ignore.
       const parsed = kind === "codex" ? parseCodexAccountPoolStrategy(fields.strategy)
         : kind === "generic" ? parseGenericPoolStrategy(fields.strategy, provider)
         : parseAccountPoolStrategy(fields.strategy);
-      if (parsed === null) return jsonResponse({ error: kind === "anthropic"
-        ? "strategy must be one of: quota, round-robin, fill-first"
-        : `strategy must be one of: quota, round-robin, fill-first, reset-first${kind === "generic" && provider === "kiro" ? ", least-loaded" : ""}` }, 400);
+      if (parsed === null) {
+        const extra = kind === "anthropic" ? "reset-near-weighted"
+          : kind === "codex" ? "reset-first, reset-near-weighted"
+          : provider === "kiro" ? "reset-first, least-loaded" : "reset-first";
+        return jsonResponse({ error: `strategy must be one of: quota, round-robin, fill-first, ${extra}` }, 400);
+      }
       strategy = parsed;
     }
     let stickyLimit: number | undefined;
@@ -983,7 +1033,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (body.strategy !== undefined) {
       const parsed = parseAccountPoolStrategy(body.strategy);
       if (parsed === null) {
-        return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first" }, 400);
+        return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first, reset-near-weighted" }, 400);
       }
       strategy = parsed;
     }
@@ -1051,6 +1101,32 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, cleared });
   }
 
+  // Read-only per-account probe: each stored account's own access token, one upstream request,
+  // no refresh and no store write. Omitting accountId probes the whole roster.
+  if (url.pathname === "/api/oauth/accounts/probe" && req.method === "POST") {
+    if (principal !== "admin-token" && principal !== "gui-session") {
+      return jsonResponse({ error: "account probe requires management authorization" }, 403);
+    }
+    const body = await readManagementJsonBodyOr(req, {});
+    if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
+    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    if (provider !== "google-antigravity") return jsonResponse({ error: "account probe is not supported for this provider" }, 400);
+    if (body.accountId !== undefined && (typeof body.accountId !== "string" || !body.accountId.trim())) {
+      return jsonResponse({ error: "accountId must be a non-empty string" }, 400);
+    }
+    const accountId = typeof body.accountId === "string" ? body.accountId.trim() : undefined;
+    if (accountProbeRunning) return jsonResponse({ error: "an account probe is already running" }, 409);
+    accountProbeRunning = true;
+    try {
+      const { probeAntigravityAccounts } = await import("../../providers/quota/antigravity-account-probe");
+      const results = await probeAntigravityAccounts({ accountId, signal: req.signal });
+      if (!results) return jsonResponse({ error: "account not found" }, 404);
+      return jsonResponse({ provider, probedAt: new Date().toISOString(), results });
+    } finally {
+      accountProbeRunning = false;
+    }
+  }
+
   if (url.pathname === "/api/oauth/accounts/import" && req.method === "POST") {
     const controller = new AbortController();
     const abortRequest = () => controller.abort();
@@ -1073,6 +1149,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (!isPlainRecord(rawBody)) return jsonResponse({ code: "invalid_document" }, 400);
       const provider = typeof rawBody.provider === "string" ? rawBody.provider : "";
       const format = typeof rawBody.format === "string" ? rawBody.format : "";
+      // An imported Antigravity credential carries the same account risk as a fresh login. Import
+      // admits only the exact provider id, so the gate matches it exactly too; other spellings
+      // keep their unsupported_provider answer.
+      if (provider === ANTIGRAVITY_RISK_PROVIDER && !hasAntigravityRiskAcknowledgement(rawBody)) {
+        return jsonResponse({ code: ANTIGRAVITY_RISK_REFUSAL_CODE }, 403);
+      }
       const { importAccounts } = await import("../../oauth/account-import");
       const imported = await importAccounts({
         provider,
@@ -1101,7 +1183,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
 
   if (url.pathname === "/api/oauth/accounts/alias" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: unknown; accountId?: unknown; alias?: unknown };
-    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    const provider = oauthCredentialSlot(typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "");
     const accountId = typeof body.accountId === "string" ? body.accountId.trim() : "";
     const alias = typeof body.alias === "string" ? body.alias.trim() : "";
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
@@ -1114,7 +1196,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, provider, accountId, alias: alias || null });
   }
   if (url.pathname === "/api/oauth/accounts" && req.method === "DELETE") {
-    const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
+    const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
     const id = url.searchParams.get("id") ?? "";
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (!id) return jsonResponse({ error: "missing id" }, 400);
@@ -1141,6 +1223,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
+    for (const row of oauthCredentialSiblingsOf(provider)) clearModelCache(row);
     clearGatherRoutedModelsInflight();
     clearQuotaCachesAfterAccountMutation(provider, true);
     // Same reasoning as logout. Removing the last account for a provider used to

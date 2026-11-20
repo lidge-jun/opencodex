@@ -1,4 +1,5 @@
 import { parseQuotaFailureCode } from "../../../src/providers/quota-types";
+import type { AccountPauseEvidence } from "../../../src/types/account-auto-pause";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import type { AccountLoadState, AccountQuotaReading } from "../components/provider-workspace/types";
 import { createBoundedFetch } from "../bounded-fetch";
@@ -9,6 +10,14 @@ import { confirmAction, requestTextValue } from "../action-dialogs";
 import { credentialAliasRejection, CREDENTIAL_ALIAS_MAX_LENGTH } from "../credential-alias";
 import { accountNeedsReauth } from "../oauth-health-display";
 import { oauthAccountDisplayLabel } from "../provider-workspace/auth";
+import { oauthCredentialSlot } from "../../../src/oauth/credential-siblings";
+import { oauthLabel } from "../pages/providers-shared";
+
+/** The owner whose accounts a shared-login row (Kimi (Responses)) acts on, else undefined. */
+const sharedAccountsOwner = (provider: string): string | undefined => {
+  const slot = oauthCredentialSlot(provider);
+  return slot !== provider ? slot : undefined;
+};
 import { affinityResetRetries, subscribeAffinityResetRetries, rememberAffinityResetRetry, beginAffinityResetOperation } from "../provider-affinity-reset-retries";
 
 export interface Config {
@@ -26,10 +35,13 @@ export interface OAuthAccount extends AccountQuotaReading {
   maskedLabel?: string;
   active: boolean;
   needsReauth?: boolean;
+  /** `verify_account`: upstream asked to verify the account rather than refusing the refresh token. */
+  needsReauthReason?: string;
   autoSelectable?: boolean;
   skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";
   paused?: boolean;
   pauseDetails?: { reason: string; pausedAt: number };
+  pauseEvidence?: AccountPauseEvidence;
   autoSwitchThresholdOverride?: number | null;
   autoSwitchThreshold?: number;
   effectiveAutoSwitchThreshold?: number;
@@ -603,6 +615,16 @@ export function useProviderAccountPools(deps: {
 
   const pauseAccount = async (provider: string, account: OAuthAccount, paused: boolean, retryAffinityReset = false) => {
     const capture = renderCapture;
+    // Pausing a shared account also stops the owner row (the Kimi Chat row) from using it: say so first.
+    const owner = sharedAccountsOwner(provider);
+    if (owner && paused && !retryAffinityReset) {
+      const consented = await confirmAction({
+        message: t("prov.accountPauseConfirmShared", { email: accountLabel(provider, account), provider: oauthLabel(owner) }),
+        confirmLabel: t("codexAuth.pause"),
+        tone: "danger",
+      });
+      if (!consented || !aliveRef.current || !mountedRef.current || serverRef.current !== serverIdentity || !captureIsCurrent(capture)) return;
+    }
     if (switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(`oauth:${provider}`)) return;
     const target = { provider, accountId: account.id };
     pausingAccountRef.current.set(provider, target);
@@ -644,7 +666,9 @@ export function useProviderAccountPools(deps: {
       setAccountSets(current => {
         const existing = current[provider];
         if (!existing) return current;
-        const accounts = existing.accounts.map(row => row.id === account.id ? { ...row, paused } : row);
+        const accounts = existing.accounts.map(row => row.id === account.id
+          ? { ...row, paused, ...(paused ? {} : { pauseDetails: undefined, pauseEvidence: undefined }) }
+          : row);
         return { ...current, [provider]: { activeAccountId: selected, accounts: selectionRows(accounts, selected) } };
       });
       if (committedResetFailure) {
@@ -978,8 +1002,11 @@ export function useProviderAccountPools(deps: {
   const removeAccount = async (provider: string, account: OAuthAccount) => {
     const capture = renderCapture;
     const label = accountLabel(provider, account);
+    const owner = sharedAccountsOwner(provider);
     const consented = await confirmAction({
-      message: t("prov.accountRemoveConfirm", { email: label }),
+      message: owner
+        ? t("prov.accountRemoveConfirmShared", { email: label, provider: oauthLabel(owner) })
+        : t("prov.accountRemoveConfirm", { email: label }),
       confirmLabel: t("common.remove"),
       tone: "danger",
     });

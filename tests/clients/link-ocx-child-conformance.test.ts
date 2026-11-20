@@ -1,7 +1,7 @@
 // Holds INV-LINK-CHILD-01 from structure/overview.md; shared TypeScript/Rust golden conformance suite for native/ocx-child.
 import { createHash, createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { fixturePath, repoPath } from "../helpers/repo-root";
 import { rustToolchainEnv } from "../helpers/rust-toolchain-env";
@@ -23,12 +23,13 @@ import {
   ensureFastModeFeature,
   ensureRootWebSearchDisabled,
   externalCodexModelProvider,
-  setRootModelCatalogPath,
   setRootOpenaiBaseUrlForTarget,
   setRootRealtimeWsBaseUrl,
   stripOpencodexCatalogPath,
+  updateRootModelCatalogPath,
 } from "../../src/codex/inject/config-toml";
 import { stripJournaledOpenaiBaseUrl } from "../../src/codex/injected-marker";
+import { codexCatalogBindingForPath } from "../../src/codex/paths";
 import { MANAGED_AGENTS_TABLE_MARKER, transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "../../src/codex/subagent-defaults";
 import { rootAssignmentKey, rootSourceLines, sourceText, splitSourceLines, type SourceLine } from "../../src/codex/toml-source-lines";
 
@@ -311,6 +312,8 @@ function runReferenceJournalCase(row: ConformanceSuite["journalRoundtripCases"][
     requiresAdmissionToken: false,
     tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
   };
+  const configPath = resolve(row.catalogPath, "../config.toml");
+  const catalogBinding = codexCatalogBindingForPath(configPath, row.catalogPath);
   let replacedUserWebSearch: string | null = null;
   let wroteWebSearch: string | null = null;
   let wroteFastMode: boolean | null = null;
@@ -329,7 +332,7 @@ function runReferenceJournalCase(row: ConformanceSuite["journalRoundtripCases"][
     lf = ws.content;
     replacedUserWebSearch = ws.replacedUserLine;
     wroteWebSearch = ws.wroteValue;
-    lf = setRootModelCatalogPath(lf, row.catalogPath);
+    lf = updateRootModelCatalogPath(lf, catalogBinding, { configPath }).content;
     lf = setRootOpenaiBaseUrlForTarget(lf, target).content;
     lf = setRootRealtimeWsBaseUrl(lf, target).content;
     if (settings.fastMode !== null) {
@@ -451,7 +454,7 @@ function runReferenceJournalCase(row: ConformanceSuite["journalRoundtripCases"][
   let surgical = applyEol(currentToml, "\n");
   surgical = surgical.replace(/^# Auto-injected by opencodex(?: \(undo: ocx restore\))?\n(?=\s*openai_base_url\s*=)/gm, "");
   surgical = stripJournaledOpenaiBaseUrl(surgical, target.baseUrl, target.baseUrl);
-  surgical = stripOpencodexCatalogPath(surgical);
+  surgical = stripOpencodexCatalogPath(surgical, { configPath });
   surgical = ensureRootWebSearchDisabled(surgical, false, {
     injectedValue: wroteWebSearch,
     replacedUserLine: replacedUserWebSearch ? replacedUserWebSearch.replace(/(?:\r?\n)+$/, "") : null,

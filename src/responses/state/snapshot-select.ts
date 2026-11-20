@@ -35,6 +35,8 @@ export function selectSnapshotEntries(
   }
   for (const [id, state] of ordered) {
     if (state.kind !== "resident") continue;
+    // Connection-owned state is memory-only: it must never reach the snapshot.
+    if (state.connectionOwned === true) continue;
     const { sizeBytes: _sizeBytes, kind: _kind, ...resident } = state;
     const entry = JSON.stringify([id, resident]);
     const size = Buffer.byteLength(entry, "utf8");

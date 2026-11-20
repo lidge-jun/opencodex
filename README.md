@@ -307,7 +307,7 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
 
 OpenCodex tracks process-retained state in the categories below. Each has a documented bound:
 
-- **14 retained stores** (request log, debug rings, image cache, model cache, vision
+- **15 retained stores** (request log, debug rings, image cache, model cache, vision
   descriptions, cursor blobs, responses continuation, etc.) are byte-accounted and
   evicted by the app-owned memory budget (default 256 MiB), except the native control replay
   store, which is pinned and never evicted.

@@ -35,8 +35,8 @@ rows are re-enabled without replacing saved mode or model settings, and noncanon
 rows are not offered that recovery path.
 
 Luna Reserve compatibility is a ChatGPT account capability on the canonical OpenAI forward path,
-not an OpenAI API-key entitlement. Its manual stored-main selector requires effective local authless
-Desktop mode and current credential-bound upstream permission; a catalog entry alone does not
+not an OpenAI API-key entitlement. Its manual stored-main selector requires the `codexReserveEnabled`
+setting on a loopback, non-client proxy and current credential-bound upstream permission; a catalog entry alone does not
 authorize a request. See [Luna Reserve alongside routed models](/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models)
 for setup, restart order, authorization requirements, and unsupported helpers.
 
@@ -257,6 +257,17 @@ Cursor, Kiro, Zed Hosted AI and Nous Portal are login-only and have no API-key e
 login-only too: `ocx login google-antigravity` signs in with your Google account over the Cloud Code
 Assist wire, and the `google` preset beside it is the AI Studio Gemini API — a different product
 reached with its own key, not a key mode for the same login.
+
+:::danger[Google can disable Gemini and Antigravity on the Google account]
+The Antigravity login is meant for Google's own Antigravity app. Users of third-party tools have
+reported Gemini and Antigravity access on their Google accounts being disabled with "This service has been disabled in this account
+for violation of Terms of Service." The ban covers that account's Gemini Code Assist and Antigravity
+access, and restoring it depends on Google's appeal process. Sign in only with a separate Google
+account you can afford to lose, never a main, personal, school or work account; a Gemini API key is
+the safer path. OpenCodex asks for an explicit acknowledgement before every Antigravity login,
+reauthentication or import: a checkbox in the dashboard, a `y` answer or `--accept-antigravity-risk`
+in the CLI.
+:::
 If Antigravity login cannot discover a Cloud Code Assist project, the failure includes a sanitized
 summary for `loadCodeAssist` and the last `onboardUser` response: HTTP status, response category,
 completion/error presence and known project-field types. It distinguishes HTTP refusal, unusable
@@ -349,6 +360,8 @@ The ChatGPT passthrough catalog also layers in the bare GPT-5.6 Sol/Terra/Luna s
 
 ## 2. Account login (OAuth)
 
+For Microsoft work or school accounts, see [Microsoft 365 Copilot setup](/guides/m365-copilot/).
+
 Provider presets can use account login — including GitHub Copilot via an experimental unofficial
 device-flow bridge. opencodex stores their credentials in
 `~/.opencodex/auth.json`; refreshable tokens are refreshed automatically, while durable keys are
@@ -380,7 +393,7 @@ ocx logout <provider>
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth uses the separate Grok CLI subscription gateway. The API-key override uses `https://api.x.ai/v1` and may inject Priority Processing. Live-first Grok catalog; `grok-4.5` is the fallback default. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude models; live model list fetched from `/v1/models`. |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan coding models. Defaults to the stable `kimi-for-coding` alias (currently K2.8 Preview): 1M-token context window, adjustable `low`/`high`/`max` thinking (default `max`), text + image input. `k3.1-pro` and `k3.1-pro-highspeed` (K3.1 Pro) are also listed: 1M-token context, thinking-only on the same ladder (default `max`). Retired `kimi-k2.x` selections are migrated to the alias on upgrade. |
-| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Same Kimi account login (reuses the `kimi` OAuth credential) over the OpenAI Responses wire. Same model roster and capabilities as `kimi`; thinking content stays encrypted server-side, tool calls and results stay visible. |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Same Kimi account login (reuses the `kimi` OAuth credential) over the OpenAI Responses wire. Same model roster and capabilities as `kimi`; thinking content stays encrypted server-side, tool calls and results stay visible. Add it from the dashboard **Add provider** picker (**Kimi (Responses)**) or with `ocx provider add kimi-responses --live`. It has no login of its own: adding it while signed in to Kimi needs no second login, and signing in from its picker entry creates only this row, leaving any `kimi` row as it is. Logging out of either row (`ocx logout kimi` or `ocx logout kimi-responses`, local or `--live`, or **Logout** on either dashboard row) removes the active Kimi account for both rows and says so; if another Kimi account is stored, it becomes active for both rows; neither row uses it while it is paused, and if it needs re-login, log in to it again. Deleting one row from the dashboard (or with `--live`) keeps the login while the other row still uses it, and deleting the last one removes it; a local `ocx provider remove` leaves stored logins in place, as for other providers. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research subscription gateway (same backend Hermes Agent uses). Device-grant login against `portal.nousresearch.com`; the access token is the per-request inference JWT. Mixed paid + `:free` model catalog (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) discovered live from the signed-in account. Refresh tokens are single-use and rotated on every refresh. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | The dashboard Login and Add account buttons offer AWS IAM Identity Center, Builder ID, Google, GitHub device login, or Kiro CLI. Native device login adds an account without signing `kiro-cli` out. The Kiro CLI choice imports or starts a CLI session; its Add account workflow temporarily switches the CLI account and restores it on cancellation or failure. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. |
@@ -588,6 +601,8 @@ distinct one. Kiro accounts use the profile ARN together with the signed-in user
 pool accounts have a separate ledger.
 Tokens stay in `~/.opencodex/auth.json`; `/api/oauth/accounts` returns masked metadata only.
 
+New Codex and Anthropic OAuth pool sessions can use [`reset-near-weighted`](/reference/configuration/providers/#reset-near-weighted) to favor weekly quota that will reset soon. Existing session bindings are preserved.
+
 ### Cockpit Tools Antigravity import
 
 For v1, OpenCodex imports only a **Cockpit Tools Antigravity** JSON export for the `google-antigravity` provider. In the Providers dashboard, choose the local JSON file from that provider's Accounts tab. The dashboard does not show the file contents or credential values; it reports only imported, updated, failed, and unsupported counts. Other Cockpit providers are rejected in v1.
@@ -681,18 +696,9 @@ the dashboard Codex account pool also performs. See
 
 ### Kiro request credits
 
-On tool-enabled turns, opencodex holds Kiro's ordinary text until completion is validated.
-If Kiro ends with plain text instead of its private final-answer tool, one bounded retry
-still runs, and only the resulting final answer is displayed. Progress accompanying a real
-tool call remains visible. A normal private final answer needs no completion retry.
-
-When Kiro's safety filter stops a turn (`CONTENT_FILTERED`, for example the Claude `BIO` classifier), the request ends as a refusal that clients do not retry: Claude clients see `stop_reason: "refusal"` and Codex sees a failed response carrying Kiro's category and explanation. If the filter stops the bounded retry, no final answer is displayed; the progress held from the first attempt and any partial text from the retry are shown as commentary before the refusal.
-
-When Kiro emits credit metering, request logs preserve the reported spend as
-`usage.providerCredits`, including in the persisted usage ledger. These are Kiro credits;
-token counts may still be estimated, and the credit value does not replace USD cost estimates.
-Completion fallback requests add their reported credits. An absent value means Kiro did not
-report credit usage; an explicit zero means it reported no spend.
+Kiro's completion guardrails, its safety-filter refusals and the credit metering that lands in
+request logs are covered in [Kiro request credits](/guides/kiro-request-credits/), beside how to
+price those credits in USD.
 
 ### Kiro refresh attention
 
@@ -788,6 +794,8 @@ are on the [API-key catalog](/guides/api-key-catalog/) page. Its sections:
 - [Official CodeBuddy Code CLI (Global & CN)](/guides/api-key-catalog/#official-codebuddy-code-cli-global--cn)
 - [Official Qoder CLI (Global & CN)](/guides/api-key-catalog/#official-qoder-cli-global--cn)
 - [Claude Code CLI (subscription)](/guides/api-key-catalog/#claude-code-cli-subscription)
+- [StepCode CLI (subscription)](/guides/step-cli/)
+- [Antigravity CLI (ACP, local)](/guides/api-key-catalog/#antigravity-cli-acp-local)
 - [A6API credit quota](/guides/api-key-catalog/#a6api-credit-quota)
 - [BigModel Coding Plan over Responses](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses)
 - [Multiple API keys](/guides/api-key-catalog/#multiple-api-keys)
@@ -892,6 +900,13 @@ Providers with a live probe: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-backed
 or Abliteration custom provider.
+
+**Anthropic monthly usage.** Usage-based seats such as Enterprise can show a monthly
+extra-usage bar when Anthropic reports enabled extra usage and no plan windows. The reading
+comes without a reset date. The bar clears when Anthropic reports plan windows or confirms that
+extra usage is disabled. If the response supplies no usable quota window, the account quota check
+still reports that the reading is unavailable, including after a provider quota refresh receives
+the same response.
 
 **Kimi Coding Plan quota.** Account login and API-key providers on the canonical
 `https://api.kimi.com/coding/v1` endpoint read `/usages`. API-key providers on the regional

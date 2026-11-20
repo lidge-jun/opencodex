@@ -1,8 +1,8 @@
 /**
  * The seam between the Responses pipeline and Remote Link activity holds (design T4 section 5).
  *
- * A link turn may carry an observer: a link WebSocket passes one in handleResponses options, and a
- * relayed HTTP request carries a short-lived random token header the link relay registered. The
+ * A link turn carries an observer: a link WebSocket passes one in handleResponses options, and every relayed HTTP
+ * Responses request carries a short-lived random token header the link relay registered. The
  * pipeline reports the expanded input right after continuation expansion and before any upstream
  * I/O, and the final request log reports the terminal status and whether the terminal came from the
  * upstream. No content leaves this module: observers hash what they need. Nothing here runs for a
@@ -30,8 +30,9 @@ export interface LinkTurnObserver {
   /** Request-log fields; present only while the link WebSocket feature is on. */
   logFields?(body: unknown): LinkTurnLogFields | null;
   /**
-   * Set only while the link WebSocket feature is on (#8601): the turn's upstream body is read only as its client drains,
-   * so a stalled link reader holds about one upstream chunk instead of the pipeline's inspection read-ahead.
+   * Set by every relayed link turn, HTTP or WebSocket, whether or not the link WebSocket feature is on (#8601): the
+   * turn's upstream body is read only as its client drains, so a stalled link reader holds about one upstream chunk
+   * instead of the pipeline's inspection read-ahead. Only logFields depends on the feature switch.
    */
   pacedReads?: boolean;
 }
@@ -46,6 +47,8 @@ export const LINK_PACED_SLICE_BYTES = 256 * 1024;
 
 const byToken = new Map<string, LinkTurnObserver>();
 const byLog = new WeakMap<object, LinkTurnObserver>();
+/** Contexts that pace for a link turn bound elsewhere (a combo child's); never notified of the terminal. */
+const pacingByLog = new WeakMap<object, LinkTurnObserver>();
 
 /** Registers an observer for one relayed request; the caller sets the returned token as LINK_TURN_HEADER. */
 export function registerLinkTurnToken(observer: LinkTurnObserver): string {
@@ -123,7 +126,16 @@ export function markLinkTurnMissing(logCtx: object): void {
 
 /** Whether a link turn bound to this context reads its upstream only as its client drains; false for every other request. */
 export function linkTurnPacesReads(logCtx: object): boolean {
-  return byLog.get(logCtx)?.pacedReads === true;
+  return (byLog.get(logCtx) ?? pacingByLog.get(logCtx))?.pacedReads === true;
+}
+
+/**
+ * A combo child runs the pipeline on a log context of its own, after the combo observed the turn on its parent's. The child
+ * reads its upstream as the parent's link turn does; the terminal notice stays with the parent's final log, so it fires once.
+ */
+export function bindLinkTurnChild(parentLogCtx: object, childLogCtx: object): void {
+  const observer = byLog.get(parentLogCtx) ?? pacingByLog.get(parentLogCtx);
+  if (observer) pacingByLog.set(childLogCtx, observer);
 }
 
 /** Called by the final request log of every turn; a no-op unless a link turn bound this context. */

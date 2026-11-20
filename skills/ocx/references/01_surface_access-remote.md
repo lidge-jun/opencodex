@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 51.
+Declared capabilities: 55.
 
 ### `ocx link probe`
 
@@ -117,6 +117,7 @@ State-changing: no. JSON mode: `payload`.
 | `--json` | boolean | Emit the K16 status payload as JSON. |
 
 - Reads live listener/tunnel metadata; when no proxy is found, falls back to the local link store. Always emits JSON.
+- Home-initiated links report recent authenticated HTTP delivery in relayHealth, with inference readiness reported as unknown.
 
 ### `ocx link diagnostics`
 
@@ -386,6 +387,81 @@ State-changing: yes. JSON mode: `payload`.
 
 - A bare invocation reads and never writes.
 - A setting flag changes the operator's config; run it only when the operator asks for that change.
+
+### `ocx connect antigravity`
+
+Usage: `ocx connect antigravity [--model <id>] [--json]`
+
+Point Google's Antigravity desktop app at this proxy, keeping a restore record.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/gateway-clients/{id}/connect` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--model` | string | Default model selector written to the Antigravity settings. |
+| `--json` | boolean | Emit the result as JSON. |
+
+- Updates the Antigravity user settings on this machine. With no running proxy the same change is made locally, provided the configured port is fixed. The proxy bind must permit local requests without a data-plane credential.
+
+### `ocx connect agy`
+
+Usage: `ocx connect agy [--json]`
+
+Point Google's agy CLI at this proxy, keeping a restore record.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/gateway-clients/{id}/connect` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the result as JSON. |
+
+- Updates shell profiles on this machine. With no running proxy the same change is made locally, provided the configured port is fixed. The proxy bind must permit local requests without a data-plane credential.
+
+### `ocx connect antigravity status`
+
+Usage: `ocx connect antigravity|agy status [--json]`
+
+Show whether Antigravity or agy is connected, which files carry it, and any admin_settings or environment override that wins.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/gateway-clients` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the client status as JSON. |
+
+- agy is an alias of antigravity. Works on this machine only; the files are the Antigravity user settings (antigravity) or shell profiles (agy).
+- With no running proxy the files are inspected locally; nothing is changed. Works whatever the proxy bind requires.
+
+### `ocx disconnect antigravity`
+
+Usage: `ocx disconnect antigravity|agy [--json]`
+
+Undo the Antigravity or agy connection: restore byte for byte, or path by path when the files changed since.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/gateway-clients/{id}/disconnect` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the result as JSON. |
+
+- agy is an alias of antigravity. Works on this machine only; the files are the Antigravity user settings (antigravity) or shell profiles (agy).
+- With no running proxy the files are restored locally. Works even when the proxy bind needs a data-plane credential, so a connection can always be undone.
 
 ### `ocx disconnect`
 

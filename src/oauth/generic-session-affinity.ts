@@ -13,7 +13,8 @@ const IDLE_TTL_MS = 24 * 60 * 60_000;
 const MAX_ENTRIES = 2_000;
 const bindings = new Map<string, { accountId: string; lastUsedAt: number; selection: OAuthAccountSelection }>();
 const prefix = (provider: string) => `${JSON.stringify([getConfigDir(), provider])}\u0000`;
-const key = (provider: string, session: string) => prefix(provider) + "session:" + createHash("sha256").update(session).digest("hex");
+const key = (provider: string, session: string, family?: string) =>
+  prefix(provider) + (family ? `session:${family}:` : "session:") + createHash("sha256").update(session).digest("hex");
 const cursorKey = (provider: string) => prefix(provider) + "fill-first";
 
 /** A persisted operator/roster/policy change revokes old session choices before its writer returns. */
@@ -59,7 +60,9 @@ export function genericSessionAccount(
   config: OcxConfig, provider: string, session: string | null, model?: string | null, now = Date.now(),
 ): string | null {
   if (!genericSessionAffinityEnabled(config, provider) || !session) return null;
-  return readBinding(config, provider, key(provider, session), model, now);
+  const family = classifyModelFamilyForQuota(provider, model);
+  return readBinding(config, provider, key(provider, session, family), model, now)
+    ?? (family ? readBinding(config, provider, key(provider, session), model, now) : null);
 }
 
 function readBinding(config: OcxConfig, provider: string, id: string, model: string | null | undefined, now: number): string | null {
@@ -127,6 +130,10 @@ export function bindGenericSessionAccount(
   const hit = session && genericSessionAccount(config, provider, session, model, now) === accountId;
   if (!hit && config.pool?.kernel === true && config.providers[provider]?.oauthAccountFailover?.strategy === "fill-first")
     keep(cursorKey(provider));
-  if (session) keep(key(provider, session));
+  const family = classifyModelFamilyForQuota(provider, model);
+  if (session) {
+    keep(key(provider, session, family));
+    if (family) keep(key(provider, session));
+  }
   while (bindings.size > MAX_ENTRIES) bindings.delete(bindings.keys().next().value!);
 }

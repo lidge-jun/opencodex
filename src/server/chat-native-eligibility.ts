@@ -47,6 +47,9 @@ export function nativeChatDeclineReason(
   // accepts — can contain signatures or redacted-thinking ciphertext, so use the bridge that
   // projects it to plaintext rather than disclosing it to an unrelated Chat destination.
   if (chatBodyCarriesAnthropicReasoningState(rawBody)) return "opaque-state-stripped";
+  // Gemini thought signatures (tool_calls[].extra_content) are Google's opaque state. Only Google's
+  // own OpenAI-compatible endpoint reads them; for any other Chat vendor the bridge drops them.
+  if (chatBodyCarriesGoogleOpaqueState(rawBody) && !isGoogleChatDestination(provider.baseUrl)) return "opaque-state-stripped";
   // A standard Chat tool message accepts a string or text parts, not image_url, so
   // normalizing a Pi/Anthropic tool image into image_url is not enough on its own —
   // the part is still inside a tool message. The translated adapter already places
@@ -74,6 +77,24 @@ export function nativeChatDeclineReason(
     }
   }
   return undefined;
+}
+
+/** Whether an assistant turn in the Chat body echoes provider-opaque tool-call state. */
+function chatBodyCarriesGoogleOpaqueState(rawBody: Rec): boolean {
+  if (!Array.isArray(rawBody.messages)) return false;
+  return rawBody.messages.some(message => isRec(message) && Array.isArray(message.tool_calls)
+    && message.tool_calls.some(call => isRec(call) && call.extra_content !== undefined));
+}
+
+/** Google's Gemini OpenAI-compatible hosts, which accept extra_content.google.thought_signature. */
+function isGoogleChatDestination(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== "string") return false;
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host === "generativelanguage.googleapis.com" || host === "aiplatform.googleapis.com" || host.endsWith("-aiplatform.googleapis.com");
+  } catch {
+    return false;
+  }
 }
 
 export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec, config?: OcxConfig): boolean {

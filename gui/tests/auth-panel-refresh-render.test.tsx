@@ -107,14 +107,14 @@ afterEach(async () => {
   await testWindow.happyDOM?.close?.();
 });
 
-test("the refresh control renders above the account list", async () => {
+test("the refresh control renders above the account quota table", async () => {
   const host = await mountPanel(async () => true);
   const button = headButton(host);
-  const list = host.querySelector(".pwi-auth-list") ?? host.querySelector(".pwi-auth-body");
-  expect(list).not.toBeNull();
+  const table = host.querySelector('table[aria-label="Account quotas"]');
+  expect(table).not.toBeNull();
   // The whole point of the move: it must precede the bars it refreshes in document
   // order, instead of sitting after every account's stacked windows.
-  const position = button.compareDocumentPosition(list!);
+  const position = button.compareDocumentPosition(table!);
   expect(position & 0x04 /* DOCUMENT_POSITION_FOLLOWING */).toBeTruthy();
 });
 

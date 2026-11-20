@@ -45,6 +45,10 @@ const MAX_TOKEN_LENGTH = 128;
 // Keyword matching reads at most this much of the message.
 const MAX_MESSAGE_SCAN = 4096;
 
+const TRANSPORT_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "upstream_reset_replay_refused", "upstream_closed_before_response", "upstream_no_response",
+]);
+
 const STRUCTURED: ReadonlyArray<readonly [UpstreamCondition, ReadonlySet<string>]> = [
   ["context_overflow", new Set(["context_length_exceeded", "string_above_max_length", "context_window_exceeded", "prompt_too_long"])],
   ["location_unsupported", new Set(["location_not_supported", "unsupported_country_region_territory", "unsupported_country", "user_location_is_not_supported"])],
@@ -53,6 +57,7 @@ const STRUCTURED: ReadonlyArray<readonly [UpstreamCondition, ReadonlySet<string>
   ["model_unavailable", new Set(["model_not_found", "unsupported_model", "model_not_available", "model_not_supported", "deployment_not_found"])],
   ["rate_limited", new Set(["rate_limit_exceeded", "rate_limit_error", "too_many_requests", "throttling", "throttled", "rate_limited"])],
   ["upstream_unavailable", new Set(["server_is_overloaded", "overloaded_error", "service_unavailable", "unavailable"])],
+  ["upstream_failed", TRANSPORT_FAILURE_CODES],
 ];
 
 // Context overflow from message text uses the same verdict the combo router trusts, so a validation
@@ -95,14 +100,16 @@ function statusFallback(status: number): UpstreamCondition | undefined {
 }
 
 /**
- * Precedence: 401 is authoritative; structured tokens next; keyword evidence only for 4xx
- * statuses (a 5xx stays a server failure whatever its text says); a bare status last.
+ * Precedence starts with 401, then exact transport codes, then other structured evidence.
+ * Keywords apply only to 4xx statuses. The bare status is the final fallback.
  */
 export function classifyUpstreamCondition(evidence: UpstreamConditionEvidence): UpstreamCondition | undefined {
   const { status } = evidence;
   if (!Number.isInteger(status)) return undefined;
   if (status === 401) return "auth_failed";
-  const tokens = [token(evidence.code), token(evidence.type), token(evidence.reason)].filter((value): value is string => value !== undefined);
+  const code = token(evidence.code);
+  if (code !== undefined && TRANSPORT_FAILURE_CODES.has(code)) return "upstream_failed";
+  const tokens = [code, token(evidence.type), token(evidence.reason)].filter((value): value is string => value !== undefined);
   const structured = structuredCondition(tokens);
   if (structured) return structured;
   const message = typeof evidence.message === "string" ? evidence.message.slice(0, MAX_MESSAGE_SCAN).toLowerCase() : "";
