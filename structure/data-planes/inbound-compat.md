@@ -24,12 +24,6 @@ using the same policy as final Responses serialization. Native dispatch retains 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
 
-The canonical Codex Responses adapter sends the translated Messages system prompt as the first
-`developer` item for GPT-6.2 Sol and Astra, so it participates in prefix caching. The projection
-uses the final outbound model and only changes the outbound copy. Cache keys and chronological
-system messages retain their original translation. Native Responses requests and compaction
-retain their existing prompt envelopes.
-
 ## Standalone file transcription
 
 `src/server/audio-transcriptions.ts` owns `POST /v1/audio/transcriptions`, independently of

@@ -626,12 +626,14 @@ test("endpoint wiring: configured bodyStallSec bounds a stalled native passthrou
   }
 }, { timeout: SERVER_BUDGET_MS });
 
-for (const [model, prependSystem] of [
-  ["gpt-6.2-sol", true],
-  ["gpt-6.2-astra", true],
-  ["gpt-6.1-sol", false],
+for (const [model, prependSystem, withSystem] of [
+  ["gpt-6.2-sol", true, true],
+  ["gpt-6.2-astra", true, true],
+  ["gpt-6.1-sol", false, true],
+  // No top-level system prompt: nothing is prepended and the late system message keeps its place.
+  ["gpt-6.2-sol", false, false],
 ] as const) {
-  test(`native openai-responses route carries cache affinity and system placement for ${model}`, async () => {
+  test(`native openai-responses route carries cache affinity and system placement for ${model}${withSystem ? "" : " without a system prompt"}`, async () => {
     const capture: { headers?: Record<string, string>; body?: Record<string, any> } = {};
     const upstream = serveUpstream({
       port: 0,
@@ -680,7 +682,7 @@ for (const [model, prependSystem] of [
         body: JSON.stringify({
           model: `native/${model}`,
           max_tokens: 128,
-          system: [{ type: "text", text: "Keep answers brief." }, { type: "text", text: "Use plain text." }],
+          ...(withSystem ? { system: [{ type: "text", text: "Keep answers brief." }, { type: "text", text: "Use plain text." }] } : {}),
           messages: [
             { role: "user", content: "hi" },
             { role: "assistant", content: "hello" },
@@ -699,7 +701,7 @@ for (const [model, prependSystem] of [
       // (devlog 090: without the header the backend reported cached_tokens: 0 every turn).
       expect(capture.body?.model).toBe(model);
       const system = "Keep answers brief.\n\nUse plain text.";
-      expect(capture.body?.instructions).toBe(prependSystem ? undefined : system);
+      expect(capture.body?.instructions).toBe(prependSystem || !withSystem ? undefined : system);
       const input = capture.body?.input;
       expect(input?.map((item: { role?: string }) => item.role)).toEqual(
         prependSystem ? ["developer", "user", "assistant", "developer", "user"]
