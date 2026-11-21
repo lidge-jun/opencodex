@@ -224,7 +224,7 @@ async function consult(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const context = takeOption(args, "--context");
   const workerModel = takeOption(args, "--worker-model");
   const taskId = takeOption(args, "--task-id");
-  const waitMs = takeIntegerOption(args, "--wait-ms", { min: 0, max: 300_000 });
+  const waitMs = takeIntegerOption(args, "--wait-ms", { min: 0, max: 240_000 });
   rejectArgs(args, USAGE);
 
   if (!consultationId?.trim() && !question?.trim()) {

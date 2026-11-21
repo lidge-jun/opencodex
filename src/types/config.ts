@@ -1718,7 +1718,7 @@ export interface OcxAdvisorConfig {
    * or a tool result after the latest user message).
    */
   policy?: "manual" | "preflight" | "adaptive";
-  /** question-only sends only the worker's explicit question and disables automatic consultations; full uploads un-truncated task history. */
+  /** question-only sends only the worker's explicit question and disables automatic consultations; full sends expanded, bounded task history (up to 128,000 characters per message and 512,000 characters total across the transcript). */
   contextMode?: "context" | "full" | "question-only";
   /** Adaptive task consultation attempts (manual + automatic). Integer 1–3, default 3. */
   maxConsultationsPerTask?: number;

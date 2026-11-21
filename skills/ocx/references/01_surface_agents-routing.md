@@ -240,8 +240,8 @@ State-changing: yes. JSON mode: `payload`.
 | `--worker-model` | string | With consult: caller model label for activity attribution. |
 | `--task-id` | string | With consult: optional task id used by adaptive budget. |
 | `--consultation-id` | string | With consult: poll an in-progress consultation. |
-| `--wait-ms` | number | With consult: bound each long-poll round trip (0-300000 ms). |
-| `--context-mode` | string | With set: context (default), full (expanded message/transcript caps and client session transcripts), or question-only. |
+| `--wait-ms` | number | With consult: bound each long-poll round trip (0-240000 ms). |
+| `--context-mode` | string | With set: context (default), full (expanded bounded caps and explicit-ID client session transcripts), or question-only. |
 | `--auto-mount-mcp` | string | With set: on (default) or off to auto-mount opencodex-advisor MCP for compatible active routes. |
 | `--mcp-clients` | string | With set: comma-separated client ids, auto (follow active routes), or none. |
 

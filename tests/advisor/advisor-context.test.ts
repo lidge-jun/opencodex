@@ -6,6 +6,7 @@ import {
   ADVISOR_SYSTEM_INSTRUCTION,
   ADVISOR_TRANSPORT_INSTRUCTION,
   ADVISOR_WORKER_NOTICE_MARKER,
+  buildAdvisorWorkerNotice,
   advisorResultIsAdvice,
   advisorTranscript,
   buildAdvisorUserPrompt,
@@ -317,7 +318,7 @@ describe("full contextMode and system-reminder stripping", () => {
     const parsed = parseRequest({ model: "deepseek-chat", stream: false, input });
     parsed.context.messages.unshift({
       role: "developer",
-      content: `${ADVISOR_WORKER_NOTICE_MARKER}\nInitial worker notice`,
+      content: buildAdvisorWorkerNotice("advisor"),
       timestamp: Date.now(),
     });
     expect(hasAdvisorWorkerNotice(parsed)).toBe(false);
@@ -350,5 +351,32 @@ describe("full contextMode and system-reminder stripping", () => {
     expect(injectAdvisorWorkerNotice(parsed)).toBe(true);
     const tailDev = parsed.context.messages.filter(m => m.role === "developer");
     expect(tailDev).toHaveLength(1);
+  });
+
+  test("preserves application-owned developer messages headed ## Advisor across long tool loops", () => {
+    const input: Array<Record<string, unknown>> = [
+      { role: "user", content: "Investigate intermittent failure" },
+    ];
+    for (let i = 1; i <= 4; i++) {
+      input.push(
+        { type: "function_call", call_id: `a${i}`, name: "shell", arguments: `{"step":${i}}` },
+        { type: "function_call_output", call_id: `a${i}`, output: `step ${i} ok` },
+      );
+    }
+    const parsed = parseRequest({ model: "deepseek-chat", stream: false, input });
+    const appNotice = `${ADVISOR_WORKER_NOTICE_MARKER}\nApplication-owned policy: never skip migrations.`;
+    parsed.context.messages.unshift({
+      role: "developer",
+      content: appNotice,
+      timestamp: Date.now(),
+    });
+    expect(hasAdvisorWorkerNotice(parsed)).toBe(false);
+    expect(injectAdvisorWorkerNotice(parsed)).toBe(true);
+
+    const devTexts = parsed.context.messages
+      .filter(m => m.role === "developer")
+      .map(m => String(m.content));
+    expect(devTexts).toContain(appNotice);
+    expect(devTexts.length).toBe(2);
   });
 });

@@ -287,7 +287,8 @@ export async function consultAdvisor(
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     try {
       const contentType = (res.headers.get("content-type") ?? "").toLowerCase();
-      const isSse = contentType.includes("text/event-stream");
+      const explicitSse = contentType.includes("text/event-stream");
+      let streamingSse = explicitSse;
       if (res.ok) linkedSignal.touch();
 
       // Bounded read: count bytes per chunk and cancel the reader the moment the bound is
@@ -355,21 +356,37 @@ export async function consultAdvisor(
               return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor response exceeded byte bound", durationMs: Date.now() - t0 };
             }
             const decoded = decoder.decode(value, { stream: true });
-            if (isSse) {
+            if (!streamingSse) {
+              raw += decoded;
+              const trimmed = raw.trimStart();
+              if (trimmed.startsWith("data:") || trimmed.startsWith(":")) {
+                streamingSse = true;
+                sseBuffer = raw;
+                raw = "";
+              }
+            } else {
               sseBuffer += decoded;
+            }
+            if (streamingSse) {
               const lines = sseBuffer.split(/\r?\n/);
               sseBuffer = lines.pop() ?? "";
               for (const line of lines) processSseLine(line);
-            } else {
-              raw += decoded;
             }
           }
           const flushed = decoder.decode();
-          if (isSse) {
-            sseBuffer += flushed;
-            if (sseBuffer.length > 0) processSseLine(sseBuffer);
-          } else {
+          if (!streamingSse) {
             raw += flushed;
+            const trimmed = raw.trimStart();
+            if (trimmed.startsWith("data:") || trimmed.startsWith(":")) {
+              streamingSse = true;
+              sseBuffer = raw;
+              raw = "";
+            }
+          } else {
+            sseBuffer += flushed;
+          }
+          if (streamingSse && sseBuffer.length > 0) {
+            for (const line of sseBuffer.split(/\r?\n/)) processSseLine(line);
           }
         } finally {
           linkedSignal.signal.removeEventListener("abort", cancelLockedReader);
@@ -387,18 +404,14 @@ export async function consultAdvisor(
       }
       let content: string | undefined;
       let usage: AdvisorConsultationResult["usage"] | undefined;
-      const parseAsSse = isSse || raw.trimStart().startsWith("data:") || raw.trimStart().startsWith(":");
-      if (parseAsSse) {
-        if (!isSse) {
-          for (const line of raw.split(/\r?\n/)) processSseLine(line);
-        }
+      if (streamingSse) {
         if (streamError) {
           return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor HTTP 502", durationMs };
         }
         if (sawMalformedSseJson && !sawDone && streamedText.trim().length === 0 && !fallbackMessageText) {
           return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor returned non-JSON", durationMs };
         }
-        if (!sawAnySseData && raw.trim().length > 0 && !isSse) {
+        if (!sawAnySseData && !explicitSse) {
           return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor returned non-JSON", durationMs };
         }
         content = streamedText.trim().length > 0 ? streamedText : fallbackMessageText;

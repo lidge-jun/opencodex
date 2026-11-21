@@ -210,6 +210,31 @@ describe("advisor preflight ledger — atomic claim", () => {
     expect(ledger.size()).toBe(1);
     expect(ledger.claim("k", 2).state).toBe("complete");
   });
+
+  test("active inflight claim stays valid past ADVISOR_INFLIGHT_TTL_MS until settled or released", () => {
+    const ledger = createAdvisorPreflightLedger();
+    let active = true;
+    const first = ledger.claim("long-task", 0, { isAlive: () => active });
+    expect(first.state).toBe("claimed");
+
+    // Advance well beyond the 10-minute fallback TTL while consultation is still active.
+    const pastTtl = ADVISOR_INFLIGHT_TTL_MS + 15 * 60 * 1000;
+    expect(ledger.claim("long-task", pastTtl).state).toBe("inflight");
+
+    // Settlement still succeeds because the claim remains owned past 10 minutes.
+    ledger.complete("long-task", first.token!, pastTtl + 1000);
+    active = false;
+    expect(ledger.claim("long-task", pastTtl + 2000).state).toBe("complete");
+
+    // Cancellation/release path also clears cleanly past 10 minutes.
+    let active2 = true;
+    const second = ledger.claim("cancelled-task", 0, { isAlive: () => active2 });
+    expect(second.state).toBe("claimed");
+    expect(ledger.claim("cancelled-task", pastTtl).state).toBe("inflight");
+    ledger.release("cancelled-task", second.token!, pastTtl + 1000);
+    active2 = false;
+    expect(ledger.claim("cancelled-task", pastTtl + 2000).state).toBe("claimed");
+  });
 });
 
 describe("advisor task identity", () => {

@@ -235,4 +235,25 @@ describe("consultAdvisor", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe("advisor HTTP 502");
   });
+
+  test("headerless SSE stream resets inactivity timeout incrementally before EOF", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        for (const chunk of ["Frame 1 ", "Frame 2 ", "Frame 3"]) {
+          await Bun.sleep(25);
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: chunk } }] })}\n\n`));
+        }
+        await Bun.sleep(20);
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    // No Content-Type header at all (headerless SSE). Total ~95ms > 50ms timeout.
+    globalThis.fetch = (async () => new Response(stream, { status: 200 })) as typeof fetch;
+
+    const result = await consultAdvisor(baseInput, {}, "max", 50, undefined, "http://advisor.test");
+    expect(result.ok).toBe(true);
+    expect(result.advice).toBe("Frame 1 Frame 2 Frame 3");
+  });
 });
