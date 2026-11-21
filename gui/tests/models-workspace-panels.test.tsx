@@ -131,11 +131,11 @@ test("a cold catalog never removes the tab strip", async () => {
   const { container, root } = await mountModels();
   try {
     // Still cold here: the catalog fetch is parked on the gate.
-    expect(tabs(container)).toHaveLength(5);
+    expect(tabs(container)).toHaveLength(6);
     expect(panel(container, "catalog")).toBeTruthy();
     releaseCatalog();
     await act(async () => { await Promise.resolve(); });
-    expect(tabs(container)).toHaveLength(5);
+    expect(tabs(container)).toHaveLength(6);
   } finally {
     await act(async () => root.unmount());
   }
@@ -157,7 +157,7 @@ test("a cold catalog failure still lets the user reach another tab", async () =>
   const { container, root } = await mountModels();
   try {
     await act(async () => { await Promise.resolve(); });
-    expect(tabs(container)).toHaveLength(5);
+    expect(tabs(container)).toHaveLength(6);
 
     // "Reachable" has to mean the click works and the panel actually appears — asserting
     // the button merely exists would pass with a dead tab.
@@ -276,7 +276,7 @@ test("a panel load failure does not take its siblings with it", async () => {
     // failed LOAD, not a render throw — the boundary mechanism itself is covered by
     // error-boundary.test.tsx; what matters here is that one panel's failure is
     // contained.
-    expect(tabs(container)).toHaveLength(5);
+    expect(tabs(container)).toHaveLength(6);
     await act(async () => {
       (container.querySelector("#models-tab-routing") as HTMLButtonElement).click();
     });
