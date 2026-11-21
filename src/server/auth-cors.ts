@@ -710,6 +710,8 @@ export const AUTH_MATRIX: readonly ApiAuthMatrixRow[] = [
   { endpoint: "/v1/hub-state", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   // Usage additionally requires a configured key identity; unscoped environment keys are refused.
   { endpoint: "/v1/usage", bearer: "rejected", dedicated: "accepted", xApiKey: "rejected" },
+  // The live meter reads the in-process request log only (numbers and model names), admitted like /v1/models.
+  { endpoint: "/v1/usage/live", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   // Usage windows require a configured, single-provider key with full model scope.
   { endpoint: "/v1/usage/windows", bearer: "accepted", dedicated: "accepted", xApiKey: "rejected" },
 ];

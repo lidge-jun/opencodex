@@ -68,6 +68,7 @@ import {
 } from "../../lib/debug-settings";
 import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
+import { markLiveRoutingObserved } from "../context-breakdown";
 import { getRequestLogEntries, queryRequestLogs, type RequestLogEntry } from "../request-log";
 import { decodeRequestLogCursor, selectRequestLogPoll } from "../request-log-cursor";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -131,6 +132,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     if (rawCursor !== null && cursor === null) {
       return jsonResponse({ error: { code: "invalid_cursor", message: "invalid cursor" } }, 400);
     }
+    if (url.searchParams.get("live") === "1") markLiveRoutingObserved();
     const all = getRequestLogEntries();
     const queried = queryRequestLogs(all, url.searchParams);
     const total = queried.total;

@@ -94,12 +94,12 @@ async function mountModels(): Promise<{ container: HTMLElement; root: Root }> {
 const tabs = (container: HTMLElement) => [...container.querySelectorAll('[role="tab"]')] as HTMLButtonElement[];
 const panel = (container: HTMLElement, id: string) => container.querySelector(`#models-panel-${id}`);
 
-test("the strip renders all five tabs with the catalog selected on the bare hash", async () => {
+test("the strip renders all six tabs with the catalog selected on the bare hash", async () => {
   installFetch();
   const { container, root } = await mountModels();
   try {
     expect(tabs(container).map(t => t.id)).toEqual([
-      "models-tab-catalog", "models-tab-overall", "models-tab-combos", "models-tab-routing", "models-tab-compatibility",
+      "models-tab-catalog", "models-tab-overall", "models-tab-live", "models-tab-combos", "models-tab-routing", "models-tab-compatibility",
     ]);
     const selected = tabs(container).filter(t => t.getAttribute("aria-selected") === "true");
     expect(selected).toHaveLength(1);
@@ -131,11 +131,11 @@ test("a cold catalog never removes the tab strip", async () => {
   const { container, root } = await mountModels();
   try {
     // Still cold here: the catalog fetch is parked on the gate.
-    expect(tabs(container)).toHaveLength(5);
+    expect(tabs(container)).toHaveLength(6);
     expect(panel(container, "catalog")).toBeTruthy();
     releaseCatalog();
     await act(async () => { await Promise.resolve(); });
-    expect(tabs(container)).toHaveLength(5);
+    expect(tabs(container)).toHaveLength(6);
   } finally {
     await act(async () => root.unmount());
   }
@@ -157,7 +157,7 @@ test("a cold catalog failure still lets the user reach another tab", async () =>
   const { container, root } = await mountModels();
   try {
     await act(async () => { await Promise.resolve(); });
-    expect(tabs(container)).toHaveLength(5);
+    expect(tabs(container)).toHaveLength(6);
 
     // "Reachable" has to mean the click works and the panel actually appears — asserting
     // the button merely exists would pass with a dead tab.
@@ -226,13 +226,13 @@ test("every rendered panel is wired to its tab", async () => {
   installFetch();
   const { container, root } = await mountModels();
   try {
-    for (const id of ["overall", "combos", "routing", "compatibility"]) {
+    for (const id of ["overall", "live", "combos", "routing", "compatibility"]) {
       await act(async () => {
         (container.querySelector(`#models-tab-${id}`) as HTMLButtonElement).click();
       });
       await act(async () => { await Promise.resolve(); });
     }
-    for (const id of ["catalog", "overall", "combos", "routing", "compatibility"]) {
+    for (const id of ["catalog", "overall", "live", "combos", "routing", "compatibility"]) {
       const p = panel(container, id)!;
       expect(p.getAttribute("role")).toBe("tabpanel");
       expect(p.getAttribute("aria-labelledby")).toBe(`models-tab-${id}`);
@@ -276,7 +276,7 @@ test("a panel load failure does not take its siblings with it", async () => {
     // failed LOAD, not a render throw — the boundary mechanism itself is covered by
     // error-boundary.test.tsx; what matters here is that one panel's failure is
     // contained.
-    expect(tabs(container)).toHaveLength(5);
+    expect(tabs(container)).toHaveLength(6);
     await act(async () => {
       (container.querySelector("#models-tab-routing") as HTMLButtonElement).click();
     });
