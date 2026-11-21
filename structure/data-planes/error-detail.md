@@ -390,8 +390,7 @@ Internal side channels retain the evidence used before normalization:
 HTTP status, retry advice formatting, replay headers, terminal callbacks and internal adapter
 terminal objects retain their prior decisions. Tests cover these boundaries in
 `tests/lib/client-error-body.test.ts`, `tests/responses/chat-error-body-normalization.test.ts`,
-`tests/responses/chat-error-collector-verdicts.test.ts` and
-`tests/server/server-chat-error-body-evidence.test.ts`.
+`tests/responses/chat-error-collector-verdicts.test.ts` and `tests/server/server-chat-error-body-evidence.test.ts`.
 
 ### Closed Chat tables
 
