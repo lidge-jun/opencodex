@@ -40,7 +40,7 @@ import {
 import { windowsProcessNative, type WindowsProcessNativeApi, type WindowsTerminateResult } from "./windows-process-native";
 import type { WindowsListenerIdentity, WindowsPortSample, WindowsStopConfirmDeps } from "./windows-stop-confirm";
 import { windowsSchedulerCsvIncludesTask } from "./windows-scheduler";
-import { WINDOWS_TASK_INSTANCE_STOP_SCRIPT, verifyWindowsTaskStopProof } from "./windows-task-instance-stop";
+import { windowsTaskInstanceStopScript, verifyWindowsTaskEngineProof, verifyWindowsTaskStopProof } from "./windows-task-instance-stop";
 
 export interface WindowsStopCommandResult {
   status: number | null;
@@ -218,6 +218,8 @@ export function stopperUnderHomeWrapper(
 
 export interface WindowsCheckedStopLiveOptions {
   run?: WindowsStopCommandRunner;
+  /** Use an injected engine observer with an injected runner. Synthetic PIDs never reach the live kernel. */
+  taskEngineIdentity?: WindowsProcessNativeApi["sameUserIdentity"];
   /**
    * The `sc.exe qc` query that proves the registered WinSW service runs THIS installation's
    * executable. Defaults to the capped runner; tests inject it.
@@ -299,12 +301,19 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       const deadline = performance.now() + Math.floor(timeoutMs);
       const withinDeadline = () => performance.now() < deadline && gate();
       const launcher = windowsLauncherVbsPath();
-      const script = Buffer.from(WINDOWS_TASK_INSTANCE_STOP_SCRIPT, "utf16le").toString("base64");
+      const identity = options.taskEngineIdentity ?? (run === liveWindowsStopCommandRunner ? windowsProcessNative()?.sameUserIdentity : undefined);
+      const script = Buffer.from(windowsTaskInstanceStopScript(identity !== undefined), "utf16le").toString("base64");
       let approved = false;
+      let expectedVerdict: "ended" | "not-running" | null = null;
       let refusal: { cause: unknown } | undefined;
       const ended = await run("powershell", ["-NoProfile", "-NoLogo", "-NonInteractive", "-EncodedCommand", script], timeoutMs,
         async line => {
-          if (!verifyWindowsTaskStopProof(line, launcher) || !withinDeadline()) return false;
+          if (!withinDeadline()) return false;
+          if (identity) {
+            expectedVerdict = verifyWindowsTaskEngineProof(line, launcher, identity, withinDeadline);
+            if (!expectedVerdict) return false;
+          } else if (!verifyWindowsTaskStopProof(line, launcher)) return false;
+          if (!withinDeadline()) return false;
           try {
             await authorize?.();
           } catch (cause) {
@@ -318,7 +327,7 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       if (ended.timedOut || ended.status !== 0) return "failed";
       const verdict = ended.stdout.trim().split(/\r?\n/).at(-1);
       if (verdict === "unverified-registration" || verdict === "denied") return verdict;
-      if (approved && (verdict === "ended" || verdict === "not-running")) return verdict;
+      if (approved && (verdict === "ended" || verdict === "not-running") && (!identity || verdict === expectedVerdict)) return verdict;
       return "failed";
     },
     async taskState(timeoutMs) {

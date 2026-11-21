@@ -126,7 +126,7 @@ import {
   type StopApproval,
 } from "./stop-approval";
 import { summarizeStopRun, type StopOutcome, type StopRunRecord } from "./stop-report";
-import { confirmGuardedFreed, inspectGuardedTarget, noServiceStop, observeGuardedStopped, orphanDiscoveryCap, stopGuardedManager, stopServiceForOcxStop, stopServiceForUninstall, stopWindowFailed, verifyUninstallStopWindow, windowsChildStopHeld, windowsPartAHolds, windowsPartAReceiptRecord, windowsPartBDue, windowsPartBOwnsPortWait, windowsStopRequiresReceipt } from "./stop-windows-checked";
+import { confirmGuardedFreed, inspectGuardedTarget, noServiceStop, observeGuardedStopped, orphanDiscoveryCap, stopGuardedManager, stopServiceForOcxStop, stopServiceForUninstall, stopWindowFailed, verifyUninstallStopWindow, windowsChildStopHeld, windowsPartAFailureMessage, windowsPartAHolds, windowsPartAReceiptRecord, windowsPartBDue, windowsPartBOwnsPortWait, windowsStopRequiresReceipt } from "./stop-windows-checked";
 import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
 import { startupDataPlaneToken } from "../lib/service-secrets";
@@ -1221,21 +1221,18 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
     // No "won't respawn" claim here: a stopped Task Scheduler can still respawn through
     // its wrapper, which the verification below is what actually settles.
     if (stoppedService) console.log("🛑 Service manager stopped.");
+    const heldByWindows = windowsPartAHolds(record);
+    ownershipBlocked = heldByWindows || ownershipBlocked; // #7771: no POST and no shared teardown.
     if (serviceStop === "failed") {
       // A manager that would not stop can respawn the proxy. That is a real stop failure,
       // not a history-only one, and an update must not replace files over it (#3008).
       stopFailed = true;
-      console.error("❌ The installed service manager did not stop; it may respawn the proxy.");
+      if (!heldByWindows) console.error("❌ The installed service manager did not stop; it may respawn the proxy.");
     }
     if (serviceStop === "state-unknown") {
-      // Nothing refused to stop — the scheduler state could not be READ. Saying "did not
-      // stop" sends the operator looking for the wrong problem, and `/api/stop` answers
-      // the same case with service_state_unknown.
       stopFailed = true;
-      console.error("❌ The Windows Task Scheduler state could not be read, so this stop cannot tell whether a wrapper would respawn the proxy.");
-      console.error("   Run 'ocx service status' to see the query error, repair Task Scheduler access, then retry.");
+      if (!heldByWindows) console.error("❌ The service state could not be verified. Check 'ocx service status' for details.");
     }
-    ownershipBlocked = windowsPartAHolds(record) || ownershipBlocked; // #7771: no POST and no shared teardown.
   } catch (err) {
     record.service = "error";
     if (err instanceof ProxyOwnershipRefusedError || isServiceOwnershipError(err) || windowsChildStopHeld()) {
@@ -1565,10 +1562,10 @@ async function handleUninstall() {
     observed.serviceStop = outcome;
     if (outcome === "absent") return false;
     if (outcome === "failed") {
-      throw new Error("the installed service manager did not stop; it may respawn the proxy");
+      throw new Error(windowsPartAFailureMessage() ?? "the installed service manager did not stop; it may respawn the proxy");
     }
     if (outcome === "state-unknown") {
-      throw new Error("the Windows Task Scheduler state could not be read, so this uninstall cannot tell whether a manager is still running. Run 'ocx service status' to see the query error");
+      throw new Error(windowsPartAFailureMessage() ?? "the service state could not be verified. Check 'ocx service status' for details");
     }
     return true;
   });

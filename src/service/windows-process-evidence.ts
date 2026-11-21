@@ -21,11 +21,14 @@ import { join } from "node:path";
 
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsSystemDirectory } from "../lib/windows-elevation";
 import { windowsLauncherVbsPath, windowsServiceScriptPath } from "./state";
+import { commandLineHasPathToken } from "./windows-command-line-token";
 import type { WindowsProcessEntry } from "./windows-guarded-manager";
+import { windowsWrapperImage } from "./windows-stop-binding";
 import {
   windowsProcessNative,
   windowsProcessPlatform,
   windowsProcessPlatformSimulated,
+  type WindowsProcessNativeApi,
   type WindowsProcessWatch,
   type WindowsTerminateResult,
 } from "./windows-process-native";
@@ -53,6 +56,8 @@ export type WindowsStopProcessEntry = WindowsProcessEntry & { startTime: number 
 const SNAPSHOT_MAX_BUFFER = 16 * 1024 * 1024;
 const SMALL_MAX_BUFFER = 64 * 1024;
 const NATIVE_CIM_TOLERANCE_MS = 1;
+const OWNER_READ_LIMIT = 32;
+const OWNER_READ_BUDGET_MS = 1_500;
 /**
  * Owner reads stop being admitted this long before the snapshot's cap, counted from the
  * helper's own process start. It covers one in-flight 1 s CIM call plus serialization and
@@ -121,16 +126,16 @@ export function windowsProcessSnapshotScript(timeoutMs: number): string {
     "$priority = @($rows | Where-Object { $_.CommandLine -match $homePath });",
     "$fallback = @($rows | Where-Object { $_.CommandLine -notmatch $homePath -and",
     "  (($_.Name -match '^(wscript|cscript|cmd)\\.exe$') -or (-not $_.Name) -or ($_.CommandLine -like '*opencodex-service*')) });",
-    "$ownerBudget = @{ Remaining = 32; Clock = [Diagnostics.Stopwatch]::StartNew();",
+    `$ownerBudget = @{ Remaining = ${OWNER_READ_LIMIT}; Clock = [Diagnostics.Stopwatch]::StartNew();`,
     "  Until = [Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().AddMilliseconds(" + ownerCutoffMs + ") };",
     "$owners = @{};",
     "foreach ($process in ($priority + $fallback)) {",
-    "  if (!$currentSid -or $ownerBudget.Remaining -le 0 -or $ownerBudget.Clock.ElapsedMilliseconds -ge 1500",
+    `  if (!$currentSid -or $ownerBudget.Remaining -le 0 -or $ownerBudget.Clock.ElapsedMilliseconds -ge ${OWNER_READ_BUDGET_MS}`,
     "    -or [DateTime]::UtcNow -ge $ownerBudget.Until) { break };",
     "  $ownerBudget.Remaining--;",
     "  try {",
     "    $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -OperationTimeoutSec 1 -ErrorAction Stop;",
-    "    if ($ownerBudget.Clock.ElapsedMilliseconds -ge 1500 -or [DateTime]::UtcNow -ge $ownerBudget.Until) { break };",
+    `    if ($ownerBudget.Clock.ElapsedMilliseconds -ge ${OWNER_READ_BUDGET_MS} -or [DateTime]::UtcNow -ge $ownerBudget.Until) { break };`,
     "    $after = Get-CimInstance -InputObject $process -OperationTimeoutSec 1 -ErrorAction Stop;",
     "    $owners[$process.ProcessId] = @{ Sid = $owner.Sid; ReturnValue = $owner.ReturnValue;",
     "      CreationDate = if ($after.CreationDate) { $after.CreationDate.ToUniversalTime().ToString('o') } else { $null } };",
@@ -146,10 +151,13 @@ export function windowsProcessSnapshotScript(timeoutMs: number): string {
 const SID_PATTERN = /^S-1-\d+(?:-\d+){1,15}$/i;
 const USER_ACCOUNT_SID_PATTERN = /^S-1-(?:5-21|12-1)(?:-\d{1,10}){4}$/i;
 
-function foreignProcessOwner(record: Record<string, unknown>, startTime: number | null): boolean | null {
-  const sid = (value: unknown): string | null => typeof value === "string" && value.length <= 256 && SID_PATTERN.test(value)
+function sid(value: unknown): string | null {
+  return typeof value === "string" && value.length <= 256 && SID_PATTERN.test(value)
     && value.split("-").slice(3).every(part => Number(part) <= 0xffff_ffff)
     ? value.toUpperCase() : null;
+}
+
+function foreignProcessOwner(record: Record<string, unknown>, startTime: number | null): boolean | null {
   const current = sid(record.CurrentUserSid);
   const owner = record.Owner;
   if (startTime === null || current === null || typeof owner !== "object" || owner === null) return null;
@@ -165,6 +173,12 @@ function foreignProcessOwner(record: Record<string, unknown>, startTime: number 
 
 /** Parse the snapshot JSON. Unparseable output is null: an unread table proves nothing. */
 export function parseWindowsProcessSnapshot(output: string): WindowsStopProcessEntry[] | null {
+  return decodeSnapshot(output);
+}
+
+type ObserveEntry = (entry: WindowsStopProcessEntry, record: Record<string, unknown>) => WindowsStopProcessEntry;
+
+function decodeSnapshot(output: string, observe?: ObserveEntry): WindowsStopProcessEntry[] | null {
   const trimmed = output.trim();
   if (!trimmed) return [];
   let parsed: unknown;
@@ -180,16 +194,17 @@ export function parseWindowsProcessSnapshot(output: string): WindowsStopProcessE
     const record = row as Record<string, unknown>;
     const pid = Number(record.ProcessId);
     const parent = Number(record.ParentProcessId);
-    if (!Number.isSafeInteger(pid) || pid <= 0) continue;
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 0xffff_ffff) continue;
     const created = typeof record.CreationDate === "string" ? Date.parse(record.CreationDate) : Number.NaN;
-    entries.push({
+    const entry = {
       pid,
       parentPid: Number.isSafeInteger(parent) && parent > 0 ? parent : null,
       name: typeof record.Name === "string" ? record.Name : null,
       commandLine: typeof record.CommandLine === "string" ? record.CommandLine : null,
       startTime: Number.isFinite(created) ? created : null,
       foreignOwner: foreignProcessOwner(record, Number.isFinite(created) ? created : null),
-    });
+    };
+    entries.push(observe ? observe(entry, record) : entry);
   }
   return entries;
 }
@@ -203,37 +218,71 @@ export function overlayNativeCreationTimes(
   entries: readonly WindowsStopProcessEntry[],
   creationTime: (pid: number) => number | null,
 ): WindowsStopProcessEntry[] {
-  return entries.map(entry => {
-    if (entry.startTime === null) return { ...entry, foreignOwner: null };
-    let native: number | null;
+  return entries.map(entry => overlayNativeCreationTime(entry, creationTime));
+}
+
+function overlayNativeCreationTime(
+  entry: WindowsStopProcessEntry, creationTime: (pid: number) => number | null,
+): WindowsStopProcessEntry {
+  if (entry.startTime === null) return { ...entry, foreignOwner: null };
+  let native: number | null;
+  try {
+    native = creationTime(entry.pid);
+  } catch {
+    native = null;
+  }
+  const agrees = native !== null && Math.abs(native - entry.startTime) <= NATIVE_CIM_TOLERANCE_MS;
+  return { ...entry, startTime: agrees ? native : null, foreignOwner: agrees ? entry.foreignOwner : null };
+}
+
+/** The helper emits UTC .NET round-trip dates. Preserve the four sub-ms digits discarded by Date.parse. */
+function cimCreationTicks(created: unknown, ms: number): bigint | null {
+  if (typeof created !== "string" || created.length !== 28 || ms < 0) return null;
+  const fraction = created.slice(23, 27);
+  if (!/^\d{3}0$/.test(fraction) || created !== new Date(ms).toISOString().slice(0, -1) + fraction + "Z") return null;
+  return 621_355_968_000_000_000n + BigInt(ms) * 10_000n + BigInt(fraction);
+}
+
+function observeNativeSnapshot(native: WindowsProcessNativeApi, deadline: number): ObserveEntry {
+  const paths = [windowsLauncherVbsPath(), windowsServiceScriptPath()];
+  const until = Math.min(deadline, performance.now() + OWNER_READ_BUDGET_MS);
+  let remaining = OWNER_READ_LIMIT;
+  return (entry, record) => {
+    const checked = overlayNativeCreationTime(entry, pid => native.creationTime(pid));
+    // A returned CIM owner whose validation failed remains unknown. Supplement only an absent sample.
+    if (record.Owner !== null || record.ProcessId !== entry.pid || checked.startTime === null
+      || checked.startTime !== entry.startTime || !windowsWrapperImage(entry.name)
+      || !paths.some(path => commandLineHasPathToken(entry.commandLine, path))) return checked;
+    const current = sid(record.CurrentUserSid);
+    const ticks = cimCreationTicks(record.CreationDate, checked.startTime);
+    if (!current || !USER_ACCOUNT_SID_PATTERN.test(current) || ticks === null || remaining <= 0 || performance.now() >= until) return checked;
+    remaining--;
     try {
-      native = creationTime(entry.pid);
-    } catch {
-      native = null;
-    }
-    const agrees = native !== null && Math.abs(native - entry.startTime) <= NATIVE_CIM_TOLERANCE_MS;
-    return { ...entry, startTime: agrees ? native : null, foreignOwner: agrees ? entry.foreignOwner : null };
-  });
+      if (native.sameUserIdentity(entry.pid, false, current)?.ticks === ticks && performance.now() < until) {
+        return { ...checked, foreignOwner: false };
+      }
+    } catch { /* Inaccessible, exited and unverified processes cannot gain ownership evidence. */ }
+    return checked;
+  };
 }
 
 /** Every process with its creation time, or null when the table cannot be read. */
 export async function windowsProcessSnapshot(options: WindowsEvidenceOptions): Promise<WindowsStopProcessEntry[] | null> {
   const run = runnerFor(options);
   if (!run) return null;
-  let entries: WindowsStopProcessEntry[] | null;
+  const deadline = Number.isFinite(options.timeoutMs) ? performance.now() + options.timeoutMs : 0;
   try {
-    entries = parseWindowsProcessSnapshot(await run({
+    const output = await run({
       program: "powershell",
       args: powershellArgs(windowsProcessSnapshotScript(options.timeoutMs)),
       timeoutMs: options.timeoutMs,
       maxBufferBytes: SNAPSHOT_MAX_BUFFER,
-    }));
+    });
+    const native = windowsProcessNative();
+    return decodeSnapshot(output, native ? observeNativeSnapshot(native, deadline) : undefined);
   } catch {
     return null;
   }
-  if (entries === null) return null;
-  const native = windowsProcessNative();
-  return native ? overlayNativeCreationTimes(entries, pid => native.creationTime(pid)) : entries;
 }
 
 /**

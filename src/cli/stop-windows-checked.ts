@@ -173,16 +173,24 @@ export function windowsPartBOwnsPortWait(): boolean {
   return windows() && state.result?.outcome === "stopped";
 }
 
-/**
- * A Part A result other than stopped/absent holds the child stop (030 "Two parts"): no
- * POST, the shared teardown skipped, proxy unknown. Records the additive reason.
- */
-export function windowsPartAHolds(record: StopRunRecord): boolean {
+function failedWindowsPartA(): WindowsCheckedStopResult | null {
   const result = state.result;
-  if (!windows() || !result || result.outcome === "stopped" || result.outcome === "absent") return false;
+  return windows() && result && result.outcome !== "stopped" && result.outcome !== "absent" ? result : null;
+}
+
+export function windowsPartAFailureMessage(): string | undefined {
+  const result = failedWindowsPartA();
+  return result ? describeWindowsPartA(result) : undefined;
+}
+
+/** A refused Part A holds the child stop and records its diagnostic without repeating it. */
+export function windowsPartAHolds(record: StopRunRecord): boolean {
+  const result = failedWindowsPartA();
+  if (!result) return false;
   const reason = windowsStopReason(result);
   if (reason) record.serviceStopReason = reason;
-  console.error("   " + describeWindowsPartA(result));
+  record.serviceStopMessage = describeWindowsPartA(result);
+  console.error("   " + record.serviceStopMessage);
   if (!state.snapshotless) return true;
   record.proxy = "unknown";
   console.error("   The proxy was left running and the shared teardown skipped: the service could relaunch it.");
