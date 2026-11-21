@@ -20,6 +20,7 @@ import { getConfigDir } from "../../config/paths";
 import { ConfigOwnershipLockError, registerOwnedConfigPath } from "../../lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "../../lib/test-home-guard";
 import {
+  isLocalControlPrivateSocketName,
   isPrivateSocketDir,
   localControlLeasePath,
   localControlPrivateSocketPath,
@@ -27,8 +28,15 @@ import {
   localControlSocketPath,
   localControlSocketPathFits,
   localControlSocketSupported,
+  removeWindowsPrivateSocket,
+  windowsPlainDirectory,
+  windowsSocketEntry,
+  windowsTrustedPath,
 } from "../../lib/local-control-socket";
+import { hardenSecretDir } from "../../lib/windows-secret-acl";
 import type { OcxConfig } from "../../types";
+
+const WINDOWS = process.platform === "win32";
 
 /**
  * The one request the local control socket serves (#8184). `ocx link status` needs admin-token
@@ -68,6 +76,16 @@ export interface LocalControlListener<T> {
 
 function preparePrivateDir(dir: string): void {
   assertNotRealHomeUnderTest(dirname(dir));
+  if (WINDOWS) {
+    // Trust the path above the run directory before creating anything in it (#8998).
+    if (!windowsTrustedPath(dir, false)) throw new Error("socket directory path is not trusted");
+    try { mkdirSync(dir); } catch (error) { if (!isCode(error, "EEXIST")) throw error; }
+    // Refuse a pre-existing junction or other reparse point before any ACL operation can follow it.
+    if (!windowsPlainDirectory(dir)) throw new Error("socket directory is not a plain directory");
+    hardenSecretDir(dir, { required: true, verifyExistingRuntimeDirectory: true });
+    if (!isPrivateSocketDir(dir)) throw new Error("socket directory could not be made private");
+    return;
+  }
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const stat = lstatSync(dir);
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid!()) {
@@ -79,6 +97,14 @@ function preparePrivateDir(dir: string): void {
 
 /** Inode identity as the kernel reports it. Bigint keeps every bit of a Windows file ID. */
 interface FileIdentity { dev: bigint; ino: bigint }
+
+/**
+ * Windows cannot read an AF_UNIX file's identity (lstat refuses it), so a socket this runtime
+ * published there carries this marker instead. What makes such a path this runtime's is the lease:
+ * every unlink of a marked path happens inside the claim mutex while the lease still names this
+ * runtime's token, and a successor can publish only after it holds the lease.
+ */
+const WINDOWS_SOCKET_IDENTITY: FileIdentity = Object.freeze({ dev: -1n, ino: -1n });
 
 /**
  * The per-port ownership record. `host` and `processStart` come from the shared owner evidence
@@ -97,7 +123,7 @@ type LeaseDecision =
   | { kind: "held" }
   | { kind: "unsafe" }
   | { kind: "contended" }
-  | { kind: "failed"; error: unknown };
+  | { kind: "failed"; error: unknown; retained?: true };
 
 const PUBLISH_ATTEMPTS = 4;
 /** `withLockClaim` is a try-lock; a contender retries a bounded number of times and then refuses. */
@@ -148,6 +174,7 @@ function registerRunDirectory(root: string, dir: string): void {
 }
 
 function identityOf(path: string): FileIdentity | null {
+  if (WINDOWS) return windowsSocketEntry(path) ? WINDOWS_SOCKET_IDENTITY : null;
   try {
     const stat = lstatSync(path, { bigint: true });
     return { dev: stat.dev, ino: stat.ino };
@@ -157,6 +184,7 @@ function identityOf(path: string): FileIdentity | null {
 }
 
 function sameIdentity(path: string, identity: FileIdentity): boolean {
+  if (identity === WINDOWS_SOCKET_IDENTITY) return windowsSocketEntry(path);
   const current = identityOf(path);
   return current !== null && current.dev === identity.dev && current.ino === identity.ino;
 }
@@ -208,11 +236,15 @@ function removeOrphanPrivateSockets(port: number, configDir: string | undefined)
   const dir = localControlSocketDir(configDir);
   let entries: string[];
   try { entries = readdirSync(dir); } catch { return; }
-  const prefix = `.c${port}.`;
   for (const name of entries) {
-    if (!name.startsWith(prefix)) continue;
+    // The exact private-socket name, never a prefix: the lease shares the prefix.
+    if (!isLocalControlPrivateSocketName(port, name)) continue;
     const candidate = join(dir, name);
     try {
+      if (WINDOWS) {
+        if (windowsSocketEntry(candidate)) unlinkSync(candidate);
+        continue;
+      }
       const stat = lstatSync(candidate);
       if (stat.isSocket() && stat.uid === process.getuid!()) unlinkSync(candidate);
     } catch { /* raced with another cleanup */ }
@@ -233,6 +265,13 @@ function publishPublicLink(target: string, privateTarget: string): void {
       if (!isCode(error, "EEXIST")) throw error;
     }
     let existing: BigIntStats;
+    if (WINDOWS) {
+      // A socket left there can only be a crashed predecessor's: this runtime holds the lease and
+      // the directory is private. Anything lstat can read is not a socket and is left alone.
+      if (!windowsSocketEntry(target)) throw new Error("socket path is occupied");
+      unlinkSync(target);
+      continue;
+    }
     try {
       existing = lstatSync(target, { bigint: true });
     } catch (error) {
@@ -251,7 +290,7 @@ function publishPublicLink(target: string, privateTarget: string): void {
  * rather than a recheck: no other runtime can be between its own read and its own write, so a
  * record judged stale cannot be replaced by a live one before this runtime publishes.
  */
-function acquireLease(leasePath: string, token: string, publish: () => void): LeaseDecision {
+function acquireLease(leasePath: string, token: string, publish: () => void, rollback: () => void = () => {}): LeaseDecision {
   for (let attempt = 0; attempt < LEASE_LOCK_ATTEMPTS; attempt += 1) {
     const outcome = withLockClaim(leasePath, token, ownerDefaults, (): LeaseDecision => {
       const current = readLease(leasePath);
@@ -265,6 +304,9 @@ function acquireLease(leasePath: string, token: string, publish: () => void): Le
       try {
         publish();
       } catch (error) {
+        // Undo what this attempt bound while it still holds the lease. A rollback that fails keeps
+        // the lease, so no successor publishes over a name this attempt may still own.
+        try { rollback(); } catch { return { kind: "failed", error, retained: true }; }
         removeOwnedLease(leasePath, token);
         return { kind: "failed", error };
       }
@@ -317,6 +359,19 @@ function releaseFailure(outcome: Exclude<ReleaseOutcome, { kind: "released" }>):
 function releaseOwnedSocket(state: OwnedSocket): ReleaseOutcome {
   try {
     const outcome = withLockClaim(state.leasePath, state.token, ownerDefaults, () => {
+      if (WINDOWS) {
+        // Without inode identity, the lease is the proof: unlink only while it still names us, and
+        // keep the lease (the release throws) unless both names are proven gone.
+        const current = readLease(state.leasePath);
+        // An unreadable record proves nothing about who owns the names: fail, keep the retry state.
+        if (current.kind === "unsafe") throw new Error("the control socket ownership record could not be read");
+        // Absent, or a confirmed successor's token: nothing here is this runtime's any more.
+        if (current.kind !== "record" || current.lease.token !== state.token) return;
+        if (state.publicPath) removeWindowsPrivateSocket(state.publicPath);
+        if (state.privatePath) removeWindowsPrivateSocket(state.privatePath);
+        removeOwnedLease(state.leasePath, state.token);
+        return;
+      }
       if (state.publicPath && state.identity && sameIdentity(state.publicPath, state.identity)) unlinkSync(state.publicPath);
       if (state.privatePath && state.identity && sameIdentity(state.privatePath, state.identity)) unlinkSync(state.privatePath);
       removeOwnedLease(state.leasePath, state.token);
@@ -424,15 +479,33 @@ export function createLocalControlListener<T>(): LocalControlListener<T> {
           },
         });
         // The private directory is the access boundary; the socket mode is a second fence.
-        chmodSync(privateTarget, 0o600);
+        // Windows has no mode to set: its boundary is the directory's verified ACL.
+        if (!WINDOWS) chmodSync(privateTarget, 0o600);
         const socketIdentity = identityOf(privateTarget);
         if (!socketIdentity) throw new Error("socket identity unavailable");
         publishPublicLink(target, privateTarget);
         published = socketIdentity;
       };
+      // Bun unlinks its bound name only when its stop completes, after this attempt gave the lease
+      // up. On Windows, where no inode identity guards a later cleanup, a failed publication removes
+      // the name itself, inside the claim mutex and before the lease goes. POSIX keeps Bun's cleanup.
+      const rollback = (): void => {
+        if (!WINDOWS) return;
+        // The name is removed here, not by the stop: unlinking a listening AF_UNIX name works on
+        // Windows, and the stop only completes after this attempt gave the lease up. A stop that
+        // fails or completes late leaves a listener with no name: a nameless AF_UNIX listener
+        // accepts no new connection, and a successor binds its own per-token name, so neither
+        // can collide with it. The failure is reported.
+        if (bound) {
+          void (bound as Server<T>).stop(true).catch(error => {
+            console.warn(`[local-control] a failed publication's listener did not stop: ${messageOf(error)}`);
+          });
+        }
+        removeWindowsPrivateSocket(privateTarget);
+      };
       let decision: LeaseDecision;
       try {
-        decision = acquireLease(leaseFile, token, publish);
+        decision = acquireLease(leaseFile, token, publish, rollback);
       } catch (error) {
         if (bound) void (bound as Server<T>).stop(true).catch(() => {});
         console.warn(hardLinkUnsupported(error) ? HARD_LINK_WARNING : `[local-control] socket unavailable: ${messageOf(error)}`);
@@ -440,6 +513,11 @@ export function createLocalControlListener<T>(): LocalControlListener<T> {
       }
       if (decision.kind === "failed") {
         if (bound) void (bound as Server<T>).stop(true).catch(() => {});
+        if (decision.retained) {
+          // The rollback could not remove what this attempt bound; keep the port owned and let the
+          // next stop() or start() finish the release, exactly as a release that failed would.
+          pendingRelease = { leasePath: leaseFile, token, publicPath: null, privatePath: privateTarget, identity: WINDOWS_SOCKET_IDENTITY };
+        }
         // Publishing is where a hard-link-less filesystem actually fails, and that error is
         // returned rather than thrown, so this branch is the one that has to classify it.
         console.warn(hardLinkUnsupported(decision.error) ? HARD_LINK_WARNING : `[local-control] socket unavailable: ${messageOf(decision.error)}`);
