@@ -4,7 +4,7 @@ import { consumeComboFailure } from "../../src/server/responses/core-combo-failu
 import { preflightComboStreamResponse } from "../../src/server/responses/combo-stream-preflight";
 import { formatErrorResponse } from "../../src/bridge/errors";
 import { retainAdapterFailureResponse } from "../../src/server/responses/image-context-recovery";
-import { isRewrittenUpstreamError, normalizeUpstreamHttpErrorResponse } from "../../src/adapters/upstream-http-error";
+import { isRewrittenUpstreamError, markRewrittenUpstreamError, normalizeUpstreamHttpErrorResponse } from "../../src/adapters/upstream-http-error";
 import { attachComboFailureEvidence } from "../../src/lib/client-error-body";
 import { M365_RESPONSE_LIMIT_MESSAGES } from "../../src/adapters/m365-copilot/response-limits";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../src/adapters/ollama-late-attribution";
@@ -72,7 +72,8 @@ describe("combo provider 413 verdicts", () => {
       const failure = await consumeComboFailure(formatErrorResponse(413, "upstream_error", message));
       expect(comboFailureDecision(failure.response.status, failure.classificationText, { code: failure.upstreamCode })).toBe("stop");
     }
-    // Its pre-send caps are this target's intake limits, so the next target may still serve the turn.
+    // Its pre-send cap wording does not veto the hop by itself (the run-turn failure envelope is marked
+    // as rewritten, so on the real path the combo keeps dev's stop; see the run-turn case below).
     const preSend = await consumeComboFailure(formatErrorResponse(413, "upstream_error", "Microsoft 365 Copilot image exceeds the 5 MiB limit"));
     expect(comboFailureDecision(preSend.response.status, preSend.classificationText, { code: preSend.upstreamCode })).toBe("hop");
   });
@@ -258,6 +259,15 @@ describe("combo provider 413 verdicts", () => {
     const plain = await retainAdapterFailureResponse(new Response(JSON.stringify({ error: { message: "Request Entity Too Large", type: "invalid_request_error" } }), { status: 413 }), new AbortController().signal);
     const kept = await consumeComboFailure(plain.response);
     expect(comboFailureDecision(413, kept.classificationText, { code: kept.upstreamCode, providerIntakeRefusal: kept.providerIntakeRefusal })).toBe("hop");
+  });
+
+  test("a run-turn adapter's generated 413 keeps dev's stop (#9017 review)", async () => {
+    // Run-turn adapters (Devin, Microsoft 365 Copilot...) report a provider failure as an event
+    // without its body; the failure response run-turn execution builds from it is marked rewritten.
+    const generated = markRewrittenUpstreamError(formatErrorResponse(413, "invalid_request_error", "GetChatMessage failed (HTTP 413)"));
+    const failure = await consumeComboFailure(generated);
+    expect(failure.providerIntakeRefusal).toBe(false);
+    expect(comboFailureDecision(413, failure.classificationText, { code: failure.upstreamCode, providerIntakeRefusal: failure.providerIntakeRefusal })).toBe("stop");
   });
   test("hard stops still outrank a provider 413", () => {
     expect(comboFailureDecision(413, "too large", { code: "origin_rejected" })).toBe("stop");
