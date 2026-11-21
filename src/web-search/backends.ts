@@ -2,29 +2,18 @@
  * Which backends may RUN a hosted web_search, and which candidate rows each
  * can run (#2188 rule 2 for web-search: ∩ probed backend with an executor).
  *
- * A backend registers here only when BOTH hold:
- *  - an executor exists in this repository (src/web-search/executor.ts or
- *    anthropic-executor.ts today), and
- *  - its liveness probe passes. For the two shipped backends the probe IS
- *    auth presence — the ChatGPT forward path and the stored Anthropic OAuth
- *    path fail closed without a credential, so a live credential is the
- *    strongest pre-flight signal short of spending a search.
- *
- * Future backends (Gemini google_search, Grok web_search, Zen hosted search,
- * Exa-class vendors) stay OUT of this table until a live probe and an
- * executor land — the research and probe contracts are recorded in
- * devlog/_plan/260820_sidecar_selection_unification/002 and 031. Documenting
- * a tool is not the same as being able to run it.
+ * Each backend has a shipped executor and an availability check. Credentialed
+ * backends check their own credential. Parallel only needs explicit selection.
  */
 import type { OcxConfig } from "../types";
 import { AUTH_SLOT_MODELS, type SidecarAuthState } from "../sidecar/auth";
 import type { SidecarCandidate } from "../sidecar/candidates";
 import { getAccountSet } from "../oauth/store";
-import type { WebSearchBackendId } from "./index";
+import type { WebSearchBackendId } from "./sidecar-providers";
 
 export interface WebSearchBackendDescriptor {
   backend: WebSearchBackendId;
-  /** Liveness signal for this backend (auth presence for the shipped two). */
+  /** Availability of this backend before a search is sent. */
   isActive(auth: SidecarAuthState, config: OcxConfig): boolean;
   /** Which candidate rows this backend's executor can actually run. */
   eligibleModel(candidate: SidecarCandidate, auth: SidecarAuthState): boolean;
@@ -84,6 +73,11 @@ export const WEB_SEARCH_BACKENDS: readonly WebSearchBackendDescriptor[] = [
     // Probe = operator key present. Exa is not an LLM: no candidate models ever
     // match, so the GUI's model list stays untouched by this backend.
     isActive: (_auth, config) => !!config.webSearchSidecar?.exaApiKey,
+    eligibleModel: () => false,
+  },
+  {
+    backend: "parallel",
+    isActive: (_auth, config) => config.webSearchSidecar?.backend === "parallel" && config.webSearchSidecar.enabled !== false,
     eligibleModel: () => false,
   },
 ];

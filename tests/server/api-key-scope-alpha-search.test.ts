@@ -337,6 +337,18 @@ test("an allowed sidecar backend still answers the search", async () => {
   expect(upstreamCalls[0]).toContain("exa.ai");
 });
 
+test.each([
+  { allowedProviders: ["exa"] },
+  { allowedProviders: ["parallel"], allowedModels: [SEARCH_MODEL] },
+])("the Parallel fallback still enforces the destination scope (%j)", async scope => {
+  const config = sidecarConfig(scope);
+  config.webSearchSidecar = { backend: "parallel", model: SEARCH_MODEL };
+  const response = await handleSearch(sidecarRequest(searchBody(SEARCH_MODEL)), config, logContext(), undefined, SCOPED);
+  expect(response.status).toBe(403);
+  expect((await denial(response)).type).toBe(MODEL_NOT_ALLOWED_FOR_KEY);
+  expect(upstreamCalls).toEqual([]);
+});
+
 test("a key with no scope keeps both search branches", async () => {
   const response = await handleSearch(
     forwardRequest(searchBody(SEARCH_MODEL), OPEN_KEY),

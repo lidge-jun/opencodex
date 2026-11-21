@@ -517,8 +517,8 @@ Successful release serializes held events lazily rather than building another fu
 `tests/web-search/web-search-progress-stream.test.ts` covers both bounds, identity-only deltas,
 upstream cancellation, cell closure, the exact event boundary, and mixed terminal controls.
 
-The bridge backend and the global `webSearchSidecar` block are configured independently, so the
-sidecar's `model` applies to a bridge search only when `resolveSidecarBackend(webSearchSidecar.backend)`
+The bridge backend and the [global search sidecar](data-planes/search.md#serving-the-relay-without-chatgpt-auth) are configured independently.
+The sidecar's `model` applies to a bridge search only when `resolveSidecarBackend(webSearchSidecar.backend)`
 equals that bridge backend; otherwise the bridge runs the backend's own default. An unset global
 backend resolves to `openai`, so an unset-backend model reaches an `openai` bridge and no other.
 There is no per-provider `webSearchBridge.model`, so a mismatched backend gets the default rather

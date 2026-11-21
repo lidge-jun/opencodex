@@ -5,20 +5,19 @@
  * evaluating when the bridge asks for these names).
  */
 import type { OcxConfig, OcxProviderConfig, OcxWebSearchSidecarConfig } from "../types";
+import { WEB_SEARCH_BACKEND_IDS } from "../types/config";
 import { resolveSidecarAuth, resolveAnthropicHelperInstance } from "../sidecar/auth";
 import { getAccountSet } from "../oauth/store";
 import type { XaiSearchOptions } from "./xai-executor";
 
-/** Every backend id the config union admits. New ids are explicit-only and inert until their executor ships. */
-export type WebSearchBackendId = "openai" | "anthropic" | "xai" | "gemini" | "exa";
+export type WebSearchBackendId = NonNullable<OcxWebSearchSidecarConfig["backend"]>;
 
 /**
  * Precedence: explicit config wins; unset defaults to "openai" (ChatGPT forward path). The
  * anthropic backend (web_search_20250305) is only used when explicitly configured — auto-selecting
  * it from credential availability caused the sidecar to send incompatible models (e.g. gpt-5.6-luna)
  * to the Anthropic API.
- * The 2188 follow-up ids (xai/gemini/exa) resolve to themselves the same explicit-only way; their
- * planWebSearch arms stay fail-closed until each executor layer lands.
+ * The other backends also require explicit selection.
  *
  * Lives here rather than in `index.ts` for the reason at the top of this file: the passthrough
  * bridge has to answer "which backend was this global sidecar block configured for?" without
@@ -27,7 +26,7 @@ export type WebSearchBackendId = "openai" | "anthropic" | "xai" | "gemini" | "ex
 export function resolveSidecarBackend(
   explicit: WebSearchBackendId | undefined,
 ): WebSearchBackendId {
-  if (explicit === "anthropic" || explicit === "xai" || explicit === "gemini" || explicit === "exa") return explicit;
+  if (explicit !== undefined && WEB_SEARCH_BACKEND_IDS.includes(explicit)) return explicit;
   return "openai";
 }
 
