@@ -592,28 +592,20 @@ describe("provider registry parity", () => {
 
     const neuralwatt = PROVIDER_REGISTRY.find(entry => entry.id === "neuralwatt");
     expect(neuralwatt?.models).toEqual([
-      "glm-5.3", "glm-5.3-fast", "glm-5.3-short", "glm-5.3-short-fast",
-      "glm-5.3-flash",
-      "glm-5.2", "glm-5.2-fast", "glm-5.2-short", "glm-5.2-short-fast",
-      "kimi-k2.6", "kimi-k2.6-fast", "kimi-k2.7-code",
-      "qwen3.5-397b", "qwen3.5-397b-fast", "qwen3.6-35b", "qwen3.6-35b-fast",
+      "glm-5.3", "glm-5.3-flex", "glm-5.3-flash", "glm-5.3-flash-flex",
+      "deepseek-v4.1-flash", "deepseek-v4.1-flash-flex", "deepseek-v4.1-flash-speed", "nw-flash", "nw-flash-flex",
+      "kimi-k3.1-pro", "kimi-k3.1-pro-flex", "nw-large", "nw-large-flex", "mimo-v2.6-pro", "mimo-v2.6-pro-flex",
+      "qwen-3.8-27b", "qwen-3.8-27b-flex", "nw-small", "nw-small-flex",
+      "qwen3.6-35b", "qwen3.6-35b-flex", "qwen3.6-35b-fast", "gemma-4-31b",
     ]);
-    expect(neuralwatt?.models).not.toContain("moonshotai/Kimi-K2.5");
-    expect(neuralwatt?.models).not.toContain("kimi-k2.5-fast");
-    expect(neuralwatt?.modelReasoningEfforts?.["glm-5.2-short"])
-      .toEqual(neuralwatt?.modelReasoningEfforts?.["glm-5.2"]);
-    expect(neuralwatt?.modelReasoningEfforts?.["glm-5.2-short-fast"]).toEqual([]);
-    expect(neuralwatt?.modelReasoningEfforts).not.toHaveProperty("moonshotai/Kimi-K2.5");
-    expect(neuralwatt?.modelReasoningEfforts).not.toHaveProperty("kimi-k2.5-fast");
-    expect(neuralwatt?.noReasoningModels).toContain("glm-5.2-short-fast");
-    expect(neuralwatt?.noReasoningModels).not.toContain("kimi-k2.5-fast");
-    expect(neuralwatt?.noVisionModels).toEqual([
-      "glm-5.3", "glm-5.3-fast", "glm-5.3-short", "glm-5.3-short-fast",
-      "glm-5.2", "glm-5.2-fast", "glm-5.2-short", "glm-5.2-short-fast",
-      "qwen3.5-397b", "qwen3.5-397b-fast",
-    ]);
+    expect(neuralwatt?.modelReasoningEfforts?.["nw-flash"]).toEqual(["none", "low", "high", "xhigh", "max"]);
+    expect(neuralwatt?.modelDefaultReasoningEfforts?.["nw-flash"]).toBe("high");
+    expect(neuralwatt?.modelContextWindows?.["deepseek-v4.1-flash"]).toBe(1_048_560);
+    expect(neuralwatt?.modelMaxOutputTokens?.["deepseek-v4.1-flash"]).toBe(393_216);
+    expect(neuralwatt?.modelInputModalities?.["glm-5.3"]).toEqual(["text"]);
+    expect(neuralwatt?.modelInputModalities?.["glm-5.3-flash"]).toEqual(["text", "image"]);
+    expect(neuralwatt?.noReasoningModels).toEqual(["qwen3.6-35b-fast"]);
     expect(neuralwatt?.preserveReasoningContentModels).toContain("glm-5.2-short");
-    expect(neuralwatt?.preserveReasoningContentModels).not.toContain("moonshotai/Kimi-K2.5");
   });
 
   test("first-party DeepSeek Flash advertises native images without widening gateway aliases (#4436)", () => {

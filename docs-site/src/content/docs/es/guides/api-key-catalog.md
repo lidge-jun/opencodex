@@ -81,6 +81,14 @@ opencodex incluye 112 preajustes integrados: 90 con clave, 18 OAuth, tres locale
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …y otros | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
 
+**Neuralwatt Cloud** descubre los modelos desde el catálogo público `/v1/models` de Neuralwatt y omite
+los modelos de decisión que no son de chat; una lista sin conexión cubre los modelos de chat cuando el descubrimiento no está disponible.
+En Chat Completions, OpenCodex reenvía el razonamiento previo de los modelos de razonamiento que Neuralwatt documenta,
+incluidos DeepSeek V4.1 Flash y su alias de seguimiento `nw-flash`. Las solicitudes a Kimi K3.1 Pro omiten
+`temperature`, `top_p` y las penalizaciones, que Moonshot fija para ese modelo.
+Las estimaciones de coste de uso aplican los precios de lista por token que Neuralwatt publica para cada modelo; Neuralwatt factura
+las suscripciones y el pago por uso según la energía de GPU, por lo que la estimación no es el importe cobrado.
+
 **Alibaba Token Plan** ofrece los presets Personal Edition de Beijing y Team Edition internacional. Ambas regiones ofrecen los dos niveles de suscripción. Las listas de modelos de chat son estáticas porque el descubrimiento del proveedor también incluye modelos que no son de chat. Se conservan las selecciones existentes y los endpoints internacionales configurados explícitamente.
 
 Ambos presets incluyen `deepseek-v4.1-flash-1017`, con entrada de texto e imágenes, salida de texto, contexto de 1.000.000 de tokens y razonamiento `low`, `high` y `max` (`high` por defecto). Su límite de salida de 393.216 sigue la normalización del presupuesto publicado; no es un límite medido. El Lab informa 384.000. Los esquemas estrictos son rechazados y `json_object` no está verificado para este identificador exacto, por lo que las solicitudes Chat omiten `response_format`: la salida es texto de mejor esfuerzo, sin garantía de JSON. La degradación JSON verificada del modelo sin sufijo y las asignaciones existentes a Responses no cambian. Beijing también incluye `deepseek-v4-pro-0813`, ahora publicado. La región internacional omite los retirados `deepseek-v3.2` y `deepseek-v4-flash` sin sufijo, pero conserva `deepseek-v4-flash-0731`. Los presets mantienen los hosts de sus guías oficiales: Beijing usa `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` y la región internacional `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`. El preset Qwen Cloud usa el host Token Plan independiente documentado arriba. Consulta la [ficha del modelo 1017](https://www.qianwenai.com/models/deepseek-v4.1-flash-1017), la [referencia Chat](https://docs.qwencloud.com/api-reference/chat/openai-chat) y la [guía Personal](https://help.aliyun.com/en/model-studio/token-plan-personal-overview).
