@@ -14,7 +14,7 @@ import { clearThreadAccountMap, clearCodexUpstreamHealth } from "../../src/codex
 import { clearAccountQuota } from "../../src/codex/quota";
 import { clearMainAccountInfoCache } from "../../src/codex/main-account-cache";
 import { setMainAccountPlan } from "../../src/codex/main-account";
-import { observeMainCodexCollisionIdentity } from "../../src/codex/collision-identity";
+import { getObservedMainCodexCollisionIdentity, observeMainCodexCollisionIdentity } from "../../src/codex/collision-identity";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -86,6 +86,49 @@ afterEach(() => {
 });
 
 describe("stored Pool duplicate of native main", () => {
+  test.each([
+    { name: "verified same-user rollover", patch: {}, accepted: true },
+    { name: "different user", patch: { accessUser: "other-user" }, accepted: false },
+    { name: "missing ID-token user", patch: { idUser: "" }, accepted: false },
+    { name: "missing access-token user", patch: { accessUser: "" }, accepted: false },
+    { name: "different subject", patch: { accessSubject: "other-subject" }, accepted: false },
+    { name: "missing subject", patch: { idSubject: " " }, accepted: false },
+    { name: "different email", patch: { accessEmail: "other@example.test" }, accepted: false },
+    { name: "missing email", patch: { idEmail: "" }, accepted: false },
+    { name: "missing current plan", patch: { accessPlan: " " }, accepted: false },
+    { name: "conflicting envelope", patch: { envelope: "other-account" }, accepted: false },
+    { name: "missing envelope", patch: { envelope: "" }, accepted: false },
+    { name: "missing access-token account", patch: { accessAccount: "" }, accepted: false },
+  ])("owned collision observation: $name", scenario => {
+    native("shared-account", "plus", email, true, "same-user");
+    expect(getObservedMainCodexCollisionIdentity()?.userId).toBe("same-user");
+    const values = { idUser: "same-user", accessUser: "same-user", idSubject: "same-subject",
+      accessSubject: "same-subject", idEmail: email, accessEmail: email, accessPlan: "team",
+      accessAccount: "current-workspace", envelope: "current-workspace", ...scenario.patch };
+    const token = (account: string, plan: string, user: string, subject: string, member: string) =>
+      `header.${Buffer.from(JSON.stringify({ sub: subject,
+        "https://api.openai.com/auth": { chatgpt_account_id: account, chatgpt_plan_type: plan, chatgpt_user_id: user },
+        "https://api.openai.com/profile": { email: member },
+      })).toString("base64url")}.fake`;
+    observeMainCodexCollisionIdentity({
+      id_token: token("shared-account", "plus", values.idUser, values.idSubject, values.idEmail),
+      access_token: token(values.accessAccount, values.accessPlan, values.accessUser, values.accessSubject, values.accessEmail),
+      account_id: values.envelope,
+    });
+    expect(getObservedMainCodexCollisionIdentity()).toMatchObject({
+      accountId: scenario.accepted ? "current-workspace" : "shared-account",
+      plan: scenario.accepted ? "team" : "plus",
+    });
+    expect(getObservedMainCodexCollisionIdentity()?.userId).toBe(scenario.accepted ? "same-user" : undefined);
+    expect(codexAccountUnusableReason(config, poolId)).toBe(scenario.accepted ? undefined : "duplicate_main");
+    if (scenario.accepted) {
+      expect(dto().selectionExcludedReason).toBeUndefined();
+      config.codexAccounts![0]!.plan = "team";
+      saveCodexAccountCredential(poolId, { accessToken: jwt("team", email, "same-user", "current-workspace"),
+        refreshToken: "fake-refresh", chatgptAccountId: "current-workspace", expiresAt: Date.now() + 3600_000 });
+      expect(codexAccountUnusableReason(config, poolId)).toBe("duplicate_main");
+    }
+  });
   test("official rows join the same upstream user without exposing identity claims", async () => {
     writeFileSync(join(process.env.OPENCODEX_HOME!, "admin-api-token"), `ocx_admin_${"x".repeat(43)}\n`);
     native("shared-account", "plus", email, true, "same-user");
