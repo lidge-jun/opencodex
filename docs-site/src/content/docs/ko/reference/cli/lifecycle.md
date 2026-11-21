@@ -241,7 +241,9 @@ probe이며, `--wait`는 준비 또는 timeout까지 polling하지만 종단 `fa
 
 프록시 시작 로그에 Codex 홈 디렉터리가 없다고 나오면 Codex를 한 번 실행하거나 `CODEX_HOME`을 Codex가 이미 초기화한 디렉터리로 지정한 다음 `ocx sync`를 실행하세요. 동기화에 성공하면 라우팅이 복구됩니다. `failed`는 현재 프로세스의 시작 결과이므로 프록시를 재시작한 뒤 `ocx ready`로 새 프로세스의 준비 상태를 확인하세요.
 
-백그라운드 서비스는 설치할 때 등록한 Codex 홈을 사용합니다. 그 홈을 초기화하고 같은 `CODEX_HOME`에서 `ocx sync`를 실행한 뒤 서비스를 재시작하세요. 셸에서만 경로를 바꾸면 서비스에는 반영되지 않습니다.
+CLI로 설치한 서비스에서는 등록된 `CODEX_HOME`과 `OPENCODEX_HOME`을 사용하세요. 구버전 서비스 정의에 두 경로가 빠져 있다면 같은 설정으로 `ocx service repair`를 한 번 실행하세요. 필요하면 Codex 홈을 초기화하고 `ocx sync` 후 서비스를 재시작하세요. 데스크톱 앱이 관리하는 프록시는 앱에서 재시작하세요.
+
+CLI 서비스를 다른 기존 Codex 홈으로 옮기려면 원래 설정으로 `ocx service uninstall`을 실행하세요. 성공하면 `OPENCODEX_HOME`을 유지하고 `CODEX_HOME`을 새 경로로 바꾼 뒤, 원래 백엔드와 옵션으로 `ocx service install`을 실행하세요.
 
 ### `ocx doctor`
 

@@ -292,7 +292,9 @@ En un Child de Remote Link, la disponibilidad también incluye el enlace. Si no 
 
 Si al iniciar el proxy aparece un mensaje que indica que falta el directorio de Codex, abre Codex una vez o configura `CODEX_HOME` para que apunte al directorio que Codex ya ha inicializado. Después ejecuta `ocx sync`. Si la sincronización se completa, se restablece el enrutamiento, pero `failed` sigue reflejando el fallo al iniciar el proceso actual. Reinicia el proxy y ejecuta `ocx ready` para comprobar el nuevo proceso.
 
-El servicio en segundo plano usa el directorio de Codex registrado al instalarlo. Inicializa ese directorio y ejecuta `ocx sync` con el mismo `CODEX_HOME` antes de reiniciar el servicio. Cambiar la variable solo en la consola no modifica la configuración del servicio.
+Para un servicio instalado con la CLI, usa los valores registrados de `CODEX_HOME` y `OPENCODEX_HOME`. Si la definición antigua del servicio omite estas rutas, ejecuta `ocx service repair` una vez con esos valores. Inicializa el directorio de Codex si hace falta, ejecuta `ocx sync` y reinicia el servicio. Si la aplicación de escritorio gestiona el proxy, reinícialo desde la aplicación.
+
+Para trasladar el servicio de la CLI a otro directorio de Codex existente, ejecuta `ocx service uninstall` con la configuración original. Si termina correctamente, conserva `OPENCODEX_HOME`, selecciona el nuevo `CODEX_HOME` y ejecuta `ocx service install` con el mismo backend y las mismas opciones.
 
 ### `ocx resolve [--json]`
 

@@ -160,7 +160,9 @@ ocx status --json
 
 如果代理启动时提示找不到 Codex 主目录，请先启动一次 Codex，或将 `CODEX_HOME` 指向 Codex 已初始化的目录，然后运行 `ocx sync`。同步成功后路由会恢复，但 `failed` 仍表示当前进程启动时的结果。请重启代理，再运行 `ocx ready` 检查新进程是否就绪。
 
-后台服务使用安装时登记的 Codex 主目录。请先初始化该目录，在相同的 `CODEX_HOME` 下运行 `ocx sync`，然后重启服务。仅在当前终端更改变量不会更新已登记的服务。
+对于由 CLI 管理的服务，请使用注册时的 `CODEX_HOME` 和 `OPENCODEX_HOME`。如果旧版服务定义中缺少这些路径，请使用相同设置运行一次 `ocx service repair`。按需初始化 Codex 主目录，运行 `ocx sync`，再重启服务。如果代理由桌面应用管理，请在应用中重启。
+
+如需将 CLI 服务迁移到另一个已有的 Codex 主目录，请先使用原设置运行 `ocx service uninstall`。卸载成功后，保留 `OPENCODEX_HOME`，选择新的 `CODEX_HOME`，再使用原后端和选项运行 `ocx service install`。
 
 ### `ocx doctor`
 

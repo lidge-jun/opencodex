@@ -585,7 +585,9 @@ or point `CODEX_HOME` at its existing home, then run `ocx sync`. A successful sy
 routing, but `failed` records the startup result for that listener. Restart the proxy and run
 `ocx ready` to check the new process.
 
-An installed background service uses the Codex home recorded at installation. Initialize that home and run `ocx sync` with the same `CODEX_HOME` before restarting the service. A shell setting alone does not update the registered service.
+For a CLI-managed service, use the registered `CODEX_HOME` and `OPENCODEX_HOME`. If an older service definition omits these paths, run `ocx service repair` once with those settings. Initialize the Codex home if needed, run `ocx sync`, then restart the service. For a Desktop-managed proxy, restart from the app.
+
+To move a CLI service to another existing Codex home, run `ocx service uninstall` with the original settings. After it succeeds, keep `OPENCODEX_HOME`, select the new `CODEX_HOME`, and run `ocx service install` with the original backend and options.
 
 On a Remote Link Child, readiness also covers the link. While the link cannot carry a request,
 `/readyz` answers `503` with `status: "pending"` and `link: {state: "unavailable", reason}`, so

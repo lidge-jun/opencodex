@@ -152,7 +152,9 @@ ocx status --json
 
 如果代理啟動時顯示找不到 Codex 家目錄，請先啟動一次 Codex，或將 `CODEX_HOME` 指向 Codex 已初始化的目錄，然後執行 `ocx sync`。同步成功後即可恢復路由，但 `failed` 仍反映目前程序啟動時的結果。請重新啟動代理，再執行 `ocx ready` 確認新程序是否就緒。
 
-背景服務使用安裝時登記的 Codex 家目錄。請先初始化該目錄，用相同的 `CODEX_HOME` 執行 `ocx sync`，再重新啟動服務。只在目前的終端機變更變數不會更新已登記的服務。
+對於由 CLI 管理的服務，請使用登記時的 `CODEX_HOME` 和 `OPENCODEX_HOME`。如果舊版服務定義缺少這些路徑，請使用相同設定執行一次 `ocx service repair`。視需要初始化 Codex 家目錄，執行 `ocx sync`，再重新啟動服務。如果代理由桌面應用程式管理，請在應用程式中重新啟動。
+
+如要將 CLI 服務移至另一個現有的 Codex 家目錄，請先用原本的設定執行 `ocx service uninstall`。解除安裝成功後，保留 `OPENCODEX_HOME`，選擇新的 `CODEX_HOME`，再以原本的後端和選項執行 `ocx service install`。
 
 ### `ocx doctor`
 

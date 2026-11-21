@@ -168,7 +168,9 @@ Par défaut, la commande effectue une seule sonde. Avec `--wait`, elle interroge
 
 Si le message de démarrage du proxy indique que le répertoire de Codex est introuvable, lancez Codex une première fois ou faites pointer `CODEX_HOME` vers le répertoire déjà initialisé par Codex. Exécutez ensuite `ocx sync`. Une synchronisation réussie rétablit le routage, mais l’état `failed` conserve le résultat du démarrage du processus en cours. Redémarrez le proxy et exécutez `ocx ready` pour vérifier le nouveau processus.
 
-Un service en arrière-plan utilise le répertoire Codex enregistré à son installation. Initialisez ce répertoire et exécutez `ocx sync` avec le même `CODEX_HOME` avant de redémarrer le service. Une modification dans le shell seul ne change pas la configuration du service.
+Pour un service installé avec la CLI, utilisez les valeurs enregistrées de `CODEX_HOME` et `OPENCODEX_HOME`. Si une ancienne définition du service omet ces chemins, exécutez une fois `ocx service repair` avec ces valeurs. Initialisez le répertoire de Codex si nécessaire, exécutez `ocx sync`, puis redémarrez le service. Si l’application de bureau gère le proxy, redémarrez-le depuis celle-ci.
+
+Pour déplacer le service CLI vers un autre répertoire Codex existant, exécutez `ocx service uninstall` avec les paramètres d’origine. Une fois la désinstallation réussie, conservez `OPENCODEX_HOME`, sélectionnez le nouveau `CODEX_HOME` et exécutez `ocx service install` avec le backend et les options d’origine.
 
 ### `ocx doctor`
 

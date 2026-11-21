@@ -239,7 +239,9 @@ ve geçersiz bağımsız değişkenler için 64'tür.
 
 Proxy başlatılırken Codex ana dizininin bulunamadığı bildirilirse Codex’i bir kez açın veya `CODEX_HOME` değişkenini Codex’in daha önce hazırladığı dizine ayarlayın. Ardından `ocx sync` komutunu çalıştırın. Başarılı bir eşitleme yönlendirmeyi düzeltir, ancak `failed` durumu çalışan sürecin başlangıç sonucunu göstermeye devam eder. Proxy’yi yeniden başlatın ve yeni sürecin hazır olup olmadığını `ocx ready` ile kontrol edin.
 
-Arka plan hizmeti, kurulum sırasında kaydedilen Codex ana dizinini kullanır. Bu dizini hazırlayın ve hizmeti yeniden başlatmadan önce aynı `CODEX_HOME` değeriyle `ocx sync` komutunu çalıştırın. Yalnızca kabuktaki değişkeni değiştirmek hizmetin ayarını güncellemez.
+CLI ile yönetilen hizmet için kayıtlı `CODEX_HOME` ve `OPENCODEX_HOME` değerlerini kullanın. Eski hizmet tanımında bu yollar yoksa aynı ayarlarla bir kez `ocx service repair` çalıştırın. Gerekirse Codex ana dizinini hazırlayın, `ocx sync` komutunu çalıştırın ve hizmeti yeniden başlatın. Proxy’yi masaüstü uygulaması yönetiyorsa uygulamadan yeniden başlatın.
+
+CLI hizmetini mevcut başka bir Codex ana dizinine taşımak için ilk ayarlarla `ocx service uninstall` çalıştırın. Kaldırma başarılı olunca `OPENCODEX_HOME` değerini koruyun, yeni `CODEX_HOME` değerini seçin ve ilk kurulumdaki arka uç ve seçeneklerle `ocx service install` çalıştırın.
 
 ### `ocx doctor`
 
