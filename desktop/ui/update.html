@@ -120,8 +120,9 @@ function bounded(work, name, deadlineMs) {
   });
 }
 function showError(cause, installFailed = false) {
-  const message = cause instanceof Error ? cause.message : String(cause);
-  const version = installFailed ? latest?.latestVersion : null;
+  const nativeFailure = installFailed && typeof cause?.message === "string" && typeof cause.manualDownload === "boolean";
+  const message = nativeFailure || cause instanceof Error ? cause.message : String(cause);
+  const version = nativeFailure && cause.manualDownload ? latest?.latestVersion : null;
   const hint = version
     ? " If automatic download is slow or blocked by network, install the package manually from GitHub Releases (v" + version + ")."
     : "";
@@ -176,7 +177,14 @@ install.addEventListener("click", async () => {
   manual.hidden = true;
   state.textContent = "Installing update…";
   try { render(await call("update_install")); }
-  catch (cause) { showError(cause, true); try { render(await call("update_status")); } catch (readError) { showError(readError, true); } }
+  catch (cause) {
+    showError(cause, true);
+    try { render(await call("update_status")); }
+    catch {
+      latest = null;
+      state.textContent = "Update status is unavailable. Check again before retrying.";
+    }
+  }
   finally { busy = false; if (latest) render(latest); else check.disabled = false; }
 });
 back.addEventListener("click", async () => {

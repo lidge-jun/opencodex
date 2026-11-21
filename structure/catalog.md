@@ -280,8 +280,8 @@ and sleeps, but exits immediately on terminal failed. `--timeout <seconds>` requ
 accepts positive integer seconds from 1–300. CLI `--json` emits
 `{ready, status, pid, port}`, with status in `ready|pending|failed|unreachable`. Exit 0 means ready;
 exit 1 covers not-ready, pending, failed, timeout, and unreachable; exit 64 means invalid arguments.
-Older proxies without `/readyz` fail closed as unreachable. `/healthz` remains the separate
-liveness contract.
+On terminal failure, the CLI directs the operator to check startup output, fix the cause and restart the proxy.
+Older proxies without `/readyz` fail closed as unreachable. `/healthz` remains the separate liveness contract.
 
 ## Entry shape
 
