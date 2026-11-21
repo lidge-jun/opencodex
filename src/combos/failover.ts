@@ -7,6 +7,7 @@ import { isAnthropicBillingFailure, isAnthropicExtraUsageFailure } from "../prov
 import { hasConflictingReasoningEffortCode } from "../providers/reasoning-metadata";
 import { isKiroAccountProfileRefusal } from "../adapters/kiro-refusal";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../adapters/ollama-late-attribution";
+import { M365_RESPONSE_LIMIT_MESSAGES } from "../adapters/m365-copilot/response-limits";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
 import { PersistedCooldownMap } from "./cooldown-store";
@@ -1568,6 +1569,9 @@ function isProviderIntakeRefusal(message: string, rawCode: string | null | undef
   if (PROXY_OWNED_413_CODES.some(owned => lower.includes(owned)) || lower.includes(PROXY_TRANSLATION_BUFFER_WORDING)) {
     return false;
   }
+  // An adapter buffer that overflowed while collecting the answer: the provider already ran the
+  // turn, so this 413 is not a refusal before processing and must not reach another target.
+  if (Object.values(M365_RESPONSE_LIMIT_MESSAGES).some(limit => message.includes(limit))) return false;
   if (message.trim() === OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE) return false;
   const root = parseErrorEnvelope(message);
   return (root ? envelopeErrorRecord(root) : undefined)?.message !== OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE;

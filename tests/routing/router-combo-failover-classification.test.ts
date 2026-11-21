@@ -18,6 +18,7 @@ import {
 } from "../../src/combos/failover";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { formatErrorResponse } from "../../src/bridge/errors";
+import { M365_RESPONSE_LIMIT_MESSAGES } from "../../src/adapters/m365-copilot/response-limits";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../src/adapters/ollama-late-attribution";
 import { normalizeUpstreamErrorText } from "../../src/server/responses/core-errors";
 import { adapterFailureFromMessage, inferHttpStatusFromAdapterMessage } from "../../src/lib/errors";
@@ -699,6 +700,18 @@ describe("combo failure hop/stop verdicts", () => {
     // A provider's own 413 through the same consumer still hops.
     const provider = await consumeComboFailure(new Response(JSON.stringify({ error: { message: "Request Entity Too Large", type: "invalid_request_error" } }), { status: 413 }));
     expect(comboFailureDecision(provider.response.status, provider.classificationText, { code: provider.upstreamCode })).toBe("hop");
+  });
+
+  test("an adapter buffer 413 raised after the request was sent stays terminal (#9017 review)", async () => {
+    // Microsoft 365 Copilot overflows its own answer, reasoning, message or frame buffer only
+    // after ChatHub ran the turn, so another target must not generate it again.
+    for (const message of Object.values(M365_RESPONSE_LIMIT_MESSAGES)) {
+      const failure = await consumeComboFailure(formatErrorResponse(413, "upstream_error", message));
+      expect(comboFailureDecision(failure.response.status, failure.classificationText, { code: failure.upstreamCode })).toBe("stop");
+    }
+    // Its pre-send caps are this target's intake limits, so the next target may still serve the turn.
+    const preSend = await consumeComboFailure(formatErrorResponse(413, "upstream_error", "Microsoft 365 Copilot image exceeds the 5 MiB limit"));
+    expect(comboFailureDecision(preSend.response.status, preSend.classificationText, { code: preSend.upstreamCode })).toBe("hop");
   });
   test("hard stops still outrank a provider 413", () => {
     expect(comboFailureDecision(413, "too large", { code: "origin_rejected" })).toBe("stop");
