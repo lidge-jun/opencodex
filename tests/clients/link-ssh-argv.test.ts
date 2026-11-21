@@ -25,6 +25,7 @@ import {
 } from "../../src/link/ssh-runner";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import { confirmWindowsShell, requireRemotePlatform, requireRemotePlatformFramed } from "../../src/link/remote-platform";
 
 const roots: string[] = [];
 
@@ -89,9 +90,47 @@ test("Windows %OS% probe is a fixed literal that trusts only an already recorded
   expect(argv.slice(0, 2)).toEqual(["ssh", "-T"]);
   expectCommonTrustOptions(argv, "yes", knownHostsFile);
   expect(argv).toContain("ClearAllForwardings=yes");
-  expect(argv.slice(-3)).toEqual(["--", "gamma.example.test", "cmd /c echo %OS%"]);
-  expect(WINDOWS_OS_PROBE).toBe("cmd /c echo %OS%");
+  expect(argv.slice(-3)).toEqual(["--", "gamma.example.test", "cmd.exe /c echo %OS%"]);
+  // Win32-OpenSSH runs `cmd.exe /c "<command>"`; a bare `cmd` there keeps the closing quote in the echo (#8972).
+  expect(WINDOWS_OS_PROBE).toBe("cmd.exe /c echo %OS%");
   expect(() => buildWindowsProbeArgv({ alias: "-oProxyCommand=x", knownHostsFile })).toThrow(LinkSshArgumentError);
+});
+
+/** A host that answers the %OS% probe with `windows` and every other command with `other`. */
+function platformRunner(windows: { code: number; stdout: string; stderr?: string }, other: { code: number; stdout: string; stderr?: string }) {
+  const answer = (value: { code: number; stdout: string; stderr?: string }) => ({ stderr: "", ...value });
+  return {
+    run: async (argv: readonly string[]) => answer(argv.at(-1) === WINDOWS_OS_PROBE ? windows : other),
+    spawnTunnel: () => { throw new Error("no tunnel in a platform probe"); },
+  };
+}
+
+test.each(["Windows_NT\r\n", "Windows_NT\"\r\n", "Windows_NT\" \r\n", "  Windows_NT\"\n"])("%j from the %OS% probe is Windows (#8972)", async stdout => {
+  const knownHostsFile = tempPath("windows-nt");
+  const runner = platformRunner({ code: 0, stdout }, { code: 1, stdout: "", stderr: "unexpected uname" });
+  expect(await requireRemotePlatform(runner, "win", null, knownHostsFile)).toBe("windows");
+  expect(await requireRemotePlatformFramed(runner, "win", null, knownHostsFile)).toBe("windows");
+  expect(await confirmWindowsShell(runner, "win", null, knownHostsFile)).toBe(true);
+});
+
+test.each(["\"Windows_NT\"\r\n", "Windows_NT\"\"\r\n", "Windows_NTx\r\n", "Windows\r\n"])("%j from the %OS% probe is not Windows", async stdout => {
+  const knownHostsFile = tempPath("not-windows-nt");
+  const runner = platformRunner({ code: 0, stdout }, { code: 0, stdout: "Linux\n" });
+  expect(await requireRemotePlatform(runner, "linux", null, knownHostsFile)).toBe("posix");
+  expect(await confirmWindowsShell(runner, "linux", null, knownHostsFile)).toBe(false);
+});
+
+test("an undetermined platform carries the remote reason as a hint (#8972)", async () => {
+  const knownHostsFile = tempPath("platform-hint");
+  const localized = platformRunner({ code: 0, stdout: "Windows_NT?\r\n" }, { code: 1, stdout: "", stderr: "El sistema no puede encontrar la ruta especificada.\r\n" });
+  const error = await requireRemotePlatform(localized, "win", null, knownHostsFile).catch((caught: unknown) => caught);
+  expect(sshRunnerErrorHint(error)).toBe("Remote platform could not be determined: El sistema no puede encontrar la ruta especificada.");
+  const silent = platformRunner({ code: 127, stdout: "" }, { code: 0, stdout: "?\n" });
+  const bare = await requireRemotePlatform(silent, "odd", null, knownHostsFile).catch((caught: unknown) => caught);
+  expect(sshRunnerErrorHint(bare)).toBe("Remote platform could not be determined");
+  const refused = platformRunner({ code: 255, stdout: "", stderr: "win: Permission denied (publickey).\r\n" }, { code: 0, stdout: "Linux\n" });
+  const transport = await requireRemotePlatform(refused, "win", null, knownHostsFile).catch((caught: unknown) => caught);
+  expect(sshRunnerErrorHint(transport)).toBe("SSH platform discovery failed: win: Permission denied (publickey).");
 });
 
 test("probe argv uses accept-new only with its temporary known_hosts file", () => {

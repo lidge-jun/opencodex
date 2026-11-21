@@ -1,5 +1,8 @@
+import { getStaleCached } from "../codex/model-cache";
+import { filterCatalogVisibleModels } from "../codex/catalog/model-visibility";
 import { resolveProtocolSettings } from "../protocols/settings";
 import { resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
+import { slugEquals } from "../providers/slug-codec";
 import { effectiveGoogleMode } from "../providers/registry";
 import type { RouteResult } from "../router";
 import type { OcxConfig } from "../types";
@@ -35,13 +38,34 @@ export function nativeGeminiDestination(config: OcxConfig, req: Request, selecto
 
 /** A native alias must route to the same wire ID and pass scope under its own resolved destination. */
 function allowedWireAlias(config: OcxConfig, req: Request, alias: string, scope?: AdmissionModelScope): CatalogRow | undefined {
-  if (!GEMINI_MODEL.test(alias)) return undefined;
+  if (!GEMINI_MODEL.test(alias) || nativeModelDisabled(config, alias)) return undefined;
   const destination = resolveNativeDestination(config, req, alias);
   if (destination?.wireModel !== alias || !routeAllowedByScope(scope, destination.route)) return undefined;
   return { selector: alias, route: destination.route };
 }
 
 type CatalogRow = { selector: string; route: RouteResult };
+
+/** Read the same accepted provider roster as the other catalogs; do not start discovery here. */
+export function geminiNativeDiscoveredRoutes(config: OcxConfig, req: Request, selector?: string): CatalogRow[] {
+  const provider = config.providers[PROVIDER];
+  if (!resolveProtocolSettings(config).rollout.geminiNativeAntigravity
+    || !provider || provider.disabled === true || provider.liveModels === false
+    || (selector !== undefined && !selector.startsWith(`${PROVIDER}/`))) return [];
+  const cached = getStaleCached(PROVIDER) ?? [];
+  const models = filterCatalogVisibleModels(cached.filter(model =>
+    model.provider === PROVIDER && GEMINI_MODEL.test(model.id)), config);
+  return models.flatMap(({ id }) => {
+    const qualified = `${PROVIDER}/${id}`;
+    if (selector !== undefined && selector !== qualified) return [];
+    const destination = resolveNativeDestination(config, req, qualified);
+    return destination?.route.modelId === id ? [{ selector: qualified, route: destination.route }] : [];
+  });
+}
+
+function nativeModelDisabled(config: OcxConfig, modelId: string): boolean {
+  return config.disabledModels?.some(slug => slugEquals(slug, PROVIDER, modelId)) ?? false;
+}
 
 export function geminiNativeCatalogLookup(
   config: OcxConfig, req: Request, alias: string, rows: () => readonly CatalogRow[], scope?: AdmissionModelScope,
@@ -52,7 +76,8 @@ export function geminiNativeCatalogLookup(
 }
 
 function advertisedWireModels(config: OcxConfig, route: RouteResult): string[] {
-  return [undefined, "low", "medium", "high"].flatMap(effort => nativeWireModel(config, route, effort) ?? []);
+  if (route.providerName !== PROVIDER || nativeModelDisabled(config, route.modelId)) return [];
+  return [undefined, "low", "medium", "high", "xhigh"].flatMap(effort => nativeWireModel(config, route, effort) ?? []);
 }
 
 export function geminiNativeCatalogAliases(

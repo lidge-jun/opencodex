@@ -245,9 +245,9 @@ export async function applyConnectedRouteIntent(
   const effective = effectiveRouteIntent(intent.document, options.statePath);
   const off = ROUTE_CLIENT_IDS.filter(id => !effective.clients[id].enabled && (!options.onlyClients || options.onlyClients.includes(id)));
   const receipt = await materializeLocalRouteIntent(config, intent.document, previousModels, { ...options, onlyClients: off });
+  if (intent.localOnly) receipt.catalogPending = true;
   persist(receipt);
-  if (intent.localOnly) { receipt.catalogPending = true; persist(receipt); return receipt; }
-  if (off.length === ROUTE_CLIENT_IDS.length) return receipt;
+  if (intent.localOnly || off.length === ROUTE_CLIENT_IDS.length) return receipt;
   let models: ExportModel[];
   try { models = await loadConnectedRouteModels(connection, token, deps); }
   catch {

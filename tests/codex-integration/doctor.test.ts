@@ -41,7 +41,7 @@ import {
 } from "../../src/lib/local-management-capability";
 import { createLocalAttestationProof, LOCAL_ATTESTATION_PROOF_HEADER } from "../../src/lib/local-management-attestation";
 import { readRuntimePort, removeRuntimePort, writeRuntimePort } from "../../src/config/process-state";
-import { fetchNativeMainAdmission, formatNativeMainAdmissionLines } from "../../src/cli/doctor";
+import { fetchNativeMainAdmission, formatNativeMainAdmissionLines, isOwnershipFence, localOwnershipRecheck } from "../../src/cli/doctor";
 import { findDeadPid } from "../helpers/dead-pid";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { STORE_BUDGET_MS } from "../helpers/test-budget";
@@ -510,6 +510,25 @@ describe("live native-main admission in doctor", () => {
     expect(formatNativeMainAdmissionLines(report)).toEqual([]);
   });
 
+  test("names the local ownership re-check under an ownership fence", () => {
+    const report = { status: "blocked", reason: "ownership-unknown" } as const;
+    const recheck = {
+      ownership: "unknown",
+      reason: "the launcher wrapper does not look like a generated opencodex service wrapper: C:\ocx\opencodex-service.cmd",
+    } as const;
+    expect(isOwnershipFence(report)).toBe(true);
+    expect(isOwnershipFence({ status: "blocked", reason: "foreign-ownership" })).toBe(true);
+    expect(isOwnershipFence({ status: "blocked", reason: "recovery-pending" })).toBe(false);
+    expect(isOwnershipFence({ status: "ready" })).toBe(false);
+    expect(formatNativeMainAdmissionLines(report, recheck)).toContain(`       Local re-check (unknown): ${recheck.reason}`);
+    expect(formatNativeMainAdmissionLines(report)).toHaveLength(2);
+  });
+
+  test("reports a re-check that throws instead of failing doctor", () => {
+    expect(localOwnershipRecheck(() => { throw new Error("schtasks timed out"); }))
+      .toEqual({ ownership: "unknown", reason: "inspection failed: schtasks timed out" });
+  });
+
   test("runDoctor reports a separate fenced service process, not its local gate", async () => {
     const secret = "A".repeat(43);
     const home = mkdtempSync(join(tmpdir(), "ocx-doctor-admission-"));
@@ -591,6 +610,7 @@ describe("live native-main admission in doctor", () => {
       const report = logs.join("\n");
       expect(report).toContain("native-main admission is fenced (reason: foreign-ownership)");
       expect(report).toContain("Native model requests return 503 until this clears.");
+      expect(report).toContain("Local re-check (");
     } finally {
       for (const cleanup of restore.reverse()) cleanup();
       if (proxy.exitCode === null) {

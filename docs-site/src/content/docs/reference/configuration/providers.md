@@ -1817,6 +1817,10 @@ their previous behavior. See the
 [ordering migration note](/guides/model-ordering/#migration-note-native-ids-in-existing-orders).
 `modelDisplayNames` on a provider controls readable labels without changing wire ids.
 
+## Reasoning-effort rejection diagnostics
+
+See the [reasoning-effort diagnostic limits](/guides/providers/#reasoning-effort-rejection-diagnostics) before relying on automatic effort repair or learned effort support.
+
 ## Routed agent messages
 
 With the [`openai-responses` adapter](/reference/adapters/#openai-responses), Codex

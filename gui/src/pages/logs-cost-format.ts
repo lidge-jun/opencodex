@@ -56,11 +56,13 @@ export function estimateReasonsForBilling(
   return reasons.filter(reason => !TOKEN_PRICE_REASONS.has(reason));
 }
 
+export type PartialCostResult = { kind: "partial"; subtotalUsd: number; unpricedAttempts: number };
+
 type EstimatedCostResult = {
   kind: "value";
   estimate: { cost: { total: number }; priorityLowerBound?: boolean; billing?: CostBilling; estimated?: boolean };
   estimateReasons?: readonly CostEstimateReason[];
-} | { kind: "unavailable" };
+} | PartialCostResult | { kind: "unavailable" };
 
 /**
  * Cost cells render a fixed `$0.1401` in every locale. The column header is the untranslated
@@ -145,6 +147,9 @@ export function formatEstimatedUsd(
   localeTag?: string,
 ): string {
   if (!result || result.kind === "unavailable") return t("logs.cost.unavailable");
+  if (result.kind === "partial") {
+    return t("logs.cost.partial", { amount: formatEstimatedUsdValue(result.subtotalUsd, t, localeTag) });
+  }
   return formatEstimatedUsdValue(
     result.estimate.cost.total,
     t,

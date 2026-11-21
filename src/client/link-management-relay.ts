@@ -22,6 +22,17 @@ import {
 
 export const LINK_CHILD_READ_ONLY = "link_child_read_only";
 
+/**
+ * The one Home read a Child's local admin token may make through this relay (#8999): GOAT's passive
+ * `ocx.quota-pool/1` read. `pathname` is the parsed request path after the relay prefix, the same value
+ * the relay forwards, so a percent-encoded, doubled or case-varied spelling never matches. Everything
+ * else under the prefix stays a dashboard-session read, and the query still passes
+ * `linkManagementReadAllowed` in {@link relayLinkManagementRead}.
+ */
+export function linkChildAdminReadAllowed(method: string, pathname: string): boolean {
+  return (method === "GET" || method === "HEAD") && pathname === "/api/quota-pool";
+}
+
 export function linkChildRefusalResponse(homePhrase: string, linkId: string, operation: string): Response {
   return Response.json({
     error: linkChildManagementRefusal(homePhrase, linkId, operation),

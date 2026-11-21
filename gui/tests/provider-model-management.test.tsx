@@ -144,10 +144,13 @@ function observed(predicate: () => boolean): Promise<void> {
     observer.observe(host as never, { childList: true, subtree: true, attributes: true, characterData: true });
   });
 }
-const actionButtons = () => [...host.querySelectorAll<HTMLButtonElement>('.pws-model-chip button[aria-label^="Hide: "], .pws-model-chip button[aria-label^="Delete: "]')];
+/** Every row control that can change persisted state: the on/off switch and Delete. */
+const actionButtons = () => [...host.querySelectorAll<HTMLButtonElement>('.pws-model-chip button[role="switch"], .pws-model-chip button[aria-label^="Delete: "]')];
 const actionable = () => actionButtons().filter(button => !button.disabled);
+const deleteButtons = () => [...host.querySelectorAll<HTMLButtonElement>('.pws-model-chip button[aria-label^="Delete: "]')];
+const switches = () => [...host.querySelectorAll<HTMLButtonElement>('.pws-model-chip button[role="switch"]')];
 const chip = (selector: string) => [...host.querySelectorAll<HTMLElement>(".pws-model-chip")].find(value => value.querySelector(".pws-model-chip-main")?.getAttribute("title") === selector)!;
-function action(selector: string, kind: "Delete" | "Hide"): HTMLButtonElement {
+function action(selector: string, kind: "Delete"): HTMLButtonElement {
   const expectedName = `${kind}: ${selector}`;
   const matches = [...chip(selector).querySelectorAll<HTMLButtonElement>("button")]
     .filter(button => button.getAttribute("aria-label") === expectedName);
@@ -155,7 +158,15 @@ function action(selector: string, kind: "Delete" | "Hide"): HTMLButtonElement {
   expect(matches[0]!.title).toBe(expectedName);
   return matches[0]!;
 }
+/** The row's on/off switch, addressed by the identifier Codex shows (its accessible name). */
+function switchFor(label: string): HTMLButtonElement {
+  const matches = switches().filter(button => button.getAttribute("aria-label") === label);
+  expect(matches).toHaveLength(1);
+  return matches[0]!;
+}
 const ids = () => [...host.querySelectorAll(".pws-model-id")].map(node => node.textContent);
+/** Rows that are on for Codex. Off rows stay listed so they can be switched back on. */
+const onIds = () => [...host.querySelectorAll(".pws-model-chip:not(.pws-model-chip--off) .pws-model-id")].map(node => node.textContent);
 const feedback = () => [...host.querySelectorAll('[role="alert"], [role="status"]')].map(node => node.textContent).join(" ");
 async function waitFor(predicate: () => boolean) {
   // Let React finish effects before awaiting a future DOM transition in a separate turn.
@@ -210,50 +221,56 @@ for (const counterpart of ["native", "discovered", "none"] as const) {
     if (counterpart !== "none") underlying = row("same", { provider, namespaced: counterpart === "native" ? "same" : "vendor/same", native: counterpart === "native" });
     rows.push(row("independently-hidden", { provider, namespaced: `${provider}/independently-hidden`, disabled: true }));
     selected = { [provider]: ["another"] };
-    await mount(provider); await waitFor(() => actionable().length === 1);
+    // The custom row has its switch and Delete; the independently hidden row has its switch.
+    await mount(provider); await waitFor(() => actionable().length === 3);
     await click(action(`${provider}/same`, "Delete"));
     await waitFor(() => feedback().includes("Custom definition deleted")); await current();
     expect(requests).toEqual([{ path: "/api/custom-models/stable%2Fid", method: "DELETE" }]);
     expect(custom).toEqual([]); expect(selected).toEqual({ [provider]: ["another"] });
     expect(rows.find(value => value.id === "independently-hidden")?.disabled).toBe(true);
-    expect(ids()).toEqual(counterpart === "none" ? [] : ["same"]);
-    await refreshCurrent(); expect(ids()).toEqual(counterpart === "none" ? [] : ["same"]);
+    expect(switchFor(`${provider}/independently-hidden`).getAttribute("aria-checked")).toBe("false");
+    // No tombstone: Delete never writes the counterpart's disabled flag. A discovered counterpart
+    // is still off because the provider allowlist ("another") does not admit it; native ignores it.
+    expect(rows.find(value => value.id === "same")?.disabled ?? false).toBe(false);
+    const listed = counterpart === "none" ? ["independently-hidden"] : ["independently-hidden", "same"];
+    const on = counterpart === "native" ? ["same"] : [];
+    expect(ids()).toEqual(listed); expect(onIds()).toEqual(on);
+    await refreshCurrent(); expect(ids()).toEqual(listed); expect(onIds()).toEqual(on);
   });
 }
 
-test("same-label custom and account-native rows keep disjoint Delete/Hide identities", async () => {
+test("same-label custom and account-native rows keep disjoint Delete/switch identities", async () => {
   const id = "account-work/gpt-5.5";
   const nativeSelector = id;
   const customSelector = "openai/account-work-gpt-5.5";
   custom = [{ id: "override", provider: "openai", modelId: id }];
   rows = [row(id, { provider: "openai", namespaced: nativeSelector, native: true }),
     row(id, { provider: "openai", namespaced: customSelector, custom: true, customId: "override" })];
-  await mount("openai"); await waitFor(() => actionable().length === 2);
+  await mount("openai"); await waitFor(() => actionable().length === 3);
   expect(ids()).toEqual([nativeSelector, customSelector]);
-  expect(actionButtons().map(button => button.getAttribute("aria-label"))).toEqual([
-    "Hide: account-work/gpt-5.5", "Delete: openai/account-work-gpt-5.5",
-  ]);
-  expect(actionButtons().map(button => button.title)).toEqual([
-    "Hide: account-work/gpt-5.5", "Delete: openai/account-work-gpt-5.5",
-  ]);
+  // The native row is named by its slug, the custom override by its namespaced id.
+  expect(switches().map(button => button.getAttribute("aria-label"))).toEqual([nativeSelector, customSelector]);
+  expect(deleteButtons().map(button => button.getAttribute("aria-label"))).toEqual(["Delete: openai/account-work-gpt-5.5"]);
+  expect(deleteButtons().map(button => button.title)).toEqual(["Delete: openai/account-work-gpt-5.5"]);
   expect([...host.querySelectorAll(".pws-model-chip-main")].map(button => button.getAttribute("aria-label")))
     .toEqual(["Copy ID", "Copy ID"]);
   await click(action(customSelector, "Delete")); await waitFor(() => ids().length === 1);
   expect(requests).toEqual([{ path: "/api/custom-models/override", method: "DELETE" }]);
   expect(rows[0]?.disabled).toBe(false);
   await refreshCurrent(); expect(ids()).toEqual([id]);
-  await waitFor(() => actionable().length === 1); await click(action(nativeSelector, "Hide"));
-  await waitFor(() => ids().length === 0);
+  await waitFor(() => actionable().length === 1); await click(switchFor(nativeSelector));
+  await waitFor(() => onIds().length === 0 && actionable().length === 1);
+  expect(switchFor(nativeSelector).getAttribute("aria-checked")).toBe("false");
   expect(requests[1]?.body).toEqual({ scope: "models", provider: "openai", targets: [{ id, native: true }], enabled: false });
   const recover = [...host.querySelectorAll("button")].find(button => button.textContent === "Manage visibility in Models")!;
   await click(recover); expect(recovery).toBe(1);
 });
 
-for (const customRow of [true, false]) {
-  test(`dismissing ${customRow ? "Delete" : "Hide"} sends no write and preserves the row`, async () => {
-    if (customRow) addCustom(); else rows = [row("custom-model")];
-    await mount(); await waitFor(() => actionable().length === 1);
-    const button = action("vendor/custom-model", customRow ? "Delete" : "Hide");
+// Only Delete asks for consent; the on/off switch is reversible and applies at once.
+test("dismissing Delete sends no write and preserves the row", async () => {
+    addCustom();
+    await mount(); await waitFor(() => actionable().length === 2);
+    const button = action("vendor/custom-model", "Delete");
     await act(async () => { button.click(); });
     /*
      * The gate must actually appear. Answering through the shared `click` helper would let
@@ -263,12 +280,11 @@ for (const customRow of [true, false]) {
     expect(actionDialogOpen(win.document as unknown as Document)).toBe(true);
     await act(async () => { dismissActionDialog(win.document as unknown as Document); await Promise.resolve(); });
     expect(requests).toEqual([]); expect(ids()).toEqual(["custom-model"]);
-  });
-}
+});
 
 for (const mode of ["reject", "lost", "malformed", "refresh-failed"] as const) {
   test(`DELETE ${mode} reconciles persisted truth, preserves feedback and never PUTs`, async () => {
-    addCustom(); deleteMode = mode; await mount(); await waitFor(() => actionable().length === 1);
+    addCustom(); deleteMode = mode; await mount(); await waitFor(() => actionable().length === 2);
     await click(action("vendor/custom-model", "Delete"));
     await waitFor(() => feedback().includes(mode === "refresh-failed" ? "could not be refreshed" : mode === "reject" ? "Failed" : "could not be confirmed"));
     await current();
@@ -284,11 +300,11 @@ for (const mode of ["reject", "lost", "malformed", "refresh-failed"] as const) {
 test("single flight blocks a second row until the first write and all reconciliation reads finish", async () => {
   addCustom(); rows.push(row("second")); let releaseWrite!: () => void;
   writeGate = new Promise<void>(resolve => { releaseWrite = resolve; });
-  await mount(); await waitFor(() => actionable().length === 2);
-  const first = action("vendor/custom-model", "Delete"); const second = action("vendor/second", "Hide");
+  await mount(); await waitFor(() => actionable().length === 3);
+  const first = action("vendor/custom-model", "Delete"); const second = switchFor("vendor/second");
   await act(async () => { first.click(); second.click(); });
-  // One dialog, not two: the flight is claimed before consent is awaited, so the second
-  // row cannot open its own gate while this one is unanswered.
+  // One dialog and no visibility write: the flight is claimed before consent is awaited, so
+  // the second row's switch cannot act while this one is unanswered.
   expect(win.document.querySelectorAll("dialog.modal-overlay")).toHaveLength(1);
   await act(async () => { acceptActionDialog(win.document as unknown as Document); await Promise.resolve(); });
   expect(requests).toHaveLength(1);
@@ -301,14 +317,14 @@ test("single flight blocks a second row until the first write and all reconcilia
 });
 
 test("three-read revision: parent pair cannot certify actions while current custom GET is pending", async () => {
-  addCustom(); await mount(); await waitFor(() => actionable().length === 1);
+  addCustom(); await mount(); await waitFor(() => actionable().length === 2);
   const inventory = hold("/api/models"), selectionRead = hold("/api/selected-models"), ownership = hold("/api/custom-models");
   await act(async () => { refresh(); });
   expect(actionable()).toEqual([]);
   await Promise.all([inventory.started, selectionRead.started, ownership.started]);
   await act(async () => { selectionRead.release(Response.json(selection())); }); expect(actionable()).toEqual([]);
   await act(async () => { inventory.release(Response.json(rows)); }); await current(); expect(actionable()).toEqual([]);
-  await act(async () => { ownership.release(Response.json(custom)); }); await waitFor(() => actionable().length === 1);
+  await act(async () => { ownership.release(Response.json(custom)); }); await waitFor(() => actionable().length === 2);
   expect(requests).toEqual([]);
 });
 
@@ -325,12 +341,12 @@ for (const failedPath of ["/api/models", "/api/selected-models"]) {
 }
 
 test("reversed parent and ownership responses cannot restore an older custom stable id", async () => {
-  addCustom("old"); await mount(); await waitFor(() => actionable().length === 1);
+  addCustom("old"); await mount(); await waitFor(() => actionable().length === 2);
   const oldRows = structuredClone(rows), oldCustom = structuredClone(custom);
   const staleRows = hold("/api/models"), staleSelection = hold("/api/selected-models"), staleCustom = hold("/api/custom-models");
   await act(async () => { refresh(); }); await Promise.all([staleRows.started, staleSelection.started, staleCustom.started]);
   custom[0]!.id = "replacement"; rows[0]!.customId = "replacement";
-  await act(async () => { refresh(); }); await waitFor(() => actionable().length === 1);
+  await act(async () => { refresh(); }); await waitFor(() => actionable().length === 2);
   await act(async () => {
     staleCustom.release(Response.json(oldCustom)); staleRows.release(Response.json(oldRows)); staleSelection.release(Response.json(selection()));
   });
@@ -347,7 +363,7 @@ test("mismatched current custom ownership never falls back to Hide", async () =>
 test("provider switch rejects the previous provider's delayed ownership", async () => {
   addCustom("vendor-id"); addCustom("other-id", "other", "other-model");
   const delayed = hold("/api/custom-models"); await mount(); await delayed.started;
-  await act(async () => { choose("other"); }); await waitFor(() => actionable().length === 1);
+  await act(async () => { choose("other"); }); await waitFor(() => actionable().length === 2);
   await act(async () => { delayed.release(Response.json([{ id: "vendor-id", provider: "vendor", modelId: "custom-model" }])); });
   expect(ids()).toEqual(["other-model"]); await click(action("other/other-model", "Delete"));
   await waitFor(() => ids().length === 0);
@@ -357,7 +373,8 @@ test("provider switch rejects the previous provider's delayed ownership", async 
 
 test("pending selection rows have no destructive action", async () => {
   rows = [row("pending", { initialSelectionPending: true, disabled: true })]; await mount(); await current();
-  expect(ids()).toEqual([]); expect(feedback()).toContain("Finish model selection"); expect(actionable()).toEqual([]); expect(requests).toEqual([]);
+  expect(ids()).toEqual(["pending"]); expect(onIds()).toEqual([]);
+  expect(feedback()).toContain("Finish model selection"); expect(actionable()).toEqual([]); expect(requests).toEqual([]);
 });
 
 test("malformed DTO makes the parent unavailable, not an editable fallback inventory", async () => {
@@ -398,7 +415,7 @@ for (const moved of [false, true]) {
   test(`focused deletion restores a stable control without stealing focus (moved=${moved})`, async () => {
     addCustom(); rows.push(row("remaining")); let release!: () => void;
     writeGate = new Promise<void>(resolve => { release = resolve; });
-    await mount(); await waitFor(() => actionable().length === 2);
+    await mount(); await waitFor(() => actionable().length === 3);
     const remove = action("vendor/custom-model", "Delete"); remove.focus(); await click(remove);
     const stable = host.querySelector<HTMLInputElement>("input.pws-model-search")!;
     if (moved) stable.focus();
@@ -413,7 +430,7 @@ for (const moved of [false, true]) {
 }
 
 test("custom-only Delete then re-add survives an actual unmount with no tombstone", async () => {
-  addCustom(); await mount(); await waitFor(() => actionable().length === 1);
+  addCustom(); await mount(); await waitFor(() => actionable().length === 2);
   await click(action("vendor/custom-model", "Delete")); await waitFor(() => ids().length === 0); await current();
   const draft = host.querySelector<HTMLInputElement>('input[aria-label="Add custom model"]')!;
   await act(async () => {
@@ -427,17 +444,19 @@ test("custom-only Delete then re-add survives an actual unmount with no tombston
     { path: "/api/custom-models", method: "POST", body: { provider: "vendor", modelId: "custom-model" } },
   ]);
   await act(async () => { root!.unmount(); }); root = undefined;
-  await mount(); await waitFor(() => actionable().length === 1);
+  await mount(); await waitFor(() => actionable().length === 2);
   expect(ids()).toEqual(["custom-model"]); expect(custom[0]?.id).toBe("readded-id");
 });
 
-test("independent hides persist on remount and an external unhide returns through paired refresh", async () => {
+test("a switched-off model stays off on remount and an external re-enable returns through paired refresh", async () => {
   rows = [row("live")]; await mount(); await waitFor(() => actionable().length === 1);
-  await click(action("vendor/live", "Hide")); await waitFor(() => ids().length === 0);
+  await click(switchFor("vendor/live")); await waitFor(() => onIds().length === 0 && actionable().length === 1);
   await act(async () => { root!.unmount(); }); root = undefined;
-  await mount(); await current(); expect(ids()).toEqual([]);
+  await mount(); await current(); expect(ids()).toEqual(["live"]); expect(onIds()).toEqual([]);
+  expect(switchFor("vendor/live").getAttribute("aria-checked")).toBe("false");
   rows[0]!.disabled = false; await refreshCurrent(); await waitFor(() => actionable().length === 1);
-  expect(ids()).toEqual(["live"]); expect(requests).toEqual([{ path: "/api/model-visibility", method: "PUT", body: { scope: "models", provider: "vendor", targets: [{ id: "live", native: false }], enabled: false } }]);
+  expect(onIds()).toEqual(["live"]); expect(switchFor("vendor/live").getAttribute("aria-checked")).toBe("true");
+  expect(requests).toEqual([{ path: "/api/model-visibility", method: "PUT", body: { scope: "models", provider: "vendor", targets: [{ id: "live", native: false }], enabled: false } }]);
 });
 
 test("one parent endpoint pair serves the entire inventory instead of per-chip requests", async () => {

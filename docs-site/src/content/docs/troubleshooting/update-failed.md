@@ -226,11 +226,12 @@ A default pnpm 11 or 12 setup passes this check and updates normally with `ocx u
 ## Desktop app update stalls or fails on "Installing update…"
 
 In the OpenCodex desktop app, **Install update** downloads the installer from GitHub
-Releases before replacing the app and restarting. A failed download or installation with
-a known version shows a manual-download hint and a link to that version's release page.
+Releases and verifies its signature. The update window reports whether verification failed,
+the runtime could not stop or be identified, another stop is in progress, or the platform
+installer failed. If the window times out, check the update status before retrying.
 
-If `Installing update…` stalls or times out, GitHub release downloads may be slow or
-blocked by your network. Use the release link in the error, or find the same version on
+If the package download fails, the window links to the offered version when it is known.
+Use that link, or find the same version on
 the [OpenCodex releases page](https://github.com/lidge-jun/opencodex/releases), and download
 the installer for your operating system and architecture. Preview versions have their own
 release pages; choose the version the app offered.

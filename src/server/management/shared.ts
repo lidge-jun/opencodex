@@ -59,7 +59,7 @@ import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustom
 import type { DesktopProfileModel } from "../../claude/desktop-profile";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
-import { creditChargeUnrepresentable, estimateComboCost, estimateRequestCost, serviceTierContext, normalizeCostTokens, tokensPerSecond, type MatchedPrice } from "../../usage/cost";
+import { creditChargeUnrepresentable, estimateAttemptCost, estimateComboCost, estimateRequestCost, serviceTierContext, normalizeCostTokens, tokensPerSecond, type MatchedPrice } from "../../usage/cost";
 import { costTokensWithinBound, isRepresentableCreditCount } from "../../usage/credit-billing";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { usageModelPriceOptions } from "../../usage/model-identity";
@@ -87,7 +87,7 @@ export type MetricUnavailableReason =
   | "usage_missing" | "usage_unsupported" | "output_missing" | "invalid_duration"
   | "price_unmatched" | "invalid_cache_breakdown"
   | "invalid_usage" | "combo_attempt_unavailable"
-  | "ttft_missing" | "decode_window_too_short"
+  | "ttft_missing" | "decode_window_missing" | "decode_window_too_short"
   // The row is credit-priced, but `providerCredits x creditPriceUsd` cannot be represented (an
   // out-of-bound price or credit count, or an overflowing product). It is deliberately not
   // `price_unmatched`-with-a-token-estimate: falling back would report a different amount than
@@ -115,9 +115,10 @@ export type CostEstimateReason =
 
 export type CostResult =
   | { kind: "value"; estimate: NonNullable<ReturnType<typeof estimateRequestCost>>; estimateReasons: CostEstimateReason[] }
+  | { kind: "partial"; subtotalUsd: number; unpricedAttempts: number }
   | { kind: "unavailable"; reason: MetricUnavailableReason };
 
-export type MetricSource = Pick<RequestLogEntry, "provider" | "model" | "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "usageStatus" | "usage" | "requestedServiceTier" | "configuredServiceTier" | "responseServiceTier" | "tierOutcome" | "routeDecision" | "cacheProvenance"> & {
+export type MetricSource = Pick<RequestLogEntry, "provider" | "model" | "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "protocolTrace" | "usageStatus" | "usage" | "requestedServiceTier" | "configuredServiceTier" | "responseServiceTier" | "tierOutcome" | "routeDecision" | "cacheProvenance"> & {
   attempts?: readonly PersistedUsageAttempt[];
 };
 
@@ -165,7 +166,7 @@ export const MIN_DECODE_WINDOW_MS = 1_000;
  * generation window spans both and stops at the last delta rather than at stream close.
  */
 export function decodeTokPerSecondResult(
-  entry: Pick<MetricSource, "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "usageStatus" | "usage">,
+  entry: Pick<MetricSource, "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "protocolTrace" | "usageStatus" | "usage">,
 ): DecodeTokPerSecondResult {
   if (!entry.usage) return { kind: "unavailable", reason: "usage_missing" };
   if (entry.usageStatus === "unsupported") return { kind: "unavailable", reason: "usage_unsupported" };
@@ -179,6 +180,7 @@ export function decodeTokPerSecondResult(
     return value === null ? { kind: "unavailable", reason: "invalid_duration" }
       : { kind: "value", value, estimated: true, timingBasis: "generation-window" };
   }
+  if (entry.protocolTrace?.inbound === "gemini") return { kind: "unavailable", reason: "decode_window_missing" };
   // A row that predates TTFT capture, or a non-streaming turn that never recorded one, has no
   // window to measure. That is a different fact from a bad duration, so it gets its own reason.
   if (entry.firstOutputMs === undefined) return { kind: "unavailable", reason: "ttft_missing" };
@@ -248,7 +250,20 @@ export function costResult(entry: MetricSource): CostResult {
   const estimate = attempts?.length
     ? estimateComboCost(attempts, undefined, tier)
     : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier, ...usageModelPriceOptions(entry, entry) });
-  if (!estimate) return { kind: "unavailable", reason: unavailableCostReason(entry) };
+  if (!estimate) {
+    // Keep the shared request-total contract. Native Gemini credential replays can show a
+    // separate subtotal from the attempts for which we do have a price.
+    if (entry.protocolTrace?.inbound === "gemini" && entry.protocolTrace.mode === "native"
+      && attempts?.some(attempt => attempt.recoveryKinds.includes("oauth-401"))) {
+      const priced = attempts.flatMap(attempt => estimateAttemptCost(attempt, undefined, tier) ?? []);
+      const unpricedAttempts = attempts.length - priced.length;
+      const subtotalUsd = priced.reduce((sum, attempt) => sum + attempt.cost.total, 0);
+      if (priced.length && unpricedAttempts > 0 && Number.isFinite(subtotalUsd)) {
+        return { kind: "partial", subtotalUsd, unpricedAttempts };
+      }
+    }
+    return { kind: "unavailable", reason: unavailableCostReason(entry) };
+  }
   // Provenance follows the basis that produced the amount. A credit charge is
   // `providerCredits x creditPriceUsd`; the token rates were resolved only to decide whether the
   // row falls back to them, so anything derived from those rates — a cache-detail caveat, a price

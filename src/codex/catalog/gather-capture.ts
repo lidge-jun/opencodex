@@ -40,7 +40,7 @@ import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, mo
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider, type ModelMetadata } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
-import { applyRegistryCapabilitySeedFill } from "./model-hints";
+import { applyRegistryCapabilitySeedFill, captureCatalogModelPolicy } from "./model-hints";
 import {
   captureFastPolicyAuthority,
   fastPolicyForModel,
@@ -392,6 +392,7 @@ export function captureProviderGather(
   // explicit {}. enrichProviderFromRegistry already preserves/fills that contract; replacing it
   // with the resolver's per-key registry fill would turn "no configured default" into a seed default.
   const provider = recursivelyFreeze(enriched);
+  captureCatalogModelPolicy(name, provider);
   const fastPolicyAuthority = captureFastPolicyAuthority(
     name,
     provider,

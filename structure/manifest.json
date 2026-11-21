@@ -467,8 +467,9 @@
       "path": "transports/responses-combo-boundaries.md",
       "tier": 3,
       "title": "Combo Streaming Boundaries",
-      "scope": "Combo preflight output commitment, turn lease lifetime, and bounded hop warnings. Original client labels on terminal envelopes and failed-turn request identities.",
+      "scope": "Combo preflight output commitment, turn lease lifetime, and bounded hop warnings. Reasoning-effort diagnostic limits for repair and fallback. Original client labels on terminal envelopes and failed-turn request identities.",
       "documents": [
+        "src/providers/reasoning-metadata.ts",
         "src/server/"
       ]
     },
@@ -1670,6 +1671,16 @@
   "contracts": {
     "version": 1,
     "entries": [
+      {
+        "id": "reasoning-effort-diagnostic-limits",
+        "owner": {
+          "document": "transports/responses-combo-boundaries.md",
+          "anchor": "reasoning-effort-diagnostics"
+        },
+        "dependents": [
+          "providers-and-adapters.md"
+        ]
+      },
       {
         "id": "paginated-history-writer",
         "owner": {

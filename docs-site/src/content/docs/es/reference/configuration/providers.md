@@ -7,6 +7,12 @@ description: "Entradas de proveedores, autenticación, puntos finales, catálogo
 
 Un proveedor le dice a opencodex dónde vive un modelo, qué adaptador de cable habla y cómo se autentican las solicitudes.
 
+<a id="reasoning-effort-rejection-diagnostics"></a>
+
+## Diagnósticos de rechazo del esfuerzo de razonamiento
+
+Consulte los [límites de los diagnósticos de esfuerzo de razonamiento](/es/guides/providers/#reasoning-effort-rejection-diagnostics) antes de depender de la reducción automática del esfuerzo o del aprendizaje de niveles admitidos.
+
 <a id="deepseek-tokens-versus-image-bytes"></a>
 
 ## DeepSeek: tokens y bytes de imágenes

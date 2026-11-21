@@ -51,8 +51,12 @@ try {
 
   $proof = Microsoft.PowerShell.Utility\ConvertTo-Json -Compress -InputObject @{ xml = $xml; sid = $sid; name = $account }
   $utf8 = [Text.UTF8Encoding]::new($false, $true)
+  $stopClock = [Diagnostics.Stopwatch]::StartNew()
   [Console]::WriteLine([Convert]::ToBase64String($utf8.GetBytes($proof)))
-  if ([Console]::ReadLine() -cne 'stop') { 'unverified-registration'; return }
+  $approval = [Console]::ReadLine()
+  if ($approval -cnotmatch '^stop-before ([1-9][0-9]{0,8})$') { 'unverified-registration'; return }
+  $stopBeforeMs = [int]$Matches[1]
+  if ($stopClock.ElapsedMilliseconds -ge $stopBeforeMs) { 'failed'; return }
 
   # Resolve the path afresh only to detect a changed registration. It is never a stop target.
   $current = $folder.GetTask($name)
@@ -63,6 +67,7 @@ try {
     return
   }
   foreach ($target in $verified) {
+    if ($stopClock.ElapsedMilliseconds -ge $stopBeforeMs) { 'failed'; return }
     $target.Instance.Refresh()
     if ([Guid]$target.Instance.InstanceGuid -ne $target.Id -or
         $target.Instance.EnginePID -ne $target.EnginePid -or $target.Instance.State -ne 4) {
@@ -70,8 +75,12 @@ try {
     }
   }
   foreach ($target in $verified) {
+    if ($stopClock.ElapsedMilliseconds -ge $stopBeforeMs) { 'failed'; return }
     $attempted = $true
-    $target.Instance.Stop()
+    try { $target.Instance.Stop() } finally {
+      [Console]::WriteLine('stop-attempted')
+      [Console]::Out.Flush()
+    }
   }
   'ended'
 } catch {

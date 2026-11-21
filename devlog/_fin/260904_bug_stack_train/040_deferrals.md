@@ -11,6 +11,12 @@ oversized or invalid request would be replayed to the next provider. Their own t
 encode the wrong expectation. #3348 functionally supersedes #3312 (30 shared files,
 near-identical source diffs; #3312 is additionally CONFLICTING/DIRTY).
 
+**Superseded for 413 (2026-11-21):** the coordinator reversed the generic-413 half for
+#9017 (#9021). A provider 413 now hops to the next untried target with cooldown "none",
+because combo targets have different intake limits and the refusal precedes processing;
+the proxy-owned 413s stay terminal and generic 410 is unchanged. See
+`structure/runtime.md`.
+
 At 2,248 lines across 34 files spanning failover, credential rotation, durable
 cooldown persistence, shutdown, and the core response path, this is not reviewable
 inside a mixed campaign. It needs its own split stack.

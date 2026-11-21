@@ -171,11 +171,12 @@ sürerse tam `ocx update` terminal çıktısı, `npm config get prefix` ve
 ## Masaüstü güncellemesi “Installing update…” aşamasında takılıyorsa
 
 OpenCodex masaüstü uygulamasında **Install update**, uygulamayı değiştirmeden ve
-yeniden başlatmadan önce yükleyiciyi GitHub Releases'ten indirir. Bilinen sürümde
-indirme/kurulum başarısızsa elle indirme ipucu ve o sürümün yayın bağlantısı gösterilir.
+yeniden başlatmadan önce yükleyiciyi GitHub Releases'ten indirir ve imzasını doğrular.
+Pencere, imza doğrulama hatasını, proxy'nin belirlenemediğini veya durdurulamadığını,
+durdurma işleminin zaten sürdüğünü ya da yükleyicinin başarısız olduğunu bildirir.
+Zaman aşımı durumunda yeniden denemeden önce güncelleme durumunu kontrol edin.
 
-“Installing update…” takılır veya zaman aşımına uğrarsa ağınız GitHub yayın
-indirmelerini yavaşlatıyor veya engelliyor olabilir. Hatadaki bağlantıyı kullanın
+Paket indirilemezse ve sürüm biliniyorsa pencere o sürümün bağlantısını gösterir. Bağlantıyı kullanın
 ya da [yayınlar sayfasında](https://github.com/lidge-jun/opencodex/releases) aynı
 sürümü bulup işletim sisteminize ve mimarinize uygun yükleyiciyi indirin.
 Önizleme sürümlerinin ayrı sayfaları vardır; uygulamanın önerdiği sürümü seçin.
