@@ -420,7 +420,9 @@ No hay control de tablero para esto todavía; configúrelo en `config.json` o co
 
 ## Auto-actualización de catálogo (`catalogAutoRefresh`)
 
-Habilitado de forma predeterminada cuando OpenCodex administra su cliente local Codex: la sección o `enabled` pueden estar ausentes. El proxy actualiza su catálogo de modelos cada 60 minutos, con una actualización inicial unos tres minutos después del inicio. Cuando se desactiva la integración Codex, o la instancia se ejecuta como un concentrador o junto a otro proxy en vivo, la actualización de fondo se ejecuta solo con un `"enabled": true` explícito, y nunca lee Codex fuentes.
+Habilitado de forma predeterminada cuando OpenCodex administra su cliente local Codex o funciona como un concentrador: la sección o `enabled` pueden estar ausentes. La actualización se ejecuta cada 60 minutos, con una inicial unos tres minutos después del inicio. Un concentrador sin cliente local administrado descubre modelos nativos mediante sus cuentas ChatGPT del Pool, sin leer el inicio de sesión nativo del host, inspeccionar su entorno de ejecución ni escribir su catálogo o configuración local de forma predeterminada. Un `"enabled": true` explícito conserva la convergencia del catálogo local después del descubrimiento. Las descargas del catálogo del concentrador incluyen los modelos descubiertos sin escribir el catálogo del host; los clientes conectados los reciben en su próxima sincronización. Las demás instancias con la integración Codex desactivada, o junto a otro proxy activo, mantienen la actualización opcional (`"enabled": true`) sin leer fuentes Codex.
+
+Las descargas requieren un catálogo persistido existente; sin él, el endpoint devuelve 404. El descubrimiento automático no crea un catálogo completo para el cliente.
 
 ```json
 {
@@ -433,7 +435,7 @@ Habilitado de forma predeterminada cuando OpenCodex administra su cliente local 
 | `enabled` | `true` | Ajuste a `false` para desactivar la actualización automática. |
 | `intervalMinutes` | `60` | Actualizar la cadencia; los valores positivos por debajo de 15 se fijan a 15. `0` desactiva la actualización. |
 
-Cada actualización observa el catálogo incluido del entorno de ejecución Codex seleccionado, luego calienta las listas de modelos Codex autenticadas antes de converger en la lista servida. Las fallas de origen utilizan la evidencia existente y vuelven a intentarlo en una marca posterior. Las ediciones de cadencia y habilitación tienen efecto en una marca posterior.
+Para un cliente local administrado, cada actualización observa el catálogo incluido del entorno de ejecución Codex seleccionado, luego calienta las listas de modelos Codex autenticadas antes de converger en la lista servida. Las fallas de origen utilizan la evidencia existente y vuelven a intentarlo en una marca posterior. Las ediciones de cadencia y habilitación tienen efecto en una marca posterior.
 
 Un modelo nativo de OpenAI que la lista de Codex de su cuenta ChatGPT enumera, pero que esta versión OpenCodex aún no conoce, se agrega con los metadatos que se publican para ella (nombre, niveles de razonamiento, ventana de contexto). OpenCodex recuerda tales modelos en `discovered-native-models.json` en su directorio de inicio y olvida uno que no se ha visto durante 14 días. Un lanzamiento posterior que envía el modelo se hace cargo de su fila.
 

@@ -774,7 +774,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
         }
         const { serializePersistedCatalog, persistedCodexVersion, MAX_REMOTE_CATALOG_BYTES } = await import("../catalog-download");
-        const serialized = await serializePersistedCatalog();
+        const serialized = await serializePersistedCatalog(config);
         if (serialized.body === null) {
           // Built directly rather than through formatErrorResponse: that helper derives
           // `code` from the status and message via classifyError, and these two need stable,

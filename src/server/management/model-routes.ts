@@ -459,7 +459,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   if (url.pathname === "/api/catalog" && req.method === "GET") {
     // Shared with GET|HEAD /v1/catalog (#809) so both planes emit identical bytes.
     const { serializePersistedCatalog, persistedCodexVersion } = await import("../catalog-download");
-    const serialized = await serializePersistedCatalog();
+    const serialized = await serializePersistedCatalog(config);
     // No size ceiling here on purpose: this route's behavior predates the shared serializer
     // and a 2,000-model catalog (~92 MB, within the supported bound) must keep working.
     if (serialized.body === null) return jsonResponse({ error: "catalog not found" }, 404, req, config);
