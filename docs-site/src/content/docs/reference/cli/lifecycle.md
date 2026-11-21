@@ -580,6 +580,11 @@ The CLI's own `--json` output is deliberately narrower than the HTTP body: it em
 `unreachable`. Exit codes are 0 for ready; 1 for not-ready, pending, failed, timeout, or
 unreachable; and 64 for invalid arguments.
 
+If the proxy startup output says the Codex home is missing, start Codex once to initialize it
+or point `CODEX_HOME` at its existing home, then run `ocx sync`. A successful sync repairs
+routing, but `failed` records the startup result for that listener. Restart the proxy and run
+`ocx ready` to check the new process.
+
 On a Remote Link Child, readiness also covers the link. While the link cannot carry a request,
 `/readyz` answers `503` with `status: "pending"` and `link: {state: "unavailable", reason}`, so
 `ocx ready --wait` keeps waiting until the link is back; a working link adds

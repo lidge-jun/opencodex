@@ -150,6 +150,8 @@ ocx status --json
 
 透過免認證的 `GET /readyz` 端點檢查同步後的就緒狀態。就緒時回傳 `200`，或 `pending` 與終端 `failed` 時回傳附帶 `Retry-After: 1` 的 `503`。其淨化的 HTTP 身分為 `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl, features}`。`protocol` 是 Hub 目前的遠端協定版本，`minimumClientProtocol` 是相容的最低用戶端協定版本，`managementUrl` 是瀏覽器可見的標準管理 origin。沒有 `/readyz` 的舊代理會以 `unreachable` 方式 fail closed；`/healthz` 是分開的存活檢查，而非就緒檢查。此指令預設執行一次探測；`--wait` 輪詢直到就緒或逾時，但在觀察到終端 `failed` 狀態時立即退出。預設逾時為 45 秒；`--timeout <seconds>` 需要 `--wait`，接受 1–300 的正整數秒。CLI JSON 輸出 `{ready, status, pid, port}`，其中 `status` 為 `ready`、`pending`、`failed` 或 `unreachable`。離開碼為：就緒 0；未就緒、pending、failed、逾時或 unreachable 1；無效引數 64。
 
+如果代理啟動時顯示找不到 Codex 家目錄，請先啟動一次 Codex，或將 `CODEX_HOME` 指向 Codex 已初始化的目錄，然後執行 `ocx sync`。同步成功後即可恢復路由，但 `failed` 仍反映目前程序啟動時的結果。請重新啟動代理，再執行 `ocx ready` 確認新程序是否就緒。
+
 ### `ocx doctor`
 
 執行唯讀環境與連線診斷：狀態路徑與檔案系統類型、WSL 雙重安裝、代理環境／設定、ChatGPT 可達性、Codex plugin 與專案設定警告，以及待處理的歷史遷移。Codex app-home 定向區段也會偵測窄義的 Windows Orca runtime-home 不符，並在適用時說明服務遷移。此診斷顯示的路徑會遮罩 OS 使用者名稱。Doctor 印出修復提示但不套用它們。

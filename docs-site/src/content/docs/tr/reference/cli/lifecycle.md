@@ -237,6 +237,8 @@ saniyeleri kabul eder. CLI JSON, `status`'un `ready`, `pending`, `failed` veya
 için 0; hazır değil, beklemede, başarısız, zaman aşımı veya erişilemez için 1;
 ve geçersiz bağımsız değişkenler için 64'tür.
 
+Proxy başlatılırken Codex ana dizininin bulunamadığı bildirilirse Codex’i bir kez açın veya `CODEX_HOME` değişkenini Codex’in daha önce hazırladığı dizine ayarlayın. Ardından `ocx sync` komutunu çalıştırın. Başarılı bir eşitleme yönlendirmeyi düzeltir, ancak `failed` durumu çalışan sürecin başlangıç sonucunu göstermeye devam eder. Proxy’yi yeniden başlatın ve yeni sürecin hazır olup olmadığını `ocx ready` ile kontrol edin.
+
 ### `ocx doctor`
 
 Salt okunur ortam ve bağlantı tanılamalarını çalıştırın: durum yolları ve dosya

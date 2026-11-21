@@ -239,6 +239,8 @@ probe이며, `--wait`는 준비 또는 timeout까지 polling하지만 종단 `fa
 `unreachable` 중 하나입니다. 종료 코드는 ready가 0, not-ready/pending/failed/timeout/unreachable이
 1, 잘못된 인수가 64입니다.
 
+프록시 시작 로그에 Codex 홈 디렉터리가 없다고 나오면 Codex를 한 번 실행하거나 `CODEX_HOME`을 Codex가 이미 초기화한 디렉터리로 지정한 다음 `ocx sync`를 실행하세요. 동기화에 성공하면 라우팅이 복구됩니다. `failed`는 현재 프로세스의 시작 결과이므로 프록시를 재시작한 뒤 `ocx ready`로 새 프로세스의 준비 상태를 확인하세요.
+
 ### `ocx doctor`
 
 읽기 전용 환경 및 연결 진단을 실행합니다. 상태 경로와 파일시스템 유형, WSL 이중 설치, 프록시
