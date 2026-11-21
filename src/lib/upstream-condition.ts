@@ -87,10 +87,14 @@ function mentions(message: string, condition: keyof typeof KEYWORDS): boolean {
   return KEYWORDS[condition].some(keyword => message.includes(keyword));
 }
 
-/** Match the fixed Claude refusal, not arbitrary links or quoted validation values. */
+/**
+ * Match the fixed Claude refusal, not arbitrary links or quoted validation values. Only the portal
+ * link may follow the sentence, so a different diagnostic appended after it (an invalid key, for
+ * example) keeps its own classification instead of the verification guidance.
+ */
 export function isClaudeVerificationNotice(evidence: UpstreamConditionEvidence): boolean {
   return evidence.status === 403 && typeof evidence.message === "string"
-    && /^your account can['’]t receive replies from claude right now\. you can find the next step in the anthropic verification portal:/i.test(evidence.message);
+    && /^your account can['’]t receive replies from claude right now\. you can find the next step in the anthropic verification portal:(?:\s*https:\/\/portal\.anthropic\.com\/verify\S*)?\s*$/i.test(evidence.message.trim());
 }
 
 function statusFallback(status: number): UpstreamCondition | undefined {

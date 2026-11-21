@@ -37,6 +37,10 @@ describe("classifyUpstreamCondition", () => {
     expect(classifyUpstreamCondition({ status: 403, message: "See https://portal.anthropic.com/verify" })).toBe("access_denied");
     expect(classifyUpstreamCondition({ status: 401, message })).toBe("auth_failed");
     expect(classifyUpstreamCondition({ status: 500, message })).toBe("upstream_failed");
+    // Only the portal link may follow the sentence; another diagnostic after it keeps its own class.
+    expect(classifyUpstreamCondition({ status: 403, message: `${message} https://portal.anthropic.com/verify?org=x` })).toBe("account_verification_required");
+    expect(classifyUpstreamCondition({ status: 403, message: `${message} invalid x-api-key` })).toBe("access_denied");
+    expect(classifyUpstreamCondition({ status: 403, message: `${message} https://example.test/verify` })).toBe("access_denied");
   });
 
   test.each([
