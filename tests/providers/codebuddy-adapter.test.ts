@@ -326,6 +326,54 @@ describe("codebuddy runTurn streams a headless turn", () => {
     expect(events).toEqual([expect.objectContaining({ type: "error", code: "vendor_scaffold_detected" })]);
   });
 
+  test("refuses DeepSeek native tool-call markup printed as text (#8447)", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({
+      type: "text_delta",
+      text: "Reading it.\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">\n"
+        + "<｜tool▁parameter name=\"file_path\" string=\"true\">/tmp/private-body",
+    });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: "Reading it.\n" },
+      expect.objectContaining({ type: "error", code: "vendor_scaffold_detected", retryable: false }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain("private-body");
+  });
+
+  test("holds DeepSeek native markup split across deltas until the invoke name arrives", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "text_delta", text: "Safe prefix.\n<｜tool▁" });
+    guarded({ type: "text_delta", text: "calls｜>\r\n<｜tool▁invoke name=\"" });
+    expect(events).toEqual([{ type: "text_delta", text: "Safe prefix.\n" }]);
+    guarded({ type: "text_delta", text: "Read\">private-body" });
+
+    expect(events.at(-1)).toEqual(expect.objectContaining({ type: "error", code: "vendor_scaffold_detected" }));
+    expect(JSON.stringify(events)).not.toContain("private-body");
+  });
+
+  test("delivers discussed, quoted and fenced DeepSeek markup unchanged", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+    const answer = "The tag <｜tool▁calls｜> opens a native call block.\n"
+      + "<｜tool▁calls｜>\nfollowed by prose, not an invoke line.\n"
+      + "> <｜tool▁calls｜>\n> <｜tool▁invoke name=\"Read\">\n"
+      + "```text\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">\n```\n"
+      + "<｜tool▁calls｜>\n<｜tool▁invoke name=\"\">";
+
+    guarded({ type: "text_delta", text: answer });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: answer },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
   test("holds a bare invoke prefix split across deltas until its name arrives", () => {
     const events: AdapterEvent[] = [];
     const guarded = guardCodeBuddyScaffolding(event => events.push(event));
