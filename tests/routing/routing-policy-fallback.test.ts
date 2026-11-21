@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 import { formatErrorResponse } from "../../src/bridge";
+import { jsonContextOverflowResponse } from "../../src/server/responses/context-overflow";
 import { isProxyError } from "../../src/lib/client-error-body";
 import { finalizeAccountLease } from "../../src/server/responses/core-lifetime";
 import { MandatoryToolChoiceUnavailableError, PolicyCandidateUnavailableError, policyCandidateRefusalResponse } from "../../src/server/responses/policy-request-scope";
@@ -843,9 +844,12 @@ describe("policy candidate fallback", () => {
   });
 
   test.each([
-    ["a readable provider 413", 0, ["policy/daily", "provider-b/model-b"]],
-    ["a 413 past the bounded read", 70_000, ["policy/daily"]],
-  ] as const)("%s decides the policy hop from its complete body (#9017)", async (_name, padding, expected) => {
+    ["a readable provider 413", "provider"],
+    ["a 413 past the bounded read", "oversized"],
+    ["the proxy's rewritten context-overflow 413", "rewritten"],
+  ] as const)("%s keeps dev's stop on a routing-profile route (#9017)", async (_name, kind) => {
+    // Core delivery rewrites a provider 413 into the proxy's own envelope before this decision, so the
+    // original body is gone; the provider-413 hop is a combo rule and does not open policy candidates.
     const trace = policyTrace();
     const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
     const seenModels: string[] = [];
@@ -856,14 +860,17 @@ describe("policy candidate fallback", () => {
       ctx.routeDecision = trace;
       seedAttempt(ctx, "provider", String(body.model));
       if (seenModels.length === 1) {
+        if (kind === "rewritten") return jsonContextOverflowResponse();
         return Response.json({ error: { message: "Request Entity Too Large", type: "invalid_request_error" },
-          ...(padding ? { padding: "x".repeat(padding) } : {}) }, { status: 413 });
+          ...(kind === "oversized" ? { padding: "x".repeat(70_000) } : {}) }, { status: 413 });
       }
       return Response.json({ id: "resp", object: "response", status: "completed", output: [] });
     };
     await handleResponsesWithPolicyFallback(request(), fixtureConfig(), logCtx, {}, { runCore });
-    expect(seenModels).toEqual([...expected]);
+    expect(seenModels).toEqual(["policy/daily"]);
   });
+
+
   test("retries the next policy candidate and keeps distinct physical attempts", async () => {
     const trace = policyTrace();
     const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
