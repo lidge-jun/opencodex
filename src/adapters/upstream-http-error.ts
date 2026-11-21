@@ -44,6 +44,12 @@ export function isRewrittenUpstreamError(response: Response): boolean {
   return rewrittenUpstreamErrors.has(response);
 }
 
+/** Record a replacement response whose body no longer holds the provider's complete failure body. */
+export function markRewrittenUpstreamError<T extends Response>(response: T): T {
+  rewrittenUpstreamErrors.add(response);
+  return response;
+}
+
 export async function normalizeUpstreamHttpErrorResponse(
   res: Response,
   opts: { signal?: AbortSignal; formatMessage: (payloadText: string) => string | Promise<string> },

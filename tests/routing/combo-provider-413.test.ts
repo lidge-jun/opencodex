@@ -3,6 +3,7 @@ import { comboFailureCooldownScope, comboFailureDecision } from "../../src/combo
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { preflightComboStreamResponse } from "../../src/server/responses/combo-stream-preflight";
 import { formatErrorResponse } from "../../src/bridge/errors";
+import { retainAdapterFailureResponse } from "../../src/server/responses/image-context-recovery";
 import { isRewrittenUpstreamError, normalizeUpstreamHttpErrorResponse } from "../../src/adapters/upstream-http-error";
 import { attachComboFailureEvidence } from "../../src/lib/client-error-body";
 import { M365_RESPONSE_LIMIT_MESSAGES } from "../../src/adapters/m365-copilot/response-limits";
@@ -243,6 +244,20 @@ describe("combo provider 413 verdicts", () => {
     const failure = await consumeComboFailure(rewritten);
     expect(failure.providerIntakeRefusal).toBe(false);
     expect(comboFailureDecision(413, failure.classificationText, { code: failure.upstreamCode, providerIntakeRefusal: failure.providerIntakeRefusal })).toBe("stop");
+  });
+
+  test("an image-recovery retained 413 keeps the original read's verdict (#9017 review)", async () => {
+    // Recovery may return its retained copy without retrying; an oversized original must not turn
+    // into an empty body that reads as a provider intake refusal.
+    const oversized = new Response(JSON.stringify({ error: { code: "invalid_prompt", message: "Request Entity Too Large", padding: "x".repeat(70_000) } }), { status: 413 });
+    const retained = await retainAdapterFailureResponse(oversized, new AbortController().signal);
+    const failure = await consumeComboFailure(retained.response);
+    expect(failure.providerIntakeRefusal).toBe(false);
+    expect(comboFailureDecision(413, failure.classificationText, { code: failure.upstreamCode, providerIntakeRefusal: failure.providerIntakeRefusal })).toBe("stop");
+    // A complete provider body keeps its own verdict through the retained copy.
+    const plain = await retainAdapterFailureResponse(new Response(JSON.stringify({ error: { message: "Request Entity Too Large", type: "invalid_request_error" } }), { status: 413 }), new AbortController().signal);
+    const kept = await consumeComboFailure(plain.response);
+    expect(comboFailureDecision(413, kept.classificationText, { code: kept.upstreamCode, providerIntakeRefusal: kept.providerIntakeRefusal })).toBe("hop");
   });
   test("hard stops still outrank a provider 413", () => {
     expect(comboFailureDecision(413, "too large", { code: "origin_rejected" })).toBe("stop");
