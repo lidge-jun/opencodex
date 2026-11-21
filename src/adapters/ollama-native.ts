@@ -1,5 +1,6 @@
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import { randomUUID } from "node:crypto";
+import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "./ollama-late-attribution";
 import type {
   AdapterEvent,
   OcxAssistantMessage,
@@ -112,10 +113,7 @@ const NATIVE_TOOL_ID_MAX_LENGTH = 256;
 const NATIVE_TOOL_NAME_MAX_BYTES = 1024;
 const NATIVE_MAX_PENDING_TOOL_CALLS = 128;
 const NATIVE_MAX_LATE_ATTRIBUTION_BYTES = 256 * 1024;
-/** Proxy-owned refusal text for an exhausted late-attribution budget. A compaction on the same
- *  Ollama route resends the same history, so the only reliable recovery is a new thread. */
-export const OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE =
-  "Late tool-output attribution for this conversation exceeded the 256 KiB per-request limit. Start a new thread to continue.";
+export { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE };
 
 /** The late-attribution budget refusal, reporting the full limit rather than the bytes left. */
 export class OllamaLateAttributionBudgetError extends TranslatorBudgetExceededError {

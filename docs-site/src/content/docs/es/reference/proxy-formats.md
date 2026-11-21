@@ -471,6 +471,9 @@ La instantánea sigue siendo un contrato de lista de modelos de solo lectura; no
 
 ## API de Gemini: `/v1beta/models` y `/v1beta/interactions`
 
+El interruptor **API de Gemini** del panel controla el acceso a estas rutas. Mientras la API
+está habilitada, los ejemplos de uso muestran una solicitud `generateContent` que se puede copiar.
+
 Los clientes de Gemini, como el SDK google-genai con una URL base personalizada, la CLI `agy` o un cliente que lee `GOOGLE_GEMINI_BASE_URL`, pueden usar las rutas de proveedor configuradas con la forma REST de Google. El proxy normalmente traduce la generación a su ruta de Chat Completions, que admite cualquier proveedor. La generación elegible con Antigravity puede usar la [ruta nativa](#gemini-nativo-con-antigravity) si está habilitada. Autentíquese con una clave API del proxy en `x-goog-api-key` o en el parámetro de consulta `?key=`; la clave se quita de la URL y de las cabeceras antes de registrar o reenviar la solicitud. Los errores usan la forma de Google `{ "error": { "code", "message", "status" } }`.
 
 - `GET /v1beta/models` lista `models/<provider>/<model>` para las rutas que la clave puede usar, y `GET /v1beta/models/{model}` devuelve una. Un modelo incluye `inputTokenLimit` y `outputTokenLimit` cuando se conocen. Para `inputTokenLimit`, tienen prioridad los límites de entrada y de ventana de contexto configurados en el proveedor, seguidos de `customModels[].contextWindow` del modelo correspondiente y de los metadatos generados.
@@ -661,14 +664,24 @@ La opción está desactivada por defecto. Usa la API compatible con Gemini en `/
 envía una clave de admisión de OpenCodex en `x-goog-api-key` o `?key=`. Un selector como
 `google-antigravity/gemini-3.8-flash` usa el transporte nativo para `generateContent` y
 `streamGenerateContent`. El proxy elige el modelo de Cloud Code Assist a partir de la ruta
-resuelta y usa el token y el proyecto de la cuenta OAuth activa. Las solicitudes de
-`/v1` y las de otros proveedores usan el puente de Chat.
+resuelta. Si está activada la conmutación de cuentas OAuth, puede elegir otra cuenta disponible
+según los modelos descubiertos para esa cuenta y la estrategia configurada. Si la cuenta
+seleccionada carece del modelo y no se permite usar otra cuenta, el proxy devuelve 403. El token
+y el proyecto siempre proceden de la misma cuenta. Las solicitudes de `/v1` y las de otros
+proveedores usan el puente de Chat.
 
 El proxy conserva el JSON de la solicitud y de las respuestas correctas, incluidos los
 campos desconocidos, los enteros grandes, los argumentos de funciones y las firmas de
 razonamiento. La transmisión usa SSE con `alt=sse` y una matriz JSON en los demás casos.
 El listado mediante `GET /v1beta/models` y la consulta de modelos conservan el catálogo permitido por la clave e
 incluyen los alias nativos que se enrutan al modelo de Antigravity correspondiente.
+
+La columna `~$` muestra el coste estimado según el precio de la API de Gemini y el uso
+informado. La tabla de intentos muestra el estado, la etiqueta opaca de la cuenta y el motivo
+del reintento de cada envío. Si un 401 del proveedor da lugar a una actualización de las
+credenciales y a un nuevo envío, el rechazo y el reintento aparecen como intentos separados.
+Si solo algunos intentos tienen un coste estimado, el registro muestra el subtotal conocido
+y cuántos intentos quedaron sin estimación.
 
 Si una respuesta del proveedor contiene credenciales de la cuenta vinculada, el proxy devuelve
 un error genérico de Gemini. Un `[DONE]` válido del proveedor o un error de Gemini pone fin a la transmisión.
@@ -677,7 +690,9 @@ Envía JSON con codificación `identity`. El cuerpo de la solicitud, la respuest
 en búfer y cada evento SSE tienen un límite de 16 MiB. Si `maxInboundBodyBytes` es menor,
 se aplica a la solicitud. La inactividad durante la carga tiene su propio tiempo de
 espera. El envío inicial y un reintento como máximo tras un 401 de la misma cuenta cuentan
-para el límite de envíos del flujo. Un límite de tokens aplicable al flujo raíz, a la
-identidad o al grupo devuelve 503 con `gemini_native_spend_limits_unsupported` porque el
-transporte nativo no contabiliza los tokens. Desactiva la opción para contabilizarlos en
-esta ruta de Gemini.
+para el límite de envíos del flujo. Para los presupuestos de tokens del flujo raíz, la
+identidad y el grupo, cada envío reserva una estimación de la entrada y el valor solicitado
+de `maxOutputTokens` por candidato. Un presupuesto insuficiente devuelve 429 con
+`workflow_spend_exhausted`. Las solicitudes completadas se contabilizan con los recuentos
+de entrada y salida que informa Gemini. Un envío sin datos de uso finales conserva el
+importe de la reserva como consumo sin resolver.

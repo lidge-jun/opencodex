@@ -87,15 +87,18 @@ export interface ProtocolAttemptTraceV1 {
   responsePath?: ProtocolHop[];
 }
 
+/** A hop in an observed trace. Gemini native delivery does not go through the protocol planner. */
+export type ProtocolTraceHop = ProtocolHop | "gemini";
+
 /** What one request actually did, recorded at the send boundary and persisted with the log row. */
 export interface ProtocolTraceV1 {
   v: typeof PROTOCOL_TRACE_SCHEMA_VERSION;
-  inbound: Protocol;
+  inbound: Protocol | "gemini";
   /** Final attempt's mode, or `blocked` when refused before any send. */
   mode: DeliveryMode;
-  upstream?: UpstreamWire;
-  requestPath: ProtocolHop[];
-  responsePath: ProtocolHop[];
+  upstream?: UpstreamWire | "gemini";
+  requestPath: ProtocolTraceHop[];
+  responsePath: ProtocolTraceHop[];
   reasonCodes: ProtocolReasonCode[];
   featureEffects?: ProtocolFeatureEffectV1[];
   attempts?: ProtocolAttemptTraceV1[];
@@ -202,15 +205,24 @@ function isAttemptTrace(value: unknown): value is ProtocolAttemptTraceV1 {
     && (value.responsePath === undefined || isPath(value.responsePath));
 }
 
+function isNativeGeminiPath(value: unknown): boolean {
+  return Array.isArray(value) && value.length === 2 && value[0] === "gemini" && value[1] === "gemini";
+}
+
 export function isProtocolTraceV1(value: unknown): value is ProtocolTraceV1 {
-  if (!isRec(value) || value.v !== PROTOCOL_TRACE_SCHEMA_VERSION) return false;
-  if (!isProtocol(value.inbound) || !isDeliveryMode(value.mode)) return false;
-  if (value.upstream !== undefined && !isUpstreamWire(value.upstream)) return false;
-  const pathsOk = value.mode === "blocked"
-    ? Array.isArray(value.requestPath) && value.requestPath.length === 0
-      && Array.isArray(value.responsePath) && value.responsePath.length === 0
-    : isPath(value.requestPath) && isPath(value.responsePath);
-  if (!pathsOk || !isReasonCodes(value.reasonCodes) || typeof value.contractVersion !== "string") return false;
+  if (!isRec(value) || value.v !== PROTOCOL_TRACE_SCHEMA_VERSION || !isDeliveryMode(value.mode)) return false;
+  if (value.inbound === "gemini") {
+    if (value.mode !== "native" || value.upstream !== "gemini" || value.attempts !== undefined
+      || !isNativeGeminiPath(value.requestPath) || !isNativeGeminiPath(value.responsePath)) return false;
+  } else {
+    if (!isProtocol(value.inbound) || (value.upstream !== undefined && !isUpstreamWire(value.upstream))) return false;
+    const pathsOk = value.mode === "blocked"
+      ? Array.isArray(value.requestPath) && value.requestPath.length === 0
+        && Array.isArray(value.responsePath) && value.responsePath.length === 0
+      : isPath(value.requestPath) && isPath(value.responsePath);
+    if (!pathsOk) return false;
+  }
+  if (!isReasonCodes(value.reasonCodes) || typeof value.contractVersion !== "string") return false;
   if (value.featureEffects !== undefined
     && !boundedArray(value.featureEffects, PROTOCOL_DTO_LIMITS.featureEffects, isFeatureEffect)) return false;
   if (value.attempts !== undefined && !boundedArray(value.attempts, PROTOCOL_DTO_LIMITS.attempts, isAttemptTrace)) return false;

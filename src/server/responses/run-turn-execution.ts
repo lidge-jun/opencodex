@@ -27,6 +27,7 @@ import { assignNativeLogConversationId, normalizeLogConversationId } from "../re
 import { normalizeDeclaredToolName, type AdapterEvent, type OcxProviderContinuationState } from "../../types";
 import { adapterFailureFromMessage, SEND_BUDGET_EXHAUSTED_CODE, SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE, type OcxErrorPayload } from "../../lib/errors";
 import { SendBudgetExhaustedError, markResponseNonReplayable } from "../../lib/upstream-retry";
+import { markRewrittenUpstreamError } from "../../adapters/upstream-http-error";
 import { hasKeyPoolFailover, rotateProviderTransportOn401, rotateProviderTransportOn429 } from "../../providers/key-failover";
 import {
   hasEligibleGenericOAuthFailoverTarget,
@@ -908,6 +909,9 @@ export async function executeResponsesRunTurn(
           // A replay-unsafe heartbeat means the adapter already ran a local side effect, so the
           // combo must not send this turn to another target: the failure stays with this child.
           if (preflight.replayUnsafe) markResponseNonReplayable(failure);
+          // A run-turn adapter reports a provider failure as an event, without the provider's body,
+          // so a 413 built here is not the provider's evidence for the provider-413 hop (#9017).
+          if (failure.status === 413) markRewrittenUpstreamError(failure);
           releaseSearchProbeLease();
           return failure;
         }
@@ -1127,6 +1131,8 @@ export async function executeResponsesRunTurn(
               upstreamCode: classifiedError?.code ?? (firstMeaningful?.type === "error" ? firstMeaningful.code : null) ?? null,
             });
           if (replayUnsafe) markResponseNonReplayable(failure);
+          // The buffered path builds the same event-only 413 as the streaming preflight above.
+          if (failure.status === 413) markRewrittenUpstreamError(failure);
           return failure;
         }
       }

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
 import { deriveLaunchdServiceDiagnostic, foregroundStartServiceAdvisoryLines, warnForegroundStartService } from "../../src/service/diagnostics";
 import type { ServiceDiagnostic } from "../../src/service/diagnostics";
@@ -83,9 +84,24 @@ describe("foregroundStartServiceAdvisoryLines", () => {
     }
   });
 
-  test("probe or warning exceptions cannot propagate to bind", () => {
+  test("probe or warning exceptions cannot escape the advisory", () => {
     const fail = (): never => { throw new Error("fixture"); };
     expect(() => warnForegroundStartService(fail, fail)).not.toThrow();
     expect(() => warnForegroundStartService(() => diagnostic(), fail)).not.toThrow();
   });
+});
+
+test("foreground advisory is wired after readiness initialization and uses the final sibling decision", () => {
+  const cli = readFileSync(new URL("../../src/cli/index.ts", import.meta.url), "utf8");
+  const start = cli.slice(cli.indexOf("async function handleStart("), cli.indexOf("function detachedStartEnvironment("));
+  const probe = "warnForegroundStartService(diagnoseService,";
+  const probes = start.split(probe);
+  expect(probes).toHaveLength(2);
+  const beforeProbe = probes[0]!;
+  expect(beforeProbe).toContain("await bindAndPublishStartOwnership(");
+  expect(beforeProbe).toContain("await reconcileClientStartupBeforeReady(");
+  expect(beforeProbe).toContain('console.log("Client startup work complete.")');
+  expect(beforeProbe.slice(beforeProbe.lastIndexOf('console.log("Client startup work complete.")'))).toContain(
+    "!cleaned && !shuttingDown && !siblingStart && !owner.live && !supervisedServiceChild",
+  );
 });

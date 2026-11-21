@@ -24,29 +24,20 @@ import {
   MODEL_NOT_IN_PLAN_CODE,
   MODEL_NOT_IN_PLAN_REFUSAL_MARKER,
 } from "../lib/errors";
-import { CommandCodeToolTextFilter, type CommandCodeDeclaredTools } from "./command-code-tool-text";
+import { CommandCodeToolTextFilter, type CommandCodeDeclaredTool, type CommandCodeDeclaredTools } from "./command-code-tool-text";
 import { EMPTY_COMMAND_CODE_PROJECT_CONTEXT, loadCommandCodeProjectContext } from "./command-code-project-context";
 
 /**
- * Text-call recovery matches markup against the schema the model was shown (`wireTools`), so a
+ * Text-call recovery matches markup against the schema the model was shown, so a
  * root-composed tool keeps the top-level `properties` its markup names. Definitions are dropped
  * because the restored-value validator accepts no `$ref`: a reference left in the normalized
  * schema still fails closed there. The original schema is validated too (`declaredSchema`),
  * because the wire view flattens root alternatives and would otherwise admit calls the tool
  * itself rejects.
  */
-function recoverySchema(tool: OcxTool): Record<string, unknown> {
-  const { $defs: _defs, definitions: _definitions, ...schema } = normalizeAnthropicInputSchema(tool.parameters);
+function recoverySchema(normalized: Record<string, unknown>): Record<string, unknown> {
+  const { $defs: _defs, definitions: _definitions, ...schema } = normalized;
   return schema;
-}
-
-function declaredTools(tools: OcxTool[]): CommandCodeDeclaredTools {
-  return new Map(tools.map(tool => [
-    namespacedToolName(tool.namespace, tool.name),
-    tool.freeform === true
-      ? { freeform: true, schema: tool.parameters }
-      : { freeform: false, schema: recoverySchema(tool), declaredSchema: tool.parameters },
-  ]));
 }
 
 // Retain the short ids emitted by the first local integration. New requests use the live catalog's
@@ -219,12 +210,17 @@ function toolChoiceInstruction(parsed: OcxParsedRequest): string | undefined {
   return undefined;
 }
 
-function wireTools(tools: OcxTool[]): Array<Record<string, unknown>> {
-  return tools.map(tool => ({
-    name: namespacedToolName(tool.namespace, tool.name),
-    description: tool.description,
-    input_schema: normalizeAnthropicInputSchema(tool.parameters),
-  }));
+function prepareTools(tools: OcxTool[]) {
+  const declared = new Map<string, CommandCodeDeclaredTool>();
+  const wire = tools.map(tool => {
+    const name = namespacedToolName(tool.namespace, tool.name);
+    const schema = normalizeAnthropicInputSchema(tool.parameters);
+    declared.set(name, tool.freeform === true
+      ? { freeform: true, schema: tool.parameters }
+      : { freeform: false, schema: recoverySchema(schema), declaredSchema: tool.parameters });
+    return { name, description: tool.description, input_schema: schema };
+  });
+  return { wire, declared };
 }
 
 function currentWorkingDirectory(): string | undefined {
@@ -737,13 +733,15 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
       const projectContext = provider.projectContext === "on"
         ? await loadCommandCodeProjectContext(cwd)
         : EMPTY_COMMAND_CODE_PROJECT_CONTEXT;
+      const config = await commandCodeConfig(cwd);
+      const preparedTools = prepareTools(tools);
       const body = {
-        config: await commandCodeConfig(cwd), ...projectContext,
+        config, ...projectContext,
         permissionMode: "standard", mode: "agent",
         params: {
           model: canonicalCommandCodeModelId(parsed.modelId),
           messages: wireMessages(parsed.context.messages),
-          tools: wireTools(tools),
+          tools: preparedTools.wire,
           system,
           max_tokens: parsed.options.maxOutputTokens ?? provider.defaultMaxOutputTokens ?? 64_000,
           // The proprietary /alpha/generate endpoint is NDJSON-stream-only; the proxy converts
@@ -764,7 +762,7 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
         "x-session-id": commandCodeSessionId(parsed),
       };
       if (cwd) headers["x-project-slug"] = projectSlug(cwd);
-      lastDeclaredTools = declaredTools(tools);
+      lastDeclaredTools = preparedTools.declared;
       return {
         url: `${provider.baseUrl.replace(/\/$/, "")}/alpha/generate`, method: "POST",
         headers,

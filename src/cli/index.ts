@@ -495,13 +495,6 @@ async function handleStart(options: { block?: boolean } = {}) {
     return;
   }
 
-  // Warn only for interactive foreground starts. This best-effort probe is
-  // synchronous; never run it for managed children, restart handoffs or noninteractive starts.
-  if (!siblingStart && !owner.live && !supervisedServiceChild
-      && restartParent.restartParentPid === null && process.stderr?.isTTY) {
-    warnForegroundStartService(diagnoseService, (line) => console.warn(line));
-  }
-
   // Managed service children may defer before binding (serving-runtimes.ts).
   const deferredExit = await deferServiceChildToNewerRuntime({ sibling: siblingStart, env: process.env, selfVersion: packageVersion(), selfCommand: currentServingCommand(), port: requestedPort });
   if (deferredExit !== null) process.exit(deferredExit);
@@ -803,6 +796,12 @@ async function handleStart(options: { block?: boolean } = {}) {
     console.error(`⚠️  ${grokSyncFailureMessage(err)}`);
   }
   console.log("Client startup work complete.");
+  // Service status can invoke an OS manager synchronously. Keep it out of the
+  // ownership lease, bind, and readiness path, and use the final sibling decision.
+  if (!cleaned && !shuttingDown && !siblingStart && !owner.live && !supervisedServiceChild
+      && restartParent.restartParentPid === null && process.stderr?.isTTY) {
+    warnForegroundStartService(diagnoseService, (line) => console.warn(line));
+  }
   if (options.block ?? true) {
     setInterval(() => {}, 60_000);
     await new Promise<void>(() => {});

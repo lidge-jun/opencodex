@@ -135,3 +135,37 @@ describe("pollVideoJob", () => {
     expect(capturedUrl).not.toMatch(/\/videos\/req\/with/);
   });
 });
+
+
+test("submits frames and references in xAI shape with the new default", async () => {
+  const captured: Captured[] = [];
+  await submitVideoJob({ prompt: "p", image: "https://a.test/1", lastFrame: "https://a.test/2", keyframes: [{ image: "https://a.test/3", timestampS: 1 }], referenceImages: ["https://a.test/4"] }, auth, undefined, xai({ request_id: "r" }, 200, captured));
+  expect(JSON.parse(captured[0]!.body!)).toMatchObject({ model: "grok-imagine-video-1.5-lite", image: { url: "https://a.test/1" }, last_frame: { url: "https://a.test/2" }, keyframes: [{ image: { url: "https://a.test/3" }, timestamp_s: 1 }], reference_images: [{ url: "https://a.test/4" }] });
+});
+
+test("appends safe validation detail on submit errors", async () => {
+  await expect(submitVideoJob({ prompt: "p" }, auth, undefined, xai({ error: { message: "`last_frame` is not supported for this model." } }, 400))).rejects.toThrow("`last_frame` is not supported for this model.");
+});
+
+test("a stalled error body still yields the permanent HTTP status", async () => {
+  const stalled: VideoOutboundDependencies = {
+    ...xai({}, 401),
+    pinnedGet: async (_url, _pinned, signal) => new Response(new ReadableStream({
+      start(controller) { signal?.addEventListener("abort", () => controller.error(signal.reason), { once: true }); },
+    }), { status: 401, headers: { "Content-Type": "application/json" } }),
+  };
+  const controller = new AbortController();
+  const pending = pollVideoJob("r", auth, controller.signal, stalled).catch(e => e);
+  setTimeout(() => controller.abort(new DOMException("poll timeout", "TimeoutError")), 20);
+  const err = await pending;
+  expect(err.status).toBe(401);
+});
+
+test("poll errors carry only the validated detail as a separate field", async () => {
+  await expect(pollVideoJob("r", auth, undefined, xai({ error: "1080p video resolution is not available for this model." }, 400)))
+    .rejects.toMatchObject({ status: 400, detail: "1080p video resolution is not available for this model." });
+  const err = await pollVideoJob("r", auth, undefined, xai({ error: "your prompt: a secret" }, 400)).catch(e => e);
+  expect(err.status).toBe(400);
+  expect(err.detail).toBeUndefined();
+  expect(String(err.message)).not.toContain("secret");
+});

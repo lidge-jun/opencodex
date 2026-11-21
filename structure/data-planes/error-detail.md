@@ -50,7 +50,7 @@ through the disk reader. A row keeps:
   names a rate limit stays `rate_limited` even when it also mentions quota, a 5xx stays a server failure
   whatever its text says, and a bare status maps to a fixed condition. It is presentation-only; routing,
   retry and recovery keep their own classifiers in `src/lib/errors.ts`. `upstreamConditionMessage` holds the
-  proxy-written sentence for each member and names only a well-formed configured provider id.
+  proxy-written sentence for each member and names only a well-formed configured provider id. Claude’s exact verification notice on HTTP 403 maps to `account_verification_required`; Messages serves a fixed Anthropic portal link, without upstream URL parameters or account IDs.
 - `rateLimitResetAt`, finite epoch milliseconds after the request and at most eight days later, derived
   server-side from the exact Meta Muse quota sentence on a Muse 429; the dashboard quota observation in
   `gui/src/muse-limit-observation.ts` reads only this number. Legacy rows that stored the sentence recover
@@ -279,7 +279,7 @@ and configuration-failure mentions are excluded per sentence in the unwrapped pr
 many tokens" is insufficient. An explicit "prompt is too long" suffices in the absence of a throughput signal.
 Body inspection time does not count toward the upstream slow-attempt budget, and empty chunks cannot
 starve the deadline or cancellation. `tests/lib/upstream-retry.test.ts` covers retry and cancellation.
-Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader. The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status.
+Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader. The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status. The shared detector folds negation asides without repartitioning whitespace across optional patterns; `tests/lib/definite-overflow-verdict.test.ts` checks bounded-response classification and abort-timer responsiveness through the retry helper.
 `InvalidSendBudgetError` displays only a finite non-negative number or `invalid`.
 `UpstreamRetryEvidenceError` uses fixed retry-evidence wording and retains the original rejection
 only as `Error.cause`. Chat request-read failures keep typed local size/encoding messages; other

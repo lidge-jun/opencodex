@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { markNativeGeminiProtocol, protocolTraceForRequest } from "../../src/protocols/trace";
 import { tapAnthropicSseForLog } from "../../src/server/claude-messages";
 import { decodeTokPerSecondResult } from "../../src/server/management/shared";
 import {
@@ -49,6 +50,13 @@ test("the decode rate uses the generation window when the row carries one", () =
   const row = { durationMs: 10_000, firstOutputMs: 6_000, usageStatus: "reported" as const, usage: { inputTokens: 10, outputTokens: 800 } };
   expect(decodeTokPerSecondResult(row)).toEqual({ kind: "value", value: 200, estimated: true, timingBasis: "legacy-post-visible-output" });
   expect(decodeTokPerSecondResult({ ...row, genStartMs: 1_000, lastOutputMs: 9_000 }))
+    .toEqual({ kind: "value", value: 100, estimated: true, timingBasis: "generation-window" });
+  const gemini = ctx();
+  markNativeGeminiProtocol(gemini);
+  const protocolTrace = protocolTraceForRequest(gemini, undefined);
+  expect(decodeTokPerSecondResult({ ...row, protocolTrace }))
+    .toEqual({ kind: "unavailable", reason: "decode_window_missing" });
+  expect(decodeTokPerSecondResult({ ...row, protocolTrace, genStartMs: 1_000, lastOutputMs: 9_000 }))
     .toEqual({ kind: "value", value: 100, estimated: true, timingBasis: "generation-window" });
   // The floor still applies, and a generation window never falls back to the TTFT window.
   expect(decodeTokPerSecondResult({ ...row, genStartMs: 8_500, lastOutputMs: 9_000 }))

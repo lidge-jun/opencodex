@@ -103,3 +103,20 @@ test("two Copilot quota refusals advance to the next provider in planners", asyn
     expect(response.status).toBe(200); expect(body).toContain("next provider served");
   } finally { await server.stop(true); }
 }, 30_000);
+
+for (const stream of [false, true]) test(`a run-turn 413 without the provider's body keeps the combo on its first target (#9017, stream=${stream})`, async () => {
+  // The adapter reports the failure as an event, so the provider-413 hop has no original body to
+  // judge and the combo keeps dev's terminal 413.
+  const hits: string[] = [];
+  turn = async options => {
+    options.beforeSend?.(); hits.push(options.model);
+    throw new M365CopilotTurnError("Microsoft 365 Copilot image exceeds the 5 MiB limit", 413);
+  };
+  const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "combo/planners", input: "fixture", stream }),
+  }), config(), { model: "", provider: "" });
+  await response.text();
+  expect(hits).toEqual(["Claude_Opus"]);
+  if (!stream) expect(response.status).toBe(413);
+}, 30_000);
+

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../../../src/adapters/openai-chat";
 import { createMimoFreeAdapter, resetMimoJwtCache } from "../../../src/adapters/mimo-free";
 import {
@@ -501,6 +501,25 @@ describe("openai-chat minimum image edge", () => {
     apiKey: "sk-test",
     authMode: "key",
   };
+
+  test("Venice keeps the attachment when native dimensions cannot be safely enlarged", async () => {
+    const original = dataUrl(ONE_PX_PNG);
+    const metadata = spyOn(Bun.Image.prototype, "metadata");
+    const resize = spyOn(Bun.Image.prototype, "resize").mockImplementation(() => {
+      throw new Error("unexpected resize");
+    });
+    try {
+      for (const [width, height] of [[4001, 4000], [0, 1], [1, -1], [0.5, 1], [1, Number.NaN]]) {
+        metadata.mockResolvedValue({ width, height, format: "png" });
+        const request = await createOpenAIChatAdapter(venice).buildRequest(parsedWith([imageMessage([original])]));
+        expect(imageParts(wireMessages(request.body as string))[0]?.image_url?.url).toBe(original);
+      }
+      expect(resize).not.toHaveBeenCalled();
+    } finally {
+      resize.mockRestore();
+      metadata.mockRestore();
+    }
+  });
 
   test("a Venice image below 64px is upscaled with its aspect ratio kept", async () => {
     const strip = await realPngB64(320, 25);

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveConfig } from "../../src/config";
+import { loadConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { clearRequestLogsForTests, getRequestLogEntries } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
@@ -106,6 +106,49 @@ describe("Gemini-compatible inbound routes", () => {
       const missing = await fetch(new URL("/v1beta/models/fx/absent", base), { headers: googKey });
       expect(missing.status).toBe(404);
       expect(await missing.json()).toEqual({ error: { code: 404, message: "model not found", status: "NOT_FOUND" } });
+    });
+  });
+
+  test("the API switch closes and reopens Gemini on the running gateway", async () => {
+    await withServer(async base => {
+      const toggle = (geminiEnabled: boolean) => fetch(new URL("/api/protocols/settings", base), {
+        method: "PATCH",
+        headers: { "content-type": "application/json", "x-opencodex-api-key": ADMIN_TOKEN },
+        body: JSON.stringify({ geminiEnabled }),
+      });
+      const closed = await toggle(false);
+      expect(closed.status).toBe(200);
+      expect(await closed.json()).toMatchObject({ geminiSurface: { enabled: false, source: "api-surfaces" } });
+      expect(loadConfig().apiSurfaces?.gemini?.enabled).toBe(false);
+      for (const [method, path] of [
+        ["GET", "/v1beta/models"],
+        ["GET", "/v1beta/models/fx/m1"],
+        ["POST", "/v1beta/models/fx/m1:countTokens"],
+        ["POST", "/v1beta/models/fx/m1:streamGenerateContent?alt=sse"],
+        ["POST", "/v1/models/fx/m1:generateContent"],
+        ["POST", "/v1beta/interactions"],
+        ["DELETE", "/v1/interactions/example"],
+        ["POST", "/v1beta/interactions/example/cancel"],
+      ]) {
+        const response = await fetch(new URL(path!, base), {
+          method, headers: googKey, ...(method === "POST" ? { body: "not JSON" } : {}),
+        });
+        expect(response.status).toBe(403);
+        expect(await response.json()).toMatchObject({ error: { message: "Gemini API is disabled", status: "PERMISSION_DENIED" } });
+      }
+      expect(seen).toHaveLength(0);
+      const openAiModels = await fetch(new URL("/v1/models", base));
+      expect(openAiModels.status).toBe(200);
+      await openAiModels.json();
+
+      const reopened = await toggle(true);
+      expect(reopened.status).toBe(200);
+      expect(await reopened.json()).toMatchObject({ geminiSurface: { enabled: true, source: "api-surfaces" } });
+      expect(loadConfig().apiSurfaces?.gemini?.enabled).toBe(true);
+      const generated = await post(base, "/v1beta/models/fx/m1:generateContent", request());
+      expect(generated.status).toBe(200);
+      expect(await generated.json()).toMatchObject({ candidates: [{ content: { parts: [{ text: "Hello" }] } }] });
+      expect(seen).toHaveLength(1);
     });
   });
 

@@ -308,9 +308,11 @@ export function ApiKeysModelsPanel({
 export function ApiKeysUsagePanel({
   endpoints,
   claudeCodeEnabled,
+  geminiEnabled = false,
 }: {
   endpoints: ApiEndpointInfo;
   claudeCodeEnabled: boolean;
+  geminiEnabled?: boolean;
 }) {
   const { t } = useI18n();
   const sampleInput = JSON.stringify(t("api.usageSampleInput"));
@@ -340,6 +342,14 @@ export function ApiKeysUsagePanel({
     "messages": [{"role": "user", "content": ${sampleInput}}]
   }'`;
 
+  const geminiModelAction = "google-antigravity/gemini-3.8-flash:generateContent";
+  const geminiExample = `curl ${endpoints.geminiModels}/${geminiModelAction} \\
+  -H "x-opencodex-api-key: ocx_YOUR_KEY_HERE" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "contents": [{"role": "user", "parts": [{"text": ${sampleInput}}]}]
+  }'`;
+
   return (
     // Not a disclosure. These are the answer to "how do I call this?", and a
     // closed <details> answered it only for someone who already suspected the
@@ -361,6 +371,12 @@ export function ApiKeysUsagePanel({
           <div className="awi-usage-example">
             <h4 className="awi-usage-example-title">{t("api.usageMessagesTitle")}</h4>
             <CopyableExample text={messagesExample} />
+          </div>
+        )}
+        {geminiEnabled && endpoints.geminiModels && (
+          <div className="awi-usage-example">
+            <h4 className="awi-usage-example-title">{t("api.usageGeminiTitle")}</h4>
+            <CopyableExample text={geminiExample} />
           </div>
         )}
       </div>

@@ -304,11 +304,11 @@ export function foregroundStartServiceAdvisoryLines(service: ServiceDiagnostic):
   }
   return [
     `⚠️  The managed background service is not loaded (${service.summary}).`,
-    "   This foreground proxy ends with this terminal and nothing restarts it; consider 'ocx service repair' to restore the supervised service instead.",
+    "   This foreground proxy ends with this terminal and nothing restarts it. After stopping it, consider 'ocx service repair' to restore the supervised service.",
   ];
 }
 
-/** Best effort, not asynchronous: a diagnostic or warning failure must not prevent a bind. */
+/** Best effort, not asynchronous: a diagnostic or warning failure must not affect the foreground proxy. */
 export function warnForegroundStartService(
   probe: () => ServiceDiagnostic,
   warn: (line: string) => void,

@@ -78,7 +78,7 @@ import { suppressedSyntheticMaxCatalogSlugs } from "./catalog/model-hints";
 import { codexRuntimeStatePath, peekCodexRuntimeProcessCache } from "./runtime";
 import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "./account-namespaces";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
-import { applyNativeAccessPrograms } from "./catalog/access-programs";
+import { applyNativeRosterMetadata } from "./catalog/access-programs";
 import { advanceNativeInheritanceTemplate, captureNativeInheritanceTemplate } from "./catalog/native-template";
 import { omitDisabledNativeCatalogEntries } from "./catalog/native-omission";
 import {
@@ -421,7 +421,7 @@ function prepareCatalog(
       warningPolicy: "suppress",
     },
   });
-  applyNativeAccessPrograms(mergedModels, modelEntitlements, accountTargets);
+  applyNativeRosterMetadata(mergedModels, modelEntitlements, accountTargets, openaiContextCap, catalogModels);
   clampCatalogModelsToObservedCodexSupport(
     mergedModels,
     source.runtimeSupport.kind === "available"

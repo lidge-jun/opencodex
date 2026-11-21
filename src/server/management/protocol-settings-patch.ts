@@ -17,6 +17,7 @@ import type { OcxConfig } from "../../types";
 
 export interface ProtocolSettingsPatch {
   messagesEnabled?: boolean;
+  geminiEnabled?: boolean;
   unrepresentable?: UnrepresentablePolicy;
   rollout?: Partial<ProtocolRolloutSettings>;
 }
@@ -25,7 +26,7 @@ export type ParsedProtocolSettingsPatch =
   | { ok: true; patch: ProtocolSettingsPatch }
   | { ok: false; code: string; message: string };
 
-const PATCH_KEYS = new Set(["messagesEnabled", "unrepresentable", "rollout"]);
+const PATCH_KEYS = new Set(["messagesEnabled", "geminiEnabled", "unrepresentable", "rollout"]);
 export const PROTOCOL_ROLLOUT_KEYS = [
   "nativeChatCombos",
   "managedMessagesNative",
@@ -50,14 +51,18 @@ function invalid(code: string, message: string): ParsedProtocolSettingsPatch {
 export function parseProtocolSettingsPatch(body: unknown): ParsedProtocolSettingsPatch {
   if (!isRec(body)) return invalid("invalid_body", "body must be a JSON object");
   const keys = Object.keys(body);
-  if (keys.length === 0) return invalid("empty_body", "body must set messagesEnabled, unrepresentable or rollout");
+  if (keys.length === 0) return invalid("empty_body", "body must set messagesEnabled, geminiEnabled, unrepresentable or rollout");
   for (const key of keys) {
-    if (!PATCH_KEYS.has(key)) return invalid("unknown_field", "body accepts only messagesEnabled, unrepresentable and rollout");
+    if (!PATCH_KEYS.has(key)) return invalid("unknown_field", "body accepts only messagesEnabled, geminiEnabled, unrepresentable and rollout");
   }
   const patch: ProtocolSettingsPatch = {};
   if (body.messagesEnabled !== undefined) {
     if (typeof body.messagesEnabled !== "boolean") return invalid("invalid_messages_enabled", "messagesEnabled must be a boolean");
     patch.messagesEnabled = body.messagesEnabled;
+  }
+  if (body.geminiEnabled !== undefined) {
+    if (typeof body.geminiEnabled !== "boolean") return invalid("invalid_gemini_enabled", "geminiEnabled must be a boolean");
+    patch.geminiEnabled = body.geminiEnabled;
   }
   if (body.unrepresentable !== undefined) {
     if (body.unrepresentable !== "legacy" && body.unrepresentable !== "reject") {
@@ -131,14 +136,24 @@ export function applyProtocolSettingsPatch(config: OcxConfig, patch: ProtocolSet
   }
 
   let claudeCodeChanged = false;
-  if (patch.messagesEnabled !== undefined) {
-    // A malformed block is replaced, not merged: the explicit value is what the operator asked for.
-    const surfaces: Rec = isRec(config.apiSurfaces) ? { ...config.apiSurfaces } : {};
-    const messages: Rec = isRec(surfaces.messages) ? { ...surfaces.messages } : {};
-    messages.enabled = patch.messagesEnabled;
-    surfaces.messages = messages;
+  if (patch.messagesEnabled !== undefined || patch.geminiEnabled !== undefined) {
+    const current = config.apiSurfaces;
+    const surfaces: Rec = isRec(current) ? { ...current } : {};
+    for (const [name, enabled] of [
+      ["messages", patch.messagesEnabled],
+      ["gemini", patch.geminiEnabled],
+    ] as const) {
+      if (enabled === undefined) continue;
+      const surface = surfaces[name];
+      surfaces[name] = { ...(isRec(surface) ? surface : {}), enabled };
+    }
+    if (current !== undefined && !isRec(current)) {
+      // Repairing the malformed parent must preserve closed sibling surfaces.
+      if (patch.messagesEnabled === undefined) surfaces.messages = { enabled: false };
+      if (patch.geminiEnabled === undefined) surfaces.gemini = { enabled: false };
+    }
     config.apiSurfaces = surfaces as OcxConfig["apiSurfaces"];
-    if (!patch.messagesEnabled && config.claudeCode?.enabled !== false) {
+    if (patch.messagesEnabled === false && config.claudeCode?.enabled !== false) {
       commitClaudeCodeBlock(config, { ...(config.claudeCode ?? {}), enabled: false });
       claudeCodeChanged = true;
     }

@@ -51,6 +51,7 @@ test("Models tab strips keep their full-bleed container borders aligned", async 
   for (const selector of [
     ".main-inner:has(#models-panel-catalog:not([hidden]))",
     ".main-inner:has(#models-panel-routing:not([hidden]))",
+    ".main-inner:has(#models-panel-overall:not([hidden]))",
   ]) {
     expect(effectiveDeclaration(workspaceStyles, selector, "max-width")).toBe("1200px");
   }

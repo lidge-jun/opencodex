@@ -291,11 +291,11 @@ async fn update_check(
 async fn update_install(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
-) -> Result<updater::PageUpdateStatus, String> {
+) -> Result<updater::PageUpdateStatus, tauri::ipc::InvokeError> {
     window::require_update_page(&window)?;
     updater::install_pending(&app).await.map_err(|error| {
-        logging::log_once("updater install failed", &error);
-        "the update could not be installed; try again".to_owned()
+        error.log();
+        error.into()
     })
 }
 
