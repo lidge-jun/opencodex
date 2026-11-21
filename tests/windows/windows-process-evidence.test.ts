@@ -145,6 +145,21 @@ describe("Windows process evidence: pure decoding", () => {
     expect(overlayNativeCreationTimes([known], () => null)[0]!.foreignOwner).toBeNull();
   });
 
+  test("missing CIM ownership requires a matching native account, command line and exact creation ticks", () => {
+    const sid = "S-1-5-21-100-200-300-1001";
+    const commandLine = "wscript.exe example.vbs";
+    const row = { ProcessId: 7, Name: "wscript.exe", CommandLine: commandLine, CurrentUserSid: sid,
+      CreationDate: "2026-11-12T01:02:03.123Z", CreationTicks: "639300000000000000", Owner: null };
+    const identity = { sid, commandLine, ticks: BigInt(row.CreationTicks) };
+    const verify = (proof: typeof identity | null) =>
+      parseWindowsProcessSnapshot(JSON.stringify(row), () => proof)![0]!.foreignOwner;
+    expect(verify(identity)).toBe(false);
+    expect(verify(null)).toBeNull();
+    expect(verify({ ...identity, ticks: identity.ticks + 10n })).toBeNull();
+    expect(verify({ ...identity, commandLine: "other.exe" })).toBeNull();
+    expect(verify({ ...identity, sid: sid + "0" })).toBeNull();
+  });
+
   test("a native creation time replaces CIM's only when both agree to the millisecond", () => {
     const rows = parseWindowsProcessSnapshot(SNAPSHOT_JSON)!;
     const cim = rows[0]!.startTime!;

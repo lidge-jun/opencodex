@@ -123,6 +123,7 @@ export function windowsProcessSnapshotScript(timeoutMs: number): string {
     "function Write-ProcessSnapshot($owners) {",
     "  $projected = @($rows | Select-Object ProcessId,ParentProcessId,Name,CommandLine,",
     "    @{Name='CreationDate';Expression={ if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null } }},",
+    "    @{Name='CreationTicks';Expression={ if ($_.CreationDate) { [string]$_.CreationDate.ToUniversalTime().Ticks } }},",
     "    @{Name='CurrentUserSid';Expression={ $currentSid }}, @{Name='Owner';Expression={ $owners[$_.ProcessId] }});",
     "  'OCX_PROCESS_SNAPSHOT ' + (ConvertTo-Json -InputObject $projected -Depth 3 -Compress) };",
     "Write-ProcessSnapshot @{}; [Console]::Out.Flush();",
@@ -168,7 +169,10 @@ function foreignProcessOwner(record: Record<string, unknown>, startTime: number 
 }
 
 /** Parse the snapshot JSON. Unparseable output is null: an unread table proves nothing. */
-export function parseWindowsProcessSnapshot(output: string): WindowsStopProcessEntry[] | null {
+export function parseWindowsProcessSnapshot(
+  output: string,
+  sameUserIdentity?: (pid: number, withCommandLine: boolean) => { ticks: bigint; sid?: string; commandLine?: string } | null,
+): WindowsStopProcessEntry[] | null {
   let trimmed = output.trim();
   if (!trimmed) return [];
   const prefix = "OCX_PROCESS_SNAPSHOT ";
@@ -199,13 +203,23 @@ export function parseWindowsProcessSnapshot(output: string): WindowsStopProcessE
     const parent = Number(record.ParentProcessId);
     if (!Number.isSafeInteger(pid) || pid <= 0) continue;
     const created = typeof record.CreationDate === "string" ? Date.parse(record.CreationDate) : Number.NaN;
+    let owner = foreignProcessOwner(record, Number.isFinite(created) ? created : null);
+    if (owner === null && record.Owner == null && sameUserIdentity && Number.isFinite(created)
+      && typeof record.Name === "string" && /^(?:wscript|cscript|cmd)\.exe$/i.test(record.Name)
+      && typeof record.CommandLine === "string" && record.CommandLine.length > 0
+      && typeof record.CurrentUserSid === "string" && USER_ACCOUNT_SID_PATTERN.test(record.CurrentUserSid)
+      && typeof record.CreationTicks === "string") {
+      const identity = sameUserIdentity(pid, true);
+      if (identity?.sid === record.CurrentUserSid && identity.ticks.toString() === record.CreationTicks
+        && identity.commandLine === record.CommandLine) owner = false;
+    }
     entries.push({
       pid,
       parentPid: Number.isSafeInteger(parent) && parent > 0 ? parent : null,
       name: typeof record.Name === "string" ? record.Name : null,
       commandLine: typeof record.CommandLine === "string" ? record.CommandLine : null,
       startTime: Number.isFinite(created) ? created : null,
-      foreignOwner: foreignProcessOwner(record, Number.isFinite(created) ? created : null),
+      foreignOwner: owner,
     });
   }
   return entries;
@@ -237,6 +251,7 @@ export function overlayNativeCreationTimes(
 export async function windowsProcessSnapshot(options: WindowsEvidenceOptions): Promise<WindowsStopProcessEntry[] | null> {
   const run = runnerFor(options);
   if (!run) return null;
+  const native = windowsProcessNative();
   let entries: WindowsStopProcessEntry[] | null;
   try {
     entries = parseWindowsProcessSnapshot(await run({
@@ -245,12 +260,11 @@ export async function windowsProcessSnapshot(options: WindowsEvidenceOptions): P
       timeoutMs: options.timeoutMs,
       maxBufferBytes: SNAPSHOT_MAX_BUFFER,
       allowPartialOutput: true,
-    }));
+    }), native?.sameUserIdentity);
   } catch {
     return null;
   }
   if (entries === null) return null;
-  const native = windowsProcessNative();
   return native ? overlayNativeCreationTimes(entries, pid => native.creationTime(pid)) : entries;
 }
 

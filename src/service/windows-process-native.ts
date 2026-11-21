@@ -69,7 +69,7 @@ export interface WindowsProcessNativeApi {
   /** Creation time in epoch ms (FILETIME truncated to ms), or null when unreadable. */
   creationTime(pid: number): number | null;
   /** Creation in .NET ticks at CIM precision from a live process with the same token user. */
-  sameUserIdentity(pid: number, withCommandLine?: boolean): { ticks: bigint; commandLine?: string } | null;
+  sameUserIdentity(pid: number, withCommandLine?: boolean): { ticks: bigint; commandLine?: string; sid?: string } | null;
   terminate(pid: number, boundStartTime: number | bigint): WindowsTerminateResult;
   openWatch(pid: number, boundStartTime: number): WindowsProcessWatch;
   /** PID of the running Task Scheduler service host, or null when it cannot be read. */
@@ -228,10 +228,11 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
       if (!handle) return null;
       try {
         const fileTime = handleFileTime(handle);
-        if (fileTime === null || handleUserSid(handle) !== handleUserSid(k.GetCurrentProcess())) return null;
+        const sid = handleUserSid(handle);
+        if (fileTime === null || sid !== handleUserSid(k.GetCurrentProcess())) return null;
         const commandLine = withCommandLine ? readWindowsProcessCommandLineFromHandle(handle) : undefined;
         if (handleExited(handle) !== false) return null;
-        return { ticks: fileTimeToCimTicks(fileTime), commandLine };
+        return { ticks: fileTimeToCimTicks(fileTime), commandLine, sid };
       } catch {
         return null;
       } finally {
