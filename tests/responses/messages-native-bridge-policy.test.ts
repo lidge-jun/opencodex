@@ -42,13 +42,14 @@ function config(overrides: Partial<OcxConfig> = {}, provider: Record<string, unk
   } as OcxConfig;
 }
 
-function route(provider: Record<string, unknown> = {}): RouteResult {
+function route(provider: Record<string, unknown> = {}, overrides: Partial<RouteResult> = {}): RouteResult {
   return {
     providerName: "anth",
     modelId: "claude-x",
     routeKind: "direct",
     routeReason: "test",
     provider: { adapter: "anthropic", baseUrl: "https://anth.example/v1", apiKey: "ka", ...provider },
+    ...overrides,
   } as unknown as RouteResult;
 }
 
@@ -129,5 +130,40 @@ describe("web-search sidecar", () => {
     expect(nativeMessagesDeclineReason(route(), { ...searchBody, tool_choice: { type: "none" } }, config())).toBeUndefined();
     expect(nativeMessagesDeclineReason(route(), { ...searchBody, tool_choice: { type: "tool", name: "lookup" } }, config()))
       .toBeUndefined();
+  });
+});
+
+describe("advisor sidecar", () => {
+  test("enabled advisor with a distinct model declines native lane so worker enters Responses bridge", () => {
+    const cfg = config({ advisor: { enabled: true, model: "openai/gpt-5" } } as Partial<OcxConfig>);
+    expect(nativeMessagesDeclineReason(route(), TEXT_BODY, cfg)).toBe("bridge-only-policy");
+    const off = config({ advisor: { enabled: false, model: "openai/gpt-5" } } as Partial<OcxConfig>);
+    expect(nativeMessagesDeclineReason(route(), TEXT_BODY, off)).toBeUndefined();
+    const emptyModel = config({ advisor: { enabled: true, model: "   " } } as Partial<OcxConfig>);
+    expect(nativeMessagesDeclineReason(route(), TEXT_BODY, emptyModel)).toBeUndefined();
+  });
+
+  test("self-advisor route and explicit Anthropic OAuth native lane stay eligible", () => {
+    const sameByProviderModel = config({ advisor: { enabled: true, model: "anth/claude-x" } } as Partial<OcxConfig>);
+    expect(nativeMessagesDeclineReason(route({}, { providerName: "anth", modelId: "claude-x" }), TEXT_BODY, sameByProviderModel))
+      .toBeUndefined();
+    const otherSameModel = config({ advisor: { enabled: true, model: "anth/claude-x" } } as Partial<OcxConfig>);
+    expect(nativeMessagesDeclineReason(route({}, { providerName: "other", modelId: "claude-x" }), TEXT_BODY, otherSameModel))
+      .toBe("bridge-only-policy");
+    const sameByModelId = config({ advisor: { enabled: true, model: "claude-x" } } as Partial<OcxConfig>);
+    expect(nativeMessagesDeclineReason(route({}, { providerName: "anth", modelId: "claude-x" }), TEXT_BODY, sameByModelId))
+      .toBeUndefined();
+    const oauthConfig = config({
+      providers: {
+        anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth", models: ["claude-x"] },
+      },
+      protocols: { rollout: { managedMessagesNative: true, managedMessagesNativeOAuth: true } },
+      advisor: { enabled: true, model: "openai/gpt-5" },
+    } as Partial<OcxConfig>);
+    expect(nativeMessagesDeclineReason(
+      route({ authMode: "oauth", baseUrl: "https://api.anthropic.com" }, { providerName: "anthropic", modelId: "claude-x" }),
+      TEXT_BODY,
+      oauthConfig,
+    )).toBeUndefined();
   });
 });

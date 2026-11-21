@@ -41,9 +41,10 @@ export const ADVISOR_SUCCESS_TTL_MS = 24 * 60 * 60 * 1000;
  */
 export const ADVISOR_FAILURE_COOLDOWN_MS = 60 * 1000;
 /**
- * In-flight claim expiry. Longer than the largest configurable consultation timeout (600s
- * upper bound on `advisor.timeoutMs`, default 120s) so a slow-but-alive consultation is never
- * mistaken for a wedged one, while a crashed claim cannot block a task forever.
+ * Fallback in-flight claim expiry for untracked/abandoned claims. Active consultations register
+ * a live predicate via `claim(key, now, { isAlive })` so their claim stays valid for the entire
+ * active consultation regardless of inactivity-extended streaming duration, then settles or
+ * releases on success, failure, or cancellation.
  */
 export const ADVISOR_INFLIGHT_TTL_MS = 10 * 60 * 1000;
 
@@ -79,6 +80,12 @@ interface LedgerEntry {
   at: number;
   /** Present on in-flight entries: which claim owns this entry. */
   token?: string;
+  /** Optional liveness check supplied by an active consultation; keeps the claim alive until settled. */
+  isAlive?: () => boolean;
+}
+
+export interface AdvisorClaimOptions {
+  isAlive?: () => boolean;
 }
 
 export interface AdvisorPreflightLedger {
@@ -87,7 +94,7 @@ export interface AdvisorPreflightLedger {
    * task (with the ownership token) until a matching settlement releases it, so two concurrent
    * requests cannot both consult.
    */
-  claim(key: string, now?: number): AdvisorClaim;
+  claim(key: string, now?: number, options?: AdvisorClaimOptions): AdvisorClaim;
   /**
    * Settle a claim the caller owns. A settlement whose token does not match the current entry
    * is a no-op: the entry now belongs to a successor claim (the caller's in-flight window
@@ -111,6 +118,7 @@ export function createAdvisorPreflightLedger(): AdvisorPreflightLedger {
   let claimSequence = 0;
 
   const isExpired = (entry: LedgerEntry, now: number): boolean => {
+    if (entry.state === "inflight" && entry.isAlive?.() === true) return false;
     const ttl = entry.state === "success"
       ? ADVISOR_SUCCESS_TTL_MS
       : entry.state === "failed"
@@ -155,9 +163,20 @@ export function createAdvisorPreflightLedger(): AdvisorPreflightLedger {
 
   // Replacing an existing key never grows the map, and every NEW key is admitted only through
   // claim()'s makeRoom gate, so the table cannot exceed MAX_ENTRIES.
-  const set = (key: string, state: LedgerEntry["state"], now: number, token?: string): void => {
+  const set = (
+    key: string,
+    state: LedgerEntry["state"],
+    now: number,
+    token?: string,
+    isAlive?: () => boolean,
+  ): void => {
     if (entries.has(key)) entries.delete(key);
-    entries.set(key, { state, at: now, ...(token !== undefined ? { token } : {}) });
+    entries.set(key, {
+      state,
+      at: now,
+      ...(token !== undefined ? { token } : {}),
+      ...(isAlive !== undefined ? { isAlive } : {}),
+    });
   };
 
   /** True when the caller's token still owns the current in-flight entry for this key. */
@@ -167,7 +186,7 @@ export function createAdvisorPreflightLedger(): AdvisorPreflightLedger {
   };
 
   return {
-    claim(key, now = Date.now()) {
+    claim(key, now = Date.now(), options) {
       const entry = liveEntry(key, now);
       if (entry?.state === "success") return { state: "complete" };
       if (entry?.state === "failed") return { state: "cooldown" };
@@ -175,7 +194,7 @@ export function createAdvisorPreflightLedger(): AdvisorPreflightLedger {
       if (!makeRoom(now)) return { state: "saturated" };
       claimSequence += 1;
       const token = `claim-${claimSequence.toString(36)}`;
-      set(key, "inflight", now, token);
+      set(key, "inflight", now, token, options?.isAlive);
       return { state: "claimed", token };
     },
     complete(key, token, now = Date.now()) {
@@ -216,12 +235,14 @@ export function advisorConversationIdentity(parsed: {
   _cursorConversationId?: string;
   _cursorClientThreadId?: string;
   _reasoningReplayScope?: { clientThreadId?: string };
+  _advisorSessionIdentity?: string;
 }): string | undefined {
   return parsed._codexOwnThreadId
     ?? parsed._clientThreadId
     ?? parsed._cursorConversationId
     ?? parsed._cursorClientThreadId
     ?? parsed._reasoningReplayScope?.clientThreadId
+    ?? parsed._advisorSessionIdentity
     ?? undefined;
 }
 

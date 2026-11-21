@@ -421,13 +421,14 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "advisor",
-    usage: "ocx advisor <status|on|off|consent|set> ...",
-    summary: "Inspect and configure the advisor sidecar (expert consultation for routed workers).",
+    usage: "ocx advisor <status|activity|consult|mcp|on|off|consent|set> ...",
+    summary: "Inspect, invoke and configure the advisor sidecar (expert consultation for workers and MCP hosts).",
     details: [
       "ocx advisor and ocx advisor status read the resolved settings; use --json for machine-readable output.",
+      "ocx advisor consult calls POST /api/advisor/consult with --question and optional --context, --worker-model, --task-id, --consultation-id, --wait-ms; ocx advisor mcp exposes consult_advisor over stdio MCP.",
       "ocx advisor on requires current context-sharing consent. Pass --ack-context-sharing to record consent v1 and enable. ocx advisor off disables the sidecar without granting consent.",
       "ocx advisor consent records consent v1 after printing the disclosure. ocx advisor consent --revoke removes it: consultations not yet dispatched are blocked, while a dispatched consultation cannot be cancelled and task content already sent cannot be retracted.",
-      "ocx advisor set updates --model, --effort, --policy, --context-mode, --max-consultations and --timeout-ms; the model may be any routable model string (bare native, provider/model, or account-qualified). set does not grant consent.",
+      "ocx advisor set updates --model, --effort, --policy, --context-mode (<context|full|question-only>), --max-consultations, --timeout-ms, --auto-mount-mcp (<on|off>) and --mcp-clients (<comma-list|auto|none>); the model may be any routable model string (bare native, provider/model, or account-qualified). set does not grant consent.",
       "In the default context mode, policy manual consults only when the worker calls the synthetic advisor tool; policy preflight also attempts one automatic consultation per task with a stable conversation identity, once the task shows orientation evidence. Without a stable identity, each eligible request may trigger another consultation. Both require current consent before any task context is sent. The question-only mode pauses automatic consultations.",
     ],
   },

@@ -101,7 +101,7 @@ Usage:
   ocx grok <sub>              Grok Build model selection and apply
   ocx system <sub>            Runtime settings, startup, sync, OpenCodex updates, and Codex CLI inspection
   ocx config [sub]            Validated configuration show/get/set/import/export
-  ocx advisor <status|on|off|set|consent>  Advisor sidecar settings and context-sharing consent
+  ocx advisor <status|consult|mcp|on|off|set|consent>  Advisor sidecar settings, consultation and MCP host
   ocx companion <show|set|reset>  Menu-bar and widget companion usage settings
   ocx telemetry <sub>         Anonymous usage telemetry status, preview, enable, and disable
   ocx lab <sub>               Inspect Lab evidence and control local automation

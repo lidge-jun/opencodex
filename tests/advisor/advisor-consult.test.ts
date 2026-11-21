@@ -84,7 +84,7 @@ describe("consultAdvisor", () => {
     expect(seenHeaders[ADVISOR_INTERNAL_HEADER]).not.toBe("1");
     expect(decodeAdvisorAdmissionScope(seenHeaders[ADVISOR_ADMISSION_SCOPE_HEADER] ?? null)).toEqual(scope);
     expect(seenBody.model).toBe("gpt-6-astra");
-    expect(seenBody.stream).toBe(false);
+    expect(seenBody.stream).toBe(true);
     expect(seenBody.reasoning_effort).toBe("max");
     const messages = seenBody.messages as { role: string; content: string }[];
     expect(messages).toHaveLength(2);
@@ -151,5 +151,109 @@ describe("consultAdvisor", () => {
     expect(result.error).toContain("exceeds encoded bound");
     // The undeliverable header was caught before dispatch: no consult was ever sent.
     expect(fetchCount).toBe(0);
+  });
+
+  test("parses text/event-stream deltas, usage, and ignores heartbeat comments", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(encoder.encode(": opencodex heartbeat\n\n"));
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"reasoning_content":"thinking..."}}]}\n\n'));
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"First "}}]}\n\n'));
+        await Bun.sleep(10);
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"second"}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}\n\n'));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    globalThis.fetch = (async () => new Response(stream, {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream; charset=utf-8" },
+    })) as typeof fetch;
+
+    const result = await consultAdvisor(baseInput, {}, "max", 5_000, undefined, "http://advisor.test");
+    expect(result.ok).toBe(true);
+    expect(result.advice).toBe("First second");
+    expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 5, totalTokens: 15 });
+  });
+
+  test("inactivity timeout resets on streaming data chunks but ignores heartbeat comments", async () => {
+    const encoder = new TextEncoder();
+    const activeStream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        // Total duration ~75ms > 45ms timeoutMs, but each data chunk arrives within 20ms.
+        for (const token of ["Step 1 ", "Step 2 ", "Step 3"]) {
+          await Bun.sleep(20);
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: token } }] })}\n\n`));
+        }
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    globalThis.fetch = (async () => new Response(activeStream, {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    })) as typeof fetch;
+
+    const okResult = await consultAdvisor(baseInput, {}, "max", 45, undefined, "http://advisor.test");
+    expect(okResult.ok).toBe(true);
+    expect(okResult.advice).toBe("Step 1 Step 2 Step 3");
+
+    // Heartbeat comments alone do NOT reset the inactivity timeout.
+    let iv: ReturnType<typeof setInterval> | undefined;
+    const heartbeatOnlyStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        iv = setInterval(() => {
+          try { controller.enqueue(encoder.encode(": opencodex heartbeat\n\n")); } catch { if (iv !== undefined) clearInterval(iv); }
+        }, 12);
+      },
+      cancel() {
+        if (iv !== undefined) clearInterval(iv);
+      },
+    });
+    globalThis.fetch = (async (_url, init) => {
+      init?.signal?.addEventListener("abort", () => {}, { once: true });
+      return new Response(heartbeatOnlyStream, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+
+    const timedOut = await consultAdvisor(baseInput, {}, "max", 40, undefined, "http://advisor.test");
+    expect(timedOut.ok).toBe(false);
+    expect(timedOut.error).toBe("advisor timeout");
+  });
+
+  test("in-stream SSE error returns bounded advisor HTTP 502", async () => {
+    const body = 'data: {"error":{"message":"sensitive prompt echo"}}\n\n';
+    globalThis.fetch = (async () => new Response(body, {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    })) as typeof fetch;
+
+    const result = await consultAdvisor(baseInput, {}, "max", 5_000, undefined, "http://advisor.test");
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("advisor HTTP 502");
+  });
+
+  test("headerless SSE stream resets inactivity timeout incrementally before EOF", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        for (const chunk of ["Frame 1 ", "Frame 2 ", "Frame 3"]) {
+          await Bun.sleep(25);
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: chunk } }] })}\n\n`));
+        }
+        await Bun.sleep(20);
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    // No Content-Type header at all (headerless SSE). Total ~95ms > 50ms timeout.
+    globalThis.fetch = (async () => new Response(stream, { status: 200 })) as typeof fetch;
+
+    const result = await consultAdvisor(baseInput, {}, "max", 50, undefined, "http://advisor.test");
+    expect(result.ok).toBe(true);
+    expect(result.advice).toBe("Frame 1 Frame 2 Frame 3");
   });
 });
