@@ -975,10 +975,10 @@ describe("Windows service task", () => {
     // Windows drops elements equal to their schema default when it exports a task:
     // Trigger/Settings Enabled default to true and RunLevel defaults to LeastPrivilege.
     const canonical = xml
-      .replace(LOGON_TRIGGER_BLOCK, `<LogonTrigger><UserId>${TEST_WINDOWS_TASK_SID}</UserId></LogonTrigger>`)
+      .replace(LOGON_TRIGGER_BLOCK, "<LogonTrigger />")
       .replace("    <RunLevel>LeastPrivilege</RunLevel>\n", "")
       .replace("    <Enabled>true</Enabled>\n    <Hidden>", "    <Hidden>");
-    expect(canonical).toContain(`<LogonTrigger><UserId>${TEST_WINDOWS_TASK_SID}</UserId></LogonTrigger>`);
+    expect(canonical).toContain("<LogonTrigger />");
     expect(canonical).not.toContain("RunLevel");
 
     expect(windowsTaskRegistrationHealthy(canonical, wscript, launcher)).toBe(true);
