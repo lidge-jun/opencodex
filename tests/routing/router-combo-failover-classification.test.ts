@@ -17,6 +17,7 @@ import {
   isProviderModerationRefusal,
 } from "../../src/combos/failover";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
+import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../src/adapters/ollama-late-attribution";
 import { normalizeUpstreamErrorText } from "../../src/server/responses/core-errors";
 import { adapterFailureFromMessage, inferHttpStatusFromAdapterMessage } from "../../src/lib/errors";
 import type { OcxConfig } from "../../src/types";
@@ -643,12 +644,49 @@ describe("combo failure hop/stop verdicts", () => {
     expect(comboFailureDecision(400, "free tier prompt cap", { code: "free_rate_limited" })).toBe("hop");
   });
 
-  test("INVARIANT: generic 410 and 413 remain terminal", () => {
-    // These two are the tripwire for this change. A widened hop list must never swallow them:
-    // 410 without a structured lifecycle code is a real resource-gone verdict, and a generic
-    // 413 is a request the next target would reject identically.
+  test("INVARIANT: a generic 410 remains terminal", () => {
+    // A widened hop list must never swallow it: 410 without a structured lifecycle code is a real
+    // resource-gone verdict.
     expect(comboFailureDecision(410, "resource is gone")).toBe("stop");
-    expect(comboFailureDecision(413, "request too large")).toBe("stop");
+  });
+
+  test("a provider 413 hops to the next target without cooling it (#9017)", () => {
+    // Targets carry different intake limits and the provider refused before processing the turn,
+    // so the next untried target may accept it. This reverses the generic-413 stop recorded in
+    // devlog/_fin/260904_bug_stack_train/040_deferrals.md.
+    const anthropic = JSON.stringify({ type: "error", error: { type: "request_too_large", message: "Request exceeds the maximum size" } });
+    for (const [message, code] of [
+      ["request too large", undefined],
+      ["Provider error 413", undefined],
+      [anthropic, "request_too_large"],
+      [JSON.stringify({ error: { message: "Payload Too Large" } }), undefined],
+    ] as const) {
+      expect(comboFailureDecision(413, message, { code })).toBe("hop");
+      expect(comboFailureCooldownScope(413, message, { code })).toBe("none");
+    }
+  });
+
+  test("each proxy-owned 413 stays terminal", () => {
+    for (const code of ["translation_buffer_limit", "inbound_body_too_large", "outbound_body_too_large"]) {
+      expect(comboFailureDecision(413, "request translation buffer exceeded the safe limit", { code })).toBe("stop");
+      // The same refusal read from its body when the structured code did not survive.
+      expect(comboFailureDecision(413, JSON.stringify({ error: { message: "refused", type: code } }))).toBe("stop");
+    }
+    // Ollama's late-attribution limit is recognized only by its exact constant, as the combo's
+    // client-envelope selector does.
+    expect(comboFailureDecision(413, OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE, { code: "request_too_large" })).toBe("stop");
+    expect(comboFailureDecision(413, JSON.stringify({ error: {
+      message: OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE, type: "request_too_large", code: "request_too_large",
+    } }), { code: "request_too_large" })).toBe("stop");
+  });
+
+  test("hard stops still outrank a provider 413", () => {
+    expect(comboFailureDecision(413, "too large", { code: "origin_rejected" })).toBe("stop");
+    expect(comboFailureDecision(413, "too large", { code: "cyber_policy" })).toBe("stop");
+    expect(comboFailureDecision(413, "too large", { code: "upstream_no_response" })).toBe("stop");
+    expect(comboFailureDecision(413, "too large", { code: "content_policy_violation" })).toBe("stop");
+    expect(comboFailureDecision(413, "too large", { code: "request_too_large", rootCode: "origin_rejected" })).toBe("stop");
+    expect(comboFailureDecision(413, "the request was origin_rejected")).toBe("stop");
   });
 
   test("a 413 carrying a structured per-minute token cap hops without cooling the target (#9017)", () => {
@@ -663,11 +701,9 @@ describe("combo failure hop/stop verdicts", () => {
     expect(comboFailureDecision(413, groq, { code: "rate_limit_exceeded" })).toBe("hop");
     expect(comboFailureDecision(413, "too large", { code: "Rate-Limit-Exceeded" })).toBe("hop");
     expect(comboFailureCooldownScope(413, groq, { code: "rate_limit_exceeded" })).toBe("none");
-    // Structured code only: the same prose without the code, or the code quoted in prose, keeps
-    // the generic-413 invariant, and hard stops still outrank the cap.
-    expect(comboFailureDecision(413, groq)).toBe("stop");
-    expect(comboFailureDecision(413, "rate_limit_exceeded")).toBe("stop");
-    expect(comboFailureDecision(413, "too large", { code: "request_too_large" })).toBe("stop");
+    // The cap is a provider 413 like any other, so the body alone hops too; the code does not make
+    // another status hop, and hard stops still outrank it.
+    expect(comboFailureDecision(413, groq)).toBe("hop");
     expect(comboFailureDecision(400, "too large", { code: "rate_limit_exceeded" })).toBe("stop");
     expect(comboFailureDecision(499, "too large", { code: "rate_limit_exceeded" })).toBe("stop");
     expect(comboFailureDecision(413, "origin_rejected", { code: "rate_limit_exceeded" })).toBe("stop");
@@ -816,7 +852,10 @@ describe("request-local optional control incompatibility", () => {
       expect(comboFailureDecision(400, message, { code })).toBe("stop");
     }
     expect(comboFailureDecision(499, message)).toBe("stop");
-    expect(comboFailureDecision(413, message)).toBe("stop");
+    // A provider 413 hops on its own status (#9017); a generic 410 is still a status this
+    // compatible message cannot turn into a hop.
+    expect(comboFailureDecision(413, message)).toBe("hop");
+    expect(comboFailureDecision(410, message)).toBe("stop");
   });
 });
 
