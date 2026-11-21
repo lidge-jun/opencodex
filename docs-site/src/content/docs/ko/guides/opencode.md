@@ -26,6 +26,8 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ```
 
+네이티브 OpenAI slug 행은 정규 `openai` provider가 활성화되어 있고 Codex Direct 모드가 아닐 때만 나타납니다. Direct 모드에서는 각 호출자의 OpenAI 자격 증명을 전달하지만 opencode는 프록시의 키를 보냅니다. 또한 `openai` provider가 비활성화되면 프록시는 접두사가 없는 모든 `gpt-*` 선택자를 거부합니다. 두 상태 모두에서 런처, 관리형 통합 및 `ocx export`는 실행할 수 없는 모델을 제공하는 대신 해당 행을 생략합니다.
+
 ## 사용자 구성은 절대 수정되지 않습니다
 
 런처는 `~/.config/opencode/opencode.json`, 프로젝트의 `opencode.json` /
