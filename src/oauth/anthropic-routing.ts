@@ -473,8 +473,9 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
       // First read after an aggregate refusal: record which window explains it. An incomplete
       // read concludes nothing and leaves the claim open for the next one.
       const all: readonly AnthropicQuotaWindow[] = ["five-hour", "weekly"];
-      const spent = all.filter(window => (percentOf(window) ?? -1) >= 100);
-      if (spent.length || all.every(window => percentOf(window) !== undefined)) entry.aggregateQuotaWindows = spent;
+      if (all.every(window => percentOf(window) !== undefined)) {
+        entry.aggregateQuotaWindows = all.filter(window => percentOf(window)! >= 100);
+      }
       return "retained";
     }
     const recovered = windows.every(window => (percentOf(window) ?? 100) < 100);

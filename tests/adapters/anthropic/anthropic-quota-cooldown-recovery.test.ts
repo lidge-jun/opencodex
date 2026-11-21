@@ -145,7 +145,8 @@ test("an incomplete first read leaves an aggregate refusal unexplained but claim
   routing.recordAnthropicAccount429(f.config, id, "600", now, new Headers(AGGREGATE_REJECTED));
   const claim = routing.captureAnthropicCooldownRecovery(id, now + 1);
   expect(claim).not.toBeNull();
-  expect(routing.settleAnthropicCooldownRecovery(claim!, { fiveHourPercent: 3, updatedAt: now + 2 })).toBe("retained");
+  // A spent five-hour window without a weekly reading names nothing: the weekly window may be spent too.
+  expect(routing.settleAnthropicCooldownRecovery(claim!, { fiveHourPercent: 100, updatedAt: now + 2 })).toBe("retained");
   const next = routing.captureAnthropicCooldownRecovery(id, now + 3);
   expect(next).not.toBeNull();
   expect(routing.settleAnthropicCooldownRecovery(next!, { fiveHourPercent: 3, weeklyPercent: 100, updatedAt: now + 4 })).toBe("retained");
