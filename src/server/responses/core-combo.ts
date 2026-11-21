@@ -1740,6 +1740,7 @@ export async function executeComboResponses(
         openRouterOpaque400: failure.openRouterOpaque400,
         unofferedToolCallRefusal: failure.unofferedToolCallRefusal,
         providerModerationRefusal: failure.providerModerationRefusal,
+        providerIntakeRefusal: failure.providerIntakeRefusal,
         // The adapter the failed leg actually resolved: a configured `kiro` provider can route a
         // model through another wire via `modelAdapters`, and an unresolved leg grants no hop.
         failedAdapter: childLog.providerAdapter,

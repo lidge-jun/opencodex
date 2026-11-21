@@ -10,6 +10,7 @@ import {
   isOpenRouterOpaque400Envelope,
   isUnofferedToolCallRefusal,
   isProviderModerationRefusal,
+  isProviderIntakeRefusalBody,
   upstreamEnvelopeRootCode,
   type CodexAccountModelRefusal,
 } from "../../combos/failover";
@@ -72,6 +73,7 @@ export async function consumeComboFailure(
   let openRouterOpaque400: boolean | undefined;
   let unofferedToolCallRefusal: boolean | undefined;
   let providerModerationRefusal: boolean | undefined;
+  let providerIntakeRefusal: boolean | undefined;
   let usage: OcxUsage | undefined;
   let upstreamCode: string | undefined;
   let upstreamRootCode: string | undefined;
@@ -134,6 +136,9 @@ export async function consumeComboFailure(
       if (response.status === 400 || response.status === 422) {
         providerModerationRefusal = isProviderModerationRefusal(response.status, body.text, undefined, true);
       }
+      // The same whole-body rule for the provider-413 hop (#9017): a hard refusal or proxy marker
+      // past the 500-character cut must still keep the combo from sending the turn elsewhere.
+      if (response.status === 413) providerIntakeRefusal = isProviderIntakeRefusalBody(body.text);
       // Status-independent: the nested record is what normalization selects, so a root verdict
       // beside it has to be captured here or the conflict rule never sees it.
       upstreamRootCode = upstreamEnvelopeRootCode(body.text);
@@ -218,6 +223,7 @@ export async function consumeComboFailure(
     ...(openRouterOpaque400 !== undefined ? { openRouterOpaque400 } : {}),
     ...(unofferedToolCallRefusal !== undefined ? { unofferedToolCallRefusal } : {}),
     ...(providerModerationRefusal !== undefined ? { providerModerationRefusal } : {}),
+    ...(providerIntakeRefusal !== undefined ? { providerIntakeRefusal } : {}),
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
     // A rewritten identity (policy, replay refusal) is the whole verdict; the root's own code
     // would only re-open a decision that rewrite already settled.

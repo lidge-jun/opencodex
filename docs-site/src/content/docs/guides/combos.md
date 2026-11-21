@@ -1257,7 +1257,7 @@ window or a credential/billing failure, otherwise 60 seconds). Explicit
 
 Validation errors (HTTP 400/422) that quote quota or free-tier cap text do not trigger fallback by that text alone. A structured `free_rate_limited` refusal still tries the next eligible target without cooling the healthy provider or target.
 
-A provider's HTTP 413 says that target cannot take a request this large, not that the request is impossible. Targets have different intake limits (Groq, for example, refuses a turn above the account's tokens-per-minute tier with 413 and `rate_limit_exceeded`), so the combo tries the next untried target and cools nothing; if the last target also refuses, you get its 413. A 413 produced by OpenCodex itself (`translation_buffer_limit`, `inbound_body_too_large`, `outbound_body_too_large`, or the Ollama late-attribution limit) still stops the combo, because every target would hit the same limit.
+A provider's HTTP 413 says that target cannot take a request this large, not that the request is impossible. Targets have different intake limits (Groq, for example, refuses a turn above the account's tokens-per-minute tier with 413 and `rate_limit_exceeded`), so the combo tries the next untried target and cools nothing. If every remaining target refuses as well, the combo returns its context-size error: HTTP 413 for non-streaming clients, and a `response.failed` event with `context_length_exceeded` for streaming Responses clients. A 413 produced by OpenCodex itself (`translation_buffer_limit`, `inbound_body_too_large`, `outbound_body_too_large`, or the Ollama late-attribution limit) still stops the combo, because every target would hit the same limit.
 
 ### Why was my alias rejected?
 

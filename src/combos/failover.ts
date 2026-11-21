@@ -1305,8 +1305,15 @@ function isAllowedModerationParam(param: string): boolean {
  * Any hard-refusal token in any spelling. A moderation code beside one is not evidence that another
  * target may serve the request: the client must not retry these.
  */
-const HARD_STOP_TOKEN =
-  /(?<![a-z0-9])(?:cyber_policy|origin_rejected|bio_policy|misalignment_policy_violation|invalid_prompt|content_policy_violation|context_length_exceeded|client_closed_request|client_cancelled|upstream_no_response|upstream_closed_before_response|upstream_reset_replay_refused)(?![a-z0-9])/i;
+const HARD_STOP_TOKENS = [
+  "cyber_policy", "origin_rejected", "bio_policy", "misalignment_policy_violation", "invalid_prompt",
+  "content_policy_violation", "context_length_exceeded", "client_closed_request", "client_cancelled",
+  "upstream_no_response", "upstream_closed_before_response", "upstream_reset_replay_refused",
+];
+const hardStopPattern = (tokens: readonly string[]) => new RegExp(`(?<![a-z0-9])(?:${tokens.join("|")})(?![a-z0-9])`, "i");
+const HARD_STOP_TOKEN = hardStopPattern(HARD_STOP_TOKENS);
+/** A provider 413 naming a context overflow is still this target's limit, so only the others veto its hop. */
+const HARD_STOP_TOKEN_413 = hardStopPattern(HARD_STOP_TOKENS.filter(token => token !== "context_length_exceeded"));
 
 /** JSON \uXXXX escapes decoded, so an escaped code cannot slip past {@link HARD_STOP_TOKEN}. */
 function withJsonEscapesDecoded(text: string): string {
@@ -1317,8 +1324,8 @@ function withJsonEscapesDecoded(text: string): string {
  * Whether any hard-refusal token appears in any spelling: JSON escapes decoded (including \n, \t
  * and \r), camel humps split, and hyphens, dots, slashes and whitespace folded to underscores.
  */
-function namesHardStopToken(text: string): boolean {
-  return HARD_STOP_TOKEN.test(withJsonEscapesDecoded(text)
+function namesHardStopToken(text: string, pattern: RegExp = HARD_STOP_TOKEN): boolean {
+  return pattern.test(withJsonEscapesDecoded(text)
     .replace(/\\[ntr]/g, "_")
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[-.\s/]+/g, "_"));
@@ -1598,6 +1605,7 @@ function isProviderIntakeRefusal(message: string, rawCode: string | null | undef
     return false;
   }
   if (safetyRefusalCodeFromMessage(message) !== undefined || isHardPolicyOrOriginRefusal(message)) return false;
+  if (namesHardStopToken(message, HARD_STOP_TOKEN_413)) return false;
   const lower = message.toLowerCase();
   if (PROXY_OWNED_413_CODES.some(owned => lower.includes(owned)) || lower.includes(PROXY_TRANSLATION_BUFFER_WORDING)) {
     return false;
@@ -1608,6 +1616,15 @@ function isProviderIntakeRefusal(message: string, rawCode: string | null | undef
   if (message.trim() === OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE) return false;
   const root = parseErrorEnvelope(message);
   return (root ? envelopeErrorRecord(root) : undefined)?.message !== OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE;
+}
+
+/**
+ * The whole-body form of {@link isProviderIntakeRefusal}, for a reader that holds the complete
+ * bounded 413 body. The classification text the decision receives is cut at 500 characters, so a
+ * hard refusal or proxy marker after the cut would otherwise leave the hop open.
+ */
+export function isProviderIntakeRefusalBody(body: string): boolean {
+  return isProviderIntakeRefusal(body, undefined);
 }
 
 function isModelLifecycleGone(
@@ -1743,6 +1760,8 @@ export function comboFailureDecision(
     unofferedToolCallRefusal?: boolean;
     /** Whole-body moderation verdict from a reader that saw the complete bounded body. */
     providerModerationRefusal?: boolean;
+    /** Whole-body 413 intake verdict ({@link isProviderIntakeRefusalBody}); false vetoes the hop. */
+    providerIntakeRefusal?: boolean;
   },
 ): ComboFailureDecision {
   const rootRawCode = typeof options?.rootCode === "number" ? String(options.rootCode) : options?.rootCode;
@@ -1772,6 +1791,8 @@ function decideComboFailure(
     unofferedToolCallRefusal?: boolean;
     /** Whole-body moderation verdict from a reader that saw the complete bounded body. */
     providerModerationRefusal?: boolean;
+    /** Whole-body 413 intake verdict ({@link isProviderIntakeRefusalBody}); false vetoes the hop. */
+    providerIntakeRefusal?: boolean;
   },
 ): ComboFailureDecision {
   if (status === 499) return "stop";
@@ -1821,7 +1842,7 @@ function decideComboFailure(
   // 413 that also states a terminal refusal. Cooldown scope stays "none". This reverses the
   // generic-413 stop recorded in devlog/_fin/260904_bug_stack_train/040_deferrals.md
   // (coordinator decision, 2026-11-21); generic 410 is unchanged.
-  if (status === 413 && isProviderIntakeRefusal(message, rawCode, error.code)) return "hop";
+  if (status === 413 && options?.providerIntakeRefusal !== false && isProviderIntakeRefusal(message, rawCode, error.code)) return "hop";
   // A local input-admission refusal (#1524) says "this candidate cannot fit the request",
   // not "the request is impossible": the next candidate may have a larger context window.
   //
