@@ -3146,6 +3146,7 @@ export const en = {
   "codexAuth.creditNextBadge": "NEXT",
   "codexAuth.creditGranted": "Granted {date}",
   "codexAuth.creditExpires": "Expires {date} ({days}d left)",
+  "codexAuth.creditNoExpiry": "No expiry",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "{count} Grok reset coupon(s)",

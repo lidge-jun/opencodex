@@ -1362,6 +1362,30 @@ describe("provider moderation refusal", () => {
     },
   };
 
+  test.each([
+    "content refused. category: spam, and please",
+    "refused category: a, and and b",
+    "refused categories: a, AND b, and c. please revise your input.",
+    "refused category: spam, and retry later.",
+  ])("recognizes category-list boundaries in %s", message => {
+    const withCode = JSON.stringify({ error: { code: "moderation_refusal", message } });
+    expect(isProviderModerationRefusal(400, withCode)).toBe(true);
+    expect(isProviderModerationRefusal(400, JSON.stringify({ error: { message } }))).toBe(false);
+  });
+
+  test("rejects an ambiguous category list without exponential backtracking (CodeQL js/redos)", () => {
+    // ", and retry" is both a category separator plus a word and a retry tail, so the former
+    // single regex tried every split before rejecting the trailing "!": about 4x slower per two
+    // repetitions until Bun's backtracking limit, roughly a second of CPU per error body on a fast
+    // machine. The scan visits each boundary once and finishes in well under a millisecond.
+    const message = "refused category: a" + ", and retry category: a".repeat(32) + "!";
+    const body = JSON.stringify({ error: { code: "moderation_refusal", message } });
+    const started = performance.now();
+    // A complete bounded body is what reaches the scan at this length (the body readers pass it).
+    expect(isProviderModerationRefusal(400, body, undefined, true)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+
   test("the observed gateway refusal hops only with a structured moderation code", () => {
     // Owner decision on #8428: prose alone never hops. The observed body carries no code, so it
     // keeps dev's stop; the same body with a structured moderation code hops without cooling.

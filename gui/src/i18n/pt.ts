@@ -3107,6 +3107,7 @@ export const pt: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "PRÓXIMO",
   "codexAuth.creditGranted": "Concedido em {date}",
   "codexAuth.creditExpires": "Expira em {date} ({days}d restantes)",
+  "codexAuth.creditNoExpiry": "Sem vencimento",
   "grokCoupon.badgeAria": "{count} cupom(ns) de reset do Grok",
   "grokCoupon.badgeErrorAria": "Não foi possível ler os cupons de reset do Grok",
   "grokCoupon.title": "Cupons de reset do Grok",

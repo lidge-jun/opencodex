@@ -648,7 +648,7 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
   if (code !== undefined && code !== null && typeof code !== "string") return false;
   const outerCode = normalizedFailureCode(code);
   if (!EXACT_EFFORT_COMPATIBLE_CODES.has(outerCode)) return false;
-  if (isHardPolicyOrOriginRefusal(message) || hasConflictingReasoningEffortCode(message)) return false;
+  if (isHardPolicyOrOriginRefusal(message) || hasConflictingReasoningEffortCode(message, 16_384)) return false;
   let text = message.trim();
   for (let depth = 0; depth < 3; depth += 1) {
     if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length).trim();
@@ -1231,23 +1231,56 @@ const RESPONSE_REQUEST_ECHO_KEYS = new Set([
  * Any other wording (an account, model, parameter or billing problem, in any phrasing) does not
  * match, so the body keeps dev's decision; only known shapes are admitted.
  */
-const MODERATION_REFUSAL_PROSE = new RegExp("^(?:"
-  + "(?:content )?(?:refused|flagged|blocked|rejected|filtered)(?: by (?:the )?(?:moderation|content filter))?\\.?"
+// The anchored scan commits to the first verdict alternative that matches, so alternatives run
+// longest-first: Azure's fixed wording leads ("the response was filtered" is a strict prefix of it)
+// and the noun-phrased verdict precedes the bare one (its `by ... system` clause reaches further).
+const MODERATION_REFUSAL_VERDICT = new RegExp("^(?:"
+  + "the response was filtered due to the prompt triggering azure openai'?s content management policy\\.?"
   + "|(?:(?:the|your) )?(?:input|request|prompt|content|message|response|output)(?: (?:was|has been|is))?"
   + " (?:refused|flagged|blocked|rejected|filtered)(?: by (?:the )?(?:moderation|content filter)(?: system)?)?\\.?"
-  + "|the response was filtered due to the prompt triggering azure openai'?s content management policy\\.?"
+  + "|(?:content )?(?:refused|flagged|blocked|rejected|filtered)(?: by (?:the )?(?:moderation|content filter))?\\.?"
   + "|(?:your )?(?:input|request|prompt|content) violated (?:the )?content (?:safety|management|filtering) polic(?:y|ies)\\.?"
-  + ")(?:"
-  + " categor(?:y|ies): [a-z][a-z/_-]*(?:(?:,? and |, )[a-z][a-z/_-]*)*\\.?"
+  + ")", "i");
+const MODERATION_REFUSAL_TAIL = new RegExp("(?:"
+  + "( categor(?:y|ies): )"
   + "| please (?:modify|revise|rephrase|change|adjust|edit) (?:your|the) (?:prompt|input|request|message)(?: and (?:retry|try again))?\\.?"
   + "| (?:please )?(?:retry|try again)(?: later)?\\.?"
   + "| to learn more about our content filtering policies please read our documentation: https://[^ ]+"
-  + ")*$", "i");
+  + ")", "iy");
+const MODERATION_CATEGORY_WORD = /[a-z][a-z/_-]*/iy;
+const MODERATION_CATEGORY_AND = / and /iy;
 
-/** Whether a prose string is a known moderation refusal copy and nothing else (bounded, linear). */
+/** Whether the whole string is known moderation refusal copy. */
 function isModerationRefusalProse(text: string): boolean {
   if (text.length > 2_000) return false;
-  return MODERATION_REFUSAL_PROSE.test(text.replace(/\s+/g, " ").trim());
+  const prose = text.replace(/\s+/g, " ").trim();
+  const verdict = MODERATION_REFUSAL_VERDICT.exec(prose);
+  if (!verdict) return false;
+
+  // A comma can introduce the category "and" or the separator ", and ". Keep both
+  // interpretations until the rest of the sentence distinguishes them. Each token
+  // boundary is visited once, even when several interpretations reach it.
+  const tailStarts = new Set([verdict[0].length]);
+  const categoryStarts = new Set<number>();
+  for (let index = verdict[0].length; index < prose.length; index++) {
+    if (tailStarts.has(index)) {
+      MODERATION_REFUSAL_TAIL.lastIndex = index;
+      const tail = MODERATION_REFUSAL_TAIL.exec(prose);
+      if (tail) {
+        const next = tail[1] ? categoryStarts : tailStarts;
+        next.add(MODERATION_REFUSAL_TAIL.lastIndex);
+      }
+    }
+    if (!categoryStarts.has(index)) continue;
+    MODERATION_CATEGORY_WORD.lastIndex = index;
+    if (!MODERATION_CATEGORY_WORD.test(prose)) continue;
+    const end = MODERATION_CATEGORY_WORD.lastIndex;
+    tailStarts.add(prose[end] === "." ? end + 1 : end);
+    if (prose.startsWith(", ", end)) categoryStarts.add(end + 2);
+    MODERATION_CATEGORY_AND.lastIndex = prose[end] === "," ? end + 1 : end;
+    if (MODERATION_CATEGORY_AND.test(prose)) categoryStarts.add(MODERATION_CATEGORY_AND.lastIndex);
+  }
+  return tailStarts.has(prose.length);
 }
 
 /**

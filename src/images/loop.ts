@@ -1,3 +1,5 @@
+import { getProviderRegistryEntry } from "../providers/registry";
+import { resolveVideoImageInput } from "./video-image-input";
 import type { AnthropicImageRecovery } from "../server/responses/image-context-recovery";
 import type { createAnthropicThinkingRecovery } from "../server/responses/anthropic-thinking-recovery";
 import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
@@ -1065,7 +1067,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 fulfilled.push({ call, result: vResult, args: pArgs });
                 continue;
               }
-              const vArgs = parseVideoCallArgs(call.args);
+              const vArgs = parseVideoCallArgs(call.args, videoPlan!.model);
               const videoAuth = videoPlan!.auth;
               let vResult;
               if (!vArgs.ok) {
@@ -1074,7 +1076,6 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 // An unusable images.videoProvider answers the call; it never reaches any upstream.
                 vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: videoPlan!.unavailable };
               } else {
-                paidVideoCalls += 1;
                 const videoTimeout = videoTimeoutMs ?? 300_000;
                 const deadlineSignal = AbortSignal.timeout(videoTimeout);
                 try {
@@ -1083,9 +1084,20 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                   const linkedDeadline = signal
                     ? AbortSignal.any([signal, deadlineSignal])
                     : deadlineSignal;
+                  const allowArtifacts = videoAuth.providerName === "xai" && videoAuth.baseUrl === (getProviderRegistryEntry("xai")?.baseUrl ?? "https://api.x.ai/v1").replace(/\/+$/, "");
+                  const resolveInput = (value: string) => resolveVideoImageInput(value, Date.now(), allowArtifacts);
+                  const image = vArgs.image === undefined ? undefined : resolveInput(vArgs.image);
+                  const lastFrame = vArgs.lastFrame === undefined ? undefined : resolveInput(vArgs.lastFrame);
+                  const keyframes = vArgs.keyframes?.map(frame => ({ ...frame, image: resolveInput(frame.image) }));
+                  const referenceImages = vArgs.referenceImages?.map(resolveInput);
+                  paidVideoCalls += 1;
                   const { requestId } = await submitVideoJob(
                     {
                       prompt: vArgs.prompt, model: videoPlan!.model,
+                      ...(image !== undefined ? { image } : {}),
+                      ...(lastFrame !== undefined ? { lastFrame } : {}),
+                      ...(keyframes !== undefined ? { keyframes } : {}),
+                      ...(referenceImages !== undefined ? { referenceImages } : {}),
                       ...(vArgs.duration != null ? { duration: vArgs.duration } : {}),
                       ...(vArgs.resolution != null ? { resolution: vArgs.resolution } : {}),
                       ...(vArgs.aspectRatio != null ? { aspectRatio: vArgs.aspectRatio } : {}),

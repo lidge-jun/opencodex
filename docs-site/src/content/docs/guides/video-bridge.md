@@ -42,7 +42,7 @@ Add `videoBridgeEnabled: true` to your `images` config:
   "images": {
     "bridgeEnabled": true,
     "videoBridgeEnabled": true,
-    "videoBridgeModel": "grok-imagine-video",
+    "videoBridgeModel": "grok-imagine-video-1.5-lite",
     "videoMaxRounds": 2,
     "videoTimeoutMs": 300000
   }
@@ -52,7 +52,7 @@ Add `videoBridgeEnabled: true` to your `images` config:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `videoBridgeEnabled` | `false` | Master switch. Must be explicitly enabled. |
-| `videoBridgeModel` | `"grok-imagine-video"` | xAI video model id. |
+| `videoBridgeModel` | `"grok-imagine-video-1.5-lite"` | xAI video model id. |
 | `videoMaxRounds` | `2` | Max video-gen rounds before forced final answer. |
 | `videoTimeoutMs` | `300000` (5 min) | Per-video timeout including polling. |
 | `videoProvider` | unset (xAI) | Optional API-key provider that serves `video_gen` with its own `baseUrl` and key. See [Choosing the video provider](#choosing-the-video-provider). |
@@ -78,7 +78,7 @@ bridge:
   "images": {
     "videoBridgeEnabled": true,
     "videoProvider": "my-video-bridge",
-    "videoBridgeModel": "grok-imagine-video"
+    "videoBridgeModel": "grok-imagine-video-1.5-lite"
   }
 }
 ```
@@ -127,10 +127,34 @@ The `video_gen` tool accepts:
 
 | Parameter | Type | Range | Description |
 |-----------|------|-------|-------------|
-| `prompt` | string | required | Detailed video generation prompt |
+| `prompt` | string | optional with an image or frame | Text prompt |
 | `duration` | integer | 1-15 | Video length in seconds |
-| `resolution` | string | `"480p"`, `"720p"` | Video resolution |
-| `aspect_ratio` | string | 7 ratios | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3` |
+| `resolution` | string | `480p`, `720p`, `1080p` | Model-dependent; 720p at most with `last_frame`, `keyframes` or `reference_images` |
+| `aspect_ratio` | string | model-dependent | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2`; refused when only animating an `image`, which keeps its own ratio |
+| `image` | string | first frame | HTTPS URL, data URL or remembered artifact |
+| `last_frame` | string | 1.5 only | Last frame |
+| `keyframes` | array | 1.5, max 4 | `{image, timestamp_s}`; timestamp strictly inside the clip (8 s when `duration` is omitted) |
+| `reference_images` | array | 1.5: 14, classic: 7 (≤ 10 s) | Image references; the classic model cannot combine them with `image` |
+
+Settings a model cannot honour are refused before any paid call instead of being dropped.
+
+### Models and image inputs
+
+| Model | Resolution | Inputs | Price per second (480p / 720p / 1080p) |
+|-------|------------|--------|------------------|
+| `grok-imagine-video-1.5` | 480p / 720p / native 1080p | first/last frame, 4 keyframes, 14 references (720p maximum) | $0.08 / $0.14 / $0.25 |
+| `grok-imagine-video-1.5-lite` (default) | 480p / 720p / upscaled 1080p | first frame | $0.02 / $0.03 / $0.14 |
+| `grok-imagine-video` | 480p / 720p | first frame, 7 references | $0.05 / $0.07 / — |
+
+Set `images.videoBridgeModel` to `grok-imagine-video-1.5` for frame pins or references.
+Known models support nine aspect ratios. Unknown models retain seven ratios, 480p/720p,
+and no image inputs. Inputs accept HTTPS URLs or PNG/JPEG/WebP data URLs up to 10 MiB
+decoded. Images downloaded by the image bridge may also be referenced by artifact URL,
+absolute path or `file:` URL for up to one hour; the bridge uses their remembered source
+URL and never reads the local file. These artifact references work only with pinned xAI,
+not a custom `images.videoProvider`. Inline image results have no source URL and cannot
+be referenced. An upstream temporary URL may expire earlier.
+
 
 ## Limitations
 

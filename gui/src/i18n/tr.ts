@@ -3081,6 +3081,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "SONRAKİ",
   "codexAuth.creditGranted": "Verildiği tarih {date}",
   "codexAuth.creditExpires": "Son kullanma {date} ({days}gün kaldı)",
+  "codexAuth.creditNoExpiry": "Son kullanma tarihi yok",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "{count} Grok sıfırlama kuponu",
