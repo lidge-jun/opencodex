@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { comboFailureCooldownScope, comboFailureDecision } from "../../src/combos/failover";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
+import { preflightComboStreamResponse } from "../../src/server/responses/combo-stream-preflight";
 import { formatErrorResponse } from "../../src/bridge/errors";
 import { M365_RESPONSE_LIMIT_MESSAGES } from "../../src/adapters/m365-copilot/response-limits";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../src/adapters/ollama-late-attribution";
@@ -118,6 +119,17 @@ describe("combo provider 413 verdicts", () => {
     // The same wording from a provider still hops, as on dev.
     expect(comboFailureDecision(413, overflow)).toBe("hop");
     expect(comboFailureDecision(413, overflow, { code: "context_length_exceeded" })).toBe("hop");
+  });
+
+  test("the Responses stream preflight reads terminal evidence anywhere in a 413 event (#9017 review)", async () => {
+    const event = (details: Record<string, unknown>) => ({ code: "request_too_large", message: "Request too large", details });
+    const responsesFrame = (error: Record<string, unknown>) => preflightComboStreamResponse(new Response(
+      `data: ${JSON.stringify({ type: "error", status: 413, error })}\n\n`, { headers: { "content-type": "text/event-stream" } },
+    ), { model: "m1", provider: "a" });
+    expect((await responsesFrame(event({ code: "invalid_prompt" }))).kind).not.toBe("failed");
+    expect((await responsesFrame(event({ note: "none" }))).kind).toBe("failed");
+    // The native Messages preflight maps a request_too_large event to 502 (as on dev), so the 413
+    // rule never decides there; it still receives the whole-event verdict for parity.
   });
   test("hard stops still outrank a provider 413", () => {
     expect(comboFailureDecision(413, "too large", { code: "origin_rejected" })).toBe("stop");

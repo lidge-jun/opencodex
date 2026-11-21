@@ -7,6 +7,7 @@ import {
   isMalformedResponseFormatRecord,
   isOpenRouterOpaque400EnvelopeRoot,
   isProviderModerationRefusal,
+  isProviderIntakeRefusalBody,
   isOpenRouterOpaque400Record,
   type CodexAccountModelRefusal,
 } from "../../combos/failover";
@@ -429,12 +430,15 @@ function bareErrorIsRetryable(payload: unknown): boolean {
   // The parsed event is the whole terminal record, so its moderation verdict is not cut short.
   const providerModerationRefusal = status === 400 || status === 422
     ? isProviderModerationRefusal(status, JSON.stringify(event), undefined, true) : undefined;
+  // The same whole-event reading for the provider-413 hop (#9017): terminal evidence in a sibling
+  // field must keep the turn on this target.
+  const providerIntakeRefusal = status === 413 ? isProviderIntakeRefusalBody(JSON.stringify(event)) : undefined;
   // A conflicting root and record code hop only when each would hop on its own, so a root hard
   // stop is never hidden behind a retryable record code (and a retryable pair keeps dev's hop).
   return comboFailureDecision(status, message, {
     code: recordCode ?? rootCode, rootCode,
     codexModelRefusal: terminalModelRefusal(status, event),
-    malformedResponseFormat, openRouterOpaque400, providerModerationRefusal,
+    malformedResponseFormat, openRouterOpaque400, providerModerationRefusal, providerIntakeRefusal,
   }) === "hop";
 }
 
