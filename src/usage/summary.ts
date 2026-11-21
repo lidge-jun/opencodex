@@ -1,7 +1,7 @@
 import { baseProviderLabel } from "../providers/label";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { usageDisplayTotalTokens } from "./totals";
-import { usageApp, type UsageApp, type UsageAppSummary } from "./app-breakdown";
+import { foldUsageAppRows, MAX_PARTITION_APP_KEYS, usageAppIdentity, usageAppKey, type UsageAppSummary } from "./app-breakdown";
 import { isLegacyCodexUsage, matchesUsageSource, snapshotConfiguredKeyIds, type UsageSourceFilter } from "./source-filter";
 import type { UsageTimeWindow } from "./time-range";
 import { isUnresolvedRequestedModel, usageModelPriceOptions } from "./model-identity";
@@ -745,7 +745,8 @@ interface UsagePartition {
   oldestTimestamp: number | null;
   legacyUnclassifiedRequests: number;
   totals: UsageSummaryTotals;
-  apps: Map<UsageApp, UsageSummaryTotals>;
+  /** Keyed by `usageAppKey`: the closed category plus its name or legacy wire. */
+  apps: Map<string, UsageSummaryTotals>;
   models: Map<string, UsageModelAccumulator>;
   providers?: Map<string, UsageModelAccumulator>;
   accounts: Map<string, UsageAccountAccumulator>;
@@ -1591,7 +1592,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     this.comboOverlap ||= projected.comboOverlap;
     const entry = projected.entry;
     const partition = this.partitionFor(entry);
-    if (this.filter?.sourceFilter && isLegacyCodexUsage(entry)) partition.legacyUnclassifiedRequests += 1;
+    if ((!this.filter || this.filter.sourceFilter) && isLegacyCodexUsage(entry)) partition.legacyUnclassifiedRequests += 1;
     const costInfo = computeEntryCost(entry);
     bumpStatus(partition.totals, entry.usageStatus);
     partition.totals.attemptCount += entry.attempts?.length ?? 1;
@@ -1600,7 +1601,11 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     addCacheProvenanceTotals(partition.totals, entry);
     addThroughputTotals(partition.totals, entry);
     addEstimatedCost(partition.totals, entry, costInfo);
-    const client = usageApp(entry.client);
+    const identity = usageAppIdentity(entry);
+    // Names come from a request header, so a partition folds any new name past its share into plain unknown.
+    const namedKey = usageAppKey(identity);
+    const client = identity.name && !partition.apps.has(namedKey) && partition.apps.size >= MAX_PARTITION_APP_KEYS
+      ? usageAppKey({ client: identity.client }) : namedKey;
     let app = partition.apps.get(client);
     if (!app) {
       app = blankTotals();
@@ -1670,7 +1675,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     const totals = blankTotals();
     const models = new Map<string, UsageModelAccumulator>();
     const providers = new Map<string, UsageModelAccumulator>();
-    const apps = new Map<UsageApp, UsageSummaryTotals>();
+    const apps = new Map<string, UsageSummaryTotals>();
     const accounts = new Map<string, UsageAccountAccumulator>();
     const dayAccumulators = new Map<string, UsageDayAccumulator>();
     const modelOverlaps: UsageModelOverlap[] = [];
@@ -1760,12 +1765,10 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
       days,
       models: buildUsageModels(models, totals.totalTokens, modelOverlaps),
       providers: buildUsageProviders(this.mode === "row-unique" ? providers : models, totals.totalTokens),
-      apps: [...apps].map(([client, app]) => ({ client, requests: app.requests, measuredRequests: app.measuredRequests,
-        totalTokens: app.totalTokens, ...(app.pricedRequests ? { estimatedCostUsd: app.estimatedCostUsd } : {}), pricedRequests: app.pricedRequests,
-        unpricedRequests: app.unpricedRequests + app.unmeteredRequests, shareRatio: totals.totalTokens === 0 ? 0 : Math.min(1, app.totalTokens / totals.totalTokens) })),
+      apps: foldUsageAppRows(apps, totals.totalTokens),
       accounts: buildUsageAccounts(accounts),
       ...(this.filter?.sourceFilter ? { sourceFilter: { client: this.filter.sourceFilter.client,
-        device: { ...this.filter.sourceFilter.device } }, legacyUnclassifiedRequests } : {}),
+        device: { ...this.filter.sourceFilter.device } }, legacyUnclassifiedRequests } : this.filter ? {} : { legacyUnclassifiedRequests }),
     };
     if (!this.filter) return summary;
     const matches = (provider: string, model: string): boolean =>
@@ -1858,8 +1861,11 @@ export function projectUsageSummary<T extends UsageSummary>(
   });
   for (const entry of entries ?? []) accumulator.add(entry);
   const projected = accumulator.summarize(summary.range, summary.generatedAt, summary.surface);
+  // The unfiltered count describes every row; a filtered projection carries it only when the
+  // filter is a source filter that recounted it, exactly as the accumulator's own output does.
+  const { legacyUnclassifiedRequests: _unfilteredLegacy, ...unfiltered } = summary;
   return {
-    ...summary,
+    ...unfiltered as T,
     summary: projected.summary,
     days: projected.days,
     models: projected.models,

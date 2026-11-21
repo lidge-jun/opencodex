@@ -27,6 +27,18 @@ export function discoveryFailureLabel(
   }
 }
 
+/** Effective per-1M-token price of a row and where it came from; absent on the row means unknown. */
+export interface ModelRowPrice {
+  source: "manual" | "official" | "models-dev" | "openrouter";
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  fetchedAt?: string;
+  multiplier?: number;
+  apiEquivalent?: true;
+}
+
 export interface ModelRow {
   provider: string;
   id: string;
@@ -40,6 +52,7 @@ export interface ModelRow {
   displayNameOverride?: string;
   displayNameSource?: "operator" | "provider" | "fallback";
   manualPricing?: boolean;
+  price?: ModelRowPrice;
   /**
    * Listed but currently unable to serve, because every usable target is quota-exhausted
    * (#1711). Distinct from `disabled`, which is the operator's own choice, and from visibility:

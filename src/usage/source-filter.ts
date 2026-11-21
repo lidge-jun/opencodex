@@ -1,7 +1,7 @@
 import type { PersistedUsageEntry } from "./log";
 
 export const USAGE_SOURCE_CLIENTS = [
-  "all", "codex", "claude_code", "claude_desktop", "grok", "opencode", "aside", "other", "unknown",
+  "all", "codex", "claude_code", "claude_desktop", "grok", "opencode", "aside", "antigravity", "agy", "other", "unknown",
 ] as const;
 export type UsageSourceClient = (typeof USAGE_SOURCE_CLIENTS)[number];
 /**

@@ -8,7 +8,7 @@
  */
 import { ADVISOR_INTERNAL_CAPABILITY_HEADER } from "../../lib/local-internal-call-capability";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
-import { classifyUsageClient } from "../../usage/client";
+import { usageClientLogContext } from "../../usage/client";
 import { admissionFields, isAllowedRequestOrigin, resolveApiAuth, resolveResponsesApiAuth, withCors } from "../auth-cors";
 import { AdmissionModelDeniedError, projectAdmissionModelDeniedLog, routeAllowedByScope } from "../admission-model-scope";
 import { SIDECAR_INTERNAL_CAPABILITY_HEADER } from "../advisor-admission-scope";
@@ -105,7 +105,7 @@ async function handleGeminiRoute(route: GeminiNativeRoute, original: Request, ur
     model: "unknown",
     provider: "unknown",
     ...deps.requestMetricsLogContext,
-    client: classifyUsageClient(req.headers),
+    ...usageClientLogContext(req.headers),
     ...admissionFields(admission),
   };
   const sessionReq = withCallerSessionIdentity(req, admission);

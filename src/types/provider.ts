@@ -305,6 +305,13 @@ export interface ReasoningCapabilities {
   defaultThinkingEnabled?: boolean;
 }
 
+/** Which per-model declarations a capability probe wrote, and when. Only `true` flags are stored. */
+export interface ModelCapabilityProbeRecord {
+  probedAt: string;
+  inputModalities?: true;
+  reasoningEfforts?: true;
+}
+
 /** Explicit per-model operator declarations; absent axes keep legacy behavior. */
 export interface ModelCapabilities extends ReasoningCapabilities {
   inputModalities?: Array<"text" | "image" | "audio" | "video">;
@@ -747,6 +754,13 @@ export interface OcxProviderConfig {
    */
   inputModalities?: string[];
   modelCapabilities?: Record<string, ModelCapabilities>;
+  /**
+   * Provenance for per-model declarations written by `POST /api/providers/probe-capabilities`.
+   * An axis flag means that model's `modelCapabilities[model].inputModalities` or
+   * `modelReasoningEfforts[model]` came from a live probe at `probedAt` (ISO 8601). A manual edit of
+   * that axis drops its flag, and a flag never outlives the declaration it labels; absent when empty.
+   */
+  modelCapabilityProbes?: Record<string, ModelCapabilityProbeRecord>;
   /** Model-specific max input token limits. Values cap auto_compact_token_limit. */
   modelMaxInputTokens?: Record<string, number>;
   /**
@@ -772,6 +786,13 @@ export interface OcxProviderConfig {
    * all-zero entry means "not billable here" and falls through to the catalogs.
    */
   modelCosts?: Record<string, ProviderCostOverlay>;
+  /**
+   * Opt-in relay multiplier (finite, > 0, <= 1000) applied to every automatic price
+   * (official, models.dev, OpenRouter) for this provider in the `~$` estimate, for a relay that
+   * charges a markup or discount over the vendor's list price. Never applied to `modelCosts`.
+   * Absent means 1; the stored form is sparse.
+   */
+  priceMultiplier?: number;
   /**
    * USD per provider credit (for example Kiro credits). For a model with a matched token price
    * and a valid `providerCredits` reading, the estimate uses credits × this price.
