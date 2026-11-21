@@ -1540,6 +1540,13 @@ export function comboFailureCooldownScope(
 
 /** The proxy's own 413 refusals: its translation buffer and body caps, identical for every target. */
 const PROXY_OWNED_413_CODES = ["translation_buffer_limit", "inbound_body_too_large", "outbound_body_too_large"];
+/**
+ * The wording every translator-budget refusal carries ("request ..." or "upstream translation
+ * buffer exceeded the safe limit"). Several producers format that 413 with type and code
+ * `request_too_large`, which drops `translation_buffer_limit` from the body, so the wording is
+ * the one identity that always survives to the combo decision.
+ */
+const PROXY_TRANSLATION_BUFFER_WORDING = "translation buffer exceeded the safe limit";
 /** Request verdicts a 413 can still state; the status alone never outranks them. */
 const VERDICT_413_CODES = ["content_policy_violation", "client_closed_request", "client_cancelled"];
 
@@ -1558,7 +1565,9 @@ function isProviderIntakeRefusal(message: string, rawCode: string | null | undef
   }
   if (safetyRefusalCodeFromMessage(message) !== undefined || isHardPolicyOrOriginRefusal(message)) return false;
   const lower = message.toLowerCase();
-  if (PROXY_OWNED_413_CODES.some(owned => lower.includes(owned))) return false;
+  if (PROXY_OWNED_413_CODES.some(owned => lower.includes(owned)) || lower.includes(PROXY_TRANSLATION_BUFFER_WORDING)) {
+    return false;
+  }
   if (message.trim() === OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE) return false;
   const root = parseErrorEnvelope(message);
   return (root ? envelopeErrorRecord(root) : undefined)?.message !== OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE;
