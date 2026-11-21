@@ -131,6 +131,20 @@ describe("combo provider 413 verdicts", () => {
     // The native Messages preflight maps a request_too_large event to 502 (as on dev), so the 413
     // rule never decides there; it still receives the whole-event verdict for parity.
   });
+
+  test("a 413 whose body was not read in full never hops (#9017 review)", async () => {
+    // Past the 64 KiB bounded read the body is discarded, so its evidence is unknown; dev's terminal
+    // 413 stands rather than letting lost evidence send the turn elsewhere.
+    const oversized = JSON.stringify({ error: { message: "Request Entity Too Large", type: "invalid_request_error", padding: "x".repeat(70_000) } });
+    const failure = await consumeComboFailure(new Response(oversized, { status: 413 }));
+    expect(failure.providerIntakeRefusal).toBe(false);
+    expect(comboFailureDecision(413, failure.classificationText, { code: failure.upstreamCode, providerIntakeRefusal: failure.providerIntakeRefusal })).toBe("stop");
+    // A body stream that fails mid-read is unknown too.
+    const broken = new Response(new ReadableStream({ start(controller) { controller.error(new Error("socket closed")); } }), { status: 413 });
+    const failed = await consumeComboFailure(broken);
+    expect(failed.providerIntakeRefusal).toBe(false);
+    expect(comboFailureDecision(413, failed.classificationText, { code: failed.upstreamCode, providerIntakeRefusal: failed.providerIntakeRefusal })).toBe("stop");
+  });
   test("hard stops still outrank a provider 413", () => {
     expect(comboFailureDecision(413, "too large", { code: "origin_rejected" })).toBe("stop");
     expect(comboFailureDecision(413, "too large", { code: "cyber_policy" })).toBe("stop");

@@ -73,7 +73,9 @@ export async function consumeComboFailure(
   let openRouterOpaque400: boolean | undefined;
   let unofferedToolCallRefusal: boolean | undefined;
   let providerModerationRefusal: boolean | undefined;
-  let providerIntakeRefusal: boolean | undefined;
+  // A 413 may hop only once its complete body was read and judged; an oversized, unreadable or
+  // aborted body leaves the evidence unknown, and unknown evidence keeps dev's terminal 413.
+  let providerIntakeRefusal: boolean | undefined = response.status === 413 ? false : undefined;
   let usage: OcxUsage | undefined;
   let upstreamCode: string | undefined;
   let upstreamRootCode: string | undefined;
