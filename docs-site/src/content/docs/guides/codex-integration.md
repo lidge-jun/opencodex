@@ -21,6 +21,16 @@ models use their selected account. Refreshing the integration updates these rows
 changes the account's access programs.
 OpenCodex carries the logged-in main account's live model availability prompt onto bare native model rows.
 
+For built-in native models, a confirmed model list from the selected account also supplies the
+default and maximum context windows and support for reasoning-effort updates and experimental
+context. Configured window limits and compaction budgets still apply. A confirmed default above
+the shipped opt-in ceiling is preserved unless a configured limit lowers it. Repeated catalog
+updates preserve a lower compaction budget when the final context window stays the same.
+If the saved catalog has duplicate rows for a native model, the first row supplies that
+retained budget; later duplicates are removed without replacing the first row's setting.
+An advertised capability
+requires its normal Codex client settings and backend support.
+
 The proxy exposes one bare `openai` Codex-login route with Pool(default) and Direct account modes,
 plus `openai-apikey/<model>` for the configured API key. Pool includes main plus added accounts;
 Direct uses only the caller/main bearer. The routes do not fall back to one another. Shipped v1

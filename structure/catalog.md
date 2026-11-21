@@ -158,8 +158,8 @@ The import-free registry unions configured and discovered membership in place; r
 Retirement is a catalog/evidence policy, not a universal request denylist. Manually supplied model ids still follow generic routing. User-selected config and historical usage remain stored.
 
 Account-gated native ids use authenticated ChatGPT `/models` rosters cached per credential generation with a bounded timeout.
-A bare gated row requires a confirmed eligible account; a selector-qualified row requires its mapped account. Failed discovery
-grants neither. The same snapshot gates Pool selection, so catalog and runtime use consistent account evidence.
+Bare gated rows and Pool selection require a confirmed eligible account. Selector-qualified rows require their mapped account. Failed discovery grants neither.
+Both disk writers and Codex-shaped HTTP discovery use the exact account's built-in model flags and context windows, with shipped fallbacks for missing or invalid fields. Confirmed defaults are not reduced to shipped opt-in ceilings; those ceilings constrain only user-requested increases. Model and provider limits, caps and lower compaction budgets still apply. Both writers retain an exact row's lower compaction budget when its incoming and final effective windows match, independent of intermediate pinned metadata; a genuinely changed window drops that retained budget. Duplicate incoming native slugs use the first row's window and budget, matching final slug deduplication; a later duplicate cannot supply retention policy.
 The roster's per-model `available_access_programs` is projected separately: bare native rows use only confirmed main-account
 metadata, and selector-qualified rows use only their mapped account. An object requires a valid `cyber` string array; malformed values under other program keys are omitted without losing that grant. Explicit `null` stays null; omission stays omitted.
 Failed discovery or credential replacement removes stale access-program metadata. It changes presentation, not routing grants.
