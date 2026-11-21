@@ -107,6 +107,57 @@ test("GET /api/claude-code returns defaults + available + aliases", async () => 
   }
 });
 
+test("Claude launch and picker keep raw and encoded exclusions while retaining context metadata", async () => {
+  const config = loadConfig();
+  config.providers.mock!.models = ["org/raw-hidden", "org/encoded-hidden", "org/visible"];
+  config.providers.mock!.modelContextWindows = { "org/raw-hidden": 500_000, "org/encoded-hidden": 500_000, "org/visible": 1_000_000 };
+  config.disabledModels = ["mock/org/raw-hidden", "mock/org-encoded-hidden"];
+  saveConfig(config);
+  const server = startServer(0);
+  try {
+    const state = await fetchClaudeCodeState(config, server.port!);
+    expect(state.enabled).toBe(true);
+    expect(state.contextWindows).toMatchObject({ "mock/org/raw-hidden": 500_000, "mock/org/visible": 1_000_000 });
+    expect(state.forceAvailable?.filter(slug => slug.startsWith("mock/"))).toEqual(["mock/org-visible"]);
+    const settings = await (await fetch(new URL("/api/claude-code", server.url))).json() as {
+      available: string[]; aliases: { display_name: string }[];
+    };
+    expect(settings.available.filter(slug => slug.startsWith("mock/"))).toEqual(["mock/org/visible"]);
+    expect(settings.aliases.map(row => row.display_name).filter(name => name.endsWith("(mock)"))).toEqual(["org/visible (mock)"]);
+    const response = await fetch(new URL("/v1/models?limit=1000&ids=cli", server.url), {
+      headers: { "anthropic-version": "2023-06-01" },
+    });
+    expect(response.status).toBe(200);
+    const picker = await response.json() as { data: { display_name: string; id: string }[] };
+    const routed = picker.data.filter(row => row.display_name.includes("(mock)"));
+    expect(routed.length).toBeGreaterThan(0);
+    expect(routed.every(row => row.display_name.includes("org/visible"))).toBe(true);
+    expect(routed.some(row => row.id.endsWith("[1m]"))).toBe(true);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("the launcher view skips the dashboard alias previews (#8945)", async () => {
+  const aliasModule = await import("../../src/claude/alias");
+  const config = loadConfig();
+  config.providers.mock!.models = ["org/one", "org/two"];
+  saveConfig(config);
+  const server = startServer(0);
+  const routedAlias = spyOn(aliasModule, "claudeCodeAlias");
+  const nativeAlias = spyOn(aliasModule, "claudeCodeNativeAlias");
+  try {
+    const state = await fetchClaudeCodeState(config, server.port!);
+    expect(state.enabled).toBe(true);
+    expect(routedAlias).not.toHaveBeenCalled();
+    expect(nativeAlias).not.toHaveBeenCalled();
+  } finally {
+    routedAlias.mockRestore();
+    nativeAlias.mockRestore();
+    await server.stop(true);
+  }
+});
+
 test.each([
   ["2.1.280", "claude-fable-5-1[1m]"],
   ["2.1.290", "claude-fable-5-2[1m]"],

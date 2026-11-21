@@ -18,7 +18,7 @@ import { isProtocol, PROTOCOL_CONTRACT_VERSION } from "../../protocols/contract"
 import { isProtocolFeature, PROTOCOL_FEATURES, type ProtocolFeature } from "../../protocols/features";
 import { previewProtocolPlan, type ProtocolPlanRequest } from "../../protocols/plan-snapshot";
 import { buildProtocolProviderSummary } from "../../protocols/provider-summary";
-import { protocolPolicyRevision, resolveApiSurfaceSettings, resolveProtocolSettings } from "../../protocols/settings";
+import { protocolPolicyRevision, resolveApiSurfaceSettings, resolveGeminiApiSurface, resolveProtocolSettings } from "../../protocols/settings";
 import type { OcxConfig } from "../../types";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
@@ -71,6 +71,8 @@ function protocolInfo(config: OcxConfig) {
     contractVersion: PROTOCOL_CONTRACT_VERSION,
     policyRevision: protocolPolicyRevision(config),
     surfaces: resolveApiSurfaceSettings(config),
+    // Older dashboards require exactly the three planning protocols inside surfaces.
+    geminiSurface: resolveGeminiApiSurface(config),
     settings: resolveProtocolSettings(config),
     features: PROTOCOL_FEATURES,
   };

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getDefaultConfig, saveConfig } from "../../src/config";
+import { getDefaultConfig } from "../../src/config";
 import { LINK_MANAGEMENT_READ_PATHS } from "../../src/link/management-routes";
 import { LINK_RELAY_AUTH_VERSION } from "../../src/link/relay-auth";
 import { LINK_REQUEST_ZSTD_VERSION } from "../../src/link/request-compression";
@@ -24,11 +24,10 @@ import {
 } from "../../src/remote/features";
 import { parseRemoteReadyMetadata, readyProtocolMetadata } from "../../src/remote/protocol";
 import { SERVED_BY_HEADER, SERVED_BY_HEADER_EMITTED } from "../../src/remote/served-by";
-import { startServer } from "../../src/server";
 import { MANAGEMENT_ROUTES } from "../../src/server/management/route-registry";
-import { createReadinessGate } from "../../src/server/readiness";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { currentServerFixtureConfig, settleServerAuthFixture, startManagementServerFixture, type ManagementServerFixture } from "../helpers/server-auth-fixture";
 
 const none: PeerFeatureSources = {
   managementRoutes: [],
@@ -85,16 +84,25 @@ describe("GET /readyz features on a live server", () => {
   const previousToken = process.env.OPENCODEX_API_AUTH_TOKEN;
   let home = "";
   let codexHome: IsolatedCodexHome | null = null;
+  let fixture: ManagementServerFixture | null = null;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     home = mkdtempSync(join(tmpdir(), "ocx-readyz-features-"));
     process.env.OPENCODEX_HOME = home;
     delete process.env.OPENCODEX_API_AUTH_TOKEN;
     codexHome = installIsolatedCodexHome("ocx-readyz-features-codex-");
-    saveConfig(getDefaultConfig());
+    fixture = await startManagementServerFixture(home, currentServerFixtureConfig({
+      ...getDefaultConfig(),
+      defaultProvider: "mock",
+      providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1", allowPrivateNetwork: true, liveModels: false, models: ["m"] } },
+    }));
+    ensureQuotaPoolIdentity();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await fixture?.close();
+    fixture = null;
+    await settleServerAuthFixture(home, codexHome?.path);
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
     if (previousToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -105,40 +113,34 @@ describe("GET /readyz features on a live server", () => {
   });
 
   test("the unauthenticated body lists the registry and nothing account-shaped", async () => {
-    const server = startServer(0, { readinessGate: createReadinessGate() });
-    try {
-      const response = await fetch(new URL("/readyz", server.url));
+    const live = fixture!;
+    const { server, signal } = live;
+    await live.run(async () => {
+      const response = await fetch(new URL("/readyz", server.url), { signal });
       expect(response.status).toBe(503);
       const body = (await response.json()) as Record<string, unknown>;
       expect(body.features).toEqual(buildPeerFeatures());
       expect(JSON.stringify(body.features)).not.toMatch(/account|email|token|secret|acct|@/i);
-    } finally {
-      await server.stop(true);
-    }
+    });
   });
 
   test("served-by-header is advertised exactly when responses carry the header", async () => {
-    saveConfig({
-      ...getDefaultConfig(),
-      defaultProvider: "mock",
-      providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1", allowPrivateNetwork: true, liveModels: false, models: ["m"] } },
-    });
-    ensureQuotaPoolIdentity();
-    const server = startServer(0, { readinessGate: createReadinessGate() });
-    try {
-      const readyz = await fetch(new URL("/readyz", server.url));
+    const live = fixture!;
+    const { server, signal } = live;
+    await live.run(async () => {
+      const readyz = await fetch(new URL("/readyz", server.url), { signal });
       const advertised = ((await readyz.json()) as { features: string[] }).features.includes("served-by-header");
       expect(advertised).toBe(SERVED_BY_HEADER_EMITTED);
       expect(advertised).toBe(true);
-      const models = await fetch(new URL("/v1/models", server.url));
+      const models = await fetch(new URL("/v1/models", server.url), { signal });
       expect(models.status).toBe(200);
       expect(models.headers.has(SERVED_BY_HEADER)).toBe(advertised);
+      await models.arrayBuffer();
       // The header names the Home on model discovery only; other routes stay unstamped.
-      for (const response of [readyz, await fetch(new URL("/v1/opencodex-readyz-features-probe", server.url))]) {
-        expect(response.headers.has(SERVED_BY_HEADER)).toBe(false);
-      }
-    } finally {
-      await server.stop(true);
-    }
+      const other = await fetch(new URL("/v1/opencodex-readyz-features-probe", server.url), { signal });
+      expect(readyz.headers.has(SERVED_BY_HEADER)).toBe(false);
+      expect(other.headers.has(SERVED_BY_HEADER)).toBe(false);
+      await other.arrayBuffer();
+    });
   });
 });

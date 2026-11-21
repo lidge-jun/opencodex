@@ -1,5 +1,5 @@
 import type { DeliveryMode, ProtocolHop } from "../../../../src/protocols/contract";
-import type { ProtocolTraceV1 } from "../../../../src/protocols/dto";
+import type { ProtocolTraceHop, ProtocolTraceV1 } from "../../../../src/protocols/dto";
 import type { FeatureDisposition } from "../../../../src/protocols/features";
 import type { TFn, TKey } from "../../i18n/shared";
 
@@ -33,11 +33,11 @@ const HOP_KEYS: Record<ProtocolHop, TKey> = {
 
 const ARROW = " → ";
 
-export function protocolHopLabel(hop: ProtocolHop, t: TFn): string {
-  return t(HOP_KEYS[hop]);
+export function protocolHopLabel(hop: ProtocolTraceHop, t: TFn): string {
+  return hop === "gemini" ? "Gemini" : t(HOP_KEYS[hop]);
 }
 
-export function protocolPathLabel(path: readonly ProtocolHop[], t: TFn): string {
+export function protocolPathLabel(path: readonly ProtocolTraceHop[], t: TFn): string {
   return path.map(hop => protocolHopLabel(hop, t)).join(ARROW);
 }
 

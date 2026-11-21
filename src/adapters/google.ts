@@ -28,6 +28,7 @@ import { readDisplaySafeErrorPayloadText } from "./upstream-http-error";
 import { googleModeLabel, googlePromptBlockedEvent, googleStopReason, isGoogleTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
 import { antigravitySessionAnchor, antigravityUserAgentForWireModel, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { summarizeGoogleWireShape } from "./google-wire-shape";
+import { usageFromGemini } from "./google-usage";
 import { compileGoogleWireBody } from "./google-wire-compiler";
 import type { GoogleToolSchemaLossReport, GoogleToolSchemaProfile } from "./google-tool-schema";
 import { identifyRoutedModel } from "./identity";
@@ -347,7 +348,7 @@ function geminiToolResultParts(
     id: wireCallId,
   };
   const images = toolResultImageParts(msg.content);
-  // Vertex Argon rejects image siblings beside a functionResponse as an unsupported model tail.
+  // Vertex Gemini 3+ models reject image siblings beside a functionResponse as an unsupported model tail (ADR-7279, ADR-8969).
   if (nestToolResultImages && images.length > 0) {
     functionResponse.parts = images;
     return [{ functionResponse }];
@@ -682,19 +683,6 @@ function toolChoiceToGeminiToolConfig(parsed: OcxParsedRequest): Record<string, 
       mode: "ANY",
       allowedFunctionNames: [resolveToolChoiceWireName(parsed.context.tools, choice.name, choice)],
     },
-  };
-}
-
-function usageFromGemini(usage: Record<string, number> | undefined): OcxUsage | undefined {
-  if (!usage) return undefined;
-  return {
-    // Google reports tool-use prompt tokens (search grounding, URL context) beside the prompt.
-    inputTokens: (usage.promptTokenCount ?? 0) + (usage.toolUsePromptTokenCount ?? 0),
-    // Google reports thinking beside candidates. Every other adapter's output includes reasoning
-    // (telemetry clamps reasoning to output, src/telemetry/aggregate.ts), and Google bills it as output.
-    outputTokens: (usage.candidatesTokenCount ?? 0) + (usage.thoughtsTokenCount ?? 0),
-    ...(usage.cachedContentTokenCount !== undefined ? { cachedInputTokens: usage.cachedContentTokenCount } : {}),
-    ...(usage.thoughtsTokenCount !== undefined ? { reasoningOutputTokens: usage.thoughtsTokenCount } : {}),
   };
 }
 
@@ -1085,11 +1073,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         identityModelId,
         stripRejectedClaudeSdkParagraph,
         isCloudCodeAssist,
-        provider.googleMode === "vertex" && (
-          parsed.modelId === "gemini-4-argon"
-          || parsed.modelId === "gemini-4-carbon"
-          || parsed.modelId === "gemini-4-hydrogen"
-        ),
+        provider.googleMode === "vertex" && /^gemini-(?:[3-9]|\d{2,})(?:[.-]|$)/i.test(parsed.modelId),
         isCloudCodeAssist && /^claude-/i.test(routedModelId),
       );
       lastInjectedCallIds = [...replayedCallIds];
@@ -1438,11 +1422,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         // usageMetadata is a top-level field independent of candidates; read it BEFORE the
         // candidates guard so a usage-only final chunk is not dropped.
-        const usageMeta = root.usageMetadata as Record<string, number> | undefined;
-        if (usageMeta) {
+        if (root.usageMetadata) {
           // Accumulate usage; emit a single terminal `done` post-loop so usage is never
           // dropped on EOF and the stream never yields two `done` events.
-          pendingUsage = usageFromGemini(usageMeta);
+          pendingUsage = usageFromGemini(root.usageMetadata) ?? pendingUsage;
           sawTerminalSignal = true;
         }
         const rawCandidates = root.candidates;
@@ -1771,7 +1754,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         const feedback = (json as { promptFeedback?: unknown }).promptFeedback;
         if (isGoogleRecord(feedback) && typeof feedback.blockReason === "string" && feedback.blockReason) {
           return finish([googlePromptBlockedEvent(googleModeLabel(provider.googleMode), feedback.blockReason,
-            usageFromGemini(json.usageMetadata as Record<string, number> | undefined))]);
+            usageFromGemini(json.usageMetadata))]);
         }
         return finish([{ type: "error", message: "google response contained no candidates" }]);
       }
@@ -1855,12 +1838,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         return finish([vertexTruncationErrorEvent(
           candidate.finishReason,
           toolCallsStarted,
-          usageFromGemini(json.usageMetadata as Record<string, number> | undefined),
+          usageFromGemini(json.usageMetadata),
           googleModeLabel(provider.googleMode),
         )]);
       }
 
-      const usage = json.usageMetadata as Record<string, number> | undefined;
+      const usage = usageFromGemini(json.usageMetadata);
       // Mirror the streaming path: a buffered turn cut off by the token limit or a content filter
       // must carry its stop reason, or the bridge sees a clean `done` and reports the truncated
       // turn as completed — and, on a compaction turn, installs the half-written summary as
@@ -1869,7 +1852,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const stopReason = googleStopReason(finishReason);
       events.push({
         type: "done",
-        usage: usageFromGemini(usage),
+        usage,
         ...(stopReason ? { stopReason } : {}),
       });
       return finish(events);

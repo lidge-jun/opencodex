@@ -2,9 +2,17 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:te
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
+import { clearModelCache } from "../../src/codex/model-cache";
 import { saveConfig } from "../../src/config";
-import { saveCredential } from "../../src/oauth/store";
+import { getAccountSet, removeAccount, saveCredential, setActiveAccount } from "../../src/oauth/store";
+import { oauthAccountLogLabel } from "../../src/codex/account-label";
+import { clearAntigravityAccountRosters, recordAntigravityAccountRoster } from "../../src/providers/antigravity-account-roster";
+import { sharedSpendLedger } from "../../src/lib/spend-reservation-ledger";
+import { estimateTokens } from "../../src/lib/token-estimate";
 import { startServer } from "../../src/server";
+import { getRequestLogEntries } from "../../src/server/request-log";
+import { decodeTokPerSecondResult } from "../../src/server/management/shared";
 import { nativeGeminiDestination } from "../../src/server/gemini-native-catalog";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -19,8 +27,18 @@ const GOOGLE_KEY = "fixture-local-ingress-key";
 const OAUTH_TOKEN = "fixture-google-oauth-access";
 const SCOPE_KEY = "ocx_data_" + "d".repeat(40);
 const MODEL_SCOPE_KEY = "ocx_data_" + "b".repeat(40);
+const HYDROGEN = "gemini-4-hydrogen";
+const NEON = "gemini-4-neon";
+const NEW_GEMINI = "gemini-discovery-fixture";
+const TIER_SCOPE_KEY = "ocx_data_" + "f".repeat(40);
+const DISCOVERED_WIRES = [
+  ...["low", "medium", "high", "xhigh"].map(tier => `${HYDROGEN}-${tier}`),
+  ...["low", "medium", "high"].map(tier => `${NEON}-${tier}`),
+  NEW_GEMINI,
+];
 const RAW = '{"contents":[{"role":"user","parts":[{"text":"hello"}]}], "future":9007199254740993123}';
-const PAYLOAD = '{"candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP"}],"future":9007199254740993123}';
+const PAYLOAD = '{"candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":12,"toolUsePromptTokenCount":5,"candidatesTokenCount":7,"thoughtsTokenCount":3,"cachedContentTokenCount":4},"future":9007199254740993123}';
+const USAGE = { inputTokens: 17, outputTokens: 10, cachedInputTokens: 4, reasoningOutputTokens: 3 };
 const originalFetch = globalThis.fetch;
 const previousEnv = {
   OPENCODEX_HOME: process.env.OPENCODEX_HOME,
@@ -28,6 +46,8 @@ const previousEnv = {
 };
 const seen: Array<{ url: URL; headers: Headers; body: string }> = [];
 let home: string;
+let discoveryWires: string[];
+let nativeResponse: (() => Response) | undefined;
 
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "ocx-native-gemini-routes-"));
@@ -48,10 +68,18 @@ afterAll(() => {
 
 beforeEach(() => {
   seen.length = 0;
+  discoveryWires = [];
+  nativeResponse = undefined;
   const fixtureFetch: typeof fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.hostname === "127.0.0.1" || url.hostname === "localhost") return originalFetch(input, init);
     if (url.origin !== CCA && url.origin !== CHAT) throw new Error("unexpected external fetch in Gemini fixture");
+    if (url.origin === CCA && url.pathname === "/v1internal:fetchAvailableModels" && discoveryWires.length > 0) {
+      return Response.json({
+        models: Object.fromEntries(discoveryWires.map(id => [id, {}])),
+        agentModelSorts: [{ groups: [{ modelIds: discoveryWires }] }],
+      });
+    }
     if (init?.method !== "POST" || !url.pathname.includes("generateContent") && !url.pathname.includes("streamGenerateContent") && !url.pathname.endsWith("/chat/completions")) {
       return Response.json({ models: [], data: [] });
     }
@@ -62,6 +90,7 @@ beforeEach(() => {
         choices: [{ index: 0, message: { role: "assistant", content: "translated" }, finish_reason: "stop" }],
       });
     }
+    if (nativeResponse) return nativeResponse();
     const envelope = `{"project":"fixture-private-project","response":${PAYLOAD}}`;
     if (url.pathname.endsWith(":streamGenerateContent")) {
       return new Response(`data: ${envelope}\n\n`, { headers: { "content-type": "text/event-stream" } });
@@ -84,6 +113,8 @@ function config(flag?: boolean): OcxConfig {
       { id: "gemini-scope", name: "Gemini scope", key: SCOPE_KEY, createdAt: "2026-01-01T00:00:00.000Z", allowedProviders: ["fx"] },
       { id: "gemini-model-scope", name: "Gemini model scope", key: MODEL_SCOPE_KEY, createdAt: "2026-01-01T00:00:00.000Z",
         allowedProviders: [PROVIDER], allowedModels: [`${PROVIDER}/gemini-4-argon`] },
+      { id: "gemini-tier-scope", name: "Gemini tier scope", key: TIER_SCOPE_KEY, createdAt: "2026-01-01T00:00:00.000Z",
+        allowedProviders: [PROVIDER], allowedModels: [`${PROVIDER}/${HYDROGEN}-high`] },
     ],
   };
 }
@@ -92,6 +123,10 @@ async function withServer(cfg: OcxConfig, run: (base: URL) => Promise<void>) {
   const server = startServer(0);
   try { await run(server.url); } finally { await server.stop(true); }
 }
+function discoverFixtureModels(cfg: OcxConfig) {
+  return fetchProviderModels(PROVIDER, { ...cfg.providers[PROVIDER]!, fetch: globalThis.fetch }, 60_000);
+}
+
 const key = { "x-goog-api-key": GOOGLE_KEY };
 const generation = (model = TARGET, method = "generateContent", version = "v1beta") => `/${version}/models/${model}:${method}`;
 const post = (base: URL, path: string, headers: Record<string, string> = key) =>
@@ -106,6 +141,19 @@ test("opted-in Gemini routes preserve native JSON and replace every ingress cred
     expect(response.headers.get("x-opencodex-request-id")).toBeTruthy();
     expect(response.headers.has("set-cookie")).toBe(false);
     expect(await response.text()).toBe(PAYLOAD);
+    const log = getRequestLogEntries().find(row => row.requestId === response.headers.get("x-opencodex-request-id"));
+    expect(log).toMatchObject({ usageStatus: "reported", usage: USAGE, totalTokens: 27, effectiveEffort: "medium" });
+    expect(log?.routeDecision).toMatchObject({
+      routeKind: "explicit-provider",
+      selected: { provider: PROVIDER, model: MODEL, reason: "explicit-provider-namespace" },
+    });
+    expect(log?.protocolTrace).toMatchObject({
+      inbound: "gemini",
+      upstream: "gemini",
+      mode: "native",
+      requestPath: ["gemini", "gemini"],
+      responsePath: ["gemini", "gemini"],
+    });
     expect(seen).toHaveLength(1);
     expect(seen[0]!.url.href).toBe(CCA + "/v1internal:generateContent");
     expect(seen[0]!.headers.get("authorization")).toBe("Bearer " + OAUTH_TOKEN);
@@ -116,6 +164,139 @@ test("opted-in Gemini routes preserve native JSON and replace every ingress cred
   });
 });
 
+test.each(["root", "identity", "pool"] as const)("native Gemini settles the %s Token budget and refuses insufficient capacity", async scope => {
+  const cfg = config(true);
+  const limit = 10_000;
+  cfg.spend = { [scope]: { maxTokens: limit } };
+  const rootId = `native-budget-${scope}-${crypto.randomUUID()}`;
+  const accountId = getAccountSet(PROVIDER)!.activeAccountId;
+  const scopeId = { root: rootId, identity: oauthAccountLogLabel(accountId, PROVIDER), pool: PROVIDER }[scope];
+  const headers = { ...key, "content-type": "application/json", "x-codex-parent-thread-id": rootId, "thread-id": rootId };
+  await withServer(cfg, async base => {
+    const ledger = sharedSpendLedger();
+    const previous = ledger.snapshot(scope, scopeId)?.settled ?? 0;
+    const stream = scope === "root";
+    const path = stream ? generation(TARGET, "streamGenerateContent") + "?alt=sse" : generation();
+    const response = await post(base, path, headers);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(stream ? `data: ${PAYLOAD}\n\n` : PAYLOAD);
+    expect(ledger.snapshot(scope, scopeId)).toMatchObject({ settled: previous + 27, reserved: 0, unresolved: 0 });
+
+    const refused = await originalFetch(new URL(generation(), base), {
+      method: "POST", headers,
+      body: JSON.stringify({ contents: [], generationConfig: { maxOutputTokens: Math.floor(limit / 2), candidateCount: 2 } }),
+    });
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
+    expect(await refused.json()).toMatchObject({ error: { status: "RESOURCE_EXHAUSTED" } });
+    expect(seen).toHaveLength(1);
+    expect(ledger.snapshot(scope, scopeId)).toMatchObject({ settled: previous + 27, reserved: 0, unresolved: 0 });
+  });
+});
+
+test("native Gemini holds streaming spend until cancellation and keeps unknown usage unresolved", async () => {
+  const cfg = config(true);
+  const rootId = `native-budget-stream-${crypto.randomUUID()}`;
+  const headers = { ...key, "content-type": "application/json", "x-codex-parent-thread-id": rootId, "thread-id": rootId };
+  const raw = '{"contents":[],"generation_config":{"max_output_tokens":32}}';
+  const reservation = estimateTokens(raw, WIRE_MODEL) + 32;
+  cfg.spend = { root: { maxTokens: reservation } };
+  const cancelled = Promise.withResolvers<void>();
+  nativeResponse = () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"response":{"candidates":[{"content":{"parts":[{"text":"partial"}]}}],"usageMetadata":{"promptTokenCount":1}}}\n\n'));
+    },
+    cancel() { cancelled.resolve(); },
+  }), { headers: { "content-type": "text/event-stream" } });
+
+  await withServer(cfg, async base => {
+    const ledger = sharedSpendLedger();
+    const url = new URL(generation(TARGET, "streamGenerateContent") + "?alt=sse", base);
+    const abort = new AbortController();
+    const response = await originalFetch(url, { method: "POST", headers, body: raw, signal: abort.signal });
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    try {
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain("partial");
+      expect(ledger.snapshot("root", rootId)).toMatchObject({ reserved: reservation, settled: 0 });
+      const refused = await originalFetch(url, { method: "POST", headers, body: raw });
+      expect(refused.status).toBe(429);
+      await refused.text();
+      expect(seen).toHaveLength(1);
+    } finally {
+      abort.abort();
+      await reader.cancel().catch(() => {});
+    }
+    await cancelled.promise;
+    for (let wait = 0; wait < 40 && ledger.snapshot("root", rootId)?.reserved; wait++) await Bun.sleep(10);
+    expect(ledger.snapshot("root", rootId)).toMatchObject({ reserved: 0, settled: 0, unresolved: reservation });
+  });
+});
+
+test("native Gemini selects a listing sibling under the configured failover policy", async () => {
+  const active = getAccountSet(PROVIDER)!.activeAccountId;
+  const siblingToken = "fixture-sibling-gemini-access";
+  const siblingProject = "fixture-sibling-gemini-project";
+  const sibling = (await saveCredential(PROVIDER, {
+    access: siblingToken, refresh: "fixture-sibling-gemini-refresh", expires: Date.now() + 3_600_000,
+    accountId: "fixture-sibling-gemini-subject", projectId: siblingProject, source: "oauth",
+  }))!.accountId;
+  try {
+    expect(await setActiveAccount(PROVIDER, active)).toBe(true);
+    recordAntigravityAccountRoster(PROVIDER, active, [{ id: NEON, wireModelId: NEON }]);
+    recordAntigravityAccountRoster(PROVIDER, sibling, [{ id: MODEL, wireModelId: WIRE_MODEL }]);
+    const cfg = config(true);
+    delete cfg.providers[PROVIDER]!.authMode;
+    for (const enabled of [false, true]) {
+      cfg.providers[PROVIDER]!.oauthAccountFailover = { enabled };
+      await withServer(cfg, async base => {
+        const response = await post(base, generation());
+        if (!enabled) {
+          expect(response.status).toBe(403);
+          expect(await response.json()).toMatchObject({ error: { details: [{ reason: "gemini_native_model_unlisted" }] } });
+          const log = getRequestLogEntries().find(row => row.requestId === response.headers.get("x-opencodex-request-id"));
+          expect(log).toMatchObject({ status: 403, terminalSource: "synthetic" });
+          expect(log?.attempts).toBeUndefined();
+          expect(log?.protocolTrace).toBeUndefined();
+          expect(seen).toHaveLength(0);
+          return;
+        }
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe(PAYLOAD);
+        expect(seen).toHaveLength(1);
+        expect(seen[0]!.headers.get("authorization")).toBe(`Bearer ${siblingToken}`);
+        expect(seen[0]!.body).toContain(`"request":${RAW}`);
+        expect(JSON.parse(seen[0]!.body)).toMatchObject({ project: siblingProject, model: WIRE_MODEL });
+        const recorded = getRequestLogEntries().find(row => row.requestId === response.headers.get("x-opencodex-request-id"));
+        expect(recorded?.attempts).toMatchObject([{
+          status: 200, sendCount: 1, model: WIRE_MODEL, accountLogLabel: oauthAccountLogLabel(sibling, PROVIDER),
+          usageStatus: "reported", usage: USAGE,
+        }]);
+        expect(recorded?.spend).toMatchObject({ sends: 1, settled: 1, unresolved: 0 });
+        expect(JSON.stringify(recorded)).not.toContain(siblingToken);
+        expect(JSON.stringify(recorded)).not.toContain(siblingProject);
+        expect(getAccountSet(PROVIDER)?.activeAccountId).toBe(active);
+      });
+    }
+    seen.length = 0;
+    recordAntigravityAccountRoster(PROVIDER, active, [{ id: MODEL, wireModelId: WIRE_MODEL }]);
+    cfg.pool = { kernel: true };
+    cfg.providers[PROVIDER]!.oauthAccountFailover = { enabled: true, strategy: "round-robin", stickyLimit: 1 };
+    await withServer(cfg, async base => {
+      for (let index = 0; index < 2; index++) {
+        const response = await post(base, generation());
+        expect(await response.text()).toBe(PAYLOAD);
+      }
+    });
+    expect(seen.map(send => send.headers.get("authorization")).sort())
+      .toEqual([`Bearer ${OAUTH_TOKEN}`, `Bearer ${siblingToken}`].sort());
+  } finally {
+    clearAntigravityAccountRosters(PROVIDER, active);
+    clearAntigravityAccountRosters(PROVIDER, sibling);
+    await removeAccount(PROVIDER, sibling);
+  }
+});
+
 test("flag off, v1, and a Gemini model on another provider use the Chat bridge", async () => {
   for (const flag of [undefined, false, true]) {
     await withServer(config(flag), async base => {
@@ -123,6 +304,9 @@ test("flag off, v1, and a Gemini model on another provider use the Chat bridge",
       const translated = await post(base, path);
       expect(translated.status).toBe(200);
       expect(await translated.json()).not.toHaveProperty("future");
+      const log = getRequestLogEntries().find(row => row.requestId === translated.headers.get("x-opencodex-request-id"));
+      expect(log).toBeDefined();
+      expect(log?.protocolTrace?.inbound).not.toBe("gemini");
       expect(seen.at(-1)?.body).not.toContain(RAW);
       const other = await post(base, generation(`fx/${MODEL}`));
       expect(other.status).toBe(200);
@@ -156,6 +340,15 @@ test("native streaming preserves records in both Gemini response formats", async
     const json = await post(base, path);
     expect(json.headers.get("content-type")).toContain("application/json");
     expect(await json.text()).toBe(`[\n${PAYLOAD}\n]`);
+    for (const res of [sse, discoverySse, json]) {
+      const log = getRequestLogEntries().find(row => row.requestId === res.headers.get("x-opencodex-request-id"));
+      expect(log).toMatchObject({
+        usageStatus: "reported", usage: USAGE, totalTokens: 27,
+        effectiveEffort: "medium", firstOutputMs: expect.any(Number),
+      });
+      expect(log?.genStartMs).toBeUndefined();
+      expect(decodeTokPerSecondResult(log!)).toEqual({ kind: "unavailable", reason: "decode_window_missing" });
+    }
     expect(seen.map(call => call.url.href)).toEqual(Array(3).fill(CCA + "/v1internal:streamGenerateContent?alt=sse"));
   });
 });
@@ -172,6 +365,13 @@ test("native selection shares key, origin, host, and model-scope refusals", asyn
       const response = await post(base, generation(), { ...headers });
       expect(response.status).toBe(status);
       expect(await response.json()).toMatchObject({ error: { code: status, status: errorStatus } });
+      const requestId = response.headers.get("x-opencodex-request-id");
+      if (requestId) {
+        const log = getRequestLogEntries().find(row => row.requestId === requestId);
+        expect(log).toBeDefined();
+        expect(log?.protocolTrace).toBeUndefined();
+        expect(log?.routeDecision).toBeUndefined();
+      }
     }
     expect(seen).toHaveLength(0);
     expect((await get(base, generation())).headers.get("allow")).toBe("POST");
@@ -220,4 +420,88 @@ test("model lookup and discovery expose only scoped, routable native wire aliase
     expect((await get(base, "/v1beta/models/gemini-no-such-model")).status).toBe(404);
     expect(seen).toHaveLength(0);
   });
+});
+
+test("Gemini discovery and lookup reuse live Antigravity models and exact wire tiers", async () => {
+  const cfg = config(true);
+  discoveryWires = DISCOVERED_WIRES;
+  try {
+    await withServer(cfg, async base => {
+      await discoverFixtureModels(cfg);
+      const openaiCatalog = await get(base, "/v1/models", { "x-opencodex-api-key": GOOGLE_KEY });
+      expect(openaiCatalog.status).toBe(200);
+      expect(await openaiCatalog.json()).toMatchObject({ data: expect.arrayContaining([
+        expect.objectContaining({ id: `${PROVIDER}/${HYDROGEN}` }),
+        expect.objectContaining({ id: `${PROVIDER}/${NEON}` }),
+      ]) });
+
+      const response = await get(base, "/v1beta/models");
+      const { models } = await response.json() as { models: Array<{ name: string }> };
+      for (const selector of [`${PROVIDER}/${HYDROGEN}`, `${PROVIDER}/${NEON}`, ...DISCOVERED_WIRES]) {
+        const listed = models.filter(model => model.name === `models/${selector}`);
+        expect(listed).toHaveLength(1);
+        const lookup = await get(base, `/v1beta/models/${selector}`);
+        expect(lookup.status).toBe(200);
+        expect(await lookup.json()).toEqual(listed[0]);
+        expect((await get(base, `/v1beta/models/${selector}`, { "x-goog-api-key": SCOPE_KEY })).status).toBe(404);
+        expect((await get(base, `/v1beta/models/${selector}`, { "x-goog-api-key": MODEL_SCOPE_KEY })).status).toBe(404);
+      }
+      expect(models.map(model => model.name)).not.toContain(`models/${NEON}-xhigh`);
+      expect((await get(base, `/v1beta/models/${NEON}-xhigh`)).status).toBe(404);
+
+      const tierScope = { "x-goog-api-key": TIER_SCOPE_KEY };
+      const high = `${HYDROGEN}-high`;
+      const scopedCatalog = await get(base, "/v1beta/models", tierScope);
+      const scopedModels = (await scopedCatalog.json() as { models: Array<{ name: string }> }).models;
+      expect(scopedModels.map(model => model.name)).toEqual([`models/${high}`]);
+      const scopedLookup = await get(base, `/v1beta/models/${high}`, tierScope);
+      expect(scopedLookup.status).toBe(200);
+      expect(await scopedLookup.json()).toEqual(scopedModels[0]);
+      expect((await get(base, `/v1beta/models/${PROVIDER}/${HYDROGEN}`, tierScope)).status).toBe(404);
+      expect((await get(base, `/v1beta/models/${HYDROGEN}-xhigh`, tierScope)).status).toBe(404);
+      const scopedSend = await post(base, generation(high), tierScope);
+      expect(scopedSend.status).toBe(200);
+      expect(await scopedSend.text()).toBe(PAYLOAD);
+      expect(JSON.parse(seen.at(-1)!.body).model).toBe(high);
+      expect((await post(base, generation(`${HYDROGEN}-xhigh`), tierScope)).status).toBe(403);
+
+      const send = await post(base, generation(`${HYDROGEN}-xhigh`));
+      expect(send.status).toBe(200);
+      expect(await send.text()).toBe(PAYLOAD);
+      expect(JSON.parse(seen.at(-1)!.body).model).toBe(`${HYDROGEN}-xhigh`);
+    });
+  } finally {
+    clearModelCache(PROVIDER);
+  }
+});
+
+test("Gemini lists discovered families only when the rollout and model visibility allow them", async () => {
+  discoveryWires = DISCOVERED_WIRES;
+  for (const restriction of ["rollout", "disabled", "selection"] as const) {
+    const cfg = config(restriction !== "rollout");
+    if (restriction === "disabled") cfg.disabledModels = [`${PROVIDER}/${HYDROGEN}`, `${PROVIDER}/${NEON}-medium`];
+    if (restriction === "selection") cfg.providers[PROVIDER]!.selectedModels = [`${NEON}-high`];
+    try {
+      await withServer(cfg, async base => {
+        const discovered = await discoverFixtureModels(cfg);
+        expect(discovered.map(model => model.id)).toContain(NEON);
+        const response = await get(base, "/v1beta/models");
+        const { models } = await response.json() as { models: Array<{ name: string }> };
+        const names = models.map(model => model.name);
+        const excluded = [`${PROVIDER}/${HYDROGEN}`, `${HYDROGEN}-high`];
+        if (restriction !== "selection") excluded.push(`${NEON}-medium`);
+        for (const selector of excluded) {
+          expect(names).not.toContain(`models/${selector}`);
+          expect((await get(base, `/v1beta/models/${selector}`)).status).toBe(404);
+        }
+        if (restriction !== "rollout") {
+          expect(names).toContain(`models/${PROVIDER}/${NEON}`);
+          expect(names).toContain(`models/${NEON}-high`);
+          expect((await get(base, `/v1beta/models/${NEON}-high`)).status).toBe(200);
+        }
+      });
+    } finally {
+      clearModelCache(PROVIDER);
+    }
+  }
 });

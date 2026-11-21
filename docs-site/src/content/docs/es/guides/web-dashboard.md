@@ -215,16 +215,21 @@ Los **Modelos** Los switches muestran la visibilidad final de Codex: un modelo e
 
 Los interruptores responden de inmediato y puedes seguir cambiando modelos mientras los cambios se guardan en segundo plano, en el orden en que haces clic. La confirmación aparece cuando la cola termina y la lista se actualiza con el estado del servidor. Si un guardado falla, se muestra un error y se restaura el estado del servidor cuando puede leerse. Espera esa confirmación antes de salir de **Modelos** o cambiar de servidor: los cambios que sigan en cola y aún no se hayan enviado se descartan al salir.
 
+La pestaña **Todos** (`#models/overall`) muestra en una sola lista todos los modelos de todos los proveedores, en el mismo orden que el catálogo, con un cuadro de búsqueda, un filtro **Todos** / **Activados** / **Desactivados** y el mismo interruptor. Ambas pestañas leen el mismo estado y comparten una cola de guardado, así que un cambio hecho en una se ve en la otra al instante.
+
 <a id="managing-models-in-a-provider-workspace"></a>
 
 ### Administrar modelos en un espacio de trabajo de proveedor
 
-En un proveedor **Modelos** token: **Eliminar** elimina la definición personalizada almacenada. Un subyacente El modelo nativo o el modelo descubierto en vivo pueden volver a aparecer, por lo que el recuento de modelos puede permanecer igual.
-**Ocultar** solo cambia la visibilidad del catálogo: no elimina la definición ni cambia directamente política de enrutamiento. Uso **Gestionar la visibilidad en modelos** para abrir el **Modelos** página y restaurar visibilidad, incluso cuando la pestaña del proveedor no tiene filas.
+La pestaña **Modelos** de un proveedor muestra todos sus modelos, también los desactivados, cada uno con el mismo interruptor que la página **Modelos**; ambas páginas leen y escriben el mismo estado. Un interruptor guarda al instante. Hasta que terminan ese guardado y la recarga posterior, los demás interruptores, **Añadir** y **Eliminar** esperan, de modo que solo hay un cambio en curso; elegir otro proveedor no lo cancela, pero salir de la página **Proveedores** antes de que termine puede cancelar la solicitud; la siguiente carga muestra si se guardó. Desactivar un modelo solo cambia la visibilidad del catálogo: no elimina la definición ni cambia la política de enrutamiento directo. **Gestionar la visibilidad en modelos** abre la página **Modelos**.
 
-**Añadir** guarda una definición personalizada; no borra una regla de selección de proveedores o ocultación existente. Por lo tanto, un modelo guardado puede permanecer oculto. Si el modelo ya se conoce, gestionar su visibilidad en **Modelos**. Todavía se guarda un guardado confirmado con una actualización de catálogo fallida: siga la actualización mensaje en lugar de añadirlo de nuevo. Si el cambio no se puede confirmar, actualice el estado del modelo antes de volver a intentarlo.
+**Eliminar** borra la definición personalizada almacenada. El modelo nativo o descubierto en vivo que había debajo puede volver a aparecer, por lo que el recuento de modelos puede quedar igual.
+
+**Añadir** guarda una definición personalizada; no anula una desactivación ni una regla de selección del proveedor que ya existan. Por lo tanto, un modelo guardado puede seguir desactivado; actívalo con su interruptor. Todavía se guarda un guardado confirmado con una actualización de catálogo fallida: siga la actualización mensaje en lugar de añadirlo de nuevo. Si el cambio no se puede confirmar, actualice el estado del modelo antes de volver a intentarlo.
 
 El recuento de modelos del proveedor es el número de entradas únicas no desactivadas en el modelo actual. inventario devuelto por el servidor, antes de buscar o mostrar truncamiento. No es el proveedor tamaño de lista de permisos, un recuento de descubrimiento en vivo o prueba de que se descubrió una entrada de origen. Selección Las insignias y la información de descubrimiento permanecen separadas de esa cuenta.
+
+Ese recuento aparece en la lista de proveedores. El encabezado de la pestaña **Modelos** del proveedor muestra en cambio cuántos modelos están activados sobre el total: el total cuenta todas las entradas listadas, también las desactivadas, y un modelo está activado con la misma regla que en la página **Modelos**: no está desactivado y es un modelo nativo, su proveedor no tiene lista de permitidos o la lista lo incluye.
 
 <a id="delegation-picker-vs-spawn-routing"></a>
 

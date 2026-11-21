@@ -794,6 +794,10 @@ cooldown.
 For an Anthropic OAuth or Codex pool, a 429 tied to one account that the pool has cooled does
 not cool the whole combo target. Other accounts behind that target remain available. A 429 with
 no identified, cooled pool account still cools the target, as do provider-wide failures.
+For the Codex pool this includes the main ChatGPT account while the OpenAI provider runs in pool
+mode, the default, because pool selection itself skips a cooled main account; when main recovers,
+the combo routes to it again without waiting for a target cooldown. In direct mode nothing skips a
+cooled main account, so a 429 from it still cools the target.
 
 After a Responses combo stream commits output, an incomplete terminal can cool that target for the
 next request. The reason can appear on the terminal event or its `response` snapshot. A refusal on
@@ -1261,6 +1265,8 @@ as HTTP 409; choose a different alias namespace. The CLI and dashboard display t
 validation message.
 
 ### Context-window refusals
+
+Whitespace-heavy provider errors retain the same overflow and negation rules. Negation-aside processing consumes surrounding whitespace once, so long whitespace runs do not require repeated matching.
 
 Before sending to a Responses combo target with a known context window and input limit,
 OpenCodex applies a 1.1× margin to the estimated input tokens and rounds up. The adjusted input

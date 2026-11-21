@@ -279,7 +279,7 @@ and configuration-failure mentions are excluded per sentence in the unwrapped pr
 many tokens" is insufficient. An explicit "prompt is too long" suffices in the absence of a throughput signal.
 Body inspection time does not count toward the upstream slow-attempt budget, and empty chunks cannot
 starve the deadline or cancellation. `tests/lib/upstream-retry.test.ts` covers retry and cancellation.
-Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader. The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status.
+Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader. The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status. The shared detector folds negation asides without repartitioning whitespace across optional patterns; `tests/lib/definite-overflow-verdict.test.ts` checks bounded-response classification and abort-timer responsiveness through the retry helper.
 `InvalidSendBudgetError` displays only a finite non-negative number or `invalid`.
 `UpstreamRetryEvidenceError` uses fixed retry-evidence wording and retains the original rejection
 only as `Error.cause`. Chat request-read failures keep typed local size/encoding messages; other
@@ -527,6 +527,8 @@ limit are relayed unchanged, regardless of upstream chunk boundaries. The echo j
 data fields with LF before parsing JSON. It writes the rewritten payload to the first data
 field and leaves later data fields empty, preserving control lines and all line endings.
 Starts whose last event field is `error` retain their canonical form.
+The empty-tool guard relays a late LF as part of the preceding CR delimiter without buffering
+it as part of the next frame. Complete-frame origin tracking stays attached to that next frame.
 The native Messages tap
 refreshes its pending-read stall deadline on each nonempty raw chunk before frame buffering.
 The single pre-echo flag authorizes owned data under the

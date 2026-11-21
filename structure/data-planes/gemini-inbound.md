@@ -20,6 +20,13 @@ package-tree fence answers them in the Gemini error shape. The unauthenticated d
 allowlist admits each path with its own HTTP method only (a wrong method is a 404 there, not the
 405), because `ocx connect agy` points the CLI at that socket; admission still comes from the
 receiving listener's policy, as for the chat wire. OPTIONS takes data-plane origin policy.
+The gateway serves these routes by default. An explicit false or malformed Gemini surface setting
+returns a Gemini-shaped 403 for supported methods before credential handling, turn admission or
+body reads. `PATCH /api/protocols/settings` writes `apiSurfaces.gemini.enabled` from the boolean
+`geminiEnabled`. `GET /api/protocols` reports `geminiSurface` alongside the three planning
+surfaces. `GET /api/keys` returns `surfaces.gemini` and `geminiModelsEndpoint` for the
+dashboard card and usage example. See [Protocol Paths](protocol-paths.md#settings) for save
+and rollback behavior.
 
 Gemini clients authenticate with `x-goog-api-key` or a `?key=` query parameter. The dispatcher
 clones the request, moves that credential onto `x-opencodex-api-key` (an existing dedicated header
@@ -30,10 +37,12 @@ the Chat admission (drain, key, origin, caller session, active turn, workflow, r
 model-discovery admission `/v1/models` uses. `embedContent` and `batchEmbedContents` answer 501
 `UNIMPLEMENTED` after admission; `countTokens` is described below.
 
-The catalog is the same eligible route set as Ollama's `/api/tags` (`src/server/ollama-route-policy.ts`
+The catalog starts with the same eligible route set as Ollama's `/api/tags` (`src/server/ollama-route-policy.ts`
 and the key's model scope): `models/<provider>/<model>` with `generateContent` and
 `streamGenerateContent`. Unknown or ineligible models are 404 `NOT_FOUND`; synthetic, shadow, combo
-and caller-credential selectors are refused as for Ollama.
+and caller-credential selectors are refused as for Ollama. The [opt-in Antigravity catalog](gemini-native.md)
+also exposes visible cached Gemini models and their routable wire aliases. Native generation
+feeds its route decision, observed reasoning and streaming timing into the same Logs details.
 
 `src/protocols/codecs/gemini.ts` maps `contents`, `systemInstruction`, base64 image `inlineData`,
 `functionDeclarations` and `toolConfig`, `functionCall` and `functionResponse` (matched by id, then by
