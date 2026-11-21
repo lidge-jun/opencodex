@@ -99,9 +99,10 @@ async function main() {
   const observeOwner = owner.observeClientStopOwner;
   mock.module("../../src/client/stop-teardown-owner", () => ({ ...owner,
     observeClientStopOwner: (proof: ClientStopOwner) => {
-      if (options.mode === "parent-unverified") return "unverified";
       if (proof.nonce === "malformed" || proof.startTime === "malformed") return observeOwner(proof);
-      return owner.readClientStopProcessStart(proof.pid) === proof.startTime ? "active" : "confirmed-stale";
+      const observedStart = options.mode === "parent-unverified" ? undefined : owner.readClientStopProcessStart(proof.pid);
+      if (observedStart === undefined) return "unverified";
+      return observedStart === proof.startTime ? "active" : "confirmed-stale";
     },
   }));
   const { startClientRuntime, scheduleStandaloneRecycle } = await import("../../src/client/runtime");
