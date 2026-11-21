@@ -209,6 +209,29 @@ describe("combo provider 413 verdicts", () => {
     expect(failure.providerIntakeRefusal).toBe(false);
     expect(comboFailureDecision(413, failure.classificationText, { code: failure.upstreamCode, providerIntakeRefusal: failure.providerIntakeRefusal })).toBe("stop");
   });
+
+  test("safety-system wording and a sidecar loop's own envelope keep a 413 terminal (#9017 review)", async () => {
+    for (const message of ["Your request was rejected by the safety system.", "This request was considered high risk."]) {
+      const body = JSON.stringify({ error: { code: "content_filter", message } });
+      expect(comboFailureDecision(413, body, { code: "content_filter" })).toBe("stop");
+      const failure = await consumeComboFailure(new Response(body, { status: 413 }));
+      expect(failure.providerIntakeRefusal).toBe(false);
+      const stream = await preflightComboStreamResponse(new Response(
+        `data: ${JSON.stringify({ type: "error", status: 413, error: { code: "content_filter", message } })}\n\n`,
+        { headers: { "content-type": "text/event-stream" } }), { model: "m1", provider: "a" });
+      expect(stream.kind).not.toBe("failed");
+    }
+    // The web-search and image bridges turn a provider failure into the proxy's own summary
+    // (src/web-search/loop.ts, src/images/loop.ts jsonError); the original body is gone.
+    for (const message of ["Provider error 413", "Provider error 413: Request Entity Too Large"]) {
+      const sidecar = await consumeComboFailure(new Response(JSON.stringify({ error: { message, type: "upstream_error", code: null } }), { status: 413 }));
+      expect(sidecar.providerIntakeRefusal).toBe(false);
+      expect(comboFailureDecision(413, sidecar.classificationText, { code: sidecar.upstreamCode, providerIntakeRefusal: sidecar.providerIntakeRefusal })).toBe("stop");
+    }
+    // The provider's own body still hops.
+    const plain = await consumeComboFailure(new Response(JSON.stringify({ error: { message: "Request Entity Too Large", type: "invalid_request_error" } }), { status: 413 }));
+    expect(comboFailureDecision(413, plain.classificationText, { code: plain.upstreamCode, providerIntakeRefusal: plain.providerIntakeRefusal })).toBe("hop");
+  });
   test("hard stops still outrank a provider 413", () => {
     expect(comboFailureDecision(413, "too large", { code: "origin_rejected" })).toBe("stop");
     expect(comboFailureDecision(413, "too large", { code: "cyber_policy" })).toBe("stop");

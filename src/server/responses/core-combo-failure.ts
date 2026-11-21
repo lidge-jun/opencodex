@@ -53,6 +53,17 @@ export function sanitizedRetryAfter(value: string | null, now: number): string |
 
 
 
+/** A failure envelope this proxy formatted from a provider body it already consumed. */
+function isProxyFormattedFailure(text: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    const error = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as { error?: unknown }).error : undefined;
+    const message = error && typeof error === "object" && !Array.isArray(error) ? (error as { message?: unknown }).message : undefined;
+    return typeof message === "string" && /^Provider error \d{3}\b/.test(message);
+  } catch {
+    return false;
+  }
+}
 export async function consumeComboFailure(
   response: Response,
   signal?: AbortSignal,
@@ -142,7 +153,12 @@ export async function consumeComboFailure(
       // past the 500-character cut must still keep the combo from sending the turn elsewhere.
       // A native lane's rewritten envelope (Messages or Chat native) is not the provider's body: its
       // terminal codes and an oversized original are gone, so only the original read may clear it.
-      if (response.status === 413) providerIntakeRefusal = legacy === undefined && isProviderIntakeRefusalBody(body.text);
+      // So is a sidecar loop's (web search, image bridge) envelope, whose message is the proxy's own
+      // "Provider error 413" summary of a body it already read.
+      if (response.status === 413) {
+        providerIntakeRefusal = legacy === undefined && !isProxyFormattedFailure(body.text)
+          && isProviderIntakeRefusalBody(body.text);
+      }
       // Status-independent: the nested record is what normalization selects, so a root verdict
       // beside it has to be captured here or the conflict rule never sees it.
       upstreamRootCode = upstreamEnvelopeRootCode(body.text);

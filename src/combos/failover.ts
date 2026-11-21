@@ -1607,7 +1607,8 @@ function isProviderIntakeRefusal(message: string, rawCode: string | null | undef
     || isTerminalRefusalCode(code) || isTerminalRefusalCode(inferred)) {
     return false;
   }
-  if (safetyRefusalCodeFromMessage(message) !== undefined || isHardPolicyOrOriginRefusal(message)) return false;
+  if (safetyRefusalCodeFromMessage(message) !== undefined || isHardPolicyOrOriginRefusal(message)
+    || SAFETY_SYSTEM_WORDING.test(message)) return false;
   if (namesHardStopToken(message, HARD_STOP_TOKEN_413)) return false;
   const lower = message.toLowerCase();
   if (PROXY_OWNED_413_CODES.some(owned => lower.includes(owned)) || lower.includes(PROXY_TRANSLATION_BUFFER_WORDING)) {
