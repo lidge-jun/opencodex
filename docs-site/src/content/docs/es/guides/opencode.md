@@ -22,6 +22,8 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ```
 
+Las filas de slug nativos de OpenAI aparecen solo mientras el proveedor canónico `openai` esté activado y no esté en modo Codex Direct. El modo Direct reenvía la credencial de OpenAI de cada invocador, mientras que opencode envía la clave del proxy, y un proveedor `openai` desactivado hace que el proxy rechace todos los selectores `gpt-*` sin prefijo; en ambos estados, el lanzador, la integración administrada y `ocx export` omiten esas filas en lugar de ofrecer un modelo que no puede ejecutarse.
+
 <a id="protocol-per-model"></a>
 
 ## Protocolo por modelo
