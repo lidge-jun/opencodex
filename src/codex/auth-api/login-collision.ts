@@ -1,27 +1,17 @@
 import { lstatSync } from "node:fs";
-import { decodeJwtPayload, extractAccountIdClaims, extractEmail } from "../../oauth/chatgpt";
+import { extractAccountIdClaims, extractEmail } from "../../oauth/chatgpt";
 import { checkAccountIdCollision, readMainAuth } from "../auth-collision";
+import { sameNativeWorkspaceUser } from "../collision-identity";
 import { resolveCodexHomeDir } from "../home";
 import { tryAcquireNativeMainProfileClaim } from "../native-main-admission";
 import { withNativeMainSharedClaim } from "../native-main-claim";
 import { resolveNativeProfileContext } from "../native-profile-store";
 import { NativeProfileError } from "../native-profile-types";
 import { extractChatgptPlanType } from "../plan";
-import { nativeUserIdClaims } from "../reserve-availability";
 import { isNativeMainClaimUnavailable } from "./http";
 
 export class CodexCollisionReadBusyError extends Error {
   constructor() { super("Native Codex login is busy or unreadable; retry login shortly."); }
-}
-
-/** A workspace rollover may retain an older ID token, but never a different user or subject. */
-function sameNativeWorkspaceUser(idToken: string, accessToken: string): boolean {
-  const id = nativeUserIdClaims(idToken), access = nativeUserIdClaims(accessToken);
-  const idSubject = decodeJwtPayload(idToken)?.sub, accessSubject = decodeJwtPayload(accessToken)?.sub;
-  const idEmail = extractEmail(idToken), accessEmail = extractEmail(undefined, accessToken);
-  return !id.conflict && !access.conflict && Boolean(id.userId?.trim()) && id.userId === access.userId
-    && typeof idSubject === "string" && idSubject.trim().length > 0 && idSubject === accessSubject
-    && Boolean(idEmail) && idEmail === accessEmail;
 }
 
 /** Only admission owns physical reads; synchronous collision consumers use observed identity. */
