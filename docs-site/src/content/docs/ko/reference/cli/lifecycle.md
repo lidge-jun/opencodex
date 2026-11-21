@@ -243,7 +243,11 @@ probe이며, `--wait`는 준비 또는 timeout까지 polling하지만 종단 `fa
 
 CLI로 설치한 서비스에서는 등록된 `CODEX_HOME`과 `OPENCODEX_HOME`을 사용하세요. 구버전 서비스 정의에 두 경로가 빠져 있다면 같은 설정으로 `ocx service repair`를 한 번 실행하세요. 필요하면 Codex 홈을 초기화하고 `ocx sync` 후 서비스를 재시작하세요. 데스크톱 앱이 관리하는 프록시는 앱에서 재시작하세요.
 
-CLI 서비스를 다른 기존 Codex 홈으로 옮기려면 원래 설정으로 `ocx service uninstall`을 실행하세요. 서비스는 제거됐는데 네이티브 Codex 복원에 실패했다면 표시된 오류를 해결하고 같은 설정으로 `ocx restore`를 실행하세요. 제거와 복원이 모두 성공하면 `OPENCODEX_HOME`을 유지하고 새 `CODEX_HOME`을 선택한 뒤 원래 백엔드와 옵션으로 `ocx service install`을 실행하세요. 새 설정에서 `ocx sync`를 실행하고 `ocx ready`로 확인하세요. 시작에 실패했다면 위의 복구 절차를 따르세요.
+CLI 서비스를 다른 기존 Codex 홈으로 옮기려면 원래 설정으로 `ocx service uninstall`을 실행하세요. 서비스는 제거됐는데 네이티브 Codex 복원에 실패했다면 표시된 오류를 해결하고 같은 설정으로 `ocx restore`를 실행하세요.
+
+Windows에서 복원 실패로 정리 대기 기록이 남았다면, 홈을 바꾸기 전에 기존 서비스를 관리하던 설치본에서 원래 홈 설정으로 `ocx stop`을 실행하세요. 이 기록이 남아 있으면 `ocx update`가 패키지 교체를 거부합니다.
+
+제거와 복원이 모두 성공하면 `OPENCODEX_HOME`을 유지하고 새 `CODEX_HOME`을 선택한 뒤 원래 백엔드와 옵션으로 `ocx service install`을 실행하세요. 새 설정에서 `ocx sync`를 실행하고 `ocx ready`로 확인하세요. 시작에 실패했다면 위의 복구 절차를 따르세요.
 
 ### `ocx doctor`
 

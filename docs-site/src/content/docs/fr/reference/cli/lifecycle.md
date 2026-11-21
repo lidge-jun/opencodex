@@ -170,7 +170,11 @@ Si le message de démarrage du proxy indique que le répertoire de Codex est int
 
 Pour un service installé avec la CLI, utilisez les valeurs enregistrées de `CODEX_HOME` et `OPENCODEX_HOME`. Si une ancienne définition du service omet ces chemins, exécutez une fois `ocx service repair` avec ces valeurs. Initialisez le répertoire de Codex si nécessaire, exécutez `ocx sync`, puis redémarrez le service. Si l’application de bureau gère le proxy, redémarrez-le depuis celle-ci.
 
-Pour déplacer le service CLI vers un autre répertoire Codex existant, exécutez `ocx service uninstall` avec les paramètres d’origine. Si le service est supprimé mais que la restauration de Codex natif échoue, corrigez l’erreur signalée et exécutez `ocx restore` avec ces mêmes paramètres. Une fois la désinstallation et la restauration réussies, conservez `OPENCODEX_HOME`, sélectionnez le nouveau `CODEX_HOME` et exécutez `ocx service install` avec le backend et les options d’origine. Avec les nouveaux paramètres, exécutez `ocx sync` et vérifiez le résultat avec `ocx ready`. En cas d’échec du démarrage, suivez les étapes de récupération ci-dessus.
+Pour déplacer le service CLI vers un autre répertoire Codex existant, exécutez `ocx service uninstall` avec les paramètres d’origine. Si le service est supprimé mais que la restauration de Codex natif échoue, corrigez l’erreur signalée et exécutez `ocx restore` avec ces mêmes paramètres.
+
+Sous Windows, si l’échec de la restauration laisse un nettoyage en attente, exécutez `ocx stop` depuis l’installation concernée avec les répertoires d’origine avant d’en changer. Tant que ce nettoyage reste en attente, `ocx update` refuse de remplacer le paquet.
+
+Une fois la désinstallation et la restauration réussies, conservez `OPENCODEX_HOME`, sélectionnez le nouveau `CODEX_HOME` et exécutez `ocx service install` avec le backend et les options d’origine. Avec les nouveaux paramètres, exécutez `ocx sync` et vérifiez le résultat avec `ocx ready`. En cas d’échec du démarrage, suivez les étapes de récupération ci-dessus.
 
 ### `ocx doctor`
 

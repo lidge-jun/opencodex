@@ -294,7 +294,11 @@ Si al iniciar el proxy aparece un mensaje que indica que falta el directorio de 
 
 Para un servicio instalado con la CLI, usa los valores registrados de `CODEX_HOME` y `OPENCODEX_HOME`. Si la definición antigua del servicio omite estas rutas, ejecuta `ocx service repair` una vez con esos valores. Inicializa el directorio de Codex si hace falta, ejecuta `ocx sync` y reinicia el servicio. Si la aplicación de escritorio gestiona el proxy, reinícialo desde la aplicación.
 
-Para trasladar el servicio de la CLI a otro directorio de Codex existente, ejecuta `ocx service uninstall` con la configuración original. Si el servicio se elimina pero falla la restauración de Codex nativo, corrige el error indicado y ejecuta `ocx restore` con esa misma configuración. Una vez completadas la desinstalación y la restauración, conserva `OPENCODEX_HOME`, selecciona el nuevo `CODEX_HOME` y ejecuta `ocx service install` con el backend y las opciones originales. Con los nuevos valores, ejecuta `ocx sync` y comprueba el resultado con `ocx ready`. Si el inicio ha fallado, sigue los pasos de recuperación anteriores.
+Para trasladar el servicio de la CLI a otro directorio de Codex existente, ejecuta `ocx service uninstall` con la configuración original. Si el servicio se elimina pero falla la restauración de Codex nativo, corrige el error indicado y ejecuta `ocx restore` con esa misma configuración.
+
+Si en Windows la restauración falla y deja un registro de limpieza pendiente, ejecuta `ocx stop` desde la instalación responsable con los directorios originales antes de cambiarlos. Mientras exista ese registro, `ocx update` rechazará el reemplazo del paquete.
+
+Una vez completadas la desinstalación y la restauración, conserva `OPENCODEX_HOME`, selecciona el nuevo `CODEX_HOME` y ejecuta `ocx service install` con el backend y las opciones originales. Con los nuevos valores, ejecuta `ocx sync` y comprueba el resultado con `ocx ready`. Si el inicio ha fallado, sigue los pasos de recuperación anteriores.
 
 ### `ocx resolve [--json]`
 

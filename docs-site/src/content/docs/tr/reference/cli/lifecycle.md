@@ -241,7 +241,11 @@ Proxy başlatılırken Codex ana dizininin bulunamadığı bildirilirse Codex’
 
 CLI ile yönetilen hizmet için kayıtlı `CODEX_HOME` ve `OPENCODEX_HOME` değerlerini kullanın. Eski hizmet tanımında bu yollar yoksa aynı ayarlarla bir kez `ocx service repair` çalıştırın. Gerekirse Codex ana dizinini hazırlayın, `ocx sync` komutunu çalıştırın ve hizmeti yeniden başlatın. Proxy’yi masaüstü uygulaması yönetiyorsa uygulamadan yeniden başlatın.
 
-CLI hizmetini mevcut başka bir Codex ana dizinine taşımak için ilk ayarlarla `ocx service uninstall` çalıştırın. Hizmet kaldırıldığı halde yerel Codex yapılandırması geri yüklenemediyse bildirilen hatayı giderip aynı ayarlarla `ocx restore` çalıştırın. Kaldırma ve geri yükleme başarılı olunca `OPENCODEX_HOME` değerini koruyun, yeni `CODEX_HOME` değerini seçin ve ilk kurulumdaki arka uç ve seçeneklerle `ocx service install` çalıştırın. Yeni ayarlarla `ocx sync` çalıştırıp `ocx ready` ile durumu kontrol edin. Başlatma başarısızsa yukarıdaki kurtarma adımlarını uygulayın.
+CLI hizmetini mevcut başka bir Codex ana dizinine taşımak için ilk ayarlarla `ocx service uninstall` çalıştırın. Hizmet kaldırıldığı halde yerel Codex yapılandırması geri yüklenemediyse bildirilen hatayı giderip aynı ayarlarla `ocx restore` çalıştırın.
+
+Windows’ta geri yükleme başarısız olup bekleyen bir temizlik kaydı bırakırsa dizinleri değiştirmeden önce hizmetin sahibi olan kurulumda ilk dizin ayarlarıyla `ocx stop` çalıştırın. Bu kayıt dururken `ocx update` paketi değiştirmeyi reddeder.
+
+Kaldırma ve geri yükleme başarılı olunca `OPENCODEX_HOME` değerini koruyun, yeni `CODEX_HOME` değerini seçin ve ilk kurulumdaki arka uç ve seçeneklerle `ocx service install` çalıştırın. Yeni ayarlarla `ocx sync` çalıştırıp `ocx ready` ile durumu kontrol edin. Başlatma başarısızsa yukarıdaki kurtarma adımlarını uygulayın.
 
 ### `ocx doctor`
 
