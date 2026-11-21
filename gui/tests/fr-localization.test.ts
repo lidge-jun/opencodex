@@ -45,6 +45,7 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "integrations.cursor.noControl",
   "uptime.hour",
   "uptime.second",
+  "quotaLive.unit", // The SI symbol for seconds, "s" in French too.
   // "auto" is the same word in French, and it labels a machine-derived alias source rather
   // than prose. Translating it would invent a difference the UI does not have.
   "models.aliasAuto",
