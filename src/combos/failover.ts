@@ -1600,8 +1600,11 @@ const VERDICT_413_CODES = ["content_policy_violation", "client_closed_request", 
  */
 function isProviderIntakeRefusal(message: string, rawCode: string | null | undefined, classifiedCode?: string | null): boolean {
   const code = normalizedFailureCode(rawCode);
-  if (PROXY_OWNED_413_CODES.includes(code) || VERDICT_413_CODES.includes(code)
-    || isTerminalRefusalCode(code) || isTerminalRefusalCode(classifiedCode)) {
+  // The classifier's own reading of the text counts too: an uncoded "Request canceled by client"
+  // is client_closed_request, and a whole-body caller has no classified code to pass.
+  const inferred = normalizedFailureCode(classifiedCode ?? classifyError(413, "upstream_error", message).code);
+  if (PROXY_OWNED_413_CODES.includes(code) || VERDICT_413_CODES.includes(code) || VERDICT_413_CODES.includes(inferred)
+    || isTerminalRefusalCode(code) || isTerminalRefusalCode(inferred)) {
     return false;
   }
   if (safetyRefusalCodeFromMessage(message) !== undefined || isHardPolicyOrOriginRefusal(message)) return false;

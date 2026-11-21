@@ -188,6 +188,16 @@ describe("combo provider 413 verdicts", () => {
     if (numeric.kind === "failed") expect(numeric.response.status).toBe(413);
     expect(await outer({ type: "error", error: { type: "invalid_request_error", code: 413, message: "Request Entity Too Large" } })).toBe("hop");
   });
+
+  test("an inferred client cancellation keeps a 413 terminal (#9017 review)", async () => {
+    for (const message of ["Request canceled by client", "Request cancelled by client"]) {
+      expect(comboFailureDecision(413, message)).toBe("stop");
+      const failure = await consumeComboFailure(new Response(message, { status: 413 }));
+      expect(failure.providerIntakeRefusal).toBe(false);
+      expect(comboFailureDecision(413, failure.classificationText, { code: failure.upstreamCode, providerIntakeRefusal: failure.providerIntakeRefusal })).toBe("stop");
+    }
+    expect(comboFailureDecision(413, "Request Entity Too Large")).toBe("hop");
+  });
   test("hard stops still outrank a provider 413", () => {
     expect(comboFailureDecision(413, "too large", { code: "origin_rejected" })).toBe("stop");
     expect(comboFailureDecision(413, "too large", { code: "cyber_policy" })).toBe("stop");
