@@ -643,12 +643,10 @@ describe("combo failure hop/stop verdicts", () => {
     expect(comboFailureDecision(400, "free tier prompt cap", { code: "free_rate_limited" })).toBe("hop");
   });
 
-  test("INVARIANT: generic 410 and 413 remain terminal", () => {
-    // These two are the tripwire for this change. A widened hop list must never swallow them:
-    // 410 without a structured lifecycle code is a real resource-gone verdict, and a generic
-    // 413 is a request the next target would reject identically.
+  test("INVARIANT: a generic 410 remains terminal", () => {
+    // A widened hop list must never swallow it: 410 without a structured lifecycle code is a real
+    // resource-gone verdict.
     expect(comboFailureDecision(410, "resource is gone")).toBe("stop");
-    expect(comboFailureDecision(413, "request too large")).toBe("stop");
   });
 
   test("INVARIANT: a structured model lifecycle 410 still hops", () => {
@@ -792,7 +790,10 @@ describe("request-local optional control incompatibility", () => {
       expect(comboFailureDecision(400, message, { code })).toBe("stop");
     }
     expect(comboFailureDecision(499, message)).toBe("stop");
-    expect(comboFailureDecision(413, message)).toBe("stop");
+    // A provider 413 hops on its own status (#9017); a generic 410 is still a status this
+    // compatible message cannot turn into a hop.
+    expect(comboFailureDecision(413, message)).toBe("hop");
+    expect(comboFailureDecision(410, message)).toBe("stop");
   });
 });
 

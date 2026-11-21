@@ -6,6 +6,8 @@ import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure, isAnthropicExtraUsageFailure } from "../providers/anthropic-billing-refusal";
 import { hasConflictingReasoningEffortCode } from "../providers/reasoning-metadata";
 import { isKiroAccountProfileRefusal } from "../adapters/kiro-refusal";
+import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../adapters/ollama-late-attribution";
+import { M365_RESPONSE_LIMIT_MESSAGES } from "../adapters/m365-copilot/response-limits";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
 import { PersistedCooldownMap } from "./cooldown-store";
@@ -1303,8 +1305,15 @@ function isAllowedModerationParam(param: string): boolean {
  * Any hard-refusal token in any spelling. A moderation code beside one is not evidence that another
  * target may serve the request: the client must not retry these.
  */
-const HARD_STOP_TOKEN =
-  /(?<![a-z0-9])(?:cyber_policy|origin_rejected|bio_policy|misalignment_policy_violation|invalid_prompt|content_policy_violation|context_length_exceeded|client_closed_request|client_cancelled|upstream_no_response|upstream_closed_before_response|upstream_reset_replay_refused)(?![a-z0-9])/i;
+const HARD_STOP_TOKENS = [
+  "cyber_policy", "origin_rejected", "bio_policy", "misalignment_policy_violation", "invalid_prompt",
+  "content_policy_violation", "context_length_exceeded", "client_closed_request", "client_cancelled",
+  "upstream_no_response", "upstream_closed_before_response", "upstream_reset_replay_refused",
+];
+const hardStopPattern = (tokens: readonly string[]) => new RegExp(`(?<![a-z0-9])(?:${tokens.join("|")})(?![a-z0-9])`, "i");
+const HARD_STOP_TOKEN = hardStopPattern(HARD_STOP_TOKENS);
+/** A provider 413 naming a context overflow is still this target's limit, so only the others veto its hop. */
+const HARD_STOP_TOKEN_413 = hardStopPattern(HARD_STOP_TOKENS.filter(token => token !== "context_length_exceeded"));
 
 /** JSON \uXXXX escapes decoded, so an escaped code cannot slip past {@link HARD_STOP_TOKEN}. */
 function withJsonEscapesDecoded(text: string): string {
@@ -1315,8 +1324,8 @@ function withJsonEscapesDecoded(text: string): string {
  * Whether any hard-refusal token appears in any spelling: JSON escapes decoded (including \n, \t
  * and \r), camel humps split, and hyphens, dots, slashes and whitespace folded to underscores.
  */
-function namesHardStopToken(text: string): boolean {
-  return HARD_STOP_TOKEN.test(withJsonEscapesDecoded(text)
+function namesHardStopToken(text: string, pattern: RegExp = HARD_STOP_TOKEN): boolean {
+  return pattern.test(withJsonEscapesDecoded(text)
     .replace(/\\[ntr]/g, "_")
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[-.\s/]+/g, "_"));
@@ -1570,6 +1579,58 @@ export function comboFailureCooldownScope(
   return "target";
 }
 
+/** The proxy's own 413 refusals: its translation buffer and body caps, identical for every target. */
+const PROXY_OWNED_413_CODES = ["translation_buffer_limit", "inbound_body_too_large", "outbound_body_too_large"];
+/**
+ * The wording every translator-budget refusal carries ("request ..." or "upstream translation
+ * buffer exceeded the safe limit"). Several producers format that 413 with type and code
+ * `request_too_large`, which drops `translation_buffer_limit` from the body, so the wording is
+ * the one identity that always survives to the combo decision.
+ */
+const PROXY_TRANSLATION_BUFFER_WORDING = "translation buffer exceeded the safe limit";
+/** Request verdicts a 413 can still state; the status alone never outranks them. */
+const VERDICT_413_CODES = ["content_policy_violation", "client_closed_request", "client_cancelled"];
+
+/**
+ * Whether a 413 is a provider's own intake refusal rather than one this proxy produced. The proxy
+ * carries its codes in the structured code (or the type a body falls back to) and in the bounded
+ * classification text, so either one marks the refusal as ours. The Ollama late-attribution limit
+ * is proxy-owned too and is recognized only by its exact constant, as `isLateAttributionRefusal`
+ * does. A 413 that also states a terminal, safety or origin refusal keeps that verdict.
+ */
+function isProviderIntakeRefusal(message: string, rawCode: string | null | undefined, classifiedCode?: string | null): boolean {
+  const code = normalizedFailureCode(rawCode);
+  // The classifier's own reading of the text counts too: an uncoded "Request canceled by client"
+  // is client_closed_request, and a whole-body caller has no classified code to pass.
+  const inferred = normalizedFailureCode(classifiedCode ?? classifyError(413, "upstream_error", message).code);
+  if (PROXY_OWNED_413_CODES.includes(code) || VERDICT_413_CODES.includes(code) || VERDICT_413_CODES.includes(inferred)
+    || isTerminalRefusalCode(code) || isTerminalRefusalCode(inferred)) {
+    return false;
+  }
+  if (safetyRefusalCodeFromMessage(message) !== undefined || isHardPolicyOrOriginRefusal(message)
+    || SAFETY_SYSTEM_WORDING.test(message)) return false;
+  if (namesHardStopToken(message, HARD_STOP_TOKEN_413)) return false;
+  const lower = message.toLowerCase();
+  if (PROXY_OWNED_413_CODES.some(owned => lower.includes(owned)) || lower.includes(PROXY_TRANSLATION_BUFFER_WORDING)) {
+    return false;
+  }
+  // An adapter buffer that overflowed while collecting the answer: the provider already ran the
+  // turn, so this 413 is not a refusal before processing and must not reach another target.
+  if (Object.values(M365_RESPONSE_LIMIT_MESSAGES).some(limit => message.includes(limit))) return false;
+  if (message.trim() === OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE) return false;
+  const root = parseErrorEnvelope(message);
+  return (root ? envelopeErrorRecord(root) : undefined)?.message !== OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE;
+}
+
+/**
+ * The whole-body form of {@link isProviderIntakeRefusal}, for a reader that holds the complete
+ * bounded 413 body. The classification text the decision receives is cut at 500 characters, so a
+ * hard refusal or proxy marker after the cut would otherwise leave the hop open.
+ */
+export function isProviderIntakeRefusalBody(body: string): boolean {
+  return isProviderIntakeRefusal(body, undefined);
+}
+
 function isModelLifecycleGone(
   status: number,
   message: string,
@@ -1703,6 +1764,8 @@ export function comboFailureDecision(
     unofferedToolCallRefusal?: boolean;
     /** Whole-body moderation verdict from a reader that saw the complete bounded body. */
     providerModerationRefusal?: boolean;
+    /** Whole-body 413 intake verdict ({@link isProviderIntakeRefusalBody}); false vetoes the hop. */
+    providerIntakeRefusal?: boolean;
   },
 ): ComboFailureDecision {
   const rootRawCode = typeof options?.rootCode === "number" ? String(options.rootCode) : options?.rootCode;
@@ -1732,6 +1795,8 @@ function decideComboFailure(
     unofferedToolCallRefusal?: boolean;
     /** Whole-body moderation verdict from a reader that saw the complete bounded body. */
     providerModerationRefusal?: boolean;
+    /** Whole-body 413 intake verdict ({@link isProviderIntakeRefusalBody}); false vetoes the hop. */
+    providerIntakeRefusal?: boolean;
   },
 ): ComboFailureDecision {
   if (status === 499) return "stop";
@@ -1761,10 +1826,17 @@ function decideComboFailure(
   if (isModelLifecycleGone(status, message, rawCode)) return "hop";
   const error = classifyError(status, "upstream_error", message);
   if (isCyberPolicyCode(error.code)) return "stop";
+  // A 413 that is the proxy's own, or that states a terminal refusal, says nothing about another
+  // target's size limit, so every size hop below stays closed for it: the provider-target and
+  // definite overflow hops as well as the provider-413 hop. A whole-body reader's verdict covers a
+  // marker past the 500-character cut; streaming callers pass the whole event, which the message
+  // check reads directly. Hops for other reasons (a model-scoped refusal, say) still apply.
+  const sizeHopVetoed = status === 413
+    && (options?.providerIntakeRefusal === false || !isProviderIntakeRefusal(message, rawCode, error.code));
   // A provider can expose its own target hard cap with a non-semantic vendor code
   // (for example 5059 + invalid_request_prompt_too_long). That is evidence that this
   // target is too small, not that every later combo target is incapable of serving it.
-  if (isProviderTargetContextOverflow(status, message, rawCode)) return "hop";
+  if (!sizeHopVetoed && isProviderTargetContextOverflow(status, message, rawCode)) return "hop";
   // A definite context-window refusal is target-local inside a heterogeneous combo: this model
   // cannot hold the turn, but a later target may have a larger window. Two boundaries keep this
   // safe. It is reached only after cancellation, structured origin/cyber refusals and
@@ -1773,7 +1845,15 @@ function decideComboFailure(
   // commits the child on any text, tool call or unknown event, and only a zero-output terminal
   // becomes a failure response at all, so a turn whose text the client already saw is never
   // reclassified here.
-  if (isDefiniteContextOverflow(status, message)) return "hop";
+  if (!sizeHopVetoed && isDefiniteContextOverflow(status, message)) return "hop";
+  // A provider's HTTP 413 is that target's intake limit (#9017). Combo targets carry different
+  // body and token limits, and the provider refused before processing the turn, so the next
+  // untried target may accept the unchanged request: the same reasoning as the context-overflow
+  // hop above. The proxy's own 413s are identical for every target and stay terminal, as does a
+  // 413 that also states a terminal refusal. Cooldown scope stays "none". This reverses the
+  // generic-413 stop recorded in devlog/_fin/260904_bug_stack_train/040_deferrals.md
+  // (coordinator decision, 2026-11-21); generic 410 is unchanged.
+  if (status === 413 && !sizeHopVetoed) return "hop";
   // A local input-admission refusal (#1524) says "this candidate cannot fit the request",
   // not "the request is impossible": the next candidate may have a larger context window.
   //

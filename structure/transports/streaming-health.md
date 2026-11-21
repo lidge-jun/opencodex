@@ -139,7 +139,7 @@ same oversized turn through its reconnect budget. For a streaming Responses call
 therefore converts the final 413 (after any adapter-owned bounded image retry) into one HTTP-200 SSE
 `response.failed` event with `error.code = context_length_exceeded` and `retryable = false`. Codex
 recognizes that terminal contract, marks the context as full, and can run its own compaction policy
-on the next turn. Combo routing treats 413 as a stop condition and performs the conversion only at
+on the next turn. Combo routing hops past a provider 413 (#9017) and converts only the final 413 at
 the outer client boundary, so the failed target is never recorded as a successful combo attempt.
 
 Non-streaming Responses callers retain HTTP 413 and receive a JSON `error` with

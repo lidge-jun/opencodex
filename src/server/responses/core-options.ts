@@ -49,6 +49,8 @@ export interface ConsumedComboFailure {
   unofferedToolCallRefusal?: boolean;
   /** Complete bounded-envelope provider moderation verdict captured before display truncation. */
   providerModerationRefusal?: boolean;
+  /** Complete bounded-envelope provider-413 intake verdict captured before display truncation. */
+  providerIntakeRefusal?: boolean;
   /** Structured upstream `error.code` when present in the failure body. */
   upstreamCode?: string;
   /**
