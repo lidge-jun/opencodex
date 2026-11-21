@@ -120,7 +120,7 @@ Si OpenCodex no puede confirmar que un envoltorio terminó porque no dispone de 
 de objeto de proceso (handle), como puede ocurrir en ARM64, compruébalo en el Administrador de tareas desde la sesión
 de su propietario, detenlo si sigue en ejecución y vuelve a intentarlo.
 
-Si no puede demostrarse que el servicio se detuvo, `ocx stop` no envía una solicitud de parada al proxy, deja intacta la configuración del cliente y falla. Con `--json`, el resumen conserva `outcome: "failed"` y `proxy: "unknown"`, y añade `serviceStopReason`:
+Si no puede demostrarse que el servicio se detuvo, `ocx stop` no envía una solicitud de parada al proxy ni continúa con la restauración nativa compartida. En un Child de Remote Link, el prevuelo puede haber eliminado ya las integraciones de archivos propiedad del Link y pausado la sincronización; repara la parada del servicio y vuelve a ejecutar `ocx stop`. El comando falla. Con `--json`, el resumen conserva `outcome: "failed"` y `proxy: "unknown"`, y añade `serviceStopReason`:
 
 | `serviceStopReason` | Significado | Qué hacer |
 |---|---|---|

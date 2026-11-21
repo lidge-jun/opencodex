@@ -191,9 +191,11 @@ eligible for termination, stop it from its owning Windows session using Task Man
 If OpenCodex cannot confirm a wrapper's exit without a process handle, as can happen on ARM64,
 check it in Task Manager from its owning session, stop it if it is still running, and retry.
 
-When the service cannot be proven stopped, `ocx stop` sends no stop request to the proxy, leaves
-your client configuration alone, and fails. With `--json` the summary keeps `outcome: "failed"`
-and `proxy: "unknown"`, and adds `serviceStopReason`:
+When the service cannot be proven stopped, `ocx stop` sends no stop request to the proxy and
+does not proceed to shared native restoration. On a Remote Link Child, preflight may already have
+removed Link-owned file integrations and paused sync; repair the service stop and retry `ocx stop`.
+The command fails. With `--json` the summary keeps `outcome: "failed"` and `proxy: "unknown"`,
+and adds `serviceStopReason`:
 
 | `serviceStopReason` | Meaning | What to do |
 |---|---|---|
