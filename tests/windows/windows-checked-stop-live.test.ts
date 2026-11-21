@@ -23,7 +23,7 @@ import {
   winswStatusFromScState,
   windowsCheckedStopLiveDeps,
 } from "../../src/service/windows-checked-stop-live";
-import type { WindowsProcessNativeApi } from "../../src/service/windows-process-native";
+import { windowsProcessNative, type WindowsProcessNativeApi } from "../../src/service/windows-process-native";
 import { windowsLauncherVbsPath } from "../../src/service/state";
 import { WINDOWS_TASK_INSTANCE_STOP_SCRIPT } from "../../src/service/windows-task-instance-stop";
 import { buildWindowsTaskXml, windowsTaskRegistrationHealthy } from "../../src/service/windows-taskxml";
@@ -256,20 +256,131 @@ describe("capped command answers", () => {
 
 const portablePowerShell = Bun.which("pwsh");
 
+describe("the bounded Scheduler registration query", () => {
+  test("a direct hit avoids PowerShell; only a completed, exact fallback answer is accepted", async () => {
+    const directHit = result(0, '"\\opencodex-proxy","N/A","Disabled"');
+    const missing = result(1, "", "지정된 파일을 찾을 수 없습니다.");
+    for (const [direct, fallback, expected] of [
+      [directHit, null, "present"],
+      [{ ...result(2), windowsExitCode: 0x80070002 }, null, "absent"],
+      [{ ...result(-2147024894), windowsExitCode: 0x80070002 }, null, "absent"],
+      [{ ...result(1), windowsExitCode: 0x80070002 }, null, "unknown"],
+      [{ ...result(2), windowsExitCode: 0x80041302 }, null, "unknown"],
+      [{ ...result(5), windowsExitCode: 0x80070005 }, null, "unknown"],
+      [{ ...result(null), windowsExitCode: 0x80070002 }, null, "unknown"],
+      [result(2), result(0, "unknown"), "unknown"],
+      [result(1, "", "", true), null, "unknown"],
+      [missing, result(0, "absent\r\n"), "absent"],
+      [missing, result(0, "present"), "present"],
+      [missing, result(0, "unknown"), "unknown"],
+      [missing, result(0, "noise\nabsent"), "unknown"],
+      [missing, result(1, "absent"), "unknown"],
+      [missing, result(null, "absent", "", true), "unknown"],
+    ] as const) {
+      const calls: string[] = [];
+      const deps = windowsCheckedStopLiveDeps({ run: async (program, args, timeout) => {
+        calls.push(program);
+        if (program === "schtasks") {
+          expect(args).toEqual(["/query", "/tn", "\\opencodex-proxy", "/fo", "CSV", "/nh", "/hresult"]);
+          return direct;
+        }
+        expect(timeout).toBeGreaterThan(0);
+        expect(timeout).toBeLessThanOrEqual(2_000);
+        return fallback!;
+      } });
+      expect((await deps.probeScheduler(2_000)).status).toBe(expected);
+      expect(calls).toEqual(fallback ? ["schtasks", "powershell"] : ["schtasks"]);
+    }
+  });
+
+  test.skipIf(process.platform !== "win32" || process.arch !== "x64")("the child handle preserves distinct HRESULTs with the same low byte", async () => {
+    const native = windowsProcessNative();
+    expect(native?.captureChildExitCode).toBeFunction();
+    for (const code of [0x80070002, 0x80041302]) {
+      const child = Bun.spawn([resolveTrustedWindowsPowerShellExe(), "-NoProfile", "-NonInteractive", "-Command",
+        `[Environment]::Exit(${code | 0})`], { stdout: "ignore", stderr: "ignore", windowsHide: true, timeout: SPAWN_BUDGET_MS });
+      const readExitCode = native!.captureChildExitCode!(child.pid);
+      await child.exited;
+      expect(readExitCode?.()).toBe(code);
+    }
+  }, 2 * SPAWN_BUDGET_MS + 1_000);
+
+  test("the fallback uses only the remaining time and a late answer is unknown", async () => {
+    let now = 100;
+    const clock = spyOn(performance, "now").mockImplementation(() => now);
+    try {
+      const deps = windowsCheckedStopLiveDeps({ run: async (program, _args, timeout) => {
+        if (program === "schtasks") { now += 750; return result(1); }
+        expect(timeout).toBe(1_250);
+        now += timeout;
+        return result(0, "absent");
+      } });
+      expect((await deps.probeScheduler(2_000)).status).toBe("unknown");
+    } finally { clock.mockRestore(); }
+  });
+
+  test.skipIf(process.platform !== "win32" && !portablePowerShell)("only a missing task in an accessible root is absent", async () => {
+    let script = "";
+    await windowsCheckedStopLiveDeps({ run: async (program, args) => {
+      if (program === "schtasks") return result(1);
+      script = args.at(-1)!;
+      return result(0, "unknown");
+    } }).probeScheduler(2_000);
+    const activation = "[Activator]::CreateInstance([type]::GetTypeFromProgID('Schedule.Service', $true))";
+    expect(script).toContain(activation);
+    const fixture = String.raw`
+class SchedulerFixture {
+  [void] Connect() { if ($global:scenario -eq 'connect') { throw [IO.FileNotFoundException]::new() } }
+  [object] GetFolder([string] $path) {
+    if ($path -cne '\' -or $global:scenario -eq 'folder') { throw [IO.FileNotFoundException]::new() }
+    return $this
+  }
+  [object] GetTask([string] $name) {
+    if ($name -cne 'opencodex-proxy') { throw 'wrong name' }
+    if ($global:scenario -eq 'missing') { throw [Runtime.InteropServices.COMException]::new('missing', -2147024894) }
+    if ($global:scenario -eq 'denied') { throw [UnauthorizedAccessException]::new() }
+    if ($global:scenario -eq 'empty') { return $null }
+    return $this
+  }
+}`;
+    const command = fixture + "\nforeach ($global:scenario in 'found','missing','denied','connect','folder','empty') { & {\n"
+      + script.replace(activation, "[SchedulerFixture]::new()") + "\n} }";
+    const powershell = process.platform === "win32" ? resolveTrustedWindowsPowerShellExe() : portablePowerShell!;
+    const child = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand",
+      Buffer.from(command, "utf16le").toString("base64")], { stdout: "pipe", stderr: "pipe", windowsHide: true, timeout: SPAWN_BUDGET_MS });
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect({ code, err, lines: out.trim().split(/\r?\n/) }).toEqual({ code: 0, err: "", lines: ["present", "absent", "unknown", "unknown", "unknown", "unknown"] });
+  }, SPAWN_BUDGET_MS + 1_000);
+});
+
 test.skipIf(process.platform !== "win32" && !portablePowerShell)("the PowerShell helper stops captured instances only after every proof succeeds", async () => {
   const powershell = process.platform === "win32" ? resolveTrustedWindowsPowerShellExe() : portablePowerShell!;
   const fixture = String.raw`
 $script:scenario = $args[0]
 $script:sid = 'S-1-5-21-100-200-300-1001'
 $script:taskReads = 0
+$script:elapsed = 0
+function Start-FixtureClock {
+  $clock = [pscustomobject]@{ Started = $script:elapsed }
+  $clock | Add-Member ScriptProperty ElapsedMilliseconds { $script:elapsed - $this.Started }
+  $clock
+}
+function Read-FixtureApproval {
+  if ($script:scenario -eq 'late-approval') { $script:elapsed = 2000 }
+  [Console]::ReadLine()
+}
 $script:stopped = [Collections.Generic.List[int]]::new()
 function New-Instance($enginePid) {
   $obj = [pscustomobject]@{ EnginePID = $enginePid; State = 4; InstanceGuid = [Guid]::NewGuid(); Reads = 0 }
   $obj | Add-Member ScriptMethod Refresh {
     $this.Reads++
     if ($script:scenario -eq 'engine-changed' -and $this.Reads -eq 2) { $this.EnginePID++ }
+    if ($script:scenario -eq 'deadline-before-first' -and $this.Reads -eq 2) { $script:elapsed = 2000 }
   }
-  $obj | Add-Member ScriptMethod Stop { $script:stopped.Add($this.EnginePID) }
+  $obj | Add-Member ScriptMethod Stop {
+    $script:stopped.Add($this.EnginePID)
+    if ($script:scenario -eq 'deadline-between-stops') { $script:elapsed = 2000 }
+  }
   return $obj
 }
 $instances = [pscustomobject]@{ Rows = @((New-Instance 42), (New-Instance 43)) }
@@ -313,6 +424,8 @@ function Invoke-CimMethod {
 }
 `;
   const helper = WINDOWS_TASK_INSTANCE_STOP_SCRIPT
+    .replace("[Diagnostics.Stopwatch]::StartNew()", "Start-FixtureClock")
+    .replace("[Console]::ReadLine()", "Read-FixtureApproval")
     .replace(/^\s*Import-Module .*'CimCmdlets\.psd1'.*$/m, "")
     .replaceAll("CimCmdlets\\", "")
     .replace("Microsoft.PowerShell.Utility\\New-Object -ComObject Schedule.Service", "New-Object -ComObject FixtureScheduler")
@@ -320,7 +433,7 @@ function Invoke-CimMethod {
       "([pscustomobject]@{ User = @{ Value = $script:sid }; Name = 'HOST\\test' })");
   expect(helper).toContain("$service = New-Object -ComObject FixtureScheduler");
   expect(helper).not.toContain("Schedule.Service");
-  // All eight launches share one 60 s window (each capped at the spawn budget), so a hang fails here
+  // All launches share one 60 s window (each capped at the spawn budget), so a hang fails here
   // with the active scenario named, inside the 120 s Linux batch deadline.
   const deadline = Date.now() + 60_000;
   for (const [scenario, status, stopped] of [
@@ -332,6 +445,9 @@ function Invoke-CimMethod {
     ["rejected", "unverified-registration", ""],
     ["hidden", "unverified-registration", ""],
     ["idle", "not-running", ""],
+    ["late-approval", "failed", ""],
+    ["deadline-before-first", "failed", ""],
+    ["deadline-between-stops", "failed", "42"],
   ]) {
     // Production runs the helper alone, which silences progress before its first module use. The fixture
     // runs first here and its Add-Member/[pscustomobject] calls autoload Microsoft.PowerShell.Utility, which
@@ -342,7 +458,7 @@ function Invoke-CimMethod {
       stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
       timeout: Math.max(1_000, Math.min(SPAWN_BUDGET_MS, deadline - Date.now())),
     });
-    child.stdin.write(scenario === "rejected" ? "\n" : "stop\n");
+    child.stdin.write(scenario === "rejected" ? "\n" : "stop-before 2000\n");
     child.stdin.end();
     const [stdout, stderr, code] = await Promise.all([
       new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,

@@ -29,7 +29,7 @@ import { parseListenPidsFromNetstat, type ListenPidScan } from "../server/port-r
 import { dropWindowsTcpRowsForLocalPort } from "../server/windows-tcp-drop";
 import { TASK, windowsLauncherVbsPath, windowsServiceScriptPath } from "./state";
 import { ancestorWrapperPids } from "./windows-guarded-manager";
-import type { WindowsCheckedStopDeps, WindowsWinswScmState, WindowsWinswStopResult } from "./windows-checked-stop";
+import type { WindowsCheckedStopDeps, WindowsTaskEndResult, WindowsWinswScmState, WindowsWinswStopResult } from "./windows-checked-stop";
 import {
   openWindowsProcessWatch,
   readScheduleServicePid,
@@ -42,11 +42,36 @@ import type { WindowsListenerIdentity, WindowsPortSample, WindowsStopConfirmDeps
 import { windowsSchedulerCsvIncludesTask } from "./windows-scheduler";
 import { WINDOWS_TASK_INSTANCE_STOP_SCRIPT, verifyWindowsTaskStopProof } from "./windows-task-instance-stop";
 
+// Only a missing task after connecting to the local root folder establishes absence.
+const TASK_REGISTRATION_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+try {
+  $service = [Activator]::CreateInstance([type]::GetTypeFromProgID('Schedule.Service', $true))
+  $service.Connect()
+  $folder = $service.GetFolder('\')
+} catch { 'unknown'; return }
+try {
+  $task = $folder.GetTask('${TASK}')
+  if ($null -ne $task) { 'present' } else { 'unknown' }
+} catch {
+  if ($_.Exception.GetBaseException().HResult -eq -2147024894) { 'absent' } else { 'unknown' }
+}`;
+
 export interface WindowsStopCommandResult {
   status: number | null;
+  /** Captured from the spawned process handle. Bun's child exit status can contain only the low byte. */
+  windowsExitCode?: number;
   stdout: string;
   stderr: string;
   timedOut: boolean;
+}
+
+export interface WindowsStopCommandControl {
+  remainingMs?: () => number;
+  signal?: AbortSignal;
+  /** Approval was dispatched; a cap cannot assume no mutation before the helper answers. */
+  onDispatch?: () => void;
+  onMutation?: () => void;
 }
 
 /** One spawned helper; tests inject it, production runs execFile with a hard timeout. */
@@ -55,6 +80,7 @@ export type WindowsStopCommandRunner = (
   args: string[],
   timeoutMs: number,
   authorizeProof?: (line: string) => boolean | Promise<boolean>,
+  control?: WindowsStopCommandControl,
 ) => Promise<WindowsStopCommandResult>;
 
 function programPath(program: "schtasks" | "sc" | "powershell"): string {
@@ -65,11 +91,12 @@ function programPath(program: "schtasks" | "sc" | "powershell"): string {
   return file;
 }
 
-export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, args, timeoutMs, authorizeProof) => new Promise(resolve => {
+export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, args, timeoutMs, authorizeProof, control) => new Promise(resolve => {
   // execFile reads a 0 timeout as "no timeout": a deadline-derived fraction is floored, and a
   // timeout that floors to 0 spawns nothing.
-  const timeout = Math.floor(timeoutMs);
-  if (!(timeout > 0)) {
+  const timeout = Math.floor(Math.min(timeoutMs, control?.remainingMs?.() ?? Infinity));
+  const deadline = performance.now() + timeout;
+  if (!(timeout > 0) || control?.signal?.aborted) {
     resolve({ status: null, stdout: "", stderr: "", timedOut: true });
     return;
   }
@@ -83,36 +110,64 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
     return;
   }
   let file: string;
+  let native: WindowsProcessNativeApi | null;
+  let readExitCode: (() => number | null) | null = null;
   try {
     file = programPath(program);
+    native = program === "schtasks" && args.includes("/hresult") ? windowsProcessNative() : null;
   } catch (error) {
     resolve({ status: null, stdout: "", stderr: error instanceof Error ? error.message : String(error), timedOut: false });
     return;
   }
-  const helper = execFile(file, args, { encoding: "buffer", timeout, windowsHide: true, maxBuffer: 1024 * 1024 },
+  const spawnTimeout = Math.floor(Math.min(deadline - performance.now(), control?.remainingMs?.() ?? Infinity));
+  if (!(spawnTimeout > 0) || control?.signal?.aborted) {
+    resolve({ status: null, stdout: "", stderr: "", timedOut: true });
+    return;
+  }
+  const helper = execFile(file, args, { encoding: "buffer", timeout: spawnTimeout, windowsHide: true, maxBuffer: 1024 * 1024, signal: control?.signal },
     (error, stdout, stderr) => {
       const text = (value: Buffer | string | undefined): string =>
         value === undefined ? "" : typeof value === "string" ? value : decodeWindowsTextBytes(value);
       const failure = error as (NodeJS.ErrnoException & { killed?: boolean; signal?: string | null; code?: number | string }) | null;
+      const windowsExitCode = readExitCode?.();
       resolve({
         status: failure ? (typeof failure.code === "number" ? failure.code : null) : 0,
+        ...(windowsExitCode == null || failure?.killed ? {} : { windowsExitCode }),
         stdout: text(stdout),
         stderr: text(stderr),
-        timedOut: !!failure?.killed && failure.signal !== null,
+        timedOut: control?.signal?.aborted === true || !!failure?.killed && failure.signal !== null,
       });
     });
+  if (helper.pid !== undefined) readExitCode = native?.captureChildExitCode?.(helper.pid) ?? null;
   if (authorizeProof) {
-    let pending = "";
+    let pending = "", progressLine = "", authorized = false;
+    helper.stdout?.on("data", (chunk: Buffer) => {
+      progressLine += chunk.toString("latin1");
+      let end: number;
+      while ((end = progressLine.indexOf("\n")) >= 0) {
+        const line = progressLine.slice(0, end).replace(/\r$/, "");
+        progressLine = progressLine.slice(end + 1);
+        if (authorized && line === "stop-attempted") control?.onMutation?.();
+      }
+    });
     const onProof = async (chunk: Buffer): Promise<void> => {
       pending += chunk.toString("latin1");
       const end = pending.indexOf("\n");
       if (end < 0) return;
+      const proofReceivedAt = performance.now();
       helper.stdout?.off("data", onProof);
       let approved = false;
       try {
         approved = await authorizeProof(pending.slice(0, end).replace(/\r$/, ""));
       } catch { /* An authorizer failure leaves stdin unapproved. */ }
-      helper.stdin?.end(approved ? "stop\n" : "\n");
+      const now = performance.now();
+      const remaining = Math.floor(Math.min(deadline - now, control?.remainingMs?.() ?? Infinity));
+      authorized = approved && remaining > 0 && control?.signal?.aborted !== true;
+      // The helper started its stopwatch before sending proof. Measuring from receipt here
+      // gives it a conservative cutoff on that clock, even if our reply sits unread.
+      const stopBeforeMs = Math.floor(now - proofReceivedAt + remaining);
+      if (authorized && helper.stdin && !helper.stdin.destroyed && !helper.stdin.writableEnded) control?.onDispatch?.();
+      helper.stdin?.end(authorized ? `stop-before ${stopBeforeMs}\n` : "\n");
     };
     helper.stdin?.on("error", () => { /* execFile reports the helper's exit or timeout. */ });
     helper.stdout?.on("data", onProof);
@@ -225,6 +280,9 @@ export interface WindowsCheckedStopLiveOptions {
   scQcRun?: (timeoutMs: number) => Promise<WindowsStopCommandResult>;
   /** The outer cap, checked before a manager stop and again after Scheduler proof. */
   gate?: () => boolean;
+  /** Share the outer monotonic deadline and cancellation with manager helpers. */
+  remainingMs?: () => number;
+  signal?: AbortSignal;
   snapshot?: (timeoutMs: number) => Promise<readonly WindowsStopProcessEntry[] | null>;
 }
 
@@ -267,12 +325,23 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
     canonicalPaths: windowsStopCanonicalPaths(),
     childPid: windowsStopChildPid(),
     async probeScheduler(timeoutMs) {
-      const started = Date.now();
-      const direct = await run("schtasks", ["/query", "/tn", TASK], timeoutMs);
-      if (direct.status === 0 && direct.stdout.includes(TASK)) return { status: "present" };
-      const listing = await run("schtasks", ["/query", "/fo", "CSV"], Math.max(1, timeoutMs - (Date.now() - started)));
-      if (listing.status !== 0 || listing.timedOut) return { status: "unknown", detail: "the Task Scheduler query did not answer" };
-      return windowsSchedulerCsvIncludesTask(listing.stdout, TASK) ? { status: "present" } : { status: "absent" };
+      const deadline = performance.now() + timeoutMs;
+      const unknown = { status: "unknown", detail: "the Task Scheduler query did not answer" } as const;
+      const direct = await run("schtasks", ["/query", "/tn", `\\${TASK}`, "/fo", "CSV", "/nh", "/hresult"], timeoutMs);
+      if (direct.timedOut || performance.now() >= deadline) return unknown;
+      if (direct.status === 0 && (direct.windowsExitCode ?? 0) === 0
+        && direct.stdout.trimStart().toLowerCase().startsWith(`"\\${TASK}",`)) return { status: "present" };
+      if (direct.windowsExitCode !== undefined) {
+        const missing = 0x80070002; // HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
+        const statusAgrees = direct.status === 2 || (direct.status !== null && (direct.status >>> 0) === missing);
+        return direct.windowsExitCode === missing && statusAgrees ? { status: "absent" } : unknown;
+      }
+      const remaining = wholeTimeoutMs(deadline - performance.now());
+      if (remaining === null) return unknown;
+      const probe = await run("powershell", ["-NoProfile", "-NonInteractive", "-Command", TASK_REGISTRATION_SCRIPT], remaining);
+      if (probe.timedOut || probe.status !== 0 || performance.now() >= deadline) return unknown;
+      const status = probe.stdout.trim();
+      return status === "present" || status === "absent" ? { status } : unknown;
     },
     async probeWinsw(timeoutMs) {
       // One cap covers both reads: the ownership query gets only what the state query left.
@@ -294,13 +363,15 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       const whole = wholeTimeoutMs(timeoutMs);
       return whole === null ? null : readScheduleServicePid({ timeoutMs: whole });
     },
-    async endTask(timeoutMs, authorize) {
-      if (!gate()) return "failed";
+    async endTask(timeoutMs, authorize, mutation) {
+      const finish = (verdict: WindowsTaskEndResult, attempted: boolean) => { mutation?.(attempted, false); return verdict; };
+      timeoutMs = Math.min(timeoutMs, options.remainingMs?.() ?? Infinity);
+      if (!gate() || !(timeoutMs >= 1) || options.signal?.aborted) return finish("failed", false);
       const deadline = performance.now() + Math.floor(timeoutMs);
       const withinDeadline = () => performance.now() < deadline && gate();
       const launcher = windowsLauncherVbsPath();
       const script = Buffer.from(WINDOWS_TASK_INSTANCE_STOP_SCRIPT, "utf16le").toString("base64");
-      let approved = false;
+      let approved = false, dispatched = false, observedMutation = false;
       let refusal: { cause: unknown } | undefined;
       const ended = await run("powershell", ["-NoProfile", "-NoLogo", "-NonInteractive", "-EncodedCommand", script], timeoutMs,
         async line => {
@@ -313,13 +384,18 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
           }
           approved = withinDeadline();
           return approved;
-        });
+        }, { remainingMs: options.remainingMs, signal: options.signal, onDispatch: () => { dispatched = true; mutation?.(false, true); }, onMutation: () => {
+          observedMutation = true;
+          mutation?.(true, false);
+        } });
       if (refusal) throw refusal.cause;
-      if (ended.timedOut || ended.status !== 0) return "failed";
-      const verdict = ended.stdout.trim().split(/\r?\n/).at(-1);
-      if (verdict === "unverified-registration" || verdict === "denied") return verdict;
-      if (approved && (verdict === "ended" || verdict === "not-running")) return verdict;
-      return "failed";
+      const lines = ended.stdout.trim().split(/\r?\n/);
+      const attempted = observedMutation || lines.includes("stop-attempted");
+      if (ended.timedOut || ended.status !== 0) return finish("failed", attempted || dispatched);
+      const verdict = lines.at(-1);
+      if (verdict === "unverified-registration" || verdict === "denied") return finish(verdict, attempted);
+      if (approved && (verdict === "ended" || verdict === "not-running")) return finish(verdict, attempted || verdict === "ended");
+      return finish("failed", attempted || dispatched && verdict !== "failed");
     },
     async taskState(timeoutMs) {
       const started = Date.now();
@@ -338,7 +414,8 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
     },
     async winswStop(timeoutMs) {
       if (!gate()) return "failed";
-      return classifyScStop(await run("sc", ["stop", WINSW_SERVICE_ID], timeoutMs));
+      return classifyScStop(await run("sc", ["stop", WINSW_SERVICE_ID], timeoutMs, undefined,
+        { remainingMs: options.remainingMs, signal: options.signal }));
     },
     winswState: scQuery,
     proxyAlive: () => {
@@ -346,7 +423,7 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       return pid === null ? false : isProcessAlive(pid);
     },
     openWatch: (pid, startTime) => openWindowsProcessWatch(pid, startTime),
-    terminate: (pid, startTime, timeoutMs) => windowsStopTerminate(pid, startTime, timeoutMs),
+    terminate: (pid, startTime, timeoutMs) => gate() ? windowsStopTerminate(pid, startTime, timeoutMs) : { status: "unavailable" },
   };
 }
 
