@@ -3,12 +3,21 @@ import type { AdapterEvent } from "../../types";
 /** Error code for a CodeBuddy turn whose output contains vendor agent scaffolding. */
 export const CODEBUDDY_SCAFFOLD_ERROR_CODE = "vendor_scaffold_detected";
 
-// The observed control protocol uses FULLWIDTH VERTICAL LINE (U+FF5C). Detection stays
+// The observed control protocols use FULLWIDTH VERTICAL LINE (U+FF5C). Detection stays
 // deliberately narrower than the marker spelling: a calls control line must be followed by an
 // invoke line with a non-empty tool name. That distinguishes an agent scaffold from prose quoting or
 // discussing one tag.
-const DSML_CALLS_LINE = "<｜｜dsml｜｜ calls>";
-const DSML_INVOKE_PREFIX = "<｜｜dsml｜｜ invoke name=\"";
+interface ScaffoldGrammar {
+  callsLine: string;
+  invokePrefix: string;
+}
+
+const SCAFFOLD_GRAMMARS: readonly ScaffoldGrammar[] = [
+  { callsLine: "<｜｜dsml｜｜ calls>", invokePrefix: "<｜｜dsml｜｜ invoke name=\"" },
+  // DeepSeek's native tool markup (LOWER ONE EIGHTH BLOCK U+2581 joins the words), printed as
+  // text when the CLI runs with no tool catalog (#8447).
+  { callsLine: "<｜tool▁calls｜>", invokePrefix: "<｜tool▁invoke name=\"" },
+];
 
 export interface CodeBuddyScaffoldFilterResult {
   /** Bytes released from a suffix withheld by an earlier event on this channel. */
@@ -53,12 +62,43 @@ function prefixAtEnd(text: string, at: number, expected: string): boolean {
 }
 
 /**
+ * Classify a column-zero position against every known control grammar: a complete
+ * calls-plus-named-invoke sequence fails the turn, and a suffix that may still become one is held.
+ */
+function matchControlSequence(text: string, index: number): "fail" | "hold" | null {
+  let hold = false;
+  for (const { callsLine, invokePrefix } of SCAFFOLD_GRAMMARS) {
+    if (startsWithFolded(text, index, callsLine)) {
+      const afterCalls = index + callsLine.length;
+      let invokeAt = -1;
+      if (text[afterCalls] === "\n") invokeAt = afterCalls + 1;
+      else if (text[afterCalls] === "\r" && text[afterCalls + 1] === "\n") invokeAt = afterCalls + 2;
+      else if (afterCalls === text.length || (text[afterCalls] === "\r" && afterCalls + 1 === text.length)) {
+        hold = true;
+        continue;
+      }
+
+      if (invokeAt >= 0) {
+        const invokeNameStart = text[invokeAt + invokePrefix.length];
+        if (startsWithFolded(text, invokeAt, invokePrefix) && invokeNameStart && !/[\s"]/.test(invokeNameStart)) {
+          return "fail";
+        }
+        if (invokeAt === text.length || prefixAtEnd(text, invokeAt, invokePrefix)) hold = true;
+      }
+    } else if (prefixAtEnd(text, index, callsLine)) {
+      hold = true;
+    }
+  }
+  return hold ? "hold" : null;
+}
+
+/**
  * Scan complete bytes and retain only a bounded suffix that can still become a control sequence.
  *
  * Control tags are recognized only at column zero and outside fenced Markdown. Inline code,
  * quoted strings, blockquotes, indented source, and prose all add syntax before the tag and are
- * therefore forwarded unchanged. A calls line alone is harmless; refusal requires the observed
- * two-line calls-plus-named-invoke grammar.
+ * therefore forwarded unchanged. A calls line alone is harmless; refusal requires one of the
+ * observed two-line calls-plus-named-invoke grammars.
  */
 function scan(
   text: string,
@@ -84,25 +124,9 @@ function scan(
       }
 
       if (!fence) {
-        if (startsWithFolded(text, index, DSML_CALLS_LINE)) {
-          const afterCalls = index + DSML_CALLS_LINE.length;
-          let invokeAt = -1;
-          if (text[afterCalls] === "\n") invokeAt = afterCalls + 1;
-          else if (text[afterCalls] === "\r" && text[afterCalls + 1] === "\n") invokeAt = afterCalls + 2;
-          else if (afterCalls === text.length || (text[afterCalls] === "\r" && afterCalls + 1 === text.length)) {
-            return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
-          }
-
-          if (invokeAt >= 0) {
-            const invokeNameStart = text[invokeAt + DSML_INVOKE_PREFIX.length];
-            if (startsWithFolded(text, invokeAt, DSML_INVOKE_PREFIX) && invokeNameStart && !/[\s"]/.test(invokeNameStart)) {
-              return { safe: text.slice(0, index), held: "", fail: true, fence, lineStart };
-            }
-            if (invokeAt === text.length || prefixAtEnd(text, invokeAt, DSML_INVOKE_PREFIX)) {
-              return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
-            }
-          }
-        } else if (prefixAtEnd(text, index, DSML_CALLS_LINE)) {
+        const verdict = matchControlSequence(text, index);
+        if (verdict === "fail") return { safe: text.slice(0, index), held: "", fail: true, fence, lineStart };
+        if (verdict === "hold") {
           return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
         }
       }
@@ -116,7 +140,7 @@ function scan(
   return { safe: text, held: "", fail: false, fence, lineStart };
 }
 
-/** Streaming DSML control-sequence filter for one text or reasoning channel. */
+/** Streaming vendor control-sequence filter for one text or reasoning channel. */
 export class CodeBuddyScaffoldFilter {
   private pending = "";
   private failed = false;
