@@ -14,9 +14,10 @@ import { JEV_AUTO_CREATE_HASH } from "../app-routing";
  * tab shows the plain model list, so a distinct id keeps "the page" and "the tab" from
  * ever having to be disambiguated in code. The visible label is still "Models".
  */
-export type ModelsTab = "catalog" | "live" | "combos" | "routing" | "compatibility";
+export type ModelsTab = "catalog" | "overall" | "live" | "combos" | "routing" | "compatibility";
 
-export const MODELS_TABS: readonly ModelsTab[] = ["catalog", "live", "combos", "routing", "compatibility"];
+/** "overall" (every model across providers, one list) sits beside the per-provider catalog. */
+export const MODELS_TABS: readonly ModelsTab[] = ["catalog", "overall", "live", "combos", "routing", "compatibility"];
 
 export function modelsTabHash(tab: ModelsTab): string {
   return tab === "catalog" ? "models" : `models/${tab}`;
@@ -34,6 +35,7 @@ export function modelsTabHash(tab: ModelsTab): string {
 export function readModelsTab(hash = window.location.hash): ModelsTab {
   // A compatibility prefilter rides in `?query` (protocol-deep-links.ts); the tab is the path.
   const raw = splitHashQuery(normalizeHashPath(hash)).path;
+  if (raw === "models/overall") return "overall";
   if (raw === "models/live") return "live";
   if (raw === "models/combos" || raw === JEV_AUTO_CREATE_HASH || raw === "combos" || raw.startsWith("combos/")) return "combos";
   if (raw === "models/routing" || raw === "routing" || raw.startsWith("routing/")) return "routing";

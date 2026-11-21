@@ -1080,7 +1080,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           return jsonResponse(buildCodexModelList({
             config, nativeSlugs, availableAccountNativeSlugs, accountNativeSlugs,
             accountNativeSlugsBySelector, goOrdered, exactComboSlugs, accountSelectors,
-            suppressedBareNativeSlugs, disabledModels,
+            suppressedBareNativeSlugs, disabledModels, roster: { snapshot: modelEntitlements, accountTargets },
           }), 200, req, policy);
         }
         // OpenAI list shape: native gpt bare + routed models namespaced "<provider>/<id>"

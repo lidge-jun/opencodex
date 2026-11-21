@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import * as oauthStore from "../../src/oauth/store";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { configureSharedSpendLedger, sharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
+import { estimateTokens } from "../../src/lib/token-estimate";
 import type { OcxConfig } from "../../src/types";
 import { handleGeminiNative, type GeminiNativeDeps } from "../../src/server/gemini-native";
 import { getActiveTurnCount, tryAdmitTurn } from "../../src/server/lifecycle";
 import { rawJsonMember } from "../../src/server/gemini-native-wire";
-import type { OAuthAccessSnapshot } from "../../src/oauth";
+import { OAuthLoginRequiredError, type OAuthAccessSnapshot } from "../../src/oauth";
+import { logGeminiNativeDelivery } from "../../src/server/gemini-native-log";
+import { getRequestLogEntries, nextRequestLogId } from "../../src/server/request-log";
 
 const config = { providers: { "google-antigravity": { adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authMode: "oauth" } } } as OcxConfig;
 const old: OAuthAccessSnapshot = { provider: "google-antigravity", accountId: "fixture-account", generation: "old", accessToken: "fixture-old-token", projectId: "fixture-project" };
@@ -18,8 +23,16 @@ const fixtureAccount = () => ({
 });
 let accountStatus: ReturnType<typeof oauthStore.getAccountCredentialWithStatus>;
 let accountStatusSpy: ReturnType<typeof spyOn<typeof oauthStore, "getAccountCredentialWithStatus">>;
-beforeEach(() => { accountStatus = fixtureAccount(); accountStatusSpy = spyOn(oauthStore, "getAccountCredentialWithStatus").mockImplementation(() => accountStatus); });
-afterEach(() => accountStatusSpy.mockRestore());
+let releaseSpendHome: () => void;
+beforeEach(() => {
+  releaseSpendHome = acquireOwnedSpendHome();
+  accountStatus = fixtureAccount();
+  accountStatusSpy = spyOn(oauthStore, "getAccountCredentialWithStatus").mockImplementation(() => accountStatus);
+});
+afterEach(() => {
+  accountStatusSpy.mockRestore();
+  releaseSpendHome();
+});
 
 function request(body = '{"contents":[],"future":9007199254740993123}', signal?: AbortSignal) {
   return new Request("http://localhost/v1beta/models/gemini-test:generateContent", { method: "POST", body, signal, headers: { Authorization: "Bearer fixture-client-key" } });
@@ -149,6 +162,45 @@ test("401 refreshes the rejected snapshot once and cancels its response", async 
   });
   expect(response.status).toBe(200);
   expect(calls).toBe(2); expect(refreshes).toBe(1); expect(cancelled).toBe(true);
+});
+
+test("native logs distinguish a 401 replay from a refresh that never resends", async () => {
+  for (const refreshSucceeds of [true, false]) {
+    const req = request();
+    const lease = tryAdmitTurn(undefined, req.signal)!;
+    const context = { model: "gemini-test", provider: old.provider };
+    const start = Date.now(), id = nextRequestLogId(start);
+    let sends = 0;
+    try {
+      const response = await handleGeminiNative(req, config, "gemini-test", undefined, lease, {
+        access: async () => old,
+        refresh: async () => {
+          if (!refreshSucceeds) throw new OAuthLoginRequiredError(old.provider);
+          return fresh;
+        },
+        fetch: transport(() => ++sends === 1
+          ? new Response("private upstream rejection", { status: 401 })
+          : new Response('{"response":{"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":7}}}')),
+      }, context, start);
+      const delivery = logGeminiNativeDelivery(response, req, id, start, context);
+      expect(delivery.status).toBe(refreshSucceeds ? 200 : 503);
+      await delivery.text();
+      const row = getRequestLogEntries().find(entry => entry.requestId === id);
+      expect(sends).toBe(refreshSucceeds ? 2 : 1);
+      expect(row?.spend).toMatchObject({ sends, settled: sends, unresolved: 0 });
+      expect(row?.attempts?.map(attempt => [attempt.status, attempt.sendCount, attempt.recoveryKinds]))
+        .toEqual(refreshSucceeds ? [[401, 1, []], [200, 1, ["oauth-401"]]] : [[401, 1, []]]);
+      expect(row?.attempts?.[0]).toMatchObject({ failureCause: "credential-rejected", usageStatus: "unreported" });
+      if (refreshSucceeds) {
+        expect(row?.attempts?.[1]).toMatchObject({ usageStatus: "reported", totalTokens: 18,
+          accountLogLabel: row?.attempts?.[0]?.accountLogLabel });
+        expect(row?.totalTokens).toBe(18);
+      }
+      expect(JSON.stringify(row)).not.toContain("private upstream rejection");
+    } finally {
+      lease.release();
+    }
+  }
 });
 
 for (const [name, echoed] of [["previous", old.accessToken], ["refreshed", fresh.accessToken]] as const) {
@@ -320,34 +372,65 @@ test("native physical sends consume the workflow ceiling across requests and 401
   }
 });
 
-test("native requests fail closed before OAuth when applicable token spend limits are configured", async () => {
-  let accessCalls = 0, sends = 0;
-  const deps = { access: async () => { accessCalls++; return old; }, refresh: async () => fresh,
-    fetch: transport(() => { sends++; return new Response('{"response":{}}'); }) };
-  for (const scope of ["root", "identity", "pool"] as const) {
-    const req = request();
-    req.headers.set("x-codex-parent-thread-id", "gemini-token-limit-fixture");
-    const response = await run(req, deps, false, { ...config, spend: { [scope]: { maxTokens: 100 } } });
-    expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({ error: { details: [{ reason: "gemini_native_spend_limits_unsupported" }] } });
+test.each([true, false])("native Gemini admits each OAuth replay against its own reservation (funded: %s)", async funded => {
+  const raw = '{"contents":[],"generationConfig":{"maxOutputTokens":16}}';
+  const reservation = estimateTokens(raw, "gemini-test") + 16;
+  const rootId = `native-replay-budget-${crypto.randomUUID()}`;
+  const cfg = { ...config, spend: { root: { maxTokens: reservation * (funded ? 2 : 1) } } };
+  configureSharedSpendLedger(spendPolicyFromConfig(cfg.spend));
+  const req = request(raw);
+  req.headers.set("x-codex-parent-thread-id", rootId);
+  const lease = tryAdmitTurn(undefined, req.signal)!;
+  const context = { model: "gemini-test", provider: old.provider };
+  const start = Date.now();
+  const id = nextRequestLogId(start);
+  let sends = 0;
+  try {
+    const response = await handleGeminiNative(req, cfg, "gemini-test", undefined, lease, {
+      access: async () => old, refresh: async () => fresh,
+      fetch: transport(() => ++sends === 1
+        ? new Response(null, { status: 401 })
+        : new Response('{"response":{"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":7}}}')),
+    }, context, start);
+    const delivery = logGeminiNativeDelivery(response, req, id, start, context);
+    expect(delivery.status).toBe(funded ? 200 : 429);
+    if (!funded) expect(delivery.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
+    await delivery.text();
+    expect(sends).toBe(funded ? 2 : 1);
+    const row = getRequestLogEntries().find(entry => entry.requestId === id);
+    expect(row?.attempts?.map(attempt => attempt.status)).toEqual(funded ? [401, 200] : [401]);
+    expect(sharedSpendLedger().snapshot("root", rootId)).toMatchObject({
+      reserved: 0, settled: funded ? 18 : 0, unresolved: reservation,
+    });
+  } finally {
+    lease.release();
   }
-  expect(accessCalls).toBe(0); expect(sends).toBe(0);
-  // Without a workflow root the root-only ceiling does not apply to this request.
-  expect((await run(request(), deps, false, { ...config, spend: { root: { maxTokens: 100 } } })).status).toBe(200);
-  expect(sends).toBe(1);
 });
 
-test("a token spend ceiling enabled during setup is rechecked before physical dispatch", async () => {
-  const baseline = getActiveTurnCount();
-  const liveConfig = { ...config };
+test("the live Token ceiling applies if it changes before the first physical send", async () => {
+  const req = request();
+  const lease = tryAdmitTurn(undefined, req.signal)!;
+  const context = { model: "gemini-test", provider: old.provider };
+  const start = Date.now();
+  const id = nextRequestLogId(start);
   let sends = 0;
-  const response = await run(request(), {
-    access: async () => { liveConfig.spend = { pool: { maxTokens: 100 } }; return old; },
-    refresh: async () => fresh,
-    fetch: transport(() => { sends++; return new Response('{"response":{}}'); }),
-  }, false, liveConfig);
-  expect(response.status).toBe(503); expect(sends).toBe(0);
-  expect(getActiveTurnCount()).toBe(baseline);
+  try {
+    const response = await handleGeminiNative(req, config, "gemini-test", undefined, lease, {
+      access: async () => {
+        configureSharedSpendLedger(spendPolicyFromConfig({ pool: { maxTokens: 1 } }));
+        return old;
+      },
+      refresh: async () => fresh,
+      fetch: transport(() => { sends++; return new Response('{"response":{}}'); }),
+    }, context, start);
+    const delivery = logGeminiNativeDelivery(response, req, id, start, context);
+    expect(delivery.status).toBe(429);
+    expect(delivery.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
+    await delivery.text();
+    expect(sends).toBe(0);
+  } finally {
+    lease.release();
+  }
 });
 
 test("native SSE errors redact upstream diagnostics and delivery logs record failure", async () => {

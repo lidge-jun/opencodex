@@ -94,12 +94,12 @@ async function mountModels(): Promise<{ container: HTMLElement; root: Root }> {
 const tabs = (container: HTMLElement) => [...container.querySelectorAll('[role="tab"]')] as HTMLButtonElement[];
 const panel = (container: HTMLElement, id: string) => container.querySelector(`#models-panel-${id}`);
 
-test("the strip renders all five tabs with the catalog selected on the bare hash", async () => {
+test("the strip renders all six tabs with the catalog selected on the bare hash", async () => {
   installFetch();
   const { container, root } = await mountModels();
   try {
     expect(tabs(container).map(t => t.id)).toEqual([
-      "models-tab-catalog", "models-tab-live", "models-tab-combos", "models-tab-routing", "models-tab-compatibility",
+      "models-tab-catalog", "models-tab-overall", "models-tab-live", "models-tab-combos", "models-tab-routing", "models-tab-compatibility",
     ]);
     const selected = tabs(container).filter(t => t.getAttribute("aria-selected") === "true");
     expect(selected).toHaveLength(1);
@@ -226,13 +226,13 @@ test("every rendered panel is wired to its tab", async () => {
   installFetch();
   const { container, root } = await mountModels();
   try {
-    for (const id of ["combos", "routing", "compatibility"]) {
+    for (const id of ["overall", "live", "combos", "routing", "compatibility"]) {
       await act(async () => {
         (container.querySelector(`#models-tab-${id}`) as HTMLButtonElement).click();
       });
       await act(async () => { await Promise.resolve(); });
     }
-    for (const id of ["catalog", "combos", "routing", "compatibility"]) {
+    for (const id of ["catalog", "overall", "live", "combos", "routing", "compatibility"]) {
       const p = panel(container, id)!;
       expect(p.getAttribute("role")).toBe("tabpanel");
       expect(p.getAttribute("aria-labelledby")).toBe(`models-tab-${id}`);

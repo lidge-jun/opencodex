@@ -12,6 +12,7 @@ import { accountNeedsReauth } from "../oauth-health-display";
 import { oauthAccountDisplayLabel } from "../provider-workspace/auth";
 import { oauthCredentialSlot } from "../../../src/oauth/credential-siblings";
 import { oauthLabel } from "../pages/providers-shared";
+import { useQuotaLiveRefresh } from "./useQuotaLiveRefresh";
 
 /** The owner whose accounts a shared-login row (Kimi (Responses)) acts on, else undefined. */
 const sharedAccountsOwner = (provider: string): string | undefined => {
@@ -177,10 +178,13 @@ export function useProviderAccountPools(deps: {
   codexActiveNeedsReauth: boolean;
   invalidateOauthStatusReads?: (provider: string, blocked?: boolean) => boolean;
   setOauthStatus?: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
+  /** The provider whose account bars are on screen; live quota updates re-read only that one. */
+  liveQuotaProvider?: string | null;
 }) {
   const {
     apiBase, targetKey = apiBase, t, config, aliveRef, notify,
     fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth, invalidateOauthStatusReads, setOauthStatus,
+    liveQuotaProvider,
   } = deps;
   // Keep the historical apiBase key for standalone callers; only a logical target that
   // differs from the request base needs the additional discriminator.
@@ -1114,6 +1118,50 @@ export function useProviderAccountPools(deps: {
     keyPoolsKeyRef.current = key;
     void Promise.resolve().then(() => { void fetchKeyPools(keyCardProviders); });
   }, [apiBase, fetchKeyPools, keyCardProviders, serverIdentity]);
+
+  /**
+   * Live quota updates for the provider on screen: the plain `&quota=1` read, never `&refresh=1`,
+   * so the server answers from its TTL cache and the readings live response headers keep current,
+   * and probes a credential again only after that cache entry expires.
+   * A tick waits out any read or mutation already in flight, sets no loading or pending state,
+   * writes quota fields onto surviving rows only (membership and selection stay with their own
+   * reads), and drops a failure, so a missed tick never replaces good bars with an error.
+   */
+  const readLiveQuota = async (provider: string, kind: AccountSelectionTarget["kind"]) => {
+    const key = `${kind === "oauth" ? "oauth" : "key"}:${provider}`;
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== serverIdentity || !captureIsCurrent(renderCapture)
+      || requestsRef.current.size > 0 || selectionMutationsRef.current.has(key)
+      || switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider)) return;
+    // Any later quota read, a manual refresh included, takes this generation over and wins.
+    const quotaGeneration = (quotaGenerationRef.current[key] ?? 0) + 1;
+    quotaGenerationRef.current[key] = quotaGeneration;
+    const currentQuota = () => aliveRef.current && mountedRef.current && serverRef.current === serverIdentity
+      && captureIsCurrent(renderCapture) && quotaGenerationRef.current[key] === quotaGeneration;
+    try {
+      if (kind === "oauth") {
+        const data = await readRoster<{ accounts?: OAuthAccount[] }>(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&quota=1`);
+        const enriched = data.accounts;
+        if (!Array.isArray(enriched) || !currentQuota()) return;
+        setAccountSets(current => currentQuota() && current[provider]
+          ? { ...current, [provider]: { ...current[provider], accounts: mergeLateQuotaRows(current[provider].accounts, enriched) } } : current);
+      } else {
+        const data = await readRoster<{ keys?: ApiKeyEntry[] }>(`${apiBase}/api/providers/keys?name=${encodeURIComponent(provider)}&quota=1`);
+        const enriched = data.keys;
+        if (!Array.isArray(enriched) || !currentQuota()) return;
+        setKeyPools(current => currentQuota() && current[provider]
+          ? { ...current, [provider]: mergeLateQuotaRows(current[provider], enriched) } : current);
+      }
+    } catch {
+      // The rows on screen stay as they are; the next tick or a manual refresh reads again.
+    }
+  };
+  useQuotaLiveRefresh(() => {
+    const provider = liveQuotaProvider;
+    if (!provider) return;
+    const kind = oauthCardProviders.includes(provider) ? "oauth" : keyCardProviders.includes(provider) ? "api-key" : null;
+    const rows = kind === "oauth" ? accountSets[provider]?.accounts : kind === "api-key" ? keyPools[provider] : undefined;
+    if (kind && rows?.some(supportsQuotaRead)) void readLiveQuota(provider, kind);
+  });
 
   const activeAccountNeedsReauth = useMemo(
     () => buildActiveAccountNeedsReauthMap(accountSets, codexActiveNeedsReauth),

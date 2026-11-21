@@ -103,7 +103,7 @@ export async function latestVersionAsync(
       const value = stdout.trim();
       finish(!failed && code === 0 && (channel === "latest"
         ? /^\d+\.\d+\.\d+$/.test(value)
-        : /^\d+\.\d+\.\d+(?:-preview\.\d+)?$/.test(value))
+        : /^\d+\.\d+\.\d+(?:-preview\.\d+(?:\.\d+)?)?$/.test(value))
         ? value : null);
     });
     const timer = setTimeout(() => {

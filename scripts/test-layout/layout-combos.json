@@ -1,5 +1,6 @@
 {
   "machine-weighted-routing.test.ts": "routing",
+  "combo-provider-413.test.ts": "routing",
   "combo-cooldown-reprobe.test.ts": "codex-integration",
   "server-combo-stream-hosted-tool-contract.test.ts": "server",
   "server-combo-stream-send-contract.test.ts": "server",
@@ -11,6 +12,7 @@
   "combo-cooldown-persistence.test.ts": "routing",
   "combo-unoffered-tool-refusal.test.ts": "routing",
   "server-combo-cooldown-recording.test.ts": "server",
+  "server-combo-main-account-cooldown.test.ts": "server",
   "combo-capability-policy.test.ts": "codex-integration",
   "combo-request-capability.test.ts": "codex-integration",
   "combo-capability-policy-config.test.ts": "config",

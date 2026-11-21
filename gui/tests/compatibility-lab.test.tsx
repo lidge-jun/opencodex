@@ -304,12 +304,12 @@ test("3. refresh/bookmark behavior via models-tab roundtrip", () => {
   expect(readModelsTab("#lab")).toBe("compatibility");
 });
 
-test("4. keyboard traversal covers five tabs in strip", async () => {
+test("4. keyboard traversal covers six tabs in strip", async () => {
   installLabFetch();
   const { root, container } = await mountModels();
   try {
     const tabs = [...container.querySelectorAll('[role="tab"]')] as HTMLButtonElement[];
-    expect(tabs).toHaveLength(5);
+    expect(tabs).toHaveLength(6);
     const routing = container.querySelector("#models-tab-routing") as HTMLButtonElement;
     await act(async () => { routing.click(); });
     routing.focus();

@@ -854,6 +854,10 @@ Thinking replay and prompt-cache work remain separate in [#3719](https://github.
 
 ## Gemini API: `/v1beta/models` and `/v1beta/interactions`
 
+The **Gemini API** switch under the dashboard's **Gateway endpoints** controls access to these
+routes. While the API is open, **Usage examples** includes a copyable `generateContent` request.
+See [API surfaces](/reference/configuration/server/#api-surfaces-apisurfaces).
+
 Gemini clients, such as the google-genai SDK with a custom base URL, the `agy` CLI or a client reading
 `GOOGLE_GEMINI_BASE_URL`, can reach the configured provider routes in Google's REST shape. The proxy
 normally translates generation onto its Chat Completions path, so the route behind it can be any
@@ -1153,7 +1157,8 @@ A repair must decode to a JSON object. Valid JSON values containing those tags a
 ## Native Gemini with Antigravity
 
 Enable the canonical `google-antigravity` provider, sign in with `ocx login google-antigravity`,
-and add this optional setting to OpenCodex's JSON config:
+then open the Google Antigravity **Accounts** tab and turn on **Native Gemini passthrough**.
+The dashboard and JSON config use the same setting:
 
 ```json
 {
@@ -1169,14 +1174,31 @@ The default is off. Use the usual Gemini-compatible API at `/v1beta` with
 `x-goog-api-key` or `?key=` for an OpenCodex admission key. An eligible selector such as
 `google-antigravity/gemini-3.8-flash` uses the native leg for `generateContent` and
 `streamGenerateContent`. The proxy chooses the Cloud Code Assist model from the resolved
-route and uses the active OAuth account's token and project. Other providers and `/v1`
-requests use the Chat bridge.
+route. With OAuth account failover enabled, it can choose another usable account according
+to that account's discovered models and the configured strategy. If the selected account
+is known to lack the model and no replacement is allowed, the proxy returns 403. The token
+and project always come from the same account. Other providers and `/v1` requests use the
+Chat bridge.
 
 The proxy preserves successful request and response JSON source, including unknown fields,
 large integers, function arguments, and thought signatures. Streaming uses SSE with
-`alt=sse` or a streamed JSON array otherwise. `GET /v1beta/models` and model lookup keep the
-configured, scoped catalog and also expose eligible native wire aliases that route back
-to their Antigravity model.
+`alt=sse` or a streamed JSON array otherwise. `GET /v1beta/models` and model lookup include
+eligible, live-discovered Gemini models from the Antigravity discovery cache alongside configured
+models. Refresh the Antigravity model list in OpenCodex to populate the cache. Native wire aliases
+are available when the exact selector routes to that Antigravity model and the admission key
+allows it. Requests sent through the native path show **Gemini → Gemini · Native** in the
+dashboard's request logs. When a completed response reports token counts, the log displays
+them and computes the end-to-end output rate. For models with a matched official rate, the
+`~$` column estimates the equivalent Gemini API cost from reported input, output and cache-hit
+tokens. The amount is an API price reference for Antigravity OAuth sessions.
+The log details show the selected provider and model and the router's selection reason.
+The upstream attempts table shows each send's status, opaque account label and recovery reason.
+If an upstream 401 triggers a successful credential refresh and replay, the refusal and replay appear
+as separate attempts. When only some attempts have an estimate, the log shows the known cost subtotal
+and the number of attempts that could not be priced.
+The log details also show the named reasoning tier or explicit thinking control and the first
+visible output time for a stream. Decode throughput is estimated from the observed output
+window when it includes the reported reasoning output.
 
 If an upstream payload contains bound account credentials, the proxy returns a generic
 Gemini error. A valid upstream `[DONE]` or a Gemini error ends stream delivery.
@@ -1184,6 +1206,8 @@ Gemini error. A valid upstream `[DONE]` or a Gemini error ends stream delivery.
 Send identity-encoded JSON. Request and buffered response bodies and SSE events have a
 16 MiB cap. A lower `maxInboundBodyBytes` also applies to requests. Upload inactivity has
 its own timeout. The first send and up to one 401 recovery on the same account count
-against workflow physical-send ceilings. Applicable root, identity, or pool token ceilings
-return 503 with `gemini_native_spend_limits_unsupported` because native token spend is
-unreported. Turn off the opt-in to use token-spend accounting on this Gemini route.
+against workflow physical-send ceilings. For root, identity, and pool token budgets, each
+send reserves estimated input and the requested `maxOutputTokens` for each candidate.
+An insufficient budget returns 429 with `workflow_spend_exhausted`. Completed requests
+settle against Gemini's reported input and output counts. A send without final usage retains
+its reservation amount as unresolved spend.

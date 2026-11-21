@@ -218,6 +218,7 @@ describe("Vertex catalog configuration", () => {
       seenApiKeyHeader = headers.get("x-goog-api-key") ?? "";
       return Promise.resolve(Response.json({
         publisherModels: [
+          { name: "publishers/google/models/gemini-4-neon", versionId: "default", launchStage: "GA" },
           { name: "publishers/google/models/gemini-4-hydrogen", versionId: "default", launchStage: "GA" },
           { name: "publishers/google/models/gemini-4-carbon", versionId: "default", launchStage: "GA" },
           { name: "publishers/google/models/gemini-4-argon", versionId: "default", launchStage: "GA" },
@@ -250,6 +251,16 @@ describe("Vertex catalog configuration", () => {
     expect(hydrogen).toMatchObject({
       provider: "google",
       id: "gemini-4-hydrogen",
+      contextWindow: 1_048_576,
+      maxOutputTokens: 65_536,
+      inputModalities: ["text", "image"],
+      reasoningEfforts: ["low", "medium", "high", "xhigh"],
+      defaultReasoningEffort: "high",
+    });
+    const neon = rows.find(row => row.provider === "google" && row.id === "gemini-4-neon");
+    expect(neon).toMatchObject({
+      provider: "google",
+      id: "gemini-4-neon",
       contextWindow: 1_048_576,
       maxOutputTokens: 65_536,
       inputModalities: ["text", "image"],

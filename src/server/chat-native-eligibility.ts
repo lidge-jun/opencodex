@@ -4,6 +4,7 @@ import type { ProtocolReasonCode } from "../protocols/contract";
 import type { RouteResult } from "../router";
 import type { OcxConfig } from "../types";
 import { isModelTextOnly, requiresVisionPreprocessing } from "../vision";
+import { isCommandCodeDecisionRoute } from "../providers/command-code-decision-models";
 
 type Rec = Record<string, unknown>;
 
@@ -22,6 +23,7 @@ export type NativeChatDeclineReason = Extract<
   | "vision-preprocessing"
   | "hosted-tool"
   | "opaque-state-stripped"
+  | "compatibility-reject"
 >;
 
 /**
@@ -36,6 +38,9 @@ export function nativeChatDeclineReason(
 ): NativeChatDeclineReason | undefined {
   const provider = route.provider;
   if (provider.adapter !== "openai-chat") return "cross-wire-ir";
+  // Command Code's System One decision models are not chat models (#8997). The native lane would
+  // forward the body verbatim; the translated path refuses it at the adapter guard before a send.
+  if (isCommandCodeDecisionRoute(provider, route.modelId)) return "compatibility-reject";
   if (provider.authMode !== undefined && provider.authMode !== "key" && provider.authMode !== "local") return "auth-mode-not-native";
   // Combo and policy execution own multi-candidate retries in the Responses pipeline.
   if (route.combo || route.routeKind === "combo" || route.routeKind === "policy") return "combo-or-policy-route";

@@ -1,0 +1,44 @@
+/* Imported by its component, so it sits in the `legacy` cascade layer itself:
+   unlayered CSS would outrank design/bridge.css and every Tailwind utility. */
+@layer legacy {
+.pool-disclosure__head { gap: 12px; }
+.pool-disclosure__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: -4px -6px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pool-disclosure__toggle:hover { background: color-mix(in oklab, var(--text) 6%, transparent); }
+.pool-disclosure__toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pool-disclosure__chevron { flex: 0 0 auto; color: var(--muted); transition: transform var(--motion-fast, .12s); }
+.pool-disclosure__chevron.is-open { transform: rotate(90deg); }
+/* No display rule on .pool-disclosure__body: the UA's [hidden] { display: none } must keep winning. */
+.pool-disclosure__body > :last-child { margin-bottom: 0; }
+
+/* Codex usage-based switching: the copy and the threshold field share the details. */
+.codex-auto-switch-card .codex-auto-switch-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+  padding: 0 16px 14px;
+}
+.codex-auto-switch-card .codex-auto-switch-alert { padding: 0 16px 10px; }
+.codex-auto-switch-card .codex-auto-switch-alert .btn { margin-top: 6px; }
+.codex-auto-switch-card > .codex-auto-switch-feedback { margin: 0; padding: 0 16px 12px; }
+/* Inside Advanced settings the card already carries the 14px 16px inset (design/pages/accounts.css),
+   so its rows add none of their own. */
+.acc-v2 .codex-auth-advanced__boxes > .codex-auto-switch-card .pool-disclosure__head { padding: 0; }
+.acc-v2 .codex-auth-advanced__boxes > .codex-auto-switch-card .codex-auto-switch-body { padding: 10px 0 0; }
+.acc-v2 .codex-auth-advanced__boxes > .codex-auto-switch-card .codex-auto-switch-alert { padding: 8px 0 0; }
+.acc-v2 .codex-auth-advanced__boxes > .codex-auto-switch-card > .codex-auto-switch-feedback { padding: 8px 0 0; }
+}

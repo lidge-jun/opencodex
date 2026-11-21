@@ -115,7 +115,8 @@ describe("ocx link cleanup", () => {
         "Retry Remote Link enrollment after updating Home if the remote shell or old installation cannot run the disconnect command.",
       ]);
       expect(report.links[3].recovery).toEqual([]);
-      expect(report.links[4].reason).toContain("ssh could not run");
+      // A platform failure names its cause (#8972) instead of the generic "ssh could not run".
+      expect(report.links[4].reason).toBe("SSH platform discovery failed: ssh: connect to host offline port 22: Connection refused");
       // Discovery reads only pinned trust; it never changes links.
       expect(h.calls).toHaveLength(7);
       expect(h.calls.filter(argv => argv.at(-1) === WINDOWS_OS_PROBE).map(argv => argv[argv.indexOf("--") + 1])).toEqual(["mini", "win-cmd", "win-ps", "studio", "offline", "win-de"]);
