@@ -387,6 +387,8 @@ describe("antigravity-acp configuration", () => {
     expect(metadata).not.toMatch(/^\s*import\s/m);
     const row = PROVIDER_REGISTRY.find(entry => entry.id === AGY_ACP_PROVIDER_ID);
     expect(row?.models).toEqual([...AGY_ACP_SEED_MODELS]);
+    expect(row?.models).toEqual(expect.arrayContaining(["gemini-4-hydrogen", "gemini-4-neon"]));
+    expect(Object.keys(row?.modelContextWindows ?? {})).toEqual(expect.arrayContaining(["gemini-4-hydrogen", "gemini-4-neon"]));
     expect(row?.defaultModel).toBe(AGY_ACP_DEFAULT_MODEL);
   });
 
