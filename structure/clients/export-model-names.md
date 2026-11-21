@@ -37,25 +37,6 @@ per provider against the router's known model inventory, before visibility
 filtering. A candidate uses the effective provider alias or provider name and a
 validated model alias. Native/account-native and combo rows are excluded.
 
-### Native-row admission
-
-`loadExportModels` keeps a native row only while the canonical OpenAI provider
-can route it. `isNativeOpenAiProviderEnabled` in
-`src/codex/catalog/metadata.ts` is the router's own admission for a bare `gpt-*`
-selector — the provider exists and is not disabled, in either account mode — and
-`NoEnabledOpenAiProviderError` is what a client would otherwise hit. This is
-deliberately weaker than `shouldIncludeAccountBoundNativeOpenAi`, whose
-account-qualified routes also require canonical forward auth, and it omits
-`shouldIncludeNativeOpenAi`'s no-enabled-provider bootstrap exception, which
-keeps the Codex catalog listable rather than promising a servable row. The
-launcher applies the same rule in `opencodeCatalogFromProxyRows` and
-`opencodeLaunchNativeSlugs` (`src/cli/opencode.ts`), so `ocx opencode`,
-`ocx export --client opencode` and every integration route agree about which
-native selectors a client may choose. Coverage:
-`tests/server/management-model-roster.test.ts` (the roster, both account modes
-and an absent provider) and `tests/providers/opencode-cli.test.ts` (the
-launcher's slug selection and proxy-row catalog).
-
 The read-only router must resolve the candidate and canonical key to the same
 concrete provider, model and account identity. A policy/combo result, ambiguity,
 unsafe namespace, native-ID shadow or refusal falls back to the canonical key.
@@ -100,6 +81,25 @@ refusal and Hermes whole-file automatic-refresh protection remain in force.
 Refresh does not recreate a removed managed block. Alias edits and client-file
 migration are separate operations; a previously saved selector can be stale
 until refresh succeeds.
+
+## Native-row admission
+
+`loadExportModels` keeps a native row only while the canonical OpenAI provider
+can route it. `isNativeOpenAiProviderEnabled` in
+`src/codex/catalog/metadata.ts` is the router's own admission for a bare `gpt-*`
+selector — the provider exists and is not disabled, in either account mode — and
+`NoEnabledOpenAiProviderError` is what a client would otherwise hit. This is
+deliberately weaker than `shouldIncludeAccountBoundNativeOpenAi`, whose
+account-qualified routes also require canonical forward auth, and it omits
+`shouldIncludeNativeOpenAi`'s no-enabled-provider bootstrap exception, which
+keeps the Codex catalog listable rather than promising a servable row. The
+launcher applies the same rule in `opencodeCatalogFromProxyRows` and
+`opencodeLaunchNativeSlugs` (`src/cli/opencode.ts`), so `ocx opencode`,
+`ocx export --client opencode` and every integration route agree about which
+native selectors a client may choose. Coverage:
+`tests/server/management-model-roster.test.ts` (the roster, both account modes
+and an absent provider) and `tests/providers/opencode-cli.test.ts` (the
+launcher's slug selection and proxy-row catalog).
 
 ## CLI and API boundary
 
