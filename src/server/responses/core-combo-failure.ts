@@ -140,7 +140,9 @@ export async function consumeComboFailure(
       }
       // The same whole-body rule for the provider-413 hop (#9017): a hard refusal or proxy marker
       // past the 500-character cut must still keep the combo from sending the turn elsewhere.
-      if (response.status === 413) providerIntakeRefusal = isProviderIntakeRefusalBody(body.text);
+      // A native lane's rewritten envelope (Messages or Chat native) is not the provider's body: its
+      // terminal codes and an oversized original are gone, so only the original read may clear it.
+      if (response.status === 413) providerIntakeRefusal = legacy === undefined && isProviderIntakeRefusalBody(body.text);
       // Status-independent: the nested record is what normalization selects, so a root verdict
       // beside it has to be captured here or the conflict rule never sees it.
       upstreamRootCode = upstreamEnvelopeRootCode(body.text);

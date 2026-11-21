@@ -3,6 +3,7 @@ import { comboFailureCooldownScope, comboFailureDecision } from "../../src/combo
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { preflightComboStreamResponse } from "../../src/server/responses/combo-stream-preflight";
 import { formatErrorResponse } from "../../src/bridge/errors";
+import { attachComboFailureEvidence } from "../../src/lib/client-error-body";
 import { M365_RESPONSE_LIMIT_MESSAGES } from "../../src/adapters/m365-copilot/response-limits";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../src/adapters/ollama-late-attribution";
 
@@ -197,6 +198,16 @@ describe("combo provider 413 verdicts", () => {
       expect(comboFailureDecision(413, failure.classificationText, { code: failure.upstreamCode, providerIntakeRefusal: failure.providerIntakeRefusal })).toBe("stop");
     }
     expect(comboFailureDecision(413, "Request Entity Too Large")).toBe("hop");
+  });
+
+  test("a native lane's rewritten 413 envelope keeps dev's stop (#9017 review)", async () => {
+    // Messages and Chat native combo children hand the combo a rewritten envelope through
+    // comboFailureEvidence; the provider's own body (and any terminal code in it) is gone.
+    const rewritten = attachComboFailureEvidence(new Response("{}", { status: 413 }),
+      JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "Request Entity Too Large" } }));
+    const failure = await consumeComboFailure(rewritten);
+    expect(failure.providerIntakeRefusal).toBe(false);
+    expect(comboFailureDecision(413, failure.classificationText, { code: failure.upstreamCode, providerIntakeRefusal: failure.providerIntakeRefusal })).toBe("stop");
   });
   test("hard stops still outrank a provider 413", () => {
     expect(comboFailureDecision(413, "too large", { code: "origin_rejected" })).toBe("stop");
