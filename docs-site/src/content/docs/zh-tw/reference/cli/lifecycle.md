@@ -152,6 +152,8 @@ ocx status --json
 
 如果代理啟動時顯示找不到 Codex 家目錄，請先啟動一次 Codex，或將 `CODEX_HOME` 指向 Codex 已初始化的目錄，然後執行 `ocx sync`。同步成功後即可恢復路由，但 `failed` 仍反映目前程序啟動時的結果。請重新啟動代理，再執行 `ocx ready` 確認新程序是否就緒。
 
+背景服務使用安裝時登記的 Codex 家目錄。請先初始化該目錄，用相同的 `CODEX_HOME` 執行 `ocx sync`，再重新啟動服務。只在目前的終端機變更變數不會更新已登記的服務。
+
 ### `ocx doctor`
 
 執行唯讀環境與連線診斷：狀態路徑與檔案系統類型、WSL 雙重安裝、代理環境／設定、ChatGPT 可達性、Codex plugin 與專案設定警告，以及待處理的歷史遷移。Codex app-home 定向區段也會偵測窄義的 Windows Orca runtime-home 不符，並在適用時說明服務遷移。此診斷顯示的路徑會遮罩 OS 使用者名稱。Doctor 印出修復提示但不套用它們。

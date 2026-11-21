@@ -585,6 +585,8 @@ or point `CODEX_HOME` at its existing home, then run `ocx sync`. A successful sy
 routing, but `failed` records the startup result for that listener. Restart the proxy and run
 `ocx ready` to check the new process.
 
+An installed background service uses the Codex home recorded at installation. Initialize that home and run `ocx sync` with the same `CODEX_HOME` before restarting the service. A shell setting alone does not update the registered service.
+
 On a Remote Link Child, readiness also covers the link. While the link cannot carry a request,
 `/readyz` answers `503` with `status: "pending"` and `link: {state: "unavailable", reason}`, so
 `ocx ready --wait` keeps waiting until the link is back; a working link adds

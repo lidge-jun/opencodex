@@ -239,6 +239,8 @@ ve geçersiz bağımsız değişkenler için 64'tür.
 
 Proxy başlatılırken Codex ana dizininin bulunamadığı bildirilirse Codex’i bir kez açın veya `CODEX_HOME` değişkenini Codex’in daha önce hazırladığı dizine ayarlayın. Ardından `ocx sync` komutunu çalıştırın. Başarılı bir eşitleme yönlendirmeyi düzeltir, ancak `failed` durumu çalışan sürecin başlangıç sonucunu göstermeye devam eder. Proxy’yi yeniden başlatın ve yeni sürecin hazır olup olmadığını `ocx ready` ile kontrol edin.
 
+Arka plan hizmeti, kurulum sırasında kaydedilen Codex ana dizinini kullanır. Bu dizini hazırlayın ve hizmeti yeniden başlatmadan önce aynı `CODEX_HOME` değeriyle `ocx sync` komutunu çalıştırın. Yalnızca kabuktaki değişkeni değiştirmek hizmetin ayarını güncellemez.
+
 ### `ocx doctor`
 
 Salt okunur ortam ve bağlantı tanılamalarını çalıştırın: durum yolları ve dosya

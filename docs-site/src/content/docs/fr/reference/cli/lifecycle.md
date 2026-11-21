@@ -168,6 +168,8 @@ Par défaut, la commande effectue une seule sonde. Avec `--wait`, elle interroge
 
 Si le message de démarrage du proxy indique que le répertoire de Codex est introuvable, lancez Codex une première fois ou faites pointer `CODEX_HOME` vers le répertoire déjà initialisé par Codex. Exécutez ensuite `ocx sync`. Une synchronisation réussie rétablit le routage, mais l’état `failed` conserve le résultat du démarrage du processus en cours. Redémarrez le proxy et exécutez `ocx ready` pour vérifier le nouveau processus.
 
+Un service en arrière-plan utilise le répertoire Codex enregistré à son installation. Initialisez ce répertoire et exécutez `ocx sync` avec le même `CODEX_HOME` avant de redémarrer le service. Une modification dans le shell seul ne change pas la configuration du service.
+
 ### `ocx doctor`
 
 Exécute des diagnostics en lecture seule sur l’environnement et la connectivité : chemins d’état et type de système de fichiers, installations doubles sous WSL, environnement et configuration du proxy, accessibilité de ChatGPT, avertissements liés au plug-in Codex et à la configuration du projet, ainsi que migration d’historique en attente. La section consacrée au répertoire de Codex App détecte également le cas précis où le répertoire d’exécution Windows Orca ne correspond pas et, le cas échéant, explique la migration du service. Les chemins affichés masquent le nom d’utilisateur du système d’exploitation. La commande doctor propose des réparations, mais ne les applique pas.
