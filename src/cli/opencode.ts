@@ -41,7 +41,7 @@ import type {
 } from "../clients/config-export";
 import type { EffectiveModelExportMetadata } from "../clients/config-export/contracts";
 import { resolveExportReasoningAxes } from "../clients/config-export/reasoning-metadata";
-import { filterCatalogVisibleModels, visibleNativeSlugs } from "../codex/catalog";
+import { filterCatalogVisibleModels, isNativeOpenAiProviderEnabled, visibleNativeSlugs } from "../codex/catalog";
 import { commandInvocation } from "../lib/win-exec";
 import { configuredAdminToken, opencodeCatalogToken } from "../lib/admin-secrets";
 import { localManagementOrigin } from "../lib/local-destinations";
@@ -161,10 +161,16 @@ export function opencodeModelKey(provider: string, id: string): string {
 }
 
 /**
- * Native OpenAI slugs advertised to opencode. Omitted in Codex Direct mode because native
- * chat-completions require the caller's real ChatGPT OAuth bearer, not proxy admission.
+ * Native OpenAI slugs advertised to opencode.
+ *
+ * Omitted in Codex Direct mode because native chat-completions require the caller's real
+ * ChatGPT OAuth bearer, not proxy admission — the same reason the Pi, DSH and shared export
+ * rosters drop them. Also omitted when the canonical OpenAI provider is disabled, because then
+ * the router refuses every bare `gpt-*` selector with `NoEnabledOpenAiProviderError` no matter
+ * which account mode is configured.
  */
 export function opencodeLaunchNativeSlugs(config: OcxConfig): string[] {
+  if (!isNativeOpenAiProviderEnabled(config)) return [];
   if (providerCodexAccountMode("openai", config.providers?.openai) === "direct") return [];
   return [...visibleNativeSlugs(config)];
 }
@@ -369,7 +375,8 @@ export function opencodeCatalogFromProxyRows(
   rows: readonly OpencodeProxyModelRow[],
   config: OcxConfig,
 ): OpencodeCatalogModel[] {
-  const omitNative = providerCodexAccountMode("openai", config.providers?.openai) === "direct";
+  const omitNative = !isNativeOpenAiProviderEnabled(config)
+    || providerCodexAccountMode("openai", config.providers?.openai) === "direct";
   const routedRows = rows.filter((row): row is OpencodeProxyModelRow & { provider: string; id: string } =>
     row.native !== true && typeof row.provider === "string" && typeof row.id === "string");
   const visibleRouted = new Set<OpencodeProxyModelRow>(filterCatalogVisibleModels(routedRows, config));
