@@ -165,6 +165,29 @@ describe("combo provider 413 verdicts", () => {
       expect(comboFailureCooldownScope(413, failure.classificationText, options)).toBe("none");
     }
   });
+
+  test("a failed terminal stating 413 keeps terminal evidence beside its record, and a numeric 413 code keeps 413 (#9017 review)", async () => {
+    const run = (payload: Record<string, unknown>) => preflightComboStreamResponse(new Response(
+      `data: ${JSON.stringify(payload)}\n\n`, { headers: { "content-type": "text/event-stream" } },
+    ), { model: "m1", provider: "a" });
+    const outer = async (payload: Record<string, unknown>) => {
+      const result = await run(payload);
+      if (result.kind !== "failed") return "stop";
+      const failure = await consumeComboFailure(result.response);
+      return comboFailureDecision(failure.response.status, failure.classificationText,
+        { code: failure.upstreamCode, providerIntakeRefusal: failure.providerIntakeRefusal });
+    };
+    const failed = (extra: Record<string, unknown>) => ({ type: "response.failed", status_code: 413, ...extra,
+      response: { status: "failed", output: [], error: { type: "invalid_request_error", message: "Request Entity Too Large" } } });
+    expect(await outer(failed({ code: "invalid_prompt" }))).toBe("stop");
+    expect(await outer(failed({ metadata: { reason: "origin_rejected" } }))).toBe("stop");
+    expect(await outer(failed({}))).toBe("hop");
+    // No status field, only a numeric code: the projection still says 413 and the combo hops.
+    const numeric = await run({ type: "error", error: { type: "invalid_request_error", code: 413, message: "Request Entity Too Large" } });
+    expect(numeric.kind).toBe("failed");
+    if (numeric.kind === "failed") expect(numeric.response.status).toBe(413);
+    expect(await outer({ type: "error", error: { type: "invalid_request_error", code: 413, message: "Request Entity Too Large" } })).toBe("hop");
+  });
   test("hard stops still outrank a provider 413", () => {
     expect(comboFailureDecision(413, "too large", { code: "origin_rejected" })).toBe("stop");
     expect(comboFailureDecision(413, "too large", { code: "cyber_policy" })).toBe("stop");

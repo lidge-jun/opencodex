@@ -479,7 +479,11 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
         && (emptyOutput || heldOnlyOutput(target.output, event.output));
     }
     if (!emptyOutput) return false;
-    return !(typeof code === "string" && NON_REPLAYABLE_FAILED_CODES.has(code));
+    if (typeof code === "string" && NON_REPLAYABLE_FAILED_CODES.has(code)) return false;
+    // A failed terminal that states 413 is judged on the whole frame, as a bare error is: a
+    // terminal code or marker beside the record (a root code, metadata) keeps it on this target,
+    // because the projection below carries only the error record (#9017).
+    return !(explicitErrorEventStatus(event) === 413 && !isProviderIntakeRefusalBody(JSON.stringify(event)));
   }
   const isIncomplete = event.type === "response.incomplete" || event.status === "incomplete";
   if (!isIncomplete) return false;
@@ -666,10 +670,12 @@ function failedTerminalResponse(
     // request-level 400 the HTTP and native readers judge it as. The verdict already vetoes any
     // stated status other than 400/422, so this only replaces a status the log tap inferred (the
     // synthetic 502 for an unrecognized code).
-    // An event that states 413 itself keeps it: the log tap may have inferred 400 from an
+    // An event that states 413 itself (a status field or a numeric code) keeps it when the whole
+    // frame reads as a provider intake refusal: the log tap may have inferred 400 from an
     // invalid_request_error type or 429 from rate_limit_exceeded, and either would turn the
     // provider-413 hop (#9017) into a stop or a target cooldown on the outer decision.
-    status: explicitErrorEventStatus(terminalPayload) === 413
+    status: (explicitErrorEventStatus(terminalPayload) === 413 || bareErrorStatus(terminalPayload) === 413)
+      && isProviderIntakeRefusalBody(JSON.stringify(terminalPayload))
       ? 413
       : (logCtx.terminalHttpStatus !== 400 && logCtx.terminalHttpStatus !== 422
       && isProviderModerationRefusal(400, JSON.stringify(terminalPayload), undefined, true))
