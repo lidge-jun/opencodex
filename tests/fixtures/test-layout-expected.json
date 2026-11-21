@@ -1837,6 +1837,7 @@
   "link-ocx-child-ws-feature.test.ts": "clients",
   "link-relay-wait-observer.test.ts": "clients",
   "responses-offline-resend.test.ts": "responses",
+  "link-served-runtime-trust.test.ts": "clients",
   "link-ws-autobahn.test.ts": "clients",
   "routing-profile-types-reexport.test.ts": "config",
   "provider-quota-probe-isolation.test.ts": "providers"
