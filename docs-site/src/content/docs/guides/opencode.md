@@ -28,6 +28,12 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ```
 
+Native OpenAI slug rows appear only while the canonical `openai` provider is enabled and not in
+Codex Direct mode. Direct mode forwards each caller's own OpenAI credential while opencode sends
+the proxy's key, and a disabled `openai` provider makes the proxy refuse every bare `gpt-*`
+selector; in both states the launcher, the managed integration and `ocx export` leave those rows
+out rather than offering a model that cannot run.
+
 ## Protocol per model
 
 Both blocks send requests to `/v1/responses` by default: V1 through `@ai-sdk/openai`, V2 through

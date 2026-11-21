@@ -437,8 +437,22 @@ describe("ocx opencode proxy model catalog", () => {
       { namespaced: "opencode-go/undeclared", provider: "opencode-go", id: "undeclared" },
       { namespaced: "opencode-go/hidden", provider: "opencode-go", id: "hidden", disabled: true, inputModalities: ["text", "image"] },
     ];
-    const catalog = opencodeCatalogFromProxyRows(rows, cfg());
-    const blocks = buildOpencodeProviderBlocksFromCatalog(10100, catalog, undefined, cfg());
+    // Pool mode, because only an enabled canonical OpenAI provider routes the native row. A
+    // config without one is what the launcher now drops it from, and that state cannot arise on
+    // disk: a fresh install materializes `providers.openai` enabled (pool).
+    const poolConfig = cfg({
+      providers: {
+        mock: { adapter: "openai-chat", baseUrl: "http://x/v1" },
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "pool",
+        },
+      },
+    });
+    const catalog = opencodeCatalogFromProxyRows(rows, poolConfig);
+    const blocks = buildOpencodeProviderBlocksFromCatalog(10100, catalog, undefined, poolConfig);
 
     for (const block of [blocks.v1]) {
       expect(block.models["gpt-5.6-luna"]).toMatchObject({
@@ -532,6 +546,17 @@ describe("ocx opencode proxy model catalog", () => {
       "gpt-5.6-sol",
       "kiro/glm-5",
     ]);
+
+    // Same rows, provider disabled: the proxy refuses the bare slug in either account mode, so
+    // the management catalog must not list it either. `ocx export --client opencode` and
+    // `ocx opencode` both read this function.
+    const disabled = cfg({
+      providers: {
+        mock: { adapter: "openai-chat", baseUrl: "http://x/v1" },
+        openai: { ...poolConfig.providers.openai!, disabled: true },
+      },
+    });
+    expect(opencodeCatalogFromProxyRows(rows, disabled).map(m => m.namespaced)).toEqual(["kiro/glm-5"]);
   });
 });
 
@@ -566,6 +591,28 @@ describe("ocx opencode native slug selection", () => {
       },
     });
     expect(opencodeLaunchNativeSlugs(config).length).toBeGreaterThan(0);
+  });
+
+  test("omits native slugs when the canonical OpenAI provider is disabled", () => {
+    // The router answers every bare `gpt-*` with `NoEnabledOpenAiProviderError` in this state,
+    // in both account modes, so advertising the slugs would hand opencode a picker of rows that
+    // cannot run. `ocx integration client enable` and the export roster drop them for the same
+    // reason; the launcher used to be the one surface that did not.
+    for (const codexAccountMode of ["direct", "pool"] as const) {
+      const config = cfg({
+        providers: {
+          mock: { adapter: "openai-chat", baseUrl: "http://x/v1" },
+          openai: {
+            adapter: "openai-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            authMode: "forward",
+            codexAccountMode,
+            disabled: true,
+          },
+        },
+      });
+      expect(opencodeLaunchNativeSlugs(config)).toEqual([]);
+    }
   });
 });
 
