@@ -93,6 +93,19 @@ describe("combo provider 413 verdicts", () => {
     }
   });
 
+
+  test("the whole-body 413 veto also closes the context-overflow hop on a long plain-text body (#9017 review)", async () => {
+    // Plain text is read as prose, so the overflow wording in the first 500 characters would hop on
+    // its own; the terminal code past the cut must still keep the turn on this target.
+    const prose = "Your input exceeds the context window of this model. Please adjust your input and try again. " + "x".repeat(800);
+    const vetoed = await consumeComboFailure(new Response(prose + " invalid_prompt", { status: 413 }));
+    expect(vetoed.classificationText).not.toContain("invalid_prompt");
+    expect(vetoed.providerIntakeRefusal).toBe(false);
+    expect(comboFailureDecision(413, vetoed.classificationText, { code: vetoed.upstreamCode, providerIntakeRefusal: vetoed.providerIntakeRefusal })).toBe("stop");
+    const plain = await consumeComboFailure(new Response(prose, { status: 413 }));
+    expect(comboFailureDecision(413, plain.classificationText, { code: plain.upstreamCode, providerIntakeRefusal: plain.providerIntakeRefusal })).toBe("hop");
+  });
+
   test("hard stops still outrank a provider 413", () => {
     expect(comboFailureDecision(413, "too large", { code: "origin_rejected" })).toBe("stop");
     expect(comboFailureDecision(413, "too large", { code: "cyber_policy" })).toBe("stop");

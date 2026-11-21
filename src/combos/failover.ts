@@ -1822,10 +1822,14 @@ function decideComboFailure(
   if (isModelLifecycleGone(status, message, rawCode)) return "hop";
   const error = classifyError(status, "upstream_error", message);
   if (isCyberPolicyCode(error.code)) return "stop";
+  // A whole-body reader found a terminal refusal or proxy marker in this 413 past the 500-character
+  // cut. The size hops below read only the cut text, so that verdict closes them too; hops for
+  // other reasons (a model-scoped refusal, say) still apply.
+  const sizeHopVetoed = status === 413 && options?.providerIntakeRefusal === false;
   // A provider can expose its own target hard cap with a non-semantic vendor code
   // (for example 5059 + invalid_request_prompt_too_long). That is evidence that this
   // target is too small, not that every later combo target is incapable of serving it.
-  if (isProviderTargetContextOverflow(status, message, rawCode)) return "hop";
+  if (!sizeHopVetoed && isProviderTargetContextOverflow(status, message, rawCode)) return "hop";
   // A definite context-window refusal is target-local inside a heterogeneous combo: this model
   // cannot hold the turn, but a later target may have a larger window. Two boundaries keep this
   // safe. It is reached only after cancellation, structured origin/cyber refusals and
@@ -1834,7 +1838,7 @@ function decideComboFailure(
   // commits the child on any text, tool call or unknown event, and only a zero-output terminal
   // becomes a failure response at all, so a turn whose text the client already saw is never
   // reclassified here.
-  if (isDefiniteContextOverflow(status, message)) return "hop";
+  if (!sizeHopVetoed && isDefiniteContextOverflow(status, message)) return "hop";
   // A provider's HTTP 413 is that target's intake limit (#9017). Combo targets carry different
   // body and token limits, and the provider refused before processing the turn, so the next
   // untried target may accept the unchanged request: the same reasoning as the context-overflow
@@ -1842,7 +1846,7 @@ function decideComboFailure(
   // 413 that also states a terminal refusal. Cooldown scope stays "none". This reverses the
   // generic-413 stop recorded in devlog/_fin/260904_bug_stack_train/040_deferrals.md
   // (coordinator decision, 2026-11-21); generic 410 is unchanged.
-  if (status === 413 && options?.providerIntakeRefusal !== false && isProviderIntakeRefusal(message, rawCode, error.code)) return "hop";
+  if (status === 413 && !sizeHopVetoed && isProviderIntakeRefusal(message, rawCode, error.code)) return "hop";
   // A local input-admission refusal (#1524) says "this candidate cannot fit the request",
   // not "the request is impossible": the next candidate may have a larger context window.
   //
