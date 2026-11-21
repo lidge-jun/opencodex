@@ -266,10 +266,14 @@ export async function executeResponsesSidecars(
   // Preflight only on real worker turns: a routed-compaction turn is a summarization request,
   // and injecting advice into it would pollute the summary Codex replaces its history with.
   // An explicit hosted Advisor choice reserves this turn's consultation for Anthropic.
+  const hasExternalAdvisorMcp = advisorPlan?.hasExternalMcpTool?.(parsed) === true;
   if (advisorPlan && !routedCompaction && !options.anthropicHostedAdvisorSelection) {
-    // Tell the worker the tool exists and when it is worth the pause. A declaration alone is not
-    // enough: the worker has to know the tool is there before it can ever decide to use it.
-    advisorPlan.injectWorkerNotice?.(parsed);
+    // When the caller already brings an external `consult_advisor` MCP tool, it remains callable
+    // across dispatch paths; synthetic-tool paths inject the worker notice only once that path
+    // actually attaches the callable synthetic `advisor` tool below.
+    if (hasExternalAdvisorMcp) {
+      advisorPlan.injectWorkerNotice?.(parsed);
+    }
     await advisorPlan.preflightInject(parsed);
   }
   // The synthetic `advisor` owns the name for the whole turn it joins, so a typed Advisor declaration
@@ -821,8 +825,8 @@ export async function executeResponsesSidecars(
   // through web-search instead of being swallowed. runTurn adapters never enter this branch.
   if (canRunWebSearch && wsPlan) {
     const requestedTools = parsed.context.tools ?? [];
-    const advisorAllowed = advisorPlan && advisorToolAllowed(parsed, advisorPlan.tool);
-    const webSearchAdvisor = advisorPlan && advisorAllowed && !routedCompaction
+    const advisorAllowed = advisorPlan && !hasExternalAdvisorMcp && advisorToolAllowed(parsed, advisorPlan.tool);
+    const webSearchAdvisor = advisorPlan && advisorAllowed && !routedCompaction && !options.anthropicHostedAdvisorSelection
       && typeof advisorPlan.consult === "function" && typeof advisorPlan.formatUnavailable === "function"
       ? advisorPlan
       : undefined;
@@ -832,6 +836,7 @@ export async function executeResponsesSidecars(
       ...(webSearchAdvisor ? [webSearchAdvisor.tool] : []),
     ];
     if (webSearchAdvisor) {
+      webSearchAdvisor.injectWorkerNotice?.(parsed);
       withholdShadowedAdvisorTool();
       requestState.toolBridgeMaps = buildToolBridgeMaps(parsed);
       translatorBudget.chargeRetained(new TextEncoder().encode(ADVISOR_TOOL_NAME).byteLength * 2, {
@@ -963,13 +968,16 @@ export async function executeResponsesSidecars(
   // run-turn adapter, not compaction, and the caller does not already bring a `consult_advisor`
   // MCP tool). Web-search handles advisor in its own loop above; the image/video and run-turn
   // loops cannot intercept it. Preflight still applies to those paths.
-  if (advisorPlan && !routedCompaction && !advisorPlan.hasExternalMcpTool?.(parsed) && !transportState.adapter.runTurn && !wsPlan && !imgPlan && !vidPlan) {
+  if (advisorPlan && !routedCompaction && !hasExternalAdvisorMcp && !transportState.adapter.runTurn && !wsPlan && !imgPlan && !vidPlan) {
     if (!advisorToolAllowed(parsed, advisorPlan.tool)) {
       // Keep the refusal guard without injecting or shadowing tools. Direct Messages delivery
       // must not expose a forbidden synthetic call merely because it was never advertised.
       normalizeWithheldAdvisorChoice();
       advisorPlan.attachGuard(parsed);
       return undefined;
+    }
+    if (!options.anthropicHostedAdvisorSelection) {
+      advisorPlan.injectWorkerNotice?.(parsed);
     }
     // A client-declared tool named "advisor" would collide with the synthetic injection (one
     // wire name, two schemas); the synthetic runtime owns the name for this turn.

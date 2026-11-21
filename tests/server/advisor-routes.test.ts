@@ -769,7 +769,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
 
     const rootDir = mkdtempSync(join(tmpdir(), "ocx-qoder-sess-"));
     try {
-      const sessDir = join(rootDir, "-Users-leaf-proj");
+      const sessDir = join(rootDir, "-Users-demo-proj");
       mkdirSync(sessDir, { recursive: true });
       const sessFile = join(sessDir, "qoder-sess-fixture.jsonl");
       writeFileSync(sessFile, [
@@ -870,7 +870,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
       expect(parsedMcp.instruction).toContain('"afterElapsedMs":45123');
       expect(resolveDefaultMcpWaitMs(undefined)).toBe(45_000);
       expect(resolveDefaultMcpWaitMs("240000")).toBe(240_000);
-      expect(resolveDefaultMcpWaitMs("9999999")).toBe(300_000);
+      expect(resolveDefaultMcpWaitMs("9999999")).toBe(240_000);
 
       // Command Code jsonl (type: "message" + nested message + top-level row.model) and Claude attachment model
       const ccFile = join(sessDir, "commandcode-sess-fixture.jsonl");
@@ -933,6 +933,245 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
       expect(claudeRes.status).toBe(200);
     } finally {
       rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  test("external consult enforces consent in question-only, explicit-ID full-only transcripts, taskId/transcript fingerprints, 240s wait cap, and bounded non-evicting capacity", async () => {
+    const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const { runExternalAdvisorConsult } = await import("../../src/advisor/external-consult");
+    const { consultAdvisorInput } = await import("../../src/advisor/mcp-server");
+
+    // 1. question-only without consent is rejected consistently with routed path.
+    const noConsentCfg = baseConfig();
+    (noConsentCfg as { advisor?: unknown }).advisor = {
+      enabled: true,
+      model: "expert/gpt-6-astra",
+      contextMode: "question-only",
+    };
+    const qOnlyDenied = await runExternalAdvisorConsult(noConsentCfg, { question: "Standalone?" });
+    expect(qOnlyDenied.status).toBe(409);
+    expect((qOnlyDenied.body.error as { code: string }).code).toBe("advisor_consent_required");
+
+    // 2. waitMs > 240000 is rejected to stay below Bun's 255s idle timeout; afterElapsedMs > 1h is accepted.
+    const cfg = baseConfig();
+    (cfg as { advisor?: unknown }).advisor = {
+      enabled: true,
+      model: "expert/gpt-6-astra",
+      contextMode: "context",
+      contextSharingConsent: "v1",
+    };
+    const overWait = await runExternalAdvisorConsult(cfg, { question: "Too long wait", waitMs: 240_001 });
+    expect(overWait.status).toBe(400);
+    expect((overWait.body.error as { code: string }).code).toBe("invalid_wait_ms");
+    expect(consultAdvisorInput.afterElapsedMs.safeParse(4_500_000).success).toBe(true);
+
+    // 3. No transcript is attached without explicit sessionId/taskId/transcriptPath, nor in default contextMode="context".
+    const rootDir = mkdtempSync(join(tmpdir(), "ocx-ext-sec-"));
+    try {
+      const projDir = join(rootDir, "p1");
+      mkdirSync(projDir, { recursive: true });
+      writeFileSync(join(projDir, "sess-a.jsonl"), `${JSON.stringify({
+        type: "user",
+        timestamp: 1000,
+        message: { role: "user", content: "Secret transcript A" },
+      })}\n`);
+      writeFileSync(join(projDir, "sess-b.jsonl"), `${JSON.stringify({
+        type: "user",
+        timestamp: 1000,
+        message: { role: "user", content: "Secret transcript B" },
+      })}\n`);
+
+      // contextMode: "context" must NOT attach local transcript even with sessionId.
+      let seenContextMsgs = -1;
+      const ctxRes = await runExternalAdvisorConsult(
+        cfg,
+        { question: "Check", sessionId: "sess-a" },
+        {
+          workbuddyProjectsDir: rootDir,
+          consultFn: async input => {
+            seenContextMsgs = input.parsed.context.messages.length;
+            return { ok: true, advice: "ok", advisorModel: "expert/gpt-6-astra", durationMs: 1 };
+          },
+        },
+      );
+      expect(ctxRes.status).toBe(200);
+      expect(seenContextMsgs).toBe(1);
+
+      // contextMode: "full" without sessionId/taskId/transcriptPath must NOT guess newest file.
+      const fullCfg = baseConfig();
+      (fullCfg as { advisor?: unknown }).advisor = {
+        enabled: true,
+        model: "expert/gpt-6-astra",
+        contextMode: "full",
+        contextSharingConsent: "v1",
+      };
+      let seenFullNoIdMsgs = -1;
+      const noIdRes = await runExternalAdvisorConsult(
+        fullCfg,
+        { question: "Check without id" },
+        {
+          workbuddyProjectsDir: rootDir,
+          consultFn: async input => {
+            seenFullNoIdMsgs = input.parsed.context.messages.length;
+            return { ok: true, advice: "ok", advisorModel: "expert/gpt-6-astra", durationMs: 1 };
+          },
+        },
+      );
+      expect(noIdRes.status).toBe(200);
+      expect(seenFullNoIdMsgs).toBe(1);
+
+      // 4. Different taskId / transcript content (same message count) do NOT collide on pending fingerprint.
+      const resolvers: Array<(advice: string) => void> = [];
+      const makePending = (taskId: string) => runExternalAdvisorConsult(
+        fullCfg,
+        { question: "Same question", taskId, waitMs: 0 },
+        {
+          workbuddyProjectsDir: rootDir,
+          consultFn: () => new Promise(resolve => {
+            resolvers.push(advice => resolve({ ok: true, advice, advisorModel: "expert/gpt-6-astra", durationMs: 5 }));
+          }),
+        },
+      );
+      const rA = await makePending("sess-a");
+      const rB = await makePending("sess-b");
+      expect(rA.status).toBe(202);
+      expect(rB.status).toBe(202);
+      expect(rA.body.consultationId).not.toBe(rB.body.consultationId);
+      for (const done of resolvers) done("done");
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+
+    // 5. Saturated store (32 pending) rejects 33rd with 429 without evicting pending entries, and polling does not evict.
+    const capCfg = baseConfig();
+    (capCfg as { advisor?: unknown }).advisor = {
+      enabled: true,
+      model: "expert/gpt-6-astra",
+      contextSharingConsent: "v1",
+    };
+    const pendingResolvers: Array<() => void> = [];
+    const ids: string[] = [];
+    for (let i = 0; i < 32; i += 1) {
+      const started = await runExternalAdvisorConsult(
+        capCfg,
+        { question: `Pending Q ${i}`, waitMs: 0 },
+        {
+          consultFn: () => new Promise(resolve => {
+            pendingResolvers.push(() => resolve({ ok: true, advice: `A ${i}`, advisorModel: "expert/gpt-6-astra", durationMs: 1 }));
+          }),
+        },
+      );
+      expect(started.status).toBe(202);
+      ids.push(started.body.consultationId as string);
+    }
+    const overflow = await runExternalAdvisorConsult(
+      capCfg,
+      { question: "Overflow Q 33", waitMs: 0 },
+      { consultFn: async () => ({ ok: true, advice: "never", advisorModel: "expert/gpt-6-astra", durationMs: 1 }) },
+    );
+    expect(overflow.status).toBe(429);
+    expect((overflow.body.error as { code: string }).code).toBe("advisor_capacity_exceeded");
+
+    // Polling the oldest entry when store is full (32 entries) must find it (no eviction during poll).
+    const polledFirst = await runExternalAdvisorConsult(capCfg, { consultationId: ids[0], waitMs: 0 });
+    expect(polledFirst.status).toBe(202);
+    expect(polledFirst.body.consultationId).toBe(ids[0]);
+    for (const done of pendingResolvers) done();
+  });
+
+  test("client-mcp preserves sibling hooks in matched groups, isolates per-client errors, and keeps shared-JSON journal Undo valid", async () => {
+    const { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const { fingerprint, writeRecord, integrationsDir } = await import("../../src/integrations/ownership");
+    const { appendOperation, findOperation, matchesOperationResult } = await import("../../src/integrations/journal");
+    const { mountAdvisorMcpForClient, unmountAdvisorMcpForClient, syncAdvisorMcpClients } = await import("../../src/advisor/client-mcp");
+
+    const homeDir = mkdtempSync(join(tmpdir(), "ocx-mcp-hardening-"));
+    const configDir = join(homeDir, ".opencodex");
+    try {
+      // Seed Qoder shared settings.json with a sibling UserPromptSubmit hook in the same group.
+      const qoderDir = join(homeDir, ".qoder");
+      mkdirSync(qoderDir, { recursive: true });
+      const qoderPath = join(qoderDir, "settings.json");
+      const initialDoc = {
+        hooks: {
+          UserPromptSubmit: [
+            {
+              matcher: "custom-matcher",
+              hooks: [
+                { type: "command", command: "/usr/local/bin/user-hook.sh" },
+                { type: "command", command: "/old/path/opencodex-advisor-notice.sh" },
+              ],
+            },
+          ],
+        },
+        mcpServers: {},
+      };
+      const initialText = `${JSON.stringify(initialDoc, null, 2)}\n`;
+      writeFileSync(qoderPath, initialText);
+
+      // Record a Routing Apply ownership record + journal entry matching initialText.
+      const intDir = integrationsDir(configDir);
+      const opId = "op-qoder-apply-1";
+      writeRecord({
+        clientId: "qoder",
+        configPath: qoderPath,
+        opId,
+        fileFingerprint: fingerprint(initialText),
+        managedPaths: ["mcpServers"],
+        writtenAt: new Date().toISOString(),
+        mode: "apply",
+      } as unknown as Parameters<typeof writeRecord>[0], intDir);
+      appendOperation({
+        opId,
+        clientId: "qoder",
+        kind: "apply",
+        at: new Date().toISOString(),
+        configPath: qoderPath,
+        snapshot: { kind: "none" },
+        resultFingerprint: fingerprint(initialText),
+        resultAbsent: false,
+        priorRecord: null,
+      }, intDir);
+
+      // Mount Advisor MCP: sibling user hook + matcher must survive; journal Undo stays valid.
+      const mountRes = mountAdvisorMcpForClient("qoder", { homeDir, configDir });
+      expect(mountRes.ok).toBe(true);
+      const afterMountText = readFileSync(qoderPath, "utf8");
+      const afterMountDoc = JSON.parse(afterMountText) as { hooks: { UserPromptSubmit: Array<{ matcher?: string; hooks: Array<{ command: string }> }> } };
+      const siblingGroup = afterMountDoc.hooks.UserPromptSubmit.find(g => g.matcher === "custom-matcher");
+      expect(siblingGroup).toBeDefined();
+      expect(siblingGroup!.hooks).toEqual([{ type: "command", command: "/usr/local/bin/user-hook.sh" }]);
+
+      const opAfterMount = findOperation(opId, intDir)!;
+      expect(matchesOperationResult(opAfterMount, afterMountText)).toBe(true);
+      // A subsequent external edit is still detected as drift.
+      expect(matchesOperationResult(opAfterMount, `${afterMountText}\n// external edit`)).toBe(false);
+
+      // Unmount Advisor MCP: sibling user hook still preserved.
+      const unmountRes = unmountAdvisorMcpForClient("qoder", { homeDir, configDir });
+      expect(unmountRes.ok).toBe(true);
+      const afterUnmountDoc = JSON.parse(readFileSync(qoderPath, "utf8")) as { hooks: { UserPromptSubmit: Array<{ matcher?: string; hooks: Array<{ command: string }> }> } };
+      expect(afterUnmountDoc.hooks.UserPromptSubmit).toEqual([
+        { matcher: "custom-matcher", hooks: [{ type: "command", command: "/usr/local/bin/user-hook.sh" }] },
+      ]);
+
+      // Per-client error isolation: block workbuddy config path with a directory while qoder still succeeds.
+      mkdirSync(join(homeDir, ".workbuddy", "mcp.json"), { recursive: true });
+      const syncCfg = baseConfig();
+      (syncCfg as { advisor?: unknown }).advisor = {
+        enabled: true,
+        model: "expert/gpt-6-astra",
+        mcpClients: ["workbuddy", "qoder"],
+      };
+      const syncRes = syncAdvisorMcpClients(syncCfg, { homeDir, configDir });
+      expect(syncRes.errors.some(e => e.clientId === "workbuddy")).toBe(true);
+      expect(syncRes.mounted).toContain("qoder");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
     }
   });
 });

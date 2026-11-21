@@ -1308,22 +1308,32 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
             const advisor = ctx.config.advisor;
             const autoMount = advisor?.autoMountMcp !== false;
             const explicitList = Array.isArray(advisor?.mcpClients) ? advisor.mcpClients : null;
-            const { isAdvisorMcpClientId, mountAdvisorMcpForClient, unmountAdvisorMcpForClient } =
-              await import("../../advisor/client-mcp");
-            if (isAdvisorMcpClientId(requestedClient)) {
-              const overrides = pathOverrides();
-              const customStore = integrationMutationTestHooks?.store;
-              const mcpOptions = {
-                ...(overrides.home ? { homeDir: overrides.home } : {}),
-                ...(overrides.env ? { env: overrides.env } : {}),
-                ...(customStore ? { configDir: dirname(customStore.root) } : {}),
-              };
-              if (parsed.enabled === true && advisor?.enabled === true && autoMount
-                && (explicitList === null || explicitList.includes(requestedClient))) {
-                advisorMcp = mountAdvisorMcpForClient(requestedClient, mcpOptions);
-              } else if (!parsed.enabled && autoMount && explicitList === null) {
-                advisorMcp = unmountAdvisorMcpForClient(requestedClient, mcpOptions);
+            try {
+              const { isAdvisorMcpClientId, mountAdvisorMcpForClient, unmountAdvisorMcpForClient } =
+                await import("../../advisor/client-mcp");
+              if (isAdvisorMcpClientId(requestedClient)) {
+                const overrides = pathOverrides();
+                const customStore = integrationMutationTestHooks?.store;
+                const mcpOptions = {
+                  ...(overrides.home ? { homeDir: overrides.home } : {}),
+                  ...(overrides.env ? { env: overrides.env } : {}),
+                  ...(customStore ? { configDir: dirname(customStore.root) } : {}),
+                };
+                if (parsed.enabled === true && advisor?.enabled === true && autoMount
+                  && (explicitList === null || explicitList.includes(requestedClient))) {
+                  advisorMcp = mountAdvisorMcpForClient(requestedClient, mcpOptions);
+                } else if (!parsed.enabled && autoMount && explicitList === null) {
+                  advisorMcp = unmountAdvisorMcpForClient(requestedClient, mcpOptions);
+                }
               }
+            } catch (error) {
+              // Optional Advisor MCP reconciliation must degrade without interrupting a committed
+              // Routing change or skipping Home route-intent recording below.
+              advisorMcp = {
+                ok: false,
+                changed: false,
+                error: error instanceof Error ? error.message : String(error),
+              };
             }
           }
           const envelope: IntegrationToggleEnvelope = advisorMcp === undefined

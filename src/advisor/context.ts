@@ -181,11 +181,18 @@ export const ADVISOR_QUESTION_ONLY_INSTRUCTION =
  * behind 40k-55k tokens of `context.systemPrompt`.
  */
 export const ADVISOR_WORKER_NOTICE_MARKER = "## Advisor";
+export const ADVISOR_RUNTIME_NOTICE_START = "<!-- ocx-advisor-worker-notice:v1 -->";
+export const ADVISOR_RUNTIME_NOTICE_END = "<!-- /ocx-advisor-worker-notice:v1 -->";
 
 export const ADVISOR_TAIL_NOTICE_WINDOW = 6;
 
+const ADVISOR_NOTICE_FOOTER =
+  "Skip it for simple lookups, single-file mechanical edits, and turns whose answer you already\n"
+  + "know. Each consultation is a full extra model call that pauses your output while it runs.";
+
 export function buildAdvisorWorkerNotice(toolName = "advisor", urgentRepair = false): string {
   return [
+    ADVISOR_RUNTIME_NOTICE_START,
     ADVISOR_WORKER_NOTICE_MARKER,
     "",
     `You have a \`${toolName}\` tool backed by a stronger model. It answers focused questions and`,
@@ -206,8 +213,8 @@ export function buildAdvisorWorkerNotice(toolName = "advisor", urgentRepair = fa
     "2. When the same failure returns after two repair attempts, or three approaches have stalled.",
     "3. Before you declare the task complete.",
     "",
-    "Skip it for simple lookups, single-file mechanical edits, and turns whose answer you already",
-    "know. Each consultation is a full extra model call that pauses your output while it runs.",
+    ADVISOR_NOTICE_FOOTER,
+    ADVISOR_RUNTIME_NOTICE_END,
   ].join("\n");
 }
 
@@ -259,6 +266,18 @@ export function hasAdvisorWorkerNotice(parsed: OcxParsedRequest): boolean {
   return tail.some(message => isNoticeRole(message.role) && messageTextIncludesMarker(message));
 }
 
+function isRuntimeAdvisorWorkerNotice(message: OcxMessage): boolean {
+  if (message.role !== "developer") return false;
+  const trimmed = textFromContent(message.content as string | readonly { type: string; text?: string }[] | undefined).trim();
+  if (!trimmed.startsWith(ADVISOR_RUNTIME_NOTICE_START) || !trimmed.endsWith(ADVISOR_RUNTIME_NOTICE_END)) {
+    return false;
+  }
+  const inner = trimmed.slice(ADVISOR_RUNTIME_NOTICE_START.length, -ADVISOR_RUNTIME_NOTICE_END.length).trim();
+  return inner.startsWith(ADVISOR_WORKER_NOTICE_MARKER)
+    && inner.includes("tool backed by a stronger model.")
+    && inner.endsWith(ADVISOR_NOTICE_FOOTER);
+}
+
 /**
  * Inject or re-anchor the advisor notice close to the generation frontier without stacking
  * duplicate runtime developer notices or splitting assistant `tool_call` -> `toolResult` pairs.
@@ -266,12 +285,7 @@ export function hasAdvisorWorkerNotice(parsed: OcxParsedRequest): boolean {
 export function injectAdvisorWorkerNotice(parsed: OcxParsedRequest, toolName?: string): boolean {
   if (hasAdvisorWorkerNotice(parsed)) return false;
   const resolvedToolName = toolName ?? findExternalAdvisorMcpToolName(parsed) ?? "advisor";
-  const cleaned = parsed.context.messages.filter(message => !(
-    message.role === "developer"
-    && textFromContent(message.content as string | readonly { type: string; text?: string }[] | undefined)
-      .trimStart()
-      .startsWith(ADVISOR_WORKER_NOTICE_MARKER)
-  ));
+  const cleaned = parsed.context.messages.filter(message => !isRuntimeAdvisorWorkerNotice(message));
   const lastUser = cleaned.findLastIndex(message => message.role === "user");
   const afterUser = lastUser >= 0 ? cleaned.slice(lastUser + 1) : cleaned;
   const errorSteps = afterUser.filter(message => message.role === "toolResult" && message.isError).length;

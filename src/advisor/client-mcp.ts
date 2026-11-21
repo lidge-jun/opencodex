@@ -8,6 +8,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { atomicWriteFile } from "../config/atomic-write";
 import { getConfigDir } from "../config/paths";
+import { appendResultFingerprintUpdate } from "../integrations/journal";
 import {
   fingerprint,
   integrationsDir,
@@ -410,8 +411,13 @@ function syncOwnershipFingerprintIfClean(
   const records = readRecords(dir);
   const record = records[clientId as keyof typeof records] as OwnershipRecord | undefined;
   if (!record || record.configPath !== configPath) return;
-  if (record.fileFingerprint !== fingerprint(beforeText)) return;
-  writeRecord({ ...record, fileFingerprint: fingerprint(afterText) }, dir);
+  const beforeFp = fingerprint(beforeText);
+  if (record.fileFingerprint !== beforeFp) return;
+  const afterFp = fingerprint(afterText);
+  writeRecord({ ...record, fileFingerprint: afterFp }, dir);
+  if (record.opId) {
+    appendResultFingerprintUpdate(record.opId, beforeFp, afterFp, dir);
+  }
 }
 
 function buildNoticeHookScript(configDir: string): string {
@@ -496,11 +502,43 @@ You have access to the stronger OpenCodex Advisor model via \`consult_advisor\` 
 - If the call returns \`status: "in_progress"\` with \`consultationId\` and \`elapsedMs\`, immediately poll again with \`{ "consultationId": "...", "afterElapsedMs": <elapsedMs> }\` (updating \`afterElapsedMs\` each round avoids duplicate-tool-call guards).
 `;
 
+function isAdvisorHookItem(item: unknown, hookScriptPath: string): boolean {
+  return isPlainObject(item)
+    && typeof item.command === "string"
+    && (item.command === hookScriptPath || item.command.endsWith("opencodex-advisor-notice.sh"));
+}
+
 function entryMatchesAdvisorHook(entry: unknown, hookScriptPath: string): boolean {
   if (!isPlainObject(entry) || !Array.isArray(entry.hooks)) return false;
-  return entry.hooks.some(item => isPlainObject(item)
-    && typeof item.command === "string"
-    && (item.command === hookScriptPath || item.command.endsWith("opencodex-advisor-notice.sh")));
+  return entry.hooks.some(item => isAdvisorHookItem(item, hookScriptPath));
+}
+
+/**
+ * Strip only OpenCodex Advisor hook commands from each hook group, preserving all sibling
+ * commands and group metadata. Drops a group only when its `hooks` array becomes empty.
+ */
+function stripAdvisorHooksFromEntries(
+  entries: readonly unknown[],
+  hookScriptPath: string,
+): { next: unknown[]; changed: boolean } {
+  const next: unknown[] = [];
+  let changed = false;
+  for (const entry of entries) {
+    if (!isPlainObject(entry) || !Array.isArray(entry.hooks)) {
+      next.push(entry);
+      continue;
+    }
+    const remaining = entry.hooks.filter(item => !isAdvisorHookItem(item, hookScriptPath));
+    if (remaining.length === entry.hooks.length) {
+      next.push(entry);
+      continue;
+    }
+    changed = true;
+    if (remaining.length > 0) {
+      next.push({ ...entry, hooks: remaining });
+    }
+  }
+  return { next, changed };
 }
 
 function mountHooksAndSkill(spec: ClientSpec, paths: ResolvedClientPaths, configDir: string): void {
@@ -514,16 +552,21 @@ function mountHooksAndSkill(spec: ClientSpec, paths: ResolvedClientPaths, config
       const next = { ...read.doc };
       const hooks = isPlainObject(next.hooks) ? { ...next.hooks } : {};
       const existing = Array.isArray(hooks.UserPromptSubmit) ? [...hooks.UserPromptSubmit] : [];
-      const alreadyHasHook = existing.some(entry => entryMatchesAdvisorHook(entry, paths.hookScriptPath!))
-        && existing.filter(entry => entryMatchesAdvisorHook(entry, paths.hookScriptPath!)).length === 1;
-      const filtered = existing.filter(entry => !entryMatchesAdvisorHook(entry, paths.hookScriptPath!));
-      filtered.push({
+      const matchingEntries = existing.filter(entry => entryMatchesAdvisorHook(entry, paths.hookScriptPath!));
+      const alreadyCleanSingleHook = matchingEntries.length === 1
+        && isPlainObject(matchingEntries[0])
+        && Array.isArray(matchingEntries[0].hooks)
+        && matchingEntries[0].hooks.length === 1
+        && isPlainObject(matchingEntries[0].hooks[0])
+        && matchingEntries[0].hooks[0].command === paths.hookScriptPath;
+      const { next: stripped } = stripAdvisorHooksFromEntries(existing, paths.hookScriptPath);
+      stripped.push({
         hooks: [{ type: "command", command: paths.hookScriptPath }],
       });
-      hooks.UserPromptSubmit = filtered;
+      hooks.UserPromptSubmit = stripped;
       next.hooks = hooks;
       const nextText = `${JSON.stringify(next, null, 2)}\n`;
-      if (!alreadyHasHook || read.text !== nextText) {
+      if (!alreadyCleanSingleHook || read.text !== nextText) {
         backupOnceBeforeEdit(configDir, spec.id, paths.hookConfigPath, read.text);
         mkdirSync(dirname(paths.hookConfigPath), { recursive: true, mode: 0o700 });
         atomicWriteFile(paths.hookConfigPath, nextText);
@@ -545,8 +588,8 @@ function unmountHooksAndSkill(spec: ClientSpec, paths: ResolvedClientPaths, conf
     if (!read.parseError && read.doc && isPlainObject(read.doc.hooks)) {
       const hooks = { ...read.doc.hooks };
       if (Array.isArray(hooks.UserPromptSubmit)) {
-        const nextArr = hooks.UserPromptSubmit.filter(entry => !entryMatchesAdvisorHook(entry, paths.hookScriptPath!));
-        if (nextArr.length !== hooks.UserPromptSubmit.length) {
+        const { next: nextArr, changed } = stripAdvisorHooksFromEntries(hooks.UserPromptSubmit, paths.hookScriptPath);
+        if (changed) {
           backupOnceBeforeEdit(configDir, spec.id, paths.hookConfigPath, read.text);
           if (nextArr.length === 0) delete hooks.UserPromptSubmit;
           else hooks.UserPromptSubmit = nextArr;
@@ -796,17 +839,24 @@ export function syncAdvisorMcpClients(
   const errors: Array<{ clientId: AdvisorMcpClientId; message: string }> = [];
 
   for (const id of ADVISOR_MCP_CLIENT_IDS) {
-    if (desiredTargets.has(id)) {
-      const res = mountAdvisorMcpForClient(id, options);
-      if (!res.ok && res.error) errors.push({ clientId: id, message: res.error });
-      else if (res.changed) mounted.push(id);
-    } else {
-      const status = inspectAdvisorMcpClientStatus(id, config, options, routedSet);
-      if (status.mounted || status.hooksMounted || status.skillMounted) {
-        const res = unmountAdvisorMcpForClient(id, options);
+    try {
+      if (desiredTargets.has(id)) {
+        const res = mountAdvisorMcpForClient(id, options);
         if (!res.ok && res.error) errors.push({ clientId: id, message: res.error });
-        else if (res.changed) unmounted.push(id);
+        else if (res.changed) mounted.push(id);
+      } else {
+        const status = inspectAdvisorMcpClientStatus(id, config, options, routedSet);
+        if (status.mounted || status.hooksMounted || status.skillMounted) {
+          const res = unmountAdvisorMcpForClient(id, options);
+          if (!res.ok && res.error) errors.push({ clientId: id, message: res.error });
+          else if (res.changed) unmounted.push(id);
+        }
       }
+    } catch (error) {
+      errors.push({
+        clientId: id,
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

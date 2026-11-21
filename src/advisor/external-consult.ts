@@ -29,9 +29,9 @@ const MAX_TASK_ID_CHARS = 256;
 const MAX_CONSULTATION_ID_CHARS = 128;
 const MAX_SESSION_ID_CHARS = 128;
 const MAX_TRANSCRIPT_PATH_CHARS = 1_024;
-const RECENT_SESSION_WINDOW_MS = 15 * 60_000;
 const MAX_TRANSCRIPT_FILE_BYTES = 4 * 1024 * 1024;
-const MAX_WAIT_MS = 300_000;
+// Stay safely below Bun's HTTP listener idleTimeout (255s in src/server/index/serve-options.ts).
+const MAX_WAIT_MS = 240_000;
 const DEFAULT_MAX_WAIT_MS = 240_000;
 const DEFAULT_MIN_WAIT_MS = 10_000;
 const MAX_STORE_ENTRIES = 32;
@@ -83,12 +83,21 @@ function consultationStore(config: Pick<OcxConfig, "advisor">): Map<string, Cons
   return store;
 }
 
-function pruneStore(store: Map<string, ConsultationEntry>, nowMs: number): void {
+/** Remove only settled entries whose retention TTL has elapsed. Never evicts live or retained entries. */
+function pruneExpiredEntries(store: Map<string, ConsultationEntry>, nowMs: number): void {
   for (const [id, entry] of store) {
     if (entry.finishedAt !== undefined && nowMs - entry.finishedAt >= COMPLETED_TTL_MS) {
       store.delete(id);
     }
   }
+}
+
+/**
+ * Reserve space for ONE new consultation without ever evicting an active (pending) entry.
+ * Returns false when every slot is occupied by a running consultation.
+ */
+function ensureStoreCapacity(store: Map<string, ConsultationEntry>, nowMs: number): boolean {
+  pruneExpiredEntries(store, nowMs);
   while (store.size >= MAX_STORE_ENTRIES) {
     let victim: ConsultationEntry | undefined;
     for (const entry of store.values()) {
@@ -97,10 +106,10 @@ function pruneStore(store: Map<string, ConsultationEntry>, nowMs: number): void 
         break;
       }
     }
-    victim ??= store.values().next().value;
-    if (!victim) break;
+    if (!victim) return false;
     store.delete(victim.id);
   }
+  return true;
 }
 
 function isRec(value: unknown): value is Record<string, unknown> {
@@ -185,6 +194,8 @@ function findTranscriptFile(options: {
   const lookupIds = [options.sessionId, options.taskId]
     .filter((v): v is string => typeof v === "string" && isSafeSessionFilenameId(v.trim()))
     .map(v => `${v.trim()}.jsonl`);
+  // Never guess across unrelated client transcripts when no explicit sessionId/taskId is given.
+  if (lookupIds.length === 0) return undefined;
 
   const runningTest = process.env.OCX_TEST_HOME_GUARD === "1" || isBunTestFileProcess();
   const searchRoots = options.workbuddyProjectsDir
@@ -197,7 +208,7 @@ function findTranscriptFile(options: {
           join(homedir(), ".qoder", "projects"),
           join(homedir(), ".qoder-cn", "projects"),
           join(homedir(), ".commandcode", "projects"),
-          ...(lookupIds.length > 0 ? [join(homedir(), ".claude", "projects")] : []),
+          join(homedir(), ".claude", "projects"),
         ];
   if (searchRoots.length === 0) return undefined;
 
@@ -207,14 +218,7 @@ function findTranscriptFile(options: {
     try {
       const stat = lstatSync(filePath);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_TRANSCRIPT_FILE_BYTES) return;
-      if (lookupIds.length > 0) {
-        if (lookupIds.includes(basename(filePath)) && stat.mtimeMs > bestMtime) {
-          bestMtime = stat.mtimeMs;
-          bestPath = filePath;
-        }
-        return;
-      }
-      if (options.nowMs - stat.mtimeMs <= RECENT_SESSION_WINDOW_MS && stat.mtimeMs > bestMtime) {
+      if (lookupIds.includes(basename(filePath)) && stat.mtimeMs > bestMtime) {
         bestMtime = stat.mtimeMs;
         bestPath = filePath;
       }
@@ -610,7 +614,7 @@ export async function runExternalAdvisorConsult(
     if (waitMs === null) {
       return errorResponse(400, "invalid_wait_ms", `waitMs must be a number between 0 and ${MAX_WAIT_MS}`);
     }
-    pruneStore(store, now());
+    pruneExpiredEntries(store, now());
     const entry = store.get(rawBody.consultationId.trim());
     if (!entry) {
       return errorResponse(404, "consultation_not_found", "Consultation not found or expired.");
@@ -656,22 +660,22 @@ export async function runExternalAdvisorConsult(
   const sessionId = typeof rawBody.sessionId === "string" && rawBody.sessionId.trim() ? rawBody.sessionId.trim() : undefined;
   const transcriptPath = typeof rawBody.transcriptPath === "string" && rawBody.transcriptPath.trim() ? rawBody.transcriptPath.trim() : undefined;
   const taskId = typeof rawBody.taskId === "string" ? rawBody.taskId.trim() : "";
-  const loadedSession = settings.contextMode === "question-only"
-    ? { messages: [] }
-    : loadWorkBuddySessionMessages({
+  const loadedSession = settings.contextMode === "full"
+    ? loadWorkBuddySessionMessages({
         sessionId,
         taskId: taskId || undefined,
         transcriptPath,
         workbuddyProjectsDir: deps.workbuddyProjectsDir,
         nowMs: now(),
-      });
+      })
+    : { messages: [] };
 
-  const requiresConsent = settings.contextMode !== "question-only" || contextText.length > 0;
-  if (requiresConsent && settings.contextSharingConsent === null) {
+  // Enforce the same operator consent boundary as routed consultations (including question-only).
+  if (settings.contextSharingConsent === null) {
     return errorResponse(
       409,
       "advisor_consent_required",
-      "Advisor context-sharing consent (v1) is required. Run `ocx advisor consent --ack` or set contextMode to question-only.",
+      "Advisor context-sharing consent (v1) is required. Run `ocx advisor consent --ack`.",
       formatAdvisorUnavailable("consent", "advisor_context_sharing_consent_required"),
     );
   }
@@ -682,6 +686,16 @@ export async function runExternalAdvisorConsult(
   const workerModel = sanitizeLogMetadataString(rawWorkerModel, MAX_WORKER_MODEL_CHARS) ?? "external-client";
   const safeAdvisorModel = sanitizeLogMetadataString(settings.model, 200) ?? "unknown";
 
+  const transcriptDigest = new Bun.CryptoHasher("sha256")
+    .update(JSON.stringify(loadedSession.messages.map(m => ({
+      role: m.role,
+      content: m.content,
+      ...("toolName" in m ? { toolName: m.toolName } : {}),
+      ...("toolCallId" in m ? { toolCallId: m.toolCallId } : {}),
+      ...("isError" in m ? { isError: m.isError } : {}),
+    }))))
+    .digest("hex");
+
   const fingerprint = new Bun.CryptoHasher("sha256")
     .update(JSON.stringify([
       settings.model,
@@ -690,16 +704,27 @@ export async function runExternalAdvisorConsult(
       workerModel,
       question,
       contextText,
+      taskId,
       sessionId ?? "",
-      loadedSession.messages.length,
+      transcriptPath ?? "",
+      transcriptDigest,
     ]))
     .digest("hex");
 
-  pruneStore(store, now());
+  pruneExpiredEntries(store, now());
   for (const existing of store.values()) {
     if (!existing.settled && existing.fingerprint === fingerprint) {
       return waitForEntry(existing, waitMs, now);
     }
+  }
+
+  if (!ensureStoreCapacity(store, now())) {
+    return errorResponse(
+      429,
+      "advisor_capacity_exceeded",
+      `Maximum concurrent advisor consultations (${MAX_STORE_ENTRIES}) reached. Retry after an active consultation completes.`,
+      formatAdvisorUnavailable("limit", "maximum concurrent advisor consultations reached"),
+    );
   }
 
   const activities = advisorActivityStore(advisorPlanRootConfig(config));

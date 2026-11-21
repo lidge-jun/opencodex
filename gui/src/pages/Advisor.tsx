@@ -34,11 +34,23 @@ export interface AdvisorSettings {
   mcpClients?: AdvisorMcpClientId[] | null;
 }
 
+export interface AdvisorMcpSyncErrorDto {
+  clientId: AdvisorMcpClientId;
+  message: string;
+}
+
+export interface AdvisorMcpSyncDto {
+  mounted?: AdvisorMcpClientId[];
+  unmounted?: AdvisorMcpClientId[];
+  errors?: AdvisorMcpSyncErrorDto[];
+}
+
 export interface AdvisorDto {
   settings: AdvisorSettings;
   runnable: boolean;
   warning?: string;
   mcpClients?: AdvisorMcpClientStatusDto[];
+  mcpSync?: AdvisorMcpSyncDto;
 }
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
@@ -64,6 +76,7 @@ export function AdvisorEditor({
   const [saving, setSaving] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [mcpSyncErrors, setMcpSyncErrors] = useState<AdvisorMcpSyncErrorDto[]>([]);
   const savedFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -83,6 +96,7 @@ export function AdvisorEditor({
     setSavedFlash(false);
     setSaving(true);
     setSaveError("");
+    setMcpSyncErrors([]);
     const submitted = draft;
     try {
       const response = await fetch(`${apiBase}/api/advisor/settings`, {
@@ -114,11 +128,16 @@ export function AdvisorEditor({
       // Edits made while the PUT was in flight stay in the draft: only overwrite the draft
       // when the user has not touched it since this save started.
       setDraft(current => (JSON.stringify(current) === JSON.stringify(submitted) ? body.settings : current));
-      setSavedFlash(true);
-      savedFlashTimerRef.current = setTimeout(() => {
-        savedFlashTimerRef.current = null;
-        setSavedFlash(false);
-      }, 2500);
+      const syncErrors = Array.isArray(body.mcpSync?.errors) ? body.mcpSync.errors : [];
+      if (syncErrors.length > 0) {
+        setMcpSyncErrors(syncErrors);
+      } else {
+        setSavedFlash(true);
+        savedFlashTimerRef.current = setTimeout(() => {
+          savedFlashTimerRef.current = null;
+          setSavedFlash(false);
+        }, 2500);
+      }
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -131,6 +150,7 @@ export function AdvisorEditor({
   // saved value would otherwise leave the notice with no way to clear at all.
   const edit = useCallback((patch: Partial<AdvisorSettings>) => {
     setSaveError("");
+    setMcpSyncErrors([]);
     setDraft(current => ({ ...current, ...patch }));
   }, []);
 
@@ -308,6 +328,26 @@ export function AdvisorEditor({
         {modelMissing && <Notice tone="warn">{t("advisor.warning.noModel")}</Notice>}
         {consentMissing && <Notice tone="warn">{t("advisor.consent.required")}</Notice>}
         {saveError && <Notice tone="err">{saveError}</Notice>}
+        {mcpSyncErrors.length > 0 && (
+          <Notice tone="warn">
+            {t("advisor.mcp.syncPartial", {
+              clients: mcpSyncErrors
+                .map(err => {
+                  const label = mcpStatus.find(c => c.clientId === err.clientId)?.label ?? err.clientId;
+                  return `${label} (${err.message})`;
+                })
+                .join(", "),
+            })}{" "}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={saving}
+              onClick={() => void save()}
+            >
+              {t("common.retry")}
+            </button>
+          </Notice>
+        )}
         {savedFlash && <Notice tone="ok">{t("advisor.saved")}</Notice>}
         <div className="flex flex-wrap items-center justify-end gap-3">
           {dirty && !saving && <span className="text-[13px] text-fg-muted" role="status">{t("proxyV2.unsaved")}</span>}

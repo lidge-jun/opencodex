@@ -66,15 +66,15 @@ export function AdvisorClientMcpPanel({
   const selectedSet = new Set<AdvisorMcpClientId>(
     isManual
       ? explicitClients
-      : clients.filter(item => item.selected).map(item => item.clientId),
+      : clients
+          .filter(item => autoMountMcp && item.defaultAutoMount && item.routed)
+          .map(item => item.clientId),
   );
 
   const toggleClient = (clientId: AdvisorMcpClientId, checked: boolean) => {
     const base = isManual
       ? [...explicitClients]
-      : clients
-          .filter(item => (autoMountMcp && item.defaultAutoMount && item.routed) || item.mounted)
-          .map(item => item.clientId);
+      : [...selectedSet];
     const next = new Set<AdvisorMcpClientId>(base);
     if (checked) next.add(clientId);
     else next.delete(clientId);

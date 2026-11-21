@@ -16,7 +16,8 @@ import { formatAdvisorAdvice, formatAdvisorUnavailable } from "./context";
 
 export const MCP_CONSULT_WAIT_MS = 45_000;
 const MIN_MCP_CONSULT_WAIT_MS = 5_000;
-const MAX_MCP_CONSULT_WAIT_MS = 300_000;
+// Stay safely below Bun's HTTP listener idleTimeout (255s).
+const MAX_MCP_CONSULT_WAIT_MS = 240_000;
 const DEFAULT_PROGRESS_INTERVAL_MS = 5_000;
 
 export function resolveDefaultMcpWaitMs(rawEnv: string | undefined = process.env.OCX_ADVISOR_MCP_WAIT_MS): number {
@@ -33,7 +34,7 @@ export const consultAdvisorInput = {
   taskId: z.string().max(256).optional().describe("Optional task or session identifier used when adaptive task budget is active."),
   sessionId: z.string().max(128).optional().describe("Optional client session UUID so OpenCodex can attach the raw local session transcript."),
   consultationId: z.string().max(128).optional().describe("Resume/poll an in-progress consultation returned by a prior consult_advisor call."),
-  afterElapsedMs: z.number().int().min(0).max(3_600_000).optional().describe("Elapsed milliseconds from the previous in_progress result when polling so repeated poll calls stay distinct."),
+  afterElapsedMs: z.number().int().min(0).optional().describe("Elapsed milliseconds from the previous in_progress result when polling so repeated poll calls stay distinct."),
 };
 
 export interface AdvisorMcpOptions extends RuntimeApiDeps {
