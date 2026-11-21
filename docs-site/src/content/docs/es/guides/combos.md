@@ -822,6 +822,8 @@ Todos los objetivos no son elegibles actualmente: por ejemplo, su proveedor est�
 
 Los errores de validación HTTP 400/422 que citan texto de cuota o del límite del nivel gratuito no activan una alternativa solo por ese texto. Un rechazo estructurado `free_rate_limited` sí prueba el siguiente destino apto, sin poner en enfriamiento al proveedor o destino sano.
 
+Un HTTP 413 del proveedor indica que ese destino no admite una solicitud tan grande, no que la solicitud sea imposible. Los destinos tienen límites de entrada distintos (Groq, por ejemplo, rechaza un turno por encima del nivel de tokens por minuto de la cuenta con 413 y `rate_limit_exceeded`), así que el combo prueba el siguiente destino no intentado y no pone nada en enfriamiento; si el último destino también lo rechaza, recibe su 413. Un 413 generado por el propio OpenCodex (`translation_buffer_limit`, `inbound_body_too_large`, `outbound_body_too_large` o el límite de atribución tardía de Ollama) sigue deteniendo el combo, porque todos los destinos alcanzarían el mismo límite.
+
 <a id="why-was-my-alias-rejected"></a>
 
 ### ¿Por qué fue rechazado mi alias?
