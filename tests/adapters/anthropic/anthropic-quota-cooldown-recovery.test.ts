@@ -91,28 +91,67 @@ test("a quota refusal with no usable deadline is recoverable as well", () => {
   expect(routing.getAnthropicAccountHealthSnapshot(id, now + 3)).toBeNull();
 });
 
-test("an entitlement 403 and a refusal naming no window are never claimed", () => {
+test("an entitlement 403 is never claimed", () => {
   const routing = f.routing.anthropicRoutingFor("anthropic");
   const now = Date.now();
   routing.recordAnthropicAccountRefusal(f.config, f.ids[0], 403, "600", now);
-  routing.recordAnthropicAccount429(f.config, f.ids[1], "600", now, new Headers({ "anthropic-ratelimit-unified-status": "rejected" }));
-  expect(routing.getAnthropicAccountHealthSnapshot(f.ids[1], now)).toMatchObject({ cooldownSource: "retry-after" });
   expect(routing.captureAnthropicCooldownRecovery(f.ids[0], now + 1)).toBeNull();
-  expect(routing.captureAnthropicCooldownRecovery(f.ids[1], now + 1)).toBeNull();
 });
 
-test("an aggregate-only reset-derived refusal stays claimable but is always retained", () => {
+const AGGREGATE_REJECTED = { "anthropic-ratelimit-unified-status": "rejected" } as const;
+
+for (const instance of INSTANCE_FIXTURE_INSTANCES) {
+  // #9032: a spent weekly window refused with only the aggregate status and a long Retry-After;
+  // the window was then reset elsewhere. The account stayed out until a manual refresh.
+  test(`${instance}: an aggregate refusal lifts once the window its first read found spent reopens`, async () => {
+    const routing = f.routing.anthropicRoutingFor(instance);
+    const id = f.ids[0];
+    routing.recordAnthropicAccount429(f.config, id, String(30 * 3600), Date.now(), new Headers(AGGREGATE_REJECTED));
+    expect(routing.getAnthropicAccountHealthSnapshot(id)).toMatchObject({ cooldownSource: "retry-after" });
+
+    usage(0, 100);
+    await freshRead(instance, id);
+    expect(routing.getAnthropicAccountHealthSnapshot(id)).toMatchObject({ cooldownSource: "retry-after" });
+
+    usage(0, 0);
+    await freshRead(instance, id);
+    expect(routing.getAnthropicAccountHealthSnapshot(id)).toBeNull();
+    expect(routing.getEligibleAnthropicAccounts()).toContain(id);
+  });
+}
+
+test("an aggregate refusal whose first read finds every window open waits for its deadline", async () => {
   const routing = f.routing.anthropicRoutingFor("anthropic");
   const id = f.ids[0];
   const now = Date.now();
+  // Usage does not explain this refusal, so a later open read is no evidence it ended.
   routing.recordAnthropicAccount429(f.config, id, null, now, new Headers({
-    "anthropic-ratelimit-unified-status": "rejected",
+    ...AGGREGATE_REJECTED,
     "anthropic-ratelimit-unified-reset": String(Math.floor((now + HOUR) / 1000)),
   }));
   expect(routing.getAnthropicAccountHealthSnapshot(id, now)).toMatchObject({ cooldownSource: "reset-derived" });
+  usage(0, 0);
+  await freshRead("anthropic", id);
+  expect(routing.getAnthropicAccountHealthSnapshot(id)).toMatchObject({ cooldownSource: "reset-derived" });
+  expect(routing.captureAnthropicCooldownRecovery(id)).toBeNull();
+  await freshRead("anthropic", id);
+  expect(routing.getAnthropicAccountHealthSnapshot(id)).not.toBeNull();
+});
+
+test("an incomplete first read leaves an aggregate refusal unexplained but claimable", () => {
+  const routing = f.routing.anthropicRoutingFor("anthropic");
+  const id = f.ids[0];
+  const now = Date.now();
+  routing.recordAnthropicAccount429(f.config, id, "600", now, new Headers(AGGREGATE_REJECTED));
   const claim = routing.captureAnthropicCooldownRecovery(id, now + 1);
   expect(claim).not.toBeNull();
-  expect(routing.settleAnthropicCooldownRecovery(claim!, { fiveHourPercent: 0, weeklyPercent: 0, updatedAt: now + 2 })).toBe("retained");
+  // A spent five-hour window without a weekly reading names nothing: the weekly window may be spent too.
+  expect(routing.settleAnthropicCooldownRecovery(claim!, { fiveHourPercent: 100, updatedAt: now + 2 })).toBe("retained");
+  const next = routing.captureAnthropicCooldownRecovery(id, now + 3);
+  expect(next).not.toBeNull();
+  expect(routing.settleAnthropicCooldownRecovery(next!, { fiveHourPercent: 3, weeklyPercent: 100, updatedAt: now + 4 })).toBe("retained");
+  const last = routing.captureAnthropicCooldownRecovery(id, now + 5);
+  expect(routing.settleAnthropicCooldownRecovery(last!, { fiveHourPercent: 3, weeklyPercent: 12, updatedAt: now + 6 })).toBe("cleared");
 });
 
 test("a usage read that started before a Retry-After refusal cannot lift it", async () => {

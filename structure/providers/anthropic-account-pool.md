@@ -114,7 +114,7 @@ expose corresponding instance-bound owners. Family leases, admission pauses and 
 account. Clear/removal fences prevent an older claim from becoming current after the same account ID is re-added.
 `src/lib/state-store-registrations.ts` sweeps and reconciles existing instance buckets without starting dormant pools. On that
 sweep `src/providers/quota/anthropic-cooldown-recovery-worker.ts` forces the usage read that lifts a claimable 429 quota cooldown
-(#6989) on enabled OAuth instances only; a windowless `Retry-After` cooldown is unclaimable and waits for its deadline. Retained
+(#6989) on enabled OAuth instances only; an aggregate refusal is read too, and its first read names the window to watch (#9032). Retained
 reads back off per account (one sweep, doubling to ten minutes); a newer refusal resets it; a deadline due first is never read for.
 
 Responses and native Messages retain the configured instance and authorized
@@ -474,12 +474,12 @@ classification are unchanged. Native Messages keeps Anthropic's `rate_limit_erro
 bridge terminal, opt-in empty-completion continuations and Chat Completions translation keep their
 existing rate-limit identity.
 
-`captureAnthropicCooldownRecovery` claims any live 429 refusal that named a rejected window, plus a
-reset-derived aggregate refusal, regardless of deadline source. Settlement still requires the
+`captureAnthropicCooldownRecovery` claims any live 429 refusal, whatever its deadline source. Settlement requires the
 claimed generation, a read no older than the claim, and every named window below 100 percent; a
 claim forces a fresh usage dispatch, and a refusal recorded while a read is in flight moves the
-generation so that read settles nothing. Entitlement 403 cooldowns and windowless Retry-After
-refusals are never claimed.
+generation so that read settles nothing. An aggregate refusal names no window: its first complete read records
+the spent windows as the ones to reopen, or none when both are open, which leaves it unclaimable until its deadline (#9032).
+Entitlement 403 cooldowns are never claimed.
 
 Regression coverage: `tests/adapters/anthropic/anthropic-pool-usage-limit.test.ts` and
 `tests/adapters/anthropic/anthropic-quota-cooldown-recovery.test.ts`.
