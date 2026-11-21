@@ -9,6 +9,7 @@ import {
   MOONSHOT_INTL_BASE_URL,
 } from "../base-url-choices";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "../command-code-efforts";
+import { COMMAND_CODE_DECISION_MODEL_DISCOVERY_FILTER } from "../command-code-decision-models";
 import { MIMO_THINKING_CAPABILITIES, MIMO_THINKING_MODELS } from "../mimo-thinking";
 import {
   CODEBUDDY_CN_MODELS,
@@ -224,6 +225,8 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       path: "models",
       maxResponseBytes: 256 * 1024,
       maxModels: 256,
+      // Decision models are not chat rows (#8997); see command-code-decision-models.ts.
+      filter: COMMAND_CODE_DECISION_MODEL_DISCOVERY_FILTER,
     },
     // Verified 2026-08-03: public /provider/v1/models returns 51 rows; /chat/completions returns
     // 401 UNAUTHORIZED without a Bearer key. Primary source: https://commandcode.ai/docs/provider.

@@ -1,6 +1,7 @@
 import { CYBER_POLICY_FALLBACK_MESSAGE, classifyError } from "./errors";
 import { classifyUpstreamCondition, upstreamConditionMessage, type UpstreamConditionEvidence } from "./upstream-condition";
 import { isDeveloperRoleRejection } from "./developer-role-rejection";
+import { COMMAND_CODE_DECISION_MODEL_MESSAGE } from "../providers/command-code-decision-models";
 
 const openaiTypes = ["invalid_request_error", "authentication_error", "permission_error", "not_found_error", "rate_limit_error", "server_error", "upstream_error", "insufficient_quota", "client_cancelled", "cyber_policy", "model_not_allowed_for_key", "api_error", "overloaded_error"] as const;
 const openaiCodes = [
@@ -230,6 +231,7 @@ const PROXY_FIXED_MESSAGES: ReadonlyMap<string, string> = literalMap([
   "upstream stream stalled without meaningful progress",
   "routed provider emitted a client tool call outside the current request's explicit tool catalog",
   "upstream stream ended before a terminal frame (truncated response)",
+  COMMAND_CODE_DECISION_MODEL_MESSAGE,
 ] as const);
 export function fixedProxyErrorMessage(message: unknown): string | undefined {
   return typeof message === "string" ? PROXY_FIXED_MESSAGES.get(message) : undefined;

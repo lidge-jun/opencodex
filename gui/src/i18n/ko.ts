@@ -3,8 +3,10 @@ import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
+import { modelsOverallCopy } from "./models-overall-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
 import { usageV2Copy } from "./v2-pages/usage-copy";
@@ -139,8 +141,10 @@ export const ko: Record<TKey, string> = {
   ...shellV2Copy("ko"),
   ...codexCliUpdateCopy("ko"),
   ...remoteLinkDiagnosticsCopy("ko"),
+  ...remoteLinkChildCopy("ko"),
   ...gatewayClientsCopy("ko"),
   ...modelsV2Copy("ko"),
+  ...modelsOverallCopy("ko"),
   ...accountsV2Copy("ko"),
   ...subagentsV2Copy("ko"),
   ...usageV2Copy("ko"),
@@ -1272,6 +1276,8 @@ export const ko: Record<TKey, string> = {
   "logs.conversation.scope": "합계는 현재 로드된 Logs 링만 포함합니다.",
   "logs.conversation.excluded": "(~$에서 가격 없음 {unpriced}건, 미측정 {unmetered}건 제외)",
   "logs.cost.approximate": "{amount}",
+  "logs.cost.partial": "확인된 비용 {amount}",
+  "logs.cost.partialMissing": "비용을 추정할 수 없는 시도({count}회)",
   "logs.cost.lowerBound": "≥{amount}",
   "logs.cost.unavailable": "사용 불가",
   "logs.detail.conversation": "대화",
@@ -1332,7 +1338,7 @@ export const ko: Record<TKey, string> = {
   "logs.detail.section.performance": "성능",
   "logs.detail.section.cost": "API 정가 환산치",
   "logs.detail.section.costBilled": "추정 비용",
-  "logs.detail.section.attempts": "Combo 시도",
+  "logs.detail.section.attempts": "업스트림 시도",
   "logs.detail.section.usage": "원본 usage",
   "logs.detail.ttft": "TTFT",
   "logs.detail.decodeTokPerSec": "디코드 속도(추정)",
@@ -1347,8 +1353,10 @@ export const ko: Record<TKey, string> = {
   "logs.detail.decodeBasisHint.unknown": "서버가 이 추정값에 어떤 시간 측정 방식을 썼는지 알려주지 않았어요.",
   "logs.detail.endToEndTokPerSec": "전체 요청 출력 tok/s",
   "logs.detail.reason.ttft_missing": "이 요청은 첫 토큰까지 걸린 시간이 기록되지 않아서 측정할 디코드 구간이 없어요.",
+  "logs.detail.reason.decode_window_missing": "전체 생성 구간을 관측하지 못했습니다.",
   "logs.detail.reason.decode_window_too_short": "측정된 출력 구간이 1초도 안 돼서 디코드 속도를 추정하기엔 너무 짧아요.",
   "logs.detail.costTotal": "정가 환산치",
+  "logs.detail.costSubtotal": "확인된 비용 소계",
   "logs.detail.creditBasis": "청구 기준",
   "logs.detail.creditCharge": "크레딧 {credits}개 × 크레딧당 {price}",
   "logs.detail.creditMixed": "혼합 — 시도별 청구 방식이 같지 않거나 크레딧 합계를 하나의 숫자로 표시할 수 없어서, 내역은 시도별 비용에만 있어요.",
@@ -1366,6 +1374,7 @@ export const ko: Record<TKey, string> = {
   "logs.detail.verification.verified": "검증됨",
   "logs.detail.verification.derived": "기반 모델 유도",
   "logs.detail.attempt.target": "프로바이더 / 모델",
+  "logs.detail.attempt.account": "계정",
   "logs.detail.attempt.reason": "결과 / 사유",
   "logs.detail.attempt.completed": "완료",
   "logs.detail.attempt.e2eNote": "상위 tok/s는 전체 요청 기준이며 각 시도는 자체 소요 시간을 사용합니다.",
@@ -1432,7 +1441,7 @@ export const ko: Record<TKey, string> = {
   "logs.detail.reason.price_unmatched": "매칭되는 가격을 찾지 못했습니다.",
   "logs.detail.reason.invalid_cache_breakdown": "캐시 토큰 상세가 전체 입력 토큰과 모순됩니다.",
   "logs.detail.reason.invalid_usage": "usage에 유효하지 않은 토큰 값이 있습니다.",
-  "logs.detail.reason.combo_attempt_unavailable": "하나 이상의 combo 시도 비용을 계산할 수 없습니다.",
+  "logs.detail.reason.combo_attempt_unavailable": "하나 이상의 업스트림 시도 비용을 계산할 수 없습니다.",
   "logs.detail.reason.credit_cost_unrepresentable": "사용할 수 있는 크레딧 측정값이 없거나 크레딧 수와 단가로 금액을 계산할 수 없어요.",
   "logs.detail.estimate.usage_estimated": "프로바이더 usage가 추정치입니다.",
   "logs.detail.estimate.cache_detail_missing": "캐시 상세가 없어 입력 전액을 상한으로 추정했습니다.",
@@ -2515,6 +2524,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "NEXT",
   "codexAuth.creditGranted": "획득 {date}",
   "codexAuth.creditExpires": "만료 {date} ({days}일 남음)",
+  "codexAuth.creditNoExpiry": "만료 없음",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "Grok 리셋 쿠폰 {count}개",
@@ -2620,18 +2630,23 @@ export const ko: Record<TKey, string> = {
   "api.responsesEndpoint": "Responses API",
   "api.chatCompletionsEndpoint": "Chat Completions API",
   "api.messagesEndpoint": "Messages API",
+  "api.geminiEndpoint": "Gemini API",
   "api.modelsEndpoint": "Models API",
   "api.surface.on": "켜짐",
   "api.surface.off": "꺼짐",
   "api.surface.source.fixed": "항상 제공",
+  "api.surface.source.default": "기본적으로 켜짐",
   "api.surface.source.explicit": "명시적 설정",
   "api.surface.source.inherited": "Claude 설정에서 상속",
   "api.surface.source.invalid": "잘못된 값 — 닫힘",
   "api.surface.messagesToggle": "Messages API 제공",
+  "api.surface.geminiToggle": "Gemini API 제공",
   "api.surface.messagesCloseNote": "Messages를 끄면 Claude 연동도 함께 꺼지므로, 이전 opencodex 버전에서도 엔드포인트가 닫힌 채로 유지됩니다.",
   "api.surface.openClaude": "Claude 설정",
   "api.surface.toggleFailed": "Messages 설정을 저장하지 못했습니다.",
   "api.surface.toggleUnavailable": "이 프록시 버전에서는 여기서 Messages API를 바꿀 수 없습니다. Claude 페이지를 사용하세요.",
+  "api.surface.geminiToggleFailed": "Gemini API 설정을 저장하지 못했습니다.",
+  "api.surface.geminiToggleUnavailable": "이 프록시 버전에서는 여기서 Gemini API를 변경할 수 없습니다.",
   "api.surface.closedNote": "이 엔드포인트로 오는 요청은 403으로 거부됩니다.",
   "api.endpointsTitle": "게이트웨이 엔드포인트",
   "api.authBaseUrlNote": "클라이언트에는 기본 URL을 설정한 뒤 아래에서 프로토콜별 엔드포인트를 선택하세요.",
@@ -2663,6 +2678,7 @@ export const ko: Record<TKey, string> = {
   "api.usageResponsesTitle": "Responses 예시",
   "api.usageChatTitle": "Chat Completions 예시",
   "api.usageMessagesTitle": "Messages 예시",
+  "api.usageGeminiTitle": "Gemini 예제",
   "api.newKeyTitle": "새 키 생성됨",
   "api.newKeyNote": "지금 키를 복사하세요. 나중에도 키 목록에서 키를 클릭하면 다시 볼 수 있습니다.",
   "api.copy": "복사",
@@ -3272,6 +3288,9 @@ export const ko: Record<TKey, string> = {
   "pws.accountsLoadFailed": "계정을 불러오지 못했습니다.",
   "pws.retryAccounts": "다시 시도",
   "pws.noAccounts": "연결된 계정이 아직 없습니다.",
+  "pws.geminiNativePassthrough": "Gemini 네이티브 패스스루",
+  "pws.geminiNativePassthroughDesc": "지원되는 Antigravity OAuth 경로에서 Gemini 요청과 응답을 유지합니다.",
+  "pws.geminiNativePassthroughLoadFailed": "Gemini 네이티브 설정을 불러올 수 없습니다.",
   "pws.cockpitImportDescription": "이 기기에서 Cockpit Tools Antigravity JSON 내보내기를 가져옵니다. 파일 내용은 표시되지 않습니다.",
   "pws.cockpitImportFileLabel": "Cockpit Tools Antigravity JSON 내보내기",
   "pws.cockpitImportChooseFile": "JSON 파일 선택",

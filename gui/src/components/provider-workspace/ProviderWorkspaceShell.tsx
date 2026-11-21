@@ -41,6 +41,7 @@ import { providerDraftTargetLabel } from "../../provider-workspace/target-drafts
 import type { ModelRow } from "../../pages/models-shared";
 import { parseModelInventory, countModelInventory, parseModelSelection, parseProviderDiscoveryMap } from "../../provider-workspace/model-inventory";
 import type { ProviderDiscoverySummary } from "../../models-groups";
+import { useProviderModelVisibility, type ProviderModelVisibility } from "../../provider-workspace/use-provider-model-visibility";
 
 export type AddProviderIntent = { tier?: "accounts" | "free" | "paid"; custom?: boolean };
 
@@ -59,6 +60,8 @@ export interface DetailSlotData {
   modelsLoading: boolean;
   modelsLoadFailed: boolean;
   onRetryModels?: () => void;
+  /** Model on/off, owned here so a provider or tab switch never cancels a write. */
+  modelVisibility?: ProviderModelVisibility;
 }
 
 const SORT_DEFS: { id: ProviderSortMode; labelKey: "pws.sort.az" | "pws.sort.za" | "pws.sort.freePaid" | "pws.sort.paidFree" | "pws.sort.accountsFirst" }[] = [
@@ -206,6 +209,10 @@ export default function ProviderWorkspaceShell({
     setModelsLoadFailed(false);
     setModelsLoadEpoch(epoch => epoch + 1);
   }, []);
+  const modelVisibility = useProviderModelVisibility(apiBase, {
+    rows: modelSnapshot?.rows ?? null, selected: modelSnapshot?.selection.selected ?? null,
+    revision: modelRevision, ready: modelRowsReady, failed: modelsLoadFailed, retry: retryModels,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -622,6 +629,7 @@ export default function ProviderWorkspaceShell({
             modelsLoading: modelsLoading || (!modelRowsReady && !modelsLoadFailed),
             modelsLoadFailed,
             onRetryModels: retryModels,
+            modelVisibility,
           },
           ) ?? (
             <div className="pws-detail-placeholder">

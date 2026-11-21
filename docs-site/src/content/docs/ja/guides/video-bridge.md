@@ -39,7 +39,7 @@ Video Bridge を使用すると、opencodex によってルーティングされ
   "images": {
     "bridgeEnabled": true,
     "videoBridgeEnabled": true,
-    "videoBridgeModel": "grok-imagine-video",
+    "videoBridgeModel": "grok-imagine-video-1.5-lite",
     "videoMaxRounds": 2,
     "videoTimeoutMs": 300000
   }
@@ -49,7 +49,7 @@ Video Bridge を使用すると、opencodex によってルーティングされ
 |オプション |デフォルト |説明 |
 |--------|---------|-------------|
 | `videoBridgeEnabled` | `false` |マスタースイッチ。明示的に有効にする必要があります。 |
-| `videoBridgeModel` | `"grok-imagine-video"` | xAI ビデオ モデル ID。 |
+| `videoBridgeModel` | `"grok-imagine-video-1.5-lite"` | xAI ビデオ モデル ID。 |
 | `videoMaxRounds` | `2` |最終回答を強制するまでの最大ビデオ生成ラウンド数。 |
 | `videoTimeoutMs` | `300000` (5 分) |ポーリングを含むビデオごとのタイムアウト。 |
 | `videoProvider` | 未設定 (xAI) | 独自の `baseUrl` とキーで `video_gen` を処理する API キープロバイダー (任意)。[動画プロバイダーの選択](#動画プロバイダーの選択) を参照してください。 |
@@ -72,7 +72,7 @@ Video Bridge を使用すると、opencodex によってルーティングされ
   "images": {
     "videoBridgeEnabled": true,
     "videoProvider": "my-video-bridge",
-    "videoBridgeModel": "grok-imagine-video"
+    "videoBridgeModel": "grok-imagine-video-1.5-lite"
   }
 }
 ```
@@ -99,16 +99,32 @@ Video Bridge を使用すると、opencodex によってルーティングされ
 
 |パラメータ |タイプ |範囲 |説明 |
 |-----------|------|-------|-------------|
-| `prompt` |文字列 |必須 |詳細なビデオ生成プロンプト |
+| `prompt` | string | 画像またはフレームがあれば省略可能 | テキストプロンプト |
 | `duration` |整数 | 1-15 |動画の長さ (秒) |
-| `resolution` |文字列 | `"480p"`、`"720p"` |ビデオ解像度 |
-| `aspect_ratio` |文字列 | 7つの比率 | `16:9`、`9:16`、`1:1`、`4:3`、`3:4`、`3:2`、`2:3` |
+| `resolution` | string | `480p`, `720p`, `1080p` | モデルによる。`last_frame`、`keyframes`、`reference_images` 使用時は最大 720p |
+| `aspect_ratio` | string | モデルによる | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2`; `image` のみをアニメーション化する場合は拒否され、元の比率が維持される |
+| `image` | string | 最初のフレーム | HTTPS URL、データ URL、または記憶された成果物 |
+| `last_frame` | string | 1.5 のみ | 最後のフレーム |
+| `keyframes` | array | 1.5、最大 4 | `{image, timestamp_s}`; タイムスタンプはクリップの内部に厳密に収める（`duration` 省略時は 8 s） |
+| `reference_images` | array | 1.5: 14、クラシック: 7 (≤ 10 s) | 参照画像。クラシックモデルでは `image` と併用不可 |
+
+モデルが対応できない設定は黙って破棄されず、課金される呼び出しの前に拒否されます。
+
+### モデルと画像入力
+
+| モデル | 解像度 | 入力 | 秒あたり (480p / 720p / 1080p) |
+|-------|------------|--------|------------------|
+| `grok-imagine-video-1.5` | 480p / 720p / 1080p ネイティブ | 最初と最後のフレーム, 4 キーフレーム, 14 参照画像 (720p 最大) | $0.08 / $0.14 / $0.25 |
+| `grok-imagine-video-1.5-lite` (デフォルト) | 480p / 720p / 1080p アップスケール | 最初のフレーム | $0.02 / $0.03 / $0.14 |
+| `grok-imagine-video` | 480p / 720p | 最初のフレーム, 7 参照画像 | $0.05 / $0.07 / — |
+
+フレーム指定や参照には `images.videoBridgeModel` を `grok-imagine-video-1.5` に設定します。既知のモデルは9種類、未知のモデルは従来の7種類の比率と480p/720pのみをサポートし、画像入力はありません。HTTPS URLと、デコード後10 MiB以下のPNG/JPEG/WebPデータURLを使用できます。画像ブリッジがダウンロードした画像は、アーティファクトURL、絶対パス、`file:` URLで1時間参照できます。ローカルファイルは読まず、保存された元URLを使います。この参照は固定xAI宛先のみで、カスタム `images.videoProvider` では使えません。インライン結果に元URLはなく、一時URLは早く期限切れになる場合があります。
+
 
 ## 制限事項
 
 - **既定は xAI**: `videoProvider` がない場合、ビデオ生成は xAI の Grok Imagine Video API を使用します。別のバックエンドは同じ非同期 API を実装する必要があります
 - **非同期**: ビデオの生成には 30 ～ 120 秒かかります
-- **コスト**: ビデオ生成は有料の xAI 機能です (480p で ~$0.05/秒、720p で ~$0.07/秒)
 - **呼び出しごとに 1 つのビデオ**: `video_gen` 呼び出しごとに 1 つのビデオが生成されます
 - **イメージ ブリッジと共存**: 両方のブリッジを同時に有効にすることができます
 - **Web 検索の優先度**: Web 検索サイドカーがターン中アクティブになっている場合 (`runTurn` アダプター以外)、ビデオ ブリッジはスキップされます。この 2 つは同時に実行できません。 `console.warn` が出力されるため、これをログで検出できます。

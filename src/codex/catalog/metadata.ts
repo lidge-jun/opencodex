@@ -62,6 +62,7 @@ import {
   SUPPORTED_NATIVE_OPENAI_SLUGS,
   RETIRED_NATIVE_OPENAI_MODELS,
   configuredNativeOpenAiModels,
+  configuredNativeOpenAiDisplayName,
   discoveredNativeOpenAiModels,
   discoveredNativeOpenAiRow,
   hasNativeOpenAiCapabilityMetadata,
@@ -614,6 +615,13 @@ function upstreamNativeEntryForSlug(slug: string): RawEntry | undefined {
   if (!presentation) return undefined; // an alias with no product identity must not ship a wrong one
   alias.display_name = presentation.displayName;
   alias.description = presentation.description;
+  neutralizeBorrowedInstructions(alias);
+  delete alias.availability_nux;
+  return alias;
+}
+
+/** A borrowed row must not claim the source model's identity in its instructions. */
+function neutralizeBorrowedInstructions(alias: RawEntry): void {
   if (typeof alias.base_instructions === "string") {
     alias.base_instructions = neutralizeIdentity(alias.base_instructions);
   }
@@ -626,8 +634,6 @@ function upstreamNativeEntryForSlug(slug: string): RawEntry | undefined {
       };
     }
   }
-  delete alias.availability_nux;
-  return alias;
 }
 
 /** Account-specific grants and prompts are projected from entitlement evidence, never a shared row. */
@@ -731,10 +737,50 @@ export function shouldUpgradeToUpstreamEntry(entry: RawEntry): boolean {
   if (typeof entry.slug !== "string" || !UPSTREAM_NATIVE_ENTRIES.has(entry.slug)) return false;
   if (discoveredNativeOpenAiRow(entry.slug)) return true;
   if (entry.display_name === entry.slug) return true;
+  if (isUnchangedHistoricalConfiguredFallback(entry)) return true;
   // A row this project authored from a guess is not evidence of upstream truth, however genuine
   // its display name looks. Replace it once, from the pin.
   return SELF_AUTHORED_NATIVE_ROWS.has(entry.slug)
     && entry.display_name !== UPSTREAM_NATIVE_ENTRIES.get(entry.slug)?.display_name;
+}
+
+// Before a model had its own pinned row (GPT-6.2 until #8893), a providers.openai.models entry for
+// it borrowed an older Sol row. Promote that fallback to the model's own pin only while every
+// field still holds what the earlier build wrote, so any user edit keeps the row: borrowed fields
+// must equal the template, and build-derived fields must hold the exact values those builds wrote
+// (checked against rows generated at c320932c19^, the commit before GPT-6.2 was pinned).
+const HISTORICAL_CONFIGURED_TEMPLATES = [NATIVE_GPT61_SOL_MODEL, NATIVE_GPT6_SOL_MODEL] as const;
+const HISTORICAL_CONFIGURED_DESCRIPTION = /^OpenAI native model added through providers\.openai\.models; uses GPT-[0-9.]+-Sol capabilities\.$/;
+const IDENTITY_FALLBACK_FIELDS: ReadonlySet<string> = new Set(["slug", "display_name", "description"]);
+// A Map, so a persisted key such as `constructor` never resolves to an inherited property.
+const HISTORICAL_DERIVED_FALLBACK_VALUES: ReadonlyMap<string, ReadonlyArray<unknown>> = new Map<string, ReadonlyArray<unknown>>([
+  ["shell_type", ["unified_exec"]],
+  ["effective_context_window_percent", [95]],
+  ["opencodex_native_source_priority", [1]],
+  // 90% of the 272,000-token window configured natives received.
+  ["auto_compact_token_limit", [244_800]],
+  // Written only when WebSockets were enabled, and then as the template's own value.
+  ["prefer_websockets", [undefined, true]],
+  // Account prompts never reach a borrowed row.
+  ["availability_nux", [undefined]],
+]);
+
+function isUnchangedHistoricalConfiguredFallback(entry: RawEntry): boolean {
+  const slug = entry.slug as string;
+  if (entry.display_name !== configuredNativeOpenAiDisplayName(slug)) return false;
+  if (typeof entry.description !== "string" || !HISTORICAL_CONFIGURED_DESCRIPTION.test(entry.description)) return false;
+  return HISTORICAL_CONFIGURED_TEMPLATES.some(template => {
+    // The projected template is what an earlier build copied, minus fields catalog rows never carry.
+    const borrowed = template === slug ? null : upstreamNativeEntry(template);
+    if (!borrowed) return false;
+    neutralizeBorrowedInstructions(borrowed);
+    const fields = new Set([...Object.keys(entry), ...Object.keys(borrowed)]);
+    return [...fields].every(field => {
+      if (IDENTITY_FALLBACK_FIELDS.has(field)) return true;
+      const derived = HISTORICAL_DERIVED_FALLBACK_VALUES.get(field);
+      return derived ? derived.includes(entry[field]) : Bun.deepEquals(entry[field], borrowed[field]);
+    });
+  });
 }
 
 export function nativeOpenAiSlugs(): string[] {

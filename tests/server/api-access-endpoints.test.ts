@@ -38,6 +38,8 @@ describe("buildApiAccessEndpoints", () => {
       chatCompletionsEndpoint: "http://[::1]:10100/v1/chat/completions",
       messagesEndpoint: "http://[::1]:10100/v1/messages",
       modelsEndpoint: "http://[::1]:10100/v1/models",
+      geminiModelsEndpoint: "http://[::1]:10100/v1beta/models",
+      surfaces: { gemini: { enabled: true, source: "default" } },
       claudeCodeEnabled: true,
     });
   });
@@ -121,6 +123,7 @@ describe("buildApiAccessEndpoints", () => {
       responses: { enabled: true, source: "fixed" },
       chat: { enabled: true, source: "fixed" },
       messages: { enabled: true, source: "claude-code-legacy" },
+      gemini: { enabled: true, source: "default" },
     });
     // An explicit surface value wins over the Claude integration, and the back-compat flag
     // follows the resolved surface so an older dashboard shows the endpoint that is served.

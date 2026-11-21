@@ -1070,6 +1070,12 @@
   flex-shrink: 0;
 }
 
+/* Turned off for Codex: same muted strike-through the Models catalog uses for an off row. */
+.pws-model-chip--off .pws-model-id {
+  color: var(--faint);
+  text-decoration: line-through;
+}
+
 .pws-inline-error {
   display: flex;
   align-items: center;

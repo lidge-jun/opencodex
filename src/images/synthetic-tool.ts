@@ -1,3 +1,4 @@
+import { videoModelCapabilities } from "./video-capabilities";
 import type { OcxTool } from "../types";
 
 /** The function name the chat model sees + the name the loop intercepts. */
@@ -82,9 +83,10 @@ export function buildImageTool(): OcxTool {
         n: { type: "integer", minimum: 1, maximum: 4 },
         aspect_ratio: {
           type: "string",
-          enum: ["1:1", "16:9", "9:16", "4:3", "3:4", "auto"],
+          enum: ["1:1", "16:9", "9:16", "4:3", "3:4", "2:3", "3:2", "9:19.5", "19.5:9", "9:20", "20:9", "1:2", "2:1", "21:9", "5:2", "auto"],
           description: "Image aspect ratio. Default auto.",
         },
+        quality: { type: "string", enum: ["low", "medium", "auto"] },
       },
       required: ["prompt"],
     },
@@ -107,13 +109,17 @@ export function isVideoGenName(name: string): boolean {
   return VIDEO_GEN_NAMES.has(name.toLowerCase());
 }
 
+/** Accepted image inputs: see src/images/video-image-input.ts. */
+const VIDEO_IMAGE_INPUT_HINT = "An https URL, a data:image URL, or a path returned by image_gen in this session.";
+
 /**
  * The synthetic function tool exposed to a chat/anthropic model for video generation.
  * Unlike image_generation, there is no hosted OpenAI tool type for video — this tool is
  * unconditionally injected when the video bridge is enabled. `videoGeneration:true` flags it
  * so the forced-final pass can drop it.
  */
-export function buildVideoTool(): OcxTool {
+export function buildVideoTool(model?: string): OcxTool {
+  const caps = videoModelCapabilities(model);
   return {
     name: VIDEO_GEN_TOOL_NAME,
     description:
@@ -122,16 +128,20 @@ export function buildVideoTool(): OcxTool {
     parameters: {
       type: "object",
       properties: {
-        prompt: { type: "string", description: "Detailed video generation prompt. Required." },
-        duration: { type: "integer", minimum: 1, maximum: 15, description: "Video length in seconds. Default 6." },
-        resolution: { type: "string", enum: ["480p", "720p"], description: "Video resolution. Default 720p." },
+        prompt: { type: "string", description: caps.firstFrame ? "Detailed video generation prompt; optional with an image." : "Detailed video generation prompt. Required." },
+        duration: { type: "integer", minimum: 1, maximum: 15, description: "Video length in seconds. xAI defaults to 8." },
+        resolution: { type: "string", enum: caps.resolutions, description: "Video resolution. xAI defaults to 480p." },
         aspect_ratio: {
           type: "string",
-          enum: ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"],
+          enum: caps.aspectRatios,
           description: "Aspect ratio. Default 16:9.",
         },
+        ...(caps.firstFrame ? { image: { type: "string", description: VIDEO_IMAGE_INPUT_HINT + " Becomes the first frame." } } : {}),
+        ...(caps.lastFrame ? { last_frame: { type: "string", description: VIDEO_IMAGE_INPUT_HINT + " Becomes the last frame." } } : {}),
+        ...(caps.maxKeyframes ? { keyframes: { type: "array", maxItems: caps.maxKeyframes, description: "Frames pinned strictly inside the clip (0 < timestamp_s < duration).", items: { type: "object", properties: { image: { type: "string", description: VIDEO_IMAGE_INPUT_HINT }, timestamp_s: { type: "number" } }, required: ["image", "timestamp_s"] } } } : {}),
+        ...(caps.maxReferenceImages ? { reference_images: { type: "array", maxItems: caps.maxReferenceImages, description: "Characters, products or places to include, without fixing the first frame.", items: { type: "string", description: VIDEO_IMAGE_INPUT_HINT } } } : {}),
       },
-      required: ["prompt"],
+      ...(caps.firstFrame ? {} : { required: ["prompt"] }),
     },
     videoGeneration: true,
   };

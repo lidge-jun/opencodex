@@ -55,7 +55,7 @@ import {
   type PinnedDownloadFn,
 } from "../images/artifacts";
 import { findXaiProvider, resolveXaiImageAuthToken } from "../images/plan";
-import { callXaiImages } from "../images/xai-client";
+import { callXaiImages, XAI_DEFAULT_IMAGE_MODEL, XAI_MAX_EDIT_IMAGES } from "../images/xai-client";
 import type { AdmissionLease } from "../lib/admission";
 import { codexAccountSelectionForTurn } from "./lifecycle";
 import { codexModelAvailabilityErrorResponse } from "./responses/codex-auth-error";
@@ -131,7 +131,24 @@ export async function readImageResponseBytes(
 }
 
 const CCA_IMAGE_MODEL = "gemini-3.1-flash-image";
-const XAI_IMAGE_BRIDGE_MODEL = "grok-imagine-image-quality";
+
+/** An edit source xAI can fetch: an https URL without credentials, or a base64 image data URL. */
+function isXaiEditSourceUrl(value: string): boolean {
+  const data = /^data:image\/(?:png|jpeg|jpg|webp);base64,(.*)$/is.exec(value);
+  if (data) {
+    // Canonical base64 only: whole quads, padding at the end and nowhere else, and unused
+    // padding bits zero (decoding and re-encoding must give back the same text).
+    const payload = data[1]!;
+    return payload.length > 0 && payload.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(payload)
+      && Buffer.from(payload, "base64").toString("base64") === payload;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname !== "" && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The model this request names, or undefined when it names none.
@@ -492,7 +509,7 @@ async function tryXaiImageRelay(
   if (config.images?.bridgeEnabled !== true) return undefined;
   const found = findXaiProvider(config);
   if (!found) return undefined;
-  const bridgeModel = config.images?.bridgeModel ?? XAI_IMAGE_BRIDGE_MODEL;
+  const bridgeModel = config.images?.bridgeModel ?? XAI_DEFAULT_IMAGE_MODEL;
   // The bridge sends this request to the configured xAI provider and the bridge
   // model regardless of the selector in the body, so that is what the key is
   // checked against.
@@ -515,20 +532,43 @@ async function tryXaiImageRelay(
   const quality = typeof obj.quality === "string" ? obj.quality : undefined;
   const aspectRatio = typeof obj.aspect_ratio === "string" ? obj.aspect_ratio : undefined;
   let imageUrl: string | undefined;
+  let imageUrls: string[] | undefined;
   if (endpoint === "edits") {
-    const images = obj.images;
-    const first = Array.isArray(images) ? images[0] : undefined;
-    if (typeof obj.image === "string") imageUrl = obj.image;
-    else if (typeof obj.image_url === "string") imageUrl = obj.image_url;
-    else if (first && typeof first === "object" && first !== null) {
-      const rec = first as Record<string, unknown>;
-      if (typeof rec.image_url === "string") imageUrl = rec.image_url;
-      else if (typeof rec.url === "string") imageUrl = rec.url;
+    const sources: string[] = [];
+    // Every supplied source must be a usable URL: silently dropping one would buy an edit
+    // missing an image the caller sent. xAI takes a public https URL or a base64 image data URL;
+    // an explicit null counts as supplied.
+    let unusable = false;
+    const add = (value: unknown) => {
+      const url = typeof value === "string" ? value.trim() : "";
+      if (isXaiEditSourceUrl(url)) sources.push(url);
+      else unusable = true;
+    };
+    if (obj.image !== undefined) add(obj.image);
+    if (obj.image_url !== undefined) add(obj.image_url);
+    if (obj.images !== undefined) {
+      if (!Array.isArray(obj.images)) unusable = true;
+      else for (const entry of obj.images) {
+        if (typeof entry === "string") { add(entry); continue; }
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) { unusable = true; continue; }
+        // Every URL-bearing property of an entry is a supplied source; an entry with none
+        // (a file_id, say) cannot be represented.
+        const rec = entry as Record<string, unknown>;
+        if (rec.image_url === undefined && rec.url === undefined) { unusable = true; continue; }
+        if (rec.image_url !== undefined) {
+          const nested = rec.image_url;
+          if (nested && typeof nested === "object" && !Array.isArray(nested)) add((nested as Record<string, unknown>).url);
+          else add(nested);
+        }
+        if (rec.url !== undefined) add(rec.url);
+      }
     }
-    if (!imageUrl?.trim()) {
-      return formatErrorResponse(400, "invalid_request_error", "image edits require an image URL");
-    }
-    imageUrl = imageUrl.trim();
+    if (unusable) return formatErrorResponse(400, "invalid_request_error", "xAI image edits need every image as a URL");
+    // Same rule as callXaiImages: duplicates collapse first, then the five-source limit applies.
+    const unique = [...new Set(sources)];
+    if (unique.length > XAI_MAX_EDIT_IMAGES) return formatErrorResponse(400, "invalid_request_error", "xAI image edits accept at most 5 images");
+    [imageUrl, ...imageUrls] = unique;
+    if (!imageUrl) return formatErrorResponse(400, "invalid_request_error", "image edits require an image URL");
   }
   const timeoutMs = config.images?.timeoutMs ?? IMAGES_UPSTREAM_TIMEOUT_MS;
   const linkedSignal = signalWithTimeout(timeoutMs, signal);
@@ -557,6 +597,7 @@ async function tryXaiImageRelay(
         quality,
         aspectRatio,
         imageUrl,
+        imageUrls,
       },
       { baseUrl: "https://api.x.ai/v1", token },
       linkedSignal.signal,

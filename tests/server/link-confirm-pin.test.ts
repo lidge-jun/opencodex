@@ -37,7 +37,7 @@ function harness(options: { links?: LinkRecord[]; knownHosts?: string; duringVer
         writeFileSync(option, argv[argv.indexOf("--") + 1] + " ssh-ed25519 AAAAPROBED\n");
         return { code: 0, stdout: "ocx-link-probe\n", stderr: "" };
       }
-      if (remote === "cmd /c echo %OS%") return { code: 127, stdout: "", stderr: "" };
+      if (remote === "cmd.exe /c echo %OS%") return { code: 127, stdout: "", stderr: "" };
       // The remote ocx script also mentions uname, so the version call is recognised first.
       if (remote.includes("--version")) {
         options.duringVersion?.(store => { current = store; });
