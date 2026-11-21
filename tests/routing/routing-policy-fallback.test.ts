@@ -841,6 +841,29 @@ describe("policy candidate fallback", () => {
     expect(response.status).toBe(200);
     expect(seenModels).toEqual(["policy/daily", "provider-b/model-b"]);
   });
+
+  test.each([
+    ["a readable provider 413", 0, ["policy/daily", "provider-b/model-b"]],
+    ["a 413 past the bounded read", 70_000, ["policy/daily"]],
+  ] as const)("%s decides the policy hop from its complete body (#9017)", async (_name, padding, expected) => {
+    const trace = policyTrace();
+    const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    const runCore: NonNullable<PolicyFallbackDeps["runCore"]> = async (req, _config, ctx, options) => {
+      const body = await req.clone().json() as { model?: string };
+      options.onRequestBodyParsed?.(body);
+      seenModels.push(String(body.model));
+      ctx.routeDecision = trace;
+      seedAttempt(ctx, "provider", String(body.model));
+      if (seenModels.length === 1) {
+        return Response.json({ error: { message: "Request Entity Too Large", type: "invalid_request_error" },
+          ...(padding ? { padding: "x".repeat(padding) } : {}) }, { status: 413 });
+      }
+      return Response.json({ id: "resp", object: "response", status: "completed", output: [] });
+    };
+    await handleResponsesWithPolicyFallback(request(), fixtureConfig(), logCtx, {}, { runCore });
+    expect(seenModels).toEqual([...expected]);
+  });
   test("retries the next policy candidate and keeps distinct physical attempts", async () => {
     const trace = policyTrace();
     const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;

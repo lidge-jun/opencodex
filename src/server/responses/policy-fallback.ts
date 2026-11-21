@@ -1,4 +1,4 @@
-import { comboFailureDecision, isProviderModerationRefusal } from "../../combos/failover";
+import { comboFailureDecision, isProviderIntakeRefusalBody, isProviderModerationRefusal } from "../../combos/failover";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { isVerifiedModelNotInPlanResponse } from "../../lib/errors";
 import { isShadowSourceModel } from "../../lib/shadow-call";
@@ -135,7 +135,8 @@ async function shouldHopPolicyCandidate(response: Response, signal?: AbortSignal
   if (isPolicyCandidateRefusal(response)) return true;
   try {
     const inspected = await readBoundedResponseBody(response.clone(), { signal });
-    const text = inspected.displaySafe && !inspected.truncated ? inspected.text : "";
+    const complete = inspected.displaySafe && !inspected.truncated;
+    const text = complete ? inspected.text : "";
     return comboFailureDecision(response.status, text, {
       code: upstreamCodeForComboFailure(response, errorCodeFromText(text)),
       // A passthrough candidate returns its upstream body unchanged, so the code is not provenance.
@@ -143,6 +144,8 @@ async function shouldHopPolicyCandidate(response: Response, signal?: AbortSignal
       // The text is the whole bounded body, judged as the combo reader judges it.
       ...(text && (response.status === 400 || response.status === 422)
         ? { providerModerationRefusal: isProviderModerationRefusal(response.status, text, undefined, true) } : {}),
+      // A 413 opens another candidate only when its complete body reads as a provider intake refusal.
+      ...(response.status === 413 ? { providerIntakeRefusal: complete && isProviderIntakeRefusalBody(text) } : {}),
     }) === "hop";
   } catch {
     return false;
