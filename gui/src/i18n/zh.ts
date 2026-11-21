@@ -2376,6 +2376,9 @@ export const zh: Record<TKey, string> = {
 
   "accountPool.strategy": "轮换策略",
   "accountPool.strategyDesc": "OpenCodex 如何为新建/未绑定任务分配账号。",
+  "accountPool.strategyPreserveLongQuota": "保留长期额度",
+  "accountPool.strategyHintPreserveLongQuota": "优先使用已确认仅有短期额度的账号，然后是周额度、月额度。同组内优先选择最长窗口最早重置的账号。窗口未知的账号作为备用。已绑定任务保留亲和策略；独立模型额度按用量排序。",
+  "accountPool.preserveBelowThreshold": "在{threshold}%以下保留长期额度",
   "accountPool.strategyResetFirst": "额度即将刷新优先",
   "accountPool.strategyResetNearWeighted": "按最近的额度重置加权",
   "accountPool.strategyHintResetFirst": "在低于用量阈值的账号中，优先选择下次5小时或周额度重置最早的账号。已绑定任务遵循配置的亲和策略。独立模型额度按用量排序。",

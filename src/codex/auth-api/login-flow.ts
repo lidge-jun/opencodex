@@ -298,6 +298,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
               let plan = extractChatgptPlanType(undefined, cred.access);
               let quota: Omit<StoredAccountQuota, "updatedAt"> | null = null;
               let policyQuota: Omit<StoredAccountQuota, "updatedAt"> | null = null;
+              let wham: { data: WhamUsageResponse } | undefined;
               try {
                 const tokens = { access_token: cred.access, account_id: oauthAccountId };
                 const resp = await fetch("https://chatgpt.com/backend-api/wham/usage", {
@@ -305,7 +306,9 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                   signal: AbortSignal.timeout(8000),
                 });
                 if (resp.ok) {
-                  const data = (await resp.json()) as WhamUsageResponse;
+                  const data = await resp.json();
+                  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Invalid WHAM response");
+                  wham = { data: data as WhamUsageResponse };
                   email = data.email?.trim() || email;
                   plan = nonEmptyPlan(data.plan_type) ?? plan;
                   quota = parseUsageQuota(data);
@@ -431,7 +434,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                 clearCodexPoolRefreshFailure(accountId);
                 if (warmup.validatedAt !== undefined) markCodexAccountValidated(accountId, warmup.validatedAt, generation);
                 clearAccountNeedsReauth(accountId);
-                if (quota) setAccountQuotaFromParsed(accountId, quota, undefined, undefined, policyQuota);
+                setAccountQuotaFromParsed(accountId, quota, undefined, undefined, policyQuota, undefined, false, true, null, wham);
                 // Keep the pool id stable; refresh display metadata after a successful login/reauth.
                 accounts[existingIdx] = withCodexAccountLogLabel({
                   ...accounts[existingIdx],
@@ -465,8 +468,8 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
               }
               // A new quota row is generation-gated by live account ownership. Reconcile the
               // durable config owner first so a partial prior sweep cannot reject this write.
-              if (newAccountPersistence?.status === "committed" && quota) {
-                setAccountQuotaFromParsed(accountId, quota, undefined, undefined, policyQuota);
+              if (newAccountPersistence?.status === "committed") {
+                setAccountQuotaFromParsed(accountId, quota, undefined, undefined, policyQuota, undefined, false, true, null, wham);
               }
               const { catalogRefreshPending } = await convergeAccountNamespaceCatalog(
                 latestConfig,

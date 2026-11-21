@@ -822,7 +822,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         : parseAccountPoolStrategy(fields.strategy);
       if (parsed === null) {
         const extra = kind === "anthropic" ? "reset-near-weighted"
-          : kind === "codex" ? "reset-first, reset-near-weighted"
+          : kind === "codex" ? "reset-first, reset-near-weighted, preserve-long-quota"
           : provider === "kiro" ? "reset-first, least-loaded" : "reset-first";
         return jsonResponse({ error: `strategy must be one of: quota, round-robin, fill-first, ${extra}` }, 400);
       }

@@ -2403,6 +2403,9 @@ export const ko: Record<TKey, string> = {
 
   "accountPool.strategy": "로테이션 전략",
   "accountPool.strategyDesc": "OpenCodex가 새 작업/바인딩 없는 작업에 계정을 배정하는 방식입니다.",
+  "accountPool.strategyPreserveLongQuota": "장기 할당량 보존",
+  "accountPool.strategyHintPreserveLongQuota": "단기 한도만 있다고 확인된 계정, 주간 한도, 월간 한도 순으로 우선합니다. 같은 그룹에서는 가장 긴 한도의 초기화가 가까운 계정을 선택합니다. 알 수 없는 한도는 예비로 사용합니다. 연결된 작업의 어피니티 정책은 유지되며 독립 모델 한도는 사용량 순서를 따릅니다.",
+  "accountPool.preserveBelowThreshold": "{threshold}% 미만에서 장기 한도 보존",
   "accountPool.strategyResetFirst": "가장 가까운 초기화 우선",
   "accountPool.strategyResetNearWeighted": "가장 가까운 초기화에 가중치",
   "accountPool.strategyHintResetFirst": "사용량 임계값 미만인 계정 중 다음 5시간·주간 초기화가 가장 가까운 계정을 고릅니다. 연결된 작업은 설정된 어피니티 정책을 따릅니다. 독립 모델 한도에는 사용량 순서를 적용합니다.",

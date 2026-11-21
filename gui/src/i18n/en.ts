@@ -3017,6 +3017,9 @@ export const en = {
 
   "accountPool.strategy": "Rotation strategy",
   "accountPool.strategyDesc": "How OpenCodex assigns an account to a new/unbound task.",
+  "accountPool.strategyPreserveLongQuota": "Preserve long-term quota",
+  "accountPool.strategyHintPreserveLongQuota": "Prefer proven short-only accounts, then weekly, then monthly quotas. Within each group, prefer the earliest reset of the longest window. Unknown topology is a fallback. Bound tasks retain the configured affinity policy; independent model quotas use quota ordering.",
+  "accountPool.preserveBelowThreshold": "preserve long-term quota below {threshold}%",
   "accountPool.strategyResetFirst": "Soonest reset first",
   "accountPool.strategyResetNearWeighted": "Weighted by nearest reset",
   "accountPool.strategyHintResetFirst": "Prefer the nearest future 5-hour or weekly reset among accounts below the usage threshold. Bound tasks follow the configured affinity policy. Independent model quotas use quota ordering.",
