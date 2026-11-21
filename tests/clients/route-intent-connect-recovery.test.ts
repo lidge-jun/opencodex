@@ -24,6 +24,41 @@ function scenario(body: string) {
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
 
+test("clearing an absent initial selection leaves the Link state directory untouched", () => {
+  const result = scenario(`
+    import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+    import { join } from 'node:path';
+    import { clearInitialRouteIntent, readInitialRouteIntent } from './src/integrations/route-intent-initial';
+    import { routeIntentStatePath } from './src/integrations/route-intent-state';
+    const root = routeIntentStatePath();
+    const link = 'lnk_0123456789abcdef';
+    clearInitialRouteIntent(link, root);
+    const createdRoot = existsSync(root);
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, 'unrelated'), 'keep');
+    clearInitialRouteIntent(link, root);
+    console.log(JSON.stringify({ createdRoot, entries: readdirSync(root), selection: readInitialRouteIntent(link, root) }));
+  `);
+  expect(result).toEqual({ createdRoot: false, entries: ["unrelated"], selection: {} });
+});
+
+test("clearing an initial selection reports an unreachable state directory", () => {
+  const result = scenario(`
+    import { throws } from 'node:assert/strict';
+    import { lstatSync, mkdirSync, rmdirSync, symlinkSync } from 'node:fs';
+    import { join } from 'node:path';
+    import { clearInitialRouteIntent } from './src/integrations/route-intent-initial';
+    const target = join(process.env.HOME, 'original');
+    const alias = join(process.env.HOME, 'alias');
+    mkdirSync(target);
+    symlinkSync(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    rmdirSync(target);
+    throws(() => clearInitialRouteIntent('lnk_0123456789abcdef', join(alias, 'route-intent')));
+    console.log(JSON.stringify({ aliasRetained: lstatSync(alias).isSymbolicLink() }));
+  `);
+  expect(result.aliasRetained).toBe(true);
+});
+
 const cliSetup = `
   import { mock } from 'bun:test';
   import { Readable } from 'node:stream';

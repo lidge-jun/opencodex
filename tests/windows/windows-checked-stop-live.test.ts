@@ -169,9 +169,11 @@ describe("capped command answers", () => {
     expect(parseTaskCsvState('"\\opencodex-proxy","N/A","正在运行"')).toBe("running");
     expect(parseTaskCsvState('"\\opencodex-proxy","2026/11/17 9:00:00","就绪"')).toBe("not-running");
     expect(parseTaskCsvState('"\\opencodex-proxy","N/A","已禁用"')).toBe("not-running");
-    // ko-KR, observed on two machines: Running, Ready.
+    // System32\ko-KR\schtasks.exe.mui: Running, Ready, Queued (534), Disabled (535).
     expect(parseTaskCsvState('"\\opencodex-proxy","N/A","실행 중"')).toBe("running");
     expect(parseTaskCsvState('"\\opencodex-proxy","N/A","준비"')).toBe("not-running");
+    expect(parseTaskCsvState('"\\opencodex-proxy","N/A","대기"')).toBe("running");
+    expect(parseTaskCsvState('"\\opencodex-proxy","N/A","사용 안 함"')).toBe("not-running");
     // Another task path still does not count, whatever the word.
     expect(parseTaskCsvState('"\\Tools\\opencodex-proxy","N/A","正在运行"')).toBe("unknown");
   });

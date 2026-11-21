@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import type { OcxProviderConfig } from "../../src/types";
 import { captureWireAdapterHardPins } from "../../src/types";
 import type { ProviderRegistryEntry } from "../../src/providers/registry/types";
@@ -11,6 +11,7 @@ import { applyProviderConfigHints } from "../../src/codex/catalog/model-hints";
 import { captureFastPolicyAuthority } from "../../src/providers/service-tier";
 import {
   clampObservedModelLimits,
+  prepareModelPolicy,
   resolveModelPolicy,
 } from "../../src/providers/resolved-model-policy";
 import { modelRecordValue } from "../../src/reasoning-effort";
@@ -66,6 +67,54 @@ function resolve(
 }
 
 describe("resolved static model policy parity", () => {
+  test("prepared policy reuses a detached provider snapshot across model rows", () => {
+    const ids = Array.from({ length: 600 }, (_, i) => `org/model-${i}`);
+    const configured = provider({ models: ids, modelContextWindows: Object.fromEntries(ids.map((id, i) => [id, 100_000 + i])) });
+    const input = { providerName: "fixture-provider", provider: configured, transportMatchedRegistry: false as const };
+    const prepared = prepareModelPolicy(input);
+    const first = prepared({ modelId: ids[0]! });
+    const last = prepared({ modelId: ids[599]! });
+    expect(last).toEqual(resolveModelPolicy({ ...input, modelId: ids[599]! }));
+    expect(first.provider).toBe(last.provider);
+    expect(Object.isFrozen(last.provider.modelContextWindows)).toBe(true);
+    configured.modelContextWindows![ids[0]!] = 1;
+    expect(prepared({ modelId: ids[0]! }).model.contextWindow).toBe(100_000);
+    expect(first.model.contextWindow).toBe(100_000);
+    expect(last.model.contextWindow).toBe(100_599);
+  });
+
+  test("model override preserves other axes of a case-variant registry row", () => {
+    const policy = resolveModelPolicy({
+      providerName: "fixture-provider",
+      provider: provider(),
+      registryEntry: registry({ modelCapabilities: { [MODEL.toUpperCase()]: {
+        supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: true,
+      } } }),
+      transportMatchedRegistry: true,
+      modelId: MODEL,
+      modelCapabilities: { supportsReasoningEffort: false },
+    });
+    expect(policy.model).toMatchObject({ supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false });
+  });
+
+  test("prepared model overrides do not clone unrelated capability rows", () => {
+    const prepared = prepareModelPolicy({
+      providerName: "fixture-provider",
+      provider: provider({ modelCapabilities: Object.fromEntries(Array.from({ length: 600 }, (_, i) => [
+        `org/model-${i}`, { supportsReasoning: true, supportsThinkingToggle: true },
+      ])) }),
+      transportMatchedRegistry: false,
+    });
+    const clone = spyOn(globalThis, "structuredClone");
+    try {
+      const policy = prepared({ modelId: "org/model-0", modelCapabilities: { supportsThinkingToggle: false } });
+      expect(policy.model).toMatchObject({ supportsReasoning: true, supportsThinkingToggle: false });
+      expect(clone.mock.calls.length).toBeLessThan(2);
+    } finally {
+      clone.mockRestore();
+    }
+  });
+
   test("inline tag opt-in inherits only matching transport defaults and preserves explicit empty lists", () => {
     const entry = registry({ inlineThinkTagModels: [MODEL] });
     expect(resolve(provider(), entry).provider.inlineThinkTagModels).toEqual([MODEL]);

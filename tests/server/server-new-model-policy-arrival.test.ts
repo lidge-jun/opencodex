@@ -1,13 +1,14 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { loadConfig, saveConfig } from "../../src/config";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
-import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
+import { flushNativeMainStartupReleases, waitForNativeMainStartupGate } from "../../src/codex/native-profile-startup";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
 import {
-  invalidateCodexModelEntitlementsForAccount, resolveCodexEntitlementClientVersion, seedCodexModelEntitlementsForTests,
+  GATED_MODEL_CLIENT_VERSION_FLOOR, invalidateCodexModelEntitlementsForAccount, seedCodexModelEntitlementsForTests,
 } from "../../src/codex/model-entitlements";
+import * as codexRuntime from "../../src/codex/runtime";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { setPersistedConfigMutationBeforeCommitForTests } from "../../src/config/persisted-mutation";
 import { gatherRoutedModels, getLastComboCatalogOmissions } from "../../src/codex/catalog";
@@ -18,6 +19,7 @@ import {
 } from "../../src/codex/model-cache";
 import type { ManagementModelRow } from "../../src/server/management/model-rows";
 import type { OcxConfig } from "../../src/types";
+import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { createTestCaseLifecycle } from "../helpers/test-sandbox-cleanup";
@@ -422,7 +424,7 @@ test("superseded Desktop listing retries after a Daybreak grant is withdrawn", (
   const daybreak = "gpt-daybreak-blue-latest";
   const alias = desktop3pAlias("native", daybreak);
   const accountId = "desktop-entitlement-fixture";
-  const version = resolveCodexEntitlementClientVersion();
+  const version = GATED_MODEL_CLIENT_VERSION_FLOOR;
   const seedRoster = (models: readonly string[]) => seedCodexModelEntitlementsForTests(
     MAIN_CODEX_ACCOUNT_ID, models, Date.now(), version, `main:${accountId}`,
   );
@@ -446,14 +448,16 @@ test("superseded Desktop listing retries after a Daybreak grant is withdrawn", (
     claudeCode: { enabled: true, desktopNativeModels: true },
   });
   const { startServer } = await import("../../src/server");
-  const server = startServer(0);
+  const server = startServer(0, {
+    inspectNativeCodexOwnership: ownedServiceHomeInspection("Desktop Daybreak fixture"),
+  });
   lifecycle.ownStop(() => server.stop(true));
+  expect(await waitForNativeMainStartupGate()).toMatchObject({ status: "ready" });
   writeFileSync(home.path(".codex", "auth.json"), JSON.stringify({
     tokens: { access_token: "fixture-entitlement-token", account_id: accountId },
   }), { mode: 0o600 });
   const cachedModels = [{ provider, id: "model-a" }];
   setCached(provider, cachedModels);
-  seedRoster([daybreak]);
   const url = new URL("/v1/models?format=desktop-config", server.url);
   const options = { signal: lifecycle.abort.signal };
   const modelNames = async (response: Response) => {
@@ -461,7 +465,14 @@ test("superseded Desktop listing retries after a Daybreak grant is withdrawn", (
     const { models } = await response.json() as { models: Array<{ name: string }> };
     return models.map(model => model.name);
   };
+  // Catalog refresh can discover a host CLI between listings. Keep every Desktop
+  // request on the same entitlement cache key as both seeded rosters.
+  const runtimeSelection = spyOn(codexRuntime, "loadPersistedCodexRuntime").mockReturnValue({
+    version: 1, command: "codex-fixture", source: "configured", selectedVersion: version, updatedAt: now,
+  });
+  codexRuntime.resetCodexRuntimeResolveCacheForTests();
   try {
+    seedRoster([daybreak]);
     expect(await modelNames(await fetch(url, options))).toContain(alias);
     seedRoster([]);
     expect(resolveDesktop3pAlias(alias)).toBe(`native/${daybreak}`);
@@ -487,6 +498,8 @@ test("superseded Desktop listing retries after a Daybreak grant is withdrawn", (
     await expectDesktopSnapshotBusy(superseded);
   } finally {
     invalidateCodexModelEntitlementsForAccount(MAIN_CODEX_ACCOUNT_ID);
+    runtimeSelection.mockRestore();
+    codexRuntime.resetCodexRuntimeResolveCacheForTests();
   }
 }), SERVER_BUDGET_MS);
 

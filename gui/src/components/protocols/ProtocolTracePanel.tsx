@@ -1,3 +1,4 @@
+import { isProtocol } from "../../../../src/protocols/contract";
 import { parseProtocolTraceV1 } from "../../../../src/protocols/dto";
 import type { TFn } from "../../i18n/shared";
 import { openCompatibilityPair, protocolPairUpstream } from "../../protocol-deep-links";
@@ -12,6 +13,8 @@ import { FEATURE_DISPOSITION_KEYS, PROTOCOL_MODE_KEYS, protocolHopLabel, protoco
  */
 export function ProtocolTracePanel({ trace, t }: { trace: unknown; t: TFn }) {
   const parsed = parseProtocolTraceV1(trace);
+  const inbound = parsed?.inbound;
+  const upstream = parsed?.upstream;
   return (
     <section className="log-detail-section" aria-labelledby="log-detail-protocol">
       <h4 id="log-detail-protocol" className="log-detail-section-title">{t("logs.detail.protocol.section")}</h4>
@@ -64,13 +67,15 @@ export function ProtocolTracePanel({ trace, t }: { trace: unknown; t: TFn }) {
               </>
             )}
           </div>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm protocol-deep-link"
-            onClick={() => openCompatibilityPair({ inbound: parsed.inbound, upstream: protocolPairUpstream(parsed.upstream) })}
-          >
-            {t("protocolLinks.labEvidence")}
-          </button>
+          {isProtocol(inbound) && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm protocol-deep-link"
+              onClick={() => openCompatibilityPair({ inbound, upstream: protocolPairUpstream(upstream === "gemini" ? undefined : upstream) })}
+            >
+              {t("protocolLinks.labEvidence")}
+            </button>
+          )}
         </>
       ) : (
         <p className="log-detail-notes-line muted">{t("logs.detail.protocol.none")}</p>

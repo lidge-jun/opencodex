@@ -371,10 +371,16 @@ export function buildRouteProbeArgv(options: RouteProbeArgvOptions): string[] {
 
 /**
  * Locale-independent Windows check for a host whose SSH shell is cmd.exe or PowerShell. Both run
- * `cmd /c echo %OS%`, and cmd expands it to `Windows_NT` regardless of display language. The
+ * `cmd.exe /c echo %OS%`, and cmd expands it to `Windows_NT` regardless of display language. The
  * command is a fixed literal; a POSIX shell answers "command not found" and nothing else.
+ *
+ * It names `cmd.exe`, never bare `cmd` (#8972). Win32-OpenSSH with the default cmd.exe shell runs an
+ * exec request as `cmd.exe /c "<command>"`, and cmd keeps those quotes when the quoted text starts
+ * with the name of something runnable: `cmd /c echo %OS%` then prints `Windows_NT"`. With
+ * `cmd.exe` the outer cmd strips the quotes. The parser still accepts the stray quote
+ * (`isWindowsNtAnswer`), so a shell that adds it anyway is understood.
  */
-export const WINDOWS_OS_PROBE = "cmd /c echo %OS%";
+export const WINDOWS_OS_PROBE = "cmd.exe /c echo %OS%";
 
 /** Run WINDOWS_OS_PROBE against an already trusted (pinned or just-probed) host key only. */
 export function buildWindowsProbeArgv(options: { alias: string; knownHostsFile: string; destination?: string; route: ExplicitRoute | null }): string[] {

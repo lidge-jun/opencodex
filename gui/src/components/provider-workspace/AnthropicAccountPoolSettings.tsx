@@ -24,6 +24,7 @@ import {
   type AccountPoolStrategy,
 } from "../../account-pool-strategy";
 import AccountPoolStrategyControls from "../AccountPoolStrategyControls";
+import PoolSettingsDisclosure from "../PoolSettingsDisclosure";
 import { Select } from "../../ui";
 
 /** The public guide section that explains pool selection, failover and its limits. */
@@ -257,187 +258,198 @@ export default function AnthropicAccountPoolSettings({
   // Always allow turning the pool off; only block enabling when fewer than 2 accounts.
   const controlsDisabled = loading || saving || loadError || reloadRequired;
   const toggleDisabled = controlsDisabled || (!enabled && accountCount < 2);
+  // Collapsed, the card is its title and switch. A disabled switch still says why: a failed load,
+  // or too few accounts to turn the pool on. The rest of the status line waits behind the title.
+  const switchBlockedByLoad = loadError && !reloadRequired;
+  const switchBlockedByAccounts = !controlsDisabled && !enabled && accountCount < 2;
 
   return (
     <div className="card anthropic-pool-card" aria-busy={loading || saving}>
-      <div className="card-row" style={{ alignItems: "flex-start", gap: 12 }}>
-        <div style={{ flex: 1 }}>
-          <strong>{t("anthropicPool.title")}</strong>
-          <div className="card-sub" style={{ marginTop: 4 }}>
+      <PoolSettingsDisclosure
+        cardId={provider}
+        title={t("anthropicPool.title")}
+        notice={(switchBlockedByLoad || switchBlockedByAccounts) && (
+          <div className="card-sub anthropic-pool-card__blocked">
+            {switchBlockedByLoad ? t("anthropicPool.loadFailed") : t("anthropicPool.needTwoAccounts")}
+          </div>
+        )}
+        control={
+          <button
+            type="button"
+            className={`toggle ${enabled ? "on" : ""}`}
+            disabled={toggleDisabled}
+            aria-pressed={reloadRequired ? undefined : enabled}
+            aria-label={t("anthropicPool.title")}
+            title={enabled ? t("anthropicPool.on") : t("anthropicPool.off")}
+            onClick={() => {
+              void save({
+                enabled: !enabled,
+                threshold,
+                strategy,
+                stickyLimit,
+                quotaWindow,
+                nativeMessages,
+              });
+            }}
+          >
+            <span className="toggle-knob" />
+          </button>
+        }
+      >
+        {!switchBlockedByLoad && (
+          <div className="card-sub anthropic-pool-card__status">
             {reloadRequired
               ? t("anthropicPool.saveStateUnknown")
-              : loadError
-              ? t("anthropicPool.loadFailed")
               : loading
                 ? t("common.loading")
                 : enabled
                   ? enabledStatus(t, strategy, threshold, quotaWindow)
                   : t("anthropicPool.disabledDesc")}
           </div>
-        </div>
-        <button
-          type="button"
-          className={`toggle ${enabled ? "on" : ""}`}
-          disabled={toggleDisabled}
-          aria-pressed={reloadRequired ? undefined : enabled}
-          aria-label={t("anthropicPool.title")}
-          title={enabled ? t("anthropicPool.on") : t("anthropicPool.off")}
-          onClick={() => {
-            void save({
-              enabled: !enabled,
-              threshold,
-              strategy,
-              stickyLimit,
-              quotaWindow,
-              nativeMessages,
-            });
-          }}
-        >
-          <span className="toggle-knob" />
-        </button>
-      </div>
+        )}
 
-      <p className="card-sub anthropic-pool-card__notice">
-        {t("anthropicPool.experimentalWarning")}
-      </p>
-
-      {accountCount < 2 && (
-        <div className="card-sub" style={{ marginTop: 8 }}>{t("anthropicPool.needTwoAccounts")}</div>
-      )}
-
-      <details className="anthropic-pool-card__details">
-        <summary>{t("anthropicPool.detailsSummary")}</summary>
-        <p>{t("anthropicPool.detailsEnabling")}</p>
-        <p>{t("anthropicPool.detailsFailover")}</p>
-        <p>{t("anthropicPool.detailsActivity")}</p>
-        <label className="anthropic-pool-card__native-messages">
-          <input
-            type="checkbox"
-            checked={state ? nativeMessages : false}
-            disabled={controlsDisabled || !state}
-            aria-label={t("anthropicPool.nativeMessagesLabel")}
-            aria-describedby="anthropic-pool-native-messages-help"
-            onChange={(event) => {
-              void save({ enabled, threshold, strategy, stickyLimit, quotaWindow, nativeMessages: event.target.checked });
-            }}
-          />
-          <span className="anthropic-pool-card__native-messages-copy">
-            <span className="field-label">{t("anthropicPool.nativeMessagesLabel")}</span>
-            <span id="anthropic-pool-native-messages-help" className="card-sub">{t("anthropicPool.nativeMessagesHelp")}</span>
-          </span>
-        </label>
-        <p>
-          <a href={ANTHROPIC_POOL_GUIDE_URL} target="_blank" rel="noreferrer">{t("anthropicPool.detailsGuide")}</a>
+        <p className="card-sub anthropic-pool-card__notice">
+          {t("anthropicPool.experimentalWarning")}
         </p>
-      </details>
 
-      {enabled && state && (
-        <>
-          {usesConfigurableQuotaWindow && <label className="field anthropic-pool-card__field">
-            <span className="field-label">{t("anthropicPool.threshold")}</span>
+        {accountCount < 2 && !switchBlockedByAccounts && (
+          <div className="card-sub" style={{ marginTop: 8 }}>{t("anthropicPool.needTwoAccounts")}</div>
+        )}
+
+        <details className="anthropic-pool-card__details">
+          <summary>{t("anthropicPool.detailsSummary")}</summary>
+          <p>{t("anthropicPool.detailsEnabling")}</p>
+          <p>{t("anthropicPool.detailsFailover")}</p>
+          <p>{t("anthropicPool.detailsActivity")}</p>
+          <label className="anthropic-pool-card__native-messages">
             <input
-              className="input mono"
-              type="number"
-              min={0}
-              max={100}
-              step={1}
-              value={draft}
-              disabled={controlsDisabled}
-              aria-label={t("anthropicPool.thresholdAria")}
-              onChange={(event) => setDraft(event.target.value)}
-              onBlur={() => {
-                const parsed = Number(draft);
-                if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
-                  setDraft(String(threshold));
-                  setError(t("anthropicPool.thresholdInvalid"));
-                  return;
-                }
-                if (parsed !== threshold) {
-                  void save({
-                    enabled: true,
-                    threshold: parsed,
-                    strategy,
-                    stickyLimit,
-                    quotaWindow,
-                    nativeMessages,
-                  });
-                }
+              type="checkbox"
+              checked={state ? nativeMessages : false}
+              disabled={controlsDisabled || !state}
+              aria-label={t("anthropicPool.nativeMessagesLabel")}
+              aria-describedby="anthropic-pool-native-messages-help"
+              onChange={(event) => {
+                void save({ enabled, threshold, strategy, stickyLimit, quotaWindow, nativeMessages: event.target.checked });
               }}
             />
-            <div className="card-sub" style={{ marginTop: 4 }}>{t("anthropicPool.thresholdHelp")}</div>
-          </label>}
+            <span className="anthropic-pool-card__native-messages-copy">
+              <span className="field-label">{t("anthropicPool.nativeMessagesLabel")}</span>
+              <span id="anthropic-pool-native-messages-help" className="card-sub">{t("anthropicPool.nativeMessagesHelp")}</span>
+            </span>
+          </label>
+          <p>
+            <a href={ANTHROPIC_POOL_GUIDE_URL} target="_blank" rel="noreferrer">{t("anthropicPool.detailsGuide")}</a>
+          </p>
+        </details>
 
-          <AccountPoolStrategyControls
-            strategy={strategy}
-            stickyDraft={stickyDraft}
-            disabled={controlsDisabled}
-            strategySelectId="anthropic-pool-strategy"
-            stickyInputId="anthropic-pool-sticky-limit"
-            onStrategyChange={(next) => {
-              if (next === strategy) return;
-              void save({
-                enabled: true,
-                threshold,
-                strategy: next,
-                stickyLimit,
-                quotaWindow,
-                nativeMessages,
-              });
-            }}
-            onStickyDraftChange={setStickyDraft}
-            onStickyCommit={(nextDraft) => {
-              const parsed = parseAccountPoolStickyLimitDraft(nextDraft ?? stickyDraft);
-              if (parsed === null) {
-                setStickyDraft(String(stickyLimit));
-                setError(t("accountPool.stickyLimitInvalid"));
-                return;
-              }
-              if (parsed === stickyLimit) {
-                setStickyDraft(String(parsed));
-                return;
-              }
-              void save({
-                enabled: true,
-                threshold,
-                strategy,
-                stickyLimit: parsed,
-                quotaWindow,
-                nativeMessages,
-              });
-            }}
-          />
+        {enabled && state && (
+          <>
+            {usesConfigurableQuotaWindow && <label className="field anthropic-pool-card__field">
+              <span className="field-label">{t("anthropicPool.threshold")}</span>
+              <input
+                className="input mono"
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                value={draft}
+                disabled={controlsDisabled}
+                aria-label={t("anthropicPool.thresholdAria")}
+                onChange={(event) => setDraft(event.target.value)}
+                onBlur={() => {
+                  const parsed = Number(draft);
+                  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
+                    setDraft(String(threshold));
+                    setError(t("anthropicPool.thresholdInvalid"));
+                    return;
+                  }
+                  if (parsed !== threshold) {
+                    void save({
+                      enabled: true,
+                      threshold: parsed,
+                      strategy,
+                      stickyLimit,
+                      quotaWindow,
+                      nativeMessages,
+                    });
+                  }
+                }}
+              />
+              <div className="card-sub" style={{ marginTop: 4 }}>{t("anthropicPool.thresholdHelp")}</div>
+            </label>}
 
-          {usesConfigurableQuotaWindow && <div className="field anthropic-pool-card__field anthropic-pool-card__field--quota-window">
-            <span className="field-label">{t("accountPool.quotaWindow")}</span>
-            <Select
-              id="anthropic-pool-quota-window"
-              value={quotaWindow}
-              options={ACCOUNT_POOL_QUOTA_WINDOWS.map((value) => ({
-                value,
-                label: t(QUOTA_WINDOW_LABEL_KEYS[value]),
-              }))}
-              disabled={controlsDisabled || quotaWindowInert}
-              label={t("accountPool.quotaWindow")}
-              onChange={(next) => {
-                const parsed = normalizeAccountPoolQuotaWindow(next);
-                if (parsed === quotaWindow) return;
+            <AccountPoolStrategyControls
+              strategy={strategy}
+              stickyDraft={stickyDraft}
+              disabled={controlsDisabled}
+              strategySelectId="anthropic-pool-strategy"
+              stickyInputId="anthropic-pool-sticky-limit"
+              onStrategyChange={(next) => {
+                if (next === strategy) return;
+                void save({
+                  enabled: true,
+                  threshold,
+                  strategy: next,
+                  stickyLimit,
+                  quotaWindow,
+                  nativeMessages,
+                });
+              }}
+              onStickyDraftChange={setStickyDraft}
+              onStickyCommit={(nextDraft) => {
+                const parsed = parseAccountPoolStickyLimitDraft(nextDraft ?? stickyDraft);
+                if (parsed === null) {
+                  setStickyDraft(String(stickyLimit));
+                  setError(t("accountPool.stickyLimitInvalid"));
+                  return;
+                }
+                if (parsed === stickyLimit) {
+                  setStickyDraft(String(parsed));
+                  return;
+                }
                 void save({
                   enabled: true,
                   threshold,
                   strategy,
-                  stickyLimit,
-                  quotaWindow: parsed,
+                  stickyLimit: parsed,
+                  quotaWindow,
                   nativeMessages,
                 });
               }}
             />
-            <div className="card-sub" style={{ marginTop: 4 }}>{t("accountPool.quotaWindowDesc")}</div>
-            <div className="card-sub" style={{ marginTop: 4 }}>
-              {quotaWindowInert ? t("accountPool.quotaWindowInert") : t("accountPool.quotaWindowHint")}
-            </div>
-          </div>}
-        </>
-      )}
+
+            {usesConfigurableQuotaWindow && <div className="field anthropic-pool-card__field anthropic-pool-card__field--quota-window">
+              <span className="field-label">{t("accountPool.quotaWindow")}</span>
+              <Select
+                id="anthropic-pool-quota-window"
+                value={quotaWindow}
+                options={ACCOUNT_POOL_QUOTA_WINDOWS.map((value) => ({
+                  value,
+                  label: t(QUOTA_WINDOW_LABEL_KEYS[value]),
+                }))}
+                disabled={controlsDisabled || quotaWindowInert}
+                label={t("accountPool.quotaWindow")}
+                onChange={(next) => {
+                  const parsed = normalizeAccountPoolQuotaWindow(next);
+                  if (parsed === quotaWindow) return;
+                  void save({
+                    enabled: true,
+                    threshold,
+                    strategy,
+                    stickyLimit,
+                    quotaWindow: parsed,
+                    nativeMessages,
+                  });
+                }}
+              />
+              <div className="card-sub" style={{ marginTop: 4 }}>{t("accountPool.quotaWindowDesc")}</div>
+              <div className="card-sub" style={{ marginTop: 4 }}>
+                {quotaWindowInert ? t("accountPool.quotaWindowInert") : t("accountPool.quotaWindowHint")}
+              </div>
+            </div>}
+          </>
+        )}
+      </PoolSettingsDisclosure>
 
       {reloadRequired && (
         <div role="alert" className="anthropic-pool-card__save-warning">

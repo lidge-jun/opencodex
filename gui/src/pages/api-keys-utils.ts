@@ -75,14 +75,14 @@ export function isApiAuthMatrix(value: unknown): value is ApiAuthMatrixRow[] {
 export const API_KEY_NAME_MAX_LENGTH = 64;
 
 /** Who decided a surface's state; mirrors `ApiSurfaceSource` in src/protocols/settings.ts. */
-export type ApiSurfaceSource = "fixed" | "api-surfaces" | "claude-code-legacy" | "invalid";
+export type ApiSurfaceSource = "fixed" | "default" | "api-surfaces" | "claude-code-legacy" | "invalid";
 export interface ApiSurfaceInfo {
   enabled: boolean;
   source: ApiSurfaceSource;
 }
-export type ApiSurfacesInfo = Record<GatewayInboundProtocol, ApiSurfaceInfo>;
+export type ApiSurfacesInfo = Record<GatewayInboundProtocol, ApiSurfaceInfo> & { gemini?: ApiSurfaceInfo };
 
-const SURFACE_SOURCES = new Set<ApiSurfaceSource>(["fixed", "api-surfaces", "claude-code-legacy", "invalid"]);
+const SURFACE_SOURCES = new Set<ApiSurfaceSource>(["fixed", "default", "api-surfaces", "claude-code-legacy", "invalid"]);
 const SURFACE_NAMES = ["responses", "chat", "messages"] as const satisfies readonly GatewayInboundProtocol[];
 
 /**
@@ -93,8 +93,9 @@ export function parseApiSurfaces(value: unknown): ApiSurfacesInfo | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const surfaces = {} as ApiSurfacesInfo;
-  for (const name of SURFACE_NAMES) {
+  for (const name of [...SURFACE_NAMES, "gemini"] as const) {
     const surface = record[name];
+    if (name === "gemini" && surface === undefined) continue;
     if (!surface || typeof surface !== "object" || Array.isArray(surface)) return undefined;
     const { enabled, source } = surface as Record<string, unknown>;
     if (typeof enabled !== "boolean" || !SURFACE_SOURCES.has(source as ApiSurfaceSource)) return undefined;
@@ -109,6 +110,7 @@ export interface ApiEndpointInfo {
   chatCompletions: string;
   messages: string;
   models: string;
+  geminiModels?: string;
   audio?: AudioApiInfo;
 }
 

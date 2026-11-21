@@ -15,6 +15,13 @@ every account quota this Home already holds. GOAT owns the decoder
   reaches it at `/api/machine/hub-relay/api/quota-pool`; the Home serves it through
   `/v1/link-management` with the link key. The shared refresh-key rule still refuses a link read
   that carries `refresh`, `reload`, `force` or `quota`.
+  A local consumer without a dashboard session, such as GOAT, uses the Child's own admin token there
+  (`Authorization: Bearer` or `x-opencodex-api-key`): the Child's listener admits that token for
+  exactly `GET` and `HEAD` of this one path (`linkChildAdminReadAllowed` in
+  `src/client/link-management-relay.ts`, #8999) and for nothing else under the relay prefix. The
+  token never leaves the Child; the relay sends the link key. Coverage:
+  `tests/clients/client-link-relay.test.ts` (admitted reads, refused paths, methods, queries, origins and
+  raw request targets) and `tests/server/quota-pool-relay.test.ts` (HEAD on the Home's link route).
 - Hub client: `/api/machine/hub-relay/api/quota-pool` goes to the Hub's
   [passive management relay](remote-link.md#hub-transport-relay) with the caller's management
   credential. The same read is available to the scoped lease. The relay accepts a single

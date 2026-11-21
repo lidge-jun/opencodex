@@ -476,8 +476,11 @@ export async function fetchClaudeCodeState(config: OcxConfig, port: number, time
       ...(Array.isArray(body.forceAvailable) ? { forceAvailable: body.forceAvailable.filter(value => typeof value === "string") } : {}),
       ...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
     };
-  } catch {
-    console.error("⚠ 모델 컨텍스트 정보를 불러오지 못했습니다 — 1M 자동 표시는 이번 실행에서 생략됩니다.");
+  } catch (error) {
+    const message = error instanceof Error && error.name === "TimeoutError"
+      ? `Timed out after ${timeoutMs} ms while loading model context information`
+      : "Could not load model context information";
+    console.error(`⚠ ${message}. Automatic [1m] marking is skipped for this launch.`);
     return { contextWindows: {} };
   }
 }

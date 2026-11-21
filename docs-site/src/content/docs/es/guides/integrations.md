@@ -780,7 +780,7 @@ del proceso de OpenCodex. Si la variable se fija únicamente en el proceso de An
 no la detecta. En Windows `agy` no está probado, porque Google lo publica solo para macOS y Linux.
 
 Para conservar el JSON de Gemini, inicia sesión con `ocx login google-antigravity` y configura
-`protocols.rollout.geminiNativeAntigravity` como `true` en el JSON de OpenCodex. Esta opción se
+`protocols.rollout.geminiNativeAntigravity` como `true` en el JSON de OpenCodex. También puedes activar la transmisión nativa de Gemini en la pestaña **Cuentas** de Google Antigravity. Esta opción se
 aplica a las solicitudes de generación Gemini de `/v1beta` que se enrutan al proveedor OAuth
 canónico `google-antigravity`. Las demás rutas usan el puente de Chat.
 Consulta [Gemini nativo con Antigravity](/es/reference/proxy-formats/#native-gemini-with-antigravity).

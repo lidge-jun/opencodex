@@ -274,9 +274,9 @@ describe("Claude account pool conditions", () => {
     await act(async () => { nativeOf(host).click(); await flush(); });
     expect(nativeOf(host).checked).toBe(true);
     expect(host.querySelector('[aria-busy="true"]')).not.toBeNull();
-    // Every EDIT is locked while the write is in flight. The rotation-strategy "?" only
-    // reveals its explanation, so it stays usable and is not an edit.
-    for (const control of host.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button:not(.acc-help-btn)")) expect(control.disabled).toBe(true);
+    // Every EDIT is locked while the write is in flight. The rotation-strategy "?" and the card's
+    // details disclosure only reveal content, so they stay usable and are not edits.
+    for (const control of host.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button:not(.acc-help-btn):not(.pool-disclosure__toggle)")) expect(control.disabled).toBe(true);
     await act(async () => { resolveWrite(Response.json({ enabled: true, nativeMessages: false })); await flush(); });
     expect(nativeOf(host).checked).toBe(false);
     expect(nativeOf(host).disabled).toBe(false);
@@ -331,7 +331,8 @@ describe("the enabled status line follows the selected strategy", () => {
   // Mirrors src/oauth/anthropic-routing.ts: round-robin rotates through the ring and reads no
   // usage (pickUnboundStrategyAccount / pickAlternateAnthropicAccount), fill-first drains the
   // active account to its threshold, and quota ranks by the window.
-  const status = (host: HTMLElement) => host.querySelector(".card-row .card-sub")?.textContent ?? "";
+  // The status line sits in the card's details since the card collapses to its title and switch.
+  const status = (host: HTMLElement) => host.querySelector(".anthropic-pool-card__status")?.textContent ?? "";
 
   for (const threshold of [80, 0]) {
     test("round-robin names no usage window or threshold (threshold " + threshold + ")", async () => {

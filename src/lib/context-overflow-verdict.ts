@@ -199,8 +199,28 @@ const CLAUSE_BREAK = String.raw`[,.;:!?\n]|\b(?:and|but|because|although|though|
  * context window") and read the prohibition as an overflow report.
  */
 const NEGATION_ASIDE = String.raw`(?:in\s+fact|actually|ever|really|truly|yet|appear\s+to|seem\s+to|as\s+far\s+as\s+(?:we|i)\s+can\s+tell|per\s+(?:our\s+checks|the\s+tokenizer))`;
-const NEGATION_ASIDE_PATTERN = new RegExp(`\\s*,?\\s*\\b${NEGATION_ASIDE}\\b\\s*,?\\s*`, "gi");
-const LET_ALONE_PATTERN = /\s*,?\s*(?:approach|come\s+close\s+to)?\s*,?\s*let\s+alone\s*,?\s*/gi;
+const NEGATION_ASIDE_PATTERN = new RegExp(`(?:,\\s*)?\\b${NEGATION_ASIDE}\\b(?:\\s*,)?`, "gi");
+const LET_ALONE_PATTERN = /(?:,\s*)?(?:approach|come\s+close\s+to)(?:\s*,)?\s*let\s+alone(?:\s*,)?|(?:,\s*){0,2}let\s+alone(?:\s*,)?/gi;
+
+/**
+ * Match the actual aside first, then consume its surrounding whitespace once. Starting a search
+ * with optional whitespace/comma/verb groups repartitions the same whitespace on a failed match.
+ * Newlines around a matched aside are still folded, but unrelated clause breaks remain intact.
+ */
+function foldNegationAsides(text: string, pattern: RegExp): string {
+  const parts: string[] = [];
+  let offset = 0;
+  for (const match of text.matchAll(pattern)) {
+    let start = match.index;
+    let end = start + match[0].length;
+    while (start > offset && /\s/.test(text[start - 1])) start -= 1;
+    while (end < text.length && /\s/.test(text[end])) end += 1;
+    parts.push(text.slice(offset, start), " ");
+    offset = end;
+  }
+  parts.push(text.slice(offset));
+  return parts.join("");
+}
 
 /** A count that shows this request crossed the limit, which overrides a modal prohibition. */
 const OVERFLOW_COUNT_EVIDENCE = /\b\d+\s*(?:tokens?)?\s*(?:>|exceeds?|past)\s*\d+\b|\b(?:exceeded|exceeds|past|over)\s+(?:the\s+)?(?:limit|maximum|context\s+(?:window|length|limit))\s+by\s+\d+\b/i;
@@ -222,9 +242,8 @@ const NEGATION_LOOKBEHIND = 120;
  */
 function isNegatedBefore(text: string, predicateStart: number): boolean {
   let window = text.slice(Math.max(0, predicateStart - NEGATION_LOOKBEHIND), predicateStart)
-    .replace(/\([^()]*\)/g, " ")
-    .replace(NEGATION_ASIDE_PATTERN, " ")
-    .replace(LET_ALONE_PATTERN, " ");
+    .replace(/\([^()]*\)/g, " ");
+  window = foldNegationAsides(foldNegationAsides(window, NEGATION_ASIDE_PATTERN), LET_ALONE_PATTERN);
   const openParenthesis = window.lastIndexOf("(");
   if (openParenthesis > window.lastIndexOf(")")) window = window.slice(openParenthesis + 1);
   const boundary = new RegExp(CLAUSE_BREAK, "gi");

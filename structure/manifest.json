@@ -467,8 +467,9 @@
       "path": "transports/responses-combo-boundaries.md",
       "tier": 3,
       "title": "Combo Streaming Boundaries",
-      "scope": "Combo preflight output commitment, turn lease lifetime, and bounded hop warnings. Original client labels on terminal envelopes and failed-turn request identities.",
+      "scope": "Combo preflight output commitment, turn lease lifetime, and bounded hop warnings. Reasoning-effort diagnostic limits for repair and fallback. Original client labels on terminal envelopes and failed-turn request identities.",
       "documents": [
+        "src/providers/reasoning-metadata.ts",
         "src/server/"
       ]
     },
@@ -725,6 +726,15 @@
         "src/server/",
         "src/types/",
         "src/web-search/"
+      ]
+    },
+    {
+      "path": "providers/step-cli-transport.md",
+      "tier": 4,
+      "title": "StepCode CLI Transport",
+      "scope": "StepCode as a Step Plan transport: its own framed stdio wire, one process per conversation, inline SDK tools instead of an MCP catalog, and the bounded tool-result window.",
+      "documents": [
+        "src/adapters/step-cli/"
       ]
     },
     {
@@ -1658,6 +1668,16 @@
   "contracts": {
     "version": 1,
     "entries": [
+      {
+        "id": "reasoning-effort-diagnostic-limits",
+        "owner": {
+          "document": "transports/responses-combo-boundaries.md",
+          "anchor": "reasoning-effort-diagnostics"
+        },
+        "dependents": [
+          "providers-and-adapters.md"
+        ]
+      },
       {
         "id": "paginated-history-writer",
         "owner": {

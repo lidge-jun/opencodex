@@ -94,6 +94,8 @@ import {
 import { codexAccountLogLabel, oauthAccountLogLabel } from "../../codex/account-label";
 import { isGenericFailoverProvider, rotateGenericOAuthAccountOn429 } from "../../oauth/generic-account-failover";
 import { codexQuotaScopeForModel, getCodexQuotaHealthSnapshot } from "../../codex/routing";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/account-id";
+import { providerCodexAccountMode } from "../../providers/registry";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import type { AgentTaskRecoveryFailureReason } from "./agent-task-recovery";
 import {
@@ -178,7 +180,7 @@ function resolvedComboDestination(config: OcxConfig, target: { provider: string;
   }
 }
 
-function cooledPoolAccountLabel(config: OcxConfig, providerName: string, modelId: string, label: string | undefined): string | undefined {
+export function cooledPoolAccountLabel(config: OcxConfig, providerName: string, modelId: string, label: string | undefined): string | undefined {
   if (!label) return undefined;
   const instance = configuredAnthropicInstance(config, providerName);
   if (instance && config.providers[providerName]?.authMode === "oauth") {
@@ -188,10 +190,20 @@ function cooledPoolAccountLabel(config: OcxConfig, providerName: string, modelId
   }
   const provider = config.providers[providerName];
   if (!provider || !isCanonicalOpenAiForwardProvider(provider)) return undefined;
+  const quotaScope = codexQuotaScopeForModel(modelId);
+  // The main account logs as `<provider>-main` and is not a `codexAccounts` entry (#8880). In pool
+  // mode the pool rotates past a cooled main itself, so its 429 is account evidence exactly like a
+  // pool account's, and parking the target would black out the siblings and main's own recovery for
+  // the upstream Retry-After (up to 24h). Direct mode serves main without that check, so there the
+  // target cooldown stays the only guard against re-sending to a spent account.
+  if (label === `${providerName}-main`) {
+    return providerCodexAccountMode(providerName, provider) === "pool"
+      && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope) ? label : undefined;
+  }
   const matches = (config.codexAccounts ?? []).filter(account =>
     `${providerName}-${codexAccountLogLabel(account)}` === label);
   return matches.length === 1
-    && getCodexQuotaHealthSnapshot(matches[0]!.id, codexQuotaScopeForModel(modelId))
+    && getCodexQuotaHealthSnapshot(matches[0]!.id, quotaScope)
     ? label : undefined;
 }
 
@@ -1815,7 +1827,10 @@ export async function executeComboResponses(
     const failedTargetKey = targetKey(pick.target);
     let failedTargetCooldownRecorded = false;
     // The dispatch rewrote this to name the pool account that actually served the turn.
-    const poolAccountLabel = poolAccountProviderLabel(childLog.provider, pick.target.provider);
+    // The pool logs its main account under the bare provider name and carries "main" only as the
+    // account label, which is stamped for pool and main-pool contexts alone (#8880).
+    const poolAccountLabel = poolAccountProviderLabel(childLog.provider, pick.target.provider)
+      ?? (childLog.accountLogLabel === "main" ? `${pick.target.provider}-main` : undefined);
     const failedAccount = failure.response.status === 402
       ? creditRefusedAnthropicAccountLabel(
         config, pick.target.provider, pick.target.model, poolAccountLabel, failure.classificationText, failure.upstreamCode,

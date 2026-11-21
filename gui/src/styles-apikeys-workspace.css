@@ -1003,7 +1003,7 @@
 /* API surface cards (PF-04): one card per public API. Inherits the endpoint URL styling from
    .api-endpoints; a closed surface stays visible, dimmed rather than hidden. */
 .api-endpoints.api-surface-cards {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
 }
 .api-surface-card {
   padding: var(--space-3);

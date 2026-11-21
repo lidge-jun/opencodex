@@ -713,19 +713,20 @@ Read recent detections with `ocx provider resets` or `GET /api/quota-resets`.
 ## API surfaces (`apiSurfaces`)
 
 Responses (`/v1/responses`) and Chat Completions (`/v1/chat/completions`) are always served.
-The Messages API (`/v1/messages` and `/v1/messages/count_tokens`) can be closed on its own.
+The Messages API (`/v1/messages` and `/v1/messages/count_tokens`) and the Gemini API each have their own switch.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `apiSurfaces.messages.enabled?` | `boolean` | inherit | `true` serves the Messages API, `false` refuses both routes with 403. Unset inherits `claudeCode.enabled`, so a Claude integration that is off also closes Messages. |
+| `apiSurfaces.gemini.enabled?` | `boolean` | `true` | `false` refuses Gemini discovery, model actions and Interactions with 403. This includes Gemini-compatible routes under both `/v1beta` and `/v1`. |
 
-A present but malformed value (a non-object `apiSurfaces` or `messages`, or a non-boolean
-`enabled`) closes the Messages API rather than falling back to the inherited value. Both
-routes always agree.
+A malformed `apiSurfaces` object closes both switchable APIs. A malformed surface entry or
+non-boolean `enabled` closes that API.
 
-The dashboard's API page shows one card per API with the setting's source (explicit,
-inherited from Claude settings, or invalid) and a toggle for Messages. Turning Messages off
-there writes `apiSurfaces.messages.enabled: false` **and** `claudeCode.enabled: false` in the
+The dashboard lists each API and its setting source under **Gateway endpoints**. The Gemini
+switch saves only `apiSurfaces.gemini.enabled`. Eligible requests use the independently
+configured [Antigravity passthrough](/reference/proxy-formats/#native-gemini-with-antigravity).
+Turning Messages off writes `apiSurfaces.messages.enabled: false` **and** `claudeCode.enabled: false` in the
 same save, so a proxy version older than this setting, which only reads `claudeCode.enabled`,
 keeps the endpoint closed after a downgrade. Turning it on writes only
 `apiSurfaces.messages.enabled: true`; an older version then still follows
