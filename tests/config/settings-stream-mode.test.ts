@@ -83,6 +83,10 @@ function getSettings(config: OcxConfig): Promise<Response | null> {
   });
 }
 
+const ISOLATED_CHILD_TIMEOUT_MS = 30_000;
+// Let the subprocess deadline report a stalled route before Bun expires the parent test.
+const ISOLATED_TEST_TIMEOUT_MS = ISOLATED_CHILD_TIMEOUT_MS + 5_000;
+
 function putDesktopSwitchInIsolatedHome(
   codexHome: string,
   config: OcxConfig,
@@ -121,10 +125,13 @@ function putDesktopSwitchInIsolatedHome(
       OCX_TEST_ROUTE_BODY: JSON.stringify(body),
     },
     encoding: "utf8",
-    timeout: 30_000,
+    timeout: ISOLATED_CHILD_TIMEOUT_MS,
   });
-  if (child.status !== 0) {
-    throw new Error(`isolated settings route failed: ${child.stderr || child.stdout}`);
+  if (child.error || child.status !== 0) {
+    const error = child.error ?? new Error("isolated settings route failed");
+    const output = [child.stderr, child.stdout].filter(Boolean).join("\n");
+    error.message += ` (status=${child.status} signal=${child.signal}): ${output}`;
+    throw error;
   }
   const line = child.stdout.trim().split("\n").filter(Boolean).at(-1);
   expect(line).toBeDefined();
@@ -741,7 +748,7 @@ describe("PUT /api/settings", () => {
     const injected = readFileSync(codexConfigPath, "utf8");
     expect(injected).toContain("[model_providers.opencodex]");
     expect(injected).toContain(expectedAuth);
-  });
+  }, ISOLATED_TEST_TIMEOUT_MS);
 
   test.each([
     {
@@ -804,7 +811,7 @@ describe("PUT /api/settings", () => {
         },
       },
     });
-  });
+  }, ISOLATED_TEST_TIMEOUT_MS);
 
   test("applies the authless switch on a fresh Codex home without config.toml (#5422)", () => {
     const codexHome = join(TEST_DIR, "codex-missing-config");
@@ -818,7 +825,7 @@ describe("PUT /api/settings", () => {
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({ codexDesktopSwitches: { apply: { applied: true } } });
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toContain("opencodex");
-  });
+  }, ISOLATED_TEST_TIMEOUT_MS);
 
   test("a paginated Codex home still applies the switch while native history relabeling stands down", async () => {
     const config = baseConfig();
@@ -865,7 +872,7 @@ describe("PUT /api/settings", () => {
     expect(verifier.query("SELECT model_provider FROM threads WHERE id = 'paginated'").get())
       .toEqual({ model_provider: "opencodex" });
     verifier.close();
-  });
+  }, ISOLATED_TEST_TIMEOUT_MS);
 
   test("account-picker disable does not initialize an empty namespace map", async () => {
     const config = baseConfig();

@@ -646,7 +646,7 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
   if (code !== undefined && code !== null && typeof code !== "string") return false;
   const outerCode = normalizedFailureCode(code);
   if (!EXACT_EFFORT_COMPATIBLE_CODES.has(outerCode)) return false;
-  if (isHardPolicyOrOriginRefusal(message) || hasConflictingReasoningEffortCode(message)) return false;
+  if (isHardPolicyOrOriginRefusal(message) || hasConflictingReasoningEffortCode(message, 16_384)) return false;
   let text = message.trim();
   for (let depth = 0; depth < 3; depth += 1) {
     if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length).trim();
