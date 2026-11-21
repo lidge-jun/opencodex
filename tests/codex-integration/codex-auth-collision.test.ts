@@ -288,3 +288,12 @@ test("same-user rollover cannot override an explicit workspace/access mismatch o
   writeFileSync(path, JSON.stringify({ tokens: { id_token: workspaceToken("old", "plus"), access_token: token, account_id: "" } }));
   await expect(checkAccountIdCollision("candidate")).rejects.toBeInstanceOf(CodexCollisionReadBusyError);
 });
+
+test.each(["", "   "])("workspace rollover refuses an unproved current plan bucket (%j)", async plan => {
+  const path = join(TEST_CODEX_HOME, "auth.json");
+  const raw = JSON.stringify({ tokens: { id_token: workspaceToken("old-personal", "plus"),
+    access_token: workspaceToken("current-workspace", plan), account_id: "current-workspace" } });
+  writeFileSync(path, raw);
+  await expect(checkAccountIdCollision("current-workspace", "main@example.test", "team")).rejects.toBeInstanceOf(CodexCollisionReadBusyError);
+  expect(readFileSync(path, "utf8")).toBe(raw);
+});

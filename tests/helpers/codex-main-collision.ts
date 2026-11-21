@@ -53,6 +53,7 @@ export function registerMainCollisionCases(
     { name: "WHAM plan overrides JWT", plan: "plus", email: "main@example.test", usage: "team", blocked: true, mainPlan: "team" },
     { name: "same-user workspace rollover permits an independent login", plan: "team", email: "main@example.test", usage: "error", blocked: false, accountId: "other-workspace", rolled: true },
     { name: "same-user workspace rollover still blocks the current native duplicate", plan: "team", email: "main@example.test", usage: "error", blocked: true, rolled: true },
+    { name: "same-user workspace rollover refuses an unknown current plan", plan: "team", email: "main@example.test", usage: "error", blocked: true, rolled: true, unprovenPlan: true },
   ];
   test.each(cases)("OAuth main collision: $name", async scenario => {
     const token = (plan: string) => `header.${Buffer.from(JSON.stringify({
@@ -64,7 +65,7 @@ export function registerMainCollisionCases(
       "https://api.openai.com/profile": { email: "main@example.test" },
     })).toString("base64url")}.sig`;
     writeFileSync(join(process.env.CODEX_HOME!, "auth.json"), JSON.stringify({
-      tokens: { access_token: scenario.rolled ? rolledToken("main-account", "team") : token(scenario.mainPlan ?? scenario.plan),
+      tokens: { access_token: scenario.rolled ? rolledToken("main-account", scenario.unprovenPlan ? "" : "team") : token(scenario.mainPlan ?? scenario.plan),
         ...(scenario.rolled ? { id_token: rolledToken("old-personal", "plus") } : {}), account_id: "main-account" },
     }));
     const config = makeConfig();
@@ -85,7 +86,9 @@ export function registerMainCollisionCases(
     });
     expect(result.state.status).toBe(scenario.blocked ? "error" : "done");
     if (scenario.blocked) {
-      expect(result.state.error).toBe("Account is already configured as the native Codex main account.");
+      expect(result.state.error).toBe(scenario.unprovenPlan
+        ? "Native Codex login is busy or unreadable; retry login shortly."
+        : "Account is already configured as the native Codex main account.");
       expect(config.codexAccounts).toEqual([]);
       expect(getCodexAccountCredential("collision-candidate")).toBeNull();
       expect(warmups).toBe(0);

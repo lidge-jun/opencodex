@@ -133,7 +133,7 @@ writes and how routing is chosen.
 
 This pool-registration error can occur after browser or device authorization succeeds. The proxy checks the native main login before saving the new pool entry. A temporary native-login claim, an unreadable file, or inconsistent identity evidence stops registration; it does not delete existing accounts.
 
-The pool collision check permits a retained ID token naming an earlier workspace only when both tokens agree on ChatGPT user ID, subject and email, and the current access-token workspace agrees with the explicit login-file account ID. It checks duplicates against that current workspace and plan without rewriting the native login. Missing or conflicting user evidence remains a refusal. Do not delete `auth.json` to clear this message. An updated proxy must be running for a login-validation fix to take effect; reloading the dashboard alone cannot update backend code.
+The pool collision check permits a retained ID token naming an earlier workspace only when both tokens agree on ChatGPT user ID, subject and email, and the current access-token workspace agrees with the explicit login-file account ID. It requires a nonblank current access-token plan and checks duplicates against that current workspace and plan without rewriting the native login. Missing plan or user evidence and conflicting identity claims remain refusals. Do not delete `auth.json` to clear this message. An updated proxy must be running for a login-validation fix to take effect; reloading the dashboard alone cannot update backend code.
 
 ## OAuth refresh capacity reached
 
