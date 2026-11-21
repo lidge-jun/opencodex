@@ -43,6 +43,7 @@ import type { ResponsesTerminalStatus } from "../../bridge";
 import { isXaiLegacyPrivacyError, isXaiPrivacyModeRefusal, xaiPrivacyModeRefusal, XAI_LEGACY_PRIVACY_MESSAGE } from "../../providers/xai-privacy-mode";
 import { stampMetaMusePlanRefusal } from "../../providers/meta-muse-plan-refusal";
 import type { RequestFailureCause } from "../../usage/telemetry-contract";
+import { isRewrittenUpstreamError } from "../../adapters/upstream-http-error";
 
 export function sanitizedRetryAfter(value: string | null, now: number): string | undefined {
   const trimmed = value?.trim();
@@ -156,7 +157,7 @@ export async function consumeComboFailure(
       // So is a sidecar loop's (web search, image bridge) envelope, whose message is the proxy's own
       // "Provider error 413" summary of a body it already read.
       if (response.status === 413) {
-        providerIntakeRefusal = legacy === undefined && !isProxyFormattedFailure(body.text)
+        providerIntakeRefusal = legacy === undefined && !isRewrittenUpstreamError(response) && !isProxyFormattedFailure(body.text)
           && isProviderIntakeRefusalBody(body.text);
       }
       // Status-independent: the nested record is what normalization selects, so a root verdict

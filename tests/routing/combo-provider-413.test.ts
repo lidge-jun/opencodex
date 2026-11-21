@@ -3,6 +3,7 @@ import { comboFailureCooldownScope, comboFailureDecision } from "../../src/combo
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { preflightComboStreamResponse } from "../../src/server/responses/combo-stream-preflight";
 import { formatErrorResponse } from "../../src/bridge/errors";
+import { isRewrittenUpstreamError, normalizeUpstreamHttpErrorResponse } from "../../src/adapters/upstream-http-error";
 import { attachComboFailureEvidence } from "../../src/lib/client-error-body";
 import { M365_RESPONSE_LIMIT_MESSAGES } from "../../src/adapters/m365-copilot/response-limits";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../src/adapters/ollama-late-attribution";
@@ -231,6 +232,17 @@ describe("combo provider 413 verdicts", () => {
     // The provider's own body still hops.
     const plain = await consumeComboFailure(new Response(JSON.stringify({ error: { message: "Request Entity Too Large", type: "invalid_request_error" } }), { status: 413 }));
     expect(comboFailureDecision(413, plain.classificationText, { code: plain.upstreamCode, providerIntakeRefusal: plain.providerIntakeRefusal })).toBe("hop");
+  });
+
+  test("an adapter-rewritten provider 413 keeps dev's stop (#9017 review)", async () => {
+    // Vertex/Antigravity and Kiro replace a failure body with display text; the provider's code
+    // (here a terminal one) is gone, so the rewritten 413 cannot clear the hop.
+    const original = new Response(JSON.stringify({ error: { code: "invalid_prompt", message: "Request Entity Too Large" } }), { status: 413 });
+    const rewritten = await normalizeUpstreamHttpErrorResponse(original, { formatMessage: () => "Vertex AI upstream error: Request Entity Too Large" });
+    expect(isRewrittenUpstreamError(rewritten)).toBe(true);
+    const failure = await consumeComboFailure(rewritten);
+    expect(failure.providerIntakeRefusal).toBe(false);
+    expect(comboFailureDecision(413, failure.classificationText, { code: failure.upstreamCode, providerIntakeRefusal: failure.providerIntakeRefusal })).toBe("stop");
   });
   test("hard stops still outrank a provider 413", () => {
     expect(comboFailureDecision(413, "too large", { code: "origin_rejected" })).toBe("stop");

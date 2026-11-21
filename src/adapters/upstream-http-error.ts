@@ -33,6 +33,17 @@ export async function readDisplaySafeErrorPayloadText(res: Response, signal?: Ab
   }
 }
 
+const rewrittenUpstreamErrors = new WeakSet<Response>();
+
+/**
+ * Whether an adapter replaced this provider failure's body with display text. The provider's own
+ * codes, and the fact that a body was unreadable or oversized, are gone from such a response, so
+ * combo failover must not read it as the provider's evidence (#9017).
+ */
+export function isRewrittenUpstreamError(response: Response): boolean {
+  return rewrittenUpstreamErrors.has(response);
+}
+
 export async function normalizeUpstreamHttpErrorResponse(
   res: Response,
   opts: { signal?: AbortSignal; formatMessage: (payloadText: string) => string | Promise<string> },
@@ -43,9 +54,11 @@ export async function normalizeUpstreamHttpErrorResponse(
   headers.delete("content-encoding");
   headers.delete("content-length");
   // The rewritten body is display text; keep the provider's closed error class for the request log (#8446).
-  return withProviderFailureFacts(inheritAccountAutoPauseResponse(res, new Response(await opts.formatMessage(payloadText), {
+  const rewritten = withProviderFailureFacts(inheritAccountAutoPauseResponse(res, new Response(await opts.formatMessage(payloadText), {
     status: res.status,
     statusText: res.statusText,
     headers,
   })), { type: providerErrorTypeOf(parseUpstreamJsonPayload(payloadText)) });
+  rewrittenUpstreamErrors.add(rewritten);
+  return rewritten;
 }
