@@ -1822,10 +1822,13 @@ function decideComboFailure(
   if (isModelLifecycleGone(status, message, rawCode)) return "hop";
   const error = classifyError(status, "upstream_error", message);
   if (isCyberPolicyCode(error.code)) return "stop";
-  // A whole-body reader found a terminal refusal or proxy marker in this 413 past the 500-character
-  // cut. The size hops below read only the cut text, so that verdict closes them too; hops for
-  // other reasons (a model-scoped refusal, say) still apply.
-  const sizeHopVetoed = status === 413 && options?.providerIntakeRefusal === false;
+  // A 413 that is the proxy's own, or that states a terminal refusal, says nothing about another
+  // target's size limit, so every size hop below stays closed for it: the provider-target and
+  // definite overflow hops as well as the provider-413 hop. A whole-body reader's verdict covers a
+  // marker past the 500-character cut; streaming callers pass the whole event, which the message
+  // check reads directly. Hops for other reasons (a model-scoped refusal, say) still apply.
+  const sizeHopVetoed = status === 413
+    && (options?.providerIntakeRefusal === false || !isProviderIntakeRefusal(message, rawCode, error.code));
   // A provider can expose its own target hard cap with a non-semantic vendor code
   // (for example 5059 + invalid_request_prompt_too_long). That is evidence that this
   // target is too small, not that every later combo target is incapable of serving it.
@@ -1846,7 +1849,7 @@ function decideComboFailure(
   // 413 that also states a terminal refusal. Cooldown scope stays "none". This reverses the
   // generic-413 stop recorded in devlog/_fin/260904_bug_stack_train/040_deferrals.md
   // (coordinator decision, 2026-11-21); generic 410 is unchanged.
-  if (status === 413 && !sizeHopVetoed && isProviderIntakeRefusal(message, rawCode, error.code)) return "hop";
+  if (status === 413 && !sizeHopVetoed) return "hop";
   // A local input-admission refusal (#1524) says "this candidate cannot fit the request",
   // not "the request is impossible": the next candidate may have a larger context window.
   //

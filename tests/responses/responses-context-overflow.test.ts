@@ -311,11 +311,16 @@ describe("Responses provider input overflow", () => {
   });
 
   // The proxy's own 413 says nothing about the next target, so it still ends the chain.
-  test.each([true, false])("a proxy-owned 413 stops the combo without dispatching a second target (stream=%s)", async stream => {
+  test.each([
+    [true, "request translation buffer exceeded the safe limit"],
+    [false, "request translation buffer exceeded the safe limit"],
+    // Context-overflow wording does not turn a proxy-owned 413 into a size hop on either transport.
+    [true, "Your input exceeds the context window of this model. Please adjust your input and try again."],
+    [false, "Your input exceeds the context window of this model. Please adjust your input and try again."],
+  ] as const)("a proxy-owned 413 stops the combo without dispatching a second target (stream=%s, %s)", async (stream, message) => {
     let firstHits = 0;
     let secondHits = 0;
-    const buffer = { message: "request translation buffer exceeded the safe limit", type: "request_too_large",
-      code: "translation_buffer_limit" };
+    const buffer = { message, type: "request_too_large", code: "translation_buffer_limit" };
     const next = config({
       first: provider("openai-chat", upstreamEnvelope(buffer, () => { firstHits += 1; })),
       second: provider("openai-chat", upstream413(() => { secondHits += 1; })),

@@ -106,6 +106,19 @@ describe("combo provider 413 verdicts", () => {
     expect(comboFailureDecision(413, plain.classificationText, { code: plain.upstreamCode, providerIntakeRefusal: plain.providerIntakeRefusal })).toBe("hop");
   });
 
+
+  test("a proxy-owned or terminal 413 never takes a context-size hop, even without a whole-body verdict (#9017 review)", () => {
+    // Streaming callers pass the event text and code without providerIntakeRefusal.
+    const overflow = "Your input exceeds the context window of this model. Please adjust your input and try again.";
+    for (const code of ["translation_buffer_limit", "inbound_body_too_large", "outbound_body_too_large", "invalid_prompt", "content_policy_violation"]) {
+      expect(comboFailureDecision(413, overflow, { code })).toBe("stop");
+    }
+    expect(comboFailureDecision(413, `${overflow} ${M365_RESPONSE_LIMIT_MESSAGES.answer}`)).toBe("stop");
+    expect(comboFailureDecision(413, JSON.stringify({ error: { message: overflow, type: "request_too_large", code: "translation_buffer_limit" } }))).toBe("stop");
+    // The same wording from a provider still hops, as on dev.
+    expect(comboFailureDecision(413, overflow)).toBe("hop");
+    expect(comboFailureDecision(413, overflow, { code: "context_length_exceeded" })).toBe("hop");
+  });
   test("hard stops still outrank a provider 413", () => {
     expect(comboFailureDecision(413, "too large", { code: "origin_rejected" })).toBe("stop");
     expect(comboFailureDecision(413, "too large", { code: "cyber_policy" })).toBe("stop");
