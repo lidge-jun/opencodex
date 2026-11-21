@@ -33,10 +33,21 @@ export default function IntegrationStateBadge({
   state,
   installed,
   id,
+  onActivate,
+  activateLabel,
+  busy,
 }: {
   state: IntegrationState | VisualIntegrationState;
   installed: boolean;
   id?: string;
+  /**
+   * Turns the pill into a button. Only a caller that has a safe action for this exact
+   * state passes it (the overview offers a one-click re-apply for "Update needed").
+   */
+  onActivate?: () => void;
+  /** Tooltip naming what the click does; the visible text stays the state itself. */
+  activateLabel?: string;
+  busy?: boolean;
 }) {
   const t = useT();
   // A caller that already resolved the visual state passes it through; the
@@ -44,6 +55,21 @@ export default function IntegrationStateBadge({
   const visual: VisualIntegrationState = state === "unknown" || state === "not-installed"
     ? state
     : installed ? state : "not-installed";
+  if (onActivate) {
+    return (
+      <button
+        type="button"
+        id={id}
+        className={`${CLASSES[visual]} integration-badge-action`}
+        data-integration-state={visual}
+        title={activateLabel}
+        onClick={onActivate}
+        disabled={busy}
+      >
+        {t(LABEL_KEYS[visual])}
+      </button>
+    );
+  }
   return (
     <span id={id} className={CLASSES[visual]} data-integration-state={visual}>
       {t(LABEL_KEYS[visual])}
