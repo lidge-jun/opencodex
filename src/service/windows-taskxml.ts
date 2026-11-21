@@ -514,7 +514,10 @@ export function windowsTaskHasSessionRecoveryTriggers(
   expectedUserId: ExpectedWindowsTaskUserId | undefined,
 ): boolean {
   const scoped = triggers.match(/<SessionStateChangeTrigger(?:\s[^>]*)?>[\s\S]*?<\/SessionStateChangeTrigger>/gi) ?? [];
-  return WINDOWS_SESSION_RECOVERY_STATE_CHANGES.every(stateChange =>
+  return !taskXmlHasPrefixedTag(triggers, "SessionStateChangeTrigger")
+    && scoped.length === taskXmlElementCount(triggers, "SessionStateChangeTrigger")
+    && scoped.every(element => windowsTaskUserIdMatches(element, expectedUserId))
+    && WINDOWS_SESSION_RECOVERY_STATE_CHANGES.every(stateChange =>
     scoped.some(element =>
       taskXmlDecodedValueEquals(element, "StateChange", stateChange)
       && taskXmlOptionalValueEquals(element, "Enabled", "true")
@@ -560,6 +563,13 @@ function windowsTaskUserIdMatches(
   // start another account's fixed-name task.
   const expectedValues = typeof expectedUserId === "string" ? [expectedUserId] : expectedUserId;
   return expectedValues.some(value => taskXmlDecodedValueEquals(element, "UserId", value));
+}
+
+function windowsTaskLogonScopeMatches(triggers: string, expectedUserId: ExpectedWindowsTaskUserId | undefined, legacy = false): boolean {
+  if (taskXmlHasPrefixedTag(triggers, "LogonTrigger") || taskXmlElementCount(triggers, "LogonTrigger") !== 1) return false;
+  const logon = taskXmlSection(triggers, "LogonTrigger");
+  if (legacy && !taskXmlHasPrefixedTag(logon, "UserId") && taskXmlElementCount(logon, "UserId") === 0) return true;
+  return windowsTaskUserIdMatches(logon, expectedUserId);
 }
 
 /** Validate the stable OpenCodex action, principal, settings, and logon trigger. */
@@ -610,6 +620,7 @@ export function windowsTaskRegistrationHealthy(
   const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
   const triggers = taskXmlSection(scrubbed, "Triggers");
   return windowsTaskRegistrationBaseHealthy(xml, wscript, launcher)
+    && windowsTaskLogonScopeMatches(triggers, expectedUserId ?? undefined)
     // Without these the task can only recover at the next logon, so a disconnected session
     // leaves the proxy down indefinitely. Treating their absence as unhealthy is what lets
     // an already-registered task from an older install get repaired instead of staying broken.
@@ -642,7 +653,9 @@ export function windowsTaskRegistrationMatchesForStop(xml: string, launcher: str
   if (!windowsTaskRegistrationBaseHealthy(xml, windowsWscript(), launcher, { allowLossyPaths: false, allowDisabled: true })
     || !windowsTaskPrincipalMatches(xml, userIds)) return false;
   const triggers = taskXmlSection(taskXmlWithoutCommentsAndCdata(xml), "Triggers");
-  return windowsTaskHasSessionRecoveryTriggers(triggers, userIds) || windowsTaskHasNoSessionRecoveryTriggers(triggers);
+  const legacy = windowsTaskHasNoSessionRecoveryTriggers(triggers);
+  return windowsTaskLogonScopeMatches(triggers, userIds, legacy)
+    && (legacy || windowsTaskHasSessionRecoveryTriggers(triggers, userIds));
 }
 
 export interface WindowsSchedulerXmlState {
