@@ -39,9 +39,11 @@ export interface WindowsEvidenceCommand {
   args: string[];
   timeoutMs: number;
   maxBufferBytes: number;
+  /** Snapshot framing can preserve a complete table if later optional enrichment fails. */
+  allowPartialOutput?: boolean;
 }
 
-/** Runs a command and resolves stdout; rejects on a nonzero exit, a timeout or overflow. */
+/** Runs a command; only framed snapshots may retain stdout after a later command failure. */
 export type WindowsEvidenceRunner = (command: WindowsEvidenceCommand) => Promise<string>;
 
 export interface WindowsEvidenceOptions {
@@ -86,7 +88,7 @@ const defaultRunner: WindowsEvidenceRunner = command => new Promise((resolve, re
     maxBuffer: command.maxBufferBytes,
     windowsHide: true,
   }, (error, stdout) => {
-    if (error) reject(error);
+    if (error && (!command.allowPartialOutput || !stdout.startsWith("OCX_PROCESS_SNAPSHOT "))) reject(error);
     else resolve(stdout);
   });
 });
@@ -102,11 +104,9 @@ function powershellArgs(script: string): string[] {
 }
 
 /**
- * Owner enrichment admits at most 32 candidates within 1.5 s; individual CIM calls also
- * have a 1 s operation cap. Unqueried owners stay unknown and every process row survives.
- * No owner read starts later than `timeoutMs - SNAPSHOT_OWNER_RESERVE_MS` after the helper
- * process started: a cold PowerShell start and first CIM query can use most of the cap on
- * a hosted runner, and the 1.5 s loop budget alone did not count that time.
+ * Owner enrichment admits at most 32 candidates within 1.5 s including enumeration;
+ * individual CIM calls have a 1 s cap. A complete baseline precedes optional owner reads.
+ * The earlier cutoff from the helper's process start also accounts for cold PowerShell startup.
  * Owner reads prioritize this home's complete launcher/script tokens before other possible
  * wrapper candidates. A fresh CIM read after GetOwnerSid binds that owner to the original
  * creation time; a reused PID cannot prove a foreign owner.
@@ -119,15 +119,21 @@ export function windowsProcessSnapshotScript(timeoutMs: number): string {
     .map(path => Buffer.from(path, "utf8").toString("base64"));
   return [
     "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false);",
+    `$ownerBudget = @{ Remaining = ${OWNER_READ_LIMIT}; Clock = [Diagnostics.Stopwatch]::StartNew();`,
+    "  Until = [Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().AddMilliseconds(" + ownerCutoffMs + ") };",
     "$currentSid = $null; try { $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { $currentSid = $null };",
     "$tokens = @('" + paths.join("','") + "') | ForEach-Object { [regex]::Escape([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_))) };",
     "$homePath = '(?:^|[\\s\\x22\\x27])(?:' + ($tokens -join '|') + ')(?=$|[\\s\\x22\\x27])';",
     "$rows = @(Get-CimInstance Win32_Process -ErrorAction Stop);",
+    "function Write-ProcessSnapshot($owners) {",
+    "  $projected = @($rows | Select-Object ProcessId,ParentProcessId,Name,CommandLine,",
+    "    @{Name='CreationDate';Expression={ if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null } }},",
+    "    @{Name='CurrentUserSid';Expression={ $currentSid }}, @{Name='Owner';Expression={ $owners[$_.ProcessId] }});",
+    "  'OCX_PROCESS_SNAPSHOT ' + (ConvertTo-Json -InputObject $projected -Depth 3 -Compress) };",
+    "Write-ProcessSnapshot @{}; [Console]::Out.Flush();",
     "$priority = @($rows | Where-Object { $_.CommandLine -match $homePath });",
     "$fallback = @($rows | Where-Object { $_.CommandLine -notmatch $homePath -and",
     "  (($_.Name -match '^(wscript|cscript|cmd)\\.exe$') -or (-not $_.Name) -or ($_.CommandLine -like '*opencodex-service*')) });",
-    `$ownerBudget = @{ Remaining = ${OWNER_READ_LIMIT}; Clock = [Diagnostics.Stopwatch]::StartNew();`,
-    "  Until = [Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().AddMilliseconds(" + ownerCutoffMs + ") };",
     "$owners = @{};",
     "foreach ($process in ($priority + $fallback)) {",
     `  if (!$currentSid -or $ownerBudget.Remaining -le 0 -or $ownerBudget.Clock.ElapsedMilliseconds -ge ${OWNER_READ_BUDGET_MS}`,
@@ -137,14 +143,12 @@ export function windowsProcessSnapshotScript(timeoutMs: number): string {
     "    $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -OperationTimeoutSec 1 -ErrorAction Stop;",
     `    if ($ownerBudget.Clock.ElapsedMilliseconds -ge ${OWNER_READ_BUDGET_MS} -or [DateTime]::UtcNow -ge $ownerBudget.Until) { break };`,
     "    $after = Get-CimInstance -InputObject $process -OperationTimeoutSec 1 -ErrorAction Stop;",
+    `    if ($ownerBudget.Clock.ElapsedMilliseconds -ge ${OWNER_READ_BUDGET_MS} -or [DateTime]::UtcNow -ge $ownerBudget.Until) { break };`,
     "    $owners[$process.ProcessId] = @{ Sid = $owner.Sid; ReturnValue = $owner.ReturnValue;",
     "      CreationDate = if ($after.CreationDate) { $after.CreationDate.ToUniversalTime().ToString('o') } else { $null } };",
     "  } catch { continue }",
     "};",
-    "$rows | Select-Object ProcessId,ParentProcessId,Name,CommandLine,",
-    "@{Name='CreationDate';Expression={ if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null } }},",
-    "@{Name='CurrentUserSid';Expression={ $currentSid }},",
-    "@{Name='Owner';Expression={ $owners[$_.ProcessId] }} | ConvertTo-Json -Depth 3 -Compress",
+    "Write-ProcessSnapshot $owners",
   ].join(" ");
 }
 
@@ -179,8 +183,21 @@ export function parseWindowsProcessSnapshot(output: string): WindowsStopProcessE
 type ObserveEntry = (entry: WindowsStopProcessEntry, record: Record<string, unknown>) => WindowsStopProcessEntry;
 
 function decodeSnapshot(output: string, observe?: ObserveEntry): WindowsStopProcessEntry[] | null {
-  const trimmed = output.trim();
+  let trimmed = output.trim();
   if (!trimmed) return [];
+  const prefix = "OCX_PROCESS_SNAPSHOT ";
+  if (trimmed.startsWith(prefix)) {
+    const frames = trimmed.split(/\r?\n/).filter(line => line.startsWith(prefix));
+    let complete: string | undefined;
+    for (const frame of frames.reverse()) {
+      try {
+        const candidate = frame.slice(prefix.length);
+        if (Array.isArray(JSON.parse(candidate))) { complete = candidate; break; }
+      } catch { /* incomplete enrichment */ }
+    }
+    if (complete === undefined) return null;
+    trimmed = complete;
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed);
@@ -277,6 +294,7 @@ export async function windowsProcessSnapshot(options: WindowsEvidenceOptions): P
       args: powershellArgs(windowsProcessSnapshotScript(options.timeoutMs)),
       timeoutMs: options.timeoutMs,
       maxBufferBytes: SNAPSHOT_MAX_BUFFER,
+      allowPartialOutput: true,
     });
     const native = windowsProcessNative();
     return decodeSnapshot(output, native ? observeNativeSnapshot(native, deadline) : undefined);

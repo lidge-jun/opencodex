@@ -176,9 +176,9 @@ Una configuración predeterminada de pnpm 11 o 12 supera esta comprobación y se
 
 ## La actualización de Desktop se detiene o falla en «Instalar actualización…»
 
-En la aplicación de escritorio OpenCodex, **Instalar actualización** descarga el instalador desde GitHub Releases antes de reemplazar la aplicación y reiniciarla. Una descarga o instalación fallida con una versión conocida muestra una sugerencia de descarga manual y un enlace a la página de lanzamiento de esa versión.
+En la aplicación de escritorio OpenCodex, **Instalar actualización** descarga el paquete desde GitHub Releases y verifica su firma. La ventana indica si falló la verificación, si no se pudo identificar o detener el proxy, si ya se estaba deteniendo o si falló el instalador. Si se agota el tiempo de espera, comprueba el estado antes de volver a intentarlo.
 
-Si `Installing update…` no avanza o agota el plazo, es posible que la red esté ralentizando o bloqueando las descargas de GitHub Releases. Abre el enlace a la versión exacta que muestra el error, o busca esa misma versión en la [página de versiones de OpenCodex](https://github.com/lidge-jun/opencodex/releases). Descarga manualmente el instalador correspondiente a tu sistema operativo y arquitectura. Las versiones preview tienen sus propias páginas; elige la versión que ofrece la aplicación.
+Si falla la descarga del paquete y se conoce la versión, la ventana muestra un enlace a esa versión. Abre el enlace o busca esa misma versión en la [página de versiones de OpenCodex](https://github.com/lidge-jun/opencodex/releases). Descarga el instalador correspondiente a tu sistema operativo y arquitectura. Elige la versión que ofrece la aplicación, incluida la de vista previa si corresponde.
 
 Antes de ejecutar el instalador, detenga el proxy a través de su propietario y confirme que se ha detenido:
 

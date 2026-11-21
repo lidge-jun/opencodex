@@ -168,6 +168,16 @@ Vérifie l’état de préparation après synchronisation au moyen du point de t
 
 Par défaut, la commande effectue une seule sonde. Avec `--wait`, elle interroge le service jusqu’à ce qu’il soit prêt ou jusqu’à l’expiration du délai, mais s’arrête immédiatement si elle observe l’état terminal `failed`. Le délai par défaut est de 45 secondes. `--timeout <seconds>` exige `--wait` et accepte un entier positif compris entre 1 et 300. La sortie JSON de la CLI est `{ready, status, pid, port}`, où `status` vaut `ready`, `pending`, `failed` ou `unreachable`. Les codes de sortie sont 0 si le service est prêt ; 1 s’il n’est pas prêt, reste en attente, échoue, dépasse le délai ou est inaccessible ; et 64 si les arguments sont invalides.
 
+Si le message de démarrage du proxy indique que le répertoire de Codex est introuvable, lancez Codex une première fois ou faites pointer `CODEX_HOME` vers le répertoire déjà initialisé par Codex. Exécutez ensuite `ocx sync`. Une synchronisation réussie rétablit le routage, mais l’état `failed` conserve le résultat du démarrage du processus en cours. Redémarrez le proxy et exécutez `ocx ready` pour vérifier le nouveau processus.
+
+Pour un service installé avec la CLI, utilisez les valeurs enregistrées de `CODEX_HOME` et `OPENCODEX_HOME`. Si une ancienne définition du service omet ces chemins, exécutez une fois `ocx service repair` avec ces valeurs. Initialisez le répertoire de Codex si nécessaire, exécutez `ocx sync`, puis redémarrez le service. Si l’application de bureau gère le proxy, redémarrez-le depuis celle-ci.
+
+Pour déplacer le service CLI vers un autre répertoire Codex existant, exécutez `ocx service uninstall` avec les paramètres d’origine. Si le service est supprimé mais que la restauration de Codex natif échoue, corrigez l’erreur signalée et exécutez `ocx restore` avec ces mêmes paramètres.
+
+Sous Windows, si l’échec de la restauration laisse un nettoyage en attente, exécutez `ocx stop` depuis l’installation concernée avec les répertoires d’origine avant d’en changer. Tant que ce nettoyage reste en attente, `ocx update` refuse de remplacer le paquet.
+
+Une fois la désinstallation et la restauration réussies, conservez `OPENCODEX_HOME`, sélectionnez le nouveau `CODEX_HOME` et exécutez `ocx service install` avec le backend et les options d’origine. Avec les nouveaux paramètres, exécutez `ocx sync` et vérifiez le résultat avec `ocx ready`. En cas d’échec du démarrage, suivez les étapes de récupération ci-dessus.
+
 ### `ocx doctor`
 
 Exécute des diagnostics en lecture seule sur l’environnement et la connectivité : chemins d’état et type de système de fichiers, installations doubles sous WSL, environnement et configuration du proxy, accessibilité de ChatGPT, avertissements liés au plug-in Codex et à la configuration du projet, ainsi que migration d’historique en attente. La section consacrée au répertoire de Codex App détecte également le cas précis où le répertoire d’exécution Windows Orca ne correspond pas et, le cas échéant, explique la migration du service. Les chemins affichés masquent le nom d’utilisateur du système d’exploitation. La commande doctor propose des réparations, mais ne les applique pas.

@@ -160,6 +160,16 @@ ocx status --json
 输出 `{ready, status, pid, port}`，其中 `status` 为 `ready`、`pending`、`failed` 或
 `unreachable`。退出码：就绪为 0；未就绪、pending、failed、超时或无法连接为 1；参数无效为 64。
 
+如果代理启动时提示找不到 Codex 主目录，请先启动一次 Codex，或将 `CODEX_HOME` 指向 Codex 已初始化的目录，然后运行 `ocx sync`。同步成功后路由会恢复，但 `failed` 仍表示当前进程启动时的结果。请重启代理，再运行 `ocx ready` 检查新进程是否就绪。
+
+对于由 CLI 管理的服务，请使用注册时的 `CODEX_HOME` 和 `OPENCODEX_HOME`。如果旧版服务定义中缺少这些路径，请使用相同设置运行一次 `ocx service repair`。按需初始化 Codex 主目录，运行 `ocx sync`，再重启服务。如果代理由桌面应用管理，请在应用中重启。
+
+如需将 CLI 服务迁移到另一个已有的 Codex 主目录，请先使用原设置运行 `ocx service uninstall`。如果服务已卸载，但恢复原生 Codex 配置失败，请解决提示的错误，再用相同设置运行 `ocx restore`。
+
+在 Windows 上，如果恢复失败后留下了待清理记录，请在切换主目录前，从原先管理服务的安装实例使用原主目录设置运行 `ocx stop`。记录仍存在时，`ocx update` 会拒绝替换软件包。
+
+卸载和恢复都成功后，保留 `OPENCODEX_HOME`，选择新的 `CODEX_HOME`，再使用原后端和选项运行 `ocx service install`。使用新设置运行 `ocx sync`，并用 `ocx ready` 检查状态。如果启动失败，请按上文步骤恢复。
+
 ### `ocx doctor`
 
 运行只读的环境与连通性诊断：状态路径和文件系统类型、WSL 双重安装、代理环境/配置、ChatGPT 可达性、Codex 插件和项目配置警告，以及待处理的历史迁移。Codex app-home 定位部分也会检测狭义的 Windows Orca 运行时 home 不匹配，并在适用时解释服务迁移。此诊断展示的路径会对操作系统用户名进行脱敏。Doctor 会输出修复提示，但不会自动应用。

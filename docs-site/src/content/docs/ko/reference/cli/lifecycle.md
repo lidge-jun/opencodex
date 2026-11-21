@@ -241,6 +241,16 @@ probe이며, `--wait`는 준비 또는 timeout까지 polling하지만 종단 `fa
 `unreachable` 중 하나입니다. 종료 코드는 ready가 0, not-ready/pending/failed/timeout/unreachable이
 1, 잘못된 인수가 64입니다.
 
+프록시 시작 로그에 Codex 홈 디렉터리가 없다고 나오면 Codex를 한 번 실행하거나 `CODEX_HOME`을 Codex가 이미 초기화한 디렉터리로 지정한 다음 `ocx sync`를 실행하세요. 동기화에 성공하면 라우팅이 복구됩니다. `failed`는 현재 프로세스의 시작 결과이므로 프록시를 재시작한 뒤 `ocx ready`로 새 프로세스의 준비 상태를 확인하세요.
+
+CLI로 설치한 서비스에서는 등록된 `CODEX_HOME`과 `OPENCODEX_HOME`을 사용하세요. 구버전 서비스 정의에 두 경로가 빠져 있다면 같은 설정으로 `ocx service repair`를 한 번 실행하세요. 필요하면 Codex 홈을 초기화하고 `ocx sync` 후 서비스를 재시작하세요. 데스크톱 앱이 관리하는 프록시는 앱에서 재시작하세요.
+
+CLI 서비스를 다른 기존 Codex 홈으로 옮기려면 원래 설정으로 `ocx service uninstall`을 실행하세요. 서비스는 제거됐는데 네이티브 Codex 복원에 실패했다면 표시된 오류를 해결하고 같은 설정으로 `ocx restore`를 실행하세요.
+
+Windows에서 복원 실패로 정리 대기 기록이 남았다면, 홈을 바꾸기 전에 기존 서비스를 관리하던 설치본에서 원래 홈 설정으로 `ocx stop`을 실행하세요. 이 기록이 남아 있으면 `ocx update`가 패키지 교체를 거부합니다.
+
+제거와 복원이 모두 성공하면 `OPENCODEX_HOME`을 유지하고 새 `CODEX_HOME`을 선택한 뒤 원래 백엔드와 옵션으로 `ocx service install`을 실행하세요. 새 설정에서 `ocx sync`를 실행하고 `ocx ready`로 확인하세요. 시작에 실패했다면 위의 복구 절차를 따르세요.
+
 ### `ocx doctor`
 
 읽기 전용 환경 및 연결 진단을 실행합니다. 상태 경로와 파일시스템 유형, WSL 이중 설치, 프록시

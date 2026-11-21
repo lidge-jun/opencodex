@@ -36,11 +36,12 @@ one capped PowerShell snapshot that emits UTF-8 JSON and uses ISO UTC for `Creat
 It reads owner SIDs for command lines carrying this home's launcher or service script as complete
 tokens first, then other wrapper images, unreadable images, and command lines containing the fixed
 `opencodex-service` basename prefix. Owner enrichment admits at most 32 candidates within
-1.5 s after enumeration and prioritization, with a 1 s operation timeout on each owner or refresh
-call. No owner read starts later than the snapshot timeout minus 2 s, counted from the
-helper process's start, so a cold PowerShell start or slow first CIM query cannot push owner
-enrichment past the cap and lose the whole table. Every row is retained. The refresh is skipped if
-the owner query spends the budget. CIM owner verification requires a successful `GetOwnerSid`,
+1.5 s including enumeration and prioritization, with a 1 s operation timeout on each owner or refresh
+call. Owner reads and refreshes also stop at the snapshot timeout minus 2 s, measured from
+the helper process's start. A complete framed table is emitted before optional owner enrichment, so a timeout during
+enrichment retains the original rows with unknown owners. A complete enriched frame supersedes
+that baseline. Owner evidence arriving at or after either cutoff is discarded.
+Owner verification requires a successful `GetOwnerSid`,
 valid local/domain or Entra ID SIDs, and a fresh CIM read reporting the original creation time.
 Matching SIDs prove the current account. Different supported SIDs prove a foreign account.
 On Windows x64, a missing CIM owner sample for a wrapper with this installation's complete
@@ -91,13 +92,29 @@ manager still running is `survived` (`unbound-wrapper` when the survivor was nev
 is `survived` while the proxy is still alive after the service reports stopped. The authorizer
 variant `guardedStopWindowsServiceChecked` runs its authorizer at entry, before each manager stop and before each terminate and
 reports a refusal as `WindowsCheckedStopRefusedError` with what had already happened. For Task
-Scheduler it reauthorizes after validating the helper proof, before sending `stop` on stdin.
+Scheduler it reauthorizes after validating the helper proof, before sending `stop-before` on stdin.
 With native identity support, each captured running instance carries its GUID, engine PID and
 creation time through that exchange. The native handle must prove the matching process and
 token user for every engine. The helper rechecks the registration and the captured instances
 before calling their COM stop methods. The bounded CIM owner check remains the fallback when
-native identity support is unavailable. The helper and outer deadlines must still be open
-after authorization.
+native identity support is unavailable. The
+helper and outer deadlines must still be open after authorization. The helper starts its
+monotonic clock before sending proof. The parent measures from proof receipt and sends the
+earlier deadline as a cutoff on that clock. Time spent delivering approval and refreshing
+instances counts toward the cutoff, which the helper checks before each `Stop()`. The outer cap also aborts
+the owned helper, including while its registration or instance refresh is pending.
+Task-stop verdicts carry separate mutation evidence: a known failure before dispatch leaves
+`changed` false even if proof was approved, an attempted stop keeps it true, and a lost answer after dispatch is conservative.
+Dispatching approval marks a pending possible mutation until a completed helper verdict proves
+otherwise; a timer between dispatch and the first stdout marker must not report `changed: false`.
+The helper's `stop-attempted` marker confirms mutation as it arrives. Part A publishes detached
+progress at these boundaries, so an outer timer can return pending dispatch and confirmed stop attempts,
+bound wrappers and terminations without awaiting unfinished verification. Returned arrays and
+records do not change when a late dependency completes.
+An authorizer refusal before the outer cap throws with its partial result; after cap expiry it returns the detached cap snapshot with completed mutation evidence.
+
+For the Korean Scheduler status, `사용 안 함` (disabled) proves inactivity and `대기`
+(queued) remains active because that instance can still start.
 
 Each step that asks the machine runs under a cap that races a timer and rechecks the elapsed time
 on the injected clock. The Scheduler proof-time authorization shares the 2 s task-end cap.
@@ -130,18 +147,27 @@ asynchronous `schtasks` and `sc.exe` calls through `execFile` (a deadline-derive
 floored to whole milliseconds and one that floors to 0 spawns nothing, because `execFile` reads 0
 as no timeout), the evidence snapshot `windowsProcessSnapshot` for every bind, the checked
 terminate, the exit watch, the Part B port sampler and the listener identity.
+For Scheduler registration, Part A queries the exact root task with `schtasks /query /tn` and
+`/hresult`. On Windows x64 it prepares native exit-code capture during executable lookup,
+then reads the full exit code from the spawned process handle. Only
+`0x80070002` establishes absence. Bun's truncated process status cannot prove that result.
+Where a full exit code is unavailable, the local Scheduler COM API can still confirm the task
+or report `ERROR_FILE_NOT_FOUND` from `GetTask` within the remainder of the same 2 s budget.
+Denied access, incomplete evidence, and late answers keep the registration unknown.
 `src/service/windows-task-instance-stop.ts` keeps the root registration and its running instances
 in one Task Scheduler COM session. It passes the registered XML and the helper's current account as
 base64 UTF-8 to preserve Unicode through the console. The live adapter checks the recognized task
 shape, the exact launcher, and the single run-as principal through `src/service/windows-taskxml.ts`.
-Trigger user IDs are checked separately. The stop proof accepts a disabled task with the same
+The logon scope and every recovery-trigger scope must match the expected account. Only the
+recognized legacy shape without recovery triggers may omit the logon scope. The stop proof accepts a disabled task with the same
 ownership evidence. Installation health still requires an enabled task.
 The helper requires a successful same-account SID check for every `EnginePID`, with the process
 creation time re-read after the owner lookup. After approval it re-reads the registration XML and
 refreshes every captured instance to verify that its GUID, engine PID and running state still agree.
 It stops each captured `IRunningTask` by instance GUID. An empty collection counts as idle only if
 the task is ready or disabled. Failed proof returns `evidence-unreadable` with instructions to
-verify the task in Task Scheduler and stop it from its owning session.
+verify the task in Task Scheduler and repair an owned registration or contact its owner or
+administrator. Ending a running instance alone does not repair an unverifiable registration.
 
 The Scheduler exposes current registration XML separately from instance identity. An instance
 already running under the same account from an earlier definition can still be visible under that
@@ -220,7 +246,9 @@ stop instead of sliding forward.
   own Part A only for a record whose managers are still the registered ones; a receipt without it
   runs Part A capped at 6 s; without a receipt a registered WinSW keeps its in-process stop and
   anything else gets the stray sweep capped at 4 s. A cap overrun is `service_state_unknown`, and
-  the manager commands and terminates are gated off once the cap has passed.
+  the manager commands and terminates are gated off once the cap has passed, including after
+  asynchronous authorization. A completed late result retains known mutation and termination
+  records while reporting the cap refusal instead of success.
 - `ocx service stop` (`src/service/cli-windows-stop.ts`) refuses on a Part A other than stopped or
   absent, claims a teardown receipt before the deferred tracked-proxy stop when this home owns the
   shared teardown (a failed claim sends no child stop), runs Part B, and clears the receipt only
@@ -319,3 +347,5 @@ service commands, the guarded order, `bound-stray`, the orphan-discovery cap and
 evidence snapshot), `tests/windows/windows-guarded-manager.test.ts` (the not-running promotion
 behind its registration proof) and `tests/windows/windows-stop-ocx-stop.test.ts` (plain `ocx stop`
 through the real CLI with the platform simulated).
+`tests/windows/windows-stop-boundary.test.ts` covers trigger ownership, cap authorization,
+mutation evidence and complete process-table retention across interrupted enrichment.

@@ -155,14 +155,15 @@ describe("runReady single probe (no --wait)", () => {
     expect(out.join("")).toContain("not ready yet (pending)");
   });
 
-  test("failed probe exits 1 with the failed line", async () => {
+  test("failed probe exits 1 and explains how to recheck after fixing startup sync", async () => {
     const { io, out } = captureIo();
     const code = await runReady(
       { json: false, wait: false, timeoutSeconds: DEFAULT_READY_WAIT_TIMEOUT_SECONDS },
       { ...io, findLive: async () => LIVE, probe: async () => FAILED_PROBE },
     );
     expect(code).toBe(1);
-    expect(out.join("")).toContain("sync failed");
+    expect(out.join("")).toContain("startup sync failed");
+    expect(out.join("")).toContain("restart the proxy");
   });
 
   test("no live proxy exits 1 with unreachable (--json sanitized)", async () => {
