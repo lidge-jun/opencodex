@@ -693,6 +693,10 @@ La barra de guardado pegajosa muestra **Sin cambios** cuando la configuración g
 
 ## Solución de problemas
 
+**Claude Code indica que Anthropic exige verificar la cuenta** — Abra el
+[Portal de verificación de Anthropic](https://portal.anthropic.com/verify) e inicie sesión con la cuenta afectada.
+OpenCodex conserva el HTTP 403 y registra `account_verification_required` en sus registros de solicitudes para este aviso.
+
 ### Desktop en Windows informa de `client_lifecycle_lock_failed` al aplicar
 
 Actualiza OpenCodex si aplicar la configuración de Desktop se bloquea cuando hay muchos archivos de
