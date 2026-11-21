@@ -1016,3 +1016,93 @@ test("an oversized streamed body remains a 413 when the credential-free auth dea
   expect(attempts).toBe(1);
   expect(records.some(row => row.event === "relay_retry")).toBe(false);
 });
+
+/** One raw HTTP/1.1 exchange, so a test can send a request target no URL parser has normalized. */
+async function rawExchange(port: number, head: string, body = ""): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    let data = "";
+    Bun.connect({ hostname: "127.0.0.1", port, socket: {
+      open(socket) { socket.write(head + "\r\n" + body); },
+      data(_socket, chunk) { data += new TextDecoder().decode(chunk); },
+      close() { resolve(Number(/^HTTP\/1\.1 (\d{3})/.exec(data)?.[1] ?? 0)); },
+      error(_socket, error) { reject(error); },
+    } }).catch(reject);
+  });
+}
+
+describe("a link Child's local admin token reads only the Home's quota pool (#8999)", () => {
+  const ADMIN = "child-admin-token-fixture-8999";
+  const POOL = "/v1/link-management/api/quota-pool";
+  let previousAdmin: string | undefined;
+  beforeEach(() => { previousAdmin = process.env.OPENCODEX_ADMIN_AUTH_TOKEN; process.env.OPENCODEX_ADMIN_AUTH_TOKEN = ADMIN; });
+  afterEach(() => {
+    if (previousAdmin === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+    else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdmin;
+  });
+
+  function child() {
+    const seen: { method: string; path: string; headers: Record<string, string>; body: string }[] = [];
+    const hub = authenticatedHome(async req => {
+      const url = new URL(req.url);
+      seen.push({ method: req.method, path: url.pathname + url.search, headers: Object.fromEntries(req.headers), body: await req.text() });
+      return Response.json({ schema: "ocx.quota-pool/1" }, { headers: { "cache-control": "no-store" } });
+    });
+    servers.push(hub);
+    // The key arrives through the runtime's own seam, so the case does not depend on the key file's ACL.
+    const machine = startMachineListener(0, { state: linkConnection(hub.port!), linkTunnel: connectedTunnel, linkKeySource: () => LINK_KEY });
+    servers.push(machine);
+    const get = (target: string, init: RequestInit = {}) => fetch(new URL("/api/machine/hub-relay" + target, machine.url), init);
+    return { seen, get, port: machine.port! };
+  }
+
+  test("GET and HEAD /api/quota-pool reach the Home with the admin token, as Bearer or x-opencodex-api-key", async () => {
+    const h = child();
+    const bearer = await h.get("/api/quota-pool", { headers: { authorization: "Bearer " + ADMIN } });
+    expect(bearer.status).toBe(200);
+    expect(await bearer.json()).toEqual({ schema: "ocx.quota-pool/1" });
+    expect((await h.get("/api/quota-pool?view=1", { headers: { "x-opencodex-api-key": ADMIN } })).status).toBe(200);
+    expect((await h.get("/api/quota-pool", { method: "HEAD", headers: { authorization: "Bearer " + ADMIN } })).status).toBe(200);
+    expect(h.seen.map(entry => [entry.method, entry.path])).toEqual([["GET", POOL], ["GET", POOL + "?view=1"], ["HEAD", POOL]]);
+    // The Home sees the link key the relay attached, never the Child's admin token.
+    for (const entry of h.seen) expect(JSON.stringify(entry.headers)).not.toContain(ADMIN);
+  });
+
+  test("every other path, method and refresh query stays closed to the admin token", async () => {
+    const h = child();
+    const admin = { authorization: "Bearer " + ADMIN };
+    for (const target of ["/api/usage", "/api/providers", "/api/settings", "/api/quota-pool/", "/api/Quota-Pool", "/api/quota-pool%2F", "/api%2Fquota-pool", "/api/quota%2Dpool"]) {
+      const response = await h.get(target, { headers: admin });
+      expect({ target, status: response.status }).toEqual({ target, status: 401 });
+    }
+    for (const method of ["POST", "PUT", "DELETE", "PATCH"]) {
+      const response = await h.get("/api/quota-pool", { method, headers: { ...admin, "content-type": "application/json" }, body: "{}" });
+      expect({ method, status: response.status }).toEqual({ method, status: 401 });
+    }
+    for (const query of ["?refresh=1", "?%72efresh=1", "?view=1&refresh=1&refresh=2", "?reload=1", "?force=true", "?quota=1"]) {
+      const response = await h.get("/api/quota-pool" + query, { headers: admin });
+      expect({ query, status: response.status }).toEqual({ query, status: 403 });
+      expect((await response.json()).code).toBe("link_child_read_only");
+    }
+    expect((await h.get("/api/quota-pool")).status).toBe(401);
+    expect((await h.get("/api/quota-pool", { headers: { authorization: "Bearer not-the-admin-token" } })).status).toBe(401);
+    expect((await h.get("/api/quota-pool", { headers: { ...admin, origin: "http://evil.example" } })).status).toBe(403);
+    expect(h.seen).toEqual([]);
+  });
+
+  test("raw request targets resolve to the quota pool or are refused, and nothing the caller adds reaches the Home", async () => {
+    const h = child();
+    const head = (target: string, extra = "") => "GET " + target + " HTTP/1.1\r\nHost: 127.0.0.1:" + h.port + "\r\nAuthorization: Bearer " + ADMIN + "\r\nConnection: close\r\n" + extra;
+    for (const target of ["/api/machine/hub-relay/api/quota-pool%2F..%2Fusage", "/api/machine/hub-relay/api/quota-pool%252F", "/api/machine/hub-relay//api/quota-pool",
+      "/api/machine/hub-relay/api/%71uota-pool"]) {
+      expect({ target, status: await rawExchange(h.port, head(target)) }).toEqual({ target, status: 401 });
+    }
+    // Dot segments normalize before the check, so they can only ever name the admitted read.
+    expect(await rawExchange(h.port, head("/api/machine/hub-relay/api/usage/../quota-pool"))).toBe(200);
+    const injected = "Cookie: ocx_session=fixture\r\nX-Forwarded-Host: evil.example\r\nForwarded: for=203.0.113.9\r\nX-Opencodex-Link-Id: lnk_ffffffffffffffff\r\nContent-Length: 7\r\n";
+    expect(await rawExchange(h.port, head("/api/machine/hub-relay/api/quota-pool", injected), "smuggle")).toBe(200);
+    expect(h.seen.map(entry => entry.path)).toEqual([POOL, POOL]);
+    const last = h.seen.at(-1)!;
+    expect(last.body).toBe("");
+    for (const value of ["ocx_session", "evil.example", "203.0.113.9", "lnk_ffffffffffffffff", ADMIN]) expect(JSON.stringify(last.headers)).not.toContain(value);
+  });
+});

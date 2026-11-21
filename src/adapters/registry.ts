@@ -24,6 +24,7 @@ import { createZedAdapter } from "./zed";
 import type { OcxProviderConfig } from "../types";
 import { createAdapterTierMetadata } from "../providers/fastwire";
 import { withInputMediaGuard } from "./input-media-guard";
+import { withCommandCodeDecisionModelGuard } from "./command-code-decision-guard";
 
 export type AdapterCacheRetention = "none" | "short" | "long";
 
@@ -236,6 +237,7 @@ export function createRegisteredAdapter(
   if (wire !== "openai-responses") {
     withInputMediaGuard(adapter, wire);
   }
+  withCommandCodeDecisionModelGuard(adapter, provider);
   const buildRequest = adapter.buildRequest.bind(adapter);
   adapter.buildRequest = (parsed, incoming) => {
     const attachTierMetadata = (request: Awaited<ReturnType<ProviderAdapter["buildRequest"]>>) => {

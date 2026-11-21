@@ -59,6 +59,9 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   // 261014 preemptive: Gemini 4 Argon, low/medium/high with no `minimal` (a documented 400).
   // Inert until Cursor's live roster lists the id.
   "gemini-4-argon": ["low", "medium", "high"],
+  // #8918: Gemini 4 Hydrogen (low..xhigh) and Carbon (low..high), per Cursor's models pages.
+  "gemini-4-hydrogen": ["low", "medium", "high", "xhigh"],
+  "gemini-4-carbon": ["low", "medium", "high"],
   // Explicit-thinking variants (260825 live roster). Tiers are the rungs the wire actually
   // lists for each family, which is not always the same set the non-thinking id carries:
   // 4.6-opus thinks only at high/max, 4.5-opus only at high, 4.6-sonnet only at medium.

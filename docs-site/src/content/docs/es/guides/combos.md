@@ -832,6 +832,8 @@ Compruebe primero la gramática del alias y los nombres reservados. Un alias dup
 
 ### Rechazos por ventana de contexto
 
+Los errores del proveedor con muchos espacios conservan las mismas reglas de desbordamiento y negación. Los espacios alrededor de los incisos de negación se procesan una sola vez, sin repetir la búsqueda sobre la misma secuencia.
+
 Antes de enviar una solicitud a un destino de un combo de Responses con ventana de contexto y
 límite de entrada conocidos, OpenCodex aplica un margen de 1,1× a la estimación de tokens de
 entrada y redondea hacia arriba. La entrada ajustada debe caber en el límite de entrada, y la suma

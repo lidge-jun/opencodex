@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
-import ClaudeNativePassthroughSetting from "../src/components/provider-workspace/ClaudeNativePassthroughSetting";
+import NativePassthroughSetting from "../src/components/provider-workspace/NativePassthroughSetting";
 import { LanguageProvider } from "../src/i18n/provider";
 import { DICTS } from "../src/i18n/shared";
 
@@ -68,7 +68,7 @@ function stubClaudeCode(
   return calls;
 }
 
-async function mount(): Promise<HTMLElement> {
+async function mount(protocol: "claude" | "gemini" = "claude"): Promise<HTMLElement> {
   const host = testWindow.document.createElement("div");
   testWindow.document.body.appendChild(host as never);
   const { createRoot } = await import("react-dom/client");
@@ -77,7 +77,7 @@ async function mount(): Promise<HTMLElement> {
     mountedRoots.push(root);
     root.render(
       <LanguageProvider>
-        <ClaudeNativePassthroughSetting apiBase="http://proxy" />
+        <NativePassthroughSetting apiBase="http://proxy" protocol={protocol} />
       </LanguageProvider>,
     );
   });
@@ -173,5 +173,43 @@ describe("Claude native passthrough setting", () => {
     await act(async () => { retryOf(host).click(); await flush(); });
     expect(toggleOf(host).disabled).toBe(false);
     expect(toggleOf(host).getAttribute("aria-pressed")).toBe("false");
+  });
+});
+
+describe("Gemini native passthrough setting", () => {
+  const settings = (enabled: boolean) => ({ settings: { rollout: { geminiNativeAntigravity: enabled } } });
+
+  test("reads the live setting and saves only the Gemini rollout switch", async () => {
+    const patches: unknown[] = [];
+    let enabled = false;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "http://proxy/api/protocols" && !init?.method) return Response.json(settings(enabled));
+      expect(String(input)).toBe("http://proxy/api/protocols/settings");
+      expect(init?.method).toBe("PATCH");
+      const patch = JSON.parse(String(init?.body));
+      patches.push(patch);
+      enabled = patch.rollout.geminiNativeAntigravity;
+      return Response.json(settings(enabled));
+    }) as typeof fetch;
+
+    const host = await mount("gemini");
+    expect(toggleOf(host).getAttribute("aria-label")).toBe(DICTS.en["pws.geminiNativePassthrough"]);
+    expect(toggleOf(host).getAttribute("aria-pressed")).toBe("false");
+    await act(async () => { toggleOf(host).click(); await flush(); });
+    expect(toggleOf(host).getAttribute("aria-pressed")).toBe("true");
+    await act(async () => { toggleOf(host).click(); await flush(); });
+    expect(toggleOf(host).getAttribute("aria-pressed")).toBe("false");
+    expect(patches).toEqual([
+      { rollout: { geminiNativeAntigravity: true } },
+      { rollout: { geminiNativeAntigravity: false } },
+    ]);
+  });
+
+  test("does not enable the switch on a server that omits the Gemini flag", async () => {
+    globalThis.fetch = (async () => Response.json({ settings: { rollout: {} } })) as typeof fetch;
+    const host = await mount("gemini");
+    expect(toggleOf(host).disabled).toBe(true);
+    expect(toggleOf(host).hasAttribute("aria-pressed")).toBe(false);
+    expect(host.textContent).toContain(DICTS.en["pws.geminiNativePassthroughLoadFailed"]);
   });
 });

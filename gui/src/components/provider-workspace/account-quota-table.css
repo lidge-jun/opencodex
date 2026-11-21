@@ -114,6 +114,12 @@
 .aqt-pool {
   min-width: 9rem;
 }
+/* The wide table names each pool in its column header; the card layout below shows this line instead. */
+.aqt-pool-label {
+  display: none;
+  color: var(--muted);
+  font-size: var(--text-caption);
+}
 .aqt-table .badge {
   white-space: nowrap;
 }
@@ -189,9 +195,9 @@
   overflow-wrap: anywhere;
 }
 
-/* Narrow: each account becomes a stacked block — account, plan and status on one line, then one
-   line per pool with its 5-hour and weekly bars side by side, then the controls — so nothing has
-   to scroll sideways to reach a button. */
+/* Narrow: each account becomes a stacked block — account, plan and status on one line, then each
+   pool as three lines (its name, the 5-hour bar, the weekly bar), then the controls — so nothing
+   has to scroll sideways to reach a button. */
 @container (max-width: 1100px) {
   .aqt-table thead {
     position: absolute;
@@ -234,30 +240,12 @@
   }
   .aqt-row > .aqt-actions-cell { grid-area: 1 / 4; }
   .aqt-row > .aqt-pool {
-    display: grid;
-    grid-template-columns: 6.5rem repeat(2, minmax(0, 1fr));
-    align-items: start;
-    column-gap: var(--space-3);
+    display: block;
     min-width: 0;
   }
-  .aqt-row > .aqt-pool--empty,
-  .aqt-row > .aqt-pool--banned {
+  .aqt-pool-label {
     display: block;
-  }
-  .aqt-pool > .aqt-bar + .aqt-bar {
-    margin-top: 0;
-  }
-  .aqt-pool[data-label]::before {
-    content: attr(data-label);
-    grid-row: 1;
-    grid-column: 1;
-    color: var(--muted);
-    font-size: var(--text-caption);
-  }
-  .aqt-pool > .aqt-next {
-    grid-column: 1;
-    grid-row: 2;
-    justify-self: start;
+    margin-bottom: var(--space-1);
   }
   .aqt-actions-cell {
     position: static;
@@ -278,8 +266,5 @@
 }
 @container (max-width: 560px) {
   .aqt-row > .aqt-actions-cell { grid-area: auto; grid-column: 1 / -1; }
-  .aqt-row > .aqt-pool { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .aqt-pool[data-label]::before { grid-row: auto; grid-column: 1 / -1; margin-bottom: var(--space-1); }
-  .aqt-pool > .aqt-next { grid-row: auto; grid-column: 1 / -1; }
 }
 }

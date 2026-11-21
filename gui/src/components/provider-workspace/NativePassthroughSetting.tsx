@@ -1,23 +1,32 @@
-/**
- * Claude Code's native passthrough (`claudeCode.nativePassthrough`, default on), shown under the
- * Claude account pool because it decides whether Claude Code's own traffic can reach the pool at
- * all: while it is on, a bare Claude id unclaimed by an alias or model map goes straight to
- * Anthropic when Claude Code sends its own login. It is one global setting, saved immediately through
- * the Claude Code settings patch, which changes only the field it is sent.
- */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { isApiTargetCaptureCurrent, targetFetch } from "../../api";
 import { useRenderTargetCapture } from "../../use-render-target-capture";
 
-export default function ClaudeNativePassthroughSetting({ apiBase, targetKey }: { apiBase: string; targetKey?: string }) {
+type NativeProtocol = "claude" | "gemini";
+
+function readPassthrough(payload: unknown, protocol: NativeProtocol): boolean | null {
+  const info = payload as {
+    nativePassthrough?: unknown;
+    settings?: { rollout?: { geminiNativeAntigravity?: unknown } };
+  } | null;
+  const value = protocol === "gemini" ? info?.settings?.rollout?.geminiNativeAntigravity : info?.nativePassthrough;
+  return typeof value === "boolean" ? value : null;
+}
+
+/** A provider account card that saves just its protocol's native passthrough setting. */
+export default function NativePassthroughSetting({
+  apiBase, targetKey, protocol,
+}: { apiBase: string; targetKey?: string; protocol: NativeProtocol }) {
   const t = useT();
+  const gemini = protocol === "gemini";
+  const readPath = gemini ? "/api/protocols" : "/api/claude-code";
+  const title = t(gemini ? "pws.geminiNativePassthrough" : "claude.nativePassthrough");
   const capture = useRenderTargetCapture(apiBase, targetKey);
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
-  // GET /api/claude-code gathers the catalog and can answer 503 while it is busy; Retry reloads.
   const [reloadVersion, setReloadVersion] = useState(0);
   const mountedRef = useRef(true);
 
@@ -29,15 +38,16 @@ export default function ClaudeNativePassthroughSetting({ apiBase, targetKey }: {
   useEffect(() => {
     let cancelled = false;
     const ac = new AbortController();
-    void targetFetch(capture, `${apiBase}/api/claude-code`, { signal: ac.signal, cache: "no-store" })
+    void targetFetch(capture, `${apiBase}${readPath}`, { signal: ac.signal, cache: "no-store" })
       .then(response => {
         if (!response.ok) throw new Error("load");
-        return response.json() as Promise<{ nativePassthrough?: unknown }>;
+        return response.json() as Promise<unknown>;
       })
       .then(json => {
         if (cancelled || !isApiTargetCaptureCurrent(capture)) return;
-        if (typeof json?.nativePassthrough !== "boolean") throw new Error("load");
-        setEnabled(json.nativePassthrough);
+        const saved = readPassthrough(json, protocol);
+        if (saved === null) throw new Error("load");
+        setEnabled(saved);
         setLoadFailed(false);
       })
       .catch(() => {
@@ -49,7 +59,7 @@ export default function ClaudeNativePassthroughSetting({ apiBase, targetKey }: {
       cancelled = true;
       ac.abort();
     };
-  }, [apiBase, capture, reloadVersion]);
+  }, [apiBase, capture, protocol, readPath, reloadVersion]);
 
   const toggle = async () => {
     if (enabled === null || saving) return;
@@ -57,17 +67,20 @@ export default function ClaudeNativePassthroughSetting({ apiBase, targetKey }: {
     setSaving(true);
     setSaveFailed(false);
     try {
-      const response = await targetFetch(capture, `${apiBase}/api/claude-code`, {
-        method: "PUT",
+      const response = await targetFetch(capture, `${apiBase}${gemini ? "/api/protocols/settings" : readPath}`, {
+        method: gemini ? "PATCH" : "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nativePassthrough: requested }),
+        body: JSON.stringify(gemini
+          ? { rollout: { geminiNativeAntigravity: requested } }
+          : { nativePassthrough: requested }),
       });
       if (!mountedRef.current || !isApiTargetCaptureCurrent(capture)) return;
       if (!response.ok) throw new Error("save");
-      const json = await response.json() as { nativePassthrough?: unknown } | null;
+      const json: unknown = await response.json();
       if (!mountedRef.current || !isApiTargetCaptureCurrent(capture)) return;
-      if (json?.nativePassthrough !== requested) throw new Error("save");
-      setEnabled(json.nativePassthrough);
+      const saved = readPassthrough(json, protocol);
+      if (saved !== requested) throw new Error("save");
+      setEnabled(saved);
     } catch {
       if (mountedRef.current && isApiTargetCaptureCurrent(capture)) {
         setEnabled(null);
@@ -81,12 +94,14 @@ export default function ClaudeNativePassthroughSetting({ apiBase, targetKey }: {
 
   const loading = enabled === null && !loadFailed;
   return (
-    <div className="card anthropic-pool-card claude-native-passthrough-card" aria-busy={loading || saving}>
+    <div className={`card anthropic-pool-card ${protocol}-native-passthrough-card`} aria-busy={loading || saving}>
       <div className="card-row" style={{ alignItems: "flex-start", gap: 12 }}>
         <div style={{ flex: 1 }}>
-          <strong>{t("claude.nativePassthrough")}</strong>
+          <strong>{title}</strong>
           <div className="card-sub" style={{ marginTop: 4 }}>
-            {loadFailed ? t("claude.nativePassthroughLoadFailed") : loading ? t("common.loading") : t("claude.nativePassthroughDesc")}
+            {loadFailed
+              ? t(gemini ? "pws.geminiNativePassthroughLoadFailed" : "claude.nativePassthroughLoadFailed")
+              : loading ? t("common.loading") : t(gemini ? "pws.geminiNativePassthroughDesc" : "claude.nativePassthroughDesc")}
           </div>
         </div>
         <button
@@ -94,7 +109,7 @@ export default function ClaudeNativePassthroughSetting({ apiBase, targetKey }: {
           className={`toggle ${enabled ? "on" : ""}`}
           disabled={enabled === null || saving}
           aria-pressed={enabled ?? undefined}
-          aria-label={t("claude.nativePassthrough")}
+          aria-label={title}
           onClick={() => { void toggle(); }}
         >
           <span className="toggle-knob" />
