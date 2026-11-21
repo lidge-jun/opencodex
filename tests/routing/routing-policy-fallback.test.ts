@@ -79,6 +79,34 @@ describe("policy candidate fallback", () => {
   let previousHome: string | undefined;
   beforeEach(() => { previousHome = process.env.OPENCODEX_HOME; home = mkdtempSync(join(tmpdir(), "ocx-policy-fallback-")); process.env.OPENCODEX_HOME = home; });
   afterEach(() => { if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome; removeTreeWithRetry(home); });
+  test.each(["long request id", "envelope limit", "over limit", "conflicting tail", "hostile diagnostic"] as const)(
+    "exact effort fallback checks the complete bounded envelope: %s", async kind => {
+      const error = { type: "invalid_request_error", param: "reasoning_effort", message: "Invalid reasoning effort." };
+      let body = JSON.stringify({ request_id: "x".repeat(1100), error,
+        ...(kind === "conflicting tail" ? { details: { param: "temperature", message: "Invalid temperature." } } : {}),
+        ...(kind === "hostile diagnostic" ? { details: { message: "parameter" + " ".repeat(1100) + "!" } } : {}),
+      });
+      if (kind === "envelope limit" || kind === "over limit") body = body.padEnd(16_384 + (kind === "over limit" ? 1 : 0), " ");
+      const shouldHop = kind === "long request id" || kind === "envelope limit";
+      const seenModels: string[] = [];
+      const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {}, {}, {
+        runCore: async (req, _config, context, options) => {
+          const parsed = await req.json();
+          options.onRequestBodyParsed?.(parsed);
+          context.routeDecision = policyTrace();
+          seenModels.push(parsed.model);
+          return seenModels.length === 1
+            ? new Response(body, { status: 400, headers: { "content-type": "application/json" } })
+            : Response.json({ status: "completed" });
+        },
+      });
+      expect(body.length).toBeGreaterThan(1024);
+      expect(seenModels).toEqual(shouldHop ? ["policy/daily", "provider-b/model-b"] : ["policy/daily"]);
+      expect(response.status).toBe(shouldHop ? 200 : 400);
+      if (shouldHop) expect(await response.json()).toEqual({ status: "completed" });
+      else expect(await response.text()).toBe(body);
+    },
+  );
   test.each([401, 402, 429, "local"] as const)("synthetic failure attribution across candidates (%s)", async outcome => {
     clearProviderCacheAffinityForTests();
     const lane = "policy-terminal-source";

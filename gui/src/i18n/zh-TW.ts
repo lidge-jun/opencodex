@@ -3,6 +3,7 @@ import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
@@ -138,6 +139,7 @@ export const zhTW: Record<TKey, string> = {
   ...shellV2Copy("zh-TW"),
   ...codexCliUpdateCopy("zh-TW"),
   ...remoteLinkDiagnosticsCopy("zh-TW"),
+  ...remoteLinkChildCopy("zh-TW"),
   ...gatewayClientsCopy("zh-TW"),
   ...modelsV2Copy("zh-TW"),
   ...modelsOverallCopy("zh-TW"),
@@ -2338,6 +2340,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "NEXT",
   "codexAuth.creditGranted": "獲得 {date}",
   "codexAuth.creditExpires": "過期 {date}（剩餘 {days} 天）",
+  "codexAuth.creditNoExpiry": "無到期時間",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "{count} 張 Grok 重設券",

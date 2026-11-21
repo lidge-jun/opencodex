@@ -700,7 +700,9 @@ export default function App() {
                 {page === "logs" && <Logs apiBase={sharedBase} />}
                 {page === "usage" && <Usage apiBase={sharedBase} connected={targets.connected || isConnectedRuntime()} apiKeyId={targets.apiKeyId} topology={targetError || (isConnectedRuntime() && !targets.connected) ? "unknown" : targets.usageTopology} />}
                 {page === "storage" && <Storage apiBase={sharedBase} />}
-                {page === "remote" && !remotePairingFormOpen && <RemoteLink key={`${sharedBase}:${sharedSessionEpoch}`} apiBase={sharedBase} diagnosticsApiBase={targets.link ? machineBase : sharedBase} sessionReady={sharedSessionReady} pairingRecoveryAvailable={hubPairingAvailable} onRequestPairing={() => setHubPairingOpen(true)} workspaceAvailable={remoteWorkspaceAvailable} onOpenWorkspace={() => navigateToPage("remote-workspace")} />}
+                {page === "remote" && !remotePairingFormOpen && <RemoteLink key={`${sharedBase}:${sharedSessionEpoch}`} apiBase={sharedBase} diagnosticsApiBase={targets.link ? machineBase : sharedBase} sessionReady={sharedSessionReady}
+                  statusApiBase={targets.link ? machineBase : sharedBase} statusSessionReady={targets.link ? hasApiSession("machine") : sharedSessionReady} childLink={targets.link}
+                  pairingRecoveryAvailable={hubPairingAvailable} onRequestPairing={() => setHubPairingOpen(true)} workspaceAvailable={remoteWorkspaceAvailable} onOpenWorkspace={() => navigateToPage("remote-workspace")} />}
                 {page === "remote-workspace" && <RemoteWorkspaceRoute available={remoteWorkspaceAvailable} apiBase={sharedBase} hubOrigin={targets.shared.serverOrigin} onOpenRemoteLink={() => navigateToPage("remote")} />}
                 {page === "codex-set" && <CodexSet apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} targetKey={sharedTarget.key} />}
                 {shellPage === "integrations" && <Integrations apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}

@@ -3,6 +3,7 @@ import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
@@ -140,6 +141,7 @@ export const fr: Record<TKey, string> = {
   ...shellV2Copy("fr"),
   ...codexCliUpdateCopy("fr"),
   ...remoteLinkDiagnosticsCopy("fr"),
+  ...remoteLinkChildCopy("fr"),
   ...gatewayClientsCopy("fr"),
   ...modelsV2Copy("fr"),
   ...modelsOverallCopy("fr"),
@@ -3060,6 +3062,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "PROCHAIN",
   "codexAuth.creditGranted": "Accordé le {date}",
   "codexAuth.creditExpires": "Expire le {date} ({days} j restants)",
+  "codexAuth.creditNoExpiry": "Sans expiration",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "{count} coupon(s) de réinitialisation Grok",

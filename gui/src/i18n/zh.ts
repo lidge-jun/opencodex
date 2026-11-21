@@ -3,6 +3,7 @@ import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
@@ -140,6 +141,7 @@ export const zh: Record<TKey, string> = {
   ...shellV2Copy("zh"),
   ...codexCliUpdateCopy("zh"),
   ...remoteLinkDiagnosticsCopy("zh"),
+  ...remoteLinkChildCopy("zh"),
   ...gatewayClientsCopy("zh"),
   ...modelsV2Copy("zh"),
   ...modelsOverallCopy("zh"),
@@ -2495,6 +2497,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "NEXT",
   "codexAuth.creditGranted": "获得 {date}",
   "codexAuth.creditExpires": "过期 {date}（剩余 {days} 天）",
+  "codexAuth.creditNoExpiry": "无到期时间",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "{count} 张 Grok 重置券",

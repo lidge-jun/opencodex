@@ -3,6 +3,7 @@ import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
@@ -142,6 +143,7 @@ export const pt: Record<TKey, string> = {
   ...shellV2Copy("pt"),
   ...codexCliUpdateCopy("pt"),
   ...remoteLinkDiagnosticsCopy("pt"),
+  ...remoteLinkChildCopy("pt"),
   ...gatewayClientsCopy("pt"),
   ...modelsV2Copy("pt"),
   ...modelsOverallCopy("pt"),
@@ -3105,6 +3107,7 @@ export const pt: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "PRÓXIMO",
   "codexAuth.creditGranted": "Concedido em {date}",
   "codexAuth.creditExpires": "Expira em {date} ({days}d restantes)",
+  "codexAuth.creditNoExpiry": "Sem vencimento",
   "grokCoupon.badgeAria": "{count} cupom(ns) de reset do Grok",
   "grokCoupon.badgeErrorAria": "Não foi possível ler os cupons de reset do Grok",
   "grokCoupon.title": "Cupons de reset do Grok",

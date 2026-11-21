@@ -16,6 +16,17 @@ account selection or defaults.
 While a provider login is in progress, its Accounts panel offers **Cancel** once sign-in
 instructions appear.
 
+## Reasoning-effort rejection diagnostics
+
+Automatic retries of the same provider and model at a lower effort, and learned unsupported
+efforts, use a complete upstream error diagnostic of at most 1,024 UTF-16 code units, including
+any wrapper text. Larger diagnostics cannot authorize this retry or learning from their prefix.
+The original error body remains available to normal handling, including ordinary Combo failover;
+existing client error-display limits still apply. A long but legitimate effort error therefore
+does not trigger automatic effort repair or update the learned effort ladder. Short diagnostics such as
+`cannot use parameter 'reasoning_effort'` still identify effort; an actual unrelated field
+continues to block this retry and learning.
+
 ## OpenAI account modes
 
 | Provider id | Use | Credential/account rule |
@@ -55,7 +66,7 @@ reset is expected to recover as `+N% pool capacity`. **Incomplete coverage** mea
 accounts could not safely contribute to the estimate, for example because their plan or quota is
 unknown, their reading is stale, or the account is paused or needs reauthentication.
 
-Business Premium seats reported as `self_serve_business_prolite` count as five Standard-seat units in this estimate. This display weight does not select accounts or create a five-hour window when the upstream reports only weekly usage. The calibration follows the [official Business usage limits](https://help.openai.com/en/articles/12003714-chatgpt-business-models-and-limits), checked 2026-10-20; unknown plans continue to count at the baseline with the unknown-plan count disclosed. An enabled Anthropic OAuth account pool with two or more accounts gets the same kind of estimate, every routable account weighted equally: inactive accounts use their last measured reading (no extra usage requests), paused, reauthenticating or stale accounts count as incomplete coverage, and with the pool off or one account the row shows the active account's own reading as before.
+Pro 100 (`prolite`), Pro 200 (`pro`), and Pro 500 (`promax`) count as 10, 20, and 50 Plus-seat units respectively. Business Premium seats reported as `self_serve_business_prolite` count as five Standard-seat units in this estimate. This display weight does not select accounts or create a five-hour window when the upstream reports only weekly usage. The calibration follows the [official Business usage limits](https://help.openai.com/en/articles/12003714-chatgpt-business-models-and-limits), checked 2026-10-20; unknown plans continue to count at the baseline with the unknown-plan count disclosed. An enabled Anthropic OAuth account pool with two or more accounts gets the same kind of estimate, every routable account weighted equally: inactive accounts use their last measured reading (no extra usage requests), paused, reauthenticating or stale accounts count as incomplete coverage, and with the pool off or one account the row shows the active account's own reading as before.
 
 A **partial window coverage** warning means some included accounts reported one quota window but
 not another. The overview keeps those windows separate and marks each affected window incomplete

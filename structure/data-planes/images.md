@@ -40,6 +40,37 @@ Fetch-based Anthropic image bridge account recovery follows [the revoked-token c
 The [provider timeout policy](../transports/timeouts.md#provider-scoped-budgets) covers the
 routed model iterations. Image and video generation use separate tool deadlines.
 
+## xAI image and video models
+
+The image bridge defaults to `grok-imagine-image-2.0`. For that model, OpenAI
+`low`/`standard` maps to xAI `low`, `medium`/`high`/`hd` to `medium`, and
+`auto` to `auto`; other models omit the quality field. Resolution mapping
+remains independent. Edits through `callXaiImages` and the `/v1/images/edits` relay accept up to five
+source URLs in caller order; both drop duplicate URLs first and then apply the limit, and the relay
+checks it before resolving credentials or sending a request. The relay refuses the request when any
+supplied source, an explicit `null` included, is not an https URL or a canonical base64 PNG/JPEG/WebP
+data URL (for example a `file_id` or plain text) instead of dropping it; every URL-bearing property of
+an `images[]` entry (`image_url`, `image_url.url`, `url`) counts as a source. The `image_gen` bridge tool sends one
+source. Safe upstream validation details are reconstructed from a
+closed vocabulary of quality, field, resolution and bounded keyframe tokens;
+unknown bodies and arbitrary upstream text never reach the caller.
+
+The video bridge defaults to `grok-imagine-video-1.5-lite`. The 1.5 model supports
+1080p, first and last frames, four keyframes and fourteen references capped at 720p;
+Lite supports 1080p and a first frame, while classic supports 720p, a first frame
+and seven references. Known models expose nine aspect ratios; unknown models retain
+the legacy seven ratios and no image inputs. `parseVideoCallArgs` refuses, before any paid
+call, every explicit setting the model cannot honour in the requested mode: an unsupported
+resolution, aspect ratio or duration; 1080p with `last_frame`, `keyframes` or references
+(reference-to-video stops at 720p); a keyframe outside the effective clip (8 s when no duration
+is given) or two keyframes in the same 1/3-second slot; classic `image` plus references, and classic
+references beyond 10 s; and an aspect ratio on plain image-to-video, which keeps the image's ratio.
+Image inputs accept HTTPS and bounded
+inline image data. A successful URL download records its original source URL in a
+256-entry, one-hour process-local map. Artifact references resolve by exact path or
+opaque ID without reading local files; they are forwarded only to the pinned xAI
+video destination. Inline image results have no source URL and cannot be referenced.
+
 ## Video bridge destination
 
 `planVideoBridge` in `src/images/plan.ts` decides where `video_gen` submit and poll requests go and

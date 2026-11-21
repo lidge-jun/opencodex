@@ -14,6 +14,7 @@ import { LinkIntro, LinkStatus, LinkSwitchRow, Monogram, RoleCard } from "../com
 import { type ForceRemovedLink, RemoteLinkDisconnectDialog, RemoteLinkForceRemovedNotice } from "./RemoteLinkDialogs";
 import { type BoundRefusal, boundRefusal } from "../remote-link-api";
 import { RemoteLinkDiagnostics } from "./RemoteLinkDiagnostics";
+import { type ChildLinkView, RemoteLinkChildDisconnect } from "./RemoteLinkChildDisconnect";
 import { LinkErrorNotice, RemoteLinkSheet, type LinkActionErrorView, type LinkChildStep } from "./RemoteLinkSheet";
 import { getChildJob, jobHoldsLink, type ChildJobView, type ChildOp } from "../remote-link-child-ops-api";
 import { ChildBulkBar, ChildJobProgress, ChildPolicyPanel, ChildRowActions, ChildRowBadges } from "./RemoteLinkChildActions";
@@ -26,6 +27,15 @@ export interface RemoteLinkProps {
   apiBase: string;
   /** Base for this computer's own diagnostics; on a connected Child the machine plane, never the Home relay. */
   diagnosticsApiBase?: string;
+  /**
+   * Base for `GET /api/link/status`. A connected Child serves its own status on its machine listener;
+   * the Home relay refuses it as a Home management read (#8985).
+   */
+  statusApiBase?: string;
+  /** Whether the session that `statusApiBase` needs is ready; it gates the status read and the page. */
+  statusSessionReady?: boolean;
+  /** A connected Child's own link, from `/api/machine/status`; the page shows the commands that end it. */
+  childLink?: ChildLinkView;
   sessionReady: boolean;
   pairingRecoveryAvailable?: boolean;
   onRequestPairing?: () => void;
@@ -195,7 +205,7 @@ function linkActionError(error: unknown): LinkActionErrorView {
   return { key: errorKey(error), hint: error.hint, childStep: error.residual ? residualChildStep(error.residual) : null };
 }
 
-export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sessionReady, pairingRecoveryAvailable = false, onRequestPairing, workspaceAvailable = false, onOpenWorkspace, onChildReady = reloadDashboard, restartWait }: RemoteLinkProps): ReactElement {
+export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sessionReady, statusApiBase = apiBase, statusSessionReady = sessionReady, childLink, pairingRecoveryAvailable = false, onRequestPairing, workspaceAvailable = false, onOpenWorkspace, onChildReady = reloadDashboard, restartWait }: RemoteLinkProps): ReactElement {
   const t = useT();
   const [uiState, setUiState] = useState<RemoteLinkUiState>("off");
   const [role, setRole] = useState<RemoteLinkRole>("home");
@@ -264,13 +274,13 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
   const refreshStatus = useCallback(async () => {
     // While this computer restarts into a Child, the draining standalone cannot answer; the
     // /healthz wait below owns the page until it reloads.
-    if (!sessionReady || document.visibilityState === "hidden" || restartingRef.current) return;
+    if (!statusSessionReady || document.visibilityState === "hidden" || restartingRef.current) return;
     statusRequestRef.current?.controller.abort();
     const controller = new AbortController();
     const sequence = ++statusSequenceRef.current;
     statusRequestRef.current = { controller, sequence };
     try {
-      const value = parseRemoteLinkStatus(await requestLinkJson<unknown>(apiBase, "/api/link/status?children=1", { signal: controller.signal }));
+      const value = parseRemoteLinkStatus(await requestLinkJson<unknown>(statusApiBase, "/api/link/status?children=1", { signal: controller.signal }));
       if (controller.signal.aborted || statusSequenceRef.current !== sequence) return;
       setStatus(value);
       setStatusError(null);
@@ -292,18 +302,18 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
     } finally {
       if (statusRequestRef.current?.sequence === sequence) statusRequestRef.current = null;
     }
-  }, [apiBase, failedAction, sessionReady]);
+  }, [statusApiBase, failedAction, statusSessionReady]);
 
   const refreshStatusOnEffect = useEffectEvent(() => { void refreshStatus(); });
 
   useEffect(() => {
-    if (!sessionReady) return;
+    if (!statusSessionReady) return;
     void Promise.resolve().then(refreshStatusOnEffect);
     const poll = window.setInterval(refreshStatusOnEffect, 5_000);
     const onVisibility = () => { if (document.visibilityState === "visible") refreshStatusOnEffect(); else abortStatusRequest(); };
     document.addEventListener("visibilitychange", onVisibility);
     return () => { window.clearInterval(poll); document.removeEventListener("visibilitychange", onVisibility); abortStatusRequest(); };
-  }, [abortStatusRequest, sessionReady]);
+  }, [abortStatusRequest, statusSessionReady]);
 
   useEffect(() => {
     if (uiState !== "restart-waiting") return;
@@ -539,7 +549,7 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
   const primaryActionDisabled = role === "child" && !childSelectable;
 
   const refreshButton = <Button variant="ghost" size="sm" onClick={() => { setPolicyReload(value => value + 1); void refreshStatus(); }} disabled={busy !== null}><IconRefresh />{t("link.refresh")}</Button>;
-  if (!sessionReady) return (
+  if (!statusSessionReady) return (
     <div className="remote-link-page flex min-w-0 flex-col gap-5 font-sans text-fg">
       <PageHeader title={t("link.title")} subtitle={t("link.subtitle")} />
       <Banner tone="warn" action={pairingRecoveryAction}>{t("link.sessionRequired")}</Banner>
@@ -679,6 +689,7 @@ export default function RemoteLink({ apiBase, diagnosticsApiBase = apiBase, sess
       )}
       {showChildOps && <ChildPolicyPanel apiBase={apiBase} busy={policyBusy} reloadSignal={policyReload} onBusy={setPolicyBusy} onError={setActionError} />}
       {(status?.role === "child" || statusRows.length > 0) && <FallbackPanel apiBase={apiBase} section="devices" readOnly={status?.role === "child"} />}
+      {status?.role === "child" && childLink && <RemoteLinkChildDisconnect link={childLink} />}
       <RemoteLinkDiagnostics apiBase={diagnosticsApiBase} />
 
       <RemoteLinkSheet
