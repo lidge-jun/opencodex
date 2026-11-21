@@ -145,6 +145,26 @@ describe("combo provider 413 verdicts", () => {
     expect(failed.providerIntakeRefusal).toBe(false);
     expect(comboFailureDecision(413, failed.classificationText, { code: failed.upstreamCode, providerIntakeRefusal: failed.providerIntakeRefusal })).toBe("stop");
   });
+
+  test("a streamed 413 error event keeps its 413 through the stream preflight (#9017 review)", async () => {
+    // The log tap reads 400 from invalid_request_error and 429 from rate_limit_exceeded; the
+    // projected failure must still say 413 so the outer combo hops without cooling the target.
+    for (const error of [
+      { type: "invalid_request_error", message: "Request Entity Too Large" },
+      { type: "tokens", code: "rate_limit_exceeded", message: "Request too large for model on tokens per minute (TPM)" },
+    ]) {
+      const preflight = await preflightComboStreamResponse(new Response(
+        `data: ${JSON.stringify({ type: "error", status: 413, error })}\n\n`, { headers: { "content-type": "text/event-stream" } },
+      ), { model: "m1", provider: "a" });
+      expect(preflight.kind).toBe("failed");
+      if (preflight.kind !== "failed") continue;
+      expect(preflight.response.status).toBe(413);
+      const failure = await consumeComboFailure(preflight.response);
+      const options = { code: failure.upstreamCode, providerIntakeRefusal: failure.providerIntakeRefusal };
+      expect(comboFailureDecision(413, failure.classificationText, options)).toBe("hop");
+      expect(comboFailureCooldownScope(413, failure.classificationText, options)).toBe("none");
+    }
+  });
   test("hard stops still outrank a provider 413", () => {
     expect(comboFailureDecision(413, "too large", { code: "origin_rejected" })).toBe("stop");
     expect(comboFailureDecision(413, "too large", { code: "cyber_policy" })).toBe("stop");
