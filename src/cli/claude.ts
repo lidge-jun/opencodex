@@ -846,7 +846,16 @@ export async function resolveHubRosterForClaude(
   }
 }
 
-export async function cmdClaude(args: string[]): Promise<number> {
+export async function cmdClaude(args: string[], fromShim = false): Promise<number> {
+  const { findNativePosixClaude, supportsClaudeShim } = await import("../claude/native-executable");
+  const executable = supportsClaudeShim() ? findNativePosixClaude() : "claude";
+  if (!executable) { console.error(CLAUDE_INSTALL_HINT); return 1; }
+  if (fromShim && (args[0] === "-h" || args[0] === "--help" || args[0] === "--version" || args[0] === "-v"
+    || ["auth", "update", "doctor", "config", "desktop", "intercept"].includes(args[0] ?? ""))) {
+    const env = { ...process.env };
+    deleteUntrustedAnthropicSlots(env, {});
+    return spawnClaude(executable, args, env);
+  }
   const config = loadConfig();
   const clientState = readClientConnectionState();
   const tokenState = clientState.kind === "connected" ? readServiceApiTokenState() : undefined;
@@ -855,7 +864,7 @@ export async function cmdClaude(args: string[]): Promise<number> {
     console.error(preflight.message);
     return 1;
   }
-  if (preflight.kind === "native") return launchNativeClaude(config, args, preflight.notice);
+  if (preflight.kind === "native") return launchNativeClaude(executable, config, args, preflight.notice);
   let route: number | ClaudeRoutingTarget;
   let contextWindows: Record<string, number>;
   let forceAvailable: readonly string[] | undefined;
@@ -874,7 +883,7 @@ export async function cmdClaude(args: string[]): Promise<number> {
     }
     const liveState = await fetchClaudeCodeState(config, port);
     const plan = claudeLaunchPlan(true, liveState.enabled);
-    if (plan.kind === "native") return launchNativeClaude(config, args, plan.notice);
+    if (plan.kind === "native") return launchNativeClaude(executable, config, args, plan.notice);
     route = port;
     contextWindows = liveState.contextWindows;
     forceAvailable = liveState.forceAvailable ?? [];
@@ -926,10 +935,10 @@ export async function cmdClaude(args: string[]): Promise<number> {
   const launch = withClaudeContextSettings(args, env, config, contextWindows, process.env, {
     selectors: gateway?.models.map(model => model.id) ?? [],
   });
-  return spawnClaude(launch.args, launch.env);
+  return spawnClaude(executable, launch.args, launch.env);
 }
 
-async function launchNativeClaude(config: OcxConfig, args: string[], notice: string): Promise<number> {
+async function launchNativeClaude(executable: string, config: OcxConfig, args: string[], notice: string): Promise<number> {
   console.error(notice);
   const providerNames = Object.keys(config.providers);
   const override = nativeModelOverride(
@@ -946,14 +955,18 @@ async function launchNativeClaude(config: OcxConfig, args: string[], notice: str
     warn: line => console.error(line),
   });
   if (allowRootSkipPermissions) console.error(rootSkipPermissionsNotice(env));
-  return spawnClaude([...(override.flag ?? []), ...args], env);
+  return spawnClaude(executable, [...(override.flag ?? []), ...args], env);
 }
 
-function spawnClaude(args: string[], env: ClaudeLaunchEnv): Promise<number> {
+function spawnClaude(executable: string, args: string[], env: ClaudeLaunchEnv): Promise<number> {
   return new Promise<number>(resolve => {
-    const inv = commandInvocation("claude", args);
+    const inv = commandInvocation(executable, args);
     const child = spawn(inv.file, inv.args, { stdio: "inherit", env: env as NodeJS.ProcessEnv, ...inv.options });
-    child.on("error", (err: NodeJS.ErrnoException) => {
+    // Direct-spawn parents may terminate only the launcher, not its process group.
+    const terminate = () => { child.kill("SIGTERM"); };
+    if (process.platform !== "win32") process.on("SIGTERM", terminate);
+    child.once("error", (err: NodeJS.ErrnoException) => {
+      process.off("SIGTERM", terminate);
       if (err.code === "ENOENT") {
         console.error(CLAUDE_INSTALL_HINT);
       } else {
@@ -961,7 +974,8 @@ function spawnClaude(args: string[], env: ClaudeLaunchEnv): Promise<number> {
       }
       resolve(1);
     });
-    child.on("exit", (code, signal) => {
+    child.once("exit", (code, signal) => {
+      process.off("SIGTERM", terminate);
       const hint = claudeNotFoundHint(code, signal);
       if (hint) console.error(hint);
       resolve(signal ? 1 : code ?? 0);

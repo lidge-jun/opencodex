@@ -1686,6 +1686,13 @@ async function handleUninstall() {
     console.error(`⚠️  Codex autostart shim removed failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  if (process.platform === "linux" || process.platform === "darwin") {
+    await runStep("Claude command shim removed", async () => {
+      const { manageClaudeShim } = await import("../claude/command-shim");
+      if (manageClaudeShim(["uninstall"]) !== 0) throw new Error("Claude shim was not removed safely");
+    });
+  }
+
   if (failures.length === 0) {
     await runStep("opencodex config removed", async () => {
       const result = await removeOwnedConfigAfterDesktopCleanup(observed);

@@ -1758,3 +1758,17 @@ On macOS, `ocx service status` distinguishes a loaded Desktop login item from a 
 These commands are local and do not require a running proxy. See
 [custom provider routing](/guides/codex-integration/#opt-in-a-custom-provider-to-managed-local-routing)
 for eligibility, restore behavior and transport preservation.
+
+### Claude Code command shim (Linux and macOS)
+
+Use `ocx claude-shim install` to let callers that look up `claude` on PATH use
+OpenCodex. Source the printed activation script after PATH setup, or configure
+an application to run the printed absolute shim path. Install changes neither
+your shell startup files nor the vendor executable. `ocx claude-shim status`
+reports whether the current process's PATH resolves to the shim.
+
+When active, `claude -p` uses the same routing and authentication as `ocx claude`.
+Native help, version and maintenance commands do not start the proxy. Callers
+that explicitly use the vendor executable are unaffected. Run
+`ocx claude-shim uninstall` before removing OpenCodex, remove any activation
+line you added, and refresh your shell's command cache.

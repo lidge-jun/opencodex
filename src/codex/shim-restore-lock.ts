@@ -140,10 +140,9 @@ function reclaimStaleRestoreLock(path: string, beforeDelete?: () => void): boole
   }
 }
 
-function tryAcquireShimRestoreLock(beforeStaleDelete?: () => void): ShimRestoreLock | null {
+function tryAcquireShimRestoreLock(beforeStaleDelete?: () => void, path = restoreLockPath()): ShimRestoreLock | null {
   const dir = getConfigDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const path = restoreLockPath();
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let fd: number | null = null;
     let identity: BigIntStats | null = null;
