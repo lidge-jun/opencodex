@@ -292,3 +292,22 @@ test.each(["set", "normalized set", "import"])("config %s cannot enter plaintext
     expect(runCli(["config", "set", "multiAgentMode", "v2", "--json"], { OPENCODEX_HOME: dir }).status).toBe(0);
   } finally { removeTreeWithRetry(dir); }
 });
+
+test("ocx config validates, stores and displays the subscription reserve policy", () => {
+  const dir = freshConfig();
+  try {
+    const env = { OPENCODEX_HOME: dir };
+    const policy = { enabled: true, soft: 0.55, hard: 0.85, targets: ["blsc/deepseek-v4-flash"] };
+    const set = runCli(["config", "set", "subscriptionReserve", JSON.stringify(policy), "--json"], env);
+    expect(set.status).toBe(0);
+    const get = runCli(["config", "get", "subscriptionReserve", "--json"], env);
+    expect(get.status).toBe(0);
+    expect(JSON.parse(get.stdout)).toEqual(policy);
+    const invalid = runCli(["config", "set", "subscriptionReserve.hard", "0.5", "--json"], env);
+    expect(invalid.status).not.toBe(0);
+    expect(invalid.stdout + invalid.stderr).toContain("subscriptionReserve.hard");
+    expect(JSON.parse(readFileSync(join(dir, "config.json"), "utf8")).subscriptionReserve).toEqual(policy);
+  } finally {
+    removeTreeWithRetry(dir);
+  }
+});

@@ -22,7 +22,8 @@ import { getProviderRegistryEntry } from "../../../src/providers/registry";
 import { routedProviderConfig } from "../../../src/providers/routed-config";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { gatherRoutedModels } from "../../../src/codex/catalog";
-import { clearModelCache } from "../../../src/codex/model-cache";
+import { gatherRoutedModelsForCatalogGather } from "../../../src/codex/catalog/routed-gather";
+import { clearModelCache, getProviderDiscoveryStatus } from "../../../src/codex/model-cache";
 import { withStubbedProviderFetch } from "../../helpers/catalog-provider-fetch";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
@@ -110,6 +111,19 @@ describe("Vertex discovery credential selection", () => {
     delete process.env.GOOGLE_CLOUD_API_KEY;
     expect(await resolveVertexDiscoveryToken(vertex())).toBe("ambient-adc-token");
     expect(tokenCalls).toBe(1);
+  });
+
+  test("a malformed ADC marker degrades the provider without aborting a refreshing gather", async () => {
+    withAmbientCredentials();
+    const name = "malformed-vertex-marker";
+    const row = vertex({ apiKey: "gcp-sa:", models: ["gemini-configured-fixture"], liveModels: true });
+    const config = withStubbedProviderFetch({ providers: { [name]: row } });
+    try {
+      expect((await gatherRoutedModels(config)).map(model => model.id)).toEqual(["gemini-configured-fixture"]);
+      expect(tokenCalls).toBe(0);
+    } finally {
+      clearModelCache(name);
+    }
   });
 
   test("ADC resolution honours the discovery deadline", async () => {
@@ -280,9 +294,10 @@ describe("Vertex discovery rows", () => {
   test("advertised efforts are the registry ladder the adapter serializes", async () => {
     const ladders = getProviderRegistryEntry("google-vertex")?.modelReasoningEfforts ?? {};
     const result = extractGoogleNativeModelItems("google-vertex", vertex({ apiKey: "literal-key" }),
-      { publisherModels: publisher("gemini-4-hydrogen", "gemini-4-carbon", "gemini-3-pro") }, 100);
+      { publisherModels: publisher("gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon", "gemini-3-pro") }, 100);
     const items = result?.ok ? result.items : [];
     const byId = new Map(items.map(item => [item.id, item]));
+    expect(byId.get("gemini-4-neon")?.reasoning_efforts).toEqual([...ladders["gemini-4-neon"]!]);
     expect(byId.get("gemini-4-hydrogen")?.reasoning_efforts).toEqual([...ladders["gemini-4-hydrogen"]!]);
     expect(byId.get("gemini-4-carbon")?.reasoning_efforts).toEqual([...ladders["gemini-4-carbon"]!]);
     expect(ladders["gemini-3-pro"]).toBeUndefined();
@@ -295,6 +310,7 @@ describe("Vertex discovery rows", () => {
     } as unknown as OcxParsedRequest);
     const thinking = async (modelId: string, effort: string) =>
       JSON.parse((await adapter.buildRequest(request(modelId, effort))).body).generationConfig?.thinkingConfig;
+    expect(await thinking("gemini-4-neon", "xhigh")).toEqual({ thinkingLevel: "xhigh" });
     expect(await thinking("gemini-4-hydrogen", "xhigh")).toEqual({ thinkingLevel: "xhigh" });
     expect(await thinking("gemini-3-pro", "high")).toBeUndefined();
   });
@@ -454,6 +470,49 @@ describe("Vertex discovery credential parity with inference", () => {
 });
 
 describe("Vertex discovery credential stays bound to its selection", () => {
+  test.each(["refreshing", "observed"] as const)("%s gathers do not inherit a failure across A → B → A", async mode => {
+    const name = "rotating-vertex";
+    const config: OcxConfig = withStubbedProviderFetch({ providers: { [name]: vertex({ liveModels: true }) } });
+    const firstStarted = Promise.withResolvers<void>();
+    const releaseFirst = Promise.withResolvers<void>();
+    const keys: Array<string | null> = [];
+    process.env.GOOGLE_CLOUD_API_KEY = "ambient-fixture-a";
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      keys.push(new Headers(init?.headers).get("x-goog-api-key"));
+      if (keys.length === 1) {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+        return new Response(null, { status: 429 });
+      }
+      return Response.json({ publisherModels: [{ name: "publishers/google/models/gemini-fixture-current" }] });
+    }) as typeof fetch;
+
+    const gather = () => mode === "refreshing" ? gatherRoutedModels(config)
+      : gatherRoutedModelsForCatalogGather(config, { authStoreBuffer: null });
+    const first = gather();
+    try {
+      await firstStarted.promise;
+      process.env.GOOGLE_CLOUD_API_KEY = "ambient-fixture-b";
+      expect(resolveObservedVertexDiscoveryAuth(config.providers[name]!)?.token).toBe("ambient-fixture-b");
+      process.env.GOOGLE_CLOUD_API_KEY = "ambient-fixture-a";
+      const second = gather();
+      try {
+        const rows = await Promise.race([second, Bun.sleep(100).then(() => null)]);
+        expect(rows?.map(model => model.id)).toEqual(["gemini-fixture-current"]);
+        expect(keys).toEqual(["ambient-fixture-a", "ambient-fixture-a"]);
+      } finally {
+        releaseFirst.resolve();
+        await second;
+      }
+      expect(await first).toEqual([]);
+      expect(getProviderDiscoveryStatus(name)).toEqual({ status: "ok" });
+    } finally {
+      releaseFirst.resolve();
+      await first;
+      clearModelCache(name);
+    }
+  });
+
   test("a selection that changes during the ADC exchange discards the token, and send-time checks reject a mismatched header", async () => {
     process.env.GOOGLE_APPLICATION_CREDENTIALS = saPath;
     process.env.CLOUDSDK_CONFIG = join(tmp, "no-gcloud");

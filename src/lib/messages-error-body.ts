@@ -2,7 +2,7 @@ import { carryReplayRefusal, isNonReplayableResponse, markResponseNonReplayable 
 import { appendClientRetryIn } from "./client-retry-after";
 import {
   ANTHROPIC_ERROR_CODES, ANTHROPIC_ERROR_TYPES, CLAUDE_CONTEXT_OVERFLOW_MESSAGE,
-  CLIENT_ERROR_CONTRACTS, clientErrorCodeMessage, actionableRefusalMessage, isProxyError, attachComboFailureEvidence, carryProxyError, proxyErrorPresentation, comboFailureEvidence, markProxyError, type ProxyErrorPresentation, type ClientErrorContract,
+  CLIENT_ERROR_CONTRACTS, clientErrorCodeMessage, actionableRefusalMessage, isProxyError, attachComboFailureEvidence, carryProxyError, proxyErrorPresentation, comboFailureEvidence, markProxyError, fixedProxyErrorMessage, type ProxyErrorPresentation, type ClientErrorContract,
 } from "./client-error-body";
 import { classifyUpstreamCondition, upstreamConditionMessage, type UpstreamCondition, type UpstreamConditionEvidence } from "./upstream-condition";
 
@@ -78,11 +78,14 @@ export interface OwnedAnthropicErrorOptions {
 export function ownedAnthropicErrorPayload(options: OwnedAnthropicErrorOptions): Rec {
   const type = ANTHROPIC_ERROR_TYPES.get(options.type ?? "")
     ?? STATUS_TYPES.get(options.status) ?? (options.status >= 500 ? "api_error" : "invalid_request_error");
-  const code = options.code === "thread_unsupported_request" ? undefined : ANTHROPIC_ERROR_CODES.get(options.code ?? "");
+  const code = options.code === "combo_unavailable" && options.localError && isProxyError(options.localError)
+    ? options.code : ANTHROPIC_ERROR_CODES.get(options.code === "thread_unsupported_request" ? "" : options.code ?? "");
   const message = options.overflow ? CLAUDE_CONTEXT_OVERFLOW_MESSAGE
     : options.localError && isProxyError(options.localError) ? fixedLocalMessage(options.localError, options.evidence.code ?? code, options.evidence.type) ?? options.localError.message
     : actionableRefusalMessage(options.evidence, code ?? null, options.contract)
       ?? (options.contract ? CLIENT_ERROR_CONTRACTS[options.contract] : undefined)
+      // The same fixed proxy sentences the Chat presenter passes through (ownedChatErrorPayload).
+      ?? (options.contract === undefined ? fixedProxyErrorMessage(options.evidence.message) : undefined)
       ?? (options.condition ? upstreamConditionMessage(options.condition) : undefined)
       ?? clientErrorCodeMessage(code)
       ?? upstreamConditionMessage(classifyUpstreamCondition(options.evidence) ?? "upstream_failed");

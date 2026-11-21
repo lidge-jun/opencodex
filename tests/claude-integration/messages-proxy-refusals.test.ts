@@ -9,11 +9,11 @@ const expected: Record<string, [number, string | null]> = {
   "pool-refresh": [529, null],
   "native-pacing-send": [429, null], "native-pacing-preflight": [429, null],
   "cooldown-unpinned": [429, null], "hard-lock": [429, null], recovery: [429, null],
-  "combo-count": [529, null],
+  "combo-count": [503, "combo_unavailable"],
   copilot: [403, null],
   "chat-roster": [403, "permission_denied"], provider: [403, null], "body-overflow": [502, null], "body-overflow-count": [502, null], "body-stall": [504, null],
   "scope-direct": [403, null], discovery: [401, null], muse: [401, null], "native-usage": [429, null],
-  roster: [403, null], "roster-count": [200, null], "oauth-login": [401, null], pacing: [429, null], scope: [403, null], combo: [529, null], workflow: [429, null], cooldown: [429, null], input: [400, "context_length_exceeded"], outbound: [413, null], inbound: [413, null], send: [429, null], model: [400, null], storage: [529, null],
+  roster: [403, null], "roster-count": [200, null], "oauth-login": [401, null], pacing: [429, null], scope: [403, null], combo: [503, "combo_unavailable"], workflow: [429, null], cooldown: [429, null], input: [400, "context_length_exceeded"], outbound: [413, null], inbound: [413, null], send: [429, null], model: [400, null], storage: [529, null],
 };
 for (const kind of ["kiro-continuation", "config", "workflow-unbound", "pool-refresh", "native-pacing-send", "native-pacing-preflight", "cooldown-unpinned", "hard-lock", "recovery", "combo-count", "copilot", "chat-roster", "provider", "body-overflow", "body-overflow-count", "body-stall", "scope-direct", "discovery", "muse", "native-usage", "roster", "roster-count", "oauth-login", "pacing", "scope", "combo", "workflow", "cooldown", "input", "outbound", "inbound", "send", "model", "storage"]) test(`Messages fixed refusal ${kind}`, async () => {
   const home = mkdtempSync(join(tmpdir(), "ocx-local-refusal-")); mkdirSync(join(home, "ocx")); mkdirSync(join(home, "codex"));

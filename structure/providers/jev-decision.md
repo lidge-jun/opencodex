@@ -232,6 +232,10 @@ force-default invariant is unchanged. With the opt-in `"client"` the decision st
 ordinary Combo policy resolves effort (including a nested-only caller `reasoning.effort`), the caller `service_tier` is kept, and the requested-effort label records no JEV transition.
 Provider pins, caps and wire normalization still run afterward in both modes. `tests/responses/jev-initial-effort-wire.test.ts` pins both modes on both lanes
 and `tests/routing/jev-quota-config.test.ts` pins that an update omitting `jevEffortMode` preserves it.
+A `decide` JEV Combo advertises an empty reasoning effort ladder in the Codex catalog. In
+`client` mode, it advertises the ordinary Combo intersection. `deriveComboCatalogModel` in
+`src/codex/catalog/aggregation.ts` owns this projection, and
+`tests/codex-integration/codex-catalog-jev-effort.test.ts` checks the emitted rows.
 A tool-loop continuation sends no decision request ([Combo tool-loop continuation](../transports/native-reasoning-retention.md#combo-tool-loop-continuation)), so under `decide` it keeps the turn's effort: `src/server/responses/combo-session-recall.ts` stores the applied effort beside the lane's completed target, and `core-combo.ts` reapplies it on both lanes while `jevChoiceEfforts` still offers it for that target. A target that completed by failover stores none, and `client` never stores or reads one, so both keep ordinary Combo policy. On Messages inbound a continuation that carries an effort takes the bridge, like the decided first request.
 > Decision record: [ADR-8041](../decisions/ADR-8041-jev-effort-mode.md)
 A retryable failure rebuilds later targets from the untouched request under ordinary Combo policy, without
@@ -248,6 +252,32 @@ section (`gui/src/components/combo-workspace-jev-decision.tsx`) chooses TypeSafe
 or an opencodex model route, with the timeout and a Test probe; there is no separate decisions page.
 
 ## Session pin
+
+Combo admission runs once per request against `snapshotComboAdmission` in
+`src/server/responses/combo-admission-snapshot.ts`: a detached copy of the request-start combo
+roster, provider and custom-model capability metadata, context caps and Vision Sidecar settings.
+The copy takes own data descriptors at every level and skips accessors without invoking them, so a
+lazily resolved credential is never read. The gate computes every member's route and capability
+verdict before it awaits image planning. Credential resolution stays in the routing and sidecar paths.
+Before forming JEV candidates and authorizing a decision backend, the combo keeps only members that
+live metered consent admits and intersects the ingress scope with the configured key's current scope.
+A denied decision destination yields an unbilled local fallback.
+After a paid decision the combo does not rerun admission. It filters the request-start choices by
+current availability over the request-start roster (cooldowns and the original reprobe
+reservation), by live metered consent and by the current key scope. An edit to capabilities,
+sidecars, protocol policy, mandatory-tool support or the roster made while the decision was in
+flight applies to the next request.
+The parent records completed decision usage before that recheck, so a refusal, a cancellation (499),
+a recheck exception and the local `503 combo_unavailable` each keep it exactly once without
+dispatching a child or repeating the decision. Responses, Chat and Messages finalize that row
+through the terminal HTTP response. Every child dispatch, including a pin reused without a paid
+decision, passes the [dispatch-time consent and scope check](../runtime.md#request-local-target-compatibility).
+Dispatch uses the admitted combo policy, including the refusal or omission rule if a required
+image description fails. Every image-description probe and the child it admits plan with the
+snapshot's Vision Sidecar settings (`comboVisionSidecar`, read through `responsesVisionConfig` in
+`src/server/responses/request-sidecar-auth.ts`); only the helper credential resolves live.
+The turn captures JEV effort ownership at ingress so the
+wire effort and its request log label follow the same mode.
 
 `sessionPin: { ttlMs }` is an opt-in, JEV-only Combo field (#7525); `src/combos/jev-session-pin-config.ts`
 owns its 60000..86400000 ms range, the CLI duration grammar and the closed `pinReason` vocabulary.
@@ -312,3 +342,5 @@ detection, and folds identities beyond 255 concrete rows into one explicit overf
 preserving global totals. Up to four JEV projections participate in the same app-owned memory budget
 and eviction path as ordinary usage aggregates. Read failure returns HTTP 500 rather than a partial
 projection.
+
+Union admission shares the hosted Advisor eligibility check with child preparation. The detached admission snapshot includes the destination’s `forwardAdvisorTool` policy; a change made after the request starts applies to the next request.

@@ -8,8 +8,61 @@ import { resolveTrustedWindowsPowerShellExe } from "../../src/lib/windows-elevat
 import type { DesktopPackageObservation as DesktopAppInstall } from "../../src/codex/desktop-compatibility/installed-build";
 import { desktopPackageObservation } from "../helpers/desktop-package-observation";
 import { hostedWindowsQuarantine } from "../helpers/windows-ci-quarantine";
+import { OPEN_WINDOWS_PACKAGE_FILES, WINDOWS_PACKAGE_PROOF_FUNCTIONS } from "../../src/codex/desktop-compatibility/windows-package-proof";
+import { WINDOWS_COMPATIBILITY_ACTIVATION_SCRIPT } from "../../src/codex/desktop-compatibility/windows-package-command";
 
 const installed = desktopPackageObservation;
+
+test("an identified package retains its observed version after content or signer proof refuses", async () => {
+  const candidate = installed("26.1103.3517.0");
+  for (const proof of [undefined, { ...candidate.proof!, contentIntegrity: false },
+    { ...candidate.proof!, signerSubject: "CN=Foreign" }]) {
+    const probe = createInstalledBuildProbe(async () => ({ ...candidate, proof }));
+    expect(await probe.check()).toBe(false);
+    expect(probe.lastResult()).toMatchObject({ observedVersion: "26.1103.3517.0", verified: false });
+    expect(probe.binding()).toMatchObject({ identity: null, build: null });
+    await probe.close();
+  }
+  const unknown = createInstalledBuildProbe(async () => null);
+  expect(await unknown.check()).toBe(false);
+  expect(unknown.lastResult()).toMatchObject({ observedVersion: null, verified: false });
+  await unknown.close();
+});
+
+test("registration and file metadata alone cannot admit a Codex package", async () => {
+  const install = installed();
+  for (const facts of [
+    { signatureKind: undefined, contentIntegrity: undefined, signerSubject: undefined, signerThumbprint: undefined, executableHash: undefined },
+    { signatureKind: "Developer" },
+    { contentIntegrity: false },
+    { contentIntegrity: undefined },
+    { signerSubject: "CN=OpenAI" },
+    { signerThumbprint: "" },
+    { executableHash: "metadata" },
+  ]) {
+    const probe = createInstalledBuildProbe(async () => ({ ...install, proof: { ...install.proof!, ...facts } }));
+    expect(await probe.check()).toBe(false);
+    expect(probe.lastResult()).toMatchObject({ verified: false });
+    expect(probe.binding().identity).toBeNull();
+    expect(probe.binding().build).toBeNull();
+    await probe.close();
+  }
+});
+
+test("a verified executable digest change advances the same-version consent fence", async () => {
+  let executableHash = "a".repeat(64);
+  const probe = createInstalledBuildProbe(async () => {
+    const install = installed();
+    return { ...install, proof: { ...install.proof!, executableHash } };
+  });
+  expect(await probe.check()).toBe(true);
+  const earlier = probe.binding();
+  executableHash = "b".repeat(64);
+  expect(await probe.check()).toBe(true);
+  expect(probe.binding().identity).not.toBe(earlier.identity);
+  expect(probe.binding().revision).toBeGreaterThan(earlier.revision);
+  await probe.close();
+});
 
 /**
  * One run of the ancestry probe: a fixture on the volume root, the real PowerShell guard, and the
@@ -80,25 +133,78 @@ describe.skipIf(process.platform !== "win32" || hostedWindowsQuarantine)("Window
   test("owned ancestor junctions and persistent retargets fail before proof publication", async () => {
     await probeOwnedAncestry(10_000);
   }, 20_000);
+
+  test("the native script publishes identified facts after a fixture content or signer refusal", async () => {
+    for (const refusal of ["content", "signer"]) {
+      const nativeFixtures = ["$ErrorActionPreference='Stop'",
+        "function Get-DesktopPackage { [pscustomobject]@{PackageFamilyName='OpenAI.Codex_2p2nqsd0c76g0';PackageFullName='OpenAI.Codex_26.1103.3517.0_x64__2p2nqsd0c76g0';InstallLocation='C:\\fixture\\OpenAI.Codex_26.1103.3517.0_x64__2p2nqsd0c76g0';Publisher='CN=fixture';Version='26.1103.3517.0'} }",
+        "function Get-AppxPackageManifest { [pscustomobject]@{Package=@{Identity=@{Name='OpenAI.Codex';Publisher='CN=fixture';Version='26.1103.3517.0'};Applications=@{Application=@(@{Id='App';Executable='app\\ChatGPT.exe'})}}} }",
+        `function Assert-DesktopPackageContent { ${refusal === "content" ? "throw 'fixture content refusal'" : ""} }`,
+        "function Get-AuthenticodeSignature { [pscustomobject]@{Status='UnknownError'} }",
+      ].join("\n");
+      // Run the shipped observation/catch/publication flow with no registered package or file I/O.
+      const script = DESKTOP_PACKAGE_PROOF_SCRIPT.replace(WINDOWS_PACKAGE_PROOF_FUNCTIONS, nativeFixtures)
+        .replace(OPEN_WINDOWS_PACKAGE_FILES, "$exeStream=$null; $manifestStream=$null; $exePath='fixture.exe'");
+      const result = await spawnTestChild([resolveTrustedWindowsPowerShellExe(), "-NoProfile", "-NonInteractive", "-Command", script],
+        { cwd: process.cwd(), deadlineMs: 10_000 });
+      expect(result).toMatchObject({ exitCode: 0, timedOut: false, reaped: true, pipesClosed: true });
+      const observation = JSON.parse(result.stdout);
+      expect(observation).not.toHaveProperty("proof");
+      const probe = createInstalledBuildProbe(async () => observation);
+      expect(await probe.check()).toBe(false);
+      expect(probe.lastResult()).toMatchObject({ observedVersion: "26.1103.3517.0", verified: false });
+      expect(probe.binding()).toMatchObject({ identity: null, build: null });
+      await probe.close();
+    }
+  }, 25_000);
 });
 
-test("manifest and canonical executable facts are required without admitting another version", async () => {
+test("manifest and canonical executable facts are required while an official newer build verifies", async () => {
   const good = installed();
   for (const proof of [undefined,
     { ...good.proof!, manifestName: "Foreign.Codex" }, { ...good.proof!, manifestPublisher: "CN=Foreign" },
     { ...good.proof!, appId: "Other" }, { ...good.proof!, executable: "other\\ChatGPT.exe" },
     { ...good.proof!, canonicalExecutable: good.root + "-foreign\\app\\ChatGPT.exe" },
     { ...good.proof!, packageFullName: good.proof!.packageFullName + "_extra" },
-    { ...good.proof!, manifestDigest: "unverified" }, { ...good.proof!, ancestryIdentity: "" },
-    { ...good.proof!, executableIdentity: "" }]) {
+    { ...good.proof!, manifestDigest: "unverified" }, { ...good.proof!, ancestryIdentity: "" }, { ...good.proof!, executableIdentity: "" }]) {
     const probe = createInstalledBuildProbe(async () => ({ ...good, proof }));
     expect(await probe.check()).toBe(false); expect(probe.binding().identity).toBeNull(); await probe.close();
   }
   const newer = createInstalledBuildProbe(async () => installed("26.1007.9446.0"));
-  expect(await newer.check()).toBe(false); await newer.close();
+  expect(await newer.check()).toBe(true);
+  const newerBinding = newer.binding();
+  expect(newerBinding.identity).not.toBeNull();
+  expect(newer.lastResult()).toMatchObject({ observedVersion: "26.1007.9446.0", verified: true });
+  await newer.close();
+  const baseline = createInstalledBuildProbe(async () => installed());
+  expect(await baseline.check()).toBe(true);
+  // The version stays inside the hashed package identity, so an update revokes a prior trial.
+  expect(baseline.binding().identity).not.toBe(newerBinding.identity);
+  await baseline.close();
   expect(DESKTOP_PACKAGE_PROOF_SCRIPT).toContain("Get-AppxPackageManifest");
+  expect(DESKTOP_PACKAGE_PROOF_SCRIPT).toContain("VerifyContentIntegrityAsync()");
+  expect(DESKTOP_PACKAGE_PROOF_SCRIPT).toContain("Get-AuthenticodeSignature -LiteralPath $exePath");
+  expect(DESKTOP_PACKAGE_PROOF_SCRIPT).toContain("Get-DesktopPackageHash $exeStream");
   expect(DESKTOP_PACKAGE_PROOF_SCRIPT).toContain("ChatGPT.exe");
   expect(DESKTOP_PACKAGE_PROOF_SCRIPT).not.toContain("Activate");
+});
+
+test("the manifest is read once, under its validated held handle, before the executable proof", () => {
+  for (const script of [DESKTOP_PACKAGE_PROOF_SCRIPT, WINDOWS_COMPATIBILITY_ACTIVATION_SCRIPT]) {
+    const read = script.indexOf("Get-AppxPackageManifest");
+    expect(script.split("Get-AppxPackageManifest")).toHaveLength(2);
+    for (const before of ["$manifestChain=Assert-DesktopPackagePath $manifestPath", "$manifestStream=[IO.File]::Open(",
+      "Unexpected package file size"]) {
+      expect(script.indexOf(before)).toBeGreaterThanOrEqual(0);
+      expect(read).toBeGreaterThan(script.indexOf(before));
+    }
+    for (const after of ["Assert-DesktopPackageContent $p", "Get-AuthenticodeSignature -LiteralPath $exePath"]) {
+      expect(read).toBeLessThan(script.indexOf(after));
+    }
+  }
+  // The diagnostic observation still exists before any file is opened.
+  expect(DESKTOP_PACKAGE_PROOF_SCRIPT.indexOf("$observation=@{"))
+    .toBeLessThan(DESKTOP_PACKAGE_PROOF_SCRIPT.indexOf("$manifestStream=[IO.File]::Open("));
 });
 
 test("same-version package proof changes and failure advance a private ABA fence", async () => {
@@ -118,7 +224,7 @@ test("same-version package proof changes and failure advance a private ABA fence
   await probe.close(); expect(probe.binding().identity).toBeNull();
 });
 
-test("identical observed metadata cannot claim to detect a same-version reinstall", async () => {
+test("identical proof observations reuse the current consent fence", async () => {
   const probe = createInstalledBuildProbe(async () => structuredClone(installed()));
   expect(await probe.check()).toBe(true); const original = probe.binding();
   expect(await probe.check()).toBe(true); expect(probe.binding()).toEqual(original);
@@ -153,7 +259,7 @@ test("concurrent build checks share only the pending query and refresh after it 
   await Bun.sleep(0); expect(calls).toBe(1);
   release(installed()); expect(await first).toBe(true); expect(await second).toBe(true);
   const changed = probe.check(); await Bun.sleep(0); expect(calls).toBe(2);
-  release(installed("99.1.1.0")); expect(await changed).toBe(false);
+  release(installed("99.1.1.0")); expect(await changed).toBe(true);
   await probe.close();
 });
 
@@ -181,11 +287,11 @@ test("build assessment exposes only the last completed public package metadata",
   const probe = createInstalledBuildProbe(async () => (++calls, install));
   expect(probe.lastResult()).toBeNull();
   install = installed("26.1007.9446.0");
-  expect(await probe.check()).toBe(false);
-  const unverified = probe.lastResult();
-  expect(unverified).toMatchObject({ assessedVersion: DESKTOP_COMPATIBILITY_ASSESSED_VERSION, observedVersion: "26.1007.9446.0", verified: false });
-  expect(unverified!.completedAt).toBeGreaterThan(0);
-  expect(JSON.stringify(unverified)).not.toContain("WindowsApps");
+  expect(await probe.check()).toBe(true);
+  const newerVerified = probe.lastResult();
+  expect(newerVerified).toMatchObject({ assessedVersion: DESKTOP_COMPATIBILITY_ASSESSED_VERSION, observedVersion: "26.1007.9446.0", verified: true });
+  expect(newerVerified!.completedAt).toBeGreaterThan(0);
+  expect(JSON.stringify(newerVerified)).not.toContain("WindowsApps");
   install = installed();
   expect(await probe.check()).toBe(true);
   expect(probe.lastResult()).toMatchObject({ observedVersion: DESKTOP_COMPATIBILITY_ASSESSED_VERSION, verified: true });

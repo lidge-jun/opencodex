@@ -10,11 +10,9 @@
  *
  * It does still depend on WHERE the run starts. Bun resolves bunfig.toml from the current
  * working directory, so a run launched outside the repository never loads this file: no
- * sandbox, and getConfigDir() resolves the real ~/.opencodex. On 2026-09-15 a run of that
- * shape deleted a live home. The write guard covers that run by arming from its test-file
- * entry (#7407), which turns such writes into refusals, but nothing here can sandbox it, so a
- * test that needs a config directory pins its own OPENCODEX_HOME rather than inheriting one,
- * and tests/ci-workflows/test-home-guard.test.ts enforces it for destructive calls.
+ * sandbox. The guard still arms from the test entry (#7407) and blocks writes to the real home.
+ * A test that needs to write config must pin an isolated OPENCODEX_HOME when launched without
+ * the preload. tests/ci-workflows/test-home-guard-unpreloaded.test.ts exercises that write guard.
  * (devlog `_plan/260730_codex_rs_upstream_v2_live_handoff/070`.)
  *
  * Import order below is load-bearing: importing the guard captures the real home at
@@ -29,7 +27,7 @@
  */
 import { afterAll, afterEach } from "bun:test";
 import { isTestHomeGuardArmed, protectedHomeForTests } from "../src/lib/test-home-guard";
-import { createIsolatedTestEnvironment, LIVE_INSTALL_CREDENTIAL_ENV } from "../scripts/test";
+import { createIsolatedTestEnvironment, liveInstallEnvNames } from "../scripts/test";
 import { gitRepositoryEnvNames } from "../scripts/git-repository-env";
 import { createGitConfigGuard } from "./helpers/git-config-guard";
 import { installNetworkEgressGuard } from "./helpers/network-egress-guard";
@@ -44,6 +42,14 @@ import {
   TEST_RUN_LOCK_TOKEN_ENV,
 } from "../scripts/test-run-lock";
 
+// Bun.spawn with no explicit env can inherit the startup environment after process.env
+// has been edited. Exit before a test file can run, including in a parallel worker.
+const liveInstallNames = liveInstallEnvNames(process.env);
+if (liveInstallNames.length > 0) {
+  console.error(`[test] refusing to run with live-install environment keys (${liveInstallNames.join(", ")}). Remove the listed keys from any dotenv files Bun loads (such as .env.test). For inherited keys, run through \`bun run test\` or unset them.`);
+  process.exit(1);
+}
+
 // Under `bun run test` the wrapper already handed us a sandbox (and OCX_REAL_HOME so the
 // guard could still see the true home). Isolating again is harmless and deliberate: the
 // alternative — inferring "already isolated" from path shapes — would trust exactly the
@@ -52,9 +58,7 @@ const isolated = createIsolatedTestEnvironment();
 for (const [key, value] of Object.entries(isolated.env)) {
   if (value !== undefined) process.env[key] = value;
 }
-// The sandbox drops these from its env, but this process started with them, so remove them here.
-for (const name of LIVE_INSTALL_CREDENTIAL_ENV) delete process.env[name];
-// Same for an inherited GIT_DIR/GIT_WORK_TREE (scripts/git-repository-env.ts). Deleting them reaches
+// Drop inherited GIT_DIR/GIT_WORK_TREE (scripts/git-repository-env.ts). Deleting them reaches
 // node:child_process and spread envs only: Bun.spawn without an `env` option keeps the environment
 // this process started with, which is why tests/helpers/git-fixture.ts always passes one.
 const inheritedGitEnv = gitRepositoryEnvNames(process.env);
@@ -91,6 +95,9 @@ process.env.OCX_DISABLE_UPDATE_CHECK = "1";
 process.env.OCX_TELEMETRY = "0";
 process.env.OPENCODEX_KIRO_MODEL_DISCOVERY = "0";
 
+if (!isolated.env.OPENCODEX_HOME?.trim() || process.env.OPENCODEX_HOME !== isolated.env.OPENCODEX_HOME) {
+  throw new Error("test preload failed to set its isolated OPENCODEX_HOME");
+}
 if (!isTestHomeGuardArmed() || !protectedHomeForTests()) {
   throw new Error("test home guard failed to arm; refusing to run tests unprotected");
 }

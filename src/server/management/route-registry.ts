@@ -327,6 +327,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/selected-models", module: "server/management/model-routes", mutates: false },
   { method: "POST", path: "/api/custom-models", module: "server/management/model-routes", mutates: true },
   { method: "POST", path: "/api/model-discovery/acknowledge", module: "server/management/model-routes", mutates: true },
+  { method: "POST", path: "/api/model-discovery/refresh", module: "server/management/model-routes", mutates: true },
   { method: "PUT", path: "/api/default-aliases", module: "server/management/model-routes", mutates: true },
   { method: "PUT", path: "/api/disabled-models", module: "server/management/model-routes", mutates: true },
   { method: "PUT", path: "/api/model-discovery", module: "server/management/model-routes", mutates: true },
@@ -343,6 +344,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management/cursor-integration-routes
   { method: "GET", path: "/api/native-integrations/cursor", module: "server/management/cursor-integration-routes", mutates: false },
   { method: "GET", path: "/api/native-integrations/cursor/local-installer", module: "server/management/cursor-integration-routes", mutates: false },
+  // server/management/gateway-client-routes
+  { method: "GET", path: "/api/gateway-clients", module: "server/management/gateway-client-routes", mutates: false },
+  { method: "POST", path: "/api/gateway-clients/{id}/connect", module: "server/management/gateway-client-routes", mutates: true, mechanism: "regex" },
+  { method: "POST", path: "/api/gateway-clients/{id}/disconnect", module: "server/management/gateway-client-routes", mutates: true, mechanism: "regex" },
   // server/management/oauth-account-routes
   { method: "DELETE", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: true },
   { method: "DELETE", path: "/api/keys/rotate", module: "server/management/oauth-account-routes", mutates: true },
@@ -369,6 +374,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/keys/rotate/commit", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/oauth/accounts/clear-cooldown", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/oauth/accounts/import", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "POST", path: "/api/oauth/accounts/probe", module: "server/management/oauth-account-routes", mutates: false },
   { method: "POST", path: "/api/oauth/login", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/oauth/login/cancel", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/oauth/login/code", module: "server/management/oauth-account-routes", mutates: true },

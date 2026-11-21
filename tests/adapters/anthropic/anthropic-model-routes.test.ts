@@ -1,6 +1,7 @@
 import { rotateAnthropicAccountOn429 } from "../../helpers/anthropic-shared-quota";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { OAUTH_PROVIDERS } from "../../../src/oauth";
+import { REFRESH_SKEW_MS } from "../../../src/oauth/refresh-policy";
 import { getAccountCredential, setAnthropicAccountThreshold } from "../../../src/oauth/store";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -104,15 +105,22 @@ test.each([false, true])("threshold edit during credential refresh reselects bef
   cfg.anthropicAccountPool = { enabled: true, strategy: "quota", ...(routed ? { routes: [{ name: "all", match: "claude-*", accounts: ids }] } : {}) };
   const initial = resolveAnthropicAccountForSession(null, cfg);
   await promoteAnthropicActiveAccount(initial.accountId!, captureOAuthAccountSelection("anthropic"), { config: cfg, reason: initial.reason });
+  // Enter the refresh window with a still-usable bearer. The mock preserves its
+  // revision so the threshold change is the only policy input that changes in flight.
+  const credential = {
+    ...getAccountCredential("anthropic", a)!,
+    source: "oauth" as const,
+    expires: Date.now() + REFRESH_SKEW_MS / 2,
+  };
+  await saveAccountCredential("anthropic", a, credential);
   for (const [id, percent] of [[a, 60], [b, 70], [c, 90]] as const) setCachedProviderAccountQuotaForTests("anthropic", id, { fiveHourPercent: percent, updatedAt: Date.now() });
-  const credential = getAccountCredential("anthropic", a)!;
-  await saveAccountCredential("anthropic", a, { ...credential, expires: Date.now() - 1 });
   const refresh = spyOn(OAUTH_PROVIDERS.anthropic!, "refresh").mockImplementation(async () => {
     await setAnthropicAccountThreshold(a, 50);
-    return { ...credential, expires: Date.now() + 3600_000 };
+    return credential;
   });
   try {
     const response = await post(cfg); expect(response.status).toBe(200);
+    expect(refresh).toHaveBeenCalled();
     expect(sends).toEqual(["Bearer synthetic-access-1"]);
   } finally { refresh.mockRestore(); }
 });

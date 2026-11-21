@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { callXaiImages, resolveXaiAspectRatioLiteral } from "../../src/images/xai-client";
+import { callXaiImages, mapQualityToXaiQuality, resolveXaiAspectRatioLiteral } from "../../src/images/xai-client";
 
 const PREV_HOME = process.env.OPENCODEX_HOME;
 beforeAll(() => { process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID()); });
@@ -72,7 +72,7 @@ describe("callXaiImages", () => {
     globalThis.fetch = (async () => {
       const stream = new ReadableStream({
         start(controller) {
-          controller.enqueue(new TextEncoder().encode('{"error":"rate limited"}'));
+          controller.enqueue(new Uint8Array(2 * 1024 * 1024));
         },
         cancel() {
           cancelled = true;
@@ -144,7 +144,7 @@ describe("callXaiImages", () => {
     expect(body.aspect_ratio).toBe("9:16");
     expect(body.resolution).toBe("2k");
     expect(body).not.toHaveProperty("size");
-    expect(body).not.toHaveProperty("quality");
+    expect(body.quality).toBe("medium");
   });
 
   test("square size → 1:1", async () => {
@@ -185,7 +185,7 @@ describe("callXaiImages", () => {
     expect(resolveXaiAspectRatioLiteral("3:4")).toBe("3:4");
     expect(resolveXaiAspectRatioLiteral("4:3")).toBe("4:3");
     expect(resolveXaiAspectRatioLiteral("auto")).toBeUndefined();
-    expect(resolveXaiAspectRatioLiteral("2:1")).toBeUndefined();
+    expect(resolveXaiAspectRatioLiteral("2:1")).toBe("2:1");
   });
 
   test("aspect_ratio auto and illegal values are dropped", async () => {
@@ -194,7 +194,7 @@ describe("callXaiImages", () => {
     expect(JSON.parse((autoCalls[0]!.init?.body as string) ?? "{}")).not.toHaveProperty("aspect_ratio");
 
     const badCalls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
-    await callXaiImages({ prompt: "x", aspectRatio: "2:1" }, AUTH);
+    await callXaiImages({ prompt: "x", aspectRatio: "7:3" }, AUTH);
     expect(JSON.parse((badCalls[0]!.init?.body as string) ?? "{}")).not.toHaveProperty("aspect_ratio");
   });
 
@@ -208,7 +208,7 @@ describe("callXaiImages", () => {
 
   test("an unknown explicit literal does not fall back to the size mapping either", async () => {
     const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
-    await callXaiImages({ prompt: "x", size: "1024x1024", aspectRatio: "2:1" }, AUTH);
+    await callXaiImages({ prompt: "x", size: "1024x1024", aspectRatio: "7:3" }, AUTH);
     expect(JSON.parse((calls[0]!.init?.body as string) ?? "{}")).not.toHaveProperty("aspect_ratio");
   });
 
@@ -217,4 +217,39 @@ describe("callXaiImages", () => {
     await callXaiImages({ prompt: "x", size: "1792x1024" }, AUTH);
     expect(JSON.parse((calls[0]!.init?.body as string) ?? "{}").aspect_ratio).toBe("16:9");
   });
+});
+
+test("image 2.0 defaults, quality, ratios and multiple edit sources", async () => {
+  for (const [quality, expected] of [["high", "medium"], ["hd", "medium"], ["low", "low"], ["auto", "auto"], ["unknown", undefined]]) {
+    const calls = stubFetch(200, { data: [] });
+    await callXaiImages({ prompt: "x", quality, size: "1024x1536" }, AUTH);
+    const body = JSON.parse(String(calls[0]!.init!.body));
+    expect(body.model).toBe("grok-imagine-image-2.0");
+    expect(body.quality).toBe(expected);
+    expect(body.aspect_ratio).toBe("2:3");
+  }
+  const calls = stubFetch(200, { data: [] });
+  await callXaiImages({ prompt: "x", model: "grok-imagine-image", quality: "high", aspectRatio: "21:9", imageUrl: " a ", imageUrls: ["b", "a"] }, AUTH);
+  const body = JSON.parse(String(calls[0]!.init!.body));
+  expect(body.quality).toBeUndefined();
+  expect(body.aspect_ratio).toBe("21:9");
+  expect(body.images).toEqual([{url:"a",type:"image_url"},{url:"b",type:"image_url"}]);
+  await expect(callXaiImages({prompt:"x", imageUrl:"1", imageUrls:["2","3","4","5","6"]}, AUTH)).rejects.toMatchObject({status:400});
+  expect(calls).toHaveLength(1);
+});
+
+test("quality is sent to grok-imagine-image-2.0 only, not to other 2.x models", () => {
+  expect(mapQualityToXaiQuality("grok-imagine-image-2.0", "high")).toBe("medium");
+  for (const model of ["grok-imagine-image-2.1", "grok-imagine-image-2-beta", "grok-imagine-image-2", "grok-imagine-image"]) {
+    expect(mapQualityToXaiQuality(model, "high")).toBeUndefined();
+  }
+});
+
+test("upstream details are restricted to canonical messages", async () => {
+  stubFetch(400, {error: "This model only supports the following quality value(s): low, medium, auto."});
+  await expect(callXaiImages({prompt:"x"}, AUTH)).rejects.toThrow("400: This model only supports");
+  stubFetch(400, {error: "secret prompt"});
+  await expect(callXaiImages({prompt:"x"}, AUTH)).rejects.toThrow(/^xAI images API returned 400$/);
+  globalThis.fetch = (async () => new Response("<html>secret</html>", {status:400})) as typeof fetch;
+  await expect(callXaiImages({prompt:"x"}, AUTH)).rejects.toThrow(/^xAI images API returned 400$/);
 });

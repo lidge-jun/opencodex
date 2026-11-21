@@ -21,7 +21,7 @@ import {
   gatherCodexCatalogCandidate,
   type CodexCatalogCandidate,
 } from "../../src/codex/convergence";
-import { CODEX_NATIVE_ALIAS_CATALOG_KIND, resetCatalogRuntimeStateForTests } from "../../src/codex/catalog";
+import { CODEX_NATIVE_ALIAS_CATALOG_KIND, gatherRoutedModels, resetCatalogRuntimeStateForTests } from "../../src/codex/catalog";
 import {
   codexRuntimeStateEpoch,
   loadPersistedCodexRuntime,
@@ -40,6 +40,7 @@ import {
   resolveCodexCoordinatorDatabasePath,
   resolveEffectiveUserIdentity,
 } from "../../src/codex/user-identity";
+import { clearModelCache, expireModelCache, getProviderDiscoveryStatus, getStaleCached } from "../../src/codex/model-cache";
 import { saveConfig } from "../../src/config";
 import { readConfigAdmissionSnapshot } from "../../src/config/diagnostics";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -158,6 +159,53 @@ test("generation drift rejects before every catalog target write", async () => {
   saveConfig(config(20200));
   expect(await commitCodexCatalogCandidate(gathered, 1_000)).toEqual({ kind: "stale", reason: "generation" });
   expect(manifest(codexHome)).toEqual(before);
+});
+
+test.each(["during gather", "after gather"] as const)("a newer 429 %s fences the catalog candidate", async timing => {
+  const name = "convergence-order";
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const upstream = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    async fetch(req) {
+      if (req.headers.get("authorization") === "Bearer fixture-new-key") return new Response(null, { status: 429 });
+      started.resolve();
+      await release.promise;
+      return Response.json({ data: [{ id: "superseded-catalog-row" }] });
+    },
+  });
+  const provider = {
+    adapter: "openai-chat", baseUrl: upstream.url.href, allowPrivateNetwork: true,
+    apiKey: "fixture-old-key", liveModels: true,
+  } satisfies OcxConfig["providers"][string];
+  const live = { ...config(), providers: { [name]: provider } };
+  saveConfig(live);
+  const before = manifest(codexHome);
+  const pending = gatherCodexCatalogCandidate(captureCatalogAdmissionSnapshot(live));
+  try {
+    await started.promise;
+    if (timing === "after gather") {
+      release.resolve();
+      await pending;
+      expect(expireModelCache(name)).toBe(true);
+    }
+    await gatherRoutedModels({ ...live, providers: { [name]: { ...provider, apiKey: "fixture-new-key" } } });
+    expect(getProviderDiscoveryStatus(name)).toEqual({ status: "failed", reason: "http", httpStatus: 429 });
+    release.resolve();
+    const gathered = await pending;
+    expect(gathered.kind).toBe("candidate");
+    if (gathered.kind !== "candidate") throw new Error(JSON.stringify(gathered));
+    expect(await commitCodexCatalogCandidate(gathered.candidate, 1_000)).toEqual({
+      kind: "stale", reason: "process-local",
+    });
+    expect(manifest(codexHome)).toEqual(before);
+    if (timing === "during gather") expect(getStaleCached(name)).toBeNull();
+  } finally {
+    release.resolve();
+    await pending;
+    upstream.stop(true);
+    clearModelCache(name);
+  }
 });
 
 test("a fresh identical candidate reports unchanged receipts and preserves artifacts", async () => {

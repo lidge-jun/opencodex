@@ -1,6 +1,7 @@
 import { ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { anthropicAccountTag } from "../providers/label";
 import { isCodexUsageAccountLogLabel, type PersistedUsageAttempt } from "../usage/log";
+import { sealedCredentialRefusals } from "./request-log-attempt-recovery";
 
 /**
  * Did the account behind a sent attempt change between two sends of the same request?
@@ -37,7 +38,7 @@ export function sealRequestAttemptIdentity(
   adapter: string,
   accountLogLabel?: string,
 ): void {
-  if (!attempt) return;
+  if (!attempt || sealedCredentialRefusals.has(attempt)) return;
   if (attempt.provider !== provider || attempt.adapter !== adapter) delete attempt.credentialSource;
   // The adapter keeps re-stamping: a mid-turn wire rotation is still this same physical send.
   attempt.adapter = adapter;

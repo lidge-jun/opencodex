@@ -123,9 +123,21 @@ export function clampObservedModelLimits(
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
   });
 }
+type PerModelPolicyInput = Pick<ResolveModelPolicyInput, "modelId" | "modelCapabilities" | "inboundWire" | "effectiveAlias" | "effectiveAliasSource">;
+type ProviderPolicyInput = Omit<ResolveModelPolicyInput, keyof PerModelPolicyInput>;
+
 export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedModelPolicy {
-  const entry = input.transportMatchedRegistry ? input.registryEntry : undefined;
-  const provider = input.provider;
+  return prepareProviderPolicy(input)(input);
+}
+
+/** Batch projection for captured catalog providers; the capture already owns registry enrichment. */
+export function prepareModelPolicy(input: Pick<ProviderPolicyInput, "providerName" | "provider" | "effectiveAuth" | "transportMatchedRegistry"> & { transportMatchedRegistry: false }) {
+  return prepareProviderPolicy({ ...input, provider: recursivelyFreeze(detachedClone(input.provider)) });
+}
+
+function prepareProviderPolicy(shared: ProviderPolicyInput): (modelInput: PerModelPolicyInput) => ResolvedModelPolicy {
+  const entry = shared.transportMatchedRegistry ? shared.registryEntry : undefined;
+  const provider = shared.provider;
   const providerPolicy: Partial<StaticProviderPolicyShape> = {};
   const providerProvenance: Partial<Record<StaticProviderPolicyField, StaticPolicySource>> = {};
   const [baseUrl, baseUrlSource] = resolvedBaseUrl(entry, provider);
@@ -154,11 +166,11 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   putScalar("apiKeyTransport", entry?.apiKeyTransport);
   const [headers, headersSource] = staticHeaders(entry?.staticHeaders, provider.headers);
   put("headers", headers, headersSource);
-  const resolvedAuthMode = input.effectiveAuth?.authMode
+  const resolvedAuthMode = shared.effectiveAuth?.authMode
     ?? (entry?.authKind === "forward" || entry?.authKind === "oauth"
       ? entry.authKind
       : provider.authMode === "forward" ? undefined : provider.authMode ?? entry?.authKind);
-  put("authMode", resolvedAuthMode, input.effectiveAuth
+  put("authMode", resolvedAuthMode, shared.effectiveAuth
     ? "captured-auth"
     : entry?.authKind === "forward" || entry?.authKind === "oauth" ? "registry"
     : provider.authMode !== undefined ? "operator" : entry ? "registry" : "unknown");
@@ -186,7 +198,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   ] as const) putScalar(key, entry?.[key] as StaticProviderPolicyShape[typeof key] | undefined);
   // Operator-only display policy; no registry entry declares it (#8363).
   put("thinkingDisplay", provider.thinkingDisplay, provider.thinkingDisplay !== undefined ? "operator" : "unknown");
-  const legacyClinePassLadder = entry !== undefined && input.providerName === "cline-pass"
+  const legacyClinePassLadder = entry !== undefined && shared.providerName === "cline-pass"
     && provider.reasoningWireFormat === "gateway-object"
     && sameStringArray(provider.reasoningEfforts, ["low"]);
   put("reasoningEfforts", legacyClinePassLadder ? entry?.reasoningEfforts : provider.reasoningEfforts ?? entry?.reasoningEfforts,
@@ -194,7 +206,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   put("chatServiceTier", provider.chatServiceTier ?? keyAuthDefaults?.chatServiceTier ?? entry?.chatServiceTier,
     provider.chatServiceTier !== undefined ? "operator" : keyAuthDefaults?.chatServiceTier !== undefined ? "registry" : entry?.chatServiceTier !== undefined ? "registry" : "unknown");
   // The Fast switch overrides every capability source; see providerFastSwitchOff.
-  const fastOff = fastSwitchOff(provider, input.registryEntry);
+  const fastOff = fastSwitchOff(provider, shared.registryEntry);
   if (fastOff) put("supportsServiceTier", false, provider.fastEnabled === false ? "operator" : "registry");
   else put("supportsServiceTier", provider.supportsServiceTier ?? keyAuthDefaults?.supportsServiceTier ?? entry?.supportsServiceTier,
     provider.supportsServiceTier !== undefined ? "operator" : keyAuthDefaults?.supportsServiceTier !== undefined ? "registry" : entry?.supportsServiceTier !== undefined ? "registry" : "unknown");
@@ -227,7 +239,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   put("modelCapabilities", mergeReasoningModelCapabilities(entry?.modelCapabilities, provider.modelCapabilities),
     provider.modelCapabilities !== undefined ? "operator-capability" : entry?.modelCapabilities !== undefined ? "registry" : "unknown");
   for (const key of ["modelContextWindows", "modelMaxInputTokens"] as const) {
-    const [value, source] = input.providerName === "openai-apikey"
+    const [value, source] = shared.providerName === "openai-apikey"
       ? positiveCapMap(entry?.[key], provider[key])
       : mapFill(entry?.[key], provider[key]);
     put(key, value, source);
@@ -284,163 +296,171 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
       (providerPolicy.modelReasoningEffortMap ??= {})[directModel] = {};
     }
   }
-  const modelValue = <T>(record: Readonly<Record<string, T>> | undefined): T | undefined =>
-    legacyModelValue(record, input.modelId);
-  const modelSource = <T>(operator: Readonly<Record<string, T>> | undefined, registry: Readonly<Record<string, T>> | undefined): StaticPolicySource =>
-    legacyModelSource(operator, registry, input.modelId);
-  const modelOrProviderSource = <T>(
-    operatorMap: Readonly<Record<string, T>> | undefined, registryMap: Readonly<Record<string, T>> | undefined,
-    operatorDefault: T | undefined, registryDefault: T | undefined,
-  ): StaticPolicySource => {
-    const exact = modelSource(operatorMap, registryMap);
-    return exact !== "unknown" ? exact : operatorDefault !== undefined ? "operator" : registryDefault !== undefined ? "registry" : "unknown";
-  };
-  const configuredAdapter = provider.modelAdapters?.[input.modelId];
-  const pin = pinnedWireAdapter(input.providerName, input.modelId, provider);
-  const normalizedModelId = input.modelId.trim().toLowerCase();
-  const registryWire = wireDefault(entry?.modelWireDefaults?.[normalizedModelId], provider, entry,
-    input.inboundWire ?? "responses", resolvedAuthMode);
-  const explicitWire = configuredAdapter && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(configuredAdapter)
-    ? configuredAdapter
-    : undefined;
-  const providerAdapter = providerPolicy.adapter ?? provider.adapter;
-  const effectiveProviderForWire = resolvedAuthMode === provider.authMode
-    ? provider
-    : { ...provider, authMode: resolvedAuthMode };
-  const canonicalForward = isCanonicalOpenAiForwardProvider(effectiveProviderForWire);
-  const adapter = pin
-    ?? (!canonicalForward ? explicitWire ?? registryWire : undefined)
-    ?? providerAdapter;
-  const adapterSource: StaticPolicySource = pin
-    ? "hard-pin"
-    : explicitWire && !canonicalForward
-      ? "operator"
-      : registryWire && !canonicalForward
-        ? "registry"
-        : "provider-default";
-  const declaredModalities = input.modelCapabilities?.inputModalities;
-  const capabilityModalities = Array.isArray(declaredModalities) && declaredModalities.length > 0
-    ? [...declaredModalities]
-    : undefined;
-  const exactContextWindow = modelValue(providerPolicy.modelContextWindows);
-  const familyContextWindow = providerPolicy.adapter === "anthropic"
-    ? anthropicFamilyContextWindow(providerPolicy.modelContextWindows, input.modelId)
-    : undefined;
-  const modelContextWindow = exactContextWindow ?? familyContextWindow ?? providerPolicy.contextWindow;
-  const exactMaxInputTokens = modelValue(providerPolicy.modelMaxInputTokens);
-  const modelMaxInputTokens = exactMaxInputTokens !== undefined && modelContextWindow !== undefined
-    ? Math.min(exactMaxInputTokens, modelContextWindow)
-    : exactMaxInputTokens;
-  const exactMaxOutputTokens = modelValue(providerPolicy.modelMaxOutputTokens);
-  const modelMaxOutputTokens = exactMaxOutputTokens ?? providerPolicy.defaultMaxOutputTokens;
-  const reasoningCapabilities = reasoningCapabilitiesFromConfig({
-    ...providerPolicy,
-    adapter: providerPolicy.adapter ?? provider.adapter,
-    baseUrl: providerPolicy.baseUrl ?? provider.baseUrl,
-    ...(input.modelCapabilities ? { modelCapabilities: mergeReasoningModelCapabilities(
-      providerPolicy.modelCapabilities, { [input.modelId]: input.modelCapabilities },
-    ) } : {}),
-  }, input.modelId);
-  const modelReasoningEfforts = reasoningCapabilities.supportsReasoningEffort === false ? []
-    : modelValue(providerPolicy.modelReasoningEfforts) ?? providerPolicy.reasoningEfforts;
-  const modelSupportsReasoningSummaries = modelValue(providerPolicy.modelSupportsReasoningSummaries)
-    ?? (modelValue(providerPolicy.modelReasoningSummaryDelivery) !== undefined ? true : undefined);
-  const modelSupportsVerbosity = modelValue(providerPolicy.modelSupportsVerbosity) ?? providerPolicy.supportsVerbosity;
-  const modelSupportsServiceTier = fastOff
-    ? false
-    : modelValue(providerPolicy.modelSupportsServiceTier) ?? providerPolicy.supportsServiceTier;
-  const modelSupportsResponsesCustomTools = input.modelCapabilities?.responsesCustomTools
-    ?? providerPolicy.supportsResponsesCustomTools;
-  const model: ResolvedPerModelStaticPolicy = {
-    adapter,
-    ...reasoningCapabilities,
-    ...(modelContextWindow !== undefined ? { contextWindow: modelContextWindow } : {}),
-    ...(capabilityModalities ?? modelValue(providerPolicy.modelInputModalities) !== undefined
-      ? { inputModalities: capabilityModalities ?? modelValue(providerPolicy.modelInputModalities) }
-      : {}),
-    ...(modelMaxInputTokens !== undefined ? { maxInputTokens: modelMaxInputTokens } : {}),
-    ...(modelMaxOutputTokens !== undefined ? { maxOutputTokens: modelMaxOutputTokens } : {}),
-    ...(modelReasoningEfforts !== undefined ? { reasoningEfforts: modelReasoningEfforts } : {}),
-    ...(reasoningCapabilities.supportsReasoningEffort !== false && modelValue(providerPolicy.modelDefaultReasoningEfforts) !== undefined ? { defaultReasoningEffort: modelValue(providerPolicy.modelDefaultReasoningEfforts) } : {}),
-    ...(modelSupportsReasoningSummaries !== undefined ? { supportsReasoningSummaries: modelSupportsReasoningSummaries } : {}),
-    ...(modelSupportsVerbosity !== undefined ? { supportsVerbosity: modelSupportsVerbosity } : {}),
-    ...(modelSupportsServiceTier !== undefined ? { supportsServiceTier: modelSupportsServiceTier } : {}),
-    ...(modelSupportsResponsesCustomTools !== undefined ? { supportsResponsesCustomTools: modelSupportsResponsesCustomTools } : {}),
-    ...(modelSupportsServiceTier === true && entry?.fastTierDescription !== undefined
-      ? { fastTierDescription: entry.fastTierDescription }
-      : {}),
-    ...(entry?.directReasoningEffortModels?.includes(input.modelId) ? { directReasoningEffort: true } : {}),
-    ...(entry?.modelResponsesUpstreamStreaming?.[normalizedModelId] !== undefined
-      ? { responsesUpstreamStreaming: entry.modelResponsesUpstreamStreaming[normalizedModelId] }
-      : {}),
-    ...(entry?.modelResponsesTerminalRepair?.[normalizedModelId] !== undefined
-      ? { responsesTerminalRepair: entry.modelResponsesTerminalRepair[normalizedModelId] }
-      : {}),
-  };
-  const modelProvenance: Partial<Record<keyof ResolvedPerModelStaticPolicy, StaticPolicySource>> = {
-    adapter: adapterSource,
-  };
-  for (const field of REASONING_CAPABILITY_FIELDS) {
-    modelProvenance[field] = reasoningCapabilities[field] === undefined ? "unknown"
-      : modelInList(provider.noReasoningModels, input.modelId) ? "operator"
-      : modelInList(entry?.noReasoningModels, input.modelId) ? "registry"
-      : input.modelCapabilities?.[field] !== undefined || declaredModelCapabilities(provider.modelCapabilities, input.modelId)?.[field] !== undefined
-        ? "operator-capability" : declaredModelCapabilities(entry?.modelCapabilities, input.modelId)?.[field] !== undefined ? "registry" : "operator";
+  const frozenProvider = recursivelyFreeze(providerPolicy) as ResolvedProviderStaticPolicy;
+  const frozenProviderProvenance = Object.freeze(providerProvenance);
+  return modelInput => resolvePreparedModel({ ...shared, ...modelInput });
+
+  function resolvePreparedModel(input: ResolveModelPolicyInput): ResolvedModelPolicy {
+    const modelValue = <T>(record: Readonly<Record<string, T>> | undefined): T | undefined =>
+      legacyModelValue(record, input.modelId);
+    const modelSource = <T>(operator: Readonly<Record<string, T>> | undefined, registry: Readonly<Record<string, T>> | undefined): StaticPolicySource =>
+      legacyModelSource(operator, registry, input.modelId);
+    const modelOrProviderSource = <T>(
+      operatorMap: Readonly<Record<string, T>> | undefined, registryMap: Readonly<Record<string, T>> | undefined,
+      operatorDefault: T | undefined, registryDefault: T | undefined,
+    ): StaticPolicySource => {
+      const exact = modelSource(operatorMap, registryMap);
+      return exact !== "unknown" ? exact : operatorDefault !== undefined ? "operator" : registryDefault !== undefined ? "registry" : "unknown";
+    };
+    const configuredAdapter = provider.modelAdapters?.[input.modelId];
+    const pin = pinnedWireAdapter(input.providerName, input.modelId, provider);
+    const normalizedModelId = input.modelId.trim().toLowerCase();
+    const registryWire = wireDefault(entry?.modelWireDefaults?.[normalizedModelId], provider, entry,
+      input.inboundWire ?? "responses", resolvedAuthMode);
+    const explicitWire = configuredAdapter && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(configuredAdapter)
+      ? configuredAdapter
+      : undefined;
+    const providerAdapter = providerPolicy.adapter ?? provider.adapter;
+    const effectiveProviderForWire = resolvedAuthMode === provider.authMode
+      ? provider
+      : { ...provider, authMode: resolvedAuthMode };
+    const canonicalForward = isCanonicalOpenAiForwardProvider(effectiveProviderForWire);
+    const adapter = pin
+      ?? (!canonicalForward ? explicitWire ?? registryWire : undefined)
+      ?? providerAdapter;
+    const adapterSource: StaticPolicySource = pin
+      ? "hard-pin"
+      : explicitWire && !canonicalForward
+        ? "operator"
+        : registryWire && !canonicalForward
+          ? "registry"
+          : "provider-default";
+    const declaredModalities = input.modelCapabilities?.inputModalities;
+    const capabilityModalities = Array.isArray(declaredModalities) && declaredModalities.length > 0
+      ? [...declaredModalities]
+      : undefined;
+    const exactContextWindow = modelValue(providerPolicy.modelContextWindows);
+    const familyContextWindow = providerPolicy.adapter === "anthropic"
+      ? anthropicFamilyContextWindow(providerPolicy.modelContextWindows, input.modelId)
+      : undefined;
+    const modelContextWindow = exactContextWindow ?? familyContextWindow ?? providerPolicy.contextWindow;
+    const exactMaxInputTokens = modelValue(providerPolicy.modelMaxInputTokens);
+    const modelMaxInputTokens = exactMaxInputTokens !== undefined && modelContextWindow !== undefined
+      ? Math.min(exactMaxInputTokens, modelContextWindow)
+      : exactMaxInputTokens;
+    const exactMaxOutputTokens = modelValue(providerPolicy.modelMaxOutputTokens);
+    const modelMaxOutputTokens = exactMaxOutputTokens ?? providerPolicy.defaultMaxOutputTokens;
+    const reasoningCapabilities = reasoningCapabilitiesFromConfig({
+      ...providerPolicy,
+      adapter: providerPolicy.adapter ?? provider.adapter,
+      baseUrl: providerPolicy.baseUrl ?? provider.baseUrl,
+      // Reasoning reads only this model's declaration; keep the other axes without cloning the roster.
+      ...(input.modelCapabilities ? { modelCapabilities: { [input.modelId]: {
+        ...declaredModelCapabilities(providerPolicy.modelCapabilities, input.modelId),
+        ...input.modelCapabilities,
+      } } } : {}),
+    }, input.modelId);
+    const modelReasoningEfforts = reasoningCapabilities.supportsReasoningEffort === false ? []
+      : modelValue(providerPolicy.modelReasoningEfforts) ?? providerPolicy.reasoningEfforts;
+    const modelSupportsReasoningSummaries = modelValue(providerPolicy.modelSupportsReasoningSummaries)
+      ?? (modelValue(providerPolicy.modelReasoningSummaryDelivery) !== undefined ? true : undefined);
+    const modelSupportsVerbosity = modelValue(providerPolicy.modelSupportsVerbosity) ?? providerPolicy.supportsVerbosity;
+    const modelSupportsServiceTier = fastOff
+      ? false
+      : modelValue(providerPolicy.modelSupportsServiceTier) ?? providerPolicy.supportsServiceTier;
+    const modelSupportsResponsesCustomTools = input.modelCapabilities?.responsesCustomTools
+      ?? providerPolicy.supportsResponsesCustomTools;
+    const model: ResolvedPerModelStaticPolicy = {
+      adapter,
+      ...reasoningCapabilities,
+      ...(modelContextWindow !== undefined ? { contextWindow: modelContextWindow } : {}),
+      ...(capabilityModalities ?? modelValue(providerPolicy.modelInputModalities) !== undefined
+        ? { inputModalities: capabilityModalities ?? modelValue(providerPolicy.modelInputModalities) }
+        : {}),
+      ...(modelMaxInputTokens !== undefined ? { maxInputTokens: modelMaxInputTokens } : {}),
+      ...(modelMaxOutputTokens !== undefined ? { maxOutputTokens: modelMaxOutputTokens } : {}),
+      ...(modelReasoningEfforts !== undefined ? { reasoningEfforts: modelReasoningEfforts } : {}),
+      ...(reasoningCapabilities.supportsReasoningEffort !== false && modelValue(providerPolicy.modelDefaultReasoningEfforts) !== undefined ? { defaultReasoningEffort: modelValue(providerPolicy.modelDefaultReasoningEfforts) } : {}),
+      ...(modelSupportsReasoningSummaries !== undefined ? { supportsReasoningSummaries: modelSupportsReasoningSummaries } : {}),
+      ...(modelSupportsVerbosity !== undefined ? { supportsVerbosity: modelSupportsVerbosity } : {}),
+      ...(modelSupportsServiceTier !== undefined ? { supportsServiceTier: modelSupportsServiceTier } : {}),
+      ...(modelSupportsResponsesCustomTools !== undefined ? { supportsResponsesCustomTools: modelSupportsResponsesCustomTools } : {}),
+      ...(modelSupportsServiceTier === true && entry?.fastTierDescription !== undefined
+        ? { fastTierDescription: entry.fastTierDescription }
+        : {}),
+      ...(entry?.directReasoningEffortModels?.includes(input.modelId) ? { directReasoningEffort: true } : {}),
+      ...(entry?.modelResponsesUpstreamStreaming?.[normalizedModelId] !== undefined
+        ? { responsesUpstreamStreaming: entry.modelResponsesUpstreamStreaming[normalizedModelId] }
+        : {}),
+      ...(entry?.modelResponsesTerminalRepair?.[normalizedModelId] !== undefined
+        ? { responsesTerminalRepair: entry.modelResponsesTerminalRepair[normalizedModelId] }
+        : {}),
+    };
+    const modelProvenance: Partial<Record<keyof ResolvedPerModelStaticPolicy, StaticPolicySource>> = {
+      adapter: adapterSource,
+    };
+    for (const field of REASONING_CAPABILITY_FIELDS) {
+      modelProvenance[field] = reasoningCapabilities[field] === undefined ? "unknown"
+        : modelInList(provider.noReasoningModels, input.modelId) ? "operator"
+        : modelInList(entry?.noReasoningModels, input.modelId) ? "registry"
+        : input.modelCapabilities?.[field] !== undefined || declaredModelCapabilities(provider.modelCapabilities, input.modelId)?.[field] !== undefined
+          ? "operator-capability" : declaredModelCapabilities(entry?.modelCapabilities, input.modelId)?.[field] !== undefined ? "registry" : "operator";
+    }
+    modelProvenance.contextWindow = modelOrProviderSource(provider.modelContextWindows, entry?.modelContextWindows, provider.contextWindow, entry?.contextWindow);
+    if (modelProvenance.contextWindow === "unknown" && familyContextWindow !== undefined) {
+      modelProvenance.contextWindow = anthropicFamilyContextWindow(provider.modelContextWindows, input.modelId) !== undefined
+        ? "operator"
+        : "registry";
+    }
+    modelProvenance.inputModalities = capabilityModalities
+      ? "operator-capability"
+      : modelSource(provider.modelInputModalities, entry?.modelInputModalities);
+    modelProvenance.maxInputTokens = modelSource(provider.modelMaxInputTokens, entry?.modelMaxInputTokens);
+    modelProvenance.maxOutputTokens = modelOrProviderSource(
+      provider.modelMaxOutputTokens,
+      entry?.modelMaxOutputTokens,
+      provider.defaultMaxOutputTokens,
+      entry?.defaultMaxOutputTokens,
+    );
+    modelProvenance.reasoningEfforts = modelOrProviderSource(provider.modelReasoningEfforts, entry?.modelReasoningEfforts, provider.reasoningEfforts, entry?.reasoningEfforts);
+    modelProvenance.defaultReasoningEffort = modelSource(
+      provider.modelDefaultReasoningEfforts,
+      entry?.modelDefaultReasoningEfforts,
+    );
+    modelProvenance.supportsReasoningSummaries = modelSource(provider.modelSupportsReasoningSummaries, entry?.modelSupportsReasoningSummaries);
+    if (modelProvenance.supportsReasoningSummaries === "unknown" && modelValue(provider.modelReasoningSummaryDelivery) !== undefined) {
+      modelProvenance.supportsReasoningSummaries = "operator";
+    }
+    modelProvenance.supportsVerbosity = modelOrProviderSource(provider.modelSupportsVerbosity, entry?.modelSupportsVerbosity, provider.supportsVerbosity, entry?.supportsVerbosity);
+    const exactServiceTierSource = modelSource(provider.modelSupportsServiceTier, registryServiceTierDefaults);
+    modelProvenance.supportsServiceTier = !fastOff && exactServiceTierSource !== "unknown" ? exactServiceTierSource
+      : providerProvenance.supportsServiceTier ?? "unknown";
+    modelProvenance.supportsResponsesCustomTools = input.modelCapabilities?.responsesCustomTools !== undefined
+      ? "operator-capability"
+      : providerProvenance.supportsResponsesCustomTools ?? "unknown";
+    modelProvenance.responsesUpstreamStreaming = model.responsesUpstreamStreaming === undefined ? "unknown" : "registry";
+    modelProvenance.responsesTerminalRepair = model.responsesTerminalRepair === undefined ? "unknown" : "registry";
+    modelProvenance.fastTierDescription = model.fastTierDescription === undefined ? "unknown" : "registry";
+    modelProvenance.directReasoningEffort = model.directReasoningEffort === undefined ? "unknown" : "registry";
+    const alias = input.effectiveAlias !== undefined
+      ? input.effectiveAlias
+      : provider.alias !== undefined
+        ? provider.alias
+        : entry?.alias;
+    const aliasSource: StaticPolicySource = input.effectiveAlias !== undefined
+      ? input.effectiveAliasSource ?? "operator"
+      : provider.alias !== undefined
+        ? "operator"
+      : entry?.alias !== undefined ? "registry" : "unknown";
+    return Object.freeze({
+      version: 1 as const,
+      providerName: input.providerName,
+      modelId: input.modelId,
+      transportMatchedRegistry: entry !== undefined,
+      ...(alias !== undefined ? { effectiveAlias: alias } : {}),
+      provider: frozenProvider,
+      model: recursivelyFreeze(detachedClone(model)),
+      provenance: Object.freeze({ alias: aliasSource, provider: frozenProviderProvenance, model: Object.freeze(modelProvenance) }),
+    });
   }
-  modelProvenance.contextWindow = modelOrProviderSource(provider.modelContextWindows, entry?.modelContextWindows, provider.contextWindow, entry?.contextWindow);
-  if (modelProvenance.contextWindow === "unknown" && familyContextWindow !== undefined) {
-    modelProvenance.contextWindow = anthropicFamilyContextWindow(provider.modelContextWindows, input.modelId) !== undefined
-      ? "operator"
-      : "registry";
-  }
-  modelProvenance.inputModalities = capabilityModalities
-    ? "operator-capability"
-    : modelSource(provider.modelInputModalities, entry?.modelInputModalities);
-  modelProvenance.maxInputTokens = modelSource(provider.modelMaxInputTokens, entry?.modelMaxInputTokens);
-  modelProvenance.maxOutputTokens = modelOrProviderSource(
-    provider.modelMaxOutputTokens,
-    entry?.modelMaxOutputTokens,
-    provider.defaultMaxOutputTokens,
-    entry?.defaultMaxOutputTokens,
-  );
-  modelProvenance.reasoningEfforts = modelOrProviderSource(provider.modelReasoningEfforts, entry?.modelReasoningEfforts, provider.reasoningEfforts, entry?.reasoningEfforts);
-  modelProvenance.defaultReasoningEffort = modelSource(
-    provider.modelDefaultReasoningEfforts,
-    entry?.modelDefaultReasoningEfforts,
-  );
-  modelProvenance.supportsReasoningSummaries = modelSource(provider.modelSupportsReasoningSummaries, entry?.modelSupportsReasoningSummaries);
-  if (modelProvenance.supportsReasoningSummaries === "unknown" && modelValue(provider.modelReasoningSummaryDelivery) !== undefined) {
-    modelProvenance.supportsReasoningSummaries = "operator";
-  }
-  modelProvenance.supportsVerbosity = modelOrProviderSource(provider.modelSupportsVerbosity, entry?.modelSupportsVerbosity, provider.supportsVerbosity, entry?.supportsVerbosity);
-  const exactServiceTierSource = modelSource(provider.modelSupportsServiceTier, registryServiceTierDefaults);
-  modelProvenance.supportsServiceTier = !fastOff && exactServiceTierSource !== "unknown" ? exactServiceTierSource
-    : providerProvenance.supportsServiceTier ?? "unknown";
-  modelProvenance.supportsResponsesCustomTools = input.modelCapabilities?.responsesCustomTools !== undefined
-    ? "operator-capability"
-    : providerProvenance.supportsResponsesCustomTools ?? "unknown";
-  modelProvenance.responsesUpstreamStreaming = model.responsesUpstreamStreaming === undefined ? "unknown" : "registry";
-  modelProvenance.responsesTerminalRepair = model.responsesTerminalRepair === undefined ? "unknown" : "registry";
-  modelProvenance.fastTierDescription = model.fastTierDescription === undefined ? "unknown" : "registry";
-  modelProvenance.directReasoningEffort = model.directReasoningEffort === undefined ? "unknown" : "registry";
-  const alias = input.effectiveAlias !== undefined
-    ? input.effectiveAlias
-    : provider.alias !== undefined
-      ? provider.alias
-      : entry?.alias;
-  const aliasSource: StaticPolicySource = input.effectiveAlias !== undefined
-    ? input.effectiveAliasSource ?? "operator"
-    : provider.alias !== undefined
-      ? "operator"
-    : entry?.alias !== undefined ? "registry" : "unknown";
-  return recursivelyFreeze(detachedClone({
-    version: 1 as const,
-    providerName: input.providerName,
-    modelId: input.modelId,
-    transportMatchedRegistry: entry !== undefined,
-    ...(alias !== undefined ? { effectiveAlias: alias } : {}),
-    provider: providerPolicy as ResolvedProviderStaticPolicy,
-    model,
-    provenance: { alias: aliasSource, provider: providerProvenance, model: modelProvenance },
-  }));
 }

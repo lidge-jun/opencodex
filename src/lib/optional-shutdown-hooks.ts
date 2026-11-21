@@ -12,16 +12,19 @@
  * A subsystem registers its teardown when it activates. A process that never activates it
  * registers nothing, so shutdown does no work and loads no module.
  *
- * Hooks are synchronous and best-effort by contract: `drainAndShutdown` runs under an
- * absolute deadline, so a hook that throws must not prevent its siblings — or
- * `server.stop` — from running.
+ * Synchronous hooks are best-effort. Subsystems that own processes can register an
+ * asynchronous cleanup receipt with its own bounded wait after the active-turn drain.
  *
  * See devlog/_fin/260814_lab_core_decoupling/010_lifecycle_shutdown_registry.md
  */
 
+import { OPTIONAL_SHUTDOWN_GRACE_MS } from "./shutdown-budget";
+
 type ShutdownHook = () => void;
+type AsyncShutdownHook = { run: (deadlineMs: number) => Promise<void>; onIncomplete?: ShutdownHook };
 
 const hooks = new Map<string, ShutdownHook>();
+const asyncHooks = new Map<string, AsyncShutdownHook>();
 let hooksRan = false;
 
 /**
@@ -47,13 +50,24 @@ export function registerOptionalShutdownHook(key: string, hook: ShutdownHook): (
   };
 }
 
+/** The async hook shares the absolute stop deadline. Its fallback must finish synchronously. */
+export function registerAsyncOptionalShutdownHook(
+  key: string,
+  run: AsyncShutdownHook["run"],
+  onIncomplete?: ShutdownHook,
+): void {
+  asyncHooks.set(key, { run, onIncomplete });
+}
+
 /** Whether `runOptionalShutdownHooks` has run at least once since the last test reset. */
 export function didRunOptionalShutdownHooks(): boolean {
   return hooksRan;
 }
 
-/** Run every registered teardown. Never throws. */
-export function runOptionalShutdownHooks(): void {
+/** Run every teardown, reporting whether the asynchronous work completed successfully. */
+export async function runOptionalShutdownHooks(
+  { deadlineMs = Date.now() + OPTIONAL_SHUTDOWN_GRACE_MS }: { deadlineMs?: number } = {},
+): Promise<boolean> {
   hooksRan = true;
   for (const [key, hook] of [...hooks]) {
     try {
@@ -65,11 +79,47 @@ export function runOptionalShutdownHooks(): void {
       );
     }
   }
+  if (asyncHooks.size === 0) return true;
+  const incomplete = new Map(asyncHooks);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const deadline = new Promise<null>(resolve => {
+      const remainingMs = deadlineMs - Date.now();
+      if (remainingMs <= 0) resolve(null);
+      else timer = setTimeout(() => resolve(null), remainingMs);
+    });
+    const cleanup = Promise.all([...incomplete].map(async ([key, hook]) => {
+      try {
+        await hook.run(deadlineMs);
+        incomplete.delete(key);
+        return true;
+      } catch {
+        console.warn(`[shutdown] optional subsystem "${key}" teardown failed`);
+        return false;
+      }
+    }));
+    const results = await Promise.race([deadline, cleanup]);
+    if (results === null || Date.now() >= deadlineMs) {
+      console.warn("[shutdown] optional subsystem teardown timed out");
+      return false;
+    }
+    return results.every(Boolean);
+  } finally {
+    clearTimeout(timer);
+    for (const [key, hook] of incomplete) {
+      try {
+        hook.onIncomplete?.();
+      } catch {
+        console.warn(`[shutdown] optional subsystem "${key}" emergency teardown failed`);
+      }
+    }
+  }
 }
 
 /** Test-only reset so an isolated lifecycle test does not inherit registrations. */
 export function resetOptionalShutdownHooksForTests(): void {
   hooks.clear();
+  asyncHooks.clear();
   drainStartHooks.clear();
   drainStartHooksRan = false;
   hooksRan = false;

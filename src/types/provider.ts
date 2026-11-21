@@ -75,14 +75,14 @@ export interface ResponsesItemIdRepairConfig {
  * Opt-in retry for pre-stream transient upstream statuses (500/502/503/504/520/521/522) on
  * `providers.<name>.transientRetryOn5xx`.
  *
- * Disabled unless the object is present; a bare `{}` opts in with defaults. Separate from
- * `retryOn429`, which handles rate limiting with its own waits.
+ * An object opts in for supported key-auth adapters. Canonical ChatGPT forward auth
+ * requires an explicit send total. Separate from `retryOn429`, which handles rate limiting.
  */
 export interface TransientRetryPolicy {
-  /** Master switch. Presence of the object also enables the policy (default true). */
+  /** Master switch for a qualifying policy (default true). */
   enabled?: boolean;
   /**
-   * TOTAL upstream sends allowed for one request, including the first (1..10, default 3).
+   * Total upstream sends allowed for one request, including the first (1..10, key-auth default 3).
    *
    * Not a per-layer retry count: the connection-reset and transient-status recovery layers
    * share this single budget, so `3` means at most three real requests reach the provider.
@@ -353,6 +353,21 @@ export interface OcxProviderConfig {
   codexToolMode?: "code_mode_only" | "shell";
   /** Optional outbound request-start pacing shared by this provider and its model overrides. */
   requestPacing?: ProviderRequestPacingConfig;
+  /**
+   * Per-provider override of the global `connectTimeoutMs` (response-header arrival deadline) for
+   * routed HTTP adapter sends, including routed model sends in the image/video and web-search
+   * bridges. A runTurn owns its transport and uses adapter-specific deadlines.
+   * A positive value applies verbatim, `0` disables the header deadline on covered paths,
+   * and an omitted value inherits the global setting.
+   */
+  connectTimeoutMs?: number;
+  /**
+   * Per-provider override of the global `stallTimeoutSec` for routed HTTP responses, streaming runTurn
+   * delivery, and inactivity in the image/video bridge. A positive value sets the inactivity budget,
+   * `0` disables it on covered paths, and an omitted value inherits the global setting.
+   * The web-search plan also uses the setting to size its independent bridge watchdog.
+   */
+  stallTimeoutSec?: number;
   /** Cursor MCP compatibility bounds; positive integers when configured. */
   mcpMaxTools?: number;
   mcpMaxSchemaBytes?: number;
@@ -613,6 +628,9 @@ export interface OcxProviderConfig {
    * `Authorization: Bearer <key>` instead.
    */
   apiKeyTransport?: "x-api-key" | "bearer";
+  /** Opt-in translated OAuth compatibility: move caller system instructions to user content,
+   * losing system-role precedence. Default false; API-key and native passthrough are unchanged. */
+  anthropicOAuthUserInstructions?: boolean;
   /**
    * Multi-key pool (API-key twin of OAuth multiauth). `apiKey` always mirrors the ACTIVE
    * entry so routing stays single-key; managed via /api/providers/keys. A legacy bare
@@ -754,6 +772,11 @@ export interface OcxProviderConfig {
    * all-zero entry means "not billable here" and falls through to the catalogs.
    */
   modelCosts?: Record<string, ProviderCostOverlay>;
+  /**
+   * USD per provider credit (for example Kiro credits). For a model with a matched token price
+   * and a valid `providerCredits` reading, the estimate uses credits × this price.
+   */
+  creditPriceUsd?: number;
   /**
    * Provider-wide auto-review (approval) model for routed models of this provider.
    *
@@ -1166,8 +1189,8 @@ export interface OcxProviderConfig {
   retryOn429?: RateLimitRetryPolicy;
   /**
    * Opt-in retry for pre-stream transient upstream statuses
-   * (`providers.<name>.transientRetryOn5xx`). Disabled unless present; a bare `{}` opts in
-   * with defaults. Key-auth `openai-chat` only.
+   * (`providers.<name>.transientRetryOn5xx`). A bare `{}` opts in with defaults on supported
+   * key-auth OpenAI adapters. Canonical ChatGPT forward providers require explicit `attempts`.
    */
   transientRetryOn5xx?: TransientRetryPolicy;
   /**

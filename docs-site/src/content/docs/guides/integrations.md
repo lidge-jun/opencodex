@@ -1229,3 +1229,44 @@ OpenCodex refuses those ambiguous settings. It also refuses an
 unsafe target or a row edited since apply. The integration is loopback only and
 never copies provider credentials. Factory documents the [BYOK schema](https://docs.factory.ai/model-independence/byok)
 and [personal settings path](https://docs.factory.ai/droid-cli/settings).
+
+## Antigravity app and agy CLI
+
+Google's Antigravity desktop app (2.15 and newer) and the `agy` CLI (1.2.15 and newer) can run through
+OpenCodex's gateway. Connect from the dashboard, or from a terminal:
+
+```bash
+ocx connect antigravity --model <id>   # desktop app: ~/.antigravity/settings.json
+ocx connect agy                        # agy CLI: a marked shell function in your profiles
+ocx connect antigravity status         # or: ocx connect agy status
+ocx disconnect antigravity             # or: ocx disconnect agy
+```
+
+Use `--model` only with `ocx connect antigravity` to set the desktop app's default model.
+
+Connect records what it replaced. Disconnect puts the original bytes back when the file is unchanged, and
+otherwise reverts only OpenCodex's own entries and keeps your other edits. Antigravity can restore
+settings after JSON keys are reordered and keeps the file and restore record when a managed setting conflicts.
+To resolve an Antigravity conflict, put the managed setting back to the value OpenCodex applied and
+retry. If OpenCodex reports `agy-profile-restore-required`, open the shell profile named in the error.
+Restore the complete `agy` block from a copy, including both marker lines and the function between
+them, then retry disconnect or uninstall. OpenCodex removes the whole block and keeps edits outside
+it. You can also restore the saved original profile, which replaces any later edits. An `agy` profile symlink must resolve
+to another supported profile for the same shell family under your home. Antigravity settings must resolve
+to the exact `~/.antigravity/settings.json` path. Restart Antigravity, or open a new terminal for `agy`,
+to apply a change. During disconnect, `agy` skips profiles without a restore record if they cannot be
+resolved or read. `ocx uninstall` disconnects clients with saved restore records
+before removing configuration. If a client cannot be restored, uninstall stops and keeps its record.
+
+OpenCodex writes a placeholder key, never a real credential, so it refuses to connect when the proxy bind
+requires one. A file with comments or trailing commas is also refused and left untouched. Antigravity reads
+an organization `admin_settings.json` first, then the `AGY_LLM_GATEWAY_*` variables, then the user settings;
+status warns about organization settings and environment overrides it can see. It checks the
+OpenCodex process environment. An override set only in the Antigravity process will not appear.
+On Windows `agy` is untested because Google lists it for macOS and Linux only.
+
+To preserve Gemini JSON, sign in with `ocx login google-antigravity` and turn on **Native Gemini
+passthrough** in the Google Antigravity **Accounts** tab. The JSON setting is
+`protocols.rollout.geminiNativeAntigravity`. This opt-in
+applies to `/v1beta` Gemini generation routed to the canonical `google-antigravity` OAuth
+provider. Other routes use the Chat bridge. See [Native Gemini with Antigravity](/reference/proxy-formats/#native-gemini-with-antigravity).

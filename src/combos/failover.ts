@@ -1,6 +1,7 @@
 import { parseResetCooldownMs } from "../codex/routing";
 import { CYBER_POLICY_FALLBACK_MESSAGE, TERMINAL_REFUSAL_FALLBACK_MESSAGE, classifyError, isCyberPolicyCode, isCyberPolicyMessage, isRateLimitOrQuotaFailureMessage, isSubscriptionGateMessage, isTerminalRefusalCode, safetyRefusalCodeFromMessage } from "../lib/errors";
 import { isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
+import { parseHttpDate } from "../lib/http-date";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure, isAnthropicExtraUsageFailure } from "../providers/anthropic-billing-refusal";
 import { hasConflictingReasoningEffortCode } from "../providers/reasoning-metadata";
@@ -43,14 +44,6 @@ const QUOTA_LIMIT_CODES = new Set([
   "insufficient_quota",
 ]);
 const TRANSIENT_REQUEST_RATE_CODES = new Set(["1302", "1305"]);
-const IMF_FIXDATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/i;
-const RFC850_DATE_RE = /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (\d{2})-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2}) (\d{2}):(\d{2}):(\d{2}) GMT$/i;
-const ASCTIME_DATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ( \d|\d{2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/i;
-const HTTP_MONTH_INDEX: Record<string, number> = {
-  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
-  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
-};
-
 /** Map<`${comboId}\0${provider/model}`, TargetCooldown> */
 // Never reset: an in-flight reservation may still refer to an entry cleared from the map.
 let nextCooldownRevision = 0;
@@ -65,71 +58,6 @@ function cooldownMapKey(
   target: Pick<OcxComboTarget, "provider" | "model">,
 ): string {
   return `${comboId}\0${targetKey(target)}`;
-}
-
-function parseUtcDateParts(
-  year: number,
-  monthName: string,
-  day: number,
-  hour: number,
-  minute: number,
-  second: number,
-): number | undefined {
-  const month = HTTP_MONTH_INDEX[monthName.toLowerCase()];
-  if (month === undefined) return undefined;
-  const timestamp = Date.UTC(year, month, day, hour, minute, second);
-  const parsed = new Date(timestamp);
-  return parsed.getUTCFullYear() === year
-    && parsed.getUTCMonth() === month
-    && parsed.getUTCDate() === day
-    && parsed.getUTCHours() === hour
-    && parsed.getUTCMinutes() === minute
-    && parsed.getUTCSeconds() === second
-    ? timestamp
-    : undefined;
-}
-
-function parseHttpDate(value: string, now: number): number | undefined {
-  const imf = IMF_FIXDATE_RE.exec(value);
-  if (imf) {
-    return parseUtcDateParts(
-      Number(imf[3]), imf[2]!, Number(imf[1]),
-      Number(imf[4]), Number(imf[5]), Number(imf[6]),
-    );
-  }
-  const rfc850 = RFC850_DATE_RE.exec(value);
-  if (rfc850) {
-    const current = new Date(now);
-    const currentYear = current.getUTCFullYear();
-    const month = HTTP_MONTH_INDEX[rfc850[2]!.toLowerCase()];
-    if (month === undefined) return undefined;
-    let year = Math.floor(currentYear / 100) * 100 + Number(rfc850[3]);
-    const yearDelta = year - currentYear;
-    const candidateTimeOfYear = Date.UTC(
-      2000, month, Number(rfc850[1]),
-      Number(rfc850[4]), Number(rfc850[5]), Number(rfc850[6]),
-    );
-    const currentTimeOfYear = Date.UTC(
-      2000, current.getUTCMonth(), current.getUTCDate(),
-      current.getUTCHours(), current.getUTCMinutes(), current.getUTCSeconds(),
-      current.getUTCMilliseconds(),
-    );
-    if (yearDelta < -50 || (yearDelta === -50 && candidateTimeOfYear < currentTimeOfYear)) {
-      year += 100;
-    } else if (yearDelta > 50 || (yearDelta === 50 && candidateTimeOfYear > currentTimeOfYear)) {
-      year -= 100;
-    }
-    return parseUtcDateParts(
-      year, rfc850[2]!, Number(rfc850[1]),
-      Number(rfc850[4]), Number(rfc850[5]), Number(rfc850[6]),
-    );
-  }
-  const asctime = ASCTIME_DATE_RE.exec(value);
-  if (!asctime) return undefined;
-  return parseUtcDateParts(
-    Number(asctime[6]), asctime[1]!, Number(asctime[2]),
-    Number(asctime[3]), Number(asctime[4]), Number(asctime[5]),
-  );
 }
 
 /** Parse a Retry-After delay, optionally retaining an upstream delay up to one day. */
@@ -154,7 +82,7 @@ export function parseRetryAfterMs(
       return Math.min(Math.max(Math.ceil(seconds * 1000), 1), maximum);
     }
   }
-  const timestamp = parseHttpDate(text, now);
+  const timestamp = parseHttpDate(text, now, { legacy: true });
   if (timestamp === undefined) return undefined;
   const delay = timestamp - now;
   if (delay > 0) return Math.min(delay, maximum);
@@ -328,6 +256,81 @@ export function coolComboTarget(
   });
   sweepExpiredOnWrite(now);
   return true;
+}
+
+/**
+ * failureDetail codes that cool a combo target after a COMMITTED terminal.
+ * Pre-commit failures already cool through the hop path; these are the
+ * post-commit `incomplete` terminals that path never sees, so without this
+ * the next request picks the same target and burns the same budget again.
+ */
+export type CommittedIncompleteReason = "max_output_tokens" | "upstream_stall_timeout";
+
+const COMMITTED_TERMINAL_COOLDOWN_MS: Readonly<Record<CommittedIncompleteReason, number>> = {
+  // The target cannot emit more than its output ceiling; a request that
+  // exhausted it will exhaust it again, so this uses the local cooldown cap.
+  max_output_tokens: MAX_COOLDOWN_MS,
+  // Upstream went silent mid-stream after committing output — a health
+  // signal, but transient, so the standard short cooldown applies.
+  upstream_stall_timeout: DEFAULT_COOLDOWN_MS,
+};
+
+export interface CommittedTerminalServingAttempt {
+  provider: string;
+  model: string;
+  status: number;
+  locallyAnswered?: boolean;
+}
+
+export interface CommittedTerminalCooldownFacts {
+  comboId?: string;
+  terminalStatus?: string;
+  terminalReason?: CommittedIncompleteReason;
+  servingAttempt?: CommittedTerminalServingAttempt;
+  httpStatus?: number;
+  target?: Pick<OcxComboTarget, "provider" | "model">;
+  writerGeneration?: number;
+  outputTokens?: number;
+  outputCeiling?: number | null;
+  isPaused?: boolean;
+}
+
+/**
+ * Record a bounded cooldown when a combo child commits output and then ends
+ * `incomplete` for a target-capacity or upstream-silence reason. The response
+ * is already delivered — this only shapes the NEXT pick, so the caller's
+ * effort and context configuration stay untouched.
+ */
+export function coolComboTargetForCommittedTerminal(facts: CommittedTerminalCooldownFacts): void {
+  if (!facts.comboId || facts.terminalStatus !== "incomplete") return;
+  const cooldownMs = facts.terminalReason === undefined
+    ? undefined
+    : COMMITTED_TERMINAL_COOLDOWN_MS[facts.terminalReason];
+  if (cooldownMs === undefined) return;
+  if (facts.terminalReason === "max_output_tokens") {
+    // Reaching the caller's own allowance (routine for Claude Code) or an Anthropic pause_turn
+    // must not cool a healthy target. Cool only when the turn was unpaused, the target's own
+    // ceiling is known, and the output actually reached that ceiling.
+    if (facts.isPaused === true) return;
+    if (facts.outputCeiling == null || (facts.outputTokens ?? 0) < facts.outputCeiling) return;
+  }
+  const attempt = facts.servingAttempt;
+  // The incomplete terminal is itself proof the target ran: a late stall surfaces to
+  // the client as a 5xx attempt status, so gating on status < 400 would silence exactly
+  // the case this cooldown exists for.
+  if (!attempt || attempt.locallyAnswered === true) return;
+  // Combo selection evaluates cooldowns against pick.target (which preserves any alias selector
+  // the combo named); fall back to the routed physical attempt only when facts omits the target.
+  const target = facts.target ?? { provider: attempt.provider, model: attempt.model };
+  // A shorter committed-terminal cooldown must not shorten a longer live one — a
+  // server Retry-After or reset already recorded for this target stays authoritative.
+  const existing = targetCooldowns.get(cooldownMapKey(facts.comboId, target));
+  if (existing && existing.cooldownUntil > Date.now() + cooldownMs) return;
+  coolComboTarget(facts.comboId, target, {
+    cooldownMs,
+    status: facts.httpStatus,
+    writerGeneration: facts.writerGeneration,
+  });
 }
 
 export function earliestComboCooldown(
@@ -643,7 +646,7 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
   if (code !== undefined && code !== null && typeof code !== "string") return false;
   const outerCode = normalizedFailureCode(code);
   if (!EXACT_EFFORT_COMPATIBLE_CODES.has(outerCode)) return false;
-  if (isHardPolicyOrOriginRefusal(message) || hasConflictingReasoningEffortCode(message)) return false;
+  if (isHardPolicyOrOriginRefusal(message) || hasConflictingReasoningEffortCode(message, 16_384)) return false;
   let text = message.trim();
   for (let depth = 0; depth < 3; depth += 1) {
     if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length).trim();
@@ -1226,23 +1229,56 @@ const RESPONSE_REQUEST_ECHO_KEYS = new Set([
  * Any other wording (an account, model, parameter or billing problem, in any phrasing) does not
  * match, so the body keeps dev's decision; only known shapes are admitted.
  */
-const MODERATION_REFUSAL_PROSE = new RegExp("^(?:"
-  + "(?:content )?(?:refused|flagged|blocked|rejected|filtered)(?: by (?:the )?(?:moderation|content filter))?\\.?"
+// The anchored scan commits to the first verdict alternative that matches, so alternatives run
+// longest-first: Azure's fixed wording leads ("the response was filtered" is a strict prefix of it)
+// and the noun-phrased verdict precedes the bare one (its `by ... system` clause reaches further).
+const MODERATION_REFUSAL_VERDICT = new RegExp("^(?:"
+  + "the response was filtered due to the prompt triggering azure openai'?s content management policy\\.?"
   + "|(?:(?:the|your) )?(?:input|request|prompt|content|message|response|output)(?: (?:was|has been|is))?"
   + " (?:refused|flagged|blocked|rejected|filtered)(?: by (?:the )?(?:moderation|content filter)(?: system)?)?\\.?"
-  + "|the response was filtered due to the prompt triggering azure openai'?s content management policy\\.?"
+  + "|(?:content )?(?:refused|flagged|blocked|rejected|filtered)(?: by (?:the )?(?:moderation|content filter))?\\.?"
   + "|(?:your )?(?:input|request|prompt|content) violated (?:the )?content (?:safety|management|filtering) polic(?:y|ies)\\.?"
-  + ")(?:"
-  + " categor(?:y|ies): [a-z][a-z/_-]*(?:(?:,? and |, )[a-z][a-z/_-]*)*\\.?"
+  + ")", "i");
+const MODERATION_REFUSAL_TAIL = new RegExp("(?:"
+  + "( categor(?:y|ies): )"
   + "| please (?:modify|revise|rephrase|change|adjust|edit) (?:your|the) (?:prompt|input|request|message)(?: and (?:retry|try again))?\\.?"
   + "| (?:please )?(?:retry|try again)(?: later)?\\.?"
   + "| to learn more about our content filtering policies please read our documentation: https://[^ ]+"
-  + ")*$", "i");
+  + ")", "iy");
+const MODERATION_CATEGORY_WORD = /[a-z][a-z/_-]*/iy;
+const MODERATION_CATEGORY_AND = / and /iy;
 
-/** Whether a prose string is a known moderation refusal copy and nothing else (bounded, linear). */
+/** Whether the whole string is known moderation refusal copy. */
 function isModerationRefusalProse(text: string): boolean {
   if (text.length > 2_000) return false;
-  return MODERATION_REFUSAL_PROSE.test(text.replace(/\s+/g, " ").trim());
+  const prose = text.replace(/\s+/g, " ").trim();
+  const verdict = MODERATION_REFUSAL_VERDICT.exec(prose);
+  if (!verdict) return false;
+
+  // A comma can introduce the category "and" or the separator ", and ". Keep both
+  // interpretations until the rest of the sentence distinguishes them. Each token
+  // boundary is visited once, even when several interpretations reach it.
+  const tailStarts = new Set([verdict[0].length]);
+  const categoryStarts = new Set<number>();
+  for (let index = verdict[0].length; index < prose.length; index++) {
+    if (tailStarts.has(index)) {
+      MODERATION_REFUSAL_TAIL.lastIndex = index;
+      const tail = MODERATION_REFUSAL_TAIL.exec(prose);
+      if (tail) {
+        const next = tail[1] ? categoryStarts : tailStarts;
+        next.add(MODERATION_REFUSAL_TAIL.lastIndex);
+      }
+    }
+    if (!categoryStarts.has(index)) continue;
+    MODERATION_CATEGORY_WORD.lastIndex = index;
+    if (!MODERATION_CATEGORY_WORD.test(prose)) continue;
+    const end = MODERATION_CATEGORY_WORD.lastIndex;
+    tailStarts.add(prose[end] === "." ? end + 1 : end);
+    if (prose.startsWith(", ", end)) categoryStarts.add(end + 2);
+    MODERATION_CATEGORY_AND.lastIndex = prose[end] === "," ? end + 1 : end;
+    if (MODERATION_CATEGORY_AND.test(prose)) categoryStarts.add(MODERATION_CATEGORY_AND.lastIndex);
+  }
+  return tailStarts.has(prose.length);
 }
 
 /**
@@ -1756,6 +1792,11 @@ function decideComboFailure(
   // tries each candidate once via `tried`, and combo excludes each attempted target. So this is
   // structured-code-only, not provably local.
   if (rawCode === "input_admission_refused" || error.code === "input_admission_refused") {
+    return "hop";
+  }
+  // A degenerate completion is target-local evidence: the child ended its turn carrying only
+  // reasoning/commentary prelude. Another target can still serve the same request.
+  if (rawCode === "degenerate_completion" || error.code === "degenerate_completion") {
     return "hop";
   }
   if (isProviderScopedQuotaCap(status, message, rawCode || error.code)) {

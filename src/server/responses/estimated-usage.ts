@@ -1,4 +1,5 @@
 import { estimateTokens } from "../../lib/token-estimate";
+import { responsesCompletionError } from "../../lib/errors";
 import type { SsePayloadRewrite } from "../sse-payload-rewrite";
 import type { HandleResponsesOptions } from "./core-options";
 import type { OcxProviderConfig } from "../../types";
@@ -98,7 +99,7 @@ export function createEstimatedUsagePayloadRewrite(
       streamedOutputTokens += estimateTokens(outputText([parsed.item]), modelId);
       return payload;
     }
-    if (!TERMINAL_TYPES.has(parsed.type)) return payload;
+    if (!TERMINAL_TYPES.has(parsed.type) || responsesCompletionError(parsed) != null) return payload;
     const response = withEstimatedUsage(parsed.response, inputTokens(), modelId, streamedOutputTokens);
     if (!response) return payload;
     onApplied?.();

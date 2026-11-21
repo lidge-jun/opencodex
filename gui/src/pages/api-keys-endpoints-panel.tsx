@@ -30,7 +30,7 @@ export function ApiKeysEndpointsPanel({
   authMatrix: ApiAuthMatrixRow[];
   /** Absent from a server that predates API surface settings; the flat list is kept then. */
   surfaces?: ApiSurfacesInfo;
-  /** Management origin the Messages toggle writes to (this machine or the shared hub). */
+  /** Management origin the surface toggles write to (this machine or the shared hub). */
   apiBase?: string;
   onSurfacesChanged?: () => void;
 }) {

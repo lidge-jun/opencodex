@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { RequestSendObserver } from "../../lib/request-execution-budget";
 import type { AdapterEvent } from "../../types";
-import { sharedSpendLedger, sharedSpendPolicy, type SpendReservationLedger, type SpendScopes, type SpendSeed, type SpendReservationProof, type SpendAdmissionPolicy } from "../../lib/spend-reservation-ledger";
+import { sharedSpendLedger, sharedSpendPolicy, type SpendReservationLedger, type SpendScopes, type SpendSeed, type SpendReservationProof, type SpendAdmissionPolicy, type SpendReservationRequest } from "../../lib/spend-reservation-ledger";
 import { SpendLedgerOwnerError } from "../../lib/spend-ledger-owner";
 import { markLocalRequestLogRefusal, type RequestLogContext } from "../request-log";
 import { chargeWorkflowSends, recordWorkflowRefusalEvent, reserveWorkflowSend, workflowDenialSummary, type WorkflowDenial, type WorkflowSpendDenialDetail } from "../../lib/workflow-budget";
@@ -14,6 +14,12 @@ export interface TerminalSpendUsage {
 }
 
 type RecordSendUsage = (usage: TerminalSpendUsage) => void;
+/**
+ * Which routed send a reading covers: the send that was newest when the parse started (the one
+ * that produced the response being parsed), or the send that is newest now (a retry the parser
+ * dispatched itself, whose response it has just finished reading).
+ */
+export type RoutedSendReadingCover = "issuing" | "newest";
 const adapterResponseSpend = new WeakMap<Response, RecordSendUsage>();
 
 /** Bind an image-recovery response after its retry ladder has finished reporting sends. */
@@ -33,6 +39,16 @@ export function adapterResponseSpendObserver(response: Response): ((event: Adapt
 /** Settles one request's durable spend entries once its terminal usage is known. */
 export interface RequestSpendSettlement {
   settle(usage: TerminalSpendUsage | undefined): void;
+  /**
+   * Bind the usage a routed response reports to the routed send that is latest when its parse
+   * starts. Legs run in sequence, so that send is the one that produced the response (#8902).
+   * A parser that dispatches its own retry (Kiro's completion retry) reports one reading per
+   * physical response; each later reading covers the routed send that is newest when it arrives.
+   * A send keeps the first reading bound to it, and a send with none stays unresolved. A null
+   * reading marks the send unmetered: its response reported no usage of its own, so it stays
+   * unresolved even when it is the last routed send the aggregate fallback would settle.
+   */
+  captureRoutedSendUsage?(): ((usage: TerminalSpendUsage | null, cover?: RoutedSendReadingCover) => void) | undefined;
 }
 
 export interface SpendTargetIdentity extends SpendScopes {
@@ -47,6 +63,8 @@ export interface SpendTargetIdentity extends SpendScopes {
    * unkeyed same-scope lookup.
    */
   readonly explicitEstimate?: boolean;
+  /** An opted-in retry owns a fresh reservation using the request's estimate. */
+  readonly freshRetry?: boolean;
 }
 export interface RequestSpendReporter {
   start(seed: SpendSeed, ordinal: number): void;
@@ -74,6 +92,21 @@ export function captureRequestSpendPolicy(policy: SpendAdmissionPolicy = sharedS
 }
 
 /**
+ * The aggregate usage left for the last routed send once the other routed sends settled their own
+ * readings, so no token is booked twice. Undefined when those readings account for all of it: the
+ * last send then reported nothing of its own and stays unresolved.
+ */
+function netOfOtherSends(total: TerminalSpendUsage | undefined, others: readonly (TerminalSpendUsage | null | undefined)[]): TerminalSpendUsage | undefined {
+  const settled = others.filter((usage): usage is TerminalSpendUsage => usage !== undefined && usage !== null);
+  if (!total || settled.length === 0) return total;
+  const remaining = (key: keyof TerminalSpendUsage): number | undefined => typeof total[key] === "number"
+    ? Math.max(0, total[key] - settled.reduce((sum, usage) => sum + (usage[key] ?? 0), 0)) : undefined;
+  const inputTokens = remaining("inputTokens");
+  const outputTokens = remaining("outputTokens");
+  return inputTokens || outputTokens ? { inputTokens, outputTokens } : undefined;
+}
+
+/**
  * One request's entries in the durable spend ledger (#4707).
  *
  * The ledger has had the whole reserve/dispatch/settle vocabulary since #4546 and no production
@@ -86,9 +119,13 @@ export function captureRequestSpendPolicy(policy: SpendAdmissionPolicy = sharedS
  * so one entry per increment is one entry per send -- and a dispatch path added later cannot
  * forget to book, which is how the previous wiring attempt ended up with no caller at all.
  *
- * Image-recovery receipts carry their own usage, or null if usage is unknown. For an ordinary
- * request the last routed send keeps the aggregate terminal usage. Other unknown sends remain
- * unresolved at their reservation estimates.
+ * Image-recovery receipts carry their own usage, or null if usage is unknown. A request with one
+ * routed send settles it with the aggregate terminal usage. When a request makes several routed
+ * sends (a terminal-guard re-ask, an empty-completion retry, a hosted-search iteration), each send
+ * settles with the usage its own response reported (#8902). The last routed send falls back to the
+ * aggregate net of what the other sends reported, and is left unresolved if nothing remains or if
+ * its response was marked unmetered. Other unknown sends remain unresolved at their reservation
+ * estimates.
  */
 export function createRequestSpendTracker(
   logCtx: Pick<
@@ -108,6 +145,8 @@ export function createRequestSpendTracker(
   let admissionPolicy: SpendAdmissionPolicy | undefined;
   const capturePolicy = (): SpendAdmissionPolicy => capturedPolicy ??= captureRequestSpendPolicy(ledgerRef?.policy);
   let initialEnforced: boolean | undefined;
+  let recoveryIdentityCeiling: number | undefined;
+  let prepaidSpend: WeakMap<SpendReservationProof, { identityId?: string; tokens: number; hasInputEstimate: boolean }> | undefined;
   // Outstanding entries; exact dispatch reports move their reservation to the end.
   const live: string[] = [];
   const pendingDispatch = new Set<string>();
@@ -119,14 +158,17 @@ export function createRequestSpendTracker(
   let finalRequested = false;
   let finalUsage: TerminalSpendUsage | undefined;
   let reporters = 0;
-  const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean; auxiliary: boolean; explicitEstimate: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number } }>();
-  const auxiliarySendIds = new Set<string>();
+  const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean; auxiliary: boolean; independent: boolean; retryScopes?: SpendScopes; estimate?: { inputTokens: number; outputCeilingTokens: number } }>();
+  const nonTerminalSendIds = new Set<string>();
   // Abandoned capabilities retain cleanup ownership, never admission lookup.
   const retiredSeeds = new Set<SpendSeed>();
   const resolvedSendIds = new Set<string>();
   const completedSeeds = new Set<SpendSeed>();
   const physical = new Map<number, { seed: SpendSeed; sendId?: string; reportPending?: boolean; reportComplete?: boolean;
-    estimate?: { inputTokens: number; outputCeilingTokens: number }; usage?: TerminalSpendUsage | null }>();
+    estimate?: { inputTokens: number; outputCeilingTokens: number }; usage?: TerminalSpendUsage | null; observed?: TerminalSpendUsage | null }>();
+  // Legacy (unseeded) sends keyed by send id: the usage each routed response reported, or null
+  // when the response was marked unmetered.
+  const observedLegacy = new Map<string, TerminalSpendUsage | null>();
   const selectedScopes = (target: SpendTargetIdentity = {}): SpendScopes => ({
     ...(rootId !== undefined ? { rootId } : {}),
     ...(target.identityId ?? logCtx.accountLogLabel ? { identityId: target.identityId ?? logCtx.accountLogLabel } : {}),
@@ -149,12 +191,21 @@ export function createRequestSpendTracker(
     retryPhysicalReports();
     // All starts are booked before producers close. Ordinal, never callback order, owns usage.
     const entries = [...physical.entries()].sort((a, b) => a[0] - b[0]);
-    const terminal = entries.findLast(([, entry]) => entry.sendId && !auxiliarySendIds.has(entry.sendId))?.[1].sendId;
+    const terminal = entries.findLast(([, entry]) => entry.sendId && !nonTerminalSendIds.has(entry.sendId))?.[1].sendId;
+    const routed = entries.filter(([, entry]) => entry.sendId && !nonTerminalSendIds.has(entry.sendId)).map(([, entry]) => entry);
+    const perSend = routed.length > 1;
+    const terminalFallback = perSend
+      ? netOfOtherSends(finalUsage, routed.filter(entry => entry.sendId !== terminal && entry.usage === undefined).map(entry => entry.observed))
+      : finalUsage;
     const ids: string[] = [];
     for (const [, entry] of entries) {
       if (!entry.sendId) return false;
       // Recovery pins set null at dispatch to opt this receipt out of the aggregate fallback.
-      const usage = entry.usage === undefined && entry.sendId === terminal ? finalUsage : entry.usage;
+      // An unmetered response (observed null) opts out the same way.
+      const usage = entry.usage !== undefined ? entry.usage
+        : entry.observed === null ? null
+        : perSend && entry.observed ? entry.observed
+          : entry.sendId === terminal ? terminalFallback : undefined;
       const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
       if (!resolvedSendIds.has(entry.sendId)) {
         const ok = reported ? ledger().settle(entry.sendId, { inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0 })
@@ -268,6 +319,32 @@ export function createRequestSpendTracker(
     recordWorkflowRefusalEvent(rootId, "workflow-sends-exhausted");
     return false;
   };
+  const reserveObservedRecovery = (request: SpendReservationRequest, proof: SpendReservationProof | undefined) => {
+    const identityId = request.scopes.identityId;
+    if (resolved || !identityId || !proof || proof.ledger !== ledgerRef) return undefined;
+    const delta = prepaidSpend?.get(proof);
+    if (!delta) return undefined;
+    const bookedLedger = proof.ledger;
+    try {
+      const missingAccountTokens = (delta.identityId === identityId ? 0 : delta.tokens)
+        + (delta.hasInputEstimate ? 0 : request.inputTokens);
+      if (missingAccountTokens > 0) {
+        // Keep the delta's missing account liability live through resend admission.
+        // Preserve any prepaid output cap and estimate unpriced input at the full frame cost.
+        const booking = bookedLedger.reserve({ sendId: randomUUID(), scopes: { identityId },
+          inputTokens: missingAccountTokens, outputCeilingTokens: 0, admissionPolicy: request.admissionPolicy, alreadySent: true });
+        if (!booking.reserved) return booking;
+        live.push(booking.sendId);
+        nonTerminalSendIds.add(booking.sendId);
+        prepaidSpend?.delete(proof);
+        if (!bookedLedger.markDispatched(booking.sendId) || !booking.durable) return undefined;
+      }
+      return bookedLedger.reserve(request);
+    } catch (error) {
+      if (error instanceof SpendLedgerOwnerError) return undefined;
+      throw error;
+    }
+  };
   const tracker: RequestSpendTracker = {
     recordWorkflowSend() { chargeWorkflowSends(rootId, 1); },
     beforePhysicalSend(auxiliary = false) {
@@ -277,7 +354,10 @@ export function createRequestSpendTracker(
       if (admissionPolicy) return;
       admissionPolicy = capturePolicy();
       initialEnforced = applicable(selectedScopes(target));
-      if (!initialEnforced) admissionPolicy = Object.freeze({ root: Object.freeze({}), identity: Object.freeze({}), pool: Object.freeze({}) });
+      if (!initialEnforced) {
+        recoveryIdentityCeiling = admissionPolicy.identity.maxTokens;
+        admissionPolicy = Object.freeze({ root: Object.freeze({}), identity: Object.freeze({}), pool: Object.freeze({}) });
+      }
     },
     // Combo prepayment can fix observe-only accounting before its child has an identity.
     // Optional hosted work still consults the original ceilings, never the live ledger policy.
@@ -290,7 +370,9 @@ export function createRequestSpendTracker(
       if (resolved || finalRequested && reporters === 0) return undefined;
       const scopes = selectedScopes(target);
       if (!applicable(scopes)) return undefined;
-      const key = JSON.stringify([scopes.rootId, scopes.identityId, scopes.poolId, target.targetKey]);
+      const independent = target.explicitEstimate === true || target.freshRetry === true;
+      const key = JSON.stringify([scopes.rootId, scopes.identityId, scopes.poolId, target.targetKey,
+        ...(target.freshRetry ? [randomUUID()] : [])]);
       const existing = seeds.get(key);
       if (existing) return existing.seed;
       if (prepaidProof?.ledger === ledger()) {
@@ -303,33 +385,34 @@ export function createRequestSpendTracker(
           }
         }
       }
-      if (target.targetKey === undefined) {
+      if (target.targetKey === undefined && !target.freshRetry) {
         const same = [...seeds.entries()].find(([candidate, candidateState]) => {
           const identity = JSON.parse(candidate) as Array<string | undefined>;
-          return candidateState.explicitEstimate !== true
+          return !candidateState.independent
             && identity[0] === (scopes.rootId ?? null) && identity[1] === (scopes.identityId ?? null) && identity[2] === (scopes.poolId ?? null);
         });
         if (same) return same[1].seed;
       }
       // Rebind an unused provisional anchor before selection changes. Dispatched anchors stay
-      // live, and an explicit-estimate successor neither retires nor is retired by another leg:
+      // live, and an independent send neither retires nor is retired by another leg:
       // both directions would destroy a booking its own reporter still owns.
-      for (const [oldKey, state] of seeds) if (!state.started && !state.explicitEstimate && !target.auxiliary && target.explicitEstimate !== true) {
+      for (const [oldKey, state] of seeds) if (!state.started && !state.independent && !target.auxiliary && !independent) {
         if (!retireSeed(oldKey, state.seed)) return undefined;
       }
       // Exact prepaid proofs originate from this tracker and are found above; foreign receipts
       // cannot enroll arbitrary scopes. Normal reservation remains the only initial admission.
       if (prepaidProof && prepaidProof.ledger !== ledger()) return undefined;
-      const estimate = target.auxiliary || target.explicitEstimate ? target.estimate : undefined;
+      const estimate = target.freshRetry ? target.estimate ?? estimates()
+        : target.auxiliary || target.explicitEstimate ? target.estimate : undefined;
       const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...(estimate ?? estimates()), admissionPolicy }, tracker);
       if (!decision.reserved) {
         // Use the established denial mapping without making another reservation.
-        refusal(decision.denial, !target.auxiliary);
+        refusal(decision.denial, !target.auxiliary && !target.freshRetry);
         return undefined;
       }
       seededAccounting = true;
       seeds.set(key, { seed: decision.seed, started: false, reported: false, auxiliary: target.auxiliary === true,
-        explicitEstimate: target.explicitEstimate === true, estimate });
+        independent, estimate, ...(target.freshRetry ? { retryScopes: scopes } : {}) });
       return decision.seed;
     },
     releaseSeed(seed) {
@@ -359,12 +442,22 @@ export function createRequestSpendTracker(
           const owned = starts.find(start => start.ordinal === ordinal);
           if (closed || !entry || !owned || entry.sendId) throw new Error("Invalid spend reporter rebind");
           const old = seedState(entry.seed)!;
+          if (old.retryScopes) {
+            const next = selectedScopes(target);
+            if (old.retryScopes.identityId === next.identityId && old.retryScopes.poolId === next.poolId) return true;
+          }
           // A helper start is provisional until selection reaches the executor. If this is
           // the first start on its seed, abandon/rebind at NORMAL capacity before the wire.
           physical.delete(ordinal);
           old.started = [...physical.values()].some(start => start.seed === old.seed);
-          const seed = tracker.ensureSeed(target);
-          if (!seed) { starts.splice(starts.indexOf(owned), 1); return false; }
+          let seed: SpendSeed | undefined;
+          try {
+            if (old.retryScopes) tracker.releaseSeed?.(old.seed);
+            seed = tracker.ensureSeed(old.retryScopes ? { ...target, estimate: old.estimate, freshRetry: true } : target);
+          } finally {
+            if (!seed) starts.splice(starts.indexOf(owned), 1);
+          }
+          if (!seed) return false;
           physical.set(ordinal, { seed });
           owned.seed = seed;
           seedState(seed)!.started = true;
@@ -404,7 +497,7 @@ export function createRequestSpendTracker(
       entry.reportPending = true;
       const firstOrdinal = [...physical.entries()].filter(([, send]) => send.seed === seed).map(([order]) => order).sort((a, b) => a - b)[0];
       const sendId = entry.sendId ??= ordinal === firstOrdinal ? seed.sendId : randomUUID();
-      if (state.auxiliary) auxiliarySendIds.add(sendId);
+      if (state.auxiliary) nonTerminalSendIds.add(sendId);
       const estimate = entry.estimate ??= state.estimate ?? estimates();
       if (sendId !== seed.sendId && !ledger().reserveReportedFromSeed(seed, { sendId, ...estimate })) {
         throw new Error("Already-sent spend could not be persisted");
@@ -416,6 +509,27 @@ export function createRequestSpendTracker(
     requestFinalSettlement(usage) {
       if (!finalRequested) { finalRequested = true; finalUsage = usage; }
       finalizeSeeds();
+    },
+    captureRoutedSendUsage() {
+      if (resolved) return undefined;
+      if (seededAccounting) {
+        const newestRouted = () => [...physical.entries()].filter(([, entry]) => seedState(entry.seed)?.auxiliary !== true)
+          .reduce<number | undefined>((latest, [order]) => latest === undefined || order > latest ? order : latest, undefined);
+        const issuing = newestRouted();
+        if (issuing === undefined) return undefined;
+        return (usage, cover = "issuing") => {
+          const ordinal = cover === "issuing" ? issuing : newestRouted();
+          const entry = ordinal === undefined ? undefined : physical.get(ordinal);
+          if (!resolved && entry && entry.observed === undefined) entry.observed = usage;
+        };
+      }
+      const newestRouted = () => live.findLast(id => !nonTerminalSendIds.has(id));
+      const issuing = newestRouted();
+      if (issuing === undefined) return undefined;
+      return (usage, cover = "issuing") => {
+        const sendId = cover === "issuing" ? issuing : newestRouted();
+        if (!resolved && sendId !== undefined && !observedLegacy.has(sendId)) observedLegacy.set(sendId, usage);
+      };
     },
     charge(options?: Parameters<RequestSendObserver["charge"]>[0]): boolean {
       tracker.startRequest?.(options?.scopes);
@@ -429,9 +543,19 @@ export function createRequestSpendTracker(
         if (alreadySent) chargeWorkflowSends(rootId, 1);
         else if (!claimWorkflowSend(!options?.auxiliary)) return false;
       }
+      const recovery = !alreadySent && options?.incrementalRecovery;
+      let estimate = options?.auxiliary && options.estimate ? options.estimate : estimates();
+      const hasInputEstimate = Number.isFinite(estimate.inputTokens) && estimate.inputTokens >= 1;
+      const needsRecoveryEstimate = !!recovery && !hasInputEstimate;
+      if (needsRecoveryEstimate) {
+        const inputTokens = recovery.inputEstimateTokens;
+        if (inputTokens === undefined || !Number.isSafeInteger(inputTokens) || inputTokens < 1) return false;
+        estimate = { ...estimate, inputTokens };
+      }
       if (!alreadySent && tracker.enforced) {
         const seed = tracker.ensureSeed({ ...options?.scopes, targetKey: options?.targetKey,
-          ...(options?.auxiliary ? { auxiliary: true, estimate: options.estimate } : {}) });
+          ...(options?.auxiliary ? { auxiliary: true, estimate: options.estimate }
+            : recovery ? { explicitEstimate: true, estimate } : {}) });
         if (!seed) return false;
         options?.onReserved?.({ ledger: ledger(), sendId: seed.sendId });
         return true;
@@ -447,18 +571,26 @@ export function createRequestSpendTracker(
           ? { poolId: logCtx.spendPoolId ?? logCtx.provider }
           : {}),
       };
-      const policy = admissionPolicy!;
+      const enforceRecovery = Boolean(recovery) && recoveryIdentityCeiling !== undefined;
+      const policy = enforceRecovery
+        ? { ...admissionPolicy!, identity: { maxTokens: recoveryIdentityCeiling } }
+        : admissionPolicy!;
       const enforced = (scopes.rootId !== undefined && policy.root.maxTokens !== undefined)
         || (scopes.identityId !== undefined && policy.identity.maxTokens !== undefined)
         || (scopes.poolId !== undefined && policy.pool.maxTokens !== undefined);
-      const decision = bookedLedger.reserve({
+      const reservation: SpendReservationRequest = {
         sendId,
         scopes,
-        admissionPolicy,
-        ...(options?.auxiliary && options.estimate ? options.estimate : estimates()),
+        admissionPolicy: policy,
+        ...estimate,
         ...(alreadySent ? { alreadySent: true } : {}),
-      });
+      };
+      const decision = recovery && enforceRecovery
+        ? reserveObservedRecovery(reservation, recovery.prepaidDelta)
+        : bookedLedger.reserve(reservation);
+      if (!decision) return false;
       if (!decision.reserved) {
+        if (enforceRecovery) { refusal(decision.denial, false); return false; }
         // An applicable ceiling cannot authorize an unbooked send, including when tracking
         // capacity is full. Unconfigured/nonapplicable requests remain observe-only, and a
         // physical send reported after dispatch cannot be refused retroactively.
@@ -466,9 +598,15 @@ export function createRequestSpendTracker(
         refusal(decision.denial, !options?.auxiliary);
         return false;
       }
-      if (!alreadySent) options?.onReserved?.({ ledger: bookedLedger, sendId });
+      if (!alreadySent && options?.onReserved) {
+        const proof = { ledger: bookedLedger, sendId };
+        if (!recovery && recoveryIdentityCeiling !== undefined && decision.durable) {
+          (prepaidSpend ??= new WeakMap()).set(proof, { identityId: scopes.identityId, tokens: decision.tokens, hasInputEstimate });
+        }
+        options.onReserved(proof);
+      }
       live.push(sendId);
-      if (options?.auxiliary) auxiliarySendIds.add(sendId);
+      if (options?.auxiliary) nonTerminalSendIds.add(sendId);
       if (options?.deferDispatch) pendingDispatch.add(sendId);
       else confirmOlderSends();
       // It has already left, so the reservation cannot be handed back for free: from here only
@@ -507,8 +645,16 @@ export function createRequestSpendTracker(
       if (seededAccounting) { tracker.requestFinalSettlement(usage); return; }
       try {
         if (!terminalProcessed && live.length > 0) {
-          const terminalIndex = live.findLastIndex(sendId => !auxiliarySendIds.has(sendId));
+          const terminalIndex = live.findLastIndex(sendId => !nonTerminalSendIds.has(sendId));
           const terminal = live[terminalIndex];
+          const routed = live.filter(sendId => !nonTerminalSendIds.has(sendId));
+          const own = terminal === undefined ? undefined : observedLegacy.get(terminal);
+          // An unmetered terminal send reported nothing, whatever the aggregate says.
+          if (own === null) usage = undefined;
+          else if (routed.length > 1 && terminal !== undefined) {
+            usage = own
+              ?? netOfOtherSends(usage, routed.filter(sendId => sendId !== terminal).map(sendId => observedLegacy.get(sendId)));
+          }
           const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
           if (terminal && reported) {
             ledger().settle(terminal, {
@@ -523,7 +669,11 @@ export function createRequestSpendTracker(
           terminalProcessed = true;
         }
         while (live.length > 0) {
-          ledger().markLost(live[live.length - 1] as string);
+          const sendId = live[live.length - 1] as string;
+          const observed = observedLegacy.get(sendId);
+          if (observed && !nonTerminalSendIds.has(sendId)) {
+            ledger().settle(sendId, { inputTokens: observed.inputTokens ?? 0, outputTokens: observed.outputTokens ?? 0 });
+          } else ledger().markLost(sendId);
           live.pop();
         }
         resolved = true;

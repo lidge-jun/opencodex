@@ -12,10 +12,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { activateAdvisor } from "../../src/lib/advisor-activation";
 import { setAdvisorPlanFactory } from "../../src/server/responses/advisor-plan-slot";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import type { TranslatorBudget } from "../../src/lib/translator-budget";
 import { handleResponses } from "../../src/server/responses/core";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { handleChatCompletions } from "../../src/server/chat-completions";
+import type { RequestLogContext } from "../../src/server/request-log";
 import { collectSse } from "../helpers/responses-conformance";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -678,15 +680,20 @@ describe("advisor responses wiring (end-to-end)", () => {
     releaseSpendHome = acquireOwnedSpendHome();
     const workerBodies: string[] = [];
     const chatRequests: string[] = [];
+    const workerLog: RequestLogContext = { model: "", provider: "" };
     const config = advisorConfig(
       { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
-      workerProviderFetch([advisorCallFrames, plainFrames("Advice accepted during a search-enabled turn.")], workerBodies),
+      workerProviderFetch([
+        [...advisorCallFrames, { choices: [], usage: { prompt_tokens: 20, completion_tokens: 2, total_tokens: 22 } }],
+        [...plainFrames("Advice accepted during a search-enabled turn."),
+          { choices: [], usage: { prompt_tokens: 30, completion_tokens: 3, total_tokens: 33 } }],
+      ], workerBodies),
     );
     config.webSearchSidecar = { backend: "exa", exaApiKey: "fixture-search-key" };
     loopbackInterceptor(config, { chatRequests });
     stubExaSearch();
 
-    const response = await handleResponses(workerRequest("Use a second opinion with search available", undefined, stream, [{ type: "web_search" }]), config, logCtx);
+    const response = await handleResponses(workerRequest("Use a second opinion with search available", undefined, stream, [{ type: "web_search" }]), config, workerLog);
     const body = await response.text();
     expect(response.status).toBe(200);
     expect(chatRequests).toHaveLength(1);
@@ -694,6 +701,8 @@ describe("advisor responses wiring (end-to-end)", () => {
     expect(workerBodies[0]).toContain('"advisor"');
     expect(workerBodies[0]).toContain('"web_search"');
     expect(workerBodies[1]).toContain(ADVISOR_ADVICE);
+    expect(workerLog.usage).toMatchObject({ inputTokens: 50, outputTokens: 5, totalTokens: 55 });
+    expect(workerLog.activeAttempt?.sendCount).toBe(2);
     expect(body).toContain("Advice accepted during a search-enabled turn");
     expect(body).not.toContain("call_adv_1");
   });
@@ -867,18 +876,24 @@ describe("advisor responses wiring (end-to-end)", () => {
     config.webSearchSidecar = { backend: "exa", exaApiKey: "fixture-search-key" };
     loopbackInterceptor(config, { chatRequests });
 
+    // Fund all five worker turns so this fixture reaches the Advisor continuation limit.
+    const sendBudget = createRequestExecutionBudget({
+      maxTotalModelSends: 5, baseSendAllowance: 5, finalRecoveryAllowance: 0,
+      maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+    });
     const response = await handleResponses(workerRequest(
       "Repeat advisor with search enabled", undefined, true, [{ type: "web_search" }],
       allowlist ? { type: "allowed_tools", mode: "required", tools: [
         { type: "function", name: "advisor" }, { type: "web_search" },
       ] } : undefined,
-    ), config, logCtx);
+    ), config, logCtx, { sendBudget });
     const body = await response.text();
     const dispatched = JSON.parse(workerBodies[0]!) as { tools?: { function?: { name?: string } }[] };
     expect(dispatched.tools?.map(tool => tool.function?.name)).toContain("web_search");
     expect(dispatched.tools?.map(tool => tool.function?.name)).toContain("advisor");
     expect(body).toContain("advisor_continuation_limit");
     expect(workerBodies).toHaveLength(5);
+    expect(sendBudget.used).toBe(5);
     // The repeated fixture question is deduplicated by the real Advisor runtime.
     expect(chatRequests).toHaveLength(1);
   });

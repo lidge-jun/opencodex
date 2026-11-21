@@ -445,7 +445,7 @@ const PRIOR_CATALOG_BYTES = '{"models":[{"slug":"local/only-model"}]}';
 
 /** Exercise enrollment and rollback in a fresh process with isolated client homes. */
 function runTransactionScenario(
-  stage: "success" | "catalog" | "preflight" | "commit" | "prior-catalog" | "coordinator" | "uninstall-during-catalog",
+  stage: "success" | "paired" | "catalog" | "preflight" | "commit" | "prior-catalog" | "coordinator" | "uninstall-during-catalog",
   options: { script?: string; timeoutMs?: number } = {},
 ) {
   const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-client-connect-home-"));
@@ -483,11 +483,18 @@ function runTransactionScenario(
     const catalog = '{"models":[]}';
     const etag = '"sha256-' + createHash("sha256").update(catalog).digest("base64url") + '"';
     const calls = [];
-    const credential = new TextEncoder().encode("ocx_admin_test-authority");
+    const paired = stage === "paired";
+    const credential = new TextEncoder().encode(paired ? "fixture-pairing-grant" : "ocx_admin_" + "r".repeat(43));
     const fetchImpl = async (input, init = {}) => {
       const url = String(input);
       calls.push({ url, method: init.method || "GET" });
       if (url.endsWith("/readyz")) return Response.json(${JSON.stringify(readyBody())});
+      if (paired && url.endsWith("/opencodex-session") && init.method === "POST") return new Response([
+        '<meta name="opencodex-session-token" content="ocx_session_' + "s".repeat(43) + '">',
+        '<meta name="opencodex-session-csrf" content="' + "c".repeat(43) + '">',
+        '<meta name="opencodex-session-origin" content="http://localhost:10100">',
+        '<meta name="opencodex-session-server-origin" content="' + new URL(url).origin + '">',
+      ].join(""));
       if (url.endsWith("/api/keys") && init.method === "POST") return Response.json({
         id: "issued-id",
         name: "client",
@@ -495,6 +502,13 @@ function runTransactionScenario(
         createdAt: "2026-08-28T00:00:00.000Z",
       }, { status: 201 });
       if (url.endsWith("/api/keys") && init.method === "DELETE") return Response.json({ success: true });
+      if (url.endsWith("/api/hub-relay/credential") && init.method === "POST") {
+        return Response.json({ token: "ocx_hub_relay_" + "r".repeat(43) }, { status: 201 });
+      }
+      if (url.endsWith("/api/hub-relay/credential") && init.method === "DELETE") {
+        if (!paired) throw new Error("fixture Hub offline");
+        return new Response(null, { status: 204 });
+      }
       if (url.endsWith("/v1/catalog")) {
         if (stage === "catalog") return Response.json({ error: "down" }, { status: 503 });
         if (stage === "uninstall-during-catalog") {
@@ -516,7 +530,7 @@ function runTransactionScenario(
         markTransaction("connect_entered");
         connected = await connectClient({
           serverUrl: "https://hub.example.test",
-          credential: { kind: "admin", value: credential },
+          credential: { kind: paired ? "pairing-grant" : "admin", value: credential },
           selectedClients: stage === "preflight" ? ["codex"] : ["claude"],
           managementTransport: "direct",
           noSync: true,
@@ -548,16 +562,22 @@ function runTransactionScenario(
         }, "2026-08-28T00:00:00.000Z");
         hubStateCacheBefore = existsSync(hubStateCachePath());
       }
+      const { hubSessionFilePath, readHubCredential } = require("./src/client/hub-session");
+      const hubSessionBeforeDisconnect = existsSync(hubSessionFilePath());
+      const hubSessionKind = connected ? readHubCredential(connected).kind : "absent";
+      const hubCredentialOnly = hubSessionBeforeDisconnect
+        && !readFileSync(hubSessionFilePath(), "utf8").includes("ocx_session_")
+        && readFileSync(hubSessionFilePath(), "utf8").includes("ocx_hub_relay_");
       const artifacts = {
         token: existsSync(serviceApiTokenFilePath()),
         catalog: existsSync(DEFAULT_CATALOG_PATH),
         credentialZeroed: credential.every(value => value === 0),
       };
       let disconnected = null;
-      if ((stage === "success" || stage === "prior-catalog") && connected) disconnected = await disconnectClient({}, { lifecycleLockDeps: { lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" } });
+      if ((stage === "success" || stage === "prior-catalog" || paired) && connected) disconnected = await disconnectClient({}, { fetchImpl, lifecycleLockDeps: { lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" } });
       const catalogAfter = existsSync(DEFAULT_CATALOG_PATH) ? readFileSync(DEFAULT_CATALOG_PATH, "utf8") : null;
       const hubStateCacheAfter = existsSync(hubStateCachePath());
-      writeSync(1, JSON.stringify({ connected, error, coordinatorUnavailable, beforeDisconnect, artifacts, disconnected, catalogAfter, hubStateCacheBefore, hubStateCacheAfter, after: readClientConnectionState(), calls, commitFaultTriggered, uninstallDuringCatalog, pendingAtResult: existsSync(process.env.OPENCODEX_HOME + "/client-connect-pending") }) + "\\n");
+      writeSync(1, JSON.stringify({ connected, error, coordinatorUnavailable, beforeDisconnect, artifacts, disconnected, catalogAfter, hubStateCacheBefore, hubStateCacheAfter, hubSessionBeforeDisconnect, hubSessionKind, hubCredentialOnly, hubSessionRemoved: !existsSync(hubSessionFilePath()), after: readClientConnectionState(), calls, commitFaultTriggered, uninstallDuringCatalog, pendingAtResult: existsSync(process.env.OPENCODEX_HOME + "/client-connect-pending") }) + "\\n");
       markTransaction("result_published");
     })();
   `;
@@ -703,6 +723,7 @@ describe("connect transaction and offline disconnect", () => {
     try {
       expect(run.status).toBe(0);
       expect(run.parsed.error).toBeNull();
+      expect(run.parsed.hubSessionBeforeDisconnect).toBe(true);
       expect(run.parsed.connected.apiKeyId).toBe("issued-id");
       expect(run.parsed.beforeDisconnect).toMatchObject({ kind: "connected", value: { apiKeyId: "issued-id" } });
       expect(run.parsed.artifacts).toEqual({ token: true, catalog: true, credentialZeroed: true });
@@ -713,7 +734,22 @@ describe("connect transaction and offline disconnect", () => {
       expect(run.parsed.hubStateCacheBefore).toBe(true);
       expect(run.parsed.hubStateCacheAfter).toBe(false);
       expect(run.parsed.after).toEqual({ kind: "disconnected" });
-      expect(run.parsed.calls.filter((call: any) => call.method === "DELETE")).toEqual([]);
+      expect(run.parsed.calls.filter((call: any) => call.method === "DELETE")).toEqual([
+        { method: "DELETE", url: `${readyBody().managementUrl}/api/hub-relay/credential` },
+      ]);
+    } finally { run.cleanup(); }
+  }, SPAWN_BUDGET_MS);
+
+  test("pairing persists only the scoped credential and online disconnect revokes it", () => {
+    const run = runTransactionScenario("paired");
+    try {
+      expect(run.status).toBe(0);
+      expect(run.parsed.error).toBeNull();
+      expect(run.parsed.hubSessionBeforeDisconnect).toBe(true);
+      expect(run.parsed.hubSessionKind).toBe("present");
+      expect(run.parsed.hubCredentialOnly).toBe(true);
+      expect(run.parsed.hubSessionRemoved).toBe(true);
+      expect(run.parsed.calls.filter((call: any) => call.url.endsWith("/api/hub-relay/credential")).map((call: any) => call.method)).toEqual(["POST", "DELETE"]);
     } finally { run.cleanup(); }
   }, SPAWN_BUDGET_MS);
 

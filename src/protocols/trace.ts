@@ -62,7 +62,7 @@ export interface ProtocolTraceAttempt {
   adapter: string;
 }
 
-const requestMarks = new WeakMap<object, EntryMark | BlockedMark>();
+const requestMarks = new WeakMap<object, EntryMark | BlockedMark | { kind: "gemini-native" }>();
 const attemptMarks = new WeakMap<object, AttemptMark>();
 const shadowInputs = new WeakMap<object, ProtocolPlanInput>();
 const suppressedContexts = new WeakSet<object>();
@@ -121,12 +121,22 @@ export function markProtocolEntry(
   }
 }
 
+/** Record an actual native Gemini send without inspecting the payload. */
+export function markNativeGeminiProtocol(logCtx: object): void {
+  if (protocolTraceSuppressed(logCtx)) return;
+  try {
+    requestMarks.set(logCtx, { kind: "gemini-native" });
+  } catch {
+    /* a trace must never fail the request it describes */
+  }
+}
+
 /** Features the request's entry or blocked mark recorded, for the shadow plan input. */
 export function protocolMarkFeatures(logCtx: object): readonly ProtocolFeature[] | undefined {
   if (protocolTraceSuppressed(logCtx)) return undefined;
   try {
     const mark = requestMarks.get(logCtx);
-    return mark ? [...mark.features] : undefined;
+    return mark && mark.kind !== "gemini-native" ? [...mark.features] : undefined;
   } catch {
     return undefined;
   }
@@ -292,6 +302,18 @@ function observedTrace(
 ): ProtocolTraceV1 | undefined {
   try {
     const mark = requestMarks.get(logCtx);
+    if (mark?.kind === "gemini-native") {
+      return {
+        v: PROTOCOL_TRACE_SCHEMA_VERSION,
+        inbound: "gemini",
+        upstream: "gemini",
+        mode: "native",
+        requestPath: ["gemini", "gemini"],
+        responsePath: ["gemini", "gemini"],
+        reasonCodes: ["same-wire-native"],
+        contractVersion: PROTOCOL_CONTRACT_VERSION,
+      };
+    }
     if (mark?.kind === "blocked") {
       return {
         v: PROTOCOL_TRACE_SCHEMA_VERSION,

@@ -1,6 +1,7 @@
+import { expandInferenceSearchSendBudget } from "../inference/context";
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { mapSpendLedgerStorageError } from "./spend-storage-error";
-import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
+import { responsesTimeoutProvider, type ResponsesRequestContext, type ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesSidecarAuth } from "./request-sidecar-auth";
@@ -16,6 +17,8 @@ import {
   adapterResponseReachedServingTerminal,
 } from "./core-replay";
 import { noteAttemptRecoveryWithheld, sealRequestAttemptIdentity, recordAttemptCredentialSource } from "../request-log";
+import { sealCredentialRefusal } from "../credential-recovery-attempt";
+import { credentialRecoveryStatus } from "../request-log-attempt-recovery";
 import { releaseProviderRequestSlot, waitForProviderRequestSlot, RequestPacingQueueOverloadError, type ProviderRequestSlot } from "../../providers/request-pacing";
 import type { AdapterEventQueue } from "../../adapters/run-turn-queue";
 import type { AttemptRecoveryKind } from "../../usage/log";
@@ -38,7 +41,7 @@ import { formatErrorResponse, bridgeToResponsesSSE, buildResponseJSON } from "..
 import { redactSecretString } from "../../lib/redact";
 import { adapterFailureFromEvent } from "../../bridge/internal";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
-import { DEFAULT_STALL_TIMEOUT_SEC, resolveStallTimeoutSec } from "../../stall-timeout";
+import { DEFAULT_STALL_TIMEOUT_SEC, providerStallTimeoutSec, resolveStallTimeoutSec } from "../../stall-timeout";
 import { jsonUtf8Bytes } from "../../lib/json-byte-size";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import {
@@ -53,7 +56,7 @@ import { undeclaredToolCallMessage } from "../responses-undeclared-tool-guard";
 import { currentTurnToolBridgeMaps, emptyToolCatalogRefusal, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 // LOCAL PATCH (runturn-websearch)
 import { planWebSearch } from "../../web-search";
-import { runTurnWebSearchInitialParsed, runTurnWebSearchLoop } from "../../web-search/run-turn-loop";
+import { runTurnWebSearchInitialParsed, runTurnWebSearchIterationLimit, runTurnWebSearchLoop } from "../../web-search/run-turn-loop";
 import { stripReplayedSearchPairs } from "../../web-search/sidecar-search-replay";
 import { WEB_SEARCH_TOOL_NAME } from "../../web-search/synthetic-tool";
 import { orderDevinMessagesOutput } from "../../claude/devin-output-order";
@@ -117,6 +120,7 @@ export async function executeResponsesRunTurn(
     | "resolveSelectionAdapter"
     | "adapter"
     | "noteRoutedAttemptSend"
+    | "commitRunTurnAttemptSend"
     | "bindKeyUsageFromBridge"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction" | "openAiSidecar">,
@@ -228,6 +232,7 @@ export async function executeResponsesRunTurn(
     wsPlan = !routedCompaction
       ? planWebSearch(config, parsed, false, route.provider, route.modelId, sidecarState.openAiSidecar, {
         admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
+        routedTransport: "runTurn",
       })
       : undefined;
   } catch (error) {
@@ -235,6 +240,11 @@ export async function executeResponsesRunTurn(
     throw error;
   }
   if (!wsPlan) stripReplayedSearchPairs(parsed);
+  const iterationSendLimit = transportState.runTurnAdapter.hostedIterationSendLimit;
+  if (wsPlan && iterationSendLimit && !options.comboAttempt && !options.comboInitialSend) {
+    expandInferenceSearchSendBudget(options.sendBudget,
+      runTurnWebSearchIterationLimit(wsPlan.maxSearches) * iterationSendLimit);
+  }
 
     const runTurnAbort = new AbortController();
     const cleanupRequestAbort = linkAbortSignal(runTurnAbort, req.signal);
@@ -335,7 +345,15 @@ export async function executeResponsesRunTurn(
         // dispatches it. Logging here would claim a send that the adapter's own budget can still
         // refuse, which is exactly what happens once earlier recovery has spent the allowance.
         const reportsOwnSends = transportState.runTurnAdapter.reportsPhysicalSends === true;
-        if (!reportsOwnSends) transportState.noteRoutedAttemptSend(logCtx.usageLogInputTokens, recovery);
+        const credentialReplay = credentialRecoveryStatus(recovery) !== undefined;
+        let published = false;
+        if (!reportsOwnSends && !credentialReplay) transportState.noteRoutedAttemptSend(logCtx.usageLogInputTokens, recovery);
+        const publishAttempt = () => {
+          if (published) return;
+          transportState.commitRunTurnAttemptSend(turnParsed, recovery);
+          published = true;
+        };
+        const publishReplacement = !reportsOwnSends && credentialReplay ? publishAttempt : undefined;
         const runTurnProviderFetch = providerFetch(
           route.provider,
           options.codexWsRuntimeIdentity,
@@ -348,6 +366,7 @@ export async function executeResponsesRunTurn(
             pacingSlotAcquired: true,
             pacingSlot,
             turnScopedPacing: true,
+            onPhysicalDispatch: publishReplacement,
           },
         );
         if (inboundWire === "anthropic" && transportState.runTurnAdapter.name === "devin" && !routedCompaction) {
@@ -368,6 +387,7 @@ export async function executeResponsesRunTurn(
             translatorBudget,
             providerFetch: runTurnProviderFetch,
             pacingSlot,
+            onGuardedDispatch: publishReplacement,
             // The only way the request budget reaches a transport the adapter owns. Without it
             // a Cursor turn's inner ladder was three physical sends the cap read as one.
             ...(adapterDispatchBudget ? { sendBudget: adapterDispatchBudget } : {}),
@@ -375,9 +395,8 @@ export async function executeResponsesRunTurn(
               // Capture once at this attempt's send, before later selection or recovery changes it.
               const binding = adapterBindings.get(transportState.runTurnAdapter);
               if (!sentKeyBinding && binding?.kind === "api-key") sentKeyBinding = binding;
-              noteAdapterPhysicalSend(logCtx.usageLogInputTokens,
-                { ...send, ...(send.recovery ?? recovery ? { recovery: send.recovery ?? recovery } : {}) },
-                { includeFirst: reportsOwnSends });
+              if (reportsOwnSends) publishAttempt();
+              noteAdapterPhysicalSend(logCtx.usageLogInputTokens, send);
             },
             onRecoveryWithheld: noteAdapterRecoveryWithheld,
           },
@@ -523,6 +542,8 @@ export async function executeResponsesRunTurn(
       const status = error.status ?? adapterFailureFromMessage(error.message).httpStatus;
       if (status !== 401 || !transportState.isOAuth401ReplayProvider || !sent || oauth401ReplayAttempted) return false;
       oauth401ReplayAttempted = true;
+      if (error.usage) transportState.bindKeyUsageFromBridge(error.usage);
+      sealCredentialRefusal(logCtx, status, "oauth-401");
       const hop = reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|runturn-oauth-401`);
       if (!hop.allowed) return false;
       try {
@@ -569,6 +590,8 @@ export async function executeResponsesRunTurn(
         || failedKeys.size >= keyAttemptLimit) return undefined;
       const failed = binding.provider;
       if (!failed.apiKey || !failed._apiKeyAttempt || failedKeys.has(failed.apiKey)) return undefined;
+      const recovery = error.status === 401 ? "key-401" : "key-429";
+      sealCredentialRefusal(logCtx, error.status, recovery);
       const hop = reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|runturn-key-${error.status}`);
       if (!hop.allowed) return undefined;
       failedKeys.add(failed.apiKey);
@@ -594,7 +617,7 @@ export async function executeResponsesRunTurn(
         sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name, logCtx.accountLogLabel);
         recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, adapter.name);
         sendBudgetState.pendingHopPermit = hop.permit;
-        return error.status === 401 ? "key-401" : "key-429";
+        return recovery;
       } catch {
         hop.permit?.release();
         return undefined;
@@ -653,6 +676,7 @@ export async function executeResponsesRunTurn(
         hop.permit?.release();
         return false;
       }
+      sealCredentialRefusal(logCtx, status, "oauth-account-429");
       try {
         const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
         transportState.genericFailovers += 1;
@@ -827,7 +851,7 @@ export async function executeResponsesRunTurn(
       try {
       void runTurn();
       let eventSource: AsyncIterable<AdapterEvent> = queue.stream();
-      const stallTimeoutSec = wsPlan?.stallTimeoutSec ?? config.stallTimeoutSec;
+      const stallTimeoutSec = wsPlan?.stallTimeoutSec ?? providerStallTimeoutSec(config, responsesTimeoutProvider(options, route.provider));
       // A disabled watchdog (0) is not a zero preflight: it would commit SSE before Devin's first
       // event and deliver a pre-output 429 in-stream. Fall back to the default finite bound.
       // A key-pool preflight must not outlast the stall budget, or a silent CLI holds the SSE

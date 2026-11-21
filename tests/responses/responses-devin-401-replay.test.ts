@@ -1,6 +1,9 @@
-import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import type { ProviderAdapter } from "../../src/adapters/base";
+import { createAdapterPhysicalSend } from "../../src/adapters/physical-send";
+import * as providerEgress from "../../src/lib/provider-egress";
+import { addFinalRequestLog, type RequestLogContext, type RequestLogEntry } from "../../src/server/request-log";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
 import { getAccountSet, replaceProviderAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { forceRefreshOAuthAccessSnapshot, getValidAccessTokenSnapshot } from "../../src/oauth";
@@ -14,6 +17,8 @@ const LIVE = "devin-session-token$synthetic-live";
 const ROTATED = "devin-session-token$synthetic-rotated";
 const DEAD_OTHER = "devin-session-token$synthetic-dead-other";
 const originalFetch = globalThis.fetch;
+const inferenceUrl = "https://server.codeium.com/synthetic-run-turn";
+let receiptMode: "adapter" | "executor" | undefined;
 
 // GetUserJwt stand-in: the identity a key mints, keyed by the key inside the protobuf body.
 let mintedIdentity: Record<string, { auth_uid?: string; sub?: string; email?: string } | undefined> = {};
@@ -26,6 +31,10 @@ function fakeUserJwt(payload: object): string {
 }
 const mintFetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
   const url = String(input instanceof Request ? input.url : input);
+  if (url === inferenceUrl) {
+    sentKeys.push(new Headers(init?.headers).get("authorization") ?? "");
+    return new Response(null, { status: 204 });
+  }
   if (!url.endsWith("/exa.auth_pb.AuthService/GetUserJwt")) return originalFetch(input, init);
   mintCalls++;
   await holdMint?.();
@@ -50,11 +59,24 @@ mock.module("../../src/server/adapter-resolve", () => ({ ...resolver,
     if (provider.adapter !== "devin") return originalResolve(provider, cache);
     return {
       name: "devin",
+      reportsPhysicalSends: receiptMode === "adapter",
       buildRequest: () => ({ url: provider.baseUrl, method: "POST", headers: {}, body: "" }),
       async *parseStream() { yield { type: "done" } as AdapterEvent; },
-      async runTurn(_parsed, _incoming, emit) {
+      async runTurn(_parsed, incoming, emit) {
         const key = String(provider.apiKey);
-        sentKeys.push(key);
+        if (receiptMode) {
+          const dispatch = (executor: typeof fetch) => executor(inferenceUrl, {
+            method: "POST", headers: { authorization: key }, signal: incoming.abortSignal,
+          });
+          if (receiptMode === "adapter") {
+            await createAdapterPhysicalSend({ executor: incoming.providerFetch, abortSignal: incoming.abortSignal,
+              sendBudget: incoming.sendBudget, onPhysicalSend: incoming.onPhysicalSend })({ url: inferenceUrl, dispatch });
+          } else {
+            await dispatch(incoming.providerFetch!);
+          }
+        } else {
+          sentKeys.push(key);
+        }
         if (rateLimited) {
           emit({ type: "error", status: 429, errorType: "rate_limit_error", code: "resource_exhausted",
             retryable: true, message: "Cognition chat failed (resource_exhausted)" });
@@ -63,7 +85,8 @@ mock.module("../../src/server/adapter-resolve", () => ({ ...resolver,
         if (key === DEAD) {
           await holdDeadSend?.();
           emit({ type: "error", status: 401, errorType: "authentication_error", code: "unauthenticated",
-            retryable: false, message: "Devin cloud error unauthenticated: invalid api key" });
+            retryable: false, message: "Devin cloud error unauthenticated: invalid api key",
+            ...(receiptMode ? { usage: { inputTokens: 17, outputTokens: 0 } } : {}) });
           return;
         }
         emit({ type: "text_delta", text: `served by ${key === ROTATED ? "rotated" : "live"}` });
@@ -89,6 +112,7 @@ beforeEach(() => {
   mintCalls = 0;
   mintFailure = undefined;
   holdMint = undefined;
+  receiptMode = undefined;
   globalThis.fetch = mintFetch;
   previousCliPath = process.env[DEVIN_CLI_CREDENTIALS_ENV];
   // Never let a test read the developer's real CLI credential.
@@ -133,7 +157,7 @@ function cliAccount() {
   return getAccountSet("devin")?.accounts.find(row => row.credential.source === "local-cli");
 }
 
-function run(stream = false) {
+function run(stream = false, log: RequestLogContext = { model: "", provider: "", surface: "codex" }) {
   const config = {
     port: 0, defaultProvider: "devin",
     providers: { devin: { adapter: "devin", authMode: "oauth", baseUrl: "https://server.codeium.com", models: ["swe-1-6"] } },
@@ -141,8 +165,88 @@ function run(stream = false) {
   return handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "devin/swe-1-6", input: "answer", stream }),
-  }), config, { model: "", provider: "", surface: "codex" });
+  }), config, log);
 }
+
+function finalizeRunTurnLog(start: number, log: RequestLogContext, status: number): RequestLogEntry {
+  let recorded: RequestLogEntry | undefined;
+  addFinalRequestLog("devin-refresh", start, log, status, undefined, entry => { recorded = entry; });
+  if (!recorded) throw new Error("Devin request did not finalize its usage log");
+  return recorded;
+}
+
+test.each(["adapter", "executor"] as const)("same-account refresh splits at the %s-owned physical send", async mode => {
+  receiptMode = mode;
+  await saveCliImport(DEAD, { accountId: "uid-rotated" });
+  writeCliFile(ROTATED);
+  const log: RequestLogContext = { surface: "codex" };
+  const start = Date.now();
+  const response = await run(false, log);
+  expect(await response.text()).toContain("served by rotated");
+  expect(sentKeys).toEqual([DEAD, ROTATED]);
+  const recorded = finalizeRunTurnLog(start, log, response.status);
+  expect(recorded.attempts?.map(attempt => [attempt.status, attempt.sendCount, attempt.accountLogLabel])).toEqual([
+    [401, 1, expect.stringMatching(/^o[0-9a-f]{6}$/)],
+    [200, 1, recorded.attempts?.[0]?.accountLogLabel],
+  ]);
+  expect(log.activeAttempt?.recoveryKinds).toContain("oauth-401");
+});
+
+test("a Devin refusal keeps its reported usage when the replacement sends", async () => {
+  receiptMode = "adapter";
+  await saveCliImport(DEAD, { accountId: "uid-rotated" });
+  writeCliFile(ROTATED);
+  const log: RequestLogContext = { surface: "codex" };
+  const start = Date.now();
+  const response = await run(false, log);
+  expect(await response.text()).toContain("served by rotated");
+  expect(finalizeRunTurnLog(start, log, response.status).attempts?.[0]).toMatchObject({
+    status: 401, sendCount: 1, usageStatus: "reported", usage: { inputTokens: 17, outputTokens: 0 },
+  });
+});
+
+test("Devin egress refusal before the first inference does not report a send", async () => {
+  receiptMode = "adapter";
+  await saveDevin(LIVE, "active");
+  const guard = spyOn(providerEgress, "providerEgressSendInit").mockImplementation(() => {
+    throw new Error("fixture pre-dispatch refusal");
+  });
+  try {
+    const log: RequestLogContext = { surface: "codex" };
+    const response = await run(false, log);
+    expect(await response.text()).toContain("fixture pre-dispatch refusal");
+    expect(sentKeys).toEqual([]);
+    expect(log.activeAttempt?.sendCount ?? 0).toBe(0);
+  } finally {
+    guard.mockRestore();
+  }
+});
+
+test.each(["adapter", "executor"] as const)("%s-owned refresh keeps the 401 when the replacement stops before dispatch", async mode => {
+  receiptMode = mode;
+  await saveCliImport(DEAD, { accountId: "uid-rotated" });
+  writeCliFile(ROTATED);
+  const validateEgress = providerEgress.providerEgressSendInit;
+  let refusedDispatches = 0;
+  const guard = spyOn(providerEgress, "providerEgressSendInit").mockImplementation((binding, ...args) => {
+    if (binding.provider.apiKey === ROTATED) {
+      refusedDispatches++;
+      throw new Error("fixture pre-dispatch refusal");
+    }
+    return validateEgress(binding, ...args);
+  });
+  try {
+    const log: RequestLogContext = { surface: "codex" };
+    const start = Date.now();
+    const response = await run(false, log);
+    expect(await response.text()).toContain("fixture pre-dispatch refusal");
+    expect(refusedDispatches).toBe(1);
+    expect(sentKeys).toEqual([DEAD]);
+    expect(finalizeRunTurnLog(start, log, response.status).attempts?.map(attempt => [attempt.status, attempt.sendCount])).toEqual([[401, 1]]);
+  } finally {
+    guard.mockRestore();
+  }
+});
 
 function account(id: string) {
   return getAccountSet("devin")?.accounts.find(row => row.credential.accountId === id);

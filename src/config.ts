@@ -113,6 +113,7 @@ export {
 } from "./config/proxy-env";
 export {
   requestPacingConfigError,
+  providerTimeoutOverrideConfigError,
   providerWebSearchBridgeConfigError,
   providerModelCostsConfigError,
   sanitizeModelCostsForDisplay,
@@ -178,6 +179,7 @@ import {
   sanitizeAnthropicSidecarInstanceForLoad,
   sanitizeAgyAcpForLoad,
   sanitizeModelCostsForLoad,
+  sanitizeCreditPriceForLoad,
   sanitizeCapabilityDeclarationsForLoad,
   warnInheritedFastWireConflicts,
   warnDegradedTopLevelOptIns,
@@ -236,6 +238,7 @@ function loadConfigUnobserved(): OcxConfig {
     sanitizeAnthropicSidecarInstanceForLoad(parsed);
     sanitizeAgyAcpForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
+    sanitizeCreditPriceForLoad(parsed);
     sanitizeCapabilityDeclarationsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {

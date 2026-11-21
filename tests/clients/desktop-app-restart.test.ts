@@ -36,7 +36,7 @@ function withTrustedExes<T>(run: () => T): T {
   }
 }
 
-interface Call { file: string; args: string[] }
+interface Call { file: string; args: string[]; desktopPayload?: string }
 
 describe.skipIf(process.platform !== "win32")("Windows membership through the real PowerShell prefilter", () => {
   for (const [label, root, executable] of [
@@ -64,7 +64,7 @@ describe.skipIf(process.platform !== "win32")("Windows membership through the re
         "}",
       ].join("\n");
       let rawListing = "";
-      const listed = withTrustedExes(() => windowsDesktopAppAdapter.listProcesses((file, args) => {
+      const listed = withTrustedExes(() => windowsDesktopAppAdapter.listProcesses((file, args, options) => {
         expect(file).toBe(PS);
         expect(args.slice(0, 3)).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
         const script = args[3]!;
@@ -72,6 +72,7 @@ describe.skipIf(process.platform !== "win32")("Windows membership through the re
           encoding: "utf8",
           timeout: 10_000,
           windowsHide: true,
+          env: options?.env,
         });
         return rawListing;
       }, { id: AUMID.replace("!App", ""), root, relaunch: AUMID }));
@@ -126,8 +127,9 @@ function scriptedIo(options: {
       if (!alive) dead.add(pid);
       return alive;
     },
-    execFile: (file, args) => {
-      options.calls.push({ file, args: [...args] });
+    execFile: (file, args, execOptions) => {
+      const desktopPayload = execOptions?.env?.OPENCODEX_DESKTOP_COMMAND_PAYLOAD;
+      options.calls.push({ file, args: [...args], ...(desktopPayload ? { desktopPayload } : {}) });
       if (options.throwOn?.(file, args)) throw new Error("exec failed");
       const joined = args.join(" ");
       if (joined.includes("Get-AppxPackage")) return options.discovery ?? "MISS";
@@ -380,7 +382,8 @@ describe("Codex desktop app restart (#2292)", () => {
     const probe = calls.find(c => c.args.join(" ").includes("Win32_Process"));
     const script = probe?.args.join(" ") ?? "";
     expect(script).toContain("Name='ChatGPT.exe'");
-    expect(script).toContain(INSTALL);
+    expect(script).toContain("StartsWith($root, 'OrdinalIgnoreCase')");
+    expect(JSON.parse(Buffer.from(probe?.desktopPayload ?? "", "base64").toString("utf8"))).toEqual({ root: INSTALL });
     expect(script).toContain("OrdinalIgnoreCase");
   });
 

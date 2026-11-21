@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, setDefaultTimeout, spyOn, test } from "b
 import { managementFetch as fetch } from "../helpers/management-auth";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { loadConfig, saveConfig, saveConfigPreservingClaudeCode } from "../../src/config";
 import * as configModule from "../../src/config";
 import { startServer as startServerImpl } from "../../src/server";
@@ -11,13 +11,14 @@ import { writeDesktop3pConfig, removeDesktop3pStandardPivot } from "../../src/cl
 import * as desktopProfiles from "../../src/claude/desktop-profile";
 import { buildClaudeDesktopState } from "../../src/server/management/shared";
 import * as systemEnv from "../../src/server/system-env";
+import { claudeLaunchPlan, fetchClaudeCodeState } from "../../src/cli/claude";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../../src/server/management/body";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { desktopFirstPartyTarget } from "../../src/claude/desktop-first-party";
 import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
-import { claudeKeychainReader } from "../../src/oauth/claude-keychain-read";
+import { CLAUDE_KEYCHAIN_PROBE_TIMEOUT_MS, claudeKeychainReader } from "../../src/oauth/claude-keychain-read";
 import { WindowsSecretAclSettleTimeoutError } from "../../src/lib/windows-secret-acl";
 
 let keychainProbe: ReturnType<typeof spyOn>;
@@ -102,6 +103,139 @@ test("GET /api/claude-code returns defaults + available + aliases", async () => 
     expect(d.aliases.some((a: { id: string }) => a.id === "ocx-claude-mock--test-model")).toBe(true);
     expect(typeof d.port).toBe("number");
   } finally {
+    await server.stop(true);
+  }
+});
+
+test("Claude launch and picker keep raw and encoded exclusions while retaining context metadata", async () => {
+  const config = loadConfig();
+  config.providers.mock!.models = ["org/raw-hidden", "org/encoded-hidden", "org/visible"];
+  config.providers.mock!.modelContextWindows = { "org/raw-hidden": 500_000, "org/encoded-hidden": 500_000, "org/visible": 1_000_000 };
+  config.disabledModels = ["mock/org/raw-hidden", "mock/org-encoded-hidden"];
+  saveConfig(config);
+  const server = startServer(0);
+  try {
+    const state = await fetchClaudeCodeState(config, server.port!);
+    expect(state.enabled).toBe(true);
+    expect(state.contextWindows).toMatchObject({ "mock/org/raw-hidden": 500_000, "mock/org/visible": 1_000_000 });
+    expect(state.forceAvailable?.filter(slug => slug.startsWith("mock/"))).toEqual(["mock/org-visible"]);
+    const settings = await (await fetch(new URL("/api/claude-code", server.url))).json() as {
+      available: string[]; aliases: { display_name: string }[];
+    };
+    expect(settings.available.filter(slug => slug.startsWith("mock/"))).toEqual(["mock/org/visible"]);
+    expect(settings.aliases.map(row => row.display_name).filter(name => name.endsWith("(mock)"))).toEqual(["org/visible (mock)"]);
+    const response = await fetch(new URL("/v1/models?limit=1000&ids=cli", server.url), {
+      headers: { "anthropic-version": "2023-06-01" },
+    });
+    expect(response.status).toBe(200);
+    const picker = await response.json() as { data: { display_name: string; id: string }[] };
+    const routed = picker.data.filter(row => row.display_name.includes("(mock)"));
+    expect(routed.length).toBeGreaterThan(0);
+    expect(routed.every(row => row.display_name.includes("org/visible"))).toBe(true);
+    expect(routed.some(row => row.id.endsWith("[1m]"))).toBe(true);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("the launcher view skips the dashboard alias previews (#8945)", async () => {
+  const aliasModule = await import("../../src/claude/alias");
+  const config = loadConfig();
+  config.providers.mock!.models = ["org/one", "org/two"];
+  saveConfig(config);
+  const server = startServer(0);
+  const routedAlias = spyOn(aliasModule, "claudeCodeAlias");
+  const nativeAlias = spyOn(aliasModule, "claudeCodeNativeAlias");
+  try {
+    const state = await fetchClaudeCodeState(config, server.port!);
+    expect(state.enabled).toBe(true);
+    expect(routedAlias).not.toHaveBeenCalled();
+    expect(nativeAlias).not.toHaveBeenCalled();
+  } finally {
+    routedAlias.mockRestore();
+    nativeAlias.mockRestore();
+    await server.stop(true);
+  }
+});
+
+test.each([
+  ["2.1.280", "claude-fable-5-1[1m]"],
+  ["2.1.290", "claude-fable-5-2[1m]"],
+  ["unknown", "claude-fable-5-1[1m]"],
+])("the Claude Code snapshot fills Fable for CLI version %s", async (version, expected) => {
+  const config = loadConfig();
+  config.claudeCode = { authMode: "subscription" };
+  saveConfig(config);
+  const bin = join(testDir, "bin");
+  mkdirSync(bin);
+  const windows = process.platform === "win32";
+  writeFileSync(join(bin, windows ? "claude.cmd" : "claude"), windows
+    ? `@echo off\r\necho ${version}\r\n`
+    : `#!/bin/sh\nprintf '%s (Claude Code)\\n' '${version}'\n`, { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  const server = startServer(0);
+  try {
+    process.env.PATH = [bin, previousPath].filter(Boolean).join(delimiter);
+    const response = await fetch(new URL("/api/claude-code", server.url));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { effectiveModelEnv: Record<string, string> };
+    expect(body.effectiveModelEnv.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe(expected);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await server.stop(true);
+  }
+});
+
+test.skipIf(process.platform === "win32")("GET /api/claude-code stays within budget when the Fable version probe times out", async () => {
+  const config = loadConfig();
+  config.claudeCode = { authMode: "subscription" };
+  saveConfig(config);
+  writeFileSync(join(testDir, "claude"), '#!/bin/sh\ntrap "" TERM\nprintf "probe\\n" >> "$0.calls"\nexec /bin/sleep 4\n', { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  const server = startServer(0);
+  try {
+    process.env.PATH = [testDir, previousPath].filter(Boolean).join(delimiter);
+    const url = new URL("/api/claude-code", server.url);
+    const started = performance.now();
+    for (let i = 0; i < 2; i++) {
+      const response = await fetch(url);
+      expect(response.status).toBe(200);
+      const body = await response.json() as { effectiveModelEnv: Record<string, string> };
+      expect(body.effectiveModelEnv.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5-1[1m]");
+      expect(Math.round(performance.now() - started)).toBeLessThan(2100);
+    }
+    expect(readFileSync(join(testDir, "claude.calls"), "utf8")).toBe("probe\n");
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await server.stop(true);
+  }
+});
+
+test.skipIf(process.platform === "win32")("Claude launcher reads the daemon routing state when both probes are slow", async () => {
+  const config = loadConfig();
+  config.claudeCode = { enabled: false, authModeMigratedAt: "2026-07-26T00:00:00.000Z" };
+  saveConfig(config);
+  keychainProbe.mockImplementation(async () => {
+    await Bun.sleep(CLAUDE_KEYCHAIN_PROBE_TIMEOUT_MS);
+    return "unknown";
+  });
+  const claude = join(testDir, "claude");
+  writeFileSync(claude, '#!/bin/sh\nprintf "probe\\n" >> "$0.calls"\nexec /bin/sleep 4\n', { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  const server = startServer(0);
+  try {
+    process.env.PATH = [testDir, previousPath].filter(Boolean).join(delimiter);
+    const state = await fetchClaudeCodeState(config, server.port!);
+    expect(keychainProbe).toHaveBeenCalledTimes(1);
+    expect(state.enabled).toBe(false);
+    expect(state.contextWindows["claude-fable-5-2"]).toBe(1_000_000);
+    expect(claudeLaunchPlan(true, state.enabled).kind).toBe("native");
+    expect(existsSync(`${claude}.calls`)).toBe(false);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
     await server.stop(true);
   }
 });

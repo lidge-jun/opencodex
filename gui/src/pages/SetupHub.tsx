@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import { useKeyedClientResource } from "../client-resource";
 import { useT } from "../i18n/shared";
 import type { Page } from "../app-routing";
@@ -8,6 +9,8 @@ import { frame, sectionTitle } from "@/components/v2-connect/classes";
 import { cn } from "@/lib/utils";
 import { startupChecklistStep } from "../startup-health-ui";
 import { useStartupChecklist } from "../hooks/useStartupChecklist";
+import { isDesktopShell } from "../lib/desktop-shell";
+import { useGettingStartedHidden } from "../getting-started-visibility";
 
 /*
  * The "Set up" tier: everything people do once, in the order they do it. Each row opens
@@ -48,6 +51,11 @@ export default function SetupHub({ apiBase, navigate }: SetupHubProps) {
   const usage = useKeyedClientResource(`setup-usage:${apiBase}`, [apiBase],
     signal => getJson<UsageBody>(`${apiBase}/api/usage?range=all`, signal));
   const startup = useStartupChecklist(apiBase);
+  const gettingStarted = useGettingStartedHidden();
+  // Show on Home removes its own row, so the confirmation that replaces it takes focus.
+  const [restored, setRestored] = useState(false);
+  const focusRestored = useRef(false);
+  const showOnHome = () => { focusRestored.current = true; setRestored(true); gettingStarted.show(); };
 
   const optional = { label: t("shellV2.badgeOptional"), tone: "optional" } satisfies HubBadge;
 
@@ -62,8 +70,9 @@ export default function SetupHub({ apiBase, navigate }: SetupHubProps) {
       done: requested, open: () => navigate("integrations") },
     { key: "request", title: t("shellV2.stepFirstRequest"), hint: t("shellV2.stepFirstRequestHint"),
       done: requested, open: () => navigate("providers") },
-    { key: "autostart", title: t(autostart.titleKey), hint: t(autostart.hintKey),
-      done: autostart.done, open: () => autostart.subPath ? navigate("startup", autostart.subPath) : navigate("startup") },
+    // The desktop app turns Start at Login on itself, so only the browser dashboard asks for it.
+    ...(isDesktopShell() ? [] : [{ key: "autostart", title: t(autostart.titleKey), hint: t(autostart.hintKey),
+      done: autostart.done, open: () => autostart.subPath ? navigate("startup", autostart.subPath) : navigate("startup") }]),
   ];
   const doneCount = steps.filter(step => step.done === true).length;
   const allDone = doneCount === steps.length;
@@ -97,6 +106,17 @@ export default function SetupHub({ apiBase, navigate }: SetupHubProps) {
               doneLabel={t("shellV2.badgeDone")} todoLabel={t("shellV2.badgeTodo")} />
           ))}
         </ol>
+        {gettingStarted.hidden ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-control bg-surface px-4 py-3 text-[13px] text-fg-muted">
+            <span>{t("gettingStarted.hiddenOnHome")}</span>
+            <Button size="sm" variant="outline" onClick={showOnHome}>{t("gettingStarted.showOnHome")}</Button>
+          </div>
+        ) : restored && (
+          <p role="status" tabIndex={-1} className="m-0 text-[13px] text-fg-muted outline-none"
+            ref={element => { if (element && focusRestored.current) { focusRestored.current = false; element.focus(); } }}>
+            {t("gettingStarted.backOnHome")}
+          </p>
+        )}
       </section>
 
       <section aria-labelledby="setup-optional" className="flex flex-col gap-3">

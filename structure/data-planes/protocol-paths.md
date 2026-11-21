@@ -88,7 +88,7 @@ native lane, and the request's features; the Messages ingress (`src/server/claud
 marks caller-forward passthrough and the managed native lane as native, the translated path as
 the bridge, and a disabled surface or a compatibility reject as blocked. The Responses ingress needs no mark: its
 path follows the final adapter's wire. Marks live in WeakMaps keyed by the request log context
-and the live attempt objects, and no mark function throws into the request.
+and the live attempt objects. The native Gemini transport marks its same-wire path when it sends.
 
 `addFinalRequestLog` derives one `ProtocolTraceV1` through `path.ts`: a blocked mark wins with
 empty paths; otherwise each attempt gets the lane-derived path (or an explicit attempt mark),
@@ -217,9 +217,9 @@ fixed at the bridge entry mark, before an effort override rewrites `thinking`.
 Messages wires without the internal Responses SSE. It is server side and not a leaf.
 `adapter-events.ts` is the driver: it ports the item state machine of `bridgeToResponsesSSE`, including `tool_call_end.incomplete`, which closes an unfinished item without claiming argument completion
 (item boundaries, signature grouping, hidden and redacted reasoning envelopes, tool naming and
-argument gating, the integral-float repair, every terminal with its usage and durability rule,
-the wire-silence heartbeat and live-destination stall watchdog ([timeout policy](../transports/timeouts.md)), pull-based stepping, cancellation) and calls one
-`ClientWireWriter` method wherever the bridge would emit a frame a client converter reads.
+argument gating, integral-float repair, terminal usage and durability, wire-silence heartbeats,
+pull-based stepping and cancellation) and calls a `ClientWireWriter` method for each frame a client converter reads.
+The live-destination [stall watchdog](../transports/timeouts.md#provider-scoped-budgets) resets on parsed adapter events, matching the Responses bridge.
 `chat.ts` (`encodeChatCompletionSse`, `foldChatCompletion`) and `messages.ts`
 (`encodeAnthropicMessageSse`, `foldAnthropicMessage`) are the writers; the Chat one also emits `reasoning_details` ([#7429](chat-reasoning-details.md)). They reuse the
 converters' own helpers, exported from `src/chat/outbound.ts` and `src/claude/outbound.ts`
@@ -542,8 +542,8 @@ lane, the decline trace, the beta allowlist, opaque state and OAuth.
 
 ## Settings
 
-`resolveApiSurfaceSettings` and `resolveProtocolSettings` in `src/protocols/settings.ts` are the
-only readers of the `apiSurfaces` and `protocols` config keys. Responses and Chat Completions are
+`src/protocols/settings.ts` resolves the `apiSurfaces` and `protocols` config keys through
+`resolveApiSurfaceSettings`, `resolveGeminiApiSurface` and `resolveProtocolSettings`. Responses and Chat Completions are
 always served. The Messages surface uses an explicit `apiSurfaces.messages.enabled` boolean when
 present, closes when that value is present but malformed, and otherwise inherits
 `claudeCode.enabled !== false`. The unrepresentable policy defaults to `legacy` and every
@@ -554,15 +554,15 @@ the key-auth one. The Chat and Messages ingresses read the unrepresentable polic
 the Messages ingress and the planner; the Chat ingress reads `nativeChatCombos`
 for combo routes (above); `managedMessagesNative` and `managedMessagesNativeOAuth` are read
 through `nativeMessagesDeclineReason` by the Messages ingress, `count_tokens` and the planner
-(above); `shadowPlan` is read by `recordProtocolShadowPlan` ([Shadow plan](#shadow-plan)). Every
-rollout switch now has a reader.
+(above). `geminiNativeAntigravity` enables the [native Gemini leg](gemini-native.md) for eligible
+`/v1beta` requests. `recordProtocolShadowPlan` reads `shadowPlan` ([Shadow plan](#shadow-plan)).
 
 `claudeInboundDisabled` in `src/server/claude-messages.ts` is the Messages ingress reader: both
 `/v1/messages` and `/v1/messages/count_tokens` call it, so the two routes cannot disagree, and a
 closed surface answers 403 before the body is read. `buildApiAccessEndpoints`
 (`src/server/management/api-access.ts`) reports the resolved `surfaces` in the keys payload and
 keeps `claudeCodeEnabled` for older dashboards, set from the resolved Messages state rather than
-from `claudeCode.enabled`.
+from `claudeCode.enabled`. The [Gemini surface](gemini-inbound.md) defaults on and has its own setting.
 
 `PATCH /api/protocols/settings` is the one writer. `src/server/management/protocol-settings-patch.ts`
 validates the body strictly and applies it in memory; the route persists through

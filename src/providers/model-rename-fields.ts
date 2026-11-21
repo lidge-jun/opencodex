@@ -13,6 +13,8 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   codexToolMode: "none",
   projectContext: "none",
   requestPacing: "nested-models",
+  connectTimeoutMs: "none",
+  stallTimeoutSec: "none",
   mcpMaxTools: "none",
   mcpMaxSchemaBytes: "none",
   mcpMaxResultBytes: "none",
@@ -78,6 +80,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   minMaxOutputTokens: "none",
   modelMaxOutputTokens: "record",
   modelCosts: "record",
+  creditPriceUsd: "none",
   autoReviewModel: "none",
   autoReviewModelOverrides: "record",
   headers: "none",
@@ -170,6 +173,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   messagePhaseInference: "none",
   estimateMissingUsage: "none",
   tlsProfile: "none",
+  anthropicOAuthUserInstructions: "none",
 } as const satisfies Record<keyof OcxProviderConfig, ModelRenameRole>;
 
 function fieldsWithRole(role: ModelRenameRole): string[] {

@@ -34,25 +34,26 @@ export function comboIdFromRawBody(body: unknown, config: OcxConfig): string | n
  * `input` tree (message content and function_call_output.output).
  */
 export function comboRequestHasImageInput(body: unknown): boolean {
+  return comboRequestHasMediaInput(body, "input_image");
+}
+
+export function comboRequestHasAudioInput(body: unknown): boolean {
+  return comboRequestHasMediaInput(body, "input_audio");
+}
+
+function comboRequestHasMediaInput(body: unknown, type: "input_image" | "input_audio"): boolean {
   if (!body || typeof body !== "object" || Array.isArray(body)) return false;
-  return responsesInputHasImage((body as { input?: unknown }).input);
+  const { input } = body as { input?: unknown };
+  return Array.isArray(input) && input.some(node => responsesInputNodeHasMedia(node, type));
 }
 
-function responsesInputHasImage(input: unknown): boolean {
-  if (typeof input === "string" || input == null) return false;
-  if (!Array.isArray(input)) return false;
-  return input.some(responsesInputNodeHasImage);
-}
-
-function responsesInputNodeHasImage(value: unknown): boolean {
+function responsesInputNodeHasMedia(value: unknown, type: "input_image" | "input_audio"): boolean {
   if (!value || typeof value !== "object") return false;
-  if (Array.isArray(value)) return value.some(responsesInputNodeHasImage);
+  if (Array.isArray(value)) return value.some(node => responsesInputNodeHasMedia(node, type));
   const record = value as Record<string, unknown>;
-  if (record.type === "input_image") return true;
+  if (record.type === type) return true;
   // Message content parts and nested function_call_output content/output arrays.
-  if (record.content !== undefined && responsesInputNodeHasImage(record.content)) return true;
-  if (record.output !== undefined && responsesInputNodeHasImage(record.output)) return true;
-  return false;
+  return responsesInputNodeHasMedia(record.content, type) || responsesInputNodeHasMedia(record.output, type);
 }
 
 /**
@@ -73,8 +74,7 @@ export function concreteComboRequestBody(
   if (defaultEffortMode === "force" && (!defaultEffort || !isCodexReasoningEffort(defaultEffort))) {
     throw new Error("force combo default effort requires a valid defaultEffort");
   }
-  if (targetReasoningEfforts?.length === 0
-    || (reasoningEffortMode === "adaptive" && targetReasoningEfforts === undefined)) {
+  if (comboStripsReasoningControls(targetReasoningEfforts, reasoningEffortMode)) {
     stripUnsupportedReasoningControls(clone);
   }
   if (!defaultEffort || !isCodexReasoningEffort(defaultEffort)) return clone;
@@ -130,7 +130,14 @@ export function concreteComboRequestBody(
   return clone;
 }
 
-function stripUnsupportedReasoningControls(body: Record<string, unknown>): void {
+export function comboStripsReasoningControls(
+  ladder: readonly string[] | undefined,
+  mode: OcxComboReasoningEffortMode,
+): boolean {
+  return ladder?.length === 0 || (mode === "adaptive" && ladder === undefined);
+}
+
+export function stripUnsupportedReasoningControls(body: Record<string, unknown>): void {
   const reasoning = body.reasoning;
   if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
     const next = { ...(reasoning as Record<string, unknown>) };

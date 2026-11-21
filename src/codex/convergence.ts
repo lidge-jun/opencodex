@@ -100,6 +100,7 @@ import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
 import { providerCodexAccountMode } from "../providers/registry";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { resolveRoutedCatalogDefaults } from "../config/schema/routed-catalog-defaults";
+import { observeModelCacheRevision } from "./model-cache";
 import { withCatalogWriteSerialization } from "./catalog-write-serialization";
 import {
   auditRefusedCatalogReplacement,
@@ -164,6 +165,7 @@ interface CandidateState {
   readonly notices: readonly CatalogNotice[];
   readonly modelEntitlements: CodexModelEntitlementSnapshot;
   readonly discoveryConfig?: OcxConfig;
+  readonly providerContentRevisions: ReadonlyMap<string, string>;
   /** Routed namespaces this candidate empties only because the driving config lacks them. */
   readonly routedRemoval: UnconfiguredRoutedRemoval | null;
 }
@@ -464,11 +466,13 @@ export async function gatherCodexCatalogCandidate(
     const authOutcomes: CatalogGatherProviderAuthOutcome[] = [];
     const providerModelOutcomes: CatalogGatherProviderModelOutcome[] = [];
     const discoveryPolicies: CatalogProviderDiscoveryPolicySnapshot[] = [];
+    const providerContentRevisions = new Map<string, string>();
     providerGatherStarted = true;
     const [routedModels, modelEntitlements] = await Promise.all([
       gatherRoutedModelsForCatalogGather(snapshot.config, session, {
         providerAuthOutcomes: authOutcomes,
         providerModelOutcomes,
+        providerContentRevisions,
         discoveryPolicySnapshots: discoveryPolicies,
       }),
       resolveAdmittedCodexModelEntitlements(snapshot.config),
@@ -573,6 +577,7 @@ export async function gatherCodexCatalogCandidate(
         ? { legacyBackup: { path: paths.legacyBackup, content: pristineBytes } } : {}),
       notices: Object.freeze([...notices]),
       modelEntitlements,
+      providerContentRevisions,
       ...(discoveryChanged ? { discoveryConfig } : {}),
       routedRemoval: unconfiguredRoutedRemoval(active, preparedCatalog, snapshot.config),
     });
@@ -698,6 +703,11 @@ export async function commitCodexCatalogCandidate(
           auditRefusedCatalogReplacement(permit, state.home, state.catalog, "unbacked-routed-removal");
           console.warn(`[opencodex] ${unbackedRoutedRemovalMessage(state.routedRemoval.namespaces.length)}`);
           return { kind: "refused", reason: "unbacked-routed-removal" } as const;
+        }
+        for (const [provider, revision] of state.providerContentRevisions) {
+          if (observeModelCacheRevision(provider) !== revision) {
+            return { kind: "stale", reason: "process-local" } as const;
+          }
         }
         return fixedCommit(state, permit);
       });

@@ -29,6 +29,7 @@ import { InvalidRetainedCompactionSummary, prepareCompactionRetention } from "./
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
 import { agyAcpPreflightResponse } from "./agy-acp-preflight";
+import { commandCodeDecisionRouteRefusal } from "./command-code-decision-refusal";
 
 /** Compose request phases while retaining the original admission-finally ownership. */
 export async function handleResponsesInner(
@@ -48,6 +49,11 @@ export async function handleResponsesInner(
   try {
     const requestState = await prepareResponsesRequest(requestContext, admissionState, requestDispatchers);
     if (requestState instanceof Response) return requestState;
+    // #8997: refuse a Command Code decision model before transport preparation (OAuth credential
+    // resolution or refresh), sidecar auth or sidecar work. Nothing is sent, so the candidate is not
+    // reported as a compaction-recovery source route either.
+    const decisionRefusal = commandCodeDecisionRouteRefusal(requestState.route.provider, requestState.parsed.modelId, logCtx);
+    if (decisionRefusal) return decisionRefusal;
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
     if (transportState instanceof Response) return markProxyError(transportState);
     const agyAcpRefusal = agyAcpPreflightResponse({

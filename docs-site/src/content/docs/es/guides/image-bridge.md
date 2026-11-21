@@ -38,7 +38,7 @@ Las opciones del puente de imágenes se encuentran en `images`, dentro de `~/.op
 {
   "images": {
     "bridgeEnabled": true,
-    "bridgeModel": "grok-imagine-image-quality",
+    "bridgeModel": "grok-imagine-image-2.0",
     "maxRounds": 3,
     "timeoutMs": 60000
   }
@@ -48,7 +48,7 @@ Las opciones del puente de imágenes se encuentran en `images`, dentro de `~/.op
 | Opción | Predeterminado | Descripción |
 | --- | --- | --- |
 | `bridgeEnabled` | `false` | Interruptor maestro. Establecer `true` para permitir el puente. Desactivado por defecto para evitar cargos inesperados de xAI. |
-| `bridgeModel` | `grok-imagine-image-quality` | El identificador de modelo de imagen xAI para enviar mensajes. |
+| `bridgeModel` | `grok-imagine-image-2.0` | El identificador de modelo de imagen xAI para enviar mensajes. |
 | `maxRounds` | `3` | Iteraciones máximas de bucle de generación de imágenes por turno. Los valores se redondean hacia abajo al entero inferior y se limitan al intervalo `[0, 10]`; los valores no finitos usan el valor de respaldo `3`. |
 | `timeoutMs` | `60000` | Fecha límite xAI por llamada en milisegundos. Los valores positivos finitos se redondean hacia abajo al entero inferior y se pasan a la solicitud xAI. |
 | `artifactsKeepCount` | `200` | Número máximo de archivos retenidos bajo `artifacts/`. Cuando se excede, los archivos más antiguos se eliminan después de cada llamada completada. Establezca en `0` o un valor negativo para deshabilitar la poda. |
@@ -81,3 +81,5 @@ Desde la perspectiva del modelo, nada cambió: llamó a una herramienta y obtuvo
 - **La búsqueda web tiene prioridad** cuando la solicitud es apta para el bucle de búsqueda web. Si se solicitan búsqueda y generación de imágenes en el mismo turno apto, se ejecuta la búsqueda y se omite la generación de imágenes. Esto incluye adaptadores `runTurn` aptos, como Cursor, mediante `runTurnWebSearchLoop`. El puente de imágenes solo puede atender esos turnos con ambas herramientas si la búsqueda web no resulta elegible.
 - **Se aplican costos de xAI.** La generación de imágenes a través de xAI requiere una suscripción activa a xAI o créditos API.
 - **Sólo streaming.** El puente funciona interceptando el flujo de respuesta SSE; las solicitudes con `stream: false` se rechazan con un error 400.
+
+El modelo predeterminado es `grok-imagine-image-2.0`. `quality` acepta `low`, `medium` y `auto`; `high` y `hd` de OpenAI se convierten en `medium`. El modelo retirado `grok-imagine-image-quality` (y `grok-imagine-image-pro`, redirigido a él desde 2026-05-15) se sirve como 2.0 con calidad baja. El precio depende de la calidad y la resolución; las ediciones añaden $0.01 por imagen de entrada. El relé `/v1/images/edits` reenvía hasta cinco imágenes de entrada (primero elimina duplicados); la herramienta puente `image_gen` envía una.

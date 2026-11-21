@@ -43,6 +43,7 @@ export interface AccountRow {
   /** Explicit paid-credit consent, reported only when supplied by the Codex API. */
   creditsAfterLimit?: boolean;
   needsReauthReason?: "verify_account";
+  needsReauthCause?: "tos_violation";
   autoSelectable?: boolean;
   skipReason?: "paused" | "needs_reauth" | "suspended" | "cooldown" | "quota_exhausted";
   selectionExcludedReason?: "plan_excluded";
@@ -475,6 +476,7 @@ interface OAuthAccountDto {
   pauseDetails?: import("../types/account-auto-pause").AccountPauseDetails;
   autoSwitchThresholdOverride?: number | null;
   needsReauthReason?: "verify_account";
+  needsReauthCause?: "tos_violation";
   autoSelectable?: boolean;
   skipReason?: unknown;
   /** Always sent by the management route; explicitly `null` when the tier is unknown. */
@@ -521,6 +523,7 @@ async function fetchOAuthRows(
     ...(a.paused === true ? { paused: true, pauseDetails: accountPauseDetailsSchema.safeParse(a.pauseDetails).data } : {}),
     ...(isAnthropicOAuthInstance(name) && Object.hasOwn(a, "autoSwitchThresholdOverride") ? { autoSwitchThresholdOverride: a.autoSwitchThresholdOverride } : {}),
     ...(a.needsReauthReason === "verify_account" ? { needsReauthReason: a.needsReauthReason } : {}),
+    ...(a.needsReauthReason === "verify_account" && a.needsReauthCause === "tos_violation" ? { needsReauthCause: a.needsReauthCause } : {}),
     ...(name === "kiro" && typeof a.autoSelectable === "boolean"
       ? { autoSelectable: a.autoSelectable } : {}),
     ...(name === "kiro" && a.autoSelectable === false && isKiroSkipReason(a.skipReason)

@@ -9,12 +9,14 @@ import { withClinePassDeepSeekV4ToolReplayCompatibility } from "./cline-pass-dee
 import { withUniqueToolCallIds } from "./unique-tool-call-ids";
 import { createCodeBuddyAdapter } from "./codebuddy/adapter";
 import { createQoderAdapter } from "./qoder/adapter";
+import { createStepCliAdapter } from "./step-cli/adapter";
 import { createCommandCodeAdapter } from "./command-code";
 import { createCursorAdapter } from "./cursor";
 import { createDevinAdapter } from "./devin";
 import { createGoogleAdapter } from "./google";
 import { createKiroAdapter } from "./kiro";
 import { createMimoFreeAdapter } from "./mimo-free";
+import { createM365CopilotAdapter } from "./m365-copilot";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { createOllamaNativeAdapter } from "./ollama-native";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
@@ -22,6 +24,7 @@ import { createZedAdapter } from "./zed";
 import type { OcxProviderConfig } from "../types";
 import { createAdapterTierMetadata } from "../providers/fastwire";
 import { withInputMediaGuard } from "./input-media-guard";
+import { withCommandCodeDecisionModelGuard } from "./command-code-decision-guard";
 
 export type AdapterCacheRetention = "none" | "short" | "long";
 
@@ -41,6 +44,7 @@ export interface AdapterFactoryContext {
 
 export type AdapterWire =
   | "codebuddy"
+  | "step-cli"
   | "command-code"
   | "openai-chat"
   | "ollama-native"
@@ -77,6 +81,10 @@ type InheritedAdapterDefinition = {
 type AdapterDefinition = DirectAdapterDefinition | InheritedAdapterDefinition;
 
 export const ADAPTER_REGISTRY = {
+  "m365-copilot": {
+    contractParent: "openai-chat",
+    create: (provider: OcxProviderConfig) => withUniqueToolCallIds(createM365CopilotAdapter(provider)),
+  },
   "workbuddy-ai": {
     contractParent: "openai-chat",
     create: (provider: OcxProviderConfig) => withUniqueToolCallIds(createWorkBuddyAdapter(provider)),
@@ -169,6 +177,15 @@ export const ADAPTER_REGISTRY = {
     contractParent: "codebuddy",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createClaudeCliAdapter(provider),
   },
+  "step-cli": {
+    // StepCode's SDK stdio host speaks its own length-prefixed envelope rather than the Anthropic
+    // stream-json this repo parses for CodeBuddy, Qoder and Claude Code, so it states its own wire
+    // contract. The family owns its args, env and framing, and the CLI owns the credential: the
+    // adapter stores and injects none.
+    wire: "step-cli",
+    mutation: "codex-owned",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createStepCliAdapter(provider),
+  },
   "dsh-account": {
     contractParent: "anthropic",
     create: (provider: OcxProviderConfig, context: AdapterFactoryContext) => createDshAccountAdapter(provider, context),
@@ -220,6 +237,7 @@ export function createRegisteredAdapter(
   if (wire !== "openai-responses") {
     withInputMediaGuard(adapter, wire);
   }
+  withCommandCodeDecisionModelGuard(adapter, provider);
   const buildRequest = adapter.buildRequest.bind(adapter);
   adapter.buildRequest = (parsed, incoming) => {
     const attachTierMetadata = (request: Awaited<ReturnType<ProviderAdapter["buildRequest"]>>) => {

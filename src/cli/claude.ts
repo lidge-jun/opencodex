@@ -13,7 +13,7 @@ import { withClaudeContextSettings } from "./claude-context-settings";
 import { loadConfig } from "../config";
 import { injectClaudeAgentDefs } from "../claude/agents-inject";
 import { CLAUDE_ALIAS_PREFIX_CURRENT, CLAUDE_ALIAS_PREFIX_CURRENT_V2, CLAUDE_ALIAS_PREFIX_V1, CLAUDE_ALIAS_PREFIX_V2 } from "../claude/alias";
-import { claudeTierDisplayName, claudeToolSearchEnv, effectiveModelEnv, isClaudeTierLabelSlot, resolveAutoContext } from "../claude/context-windows";
+import { claudeTierDisplayName, claudeToolSearchEnv, effectiveModelEnv, isClaudeTierLabelSlot, probeClaudeCodeVersionForTierFill, resolveAutoContext } from "../claude/context-windows";
 import { claudeConfigDir, fetchGatewayModels, writeGatewayModelCache } from "../claude/gateway-cache";
 import { commandInvocation } from "../lib/win-exec";
 import { isProxyAdmissionSecret } from "../server/auth-cors";
@@ -64,6 +64,7 @@ export interface ClaudeRoutingTarget {
  * launch base so detection and the spawned process can never disagree (audit R3-3).
  */
 export type ClaudeEnvDeps = {
+  claudeCodeVersion?: string | null;
   forceAvailable?: readonly string[];
   forceAvailableSelectors?: readonly string[];
   authDetect?: Omit<Partial<AuthDetectDeps>, "env" | "ownTokens">;
@@ -434,7 +435,7 @@ export function buildClaudeEnv(
   // Model slots (devlog 260712 B2): default + four tier defaults + legacy small-fast,
   // with automatic [1m] context-variant marking when the slot's target model has an
   // authoritative >=1M window (Claude Code then accounts 1M, compaction preserved).
-  for (const [name, value] of Object.entries(effectiveModelEnv(config.claudeCode, contextWindows, auto))) {
+  for (const [name, value] of Object.entries(effectiveModelEnv(config.claudeCode, contextWindows, auto, deps.claudeCodeVersion))) {
     // A tier slot this launch wrote gets its picker label too (#6926). A slot the user exported
     // stays unlabelled, and a `<slot>_NAME` the user exported wins.
     if (setDefault(name, value) && isClaudeTierLabelSlot(name)) setDefault(`${name}_NAME`, claudeTierDisplayName(value));
@@ -464,7 +465,7 @@ export async function fetchClaudeCodeState(config: OcxConfig, port: number, time
     const headers = new Headers();
     const token = configuredAdminToken();
     if (token) headers.set("x-opencodex-api-key", token);
-    const res = await fetch(`${localManagementOrigin(config, port)}/api/claude-code`, {
+    const res = await fetch(`${localManagementOrigin(config, port)}/api/claude-code?view=launch`, {
       headers,
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -475,8 +476,11 @@ export async function fetchClaudeCodeState(config: OcxConfig, port: number, time
       ...(Array.isArray(body.forceAvailable) ? { forceAvailable: body.forceAvailable.filter(value => typeof value === "string") } : {}),
       ...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
     };
-  } catch {
-    console.error("⚠ 모델 컨텍스트 정보를 불러오지 못했습니다 — 1M 자동 표시는 이번 실행에서 생략됩니다.");
+  } catch (error) {
+    const message = error instanceof Error && error.name === "TimeoutError"
+      ? `Timed out after ${timeoutMs} ms while loading model context information`
+      : "Could not load model context information";
+    console.error(`⚠ ${message}. Automatic [1m] marking is skipped for this launch.`);
     return { contextWindows: {} };
   }
 }
@@ -875,12 +879,15 @@ export async function cmdClaude(args: string[]): Promise<number> {
     contextWindows = liveState.contextWindows;
     forceAvailable = liveState.forceAvailable ?? [];
   }
-  const gateway = await fetchGatewayModels(route, { admissionConfig: config });
+  const [gateway, claudeCodeVersion, keychainPresence] = await Promise.all([
+    fetchGatewayModels(route, { admissionConfig: config }),
+    probeClaudeCodeVersionForTierFill(config.claudeCode, contextWindows),
+    resolveClaudeKeychainPresence(config.claudeCode?.authMode),
+  ]);
   const forceAvailableSelectors = typeof route === "number" ? undefined : gateway?.models.map(model => model.id) ?? [];
   const allowRootSkipPermissions = shouldAllowRootSkipPermissions(args);
-  const keychainPresence = await resolveClaudeKeychainPresence(config.claudeCode?.authMode);
   const env = buildClaudeEnv(config, route, process.env, contextWindows, {
-    allowRootSkipPermissions, forceAvailable, forceAvailableSelectors, authDetect: { keychainProbe: () => keychainPresence },
+    allowRootSkipPermissions, forceAvailable, forceAvailableSelectors, claudeCodeVersion, authDetect: { keychainProbe: () => keychainPresence },
   });
   if (allowRootSkipPermissions) {
     console.error(rootSkipPermissionsNotice(env));

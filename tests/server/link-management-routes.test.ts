@@ -101,7 +101,7 @@ function harness() {
 
 function childProbe(remote: string, h: ReturnType<typeof harness>): SshRunResult | null {
   if (remote === "echo ocx-link-probe") return { code: 0, stdout: "ocx-link-probe\n", stderr: "" };
-  if (remote === "cmd /c echo %OS%") return { code: 127, stdout: "", stderr: "cmd absent" };
+  if (remote === "cmd.exe /c echo %OS%") return { code: 127, stdout: "", stderr: "cmd absent" };
   if (remote.includes("ocx-platform")) return { code: 0, stdout: "Linux\n", stderr: "" };
   if (remote === remoteOcx(["config", "show", "--json"])) return { code: 0, stdout: '{"port":10100}', stderr: "" };
   if (remote === quoteRemote(REMOTE_CURL_PREFLIGHT)) return { code: 0, stdout: "", stderr: "" };
@@ -164,7 +164,7 @@ function versionRunner(remote: { probeCode: number; probeStderr: string; code: n
       const text = argv.join(" ");
       if (text.includes("ssh-keygen")) return { code: 0, stdout: "256 SHA256:abcdefghijklmnop host (ED25519)", stderr: "" };
       if (isBareOcx(argv)) return BARE_OCX;
-      if (argv.at(-1) === "cmd /c echo %OS%") return { code: 127, stdout: "", stderr: "cmd absent" };
+      if (argv.at(-1) === "cmd.exe /c echo %OS%") return { code: 127, stdout: "", stderr: "cmd absent" };
       if (argv.at(-1)?.includes("ocx-platform")) return { code: 0, stdout: "Linux\n", stderr: "" };
       if (argv.at(-1) === remoteOcx(["--version"])) return { code: remote.code, stdout: remote.stdout, stderr: remote.stderr };
       const knownHostOption = argv.find(value => value.startsWith("UserKnownHostsFile="));
@@ -1384,7 +1384,7 @@ for (const remotePlatform of [undefined, "windows", "posix"] as const) {
     const runner: SshRunner = {
       async run(argv) {
         expect(argv).toContain("StrictHostKeyChecking=yes");
-        if (argv.at(-1) === "cmd /c echo %OS%") return { code: 0, stdout: "Windows_NT\r\n", stderr: "" };
+        if (argv.at(-1) === "cmd.exe /c echo %OS%") return { code: 0, stdout: "Windows_NT\r\n", stderr: "" };
         expect(argv.at(-1)).toBe(quoteRemote(remoteOcxArgv(["disconnect", "--expect-link", id], selected)));
         return { code: 0, stdout: "", stderr: "" };
       },

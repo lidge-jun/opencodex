@@ -10,6 +10,7 @@ import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
 const EXPECTED_ADAPTER_NAMES = {
+  "m365-copilot": "m365-copilot",
   "workbuddy-ai": "workbuddy-ai",
   codebuddy: "codebuddy",
   "command-code": "command-code",
@@ -28,6 +29,7 @@ const EXPECTED_ADAPTER_NAMES = {
   qoder: "qoder",
   "agy-acp": "agy-acp",
   "claude-cli": "claude-cli",
+  "step-cli": "step-cli",
   "dsh-account": "dsh-account",
 } as const;
 

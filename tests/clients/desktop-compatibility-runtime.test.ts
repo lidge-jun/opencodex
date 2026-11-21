@@ -1,6 +1,6 @@
 import { UsageActivation } from "../../src/codex/desktop-compatibility/usage-activation";
 import { evaluateUsageRewrite } from "../../src/codex/desktop-compatibility/usage-policy";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
 import { X509Certificate } from "node:crypto";
 import { createDesktopCompatibilityRuntime, type DesktopRuntimeIo } from "../../src/codex/desktop-compatibility/runtime";
@@ -10,6 +10,10 @@ import { desktopPackageObservation } from "../helpers/desktop-package-observatio
 import { UsageRelayController, type UsageIdentity } from "../../src/codex/desktop-compatibility/usage-controller";
 import { desktopCompatibilityRuntimeActive, readDesktopCompatibilityLaunch } from "../../src/codex/desktop-compatibility/runtime-ownership";
 import { captureWindowsCompatibilityContext, assertWindowsCompatibilityContext } from "../../src/codex/desktop-compatibility/windows-package-command";
+import * as packageLauncher from "../../src/codex/desktop-compatibility/windows-package-launch";
+import { windowsDesktopAppAdapter } from "../../src/codex/desktop-app/windows";
+import type { DesktopExec } from "../../src/codex/desktop-app/types";
+import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
 import { createDesktopCertificateService } from "../../src/codex/desktop-compatibility/certificate-service";
 import { resetOptionalShutdownHooksForTests, runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
 import type { DesktopConnectionIdentity, DesktopConnectionStore } from "../../src/codex/desktop-compatibility/connection-store";
@@ -209,6 +213,169 @@ function fixture(trusted = true, connectionStore?: DesktopConnectionStore, build
 describe("optional native compatibility runtime", () => {
   const assessedInstall = desktopPackageObservation;
 
+  for (const path of ["direct launch", "managed restart"] as const) {
+    for (const result of ["refused readback", "indeterminate completion"] as const) {
+      test(`${path} fences the connection and revokes the trial after ${result}`, async () => {
+        const install = assessedInstall();
+        const io = fixture(true, undefined, undefined, () => createInstalledBuildProbe(async () => install));
+        await io.runtime.start();
+        const pacUrl = io.runtime.getPacUrl()!;
+        const pac = await fetch(pacUrl).then(response => response.text());
+        const port = /PROXY 127\.0\.0\.1:(\d+)/.exec(pac)![1];
+        const read = () => fetch("https://chatgpt.com/backend-api/wham/usage", {
+          proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem },
+        }).then(response => response.json());
+        expect(await read()).toEqual(usage);
+        expect((await io.runtime.apply(true)).accepted).toBe(true);
+        expect((await read()).rate_limit.allowed).toBe(true);
+
+        const calls: string[] = [];
+        const exec: DesktopExec = (_file, args) => {
+          const script = args.at(-1)!;
+          if (!script.includes("OpenCodexPackageActivation")) { calls.push("probe"); return ""; }
+          calls.push("activation");
+          if (result === "indeterminate completion") throw new Error("fixture timeout");
+          return JSON.stringify({ pid: 123, verified: false });
+        };
+        const launch = packageLauncher.launchWindowsCodexCompatibilityAsync;
+        setTrustedWindowsElevationExecutablesForTests({ powershell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" });
+        const launchSpy = spyOn(packageLauncher, "launchWindowsCodexCompatibilityAsync")
+          .mockImplementation((url, build, options) => launch(url, build, { ...options, platform: "win32", execAsync: async (...args) => exec(...args) }));
+        try {
+          if (path === "direct launch") {
+            expect(await io.runtime.launch()).toEqual({ status: "refused", reason: "activation_failed" });
+            expect(calls).toEqual(["probe", "activation"]);
+          } else {
+            const shell = { pid: 100, parentPid: 50, createdAt: "fixture", executable: "ChatGPT.exe", commandLine: `ChatGPT.exe --proxy-pac-url=${pacUrl}` };
+            const captured = captureWindowsCompatibilityContext([shell], install);
+            expect(() => windowsDesktopAppAdapter.relaunch(exec, install, captured)).toThrow("desktop_compatibility_activation_unverified");
+            expect(calls).toEqual(["activation"]);
+            expect(io.runtime.status()).toMatchObject({ phase: "stopping", usage: { mode: "observe", outputs: 0 } });
+          }
+          expect(readDesktopCompatibilityLaunch()).toBeNull();
+          await expect(read()).rejects.toThrow();
+          await expect(fetch(pacUrl)).rejects.toThrow();
+          if (path === "managed restart") await io.runtime.stop(); // Join the teardown already started by the adapter.
+          expect(io.runtime.status().phase).toBe("off");
+          await io.runtime.start();
+          expect(io.runtime.getPacUrl()).toBe(pacUrl);
+          expect(await io.runtime.apply(true)).toMatchObject({ accepted: false, reason: "no-fresh-eligible-exhaustion" });
+          expect(await read()).toEqual(usage);
+          expect((await io.runtime.apply(false)).accepted).toBe(false);
+          expect((await io.runtime.apply(true)).accepted).toBe(true);
+        } finally {
+          launchSpy.mockRestore();
+          setTrustedWindowsElevationExecutablesForTests(null);
+        }
+      }, 15_000);
+    }
+  }
+
+  test("a pending activation keeps PAC responsive and Stop drains its child before restart", async () => {
+    const io = fixture(true, undefined, undefined, () => createInstalledBuildProbe(async () => assessedInstall()));
+    await io.runtime.start();
+    const pac = io.runtime.getPacUrl()!;
+    let entered!: () => void, complete!: () => void, aborted = false, launches = 0;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const launchSpy = spyOn(packageLauncher, "launchWindowsCodexCompatibilityAsync").mockImplementation((_url, _build, options) => {
+      launches++;
+      return new Promise(resolve => {
+        options?.signal?.addEventListener("abort", () => { aborted = true; }, { once: true });
+        complete = () => resolve({ status: "refused", reason: "activation_failed" });
+        entered();
+      });
+    });
+    try {
+      const first = io.runtime.launch().then(value => ({ value }), error => ({ error }));
+      await started;
+      const duplicate = io.runtime.launch().then(value => ({ value }), error => ({ error }));
+      expect((await fetch(pac)).status).toBe(200);
+      expect(launches).toBe(1);
+      let stopped = false;
+      const stop = io.runtime.stop().then(() => { stopped = true; });
+      expect(aborted).toBe(true);
+      expect(io.runtime.status().phase).toBe("stopping");
+      expect(stopped).toBe(false);
+      await expect(io.runtime.start()).rejects.toThrow("desktop_compatibility_busy");
+      complete();
+      await stop;
+      for (const result of await Promise.all([first, duplicate])) {
+        expect("error" in result && String(result.error)).toContain("desktop_compatibility_not_running");
+      }
+      expect(io.runtime.status().phase).toBe("off");
+      await io.runtime.start();
+      expect(io.runtime.status().phase).toBe("running");
+      expect((await fetch(io.runtime.getPacUrl()!)).status).toBe(200);
+    } finally { complete?.(); launchSpy.mockRestore(); }
+  });
+
+  test("a build refresh during a failed activation readback still fences the runtime and revokes the trial", async () => {
+    let current: DesktopAppInstall = assessedInstall();
+    let probe!: ReturnType<typeof createInstalledBuildProbe>;
+    const io = fixture(true, undefined, undefined, () => (probe = createInstalledBuildProbe(async () => current)));
+    await io.runtime.start();
+    const pacUrl = io.runtime.getPacUrl()!;
+    const port = /PROXY 127\.0\.0\.1:(\d+)/.exec(await fetch(pacUrl).then(response => response.text()))![1];
+    const read = () => fetch("https://chatgpt.com/backend-api/wham/usage", {
+      proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem },
+    }).then(response => response.json());
+    await read(); expect((await io.runtime.apply(true)).accepted).toBe(true);
+    let entered!: () => void, complete!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const launchSpy = spyOn(packageLauncher, "launchWindowsCodexCompatibilityAsync").mockImplementation(() => new Promise(resolve => {
+      complete = () => resolve({ status: "refused", reason: "activation_failed" }); entered();
+    }));
+    const invalidate = spyOn(UsageRelayController.prototype, "invalidateContext");
+    try {
+      const launching = io.runtime.launch().then(value => ({ value }), error => ({ error }));
+      await started;
+      // A concurrent proof refresh advances the build revision while the readback is pending.
+      current = { ...assessedInstall(), proof: { ...assessedInstall().proof!, executableHash: "e".repeat(64) } };
+      expect(await probe.check()).toBe(true);
+      expect(invalidate).not.toHaveBeenCalled();
+      complete();
+      const outcome = await launching;
+      expect("value" in outcome && outcome.value.status === "started").toBe(false);
+      // The launch itself fenced the runtime: no further Stop is needed to close the connection.
+      expect(io.runtime.status().phase).toBe("off");
+      expect(invalidate).toHaveBeenCalled();
+      expect(readDesktopCompatibilityLaunch()).toBeNull();
+      await expect(fetch(pacUrl)).rejects.toThrow();
+      await expect(read()).rejects.toThrow();
+    } finally { complete?.(); invalidate.mockRestore(); launchSpy.mockRestore(); }
+  });
+
+  test("a caller that verified a newer build revision cannot receive success from an older pending launch", async () => {
+    let current: DesktopAppInstall = assessedInstall();
+    let probe!: ReturnType<typeof createInstalledBuildProbe>;
+    const io = fixture(true, undefined, undefined, () => (probe = createInstalledBuildProbe(async () => current)));
+    await io.runtime.start();
+    let entered!: () => void, complete!: () => void, launches = 0;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const success = { status: "started" as const, pid: 4321, packageFullName: assessedInstall().proof!.packageFullName };
+    const launchSpy = spyOn(packageLauncher, "launchWindowsCodexCompatibilityAsync").mockImplementation(() => {
+      if (++launches > 1) return Promise.resolve(success);
+      return new Promise(resolve => { complete = () => resolve(success); entered(); });
+    });
+    try {
+      const older = io.runtime.launch().then(value => ({ value }), error => ({ error }));
+      await started;
+      current = { ...assessedInstall(), proof: { ...assessedInstall().proof!, executableHash: "e".repeat(64) } };
+      // The first check after the change revokes the trial; the next one verifies the newer revision.
+      await expect(io.runtime.launch()).rejects.toThrow("build_unverified");
+      const newerRevision = probe.binding().revision;
+      const newer = io.runtime.launch().then(value => ({ value }), error => ({ error }));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(probe.binding().revision).toBe(newerRevision);
+      complete();
+      for (const result of await Promise.all([older, newer])) {
+        expect(result).toHaveProperty("error");
+        expect(String((result as { error: unknown }).error)).toContain("desktop_compatibility_build_unverified");
+      }
+      expect(launches).toBe(1);
+    } finally { complete?.(); launchSpy.mockRestore(); }
+  });
+
   for (const completion of ["success", "rejection"] as const) {
     test(`late ${completion} from a replaced runtime cannot invalidate its successor`, async () => {
       let hold = false, entered!: () => void, resolveOld!: (value: boolean) => void, rejectOld!: (error: Error) => void;
@@ -245,7 +412,7 @@ describe("optional native compatibility runtime", () => {
     }, 15_000);
   }
 
-  for (const failure of ["same-version-replacement", "unverifiable", "ABA"] as const) {
+  for (const failure of ["same-version-replacement", "executable-bytes", "unverifiable", "ABA", "version-update"] as const) {
     test(`${failure} revokes package-bound trial consent before another corrected response`, async () => {
       let current: DesktopAppInstall | null = assessedInstall();
       let probe!: ReturnType<typeof createInstalledBuildProbe>;
@@ -260,7 +427,11 @@ describe("optional native compatibility runtime", () => {
       expect((await read()).rate_limit.allowed).toBe(true);
       const generation = io.runtime.status().usage!.generation;
       current = failure === "unverifiable" ? null
+        : failure === "version-update" ? assessedInstall("26.1007.9446.0")
+        : failure === "executable-bytes" ? { ...assessedInstall(), proof: { ...assessedInstall().proof!, executableHash: "e".repeat(64) } }
         : { ...assessedInstall(), proof: { ...assessedInstall().proof!, executableIdentity: "1024:100:201" } };
+      // A newer proof-verified build admits but its changed identity still revokes the trial.
+      if (failure === "version-update") expect(await probe.check()).toBe(true);
       if (failure === "ABA") {
         expect(await probe.check()).toBe(true);
         current = assessedInstall(); expect(await probe.check()).toBe(true);
@@ -369,22 +540,23 @@ describe("optional native compatibility runtime", () => {
   });
 
   test("only a serving runtime attests PAC preservation and stop/start invalidates the captured generation", async () => {
-    const io = fixture();
+    const io = fixture(true, undefined, undefined, () => createInstalledBuildProbe(async () => assessedInstall()));
+    const install = assessedInstall();
     expect(readDesktopCompatibilityLaunch()).toBeNull();
     await io.runtime.start();
     const pacUrl = io.runtime.getPacUrl()!;
     expect((await fetch(pacUrl)).status).toBe(200);
     const root = { pid: 100, parentPid: 50, createdAt: "fixture", executable: "ChatGPT.exe", commandLine: `ChatGPT.exe --proxy-pac-url=${pacUrl}` };
-    const captured = captureWindowsCompatibilityContext([root]);
+    const captured = captureWindowsCompatibilityContext([root], install);
     expect(captured.codexCompatibilityGeneration).toBe(readDesktopCompatibilityLaunch()!.generation);
-    expect(() => assertWindowsCompatibilityContext(captured)).not.toThrow();
+    expect(() => assertWindowsCompatibilityContext(captured, install)).not.toThrow();
     const stopping = io.runtime.stop();
     expect(readDesktopCompatibilityLaunch()).toBeNull();
     await stopping;
     await io.runtime.start();
     expect(io.runtime.getPacUrl()).toBe(pacUrl);
-    expect(() => assertWindowsCompatibilityContext(captured)).toThrow("desktop_compatibility_launch_owner_unverified");
-    expect(() => assertWindowsCompatibilityContext(captureWindowsCompatibilityContext([root]))).not.toThrow();
+    expect(() => assertWindowsCompatibilityContext(captured, install)).toThrow("desktop_compatibility_launch_owner_unverified");
+    expect(() => assertWindowsCompatibilityContext(captureWindowsCompatibilityContext([root], install), install)).not.toThrow();
   });
   test("observation cancels a pending apply request before its build preflight can finish", async () => {
     let pending = false, entered!: () => void, release!: (value: boolean) => void;

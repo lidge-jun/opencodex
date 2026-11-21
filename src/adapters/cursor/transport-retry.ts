@@ -30,6 +30,7 @@ export const CURSOR_BUDGET_TARGET_KEY = "cursor";
 export interface CursorTurnExecutionOptions {
   /** Absent means unlimited; present means every retry is a physical send the request pays for. */
   sendBudget?: RequestExecutionBudget;
+  beforePhysicalSend?: () => void;
   /** Observes each physical run request; `ordinal` counts from 1 within this turn. */
   onPhysicalSend?: (send: { ordinal: number; recovery?: AttemptRecoveryKind }) => void;
 }
@@ -103,6 +104,7 @@ export async function runCursorTurnWithRetry(
   onEvent: (message: CursorServerMessage, transport: CursorTransport) => void,
   execution: CursorTurnExecutionOptions = {},
 ): Promise<void> {
+  let ordinal = 0;
   for (let attempt = 0; ; attempt++) {
     if (signal?.aborted) throw abortError(signal);
     // Admitted before the transport is built: a refused send must not open a connection, and
@@ -112,16 +114,19 @@ export async function runCursorTurnWithRetry(
       sendClass: "transient",
       targetKey: CURSOR_BUDGET_TARGET_KEY,
     });
-    if (decision && (!decision.allowed || !decision.permit.use())) {
+    if (decision && !decision.allowed) {
       throw new SendBudgetExhaustedError(providerErrorDestinationLabel(CURSOR_BUDGET_TARGET_KEY));
     }
-    execution.onPhysicalSend?.({
-      ordinal: attempt + 1,
-      // Cursor retries only pre-commit transport failures, so every retry send is the
-      // connection-reset class; there is no re-send of a turn the server may have accepted.
-      ...(attempt > 0 ? { recovery: "connection-reset" as const } : {}),
-    });
-    const transport = makeTransport(input);
+    const permit = decision?.allowed ? decision.permit : undefined;
+    const onRunDispatch = () => {
+      signal?.throwIfAborted();
+      execution.beforePhysicalSend?.();
+      if (permit && !permit.use()) throw new SendBudgetExhaustedError(providerErrorDestinationLabel(CURSOR_BUDGET_TARGET_KEY));
+      execution.onPhysicalSend?.({ ordinal: ++ordinal, ...(attempt > 0 ? { recovery: "connection-reset" } : {}) });
+    };
+    let transport: CursorTransport;
+    try { transport = makeTransport({ ...input, onRunDispatch }); }
+    catch (error) { permit?.release(); throw error; }
     let emittedAny = false;
     let closed = false;
     // Best-effort close: a cleanup failure must never replace the run outcome (or kill
@@ -173,6 +178,7 @@ export async function runCursorTurnWithRetry(
       await closeOnce();
       await sleepWithAbort(backoffMs, signal);
     } finally {
+      permit?.release();
       await closeOnce();
     }
   }

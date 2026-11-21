@@ -316,7 +316,33 @@ the full filtered window. A valid unchanged prefix returns only appended rows; `
 the client window after edits, eviction, query changes or restart. Invalid cursors return HTTP 400 with
 `error.code: "invalid_cursor"`. Authentication is unchanged. The dashboard falls back to full snapshots
 for older servers. This reduces response bytes for stable windows; server projection remains bounded
-by the current window size.
+by the current window size. Logs and request-history responses omit `usage.providerCredits` on
+requests and attempts with an invalid or incomplete credit reading. A measured zero is returned as `0`.
+
+A successful `/api/logs` (and request-history) `displayMetrics.cost.estimate` may carry an optional
+`billing` object naming how the row was charged, so a client never has to infer an allocation the
+proxy does not have:
+
+- `{ "source": "provider-credits", "providerCredits": <number>, "creditPriceUsd": <number> }` — the
+  total is `providerCredits x creditPriceUsd` and the four token component fields are placeholders,
+  not a split. Every attempt that shares one credit price reports this; an explicit zero credit
+  reading reports zero. Missing credits with no output leave the cost unavailable.
+- `{ "source": "mixed" }` — the attempts were not all billed the same way (a credit attempt beside a
+  token-priced one, or two credit prices), so only the per-attempt estimates have a split; the
+  parent total is still their sum.
+
+Absent `billing` on an available estimate indicates token pricing. A previously recorded row
+with a retained valid reading can get credit pricing at the current configured rate, regardless
+of when it was logged. Positive-output rows without a reading can fall back to tokens. Clients
+can show the token component breakdown when `billing` is absent. For a credit-priced estimate,
+`tokens` is `null` if the token breakdown could not be normalized.
+
+A missing credit reading with zero output, or a count or price that cannot yield a representable
+credit estimate, gives `{ "kind": "unavailable", "reason": "credit_cost_unrepresentable" }`.
+A Combo with an eligible attempt in that state reports the same reason on the parent. Otherwise,
+a Combo with an unpriced attempt reports `combo_attempt_unavailable` on the parent. A token-priced
+row or attempt whose token count exceeds the pricing bound reports `invalid_usage`. See
+[Kiro request credits](/guides/kiro-request-credits/#bounds-and-unrepresentable-values).
 
 Successful `/api/logs` `displayMetrics.decodeTokPerSecond` values carry
 `timingBasis: "generation-window" | "legacy-post-visible-output"` alongside `kind`, `value`
@@ -408,6 +434,10 @@ confidence/probability, and optional numeric decision usage. It never stores pro
 credentials, tool arguments, or raw TypeSafe responses. Oversized rows retain the same positive
 `usageIncomplete` diagnostic as the ordinary usage endpoint.
 
+For routed image and web-search turns, `sendCount` includes upstream adapter retries.
+Each model send for these turns uses the shared request send budget, including retries and later tool rounds. A send refused at the cap does not increment `sendCount`. For direct hosted web search, the default request budget covers the loop’s bounded model rounds, including the forced-answer retry and any enabled recovery, rate-limit, and connection-reset retries. For direct hosted media, the default budget covers the configured rounds, same-target 429 retries and the transport’s bounded send attempts. Explicit send caps still apply.
+A replacement stopped before upstream dispatch adds no send.
+
 New xAI attempts in `usage.jsonl` include a request-time `credentialSource`: `grok-oauth`
 for the resolved Grok CLI OAuth transport, or `xai-api-key` for the public xAI API key
 transport. This fixed label contains no credential or account identifier. It belongs to
@@ -433,8 +463,15 @@ the per-account usage summaries. A provider without that suffix, such as a pool-
 request, has no tag. Older rows and malformed values omit the field.
 
 Key selection is recorded after queued requests have been rebuilt for the current selection.
-When a retry changes keys, `attempts` retains a separate record for the preceding key, including
-reported usage from failed responses. Missing usage remains unreported. Routed adapter terminals
+When a retry changes keys, `attempts` retains a separate record for the preceding key. After an
+upstream attempt has been sent, credential recovery records a separate attempt when the proxy
+dispatches the replacement, even if both attempts use the same account label. If local pacing
+rejects the replacement, the request can have status 429 while its sole upstream attempt retains status 401. The same
+dispatch rule applies to combo members, runTurn adapters, and native Responses compaction.
+Each attempt retains the usage the proxy captures for it. The xAI Responses OAuth replay discards
+the refused 401 body, so usage in that body remains unreported. A replacement can carry estimated
+usage from its rebuilt request when provider totals are unavailable.
+`usageStatus` distinguishes reported, estimated, and unreported usage. Routed adapter terminals
 are observed before image/search loops or continuation guards combine their usage. Consumers
 sum the flat attempts by provider/account and do not add the parent combo total again. These
 records identify usage; provider quota percentages remain separate upstream observations.
@@ -691,7 +728,7 @@ Labels are read on login/import or refresh, never inferred from quota percentage
 | `POST /api/oauth/login/cancel` | Cancel a public in-progress OAuth flow or dismiss its settled failure; an optional `flowId` names one flow (a flow of another provider is refused) | 400 unknown provider |
 | `GET /api/oauth/status` | Poll one provider's OAuth flow; for xAI, `flowId` selects the device attempt, while omitting it retains provider-wide polling. A failed flow reports a fixed public `error` and a machine-readable `errorCode` from the same vocabulary as the paste response, including `oauth_authentication_failed` for xAI denial or a refused redirect and `provider_unreachable` for an xAI server failure | 400 unknown provider |
 | `POST /api/oauth/logout` | Remove the selected provider credential | 400 unknown provider; `oauth_mutation_busy` |
-| `GET /api/oauth/accounts` | List masked accounts; Anthropic and generic OAuth account rows include their `paused` state. Kiro rows include `autoSelectable` and a closed `skipReason` when excluded from automatic selection; an active singleton may still send. Quota remains opt-in. | 400 invalid provider |
+| `GET /api/oauth/accounts` | List masked accounts. Anthropic and generic OAuth rows include `paused`. Automatically paused rows can include `pauseDetails` (reason and timestamp) and a sibling `pauseEvidence` with `statusCode` and an optional redacted `message` of up to 300 characters. A conclusive first-party Cloud Code Assist ban can also include a validated Google `appealUrl` and optional plain `appealText` inside `pauseEvidence`. Resuming clears both fields. Kiro rows include `autoSelectable` and a closed `skipReason` when excluded from automatic selection; an active singleton may still send. Quota remains opt-in. | 400 invalid provider |
 | `DELETE /api/oauth/accounts` | Remove one account | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | Select the active OAuth account | 400 invalid provider/account; 404 account missing; 409 account paused; `oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `selectionCommitted: true`, `retryable: true`; account change saved; resend the same request even if already active) |
 | `PUT /api/oauth/accounts/pause` | Pause or resume one Anthropic or generic OAuth account. Body `{ provider, accountId, paused }`; pausing the active account selects the next usable account when available. Pause is durable and independent of pool enablement; resume preserves health and credentials. | 400 unsupported provider or invalid body; 404 account missing; `oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `pauseCommitted: true`, `retryable: true`; pause state saved; preserve the account and pause state, add `retryAffinityReset: true`, and retry to confirm the reset even after a server restart) |
@@ -720,10 +757,10 @@ keys are not returned to dashboard clients.
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
-| `GET /api/protocols` | Return the protocol contract version, which APIs are served, the protocol settings, the current policy revision, and the request features a preview understands | — |
+| `GET /api/protocols` | Return the protocol contract version, which APIs are served (including the top-level `geminiSurface`), the protocol settings, the current policy revision, and the request features a preview understands | — |
 | `GET /api/protocols?provider=<name>` | The same body plus `provider`: `{ name, adapter, adapterSource, authMode, upstream, modelOverrides: [{ model, adapter, source }] }` — the wire the provider receives and who decided it (`hard-pin`, `operator`, `registry`, `provider-default`), with up to 64 models on a different wire (`modelOverridesTruncated: true` past that). No credential or base URL | 400 empty, repeated, over 200 characters, or control characters; 404 no provider with that name |
 | `POST /api/protocols/plan` | Preview the path a request would take: `{ "model": "...", "inbound": "responses" \| "chat" \| "messages", "features": [...] }` returns each route candidate's request and response path, delivery mode, fidelity, feature effects, and reasons | 400 invalid JSON, unknown field, model over 200 characters, unknown inbound, or more than 24 / unknown features |
-| `PATCH /api/protocols/settings` | Change protocol settings: `{ "messagesEnabled"?: boolean, "unrepresentable"?: "legacy" \| "reject", "rollout"?: { ...boolean switches } }`. Returns the same body as `GET /api/protocols`. Closing Messages also sets `claudeCode.enabled` to `false` in the same save; opening it writes only `apiSurfaces.messages.enabled` | 400 invalid JSON, empty body, unknown field, wrong type, or `rollout.managedMessagesNativeOAuth` without `rollout.managedMessagesNative`; 409 configuration busy; 500 save failed (nothing changes) |
+| `PATCH /api/protocols/settings` | Change protocol settings: `{ "messagesEnabled"?: boolean, "geminiEnabled"?: boolean, "unrepresentable"?: "legacy" \| "reject", "rollout"?: { ...boolean switches } }`. Returns the same body as `GET /api/protocols`. Closing Messages also sets `claudeCode.enabled` to `false` in the same save; opening it writes only `apiSurfaces.messages.enabled` | 400 invalid JSON, empty body, unknown field, wrong type, or `rollout.managedMessagesNativeOAuth` without `rollout.managedMessagesNative`; 409 configuration busy; 500 save failed (nothing changes) |
 
 A preview is computed from configuration alone. It sends nothing to any provider, costs nothing,
 does not advance combo rotation, and is not logged. The API page in the dashboard shows the same
@@ -1051,11 +1088,29 @@ create a general pairing session. Controls stay disabled until that scope is ver
 grant nor the exchange changes certificate trust, runtime state or the auto-start preference.
 
 Start requires an already prepared, trusted certificate, a freshly verified native file-based
-ChatGPT login and the assessed Codex Windows build `26.924.2738.0`. It begins in Observe mode.
+ChatGPT login and an official Microsoft Store Codex package for the current Windows user.
+Windows must verify the signed package contents and report a valid OpenAI Authenticode signature
+for the installed `ChatGPT.exe`. Failure or unavailable proof returns `build_unverified`.
+Observation starts in Observe mode.
 HTTP/HTTPS and authenticated SOCKS5 outbound proxies use the same explicit selection for HTTP,
 identity verification and upgraded sockets. NO_PROXY is honored; failures never retry directly.
 An invalid or unsupported setting returns `egress_proxy_invalid`. Start never registers a certificate or changes
-login. Launch preserves package identity and refuses an app that is already running.
+login. Launch refuses an app that is already running. It checks the verified full package name and
+executable SHA-256 before package activation, then checks the process image and routing argument
+before reporting success. Runtime-owned launch uses an asynchronous child, so PAC and relay
+requests remain serviceable while the full proof runs. Stop aborts and drains that child before
+another runtime can start. A refused or indeterminate package activation revokes the account-wide
+trial and initiates cleanup of the compatibility runtime and its managed connections. Closure
+is confirmed only after cleanup succeeds. This also applies to a managed Codex restart, and to an
+activation that fails after a proof refresh changed the verified build. A launch reports success
+only for the build revision it started with; a request that verified a different revision
+receives `build_unverified` instead.
+OpenCodeX leaves any PID returned by activation alone. Check `runtime.phase` in the response:
+if cleanup fails, HTTP 409 includes `cleanup-required`; retry Stop and confirm `off` before
+starting again. After successful cleanup, callers can start directly. For either activation
+failure path, save drafts, close any Codex window left running, start observation, and select
+**Open Codex** to restore the managed connection. Then wait for a fresh eligible exhaustion
+snapshot and explicitly consent to a new Apply request.
 PAC and CONNECT ports are persisted after successful first binding and reused on restart.
 `connection_unavailable` means binding failed; `connection_invalid` or `connection_changed`
 means stored endpoint identity could not be accepted. These failures never silently rotate
@@ -1065,15 +1120,16 @@ process's bound OpenCodex listener. Runtime status may expose `contextFailure` f
 or `build_unverified`. These states disable response correction without claiming an app repair.
 
 A status response can also carry `buildAssessment`, the public metadata of the last completed
-build check: `assessedVersion` (the exact package this runtime was assessed against),
+build check: `assessedVersion` (the baseline holding native acceptance evidence),
 `observedVersion`, `verified` and `completedAt`. It records a past observation, not a live
 install reading: a stopped runtime, an app update or a pending or interrupted check can leave it
 older than the installed package, and only a completed check replaces it. `observedVersion` is
-null unless discovery matched the assessed package family and entry point; an identified newer
-build keeps its own version with `verified` false, and `verified` always describes the package
-observed at `completedAt`, never whatever is installed later. The field is absent until the
-service creates its probe during start and `null` until that probe finishes a check; reading
-status never starts one.
+null unless discovery matched the assessed package family and entry point; an identified build
+keeps its own version, and `verified` reports whether the package passed its official package
+proof at `completedAt`, never whatever is installed later. The field is absent until the
+service creates its probe during start. It is `null` only when a probe exists and no completed
+assessment is available. A previous completed assessment remains visible while a replacement
+probe is pending, until a new check completes; reading status never starts a check.
 
 Apply requires a recently observed eligible exhaustion snapshot and lasts at most three minutes
 at the response layer. It changes two account-UI gate flags, not usage percentages, credits,

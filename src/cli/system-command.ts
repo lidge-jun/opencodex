@@ -113,12 +113,15 @@ function settingsUpdateLines(
   const switches = recordValue(recordValue(result)?.codexDesktopSwitches);
   if (!switches) return ["System settings updated."];
 
+  const apply = recordValue(switches.apply);
+  const refused = apply?.applied === false && apply.reason === "injection_refused";
   const lines: string[] = [];
   const appendSwitch = (key: string, label: string): boolean => {
     const state = recordValue(switches[key]);
     if (!state || typeof state.stored !== "boolean"
       || (typeof state.effective !== "boolean" && state.effective !== null)) return false;
     lines.push(`${label}: stored ${state.stored ? "on" : "off"}.`);
+    if (refused) return true;
     if (state.effective === null) {
       // `null` is reported for both withheld cases; the apply reason is the only place
       // that still distinguishes them, so the line has to read it rather than claim
@@ -146,7 +149,6 @@ function settingsUpdateLines(
     return ["System settings updated."];
   }
 
-  const apply = recordValue(switches.apply);
   const authSource = recordValue(switches.authSource);
   if (!apply || typeof apply.applied !== "boolean" || !authSource || typeof authSource.summary !== "string") {
     return ["System settings updated."];
@@ -155,7 +157,7 @@ function settingsUpdateLines(
     lines.push("Codex config: ~/.codex/config.toml was rewritten.");
   } else {
     const detail = typeof apply.detail === "string" && apply.detail.length > 0 ? ` Details: ${apply.detail}` : "";
-    const retry = apply.reason === "external_provider"
+    const retry = refused || apply.reason === "external_provider"
       ? ""
       : apply.reason === "ownership_undetermined"
       ? " Resolve the reported config.toml read error, then inspect 'ocx system settings --json'."

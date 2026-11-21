@@ -67,7 +67,12 @@ function acquire(deps: ClientLifecycleLockDeps, name = "client-desktop-lifecycle
       : resolve(deps.lockPath) + suffix;
     preparePath(path);
     database = new Database(path, { create: true });
-    database.exec("PRAGMA locking_mode = NORMAL; PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    database.exec("PRAGMA locking_mode = NORMAL; PRAGMA busy_timeout = 0");
+    // This file carries an OS lock only. Do not create a disk journal for its
+    // empty transaction: Windows changes the directory's ACL freshness stamp.
+    const journal = database.query<{ journal_mode: string }, []>("PRAGMA journal_mode = MEMORY").get();
+    if (journal?.journal_mode !== "memory") throw new Error("Client lifecycle lock requires an in-memory rollback journal");
+    database.exec("BEGIN IMMEDIATE");
     return database;
   } catch (error) {
     try { database?.close(); } catch { /* preserve acquisition failure */ }

@@ -1,6 +1,6 @@
 /** Provisioning choices are local enabled-only overrides, never writes to Home policy. */
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { lstatSync, mkdirSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { atomicWriteFileNoFollow } from "../config/atomic-write";
 import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
@@ -61,4 +61,16 @@ export function initialRouteOutcomeMetadata(linkId: string, document: HomeRouteI
       ? { ...row, initialIntent: { enabled: entry.enabled }, initialRevision: entry.revision } : row;
   };
 }
-export function clearInitialRouteIntent(linkId: string, root = routeIntentStatePath()): void { writeInitial(linkId, {}, root); }
+export function clearInitialRouteIntent(linkId: string, root = routeIntentStatePath()): void {
+  assertNotRealHomeUnderTest(root);
+  const path = recordPath(linkId, root);
+  // ENOENT below a broken directory link is not proof that the selection is absent.
+  let entry = path;
+  while (!lstatSync(entry, { throwIfNoEntry: false })) {
+    const parent = dirname(entry);
+    if (parent === entry) break;
+    entry = parent;
+  }
+  if (entry !== path && statSync(entry).isDirectory()) return;
+  writeInitial(linkId, {}, root);
+}

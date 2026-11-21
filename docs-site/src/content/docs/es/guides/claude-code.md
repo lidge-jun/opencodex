@@ -24,6 +24,24 @@ Los alias de enrutamiento seleccionados se emparejan con etiquetas `ANTHROPIC_DE
 
 Solo se aplican los ID de nivel explícitamente seleccionados. Un nivel no establecido deja intacto su ID de modelo existente y su etiqueta de visualización. Reemplazar un alias con un ID de origen u otro no alias también elimina su etiqueta generada coincidente. La vista previa muestra la eliminación de etiquetas como un reemplazo vacío; las etiquetas personalizadas y las configuraciones no relacionadas permanecen intactas. Los archivos que faltan son compatibles, pero los archivos vacíos o corruptos existentes son rechazados. Los cambios desde la vista previa requieren una nueva vista previa. Aplique brevemente mueve el documento actual a un directorio privado `model-default-backups/apply-*/settings.json` bajo el directorio de configuración Claude, valida el documento capturado y luego publica exclusivamente. Nunca reemplaza el nuevo archivo de un escritor concurrente, incluso durante la reversión. Evite editar o iniciar Claude mientras aplica: otro lector puede ver el breve intervalo de archivo faltante. El sistema de archivos debe admitir movimientos del mismo volumen y enlaces duros; las operaciones no compatibles fallan sin sobrescribirlas. Después de una aplicación interrumpida o una restauración automática fallida, inspeccione esta ubicación de copia de seguridad y reconcilie las ediciones más recientes antes de restaurar. El comportamiento del sistema de archivos Windows / Linux debe verificarse por separado; una prueba local no es una prueba multiplataforma. Verifique el proveedor/modelo resuelto en los registros de solicitudes: la selección de un nivel no es prueba del modelo real servido. Esto es especialmente útil para los clasificadores externos que solicitan Sonnet.
 
+<a id="weekly-subscription-reserve"></a>
+
+## Reserva semanal de la suscripción
+
+Para reservar cuota semanal de Claude para el trabajo interactivo, activa
+[`subscriptionReserve`](/es/reference/configuration/#claude-subscription-reserve) y configura un
+destino enrutado. Añade `x-ocx-priority: background` en tu cliente o script a cada solicitud
+`/v1/messages` que quieras desviar cuando la utilización sea alta. Las solicitudes sin esa marca se
+consideran interactivas, incluidas las de Haiku, las de subagentes y las breves sin herramientas.
+
+El proxy obtiene la utilización semanal de las respuestas de paso directo de la misma credencial
+de suscripción y del mismo servidor de origen. Solo desvía solicitudes que usarían ese paso directo.
+Las solicitudes con hilos de mensajes conservan su conexión con el servidor de origen.
+Las observaciones caducan a los 30 minutos o al reiniciarse la ventana semanal, lo que ocurra primero,
+y se borran al reiniciar el proxy. Las solicitudes que ya usan credenciales administradas por el proxy
+siguen su enrutamiento habitual. El proveedor alternativo recibe las solicitudes marcadas que se
+desvían y aplica sus condiciones habituales de enrutamiento y facturación.
+
 <a id="claude-oauth-account-pool-experimental"></a>
 
 ## Claude Grupo de cuentas OAuth (experimental)
@@ -86,7 +104,7 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Umbral de compactación de contexto automático (predeterminado `829800`). En lanzamientos enrutados, `ocx claude` usa `--settings` para configurar ventanas de compactación por modelo cuando el catálogo contiene ventanas más pequeñas. |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (opcional) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (opcional; legado) `ANTHROPIC_SMALL_FAST_MODEL` también) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`; en un lanzamiento de suscripción, una ranura no establecida obtiene el `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]` nativo, por lo que `--model opus`, `sonnet` y `fable` mantienen su contexto de 1M |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`. Al iniciar localmente con una suscripción, con `nativePassthrough` activado y el modo de cómputo de contexto de 1M (el predeterminado), cada ranura sin configurar que cumpla los requisitos del marcado automático recibe su modelo nativo: `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]`. Fable usa `claude-fable-5-2[1m]` con Claude Code 2.1.290 o posterior y `claude-fable-5-1[1m]` si la versión es anterior o desconocida. Si `claudeCode.contextAccounting` se establece en `200k`, se desactiva el marcado automático `[1m]` y las ranuras sin configurar quedan vacías. El bloque de entorno manual del panel solo exporta Fable cuando se configura su ranura. Si está vacía, Claude Code elige el modelo Fable en la terminal donde se pega el bloque. |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | La etiqueta `/model` para una ranura de nivel que OpenCodex establece en un alias encaminado, tal como `gpt-6.1-sol (native)` para `ocx-claude-native--gpt-6.1-sol`. Sin ella, Claude Code etiquetas que rema con el alias. El alias mantiene el ID de modelo seleccionado. Cuando el env del sistema está encendido, el entorno launchd y el gancho de la carcasa obtienen el mismo par de ranura y etiqueta. Una ranura o etiqueta que usted mismo establezca se deja sola |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1` cuando `alwaysEnableEffort` está encendido (condicional) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` cuando está establecido (condicional; no se inyecta de forma predeterminada; se aplica el valor de Claude Code - ver [Los esquemas de herramientas MCP llenan el contexto](#troubleshooting) ) |

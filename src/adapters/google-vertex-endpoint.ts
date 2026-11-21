@@ -70,6 +70,17 @@ export function vertexInferenceUrl(selection: VertexEndpointSelection, modelId: 
   }
   const locationError = googleVertexLocationConfigError(selection.location);
   if (locationError) throw new Error(locationError);
-  const host = selection.location === "global" ? "aiplatform.googleapis.com" : `${selection.location}-aiplatform.googleapis.com`;
+  const host = vertexHostForLocation(selection.location);
   return `https://${host}/v1/projects/${encodeURIComponent(selection.project)}/locations/${selection.location}/publishers/google/models/${modelId}:${method}${streamParam}`;
+}
+
+/**
+ * The inference authority for an already validated location: `global` uses the global host, the
+ * `us` and `eu` multi-regions use their regional-endpoint (rep) hosts, and every region keeps
+ * `<location>-aiplatform.googleapis.com` (CPA's vertexBaseURL table).
+ */
+export function vertexHostForLocation(location: string): string {
+  if (location === "global") return "aiplatform.googleapis.com";
+  if (location === "us" || location === "eu") return `aiplatform.${location}.rep.googleapis.com`;
+  return `${location}-aiplatform.googleapis.com`;
 }

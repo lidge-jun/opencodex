@@ -1,3 +1,4 @@
+import { responsesExtraContentFromProviderMetadata } from "../../responses/provider-opaque-metadata";
 import { isProxyError, hasProxyErrorMessage } from "../../lib/client-error-body";
 import type { FailureVerdictSink } from "../../chat/failure-verdict";
 import { ownedChatErrorResponse } from "../../chat/outbound";
@@ -44,9 +45,12 @@ export interface ChatCompletionEncodeOptions extends AdapterEventEncodeOptions {
   model: string;
   failureVerdictSink?: FailureVerdictSink;
   proxyErrorContext?: object;
+  /** The client set `stream_options.include_usage`: a failed terminal's usage precedes its error frame. */
+  includeUsage?: boolean;
 }
 
-function createChatCompletionWriter(sink: ClientFrameSink, model: string, failureVerdictSink?: FailureVerdictSink, proxyErrorContext?: object): ClientWireWriter {
+function createChatCompletionWriter(sink: ClientFrameSink, model: string, failureVerdictSink?: FailureVerdictSink, proxyErrorContext?: object,
+  includeUsage = false): ClientWireWriter {
   const id = completionId();
   const created = Math.floor(Date.now() / 1000);
   let started = false;
@@ -109,7 +113,7 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string, failur
     frame.choices = [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }];
     emit(frame);
   };
-  const emitToolCall = (toolIndex: number, callId: string, name: string, args: string) => {
+  const emitToolCall = (toolIndex: number, callId: string, name: string, args: string, extra?: Record<string, unknown>) => {
     if (!callId || emittedToolIndexes.has(toolIndex)) return;
     emittedToolIndexes.add(toolIndex);
     ensureRole();
@@ -122,6 +126,7 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string, failur
           id: callId,
           type: "function",
           function: { name, arguments: args },
+          ...(extra ?? {}),
         }],
       },
       finish_reason: null,
@@ -148,8 +153,16 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string, failur
     sink.emitBatch(batch);
     terminated = true;
   };
-  const fail = (message: string, details?: ChatCompletionsStreamFailure) => {
+  const fail = (message: string, details?: ChatCompletionsStreamFailure, usage?: Rec | null) => {
     if (terminated) return;
+    // As the converter: the failed terminal's usage rides its own chunk before the error frame.
+    if (includeUsage && usage) {
+      try {
+        const frame = chunkBase(id, model, created);
+        frame.usage = chatCompletionsUsage(usage);
+        emit(frame);
+      } catch { /* the error frame below still ends the stream */ }
+    }
     terminated = true;
     failed = true;
     // A real error event, then an abnormal close without [DONE].
@@ -228,7 +241,8 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string, failur
       toolIndexByItemId.set(call.itemId, toolIndex);
       if (call.name) toolNameByIndex.set(toolIndex, call.name);
       // The completed arguments are never empty ("{}" at least), so they win over the stream.
-      emitToolCall(toolIndex, call.callId, call.name || toolNameByIndex.get(toolIndex) || "", call.arguments);
+      emitToolCall(toolIndex, call.callId, call.name || toolNameByIndex.get(toolIndex) || "", call.arguments,
+        responsesExtraContentFromProviderMetadata(call.providerMetadata));
     },
     webSearchDone() { /* server-side search has no Chat representation */ },
     terminal(terminal) {
@@ -242,12 +256,13 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string, failur
           finish(outcome.finishReason, terminal.usageOnWire ? responsesUsage(terminal.usage) : null);
         } else {
           fail(outcome.originalFailMessage, { contract: "stream_incomplete",
-            proxyAuthored: isProxyError(terminal) });
+            proxyAuthored: isProxyError(terminal) }, terminal.usageOnWire ? responsesUsage(terminal.usage) : null);
         }
         return;
       }
       const failure = chatCompletionsFailedResponse((terminal.error ?? {}) as unknown as Rec);
-      fail(failure.message, { ...failure.details, proxyAuthored: hasProxyErrorMessage(proxyErrorContext, failure.message, failure.details) });
+      fail(failure.message, { ...failure.details, proxyAuthored: hasProxyErrorMessage(proxyErrorContext, failure.message, failure.details) },
+        terminal.usageOnWire ? responsesUsage(terminal.usage) : null);
     },
     overflow() {
       fail("upstream translation buffer exceeded the safe limit", {
@@ -265,7 +280,8 @@ export function encodeChatCompletionSse(
   events: AsyncIterable<AdapterEvent>,
   options: ChatCompletionEncodeOptions,
 ): ReadableStream<Uint8Array> {
-  return encodeAdapterEventStream(events, sink => createChatCompletionWriter(sink, options.model, options.failureVerdictSink, options.proxyErrorContext), options);
+  return encodeAdapterEventStream(events, sink => createChatCompletionWriter(sink, options.model, options.failureVerdictSink, options.proxyErrorContext,
+    options.includeUsage), options);
 }
 
 /**
