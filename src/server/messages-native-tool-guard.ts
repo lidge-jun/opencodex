@@ -64,6 +64,7 @@ export function guardNativeMessagesEmptyToolCatalog(
   const permittedInputBlocks = new Set<number>();
   let queuedBytes = 0;
   let settled = false;
+  let pendingLineFeed = false;
   const releaseQueued = () => {
     budget.releaseRetained(queuedBytes, scope);
     queuedBytes = 0;
@@ -74,13 +75,13 @@ export function guardNativeMessagesEmptyToolCatalog(
     budget.releaseRetained(permittedInputBlocks.size * 32, scope);
     permittedInputBlocks.clear();
   };
-  const enqueue = (controller: ReadableStreamDefaultController<Uint8Array>, text: string, original = text, refusal = false) => {
+  const enqueue = (controller: ReadableStreamDefaultController<Uint8Array>, text: string, original?: string, refusal = false) => {
     const bytes = Buffer.byteLength(text);
     const reservation = budget.reserveTransient(bytes, scope);
     try {
       const encoded = encoder.encode(text);
       if (refusal) frames?.register(encoded, { client: messagesSseLocalFrame("guard", "") });
-      else hooks?.output(original, encoded);
+      else if (original !== undefined) hooks?.output(original, encoded);
       controller.enqueue(encoded);
       reservation.commitRetained();
       queuedBytes += bytes;
@@ -136,7 +137,8 @@ export function guardNativeMessagesEmptyToolCatalog(
         budget.releaseRetained(32, scope);
       }
     }
-    enqueue(controller, block + delimiter);
+    const frame = block + delimiter;
+    enqueue(controller, frame, frame);
     if (terminal) {
       settled = true;
       clear();
@@ -152,6 +154,7 @@ export function guardNativeMessagesEmptyToolCatalog(
         for (;;) {
           const block = buffer.next();
           if (block) {
+            pendingLineFeed = block.delimiter.endsWith("\r") && buffer.isEmpty();
             buffer.compact();
             process(controller, block.block, block.delimiter);
             return;
@@ -159,8 +162,18 @@ export function guardNativeMessagesEmptyToolCatalog(
           const { done, value } = await reader.read();
           if (settled) return;
           if (!done) {
-            hooks?.input(value, buffer.isEmpty());
-            buffer.append(decoder.decode(value, { stream: true }));
+            hooks?.input(value, buffer.isEmpty(), !buffer.isEmpty() && buffer.endsWithLineFeed(), pendingLineFeed);
+            const fragment = decoder.decode(value, { stream: true });
+            if (pendingLineFeed && fragment.length > 0) {
+              pendingLineFeed = false;
+              if (fragment.startsWith("\n")) {
+                // This LF extends an emitted delimiter and carries no frame origin.
+                buffer.append(fragment.slice(1));
+                enqueue(controller, "\n");
+                return;
+              }
+            }
+            buffer.append(fragment);
             continue;
           }
           buffer.append(decoder.decode());

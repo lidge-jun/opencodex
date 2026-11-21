@@ -151,7 +151,7 @@ export function AddProviderFormPane({
         <div role="note" data-subscription-cli-warning="" className="text-label leading-relaxed" style={{ color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "10px 12px" }}>
           <strong>{t("modal.subscriptionCliTitle")}</strong>
           <div style={{ marginTop: 4 }}>
-            <Trans k={subscriptionCli.key} cmd={subscriptionCli.cmd} vars={{ apiProvider: subscriptionCli.apiProvider }} />
+            <Trans k={subscriptionCli.key} cmd={subscriptionCli.cmd} vars={{ ...subscriptionCli.vars, apiProvider: subscriptionCli.apiProvider }} />
           </div>
         </div>
       ) : preset.keyOptional ? (

@@ -385,6 +385,113 @@ describe("learned rung refusals", () => {
   });
 });
 
+describe("reasoning diagnostic analysis budget", () => {
+  const limit = 1024;
+  const refusal = JSON.stringify({ error: { param: "reasoning_effort", message: "Invalid reasoning effort." } });
+
+  test("accepts a complete refusal at the limit, but not one extra character", async () => {
+    const { metadata } = await load();
+    const exact = refusal.padEnd(limit, " ");
+    expect(exact.length).toBe(limit);
+    expect(metadata.hasConflictingReasoningEffortCode(exact)).toBe(false);
+    expect(metadata.isReasoningEffortRejection(exact)).toBe(true);
+    expect(metadata.hasConflictingReasoningEffortCode(exact + " ")).toBe(true);
+    expect(metadata.isReasoningEffortRejection(exact + " ")).toBe(false);
+  });
+
+  test("exact-refusal failover allows long metadata without widening prose or repair budgets", async () => {
+    const { metadata } = await load();
+    const error = { param: "reasoning_effort", message: "Invalid reasoning effort." };
+    const longMetadata = JSON.stringify({ request_id: "x".repeat(1100), error });
+    expect(metadata.hasConflictingReasoningEffortCode(longMetadata, 16_384)).toBe(false);
+    expect(metadata.hasConflictingReasoningEffortCode(longMetadata)).toBe(true);
+    expect(metadata.isReasoningEffortRejection(longMetadata)).toBe(false);
+    expect(metadata.hasConflictingReasoningEffortCode(longMetadata.padEnd(16_385, " "), 16_384)).toBe(true);
+    for (const message of ["parameter" + " ".repeat(1100) + "!", "a-".repeat(550) + "!"]) {
+      const hostile = JSON.stringify({ error: { ...error, message } });
+      expect(metadata.hasConflictingReasoningEffortCode(hostile, 16_384)).toBe(true);
+    }
+    const conflicting = JSON.stringify({ request_id: "x".repeat(1100), error,
+      details: { param: "temperature", message: "Invalid temperature." } });
+    expect(metadata.hasConflictingReasoningEffortCode(conflicting, 16_384)).toBe(true);
+  });
+
+  test.each([
+    ["parameter whitespace", "parameter" + " ".repeat(1024) + "!"],
+    ["optional field whitespace", "missing" + " ".repeat(1024) + "!"],
+    ["hyphenated token", "a-".repeat(512) + "!"],
+    ["dotted token", "a.".repeat(512) + "!"],
+  ])("declines an oversized %s diagnostic", async (_name, message) => {
+    const { metadata } = await load();
+    const text = JSON.stringify({ error: { message } });
+    expect(text.length).toBeGreaterThan(limit);
+    expect(metadata.hasConflictingReasoningEffortCode(text)).toBe(true);
+    expect(metadata.isReasoningEffortRejection(text)).toBe(false);
+  });
+
+  test("counts the entire envelope and never learns from an accepted prefix", async () => {
+    const { metadata } = await load();
+    const provider = { ...ZEN_GO, reasoningEfforts: ["low", "high", "max"] } as OcxProviderConfig;
+    const conflictingTail = JSON.stringify({ error: { details: { param: "temperature", message: "Invalid temperature." } } });
+    const manySmallFields = JSON.stringify({ error: { param: "reasoning_effort", message: "Invalid reasoning effort.",
+      details: Array.from({ length: 20 }, () => ({ message: "ordinary diagnostic note ".repeat(3) })) } });
+    const inputs = [refusal.padEnd(limit, " ") + conflictingTail, manySmallFields, refusal.padEnd(limit + 1, " ")];
+    try {
+      for (const rejectionText of inputs) {
+        expect(rejectionText.length).toBeGreaterThan(limit);
+        expect(metadata.hasConflictingReasoningEffortCode(rejectionText)).toBe(true);
+        expect(metadata.isReasoningEffortRejection(rejectionText)).toBe(false);
+        expect(metadata.planReasoningEffortDowngrade({ provider, modelId: MUSE_SPARK, requested: "max", rejectionText })).toBeUndefined();
+        expect(metadata.isReasoningEffortLearnedUnsupported(provider, MUSE_SPARK, "max")).toBe(false);
+      }
+    } finally {
+      metadata.resetReasoningMetadataCachesForTests();
+    }
+  });
+
+  test.each([
+    ["cannot use parameter 'reasoning_effort'", false],
+    ["cannot use parameter'reasoning_effort'", false],
+    ["missing parameter `reasoning_effort`", false],
+    ['cannot set param"reasoning.effort"', false],
+    ["unexpected field`reasoning_effort`", false],
+    ["cannot use parameter 'sampling_knob'", true],
+    ["cannot use field`sampling_knob`", true],
+    ["cannot use parametersampling_knob", true],
+    ["the use parameter is invalid", true],
+    ["cannot 'use' parameter", true],
+    ["'missing' parameter is invalid", true],
+  ] as const)("matches complete diagnostic labels: %s", async (diagnostic, conflicting) => {
+    const { metadata } = await load();
+    const message = `Invalid reasoning effort. ${diagnostic}`;
+    for (const text of [message, JSON.stringify({ error: { message } })]) {
+      expect(metadata.hasConflictingReasoningEffortCode(text)).toBe(conflicting);
+      expect(metadata.isReasoningEffortRejection(text)).toBe(!conflicting);
+    }
+  });
+
+  test("keeps separators and quoted field names distinct from effort refusals", async () => {
+    const { metadata } = await load();
+    const forms = [
+      ["Unsupported parameter: 'reasoning_effort'", false],
+      ["Unsupported parameter: 'sampling.knob'", true],
+      ['Unsupported param = "sampling_knob"', true],
+      ["Unsupported argument\tsampling_knob", true],
+      ["Unsupported arg\nsampling_knob", true],
+      ["Unsupported field`sampling_knob`", true],
+      ['Unsupported property \'"custom-flag"', true],
+      ["missing\t'sampling_knob'", true],
+      ["unexpected\tfield 'sampling_knob'", true],
+      ["cannot use\tparameter 'sampling_knob'", true],
+    ] as const;
+    for (const [diagnostic, conflicting] of forms) {
+      const text = JSON.stringify({ error: { message: `Invalid reasoning effort. ${diagnostic}` } });
+      expect(metadata.hasConflictingReasoningEffortCode(text)).toBe(conflicting);
+      expect(metadata.isReasoningEffortRejection(text)).toBe(!conflicting);
+    }
+  });
+});
+
 describe("destination resolution", () => {
   const ZEN = { ...ZEN_GO, baseUrl: "https://opencode.ai/zen/v1" } as OcxProviderConfig;
   const MODEL = { [MUSE_SPARK]: { reasoning: true, options: [{ type: "effort", values: ["low", "high"] }] } };

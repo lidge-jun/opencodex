@@ -22,7 +22,7 @@ import {
 } from "../../oauth-health-display";
 import CodexAccountPool from "../CodexAccountPool";
 import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
-import ClaudeNativePassthroughSetting from "./ClaudeNativePassthroughSetting";
+import NativePassthroughSetting from "./NativePassthroughSetting";
 import { LoginHint as LoginHintView } from "../login-url-block";
 import { OpenBrowserPrefToggle } from "../open-browser-pref-toggle";
 import ProviderAccountQuota from "./ProviderAccountQuota";
@@ -507,7 +507,7 @@ export default function ProviderAuthPanel({
         )}
         {/* An API-key Anthropic row has no pool card, but the global switch still applies to Claude Code. */}
         {item.name === "anthropic" && !isOauth && (
-          <ClaudeNativePassthroughSetting key={`${apiBase}:passthrough`} apiBase={apiBase} targetKey={targetKey} />
+          <NativePassthroughSetting protocol="claude" key={`${apiBase}:passthrough`} apiBase={apiBase} targetKey={targetKey} />
         )}
         {isOauth && (
           <>
@@ -523,7 +523,10 @@ export default function ProviderAuthPanel({
             )}
             {/* Global Claude Code setting; it decides whether Claude Code's own traffic reaches the pool above. */}
             {item.name === "anthropic" && (
-              <ClaudeNativePassthroughSetting key={`${apiBase}:passthrough`} apiBase={apiBase} targetKey={targetKey} />
+              <NativePassthroughSetting protocol="claude" key={`${apiBase}:passthrough`} apiBase={apiBase} targetKey={targetKey} />
+            )}
+            {item.name === "google-antigravity" && (
+              <NativePassthroughSetting protocol="gemini" apiBase={apiBase} targetKey={targetKey} />
             )}
             {item.name === "google-antigravity" && (
               <div className="pwi-auth-add-key">

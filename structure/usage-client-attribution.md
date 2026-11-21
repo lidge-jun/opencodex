@@ -223,8 +223,9 @@ permit is consumed. The import-free `src/lib/executor-physical-send-receipt.ts` 
 final-admission receipt between the HTTP executor and adapter dispatch. Copilot continuation
 recovery checks the attempt identity and send count on the inference response, and pacing
 preserves that receipt when it wraps the body.
-`src/server/responses/compact.ts` creates its native attempt on the first dispatch receipt and
-seals a 401 before starting credential refresh.
+Native compact and native Gemini create a shared attempt at the first physical dispatch and
+seal a 401 before starting credential refresh. See `src/server/responses/compact.ts` and
+`src/server/gemini-native.ts`.
 A Responses-to-Chat handoff carries this pending replay into translated dispatch and hosted
 sidecars. At replacement dispatch, `src/server/passive-route-linker.ts` resolves the passive Lab
 subject from the routed provider configuration, inbound wire and effective adapter. Matching

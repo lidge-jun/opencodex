@@ -4,6 +4,7 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { DICTS } from "../src/i18n/shared";
+import { ApiKeysUsagePanel } from "../src/pages/api-keys-panels";
 import { ApiKeysEndpointsPanel } from "../src/pages/api-keys-endpoints-panel";
 import { parseApiSurfaces, type ApiSurfacesInfo } from "../src/pages/api-keys-utils";
 import { patchProtocolSettings } from "../src/protocol-api";
@@ -20,6 +21,7 @@ const endpoints = {
   chatCompletions: "http://127.0.0.1:10100/v1/chat/completions",
   messages: "http://127.0.0.1:10100/v1/messages",
   models: "http://127.0.0.1:10100/v1/models",
+  geminiModels: "http://127.0.0.1:10100/v1beta/models",
 };
 const authMatrix = [{ endpoint: "/v1/responses", bearer: "rejected" as const, dedicated: "required" as const, xApiKey: "rejected" as const }];
 
@@ -150,6 +152,28 @@ describe("API surface cards", () => {
     await act(async () => root.unmount());
   });
 
+  test("Gemini keeps its own card and patches only its setting on the selected gateway", async () => {
+    const calls: Array<{ url: string; method?: string; body: string }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), method: init?.method, body: String(init?.body) });
+      return Response.json({ ...INFO, geminiSurface: { enabled: true, source: "api-surfaces" } });
+    }) as typeof fetch;
+    const remote = parseApiSurfaces({ ...INFO.surfaces, gemini: { enabled: false, source: "api-surfaces" } });
+    let changed = 0;
+    const { root, container } = await mount({
+      surfaces: remote,
+      apiBase: "http://hub.example:10100",
+      onSurfacesChanged: () => { changed++; },
+    });
+    const card = container.querySelector('[data-surface="gemini"]')!;
+    expect(card.textContent).toContain(endpoints.geminiModels);
+    expect(card.textContent).toContain(en["api.surface.closedNote"]);
+    await act(async () => { card.querySelector<HTMLButtonElement>(".switch")!.click(); });
+    expect(calls).toEqual([{ url: "http://hub.example:10100/api/protocols/settings", method: "PATCH", body: JSON.stringify({ geminiEnabled: true }) }]);
+    expect(changed).toBe(1);
+    await act(async () => root.unmount());
+  });
+
   test("a failed toggle says so and does not reload", async () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({ error: { code: "write_failed" } }), { status: 500 })) as unknown as typeof fetch;
     let changed = 0;
@@ -163,6 +187,25 @@ describe("API surface cards", () => {
     expect(changed).toBe(0);
     await act(async () => root.unmount());
   });
+});
+
+test("the Gemini example follows the API switch and uses the advertised models URL", async () => {
+  const { root, container } = await mount({});
+  const render = (geminiEnabled: boolean) => act(async () => {
+    root.render(
+      <LanguageProvider>
+        <ApiKeysUsagePanel endpoints={endpoints} claudeCodeEnabled geminiEnabled={geminiEnabled} />
+      </LanguageProvider>,
+    );
+  });
+  await render(true);
+  expect(container.textContent).toContain(en["api.usageGeminiTitle"]);
+  expect(container.textContent).toContain(`${endpoints.geminiModels}/google-antigravity/gemini-3.8-flash:generateContent`);
+  expect(container.textContent).toContain('"parts": [{"text":');
+  await render(false);
+  expect(container.textContent).not.toContain(en["api.usageGeminiTitle"]);
+  expect(container.textContent).toContain(en["api.usageMessagesTitle"]);
+  await act(async () => root.unmount());
 });
 
 describe("patchProtocolSettings", () => {

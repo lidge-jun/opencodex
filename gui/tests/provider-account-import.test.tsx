@@ -43,7 +43,17 @@ beforeEach(() => {
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: win.document }, window: { configurable: true, value: win },
     navigator: { configurable: true, value: win.navigator }, localStorage: { configurable: true, value: win.localStorage },
-    fetch: { configurable: true, value: fetchMock },
+    fetch: {
+      configurable: true,
+      value: async (url: RequestInfo | URL, init?: RequestInit) => {
+        // The native passthrough card reads its setting upon mount. Keep that read
+        // separate so the import assertions still count every other network call.
+        if (url === "/proxy/api/protocols" && (init?.method ?? "GET") === "GET") {
+          return Response.json({ settings: { rollout: { geminiNativeAntigravity: false } } });
+        }
+        return fetchMock(url, init);
+      },
+    },
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   host = win.document.createElement("div") as unknown as HTMLElement;

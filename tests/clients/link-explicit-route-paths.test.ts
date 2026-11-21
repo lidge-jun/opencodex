@@ -36,7 +36,7 @@ const WITH = { proxy: [ROUTE.proxyCommand], user: ["ubuntu"], port: ["22"] };
 const WITHOUT = { proxy: [], user: [], port: [] };
 
 test.each([[ROUTE, WITH], [null, WITHOUT]] as const)("platform discovery, inspection and purge with route %p", async (route, expected) => {
-  const { runner, seen } = recording(argv => argv.at(-1) === "cmd /c echo %OS%" ? { code: 127, stdout: "", stderr: "" } : { code: 0, stdout: "Linux\nocx-platform:Linux\n", stderr: "" });
+  const { runner, seen } = recording(argv => argv.at(-1) === "cmd.exe /c echo %OS%" ? { code: 127, stdout: "", stderr: "" } : { code: 0, stdout: "Linux\nocx-platform:Linux\n", stderr: "" });
   await requireRemotePlatform(runner, "pen-7f3a9c", route, KNOWN_HOSTS);
   await requireRemotePlatformFramed(runner, "pen-7f3a9c", route, KNOWN_HOSTS);
   await inspectRemoteChildRuntime(runner, "pen-7f3a9c", route, KNOWN_HOSTS, "posix");

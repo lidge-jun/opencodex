@@ -55,7 +55,7 @@ import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
-import { routedSlug, slugEquals } from "../../providers/slug-codec";
+import { hasRoutedSlug, routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
@@ -1537,35 +1537,8 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
   }
   if (url.pathname === "/api/claude-code" && req.method === "GET") {
     const models = await fetchAllModels(config);
-    const { listCatalogNativeSlugs } = await import("../../codex/catalog");
-    const { claudeCodeAlias, claudeCodeNativeAlias } = await import("../../claude/alias");
     const { buildClaudeContextWindows, effectiveModelEnv, nativeClaudePassthroughFor, probeClaudeCodeVersionForTierFill } = await import("../../claude/context-windows");
     const { visibleNativeSlugs } = await import("../../codex/catalog");
-    const disabled = new Set(config.disabledModels ?? []);
-    const isDisabled = (provider: string, id: string) =>
-      [...disabled].some(stored => slugEquals(stored, provider, id));
-    const available = [
-      ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
-      // Claude-facing values stay RAW native selectors (resolved inbound via routeModel,
-      // which accepts the raw full-slash form); only the disabled check goes tolerant.
-      ...models.filter(m => !isDisabled(m.provider, m.id)).map(m => `${m.provider}/${m.id}`),
-    ];
-    const aliases: { id: string; display_name: string }[] = [];
-    // Resolved once, not per model: with the global fast switch on, Claude Code discovers the
-    // fast identity, so the dashboard must list the same id rather than the umbrella one.
-    const cursorFastIdFor = config.fastMode === true
-      ? (await import("../../adapters/cursor/catalog")).cursorFastIdFor
-      : undefined;
-    for (const slug of listCatalogNativeSlugs()) {
-      // Readable CLI-surface alias with hash fallback (devlog 050 / audit 051 #2) —
-      // the same shared helper the /v1/models ?ids=cli path uses.
-      if (!disabled.has(slug)) aliases.push({ id: claudeCodeNativeAlias(slug), display_name: `${slug} (native)` });
-    }
-    for (const m of models) {
-      if (isDisabled(m.provider, m.id)) continue;
-      const listedId = (m.provider === "cursor" ? cursorFastIdFor?.(m.id) : undefined) ?? m.id;
-      aliases.push({ id: claudeCodeAlias(m.provider, listedId), display_name: `${listedId} (${m.provider})` });
-    }
     // Auto is a RESOLUTION, recomputed per request — never stored state. Detection is
     // daemon-side, so it cannot see a key exported only in the user's terminal; the
     // GUI labels the badge with detectionScope for exactly that reason.
@@ -1588,6 +1561,31 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     };
     // The launcher probes its own CLI. Only the dashboard snapshot needs the daemon's version.
     if (url.searchParams.get("view") === "launch") return jsonResponse(launchState);
+    const { listCatalogNativeSlugs } = await import("../../codex/catalog");
+    const { claudeCodeAlias, claudeCodeNativeAlias } = await import("../../claude/alias");
+    const disabled = new Set(config.disabledModels ?? []);
+    const availableRouted = models.filter(m => !hasRoutedSlug(disabled, m.provider, m.id));
+    const available = [
+      ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
+      // Claude-facing values stay RAW native selectors (resolved inbound via routeModel,
+      // which accepts the raw full-slash form); only the disabled check goes tolerant.
+      ...availableRouted.map(m => `${m.provider}/${m.id}`),
+    ];
+    const aliases: { id: string; display_name: string }[] = [];
+    // Resolved once, not per model: with the global fast switch on, Claude Code discovers the
+    // fast identity, so the dashboard must list the same id rather than the umbrella one.
+    const cursorFastIdFor = config.fastMode === true
+      ? (await import("../../adapters/cursor/catalog")).cursorFastIdFor
+      : undefined;
+    for (const slug of listCatalogNativeSlugs()) {
+      // Readable CLI-surface alias with hash fallback (devlog 050 / audit 051 #2) —
+      // the same shared helper the /v1/models ?ids=cli path uses.
+      if (!disabled.has(slug)) aliases.push({ id: claudeCodeNativeAlias(slug), display_name: `${slug} (native)` });
+    }
+    for (const m of availableRouted) {
+      const listedId = (m.provider === "cursor" ? cursorFastIdFor?.(m.id) : undefined) ?? m.id;
+      aliases.push({ id: claudeCodeAlias(m.provider, listedId), display_name: `${listedId} (${m.provider})` });
+    }
     const claudeCodeVersion = await probeClaudeCodeVersionForTierFill(config.claudeCode, contextWindows);
     const webSearchOverride = config.claudeCode?.webSearchSidecar;
     const visionOverride = config.claudeCode?.visionSidecar;

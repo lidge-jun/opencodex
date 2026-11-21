@@ -119,6 +119,7 @@ export async function fetchProtocolPlan(
 
 export interface ProtocolSettingsPatchBody {
   messagesEnabled?: boolean;
+  geminiEnabled?: boolean;
 }
 
 export type ProtocolSettingsPatchResult =
