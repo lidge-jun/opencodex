@@ -60,8 +60,10 @@ export function privateNpm(root: string, args: string[]) {
   const env = node
     ? { PATH: [work, dirname(node), "/usr/bin", "/bin"].join(":"), NODE_COMPILE_CACHE: isolation.env.NODE_COMPILE_CACHE }
     : isolation.env;
+  // npm config and package caches stay fresh per command; only compiled Node
+  // code is reused inside this owned fixture, as it is by the launcher below.
   const result = spawnSync(bin, target.args, { ...target.options, encoding: "utf8", timeout: 60_000,
-    env: { ...env, HOME: root, TMPDIR: root } });
+    env: { ...env, HOME: root, TMPDIR: root, NODE_COMPILE_CACHE: join(root, "node-compile-cache") } });
   if (result.error || result.status !== 0) throw new Error(`private npm failed: ${result.status} ${result.error?.message ?? ""}\n${result.stderr}`);
   return result;
 }
@@ -106,12 +108,16 @@ export function createCodexCliApplyFixture(root: string, platform: NodeJS.Platfo
         if (name !== "package.json") chmodSync(join(source, name), 0o755);
       }
     }
-    const pack = (source: string) => {
-      const info = JSON.parse(privateNpm(root, ["pack", source, "--json", "--pack-destination", source]).stdout);
-      const path = join(source, info[0].filename);
+    // Pack both real local packages in one process, with a fresh npm cache
+    // for each version. The archives still come from npm, not synthetic tar.
+    const packed = JSON.parse(privateNpm(root, ["pack", mainSource, backingSource,
+      "--json", "--pack-destination", root]).stdout);
+    if (!Array.isArray(packed) || packed.length !== 2) throw new Error("fixture npm pack did not return both packages");
+    const archive = (index: number) => {
+      const path = join(root, packed[index].filename);
       return { path, bytes: readFileSync(path) };
     };
-    const main = pack(mainSource), backing = pack(backingSource);
+    const main = archive(0), backing = archive(1);
     const artifacts = { ...fixture.artifacts, main: fixtureArtifact(main.bytes, version),
       backing: fixtureArtifact(backing.bytes, fixture.artifacts.backing.version, fixture.artifacts.backing.installName) };
     return { artifacts, main, backing, mainManifest: fixture.mainManifest };
