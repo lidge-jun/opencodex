@@ -309,7 +309,12 @@ function requestHeaders(request: Request, target: URL): { text: string; chunked:
   };
 }
 
-async function secureSocket(socket: Socket, target: URL, signal: AbortSignal): Promise<TLSSocket> {
+async function secureSocket(
+  socket: Socket,
+  target: URL,
+  signal: AbortSignal,
+  tlsOptions: BunFetchRequestInitTLS | undefined,
+): Promise<TLSSocket> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
       socket.destroy();
@@ -320,6 +325,7 @@ async function secureSocket(socket: Socket, target: URL, signal: AbortSignal): P
       socket,
       servername: target.hostname,
       rejectUnauthorized: true,
+      ...(tlsOptions as import("node:tls").ConnectionOptions | undefined),
     });
     let settled = false;
     // Absolute deadline: a peer sending occasional TLS bytes must not extend the handshake.
@@ -691,7 +697,9 @@ export async function socks5Fetch(
   };
   request.signal.addEventListener("abort", onAbort, { once: true });
   try {
-    if (target.protocol === "https:") socket = await secureSocket(tunnel, target, request.signal);
+    if (target.protocol === "https:") {
+      socket = await secureSocket(tunnel, target, request.signal, (init as BunFetchRequestInit | undefined)?.tls);
+    }
     socket.setTimeout(SOCKS5_RESPONSE_TIMEOUT_MS, onResponseTimeout);
     // Observe socket errors and early responses while uploading, not only after it.
     reader = new SocketReader(socket);
