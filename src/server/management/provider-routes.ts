@@ -1647,6 +1647,13 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const { staticCatalogConnectionTest } = await import("./static-catalog-probe");
       return jsonResponse(await staticCatalogConnectionTest(name, prov, req.signal));
     }
+    if (prov.adapter === "agy-acp") {
+      const started = Date.now();
+      const { agyModelIds, readAgyMetadata } = await import("../../adapters/agy-acp/metadata");
+      const models = agyModelIds(await readAgyMetadata("models").catch(() => ""));
+      return jsonResponse({ ok: models.length > 0, models: models.length, latencyMs: Date.now() - started,
+        ...(models.length ? {} : { error: "No Gemini models returned by the Antigravity CLI." }) });
+    }
     const { buildModelsRequest, getModelsOAuthAccessSnapshot, resolveModelsAuthToken } = await import("../../oauth");
     const antigravity = effectiveGoogleMode(name, prov) === "cloud-code-assist";
     const snapshot = prov.authMode === "oauth" && mayResolveModelsOAuth(name, config.providers[name])
