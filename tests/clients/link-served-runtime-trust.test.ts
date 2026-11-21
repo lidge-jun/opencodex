@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { remoteOcxArgv, remotePinnedSyncArgv } from "../../src/link/ssh-argv";
@@ -20,7 +20,8 @@ function executable(path: string, body: string): void {
 }
 
 function fixture(platform = "Linux") {
-  const home = mkdtempSync(join(tmpdir(), "ocx-runtime-trust-")); roots.push(home);
+  // Canonical: macOS tmpdir sits below the /var symlink, which the gate resolves.
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "ocx-runtime-trust-"))); roots.push(home);
   const bin = join(home, "tools"); mkdirSync(bin);
   for (const name of ["sh", "mktemp", "sleep", "cat", "awk", "dd", "wc", "rm", "stat", "id", "readlink"]) {
     const command = Bun.which(name);
@@ -123,7 +124,9 @@ posix("a symlink loop is skipped within the bounded resolver", async () => {
   expect(existsSync(join(f.home, "served-calls"))).toBe(false);
 }, SPAWN_BUDGET_MS);
 
-posix("a trailing newline in a symlink target cannot substitute the checked path", async () => {
+// GNU and BusyBox readlink always append a newline; BSD readlink omits it when the target
+// already ends in one. The gate runs only on Linux, so only a Linux host reproduces it.
+test.skipIf(process.platform !== "linux")("a trailing newline in a symlink target cannot substitute the checked path", async () => {
   const f = fixture();
   const newlineTarget = f.served + "\n";
   executable(newlineTarget, 'printf "unexpected\\n" >> "$HOME/served-calls"; printf "opencodex 2.99.0\\n"');
