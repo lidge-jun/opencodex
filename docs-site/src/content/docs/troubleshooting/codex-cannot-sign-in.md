@@ -129,6 +129,12 @@ ocx account login openai --device
 See [Codex Integration](/guides/codex-integration/) for what the injection
 writes and how routing is chosen.
 
+### Native login is busy or unreadable
+
+This pool-registration error can occur after browser or device authorization succeeds. The proxy checks the native main login before saving the new pool entry. A temporary native-login claim, an unreadable file, or inconsistent identity evidence stops registration; it does not delete existing accounts.
+
+The pool collision check permits a retained ID token naming an earlier workspace only when both tokens agree on ChatGPT user ID, subject and email, and the current access-token workspace agrees with the explicit login-file account ID. It checks duplicates against that current workspace and plan without rewriting the native login. Missing or conflicting user evidence remains a refusal. Do not delete `auth.json` to clear this message. An updated proxy must be running for a login-validation fix to take effect; reloading the dashboard alone cannot update backend code.
+
 ## OAuth refresh capacity reached
 
 If a Responses request reports `OAuth token refresh capacity reached`, wait at

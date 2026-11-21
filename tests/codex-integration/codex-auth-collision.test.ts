@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { checkAccountIdCollisionWithNativeMain as checkAccountIdCollision, CodexCollisionReadBusyError } from "../../src/codex/auth-api/login-collision";
@@ -226,5 +226,65 @@ test("conflicting native account claims are retryable rather than collision evid
   writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({ tokens: {
     access_token: token, account_id: "envelope-account",
   } }));
+  await expect(checkAccountIdCollision("candidate")).rejects.toBeInstanceOf(CodexCollisionReadBusyError);
+});
+
+/** Synthetic credentials reproduce Codex retaining an ID token across a workspace rollover. */
+function workspaceToken(account: string, plan: string, user = "same-user", subject = "same-subject", email = "main@example.test") {
+  return `header.${Buffer.from(JSON.stringify({ sub: subject,
+    "https://api.openai.com/auth": { chatgpt_account_id: account, chatgpt_user_id: user, user_id: user, chatgpt_plan_type: plan },
+    "https://api.openai.com/profile": { email },
+  })).toString("base64url")}.fake`;
+}
+
+test("same-user workspace rollover admits independent pool logins and still rejects the current native duplicate without changing auth", async () => {
+  saveConfig({ port: 10100, providers: {}, defaultProvider: "openai", codexAccounts: [] } as OcxConfig);
+  const path = join(TEST_CODEX_HOME, "auth.json");
+  const raw = JSON.stringify({ auth_mode: "chatgpt", tokens: {
+    id_token: workspaceToken("old-personal", "plus"),
+    access_token: workspaceToken("current-workspace", "team"), account_id: "current-workspace",
+  } });
+  writeFileSync(path, raw);
+  expect(await checkAccountIdCollision("another-workspace", "new@example.test", "team")).toEqual({ collision: false });
+  expect(await checkAccountIdCollision("old-personal", "main@example.test", "plus")).toEqual({ collision: false });
+  expect(await checkAccountIdCollision("current-workspace", "other@example.test", "team")).toEqual({ collision: false });
+  expect(await checkAccountIdCollision("current-workspace", "main@example.test", "team")).toMatchObject({ collision: true });
+  expect(readFileSync(path, "utf8")).toBe(raw);
+});
+
+test.each([
+  ["different user", workspaceToken("old", "plus", "different-user")],
+  ["missing user", workspaceToken("old", "plus", "")],
+  ["blank user", workspaceToken("old", "plus", "   ")],
+  ["different subject", workspaceToken("old", "plus", "same-user", "different-subject")],
+  ["missing subject", workspaceToken("old", "plus", "same-user", "")],
+  ["different email", workspaceToken("old", "plus", "same-user", "same-subject", "different@example.test")],
+  ["missing email", workspaceToken("old", "plus", "same-user", "same-subject", "")],
+  ["no identity evidence", `header.${Buffer.from(JSON.stringify({ chatgpt_account_id: "old" })).toString("base64url")}.fake`],
+])("workspace rollover rejects %s evidence", async (_name, idToken) => {
+  const path = join(TEST_CODEX_HOME, "auth.json");
+  const raw = JSON.stringify({ tokens: { id_token: idToken,
+    access_token: workspaceToken("current", "team"), account_id: "current" } });
+  writeFileSync(path, raw);
+  await expect(checkAccountIdCollision("candidate")).rejects.toBeInstanceOf(CodexCollisionReadBusyError);
+  expect(readFileSync(path, "utf8")).toBe(raw);
+});
+
+test("same-user rollover cannot override an explicit workspace/access mismatch or an internally conflicting claim", async () => {
+  const path = join(TEST_CODEX_HOME, "auth.json");
+  const token = workspaceToken("current", "team");
+  writeFileSync(path, JSON.stringify({ tokens: { id_token: workspaceToken("old", "plus"), access_token: token, account_id: "other" } }));
+  await expect(checkAccountIdCollision("candidate")).rejects.toBeInstanceOf(CodexCollisionReadBusyError);
+  const payload = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString());
+  payload.chatgpt_account_id = "conflicting";
+  writeFileSync(path, JSON.stringify({ tokens: { id_token: workspaceToken("old", "plus"),
+    access_token: `header.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.fake`, account_id: "current" } }));
+  await expect(checkAccountIdCollision("candidate")).rejects.toBeInstanceOf(CodexCollisionReadBusyError);
+  delete payload.chatgpt_account_id;
+  payload["https://api.openai.com/auth"].user_id = "conflicting-user";
+  writeFileSync(path, JSON.stringify({ tokens: { id_token: workspaceToken("old", "plus"),
+    access_token: `header.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.fake`, account_id: "current" } }));
+  await expect(checkAccountIdCollision("candidate")).rejects.toBeInstanceOf(CodexCollisionReadBusyError);
+  writeFileSync(path, JSON.stringify({ tokens: { id_token: workspaceToken("old", "plus"), access_token: token, account_id: "" } }));
   await expect(checkAccountIdCollision("candidate")).rejects.toBeInstanceOf(CodexCollisionReadBusyError);
 });

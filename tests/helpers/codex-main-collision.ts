@@ -51,14 +51,21 @@ export function registerMainCollisionCases(
     { name: "different workspace", plan: "team", email: "main@example.test", usage: "error", blocked: false, accountId: "other-workspace" },
     { name: "different plan bucket", plan: "plus", email: "main@example.test", usage: "error", blocked: false, mainPlan: "team" },
     { name: "WHAM plan overrides JWT", plan: "plus", email: "main@example.test", usage: "team", blocked: true, mainPlan: "team" },
+    { name: "same-user workspace rollover permits an independent login", plan: "team", email: "main@example.test", usage: "error", blocked: false, accountId: "other-workspace", rolled: true },
+    { name: "same-user workspace rollover still blocks the current native duplicate", plan: "team", email: "main@example.test", usage: "error", blocked: true, rolled: true },
   ];
   test.each(cases)("OAuth main collision: $name", async scenario => {
     const token = (plan: string) => `header.${Buffer.from(JSON.stringify({
       "https://api.openai.com/auth": { chatgpt_plan_type: plan },
       "https://api.openai.com/profile": { email: "main@example.test" },
     })).toString("base64url")}.sig`;
+    const rolledToken = (account: string, plan: string) => `header.${Buffer.from(JSON.stringify({ sub: "same-subject",
+      "https://api.openai.com/auth": { chatgpt_account_id: account, chatgpt_user_id: "same-user", chatgpt_plan_type: plan },
+      "https://api.openai.com/profile": { email: "main@example.test" },
+    })).toString("base64url")}.sig`;
     writeFileSync(join(process.env.CODEX_HOME!, "auth.json"), JSON.stringify({
-      tokens: { access_token: token(scenario.mainPlan ?? scenario.plan), account_id: "main-account" },
+      tokens: { access_token: scenario.rolled ? rolledToken("main-account", "team") : token(scenario.mainPlan ?? scenario.plan),
+        ...(scenario.rolled ? { id_token: rolledToken("old-personal", "plus") } : {}), account_id: "main-account" },
     }));
     const config = makeConfig();
     saveConfig(config);
