@@ -2,6 +2,7 @@
 import { mock, spyOn } from "bun:test";
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { unavailableFixtureHome } from "../helpers/client-stop-fixture-home";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { serviceApiTokenFingerprint, writeServiceApiTokenFile, readServiceApiTokenState } from "../../src/lib/service-secrets";
 import { readRuntimePort, type ClientStopOwner } from "../../src/config/process-state";
@@ -33,10 +34,11 @@ mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
 async function main() {
   const token = `ocx_data_${"c".repeat(40)}`;
   const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+  const fixtureHome = unavailableFixtureHome();
   const config = getDefaultConfig(); config.port = probe.port!;
   config.runtimeRole = "client";
-  config.client = { serverUrl: "http://127.0.0.1:34567", managementUrl: "http://127.0.0.1:34567", managementTransport: "direct", transport: "link",
-    link: { tunnelPort: 34567, linkId: "lnk_0123456789abcdef" }, selectedClients: ["pi"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
+  config.client = { serverUrl: fixtureHome.url.origin, managementUrl: fixtureHome.url.origin, managementTransport: "direct", transport: "link",
+    link: { tunnelPort: fixtureHome.port!, linkId: "lnk_0123456789abcdef" }, selectedClients: ["pi"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
     apiKeyId: "fixture-client", tokenFingerprint: serviceApiTokenFingerprint(token), protocolVersion: 1, connectedAt: "2026-10-01T00:00:00.000Z" };
   saveConfig(config); writeServiceApiTokenFile(token);
   const expected = structuredClone(config.client);

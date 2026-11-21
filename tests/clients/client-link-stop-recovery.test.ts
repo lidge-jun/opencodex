@@ -5,13 +5,30 @@ import { join } from "node:path";
 import { fixturePath, repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { runStop } from "../helpers/client-link-stop";
+import { stopFixtureEnv, unavailableFixtureHome } from "../helpers/client-stop-fixture-home";
+
+test("stop fixtures keep Home traffic and integration state separate across children", async () => {
+  const first = unavailableFixtureHome(), second = unavailableFixtureHome();
+  try {
+    expect(first.port).not.toBe(second.port);
+    for (const home of [first, second]) {
+      expect(home.url.hostname).toBe("127.0.0.1");
+      expect((await fetch(home.url)).status).toBe(503);
+    }
+    const root = join(tmpdir(), "fixture-child");
+    const inherited = { ...process.env, GROK_HOME: "suite-grok", CLAUDE_CONFIG_DIR: "suite-claude",
+      XDG_CONFIG_HOME: "suite-config", OCX_OWNER_REGISTRY_DIR: "suite-registry", OCX_SERVICE: "1" };
+    expect(stopFixtureEnv(root, inherited)).toMatchObject({ GROK_HOME: join(root, ".grok"),
+      CLAUDE_CONFIG_DIR: join(root, ".claude"), XDG_CONFIG_HOME: join(root, ".config"),
+      OCX_OWNER_REGISTRY_DIR: join(root, "ocx", "ocx-homes"), OCX_SERVICE: "" });
+  } finally { await Promise.all([first.stop(true), second.stop(true)]); }
+});
 
 async function runRecovery(mode: string, scheduled = false, env = process.env, attempt = 0): Promise<Record<string, unknown>> {
   const root = mkdtempSync(join(tmpdir(), "ocx-link-stop-recovery-"));
   const child = Bun.spawn([process.execPath, fixturePath("client-link-stop-recovery-runner.ts")], {
     cwd: repoPath(), stdin: new Blob([JSON.stringify({ mode, scheduled })]), stdout: "pipe", stderr: "pipe",
-    env: { ...env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: join(root, "ocx"), CODEX_HOME: join(root, "codex"),
-      OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(root, "claude-desktop"), OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0" },
+    env: stopFixtureEnv(root, env),
   });
   let parentDeadlineReached = false;
   const timeout = setTimeout(() => {

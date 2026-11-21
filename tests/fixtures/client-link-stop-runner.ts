@@ -3,6 +3,7 @@ import { mock } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { unavailableFixtureHome } from "../helpers/client-stop-fixture-home";
 import { getDefaultConfig, prepareConfigMutationDatabasePathForWrite, saveConfig } from "../../src/config";
 import { CODEX_CONFIG_PATH, CODEX_HOME, CODEX_PROFILE_PATH, DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import { JOURNAL_PATH, markJournalInjectedState, writeJournal } from "../../src/codex/journal";
@@ -73,14 +74,15 @@ mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
 const token = `ocx_data_${"c".repeat(40)}`;
 const config = getDefaultConfig();
 const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+const fixtureHome = options.transport === "hub" ? undefined : unavailableFixtureHome();
 config.port = probe.port!;
 await probe.stop(true);
 config.runtimeRole = "client";
 config.client = {
-  serverUrl: options.transport === "hub" ? "https://hub.example.test" : "http://127.0.0.1:34567",
-  managementUrl: options.transport === "hub" ? "https://hub.example.test" : "http://127.0.0.1:34567",
+  serverUrl: fixtureHome?.url.origin ?? "https://hub.example.test",
+  managementUrl: fixtureHome?.url.origin ?? "https://hub.example.test",
   managementTransport: "direct", transport: options.transport ?? "link",
-  ...(options.transport === "hub" ? {} : { link: { tunnelPort: 34567, linkId: "lnk_0123456789abcdef" } }),
+  ...(fixtureHome ? { link: { tunnelPort: fixtureHome.port!, linkId: "lnk_0123456789abcdef" } } : {}),
   selectedClients: ["codex", ...(options.deferFileApply ? [] : options.fileClients ?? [])], tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "fixture-client",
   tokenFingerprint: serviceApiTokenFingerprint(token), protocolVersion: 1, connectedAt: "2026-10-01T00:00:00.000Z",
 };

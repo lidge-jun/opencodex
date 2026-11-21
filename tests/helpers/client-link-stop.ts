@@ -4,13 +4,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fixturePath, repoPath } from "./repo-root";
 import { removeTreeWithRetry } from "./remove-tree";
+import { stopFixtureEnv } from "./client-stop-fixture-home";
 
 export async function runStop(options: Record<string, unknown>) {
   const root = mkdtempSync(join(tmpdir(), "ocx-link-stop-"));
   const home = join(root, "ocx");
-  const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home,
-    CODEX_HOME: join(root, "codex"), OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(root, "claude-desktop"),
-    OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0" };
+  const env = stopFixtureEnv(root);
   let owner: Bun.Subprocess<"pipe", "pipe", "ignore"> | undefined;
   let child: Bun.Subprocess<Blob, "pipe", "pipe"> | undefined;
   const timeout = setTimeout(() => {
