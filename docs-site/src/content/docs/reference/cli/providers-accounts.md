@@ -1049,8 +1049,9 @@ An Anthropic 429 quota cooldown that names its rejected usage windows also lifts
 enabled OAuth instances, the proxy re-reads the account's usage on its background sweep (about once a
 minute, backing off to every ten minutes while the window stays spent) and returns the account to
 selection as soon as every rejected window shows headroom, for example after a reset spent in the
-Claude app or a plan upgrade. A 429 that carries only `Retry-After`, with no window to re-read, keeps
-its cooldown until that deadline. `clear-cooldown` remains the manual override for both.
+Claude app or a plan upgrade. A 429 that names no window is matched to the window its first re-read
+finds spent; if that read finds every window open, usage does not explain the refusal and the
+cooldown is kept until its deadline. `clear-cooldown` remains the manual override for both.
 
 ### `ocx account refresh <provider> [--json]`
 
