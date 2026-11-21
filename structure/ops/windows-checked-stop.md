@@ -138,13 +138,6 @@ asynchronous `schtasks` and `sc.exe` calls through `execFile` (a deadline-derive
 floored to whole milliseconds and one that floors to 0 spawns nothing, because `execFile` reads 0
 as no timeout), the evidence snapshot `windowsProcessSnapshot` for every bind, the checked
 terminate, the exit watch, the Part B port sampler and the listener identity.
-For Scheduler registration, Part A queries the exact root task with `schtasks /query /tn` and
-`/hresult`. On Windows x64 it prepares native exit-code capture during executable lookup,
-then reads the full exit code from the spawned process handle. Only
-`0x80070002` establishes absence. Bun's truncated process status cannot prove that result.
-Where a full exit code is unavailable, the local Scheduler COM API can still confirm the task
-or report `ERROR_FILE_NOT_FOUND` from `GetTask` within the remainder of the same 2 s budget.
-Denied access, incomplete evidence, and late answers keep the registration unknown.
 `src/service/windows-task-instance-stop.ts` keeps the root registration and its running instances
 in one Task Scheduler COM session. It passes the registered XML and the helper's current account as
 base64 UTF-8 to preserve Unicode through the console. The live adapter checks the recognized task

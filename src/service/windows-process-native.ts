@@ -64,8 +64,6 @@ export type WindowsProcessWatch =
   | { status: "gone" | "reused" | "denied" | "unavailable" };
 
 export interface WindowsProcessNativeApi {
-  /** Pin a just-spawned child until its completion callback reads its full Windows exit code. */
-  captureChildExitCode?(pid: number): (() => number | null) | null;
   /** Creation time in epoch ms (FILETIME truncated to ms), or null when unreadable. */
   creationTime(pid: number): number | null;
   /** Creation in .NET ticks at CIM precision from a live process with the same token user. */
@@ -141,7 +139,6 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
     kernel32 = ffi.dlopen(join(systemDirectory, "kernel32.dll"), {
       OpenProcess: { args: ["u32", "i32", "u32"], returns: "u64" },
       CloseHandle: { args: ["u64"], returns: "i32" },
-      GetExitCodeProcess: { args: ["u64", "ptr"], returns: "i32" },
       GetProcessTimes: { args: ["u64", "ptr", "ptr", "ptr", "ptr"], returns: "i32" },
       TerminateProcess: { args: ["u64", "u32"], returns: "i32" },
       WaitForSingleObject: { args: ["u64", "u32"], returns: "u32" },
@@ -202,18 +199,6 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
   };
 
   nativeApi = {
-    captureChildExitCode(pid) {
-      const handle = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid);
-      if (!handle) return null;
-      return () => {
-        try {
-          const code = new Uint32Array(1);
-          return handleExited(handle) === true && k.GetExitCodeProcess(handle, ptr(code)) ? code[0]! : null;
-        } finally {
-          k.CloseHandle(handle);
-        }
-      };
-    },
     creationTime(pid) {
       const handle = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
       if (!handle) return null;
