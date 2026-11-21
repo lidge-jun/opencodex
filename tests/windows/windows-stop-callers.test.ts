@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { inspectGuardedTarget, resetOcxWindowsStopForTests, stopGuardedManager } from "../../src/cli/stop-windows-checked";
+import { inspectGuardedTarget, resetOcxWindowsStopForTests, stopGuardedManager, stopServiceForUninstall, windowsPartAFailureMessage } from "../../src/cli/stop-windows-checked";
 import { runGuardedManagerStep, type GuardedStopSnapshot } from "../../src/cli/stop-approval";
 import { ROUTE_PART_A_CAP_MS, ROUTE_STRAY_SWEEP_CAP_MS, routeServiceStop } from "../../src/server/stop-service-route";
 import { completeWindowsServiceStopReceipt, windowsServiceRemovalStop as removalStop, windowsServiceStopBeforeRestore as stopBeforeRestore } from "../../src/service/cli-windows-stop";
@@ -90,6 +90,14 @@ describe("/api/stop service stop on Windows", () => {
 });
 
 describe("ocx service stop on Windows", () => {
+  test("CLI uninstall retains the specific checked-stop refusal", async () => {
+    const detail = "same-account ownership of a service wrapper could not be proven";
+    resetOcxWindowsStopForTests("win32");
+    setWindowsServiceStopHooksForTests({ partA: async () => partAResult("unknown", { detail }) });
+    expect(await stopServiceForUninstall()).toBe("state-unknown");
+    expect(windowsPartAFailureMessage()).toContain(detail);
+  });
+
   test("a discovered orphan's endpoint is used for both receipt and stop", async () => {
     setWindowsServiceStopHooksForTests({ partA: async () => partAResult("stopped"), partB: async () => partBResult("freed") });
     const endpoint = { hostname: "127.0.0.1", port: 12001 };

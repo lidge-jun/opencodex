@@ -1,10 +1,11 @@
 // Process evidence for the checked Windows stop (#7771): creation times, the Schedule
 // service PID, the checked terminate and the exit watch. Hermetic everywhere except the
 // cases gated on real Windows, which exercise the owner snapshot and x64 FFI on our own child.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { observeClientStopOwner, readClientStopProcessStart } from "../../src/client/stop-teardown-owner";
+import { resolveWindowsCurrentSid } from "../../src/codex/windows-current-sid";
 
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsSystemDirectory } from "../../src/lib/windows-elevation";
 import { windowsLauncherVbsPath } from "../../src/service/state";
@@ -77,6 +78,82 @@ const SNAPSHOT_JSON = JSON.stringify([
   { ProcessId: 20, ParentProcessId: 900, Name: "wscript.exe", CommandLine: "wscript.exe x.vbs", CreationDate: "2026-11-12T01:02:03.1234567Z" },
   { ProcessId: 4, ParentProcessId: 0, Name: "System", CommandLine: null, CreationDate: null },
 ]);
+
+describe("snapshot native wrapper owner proof", () => {
+  const created = "2026-11-12T01:02:03.1234560Z";
+  const ms = Date.parse(created);
+  const ticks = 621_355_968_000_000_000n + BigInt(ms) * 10_000n + 4_560n;
+  const sid = "S-1-5-21-100-200-300-1002";
+  const row = (pid: number) => ({ ProcessId: pid, ParentProcessId: 7, Name: "wscript.exe",
+    CommandLine: `wscript.exe "${windowsLauncherVbsPath()}"`, CurrentUserSid: sid, Owner: null, CreationDate: created });
+  const snapshot = (rows: object[], timeoutMs = 5_000) =>
+    windowsProcessSnapshot({ timeoutMs, run: async () => JSON.stringify(rows) });
+
+  test("proves only an eligible wrapper with a missing CIM owner and the same live incarnation", async () => {
+    setWindowsProcessPlatformForTests("win32");
+    const calls: number[] = [];
+    setWindowsProcessNativeForTests(fakeNative({
+      creationTime: pid => pid === 19 ? ms + 1 : ms,
+      sameUserIdentity: (pid, _withCommandLine, expectedSid) => {
+        calls.push(pid);
+        if (expectedSid !== sid && expectedSid !== "S-1-12-1-100-200-300-400") return null;
+        if (pid === 12) return { ticks: ticks + 10n }; // Same epoch ms, different CIM microsecond.
+        if (pid === 13) throw new Error("unavailable");
+        if (pid === 14) return null;
+        return { ticks };
+      },
+    }));
+    const output = await snapshot([
+      row(10), { ...row(11), CurrentUserSid: "S-1-12-1-100-200-300-400" },
+      row(12), row(13), row(14),
+      { ...row(15), CurrentUserSid: "S-1-5-18" }, { ...row(16), CurrentUserSid: "S-1-5-21-100-200-300-4294967296" },
+      { ...row(17), CommandLine: row(17).CommandLine.replace('vbs"', 'vbs.bak"') }, { ...row(18), Name: "unrelated.exe" },
+      row(19), { ...row(20), CreationDate: "invalid" }, { ...row(21), CreationDate: created.replace("4560", "457") },
+      { ...row(22), Owner: { Sid: "S-1-5-21-100-200-300-1003", ReturnValue: 0, CreationDate: created } },
+      { ...row(23), Owner: { Sid: sid, ReturnValue: 2, CreationDate: created } },
+      { ...row(24), Owner: { Sid: sid, ReturnValue: 0, CreationDate: created.replace("4560", "4570") } },
+      row(0), row(0x1_0000_0000),
+    ]);
+    expect(output?.filter(entry => entry.foreignOwner === false).map(entry => entry.pid)).toEqual([10, 11]);
+    expect(output?.filter(entry => entry.foreignOwner === true).map(entry => entry.pid)).toEqual([22]);
+    expect(calls).toEqual([10, 11, 12, 13, 14]);
+    expect(JSON.stringify(output)).not.toContain(sid);
+  });
+
+  test("bounds optional native reads and leaves unread owners unknown", async () => {
+    setWindowsProcessPlatformForTests("win32");
+    let calls = 0;
+    setWindowsProcessNativeForTests(fakeNative({ creationTime: () => ms, sameUserIdentity: () => { calls++; return { ticks }; } }));
+    const rows = Array.from({ length: 34 }, (_, i) => row(i + 100));
+    const bounded = await snapshot(rows);
+    expect(calls).toBe(32);
+    expect(bounded).toHaveLength(34);
+    expect(bounded?.slice(32).every(entry => entry.foreignOwner === null)).toBe(true);
+    const expired = await snapshot([row(201)], 0);
+    expect(calls).toBe(32);
+    expect(expired?.[0]?.foreignOwner).toBeNull();
+    setWindowsProcessNativeForTests(null);
+    expect((await snapshot([row(202)]))?.[0]?.foreignOwner).toBeNull();
+  });
+
+  test("discards proof that returns after the original snapshot deadline", async () => {
+    setWindowsProcessPlatformForTests("win32");
+    let now = 0, reads = 0;
+    const clock = spyOn(performance, "now").mockImplementation(() => now);
+    try {
+      setWindowsProcessNativeForTests(fakeNative({ creationTime: () => ms, sameUserIdentity: () => {
+        reads++;
+        now = 100;
+        return { ticks };
+      } }));
+      const entries = await snapshot([row(10), row(11)], 100);
+      expect(reads).toBe(1);
+      expect(entries?.map(entry => entry.foreignOwner)).toEqual([null, null]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});
 
 describe("Windows process evidence: pure decoding", () => {
   test("FILETIME converts to epoch ms by truncation; zero is unreadable", () => {
@@ -352,6 +429,17 @@ test.skipIf(process.platform !== "win32")("the live capped snapshot reads and re
 }, 10_000);
 
 describe("Windows process evidence: live x64 primitive", () => {
+  test.skipIf(liveX64)("matches an expected user SID on the current process handle", () => {
+    const current = resolveWindowsCurrentSid(() => { throw new Error("native current SID unavailable"); });
+    const other = current === "S-1-5-21-1-2-3-4" ? "S-1-5-21-1-2-3-5" : "S-1-5-21-1-2-3-4";
+    const native = windowsProcessNative();
+    expect(native).not.toBeNull();
+    const identity = native!.sameUserIdentity(process.pid);
+    expect(typeof identity?.ticks).toBe("bigint");
+    expect(native!.sameUserIdentity(process.pid, false, current)?.ticks).toBe(identity!.ticks);
+    expect(native!.sameUserIdentity(process.pid, false, other)).toBeNull();
+  });
+
   test.skipIf(liveX64)("reads a child's creation time, refuses a mismatched identity and ends the bound one", async () => {
     const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
       stdio: ["ignore", "ignore", "ignore"], windowsHide: true,

@@ -529,11 +529,10 @@ export async function handleManagementAPI(
         }, 409, req, config);
       }
       if (serviceStop === "state-unknown") {
-        // Same case, same remedy as the pre-check: the query is what needs fixing.
         return jsonResponse({
           success: false,
           code: "service_state_unknown",
-          message: "The Windows Task Scheduler state could not be read, so this proxy cannot tell whether a wrapper would respawn it. Shared client config was left alone. Run `ocx service status` to see the query error, repair Task Scheduler access, then retry.",
+          message: "The Windows service or process state could not be verified, so the stop could not be confirmed. Shared client config was left alone.",
         }, 409, req, config);
       }
       // The pre-check above already refused the respawnable case without a receipt, so
