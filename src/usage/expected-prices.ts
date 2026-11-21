@@ -280,6 +280,21 @@ const ZAI_PRICING = "https://docs.z.ai/guides/overview/pricing (official USD tab
 // Morph Ultra is subscription-billed ($200/month, no token meter), so these are the vendor's
 // published per-token list prices shown as estimates, never the amount Ultra actually charges.
 const MORPH_ULTRA_PRICING = "https://www.morphllm.com/pricing (list price; Morph Ultra is subscription-billed with no token meter)";
+// Neuralwatt bills subscriptions and pay-as-you-go by GPU energy (kWh); these are the
+// per-token list prices its /v1/models catalog publishes, shown as estimates only.
+// Flex rows already carry the published 0.65 multiplier; no rate is charged for cache writes.
+const NEURALWATT_PRICING = "https://api.neuralwatt.com/v1/models metadata.pricing (token list price; billing is energy-based, see https://docs.neuralwatt.com/billing/faq)";
+const NEURALWATT_LIST_PRICES: readonly [string, number, number, number][] = [
+  ["glm-5.3", 1.45, 4.5, 0.145], ["glm-5.3-flex", 0.9425, 2.925, 0.09425],
+  ["glm-5.3-flash", 0.15, 0.5, 0.03], ["glm-5.3-flash-flex", 0.0975, 0.325, 0.0195],
+  ["deepseek-v4.1-flash", 0.15, 0.6, 0.015], ["deepseek-v4.1-flash-flex", 0.0975, 0.39, 0.00975],
+  ["deepseek-v4.1-flash-speed", 0.15, 0.6, 0.015], ["nw-flash", 0.15, 0.6, 0.015], ["nw-flash-flex", 0.0975, 0.39, 0.00975],
+  ["kimi-k3.1-pro", 2, 10, 0.2], ["kimi-k3.1-pro-flex", 1.3, 6.5, 0.13], ["nw-large", 2, 10, 0.2], ["nw-large-flex", 1.3, 6.5, 0.13],
+  ["mimo-v2.6-pro", 0.435, 0.87, 0.0036], ["mimo-v2.6-pro-flex", 0.28275, 0.5655, 0.00234],
+  ["qwen-3.8-27b", 0.45, 3.2, 0.25], ["qwen-3.8-27b-flex", 0.2925, 2.08, 0.1625], ["nw-small", 0.45, 3.2, 0.25], ["nw-small-flex", 0.2925, 2.08, 0.1625],
+  ["qwen3.6-35b", 0.29, 1.15, 0.029], ["qwen3.6-35b-flex", 0.1885, 0.7475, 0.01885], ["qwen3.6-35b-fast", 0.29, 1.15, 0.029],
+  ["gemma-4-31b", 0.144, 0.42, 0.0144],
+];
 const MORPH_KIMI_K31: Cost4 = { input: 2.5, output: 14, cacheRead: 0.29, cacheWrite: 0 };
 const MORPH_DSV41_FLASH: Cost4 = { input: 0.12, output: 0.8, cacheRead: 0.008, cacheWrite: 0 };
 const ZAI_CODING_PLAN_NOTE = "z.ai list price shown as estimate; GLM Coding Plan is subscription-billed";
@@ -564,6 +579,11 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // Morph Ultra — subscription-billed, so the vendor list price is an estimate only.
   { provider: "morph", modelId: "morph-kimik31", cost4: MORPH_KIMI_K31, source: MORPH_ULTRA_PRICING, verifiedAt: "2026-11-13", status: "verified-derived" },
   { provider: "morph", modelId: "morph-dsv41flash-1017", cost4: MORPH_DSV41_FLASH, source: MORPH_ULTRA_PRICING, verifiedAt: "2026-11-13", status: "verified-derived" },
+  // Neuralwatt — energy-billed, so the published token list price is an estimate only.
+  ...NEURALWATT_LIST_PRICES.map(([modelId, input, output, cacheRead]): ExpectedPriceOverlay => ({
+    provider: "neuralwatt", modelId, cost4: { input, output, cacheRead, cacheWrite: 0 },
+    source: NEURALWATT_PRICING, verifiedAt: "2026-11-21", status: "verified-derived",
+  })),
   // Cursor Auto router — Cursor's published fixed token price (verified).
   { provider: "cursor", modelId: "auto", cost4: { input: 1.25, output: 6, cacheRead: 0.25, cacheWrite: 1.25 }, source: "https://docs.cursor.com/account/pricing + https://cursor.com/blog/aug-2025-pricing", verifiedAt: "2026-07-20", status: "verified" },
   // Z.AI GLM family — the zai bundle's rows are all-zero upstream, and the four
