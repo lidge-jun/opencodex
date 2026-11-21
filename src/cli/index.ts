@@ -130,7 +130,7 @@ import { confirmGuardedFreed, inspectGuardedTarget, noServiceStop, observeGuarde
 import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
 import { startupDataPlaneToken } from "../lib/service-secrets";
-import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatePaths, serviceStatusSummary, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
+import { assertNotAdminToken, diagnoseService, warnForegroundStartService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatePaths, serviceStatusSummary, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
 import { completeWindowsServiceStopReceipt } from "../service/cli-windows-stop";
 import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
@@ -796,6 +796,12 @@ async function handleStart(options: { block?: boolean } = {}) {
     console.error(`⚠️  ${grokSyncFailureMessage(err)}`);
   }
   console.log("Client startup work complete.");
+  // Service status can invoke an OS manager synchronously. Keep it out of the
+  // ownership lease, bind, and readiness path, and use the final sibling decision.
+  if (!cleaned && !shuttingDown && !siblingStart && !owner.live && !supervisedServiceChild
+      && restartParent.restartParentPid === null && process.stderr?.isTTY) {
+    warnForegroundStartService(diagnoseService, (line) => console.warn(line));
+  }
   if (options.block ?? true) {
     setInterval(() => {}, 60_000);
     await new Promise<void>(() => {});
