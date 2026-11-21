@@ -674,8 +674,8 @@ Le proxy traduit chaque requête Anthropic Messages API au format Codex Response
 
 | Entrée Messages | Sortie Responses |
 | --- | --- |
-| Niveau supérieur `system` | `instructions` (blocs de texte joints par `\n\n`) |
-| `messages[].role: "system"` | Également plié en `instructions` |
+| Niveau supérieur `system` | `instructions` (blocs de texte joints par `\n\n`). Pour GPT-6.2 Sol et Astra via la connexion Codex, envoyé comme premier message `developer` afin d'être mis en cache |
+| `messages[].role: "system"` | Traduits en messages `developer` à leur position d'origine |
 | Texte/image utilisateur | `input_text` / `input_image` (base64 → données URL) |
 | Texte assistant | `output_text` |
 | Assistant `tool_use` | `function_call` (`input` → JSON-stringifié `arguments`) |

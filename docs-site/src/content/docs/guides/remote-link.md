@@ -15,6 +15,8 @@ A machine link connects an OpenCodex **Home** computer to a **Child** computer o
 
 Password SSH is not supported. Links can be started from Home or Child. Windows execution uses PowerShell over the same pinned OpenSSH connection.
 
+On Linux, a recorded OpenCodex install is used only when its executable and optional package entrypoint belong to the SSH account and their permissions and parent directories prevent replacement by another account. If that cannot be checked, Remote Link skips the recorded install. On macOS, recorded installs are always skipped because the remote shell cannot reliably verify their extra access permissions (ACLs). Remote Link continues its existing Desktop, system and PATH discovery on both platforms. A macOS install available only through the runtime record therefore needs to be installed in a discoverable location or added to the SSH account’s PATH. Keep the installation in an account-owned directory instead of a shared writable folder; a successful version response alone does not establish ownership.
+
 ## Add a Child from `#remote`
 
 1. Open the dashboard at `#remote` and switch Remote Link on.

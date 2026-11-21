@@ -7,7 +7,7 @@ import { quoteRemote, REMOTE_OCX_SCRIPT, REMOTE_SERVED_RUNTIME, remoteOcxArgv } 
 import { recordServingRuntime } from "../../src/config/serving-runtimes";
 import { remoteInspectRuntimeArgv } from "../../src/link/remote-plant";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { spawnTestChild } from "../helpers/spawn-test-child";
+import { spawnTestChild, TEST_CHILD_REAP_RESERVE_MS } from "../helpers/spawn-test-child";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { windowsServedHome as windowsServedHomeFixture } from "../helpers/windows-served-home";
 
@@ -114,8 +114,9 @@ test.skipIf(process.platform === "win32").each(["Windows_NT", "MSYS_NT-10.0-2263
  * The census is written by the real recorder, so a format change on that side breaks these cases.
  */
 function servedFixture(tools = ["awk", "dd", "wc"]) {
-  const f = fixture();
-  for (const tool of tools) symlinkSync(Bun.which(tool)!, join(f.home, "remote-bin", tool));
+  const f = fixture("Linux"); // Recorded hints require the Linux ownership/mode gate.
+  // Keep trust evidence available when a case removes one of the census reader's tools.
+  for (const tool of new Set([...tools, "stat", "id", "readlink"])) symlinkSync(Bun.which(tool)!, join(f.home, "remote-bin", tool));
   f.install(0); // a runnable Desktop copy that must lose to the served install
   const census = (command: string[]) => recordServingRuntime(
     { command, version: "2.99.0", servedAt: "2026-11-09T00:00:00.000Z" },
@@ -204,20 +205,38 @@ test.skipIf(process.platform === "win32").each([
   expect(await readCensus(body)).toEqual({ exitCode: 1, stdout: "" });
 }, SPAWN_BUDGET_MS);
 
+async function runWindowsFixture(home: string, argv: string[], input: string, deadline: number, env?: NodeJS.ProcessEnv) {
+  const remainingMs = Math.ceil(deadline - performance.now());
+  if (remainingMs <= 0) throw new Error("Windows fixture exhausted its child budget before launch");
+  const child = Bun.spawn(argv, {
+    env, stdin: new Blob([input]), stdout: "pipe", stderr: "pipe", timeout: remainingMs,
+  });
+  // afterEach may run on a timeout. Keep the root until this child and both pipes settle.
+  activeRoots.add(home);
+  const pending = [new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited] as const;
+  const [, , exited] = await Promise.allSettled(pending);
+  if (exited.status === "fulfilled") {
+    activeRoots.delete(home);
+    // If afterEach already drained roots, this child now owns the deferred cleanup.
+    if (!roots.includes(home)) removeTreeWithRetry(home);
+  }
+  const [stdout, stderr, code] = await Promise.all(pending);
+  return { stdout, stderr, code };
+}
+
 test.skipIf(process.platform !== "win32")("Windows native execution preserves spaces quotes Unicode empty arguments and stdin bytes", async () => {
+  const deadline = performance.now() + SPAWN_BUDGET_MS - TEST_CHILD_REAP_RESERVE_MS;
   const home = mkdtempSync(join(tmpdir(), "ocx-windows-native-")); roots.push(home);
   const script = join(home, "echo arguments.ts");
   writeFileSync(script, 'const input = await Bun.stdin.text(); console.log(JSON.stringify({args:process.argv.slice(2),input})); process.exit(23);');
   const args = ["space and 'quote'", 'double"quote', "", "雪🔥", "x;$(echo bad)&%OS%", "tail\\"];
-  const child = Bun.spawn(windowsNativeArgv(process.execPath, [script, ...args]), {
-    stdin: new Blob(["fixture-key-stdin\n"]), stdout: "pipe", stderr: "pipe",
-  });
-  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  const { stdout, stderr, code } = await runWindowsFixture(home, windowsNativeArgv(process.execPath, [script, ...args]), "fixture-key-stdin\n", deadline);
   expect(stderr).toBe(""); expect(code).toBe(23);
   expect(JSON.parse(stdout)).toEqual({ args, input: "fixture-key-stdin\n" });
-});
+}, SPAWN_BUDGET_MS);
 
 test.skipIf(process.platform !== "win32")("Windows discovery selects Desktop before the managed current junction before a legacy executable", async () => {
+  const deadline = performance.now() + SPAWN_BUDGET_MS - TEST_CHILD_REAP_RESERVE_MS;
   const home = mkdtempSync(join(tmpdir(), "ocx-windows-discovery-")); roots.push(home);
   const prefix = join(home, ".local", "share", "goat", "opencodex");
   const version = join(prefix, "fixture-win32-x64");
@@ -230,17 +249,15 @@ test.skipIf(process.platform !== "win32")("Windows discovery selects Desktop bef
   }
   symlinkSync(version, join(prefix, "current"), "junction");
   for (const expected of [desktop, managed, legacy]) {
-    const child = Bun.spawn(windowsOcxArgv(["-e", 'console.log(require("node:fs").realpathSync(process.execPath)); console.log(await Bun.stdin.text());']), {
-      env: { ...process.env, USERPROFILE: home }, stdin: new Blob(["fixture-key-stdin"]), stdout: "pipe", stderr: "pipe",
-    });
-    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    const argv = windowsOcxArgv(["-e", 'console.log(require("node:fs").realpathSync(process.execPath)); console.log(await Bun.stdin.text());']);
+    const { stdout, stderr, code } = await runWindowsFixture(home, argv, "fixture-key-stdin", deadline, { ...process.env, USERPROFILE: home });
     expect(code).toBe(0); expect(stderr).toBe("");
     // The child reports its long path; the runner's temp root is an 8.3 short name.
     expect(stdout.trim().split(/\r?\n/u)).toEqual([realpathSync.native(expected), "fixture-key-stdin"]);
     if (expected === managed) rmSync(join(prefix, "current"));
     else rmSync(expected);
   }
-});
+}, SPAWN_BUDGET_MS);
 
 const windowsServedHome = () => windowsServedHomeFixture(root => { roots.push(root); });
 
@@ -504,7 +521,8 @@ test.skipIf(process.platform === "win32")("runtime inspection reports the served
   writeFileSync(cli, "// entry\n");
   recordServingRuntime({ command: [bun, cli], version: "2.99.0", servedAt: "2026-11-09T00:00:00.000Z" }, join(home, ".opencodex"));
   const bin = join(home, "tools"); mkdirSync(bin);
-  for (const tool of ["sh", "uname", "awk", "dd", "wc"]) symlinkSync(Bun.which(tool)!, join(bin, tool));
+  for (const tool of ["sh", "awk", "dd", "wc", "stat", "id", "readlink"]) symlinkSync(Bun.which(tool)!, join(bin, tool));
+  executable(join(bin, "uname"), "printf 'Linux\\n'");
   const result = Bun.spawnSync(remoteInspectRuntimeArgv("posix"), { env: { HOME: home, PATH: bin }, stdout: "pipe", stderr: "pipe" });
   const lines = result.stdout.toString().split("\n");
   expect(result.exitCode).toBe(0);
