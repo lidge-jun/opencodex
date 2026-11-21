@@ -162,7 +162,7 @@ ocx status --json
 
 对于由 CLI 管理的服务，请使用注册时的 `CODEX_HOME` 和 `OPENCODEX_HOME`。如果旧版服务定义中缺少这些路径，请使用相同设置运行一次 `ocx service repair`。按需初始化 Codex 主目录，运行 `ocx sync`，再重启服务。如果代理由桌面应用管理，请在应用中重启。
 
-如需将 CLI 服务迁移到另一个已有的 Codex 主目录，请先使用原设置运行 `ocx service uninstall`。卸载成功后，保留 `OPENCODEX_HOME`，选择新的 `CODEX_HOME`，再使用原后端和选项运行 `ocx service install`。
+如需将 CLI 服务迁移到另一个已有的 Codex 主目录，请先使用原设置运行 `ocx service uninstall`。如果服务已卸载，但恢复原生 Codex 配置失败，请解决提示的错误，再用相同设置运行 `ocx restore`。卸载和恢复都成功后，保留 `OPENCODEX_HOME`，选择新的 `CODEX_HOME`，再使用原后端和选项运行 `ocx service install`。使用新设置运行 `ocx sync`，并用 `ocx ready` 检查状态。如果启动失败，请按上文步骤恢复。
 
 ### `ocx doctor`
 

@@ -587,7 +587,7 @@ routing, but `failed` records the startup result for that listener. Restart the 
 
 For a CLI-managed service, use the registered `CODEX_HOME` and `OPENCODEX_HOME`. If an older service definition omits these paths, run `ocx service repair` once with those settings. Initialize the Codex home if needed, run `ocx sync`, then restart the service. For a Desktop-managed proxy, restart from the app.
 
-To move a CLI service to another existing Codex home, run `ocx service uninstall` with the original settings. After it succeeds, keep `OPENCODEX_HOME`, select the new `CODEX_HOME`, and run `ocx service install` with the original backend and options.
+To move a CLI service to another existing Codex home, run `ocx service uninstall` with the original settings. If it removes the service but reports a native Codex restore failure, correct the reported error and run `ocx restore` with those same settings. Once removal and restoration have succeeded, keep `OPENCODEX_HOME`, select the new `CODEX_HOME`, and run `ocx service install` with the original backend and options. With the new settings, run `ocx sync` and check `ocx ready`. If startup failed, follow the recovery steps above.
 
 On a Remote Link Child, readiness also covers the link. While the link cannot carry a request,
 `/readyz` answers `503` with `status: "pending"` and `link: {state: "unavailable", reason}`, so

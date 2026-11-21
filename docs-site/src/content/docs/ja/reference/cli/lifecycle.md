@@ -166,7 +166,7 @@ ocx status --json
 
 CLI で管理するサービスでは、登録済みの `CODEX_HOME` と `OPENCODEX_HOME` を使用します。古いサービス定義にこれらのパスがない場合は、同じ設定で `ocx service repair` を一度実行してください。必要に応じて Codex ホームを初期化し、`ocx sync` を実行してからサービスを再起動します。デスクトップアプリで管理するプロキシは、アプリから再起動します。
 
-CLI サービスを別の既存の Codex ホームに移すには、元の設定で `ocx service uninstall` を実行します。成功したら `OPENCODEX_HOME` はそのままにして、新しい `CODEX_HOME` を選び、元のバックエンドとオプションで `ocx service install` を実行してください。
+CLI サービスを別の既存の Codex ホームに移すには、元の設定で `ocx service uninstall` を実行します。サービスの削除後にネイティブ Codex の復元に失敗した場合は、表示されたエラーを解消し、同じ設定で `ocx restore` を実行してください。削除と復元の両方が成功したら `OPENCODEX_HOME` はそのままにして、新しい `CODEX_HOME` を選び、元のバックエンドとオプションで `ocx service install` を実行します。新しい設定で `ocx sync` を実行し、`ocx ready` で状態を確認してください。起動に失敗した場合は、上記の手順で復旧します。
 
 ### `ocx doctor`
 
