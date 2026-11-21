@@ -402,14 +402,15 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       const csv = await run("schtasks", ["/query", "/tn", TASK, "/fo", "CSV", "/nh"], timeoutMs);
       const parsed = csv.status === 0 ? parseTaskCsvState(csv.stdout) : "unknown";
       if (parsed !== "unknown") return parsed;
-      // A localized status word: ask Get-ScheduledTask, whose State is an enum name.
+      // Query TASK_STATE directly: importing ScheduledTasks can exhaust the one-second state budget.
       const left = timeoutMs - (Date.now() - started);
       if (left <= 0) return "unknown";
       const ps = await run("powershell", ["-NoProfile", "-NoLogo", "-NonInteractive", "-Command",
-        "(Get-ScheduledTask -TaskName '" + TASK + "' -TaskPath '\\' -ErrorAction Stop).State"], left);
+        `$ErrorActionPreference = 'Stop'; $s = New-Object -ComObject Schedule.Service; $s.Connect(); $s.GetFolder('\\').GetTask('${TASK}').State`], left);
+      if (ps.timedOut || ps.status !== 0) return "unknown";
       const state = ps.stdout.trim();
-      if (/^(running|queued)$/i.test(state)) return "running";
-      if (/^(ready|disabled)$/i.test(state)) return "not-running";
+      if (state === "2" || state === "4") return "running"; // queued or running
+      if (state === "1" || state === "3") return "not-running"; // disabled or ready
       return "unknown";
     },
     async winswStop(timeoutMs) {

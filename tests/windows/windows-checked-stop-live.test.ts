@@ -102,12 +102,22 @@ describe("capped command answers", () => {
     const programs: string[] = [];
     const deps = windowsCheckedStopLiveDeps({ run: async program => {
       programs.push(program);
-      if (program === "powershell") return result(0, "Queued\r\n");
+      if (program === "powershell") return result(0, "2\r\n");
       const word = status === "PowerShell" ? "Wird ausgeführt" : status;
       return result(0, `"\\opencodex-proxy","N/A","${word}"\r\n`);
     } });
     expect(await deps.taskState(1_000)).toBe("running");
     expect(programs).toEqual(status === "PowerShell" ? ["schtasks", "powershell"] : ["schtasks"]);
+  });
+
+  test.each([
+    [result(0, "1"), "not-running"], [result(0, "3"), "not-running"],
+    [result(0, "4"), "running"], [result(0, "0"), "unknown"],
+    [result(1, "3"), "unknown"], [result(0, "3", "", true), "unknown"],
+  ] as const)("reads the numeric scheduler state for an unrecognized CSV label", async (probe, expected) => {
+    const deps = windowsCheckedStopLiveDeps({ run: async program => program === "schtasks"
+      ? result(0, '"\\opencodex-proxy","N/A","Prêt"') : probe });
+    expect(await deps.taskState(1_000)).toBe(expected);
   });
 
   test("the #3064 launcher survives the task stop proof round trip", async () => {
