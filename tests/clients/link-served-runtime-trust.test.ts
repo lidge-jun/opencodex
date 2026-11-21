@@ -155,7 +155,8 @@ posix("a missing symlink reader never treats the link as a regular executable", 
 }, SPAWN_BUDGET_MS);
 
 posix("BSD stat preserves sticky ancestors and zero-padded permission bits", async () => {
-  const f = fixture(); const realStat = Bun.which("stat")!;
+  // macOS runners may put GNU coreutils first on PATH; /usr/bin/stat is always the BSD one there.
+  const f = fixture(); const realStat = process.platform === "darwin" ? "/usr/bin/stat" : Bun.which("stat")!;
   chmodSync(dirname(f.served), 0o1777);
   unlinkSync(join(f.bin, "stat"));
   executable(join(f.bin, "stat"), `if [ "$1" = -c ]; then exit 1; fi
