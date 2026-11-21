@@ -1113,15 +1113,7 @@ jobs:
     # setup that projects ~33.6 against the 30-minute bound. Fourteen shards put test
     # work at ~19.6 minutes and the same projection at ~26.9, the margin chosen for
     # eleven. Pay for three extra setups, keep the 30-minute job bound and all tests.
-    #
-    # Fourteen shards then reached it as well: on dev 067f6231f6 shard 14/14 was
-    # cancelled at batch 39/46 twice in a row (run 44898495822, both attempts) with no
-    # failing test, after other shards in the same window had been cancelled at 30
-    # minutes in runs 44809394399 and 44878221019. A cancelled shard is neither a
-    # pass nor a fail, so it blocks release evidence without showing a fault. Raise
-    # the bound to 40, as #8944 did for the Linux shards, until the Windows weights
-    # are refreshed and the shard count is revisited; a shard far beyond 40 minutes
-    # is still wedged, not slow.
+    # Raised to 40 as #8944 did for Linux: 14/14 hit 30 at batch 39/46 (run 44898495822).
     timeout-minutes: 40
     strategy:
       fail-fast: false

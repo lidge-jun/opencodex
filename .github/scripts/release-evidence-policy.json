@@ -982,7 +982,7 @@
     "version": 1,
     "windowsShards": 14,
     "files": {
-      ".github/workflows/ci.yml": "6f6006246d695012c8672b0cdd56729a1c4c7df6",
+      ".github/workflows/ci.yml": "cdfc4ea31e35aba6a44123f04eba1fba0cee5791",
       ".github/actions/setup-project-bun/action.yml": "cf28f6f9d4385d69784f4e3610914f6952ce789d",
       ".github/scripts/release-evidence.cjs": "ace2b9006b2d58ef84ed0996b4e179ff4be15900",
       ".github/scripts/release-evidence.test.cjs": "9cc686390e5c37d8e693b98d049e8b505d0273cf",
