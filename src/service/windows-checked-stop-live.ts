@@ -127,8 +127,8 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
  * falls back to Get-ScheduledTask's locale-independent State enum.
  */
 // A queued instance can launch after Part A. Only ready and disabled prove inactivity.
-const TASK_CSV_ACTIVE = new Set(["running", "queued", "正在运行", "已排队", "실행 중"]);
-const TASK_CSV_NOT_RUNNING = new Set(["ready", "disabled", "就绪", "已禁用", "준비"]);
+const TASK_CSV_ACTIVE = new Set(["running", "queued", "正在运行", "已排队", "실행 중", "대기"]);
+const TASK_CSV_NOT_RUNNING = new Set(["ready", "disabled", "就绪", "已禁用", "준비", "사용 안 함"]);
 
 export function parseTaskCsvState(csv: string): "running" | "not-running" | "unknown" {
   for (const line of csv.split(/\r?\n/)) {

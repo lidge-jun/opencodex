@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { createCommandCodeAdapter } from "../../src/adapters/command-code";
 import { normalizeAnthropicInputSchema } from "../../src/adapters/anthropic-input-schema";
+import * as inputSchemas from "../../src/adapters/anthropic-input-schema";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxTool } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
@@ -49,6 +50,21 @@ function sharedRefGraph(depth: number): Record<string, unknown> {
 }
 
 describe("Command Code wireTools input_schema", () => {
+  test("normalizes each visible tool once when preparing the wire and recovery views", async () => {
+    const normalize = spyOn(inputSchemas, "normalizeAnthropicInputSchema");
+    try {
+      const parameters = { type: "object", properties: { path: { type: "string" } } };
+      const schemas = await wiredSchemas([
+        { name: "read", description: "Read", parameters },
+        { name: "write", description: "Write", parameters },
+      ]);
+      expect(Object.keys(schemas)).toEqual(["read", "write"]);
+      expect(normalize).toHaveBeenCalledTimes(2);
+    } finally {
+      normalize.mockRestore();
+    }
+  });
+
   test("normalizes root oneOf, anyOf, and allOf in the outbound request", async () => {
     const schemas = await wiredSchemas([
       {

@@ -91,6 +91,9 @@ reports a refusal as `WindowsCheckedStopRefusedError` with what had already happ
 Scheduler it reauthorizes after validating the helper proof, before sending `stop` on stdin. The
 helper and outer deadlines must still be open after authorization.
 
+For the Korean Scheduler status, `사용 안 함` (disabled) proves inactivity and `대기`
+(queued) remains active because that instance can still start.
+
 Each step that asks the machine runs under a cap that races a timer and rechecks the elapsed time
 on the injected clock. The Scheduler proof-time authorization shares the 2 s task-end cap.
 Opening bind-time watches and the other authorization calls have no individual cap. Authorization

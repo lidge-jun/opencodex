@@ -1266,6 +1266,8 @@ validation message.
 
 ### Context-window refusals
 
+Whitespace-heavy provider errors retain the same overflow and negation rules. Negation-aside processing consumes surrounding whitespace once, so long whitespace runs do not require repeated matching.
+
 Before sending to a Responses combo target with a known context window and input limit,
 OpenCodex applies a 1.1× margin to the estimated input tokens and rounds up. The adjusted input
 must fit the input limit, and the adjusted input plus the output reserve must fit the context
