@@ -106,11 +106,16 @@ Una salida proxy sola no confirma que la restauración compartida Codex / Grok t
 En Windows, `ocx stop` detiene una tarea registrada del Programador de tareas o un servicio nativo WinSW mediante una parada verificada. Primero finaliza la tarea y después solo los procesos envoltorios `wscript.exe` y `cmd.exe` que puede vincular a esta instalación (el lanzador o script de servicio de este directorio, una cadena de procesos padres que conduce al proxy o al servicio del Programador de tareas, y una hora de inicio registrada), y espera a que terminen. Solo entonces detiene el proxy de forma controlada. Después confirma que el puerto permanezca libre unos seis segundos y que ningún envoltorio se haya reiniciado, para impedir que un bucle de reinicio vuelva a iniciar el proxy tras una parada exitosa.
 
 OpenCodex verifica que la tarea programada inicie esta instalación con tu cuenta de Windows
-y comprueba la cuenta de cada instancia en ejecución antes de detenerla. Una tarea deshabilitada
+y comprueba las cuentas de sus desencadenadores y de cada instancia en ejecución antes de detenerla. Una tarea deshabilitada
 de tu cuenta se considera inactiva si no tiene instancias en ejecución. Si hay una tarea en cola,
 OpenCodex no confirma la parada. Si la comprobación falla,
-revisa el lanzador y la cuenta de ejecución en el Programador de tareas y detén la tarea desde
-la sesión de esa cuenta.
+revisa el lanzador, las cuentas de los desencadenadores y la cuenta de ejecución en el Programador
+de tareas. Finalizar sus instancias no repara el registro. Repara un registro que te pertenezca
+o contacta con su propietario o administrador. La parada rechaza nuevas acciones al vencer
+su límite de tiempo, cancela el proceso auxiliar de parada y conserva los cambios confirmados
+en el resultado, incluso si la verificación final sigue pendiente.
+Si se envía la autorización y el auxiliar no responde antes del plazo, la CLI indica
+que no pudo leer el estado del servicio (`state-unknown`) y marca la parada como fallida.
 
 OpenCodex solo finaliza directamente un envoltorio si comprueba que pertenece a tu cuenta.
 Ignora los envoltorios que pertenecen a otro usuario. Si no puede verificar el propietario
