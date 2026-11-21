@@ -95,6 +95,8 @@ export function registerMainCollisionCases(
     } else {
       expect(config.codexAccounts).toHaveLength(1);
       expect(getCodexAccountCredential("collision-candidate")).not.toBeNull();
+      expect(getCodexAccountCredential("collision-candidate")?.chatgptAccountId)
+        .toBe(scenario.accountId ?? "main-account");
       expect(warmups).toBeGreaterThan(0);
     }
   });
