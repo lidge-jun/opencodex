@@ -898,8 +898,15 @@ export function buildOpencodeProviderBlockFromCatalog(
  * one pass so they cannot disagree about the model set, the names, or the connection.
  */
 function buildOpencodeClientConfig(ctx: ExportContext): OpencodeGeneratedConfig {
-  const models = normalizeExportModels(ctx.models);
   const config = ctx.config ?? OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG;
+  // Codex Direct forwards each caller's own bearer, while opencode sends the proxy's
+  // admission key, so a native row could only ever answer 401. Pi, DSH and the CLI's
+  // `ocx export` already drop native rows in that mode; the managed integration is the
+  // same client surface and has to agree, or a managed apply would list models that fail
+  // when selected. `ctx.config` is undefined for a caller that has no live config, and
+  // Direct cannot be claimed without one.
+  const models = normalizeExportModels(ctx.models).filter(model =>
+    !(model.native === true && providerCodexAccountMode("openai", ctx.config?.providers?.openai) === "direct"));
   const blocks = opencodeProviderBlocks(ctx.baseUrl, models, config, { keylessInference: ctx.keylessInference === true });
   return {
     $schema: OPENCODE_CONFIG_SCHEMA,

@@ -124,6 +124,37 @@ test("OpenCode selects the protocol for each concrete model in both config gener
   }
 });
 
+test("OpenCode managed document drops native rows in Codex Direct and keeps them in pool", () => {
+  // Direct forwards the caller's own bearer while opencode sends the proxy key, so a native
+  // row would only answer 401. The launcher, Pi and DSH already omit them; the managed
+  // integration writes the same client's file and must agree, or an applied config lists a
+  // model that fails when selected.
+  const models: ExportModel[] = [
+    { namespaced: "gpt-5.6-luna", provider: "openai", id: "gpt-5.6-luna", native: true, fastRowAvailable: true },
+    { namespaced: "openai/gpt-routed", provider: "openai", id: "gpt-routed" },
+    { namespaced: "safe/model", provider: "safe", id: "model" },
+  ];
+  const direct = cfg({
+    providers: {
+      openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", codexAccountMode: "direct" },
+      safe: { adapter: "openai-chat", baseUrl: "https://safe.example/v1" },
+    },
+  });
+
+  const routedKeys = ["openai/gpt-routed", "safe/model"];
+  const directDoc = opencodeConfig(ctx({ models, config: direct }));
+  for (const block of [directDoc.provider.opencodex!.models, directDoc.providers.opencodex!.models]) {
+    // The synthetic Fast row inherits the native flag, so it must go with its parent.
+    expect(Object.keys(block).sort()).toEqual(routedKeys);
+  }
+
+  const pool = cfg({ ...direct, providers: { ...direct.providers, openai: { ...direct.providers.openai!, codexAccountMode: "pool" } } });
+  const poolDoc = opencodeConfig(ctx({ models, config: pool }));
+  for (const block of [poolDoc.provider.opencodex!.models, poolDoc.providers.opencodex!.models]) {
+    expect(Object.keys(block).sort()).toEqual(["gpt-5.6-luna", "gpt-5.6-luna--fast", ...routedKeys].sort());
+  }
+});
+
 function piConfig(context: ExportContext = ctx()): PiGeneratedConfig {
   return buildClientConfig("pi", context) as PiGeneratedConfig;
 }
