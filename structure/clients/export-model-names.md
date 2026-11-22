@@ -96,10 +96,20 @@ keeps the Codex catalog listable rather than promising a servable row. The
 launcher applies the same rule in `opencodeCatalogFromProxyRows` and
 `opencodeLaunchNativeSlugs` (`src/cli/opencode.ts`), so `ocx opencode`,
 `ocx export --client opencode` and every integration route agree about which
-native selectors a client may choose. Coverage:
+native selectors a client may choose.
+
+Admission is only half of what a client may be offered. Codex Direct is a
+separate omission that applies after admission succeeds: direct mode forwards
+each caller's own OpenAI bearer while a client sends the proxy's key, so a
+native row would answer 401. Every OpenCode surface therefore drops native rows
+in that mode — the launcher's slug and proxy-row paths, `ocx export`, and the
+managed integration, whose `buildOpencodeClientConfig` filters them alongside Pi
+and DSH — while the roster itself still exports them for clients that select
+their own credential. Coverage:
 `tests/server/management-model-roster.test.ts` (the roster, both account modes
-and an absent provider) and `tests/providers/opencode-cli.test.ts` (the
-launcher's slug selection and proxy-row catalog).
+and an absent provider), `tests/providers/opencode-cli.test.ts` (the launcher's
+slug selection and proxy-row catalog) and `tests/config/client-config-export.test.ts`
+(the managed OpenCode document in both account modes, Fast row included).
 
 ## CLI and API boundary
 
