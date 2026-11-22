@@ -1,4 +1,14 @@
-import { readFileSync } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { startForegroundAdvisory } from "../../src/service/foreground-advisory-process";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { saveConfig } from "../../src/config";
+import { startServer } from "../../src/server";
+import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
+import { repoPath } from "../helpers/repo-root";
 import { describe, expect, test } from "bun:test";
 import { deriveLaunchdServiceDiagnostic, foregroundStartServiceAdvisoryLines, warnForegroundStartService } from "../../src/service/diagnostics";
 import type { ServiceDiagnostic } from "../../src/service/diagnostics";
@@ -92,9 +102,9 @@ describe("foregroundStartServiceAdvisoryLines", () => {
 });
 
 test("foreground advisory is wired after readiness initialization and uses the final sibling decision", () => {
-  const cli = readFileSync(new URL("../../src/cli/index.ts", import.meta.url), "utf8");
+  const cli = readFileSync(repoPath("src/cli/index.ts"), "utf8");
   const start = cli.slice(cli.indexOf("async function handleStart("), cli.indexOf("function detachedStartEnvironment("));
-  const probe = "warnForegroundStartService(diagnoseService,";
+  const probe = "startForegroundAdvisory(line =>";
   const probes = start.split(probe);
   expect(probes).toHaveLength(2);
   const beforeProbe = probes[0]!;
@@ -104,4 +114,86 @@ test("foreground advisory is wired after readiness initialization and uses the f
   expect(beforeProbe.slice(beforeProbe.lastIndexOf('console.log("Client startup work complete.")'))).toContain(
     "!cleaned && !shuttingDown && !siblingStart && !owner.live && !supervisedServiceChild",
   );
+});
+
+function fakeProbe(body: string) {
+  return spawn(process.execPath, ["-e", body], {
+    detached: process.platform !== "win32", stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
+  });
+}
+
+test("the listening proxy can answer a request while the advisory child is still probing", async () => {
+  const previousHome = process.env.OPENCODEX_HOME;
+  const home = mkdtempSync(join(tmpdir(), "ocx-advisory-"));
+  const codexHome = installIsolatedCodexHome("ocx-advisory-codex-");
+  process.env.OPENCODEX_HOME = home;
+  let server: ReturnType<typeof startServer> | undefined;
+  const warnings: string[] = [];
+  let child: ChildProcess | undefined;
+  let cancel: (() => void) | undefined;
+  try {
+    saveConfig({
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "mock",
+      providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1", allowPrivateNetwork: true, liveModels: false, models: ["m"] } },
+      clientIntegrations: { codex: false },
+      webSearchSidecar: { enabled: false },
+    });
+    server = startServer(0);
+    cancel = startForegroundAdvisory(line => warnings.push(line), {
+      launch: () => (child = fakeProbe("console.log('pending'); for (;;) {}")),
+      timeoutMs: 4_000,
+    });
+    expect(child).toBeDefined();
+    const ready = new AbortController();
+    const deadline = setTimeout(() => ready.abort(), 2_000);
+    try {
+      await Promise.race([
+        once(child!.stdout!, "data", { signal: ready.signal }),
+        once(child!, "close", { signal: ready.signal }).then(() => { throw new Error("probe exited before starting"); }),
+      ]);
+    } finally {
+      clearTimeout(deadline);
+      ready.abort();
+    }
+    const response = await fetch(new URL("/healthz", server.url), { signal: AbortSignal.timeout(1_500) });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toHaveProperty("status");
+    expect(child!.exitCode).toBeNull();
+    expect(child!.signalCode).toBeNull();
+    expect(warnings).toEqual([]);
+  } finally {
+    const exited = child && child.exitCode === null && child.signalCode === null ? once(child, "close") : undefined;
+    cancel?.();
+    try { await server?.stop(true); await exited; } finally {
+      codexHome.restore();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeAfterBackgroundWork(home);
+    }
+  }
+});
+
+test("a completed probe publishes its advisory; a timed-out probe is stopped silently", async () => {
+  const warnings: string[] = [];
+  let child!: ChildProcess;
+  const onWarning = (line: string) => warnings.push(line);
+  const cancel = startForegroundAdvisory(onWarning, {
+    launch: () => (child = fakeProbe('console.log(JSON.stringify(["status guidance"]))')),
+  });
+  try {
+    await once(child, "close");
+    expect(warnings).toEqual(["status guidance"]);
+  } finally { cancel(); }
+
+  const cancelSlow = startForegroundAdvisory(onWarning, {
+    launch: () => (child = fakeProbe('setTimeout(() => console.log(JSON.stringify(["too late"])), 2000)')),
+    timeoutMs: 100,
+  });
+  try {
+    const [code] = await once(child, "close");
+    expect(code).not.toBe(0);
+    expect(warnings).toEqual(["status guidance"]);
+  } finally { cancelSlow(); }
 });
