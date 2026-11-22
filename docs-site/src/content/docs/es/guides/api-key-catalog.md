@@ -408,7 +408,6 @@ En un chat interactivo de Codex, Gemini puede solicitar las herramientas que ofr
   o a que se termine el árbol de procesos y se cierre el proceso principal en Windows, antes de eliminar el espacio de
   trabajo. Si no puede confirmar la limpieza, registra una advertencia, conserva el espacio de trabajo y da por fallido el
   turno afectado. Los espacios de trabajo conservados pueden acumularse tras fallos repetidos.
-- **Solo texto:** los prompts de ACP llevan texto, así que las herramientas de función del cliente y las imágenes no se ofrecen al modelo, y el uso de herramientas propio de la CLI queda dentro de la CLI.
 
 <a id="a6api-credit-quota"></a>
 
