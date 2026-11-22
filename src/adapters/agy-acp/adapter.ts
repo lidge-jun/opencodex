@@ -22,7 +22,7 @@ import { getConfigDir } from "../../config/paths";
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import {
   ACP_AUTH_REQUIRED, MAX_ACP_LINE_BYTES, MAX_ACP_TOTAL_BYTES, acpSystemText, acpTerminal, acpUpdateToEvents,
-  buildAcpPrompt, classifyFrame, initializeFrame, mapAcpUsage, methodNotFoundFrame, permissionCancelledFrame,
+  acpPromptBlocks, UnsupportedAcpMedia, classifyFrame, initializeFrame, mapAcpUsage, methodNotFoundFrame, permissionCancelledFrame,
   sessionCancelFrame, sessionNewFrame, sessionPromptFrame, setConfigOptionFrame, type AcpFailureCode, type JsonRpcId,
 } from "./acp";
 import {
@@ -32,6 +32,7 @@ import {
 import { AGY_ACP_MIN_VERSION, AGY_INSTALL_HINT, MAX_AGY_VERSION_OUTPUT_LENGTH, probeAgyVersion, readAgyExecutable, resolveAgyBinary, type AgyVersionProbe } from "./binary";
 import { AgyAcpCleanupError, AgyAcpTreeCleanupError, agySpawnCreatedNoProcess, createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild, type AgyAcpSpawn, type TurnWorkspace } from "./process";
 import { AcpTurnOutput } from "./output-redaction";
+import { stageClientTools } from "./client-tools";
 import { agyAcpPolicyRefusal } from "./policy";
 
 /** Identity only: the transport is stdio. Never fetched. */
@@ -217,6 +218,14 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       }
 
       try {
+        let tools: Awaited<ReturnType<typeof stageClientTools>>;
+        try {
+          tools = await stageClientTools(parsed, workspace.tmp);
+        } catch {
+          await cleanup(workspace);
+          emit(invalidRequest("agy_acp_tool_catalog", "The client tool catalog could not be prepared."));
+          return;
+        }
         const executable = readAgyExecutable(binary);
         if (incoming.abortSignal?.aborted || !executable) {
           await cleanup(workspace);
@@ -234,7 +243,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
             return;
           }
         }
-        await driveTurn({ binary: executable.path, workspace, parsed, incoming, emit, requested, thoughtWanted });
+        await driveTurn({ binary: executable.path, tools, workspace, parsed, incoming, emit, requested, thoughtWanted });
       } catch (error) {
         if (!(error instanceof AgyAcpCleanupError)) throw error;
         emit({ type: "error", status: 502, errorType: "upstream_error", code: "agy_acp_protocol", message: error.message });
@@ -243,10 +252,10 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
   };
 
   async function driveTurn(turn: {
-    binary: string; workspace: TurnWorkspace; parsed: OcxParsedRequest; incoming: IncomingMeta;
+    tools: Awaited<ReturnType<typeof stageClientTools>>; binary: string; workspace: TurnWorkspace; parsed: OcxParsedRequest; incoming: IncomingMeta;
     emit: (event: AdapterEvent) => void; requested: string; thoughtWanted: readonly string[] | undefined;
   }): Promise<void> {
-    const { workspace, parsed, incoming, emit, requested, thoughtWanted } = turn;
+    const { tools, workspace, parsed, incoming, emit, requested, thoughtWanted } = turn;
     let child: AgyAcpChild;
     try {
       child = spawnChild(turn.binary, [...AGY_ACP_ARGS], { cwd: workspace.dir, env: childEnv(workspace) });
@@ -263,12 +272,14 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     let spawnFailed = false;
     let sessionId: string | undefined;
     let systemOnSession = false;
+    let allowsImage = false;
     let state: AcpConfigOption[] = [];
     let target: AcpSelectValue | undefined;
     const { stdin, stdout, stderr } = child;
     let modelSetterPending = false;
     let prompting = false;
     let usage: OcxUsage | undefined;
+    let pendingToolEvents: AdapterEvent[] = [];
     let sawFrame = false;
     let buffer = "";
     let totalBytes = 0;
@@ -308,7 +319,12 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
           output.flush();
         }
       }).then(() => {
-        if (!aborted && !incoming.abortSignal?.aborted && terminal) emit(terminal);
+        if (!aborted && !incoming.abortSignal?.aborted && terminal) {
+          if (terminal.type === "done" && terminal.stopReason === "tool_use") {
+            for (const event of pendingToolEvents) emit(event);
+          }
+          emit(terminal);
+        }
         if (refusal) rejectTurn(refusal.error);
         else resolveTurn();
       }).catch(rejectTurn);
@@ -377,7 +393,10 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       if (!checkSelectedModel() || !checkSelectedThinking()) return;
       const refuse = (error: unknown): void => finish(undefined, false, { error });
       try {
-        const prompt = buildAcpPrompt(parsed, !systemOnSession);
+        const prompt = acpPromptBlocks(parsed, !systemOnSession, systemOnSession ? undefined : tools.instruction);
+        if (!allowsImage && prompt.some(block => block.type === "image")) {
+          return finish(invalidRequest("unsupported_input_modality", "This ACP session did not advertise image input."));
+        }
         const decision = incoming.sendBudget?.reserveDispatch({ sendClass: "transient", targetKey: AGY_ACP_IDENTITY_URL });
         if (decision && !decision.allowed) return refuse(new SendBudgetExhaustedError());
         const permit = decision?.permit;
@@ -401,6 +420,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         const sending = permit?.execute ? permit.execute(dispatch) : dispatch();
         void sending.catch(refuse).finally(() => permit?.release());
       } catch (error) {
+        if (error instanceof UnsupportedAcpMedia) return finish(invalidRequest("unsupported_input_modality", error.message));
         refuse(error);
       }
     }
@@ -414,10 +434,11 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       const r = result && typeof result === "object" ? result as Record<string, unknown> : {};
       if (kind === "initialize") {
         if (r.protocolVersion !== 1) return fail("agy_acp_protocol", "initialize: unsupported protocol version");
-        const caps = r.agentCapabilities as { sessionCapabilities?: { systemPrompt?: unknown } } | undefined;
-        const system = acpSystemText(parsed);
+        const caps = r.agentCapabilities as { promptCapabilities?: { image?: boolean }; sessionCapabilities?: { systemPrompt?: unknown } } | undefined;
+        allowsImage = caps?.promptCapabilities?.image === true;
+        const system = [acpSystemText(parsed), tools.instruction].filter(Boolean).join("\n\n");
         systemOnSession = !!system && !!caps?.sessionCapabilities?.systemPrompt && typeof caps.sessionCapabilities.systemPrompt === "object";
-        request("session/new", id => sessionNewFrame(id, workspace.dir, systemOnSession ? system : undefined));
+        request("session/new", id => sessionNewFrame(id, workspace.dir, systemOnSession ? system : undefined, tools.servers));
         return;
       }
       if (kind === "session/new") {
@@ -457,14 +478,33 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       if (terminal.kind === "aborted") return finish(undefined, true);
       if (terminal.kind === "error") return fail(terminal.code);
       if (terminal.kind === "refusal") return finish({ type: "incomplete", reason: "content_filter", retryable: false, usage });
+      if (pendingToolEvents.length) return; // The captured call settles after this batch of frames.
+      if (tools.required) return fail("agy_acp_protocol", "required client tool was not called");
       finish({ type: "done", ...(usage ? { usage } : {}), ...(terminal.stopReason ? { stopReason: terminal.stopReason } : {}) });
+    }
+
+    function captureClientCall(call: unknown): boolean {
+      if (!prompting || settled || incoming.abortSignal?.aborted) return false;
+      const events = tools.capture(call);
+      if (!events || !checkSelectedModel()) return false;
+      if (pendingToolEvents.length) return true;
+      pendingToolEvents = events;
+      queueMicrotask(() => {
+        if (settled || incoming.abortSignal?.aborted || !checkSelectedModel() || !checkSelectedThinking()) return;
+        finish({ type: "done", stopReason: "tool_use", endTurn: false, usage });
+      });
+      return true;
     }
 
     function handle(raw: unknown): void {
       const frame = classifyFrame(raw);
       if (frame.kind === "invalid") return fail("agy_acp_protocol", "malformed frame");
       if (frame.kind === "request") {
+        const params = frame.params as { sessionId?: unknown; toolCall?: unknown } | undefined;
         send(frame.method === "session/request_permission" ? permissionCancelledFrame(frame.id) : methodNotFoundFrame(frame.id));
+        if (frame.method === "session/request_permission" && sessionId && params?.sessionId === sessionId) {
+          captureClientCall(params.toolCall);
+        }
         return;
       }
       if (frame.kind === "response") {
@@ -485,6 +525,8 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         return;
       }
       if (!prompting) return;
+      if ((update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update")
+        && captureClientCall(update)) return;
       for (const event of acpUpdateToEvents(update)) {
         if (event.type !== "text_delta" && event.type !== "thinking_delta") {
           emit(event);

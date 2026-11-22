@@ -98,6 +98,10 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   Explicit non-Gemini evidence in the model ID or label invalidates the selection. The adapter checks the model and thinking level again after processing all complete frames in the current stdout batch and before spending the dispatch permit.
   Selection rejects duplicate setting IDs, oversized snapshots and nested groups. The adapter ignores updates
   until it has a session ID and accepts updates only for that session. Permission requests are answered `cancelled`.
+  Caller-advertised tools use the capture-only CodeBuddy MCP helper. Each leg returns at most one
+  matching call to the host after child cleanup; the host executes it under its own tool permissions.
+  Inline user and tool-result images require ACP image capability. Text replay under pressure keeps
+  the latest request, preceding proposal and paired tool result within the prompt limit.
   Selection errors use fixed text. Answer and reasoning
   deltas each pass through a bounded streaming redactor for minted OpenCodex credentials, Bearer values,
   OAuth token fields, and token-shaped JWT and API-key strings. Long values stay masked across frames.
@@ -112,7 +116,7 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   child can start. Retained workspaces can accumulate when cleanup repeatedly cannot be confirmed.
   A confirmed spawn failure without an assigned PID leaves no process to reap. Deferred startup errors
   are handled even if the child has no pipes. The adapter parses a final stdout reply without a trailing newline and fails an unanswered turn at EOF.
-  The version probe and each turn start with a fresh private workspace containing only an empty temp directory.
+  The probe and turn workspaces start empty. A turn with caller tools stages a private catalog in its temp directory.
   On POSIX, workspace removal follows confirmed leader exit and a group check returning ESRCH after SIGKILL or
   ESRCH. Descendants that deliberately leave the process group are outside that check. Removing the workspace
   exposes no pre-existing user files. Windows requires successful
