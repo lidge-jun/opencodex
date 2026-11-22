@@ -29,11 +29,23 @@ export interface CodeBuddyScaffoldFilterResult {
   fail: boolean;
 }
 
+/**
+ * An open fenced code block (CommonMark): it closes only on a line whose fence run uses the same
+ * character, is at least as long as the opener, and is followed by nothing but spaces or tabs.
+ * `closing` tracks a candidate closing line whose remainder has not been seen yet: `run` while the
+ * fence run may still grow, `space` once trailing whitespace started.
+ */
+interface FenceState {
+  char: "`" | "~";
+  length: number;
+  closing: "run" | "space" | null;
+}
+
 interface ScanResult {
   safe: string;
   held: string;
   fail: boolean;
-  fence: "`" | "~" | null;
+  fence: FenceState | null;
   lineStart: boolean;
 }
 
@@ -102,25 +114,50 @@ function matchControlSequence(text: string, index: number): "fail" | "hold" | nu
  */
 function scan(
   text: string,
-  initialFence: "`" | "~" | null,
+  initialFence: FenceState | null,
   initialLineStart: boolean,
 ): ScanResult {
-  let fence = initialFence;
+  let fence = initialFence && { ...initialFence };
   let lineStart = initialLineStart;
   let index = 0;
 
   while (index < text.length) {
-    if (lineStart) {
-      const fenceMarkers = fence ? [fence.repeat(3)] : ["```", "~~~"];
-      const completeFence = fenceMarkers.find(marker => text.startsWith(marker, index));
-      if (completeFence) {
-        fence = fence ? null : (completeFence[0] as "`" | "~");
-        index += completeFence.length;
-        lineStart = false;
+    if (fence?.closing) {
+      const char = text[index]!;
+      if (fence.closing === "run" && char === fence.char) {
+        index += 1;
         continue;
       }
-      if (fenceMarkers.some(marker => prefixAtEnd(text, index, marker))) {
-        return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
+      if (char === " " || char === "\t") {
+        fence.closing = "space";
+        index += 1;
+        continue;
+      }
+      // A line end confirms the close; any other text makes the line ordinary fenced content.
+      if (char === "\n" || char === "\r") fence = null;
+      else fence.closing = null;
+    } else if (lineStart) {
+      const runChar = text[index];
+      if (runChar === "`" || runChar === "~") {
+        let runEnd = index + 1;
+        while (runEnd < text.length && text[runEnd] === runChar) runEnd += 1;
+        const runLength = runEnd - index;
+        if (!fence && runLength >= 3) {
+          fence = { char: runChar, length: runLength, closing: null };
+          index = runEnd;
+          lineStart = false;
+          continue;
+        }
+        if (fence && runChar === fence.char && runLength >= fence.length) {
+          fence.closing = "run";
+          index = runEnd;
+          lineStart = false;
+          continue;
+        }
+        // A run cut off by the end of this chunk may still reach the length that opens or closes.
+        if (runEnd === text.length && (!fence || runChar === fence.char)) {
+          return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
+        }
       }
 
       if (!fence) {
@@ -144,7 +181,7 @@ function scan(
 export class CodeBuddyScaffoldFilter {
   private pending = "";
   private failed = false;
-  private fence: "`" | "~" | null = null;
+  private fence: FenceState | null = null;
   private lineStart = true;
 
   /** True while an earlier event owns an unresolved marker or fence prefix. */
