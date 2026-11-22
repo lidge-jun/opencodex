@@ -106,7 +106,7 @@ The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
 line so scroll-spy and the top-bar offset agree; other consumers keep their
 existing reading line. The section strip stays one row at every width.
 
-Provider Overview consumes the existing shared `add-provider-presets` resource for sponsor
+RunAPI joins the Standard tier through the registry. Provider Overview consumes the shared `add-provider-presets` resource for sponsor
 presentation. `matchingWorkspacePreset` requires the configured id, adapter and normalized
 endpoint to match; a custom endpoint or absent sponsor metadata suppresses the introduction.
 `ProviderSponsor` keeps localized promotional copy and outbound HTTP(S) links separate from

@@ -155,6 +155,10 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
 <td><a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a>의 후원에 감사합니다. TokenLab은 코딩 에이전트에게 주요 모델용 API 키 하나를 제공하며, OpenAI Responses와 Chat Completions, Anthropic Messages, Gemini 네이티브 API 형식을 스트리밍과 도구 호출까지 지원합니다. MCP 서버와 에이전트 Skills도 제공해 쉽게 연동할 수 있습니다. 전달 모드를 고르고 쓴 만큼 결제하세요. Add provider 선택기에서 <code>TokenLab</code>을 고르거나 <code>ocx provider add tokenlab</code>을 실행하세요.<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
 </tr>
+<tr>
+<td width="180"><a href="https://runapi.co">RunAPI</a><!-- RunAPI light and dark logos pending --></td>
+<td>Thanks to <a href="https://runapi.co">RunAPI</a> for sponsoring this project! <!-- RunAPI sponsor blurb pending --></td>
+</tr>
 </tbody>
 </table>
 

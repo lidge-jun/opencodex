@@ -156,6 +156,10 @@ WidgetKit 擴充套件，可顯示代理狀態、今日用量與供應商配額�
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
 <td>感謝 <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a> 贊助本專案！TokenLab 為程式設計智慧體提供統一的多模型 API，一把 API Key 即可接入主流模型，支援 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及串流輸出和工具呼叫。同時提供 MCP 伺服器和 Agent Skills，方便接入現有工作流程；交付模式可選，按量付費。在「新增供應商」選擇器選 <code>TokenLab</code>，或執行 <code>ocx provider add tokenlab</code>。</td>
 </tr>
+<tr>
+<td width="180"><a href="https://runapi.co">RunAPI</a><!-- RunAPI light and dark logos pending --></td>
+<td>Thanks to <a href="https://runapi.co">RunAPI</a> for sponsoring this project! <!-- RunAPI sponsor blurb pending --></td>
+</tr>
 </tbody>
 </table>
 
