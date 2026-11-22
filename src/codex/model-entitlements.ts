@@ -1606,7 +1606,11 @@ export function recordCodexModelDenialEvidence(
   // lives in `auth.json` and has no pool generation; discarding its refusals would revert
   // #4906 for the stored main login (#4952). Request-owned `main` never reaches here — its
   // `accountId` is null and the guard above returns.
-  recordObservedCodexModelDenial(accountId, modelId, typeof generation === "number" ? generation : undefined, now);
+  if (recordObservedCodexModelDenial(accountId, modelId, typeof generation === "number" ? generation : undefined, now)) {
+    // A cached grant predates this accepted refusal, on both initial and alternate sends.
+    // Keep later roster grants authoritative without letting a stale credential erase them.
+    invalidateCodexModelEntitlementsForAccount(accountId);
+  }
 }
 
 /** Drop the refusal evidence for a pair the account has just served successfully. */

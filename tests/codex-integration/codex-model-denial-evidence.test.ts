@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
   cachedDeniedCodexAccountIdsForModel,
+  cachedAvailableAccountGatedNativeModels,
   clearCodexModelDenialEvidence,
   recordCodexModelDenialEvidence,
   resetCodexModelEntitlementCacheForTests,
@@ -77,6 +78,16 @@ describe("upstream refusal as per-account model denial evidence", () => {
     // account that has since been granted the model.
     seedCodexModelEntitlementsForTests("plus", [ASTRA], now, TEST_CLIENT_VERSION);
     expect(cachedDeniedCodexAccountIdsForModel(ASTRA, now)).toBeUndefined();
+  });
+
+  test("an accepted refusal invalidates an older roster grant, but a later grant still restores it", () => {
+    const now = 1_800_000_000_000;
+    const model = "gpt-6.2-sol";
+    seedCodexModelEntitlementsForTests("free", [model], now, TEST_CLIENT_VERSION);
+    recordCodexModelDenialEvidence("free", model, GEN, now + 1);
+    expect(cachedDeniedCodexAccountIdsForModel(model, now + 1)).toEqual(new Set(["free"]));
+    seedCodexModelEntitlementsForTests("free", [model], now + 2, TEST_CLIENT_VERSION);
+    expect(cachedDeniedCodexAccountIdsForModel(model, now + 2)).toBeUndefined();
   });
 
   test("a success clears the refusal for that pair only", () => {
@@ -269,6 +280,16 @@ describe.each([SOL, "gpt-6.2-sol"])("denial evidence is scoped to the credential
   function onlyGenerationIsLive(live: number): void {
     setObservedDenialGenerationCheck(() => (_id, generation) => generation === live);
   }
+
+  test("a late old-generation refusal cannot invalidate the replacement's cached roster", () => {
+    const now = Date.now();
+    onlyGenerationIsLive(2);
+    seedCodexModelEntitlementsForTests("pooled", [model, DAYBREAK], now, TEST_CLIENT_VERSION);
+    expect(cachedAvailableAccountGatedNativeModels(now).has(DAYBREAK)).toBe(true);
+    recordCodexModelDenialEvidence("pooled", model, 1, now);
+    expect(cachedAvailableAccountGatedNativeModels(now).has(DAYBREAK)).toBe(true);
+    expect(cachedDeniedCodexAccountIdsForModel(model, now)).toBeUndefined();
+  });
 
   test("evidence from a superseded credential stops denying the replacement", () => {
     const now = Date.now();

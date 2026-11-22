@@ -88,8 +88,8 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   therefore the second source: an exact pre-stream unsupported-model 400 from a Pool account is
   recorded per (account, model) in `src/codex/observed-model-denials.ts` and unioned into
   `cachedDeniedCodexAccountIdsForModel`. It is confirmed, authenticated evidence, never a plan
-  name and never remaining quota. It is bounded and retained for six hours, it is outranked by any
-  confirmed roster grant for the same pair, it is cleared when that account successfully serves
+  name and never remaining quota. An accepted refusal invalidates that account's cached rosters; rejected old-generation evidence does not. It is bounded and retained for six hours, and a later
+  confirmed roster grant for the same pair outranks it, it is cleared when that account successfully serves
   that model, and it is discarded when the account's credential identity changes. Recording is
   scoped to registered ungated natives, so an unrelated 400 cannot steer routing. Newer models
   never infer denial from roster absence; a lagging roster leaves routing unchanged. Every

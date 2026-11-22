@@ -15,8 +15,10 @@ import { readCodexAccountRecord, saveCodexAccountCredential } from "../../src/co
 import { getEffectiveActiveCodexAccountId, rememberActiveCodexAccount } from "../../src/codex/routing/active-account";
 import {
   cachedDeniedCodexAccountIdsForModel,
+  cachedAvailableAccountGatedNativeModels,
   recordCodexModelDenialEvidence,
   resetCodexModelEntitlementCacheForTests,
+  seedCodexModelEntitlementsForTests,
 } from "../../src/codex/model-entitlements";
 import {
   clearAccountNeedsReauth,
@@ -408,6 +410,43 @@ describe("Responses learns a native model refusal across requests", () => {
       }
     },
   );
+
+  test.each(["first", "alternate"] as const)("a stale grant cannot mask a refusal from the %s account", async refused => {
+    const release = acquireOwnedSpendHome();
+    const model = "gpt-6.2-sol";
+    const harness = installHarness({ responseForSend(authorization) {
+      if (refused === "alternate" && authorization === "Bearer access-a") {
+        return Response.json({ error: { message: "quota exhausted" } }, { status: 429 });
+      }
+      if (authorization === (refused === "first" ? "Bearer access-a" : "Bearer access-b")) {
+        return Response.json({ detail: `The '${model}' model is not supported when using Codex with a ChatGPT account.` }, { status: 400 });
+      }
+    } });
+    try {
+      updateAccountQuota("a", 10);
+      updateAccountQuota("b", 20);
+      const id = refused === "first" ? "a" : "b";
+      const record = readCodexAccountRecord(id)!;
+      seedCodexModelEntitlementsForTests(id, [model], Date.now(), "0.146.0",
+        `pool:${record.generation}:${record.credential!.chatgptAccountId}`);
+      const otherId = id === "a" ? "b" : "a";
+      const other = readCodexAccountRecord(otherId)!;
+      seedCodexModelEntitlementsForTests(otherId, [model, "gpt-daybreak-blue-latest"], Date.now(), "0.146.0",
+        `pool:${other.generation}:${other.credential!.chatgptAccountId}`);
+      const config = responsesConfig();
+      const response = await handleResponses(request(model), config, { model: "", provider: "" } as RequestLogContext);
+      await response.text();
+      expect(response.status).toBe(refused === "first" ? 200 : 400);
+      expect(harness.sends).toEqual(["Bearer access-a", "Bearer access-b"]);
+      expect(cachedDeniedCodexAccountIdsForModel(model)).toEqual(new Set([id]));
+      expect(cachedAvailableAccountGatedNativeModels(Date.now(), new Set([otherId])).has("gpt-daybreak-blue-latest")).toBe(true);
+      expect(harness.refreshes).toEqual([]);
+    } finally {
+      release();
+      restorePool401Fetch();
+      clearResponseStateForTests();
+    }
+  });
 
   test.each(["exact-selector", "uploaded-file", "all-refused", "unrelated-400"] as const)(
     "a new-model refusal preserves the %s boundary", async boundary => {
