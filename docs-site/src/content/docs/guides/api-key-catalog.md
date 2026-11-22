@@ -913,6 +913,8 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
 }
 ```
 
+In an interactive Codex chat, Gemini can request tools advertised by that chat, including project tools and connected apps. Codex executes the call with its usual approvals and returns the result in the same chat. Inline attachments and images returned by tools such as `view_image` require image input in both the selected Codex model entry and the ACP session.
+
 - **Prerequisites:** Antigravity CLI 1.5.3 or newer on `PATH` (or `OPENCODEX_AGY_BIN` set to its absolute path),
   signed in once on the proxy host with `agy acp --login` or an interactive `agy` session. A sign-in failure returns
   HTTP 401 with code `agy_login_required` before the response starts. If the response is already streaming,
