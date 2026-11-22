@@ -374,6 +374,45 @@ describe("codebuddy runTurn streams a headless turn", () => {
     ]);
   });
 
+  test("keeps a longer fence open across an inner shorter fence line", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+    const answer = "````md\n```\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">\n```\n````\n";
+
+    guarded({ type: "text_delta", text: answer });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: answer },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("does not close a fence on a fence-like line with trailing text", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+    const answer = "```text\n```not a close\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">\n```\n";
+
+    guarded({ type: "text_delta", text: answer });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: answer },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("refuses markup after a long fence closes on a matching line split across deltas", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "text_delta", text: "````\n```\n``" });
+    guarded({ type: "text_delta", text: "``  \n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">private-body" });
+
+    expect(events.at(-1)).toEqual(expect.objectContaining({ type: "error", code: "vendor_scaffold_detected" }));
+    expect(JSON.stringify(events)).not.toContain("private-body");
+  });
+
   test("holds a bare invoke prefix split across deltas until its name arrives", () => {
     const events: AdapterEvent[] = [];
     const guarded = guardCodeBuddyScaffolding(event => events.push(event));
