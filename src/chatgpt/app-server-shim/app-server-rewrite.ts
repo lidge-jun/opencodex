@@ -31,7 +31,7 @@ function gatePayload(message: unknown): Record<string, unknown> | null {
  * rewrite has nothing to change. Parse failures also return null: the rewrite owns removal of
  * known-shaped locks, not validation.
  */
-export function rewriteAppServerLine(line: string): string | null {
+export function rewriteAppServerLine(line: string, liftCredits = false): string | null {
   if (!line.includes("rateLimit") && !line.includes("ordinaryUsageAllowed")) return null;
   let parsed: unknown;
   try {
@@ -41,5 +41,5 @@ export function rewriteAppServerLine(line: string): string | null {
   }
   const payload = gatePayload(parsed);
   if (payload === null) return null;
-  return unlockRateLimitGate(payload) ? JSON.stringify(parsed) : null;
+  return unlockRateLimitGate(payload, { liftCredits }) ? JSON.stringify(parsed) : null;
 }

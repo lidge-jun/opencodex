@@ -39,6 +39,25 @@ describe("app-server line rewrite", () => {
     }
   });
 
+  test("with spendCredits the credit variants are lifted like the plain quota", () => {
+    for (const type of ["workspace_owner_usage_limit_reached", "workspace_member_credits_depleted"]) {
+      const line = rpcResult({ ...EXHAUSTED_RATE_LIMITS, rateLimits: { ...EXHAUSTED_RATE_LIMITS.rateLimits, rateLimitReachedType: type }, rateLimitsByLimitId: {} });
+      const out = JSON.parse(rewriteAppServerLine(line, true)!);
+      expect(out.result.ordinaryUsageAllowed).toBe(true);
+      expect(out.result.rateLimits.rateLimitReachedType).toBeNull();
+    }
+  });
+
+  test("spend control keeps the usage gate closed even with spendCredits", () => {
+    const line = rpcResult({
+      ordinaryUsageAllowed: false,
+      rateLimits: { rateLimitReachedType: "workspace_member_credits_depleted" },
+      spendControlReached: true,
+    });
+    const out = JSON.parse(rewriteAppServerLine(line, true)!);
+    expect(out.result.ordinaryUsageAllowed).toBe(false);
+  });
+
   test("a plain quota next to a workspace block keeps ordinary usage closed", () => {
     const line = rpcResult({
       ordinaryUsageAllowed: false,
