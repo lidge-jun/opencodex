@@ -478,6 +478,12 @@ están en la página [Catálogo de proveedores con clave API](/es/guides/api-key
 
 <a id="4-local-providers"></a>
 
+### RunAPI
+
+[RunAPI](https://runapi.co) es un patrocinador Standard. Selecciona **RunAPI** en **Añadir proveedor**
+o ejecuta `ocx provider add runapi` e introduce una clave API de RunAPI. El preajuste usa Chat
+Completions de OpenAI con la URL base `https://runapi.co/v1`. Selecciona un modelo disponible para tu clave.
+
 ## 4. Proveedores locales
 
 Apunte opencodex a un servidor local compatible con OpenAI, normalmente con una clave en blanco:
