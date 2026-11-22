@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { ELEVATION_REQUEST_TIMEOUT_MS, OCX_ELEVATED_PROTOCOL_FAILED, raceWithTimeout, resolveTrustedWindowsSchtasksExe, startElevatedSchtasksCreateAndRun, runWindowsElevated, toWindowsSchtasksError, WindowsElevationError, type ElevatedSchedulerOutcome, type ElevatedSchtasksCreateAndRunExecution, type ElevatedSchtasksCreateAndRunResult } from "../lib/windows-elevation";
+import { ELEVATION_REQUEST_TIMEOUT_MS, OCX_ELEVATED_PROTOCOL_FAILED, raceWithTimeout, resolveTrustedWindowsSchtasksExe, startElevatedSchtasksCreateAndRun, runWindowsElevated, toWindowsSchtasksError, WindowsElevationError, WindowsSchtasksError, type ElevatedSchedulerOutcome, type ElevatedSchtasksCreateAndRunExecution, type ElevatedSchtasksCreateAndRunResult } from "../lib/windows-elevation";
 import { statusWinswRaw } from "../lib/winsw";
 import { decodeWindowsTextBytes, type WindowsTextDecodeOptions } from "../lib/windows-text";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
@@ -255,6 +255,18 @@ export function probeWindowsSchedulerTask(taskName = TASK): WindowsSchedulerTask
       : `Task query did not confirm presence and CSV listing failed (${listDetail}).`;
     return { status: "unknown", detail };
   }
+}
+
+/** Explain a missing registration at the CLI boundary while preserving other start failures. */
+export function windowsSchedulerStartRecovery(
+  error: unknown,
+  probe = probeWindowsSchedulerTask,
+): string | null {
+  // /run uses the same exit code for multiple failures. Confirm registration independently
+  // so the install advice does not depend on the locale or mask an explicit access denial.
+  if (!(error instanceof WindowsSchtasksError) || error.operation !== "run" || error.reason !== "other"
+    || probe().status !== "absent") return null;
+  return "Service is not installed (Task Scheduler). Run 'ocx service install' first.";
 }
 
 /** True when the Task Scheduler registration for the default proxy task is proven present. */

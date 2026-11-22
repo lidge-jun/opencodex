@@ -24,7 +24,7 @@ import { ownershipMutationLeaseStatusLine } from "./ownership-mutation-lease.mjs
 import { foreignServiceOwnerRefusal, unknownServiceOwnerRefusal } from "./repair";
 import type { ServiceBackend } from "./state";
 import { unitPath } from "./systemd";
-import { inspectWindowsSchedulerServiceStatus, schtasksErrorDetail, probeWindowsSchedulerTask } from "./windows-scheduler";
+import { inspectWindowsSchedulerServiceStatus, schtasksErrorDetail, probeWindowsSchedulerTask, windowsSchedulerStartRecovery } from "./windows-scheduler";
 import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { win32 } from "node:path";
 import { serviceDiagnosticsSummary } from "./diagnostics";
@@ -393,7 +393,17 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         process.exitCode = 1;
         break;
       }
-      ops.start();
+      try {
+        ops.start();
+      } catch (error) {
+        const recovery = process.platform === "win32" && backend === "scheduler"
+          ? windowsSchedulerStartRecovery(error)
+          : null;
+        if (!recovery) throw error;
+        console.error(`❌ ${recovery}`);
+        process.exitCode = 1;
+        break;
+      }
       await reportServiceServing("started");
       break;
     }
