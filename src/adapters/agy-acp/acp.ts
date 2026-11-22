@@ -103,12 +103,34 @@ export function acpSystemText(parsed: OcxParsedRequest): string {
   return parsed.context.systemPrompt?.filter(line => line.trim().length > 0).join("\n") ?? "";
 }
 
+/** Keep both ends of a priority block and preserve image placeholders as indivisible units. */
+function clipPromptBlock(text: string, limit: number, imagePattern?: RegExp): string {
+  if (text.length <= limit) return text;
+  const cut = "\n[...truncated...]\n";
+  const images = imagePattern ? Array.from(text.matchAll(imagePattern)) : [];
+  const imageChars = images.reduce((sum, image) => sum + image[0].length, 0);
+  const half = Math.floor((limit - cut.length - imageChars) / 2);
+  if (half < 1) throw new UnsupportedAcpMedia("The inline images exceed the ACP replay budget.");
+  let left = half;
+  let right = text.length - half;
+  const middle: string[] = [];
+  for (const image of images) {
+    const start = image.index;
+    const end = start + image[0].length;
+    if (end <= left || start >= right) continue;
+    left = Math.min(left, start);
+    right = Math.max(right, end);
+    middle.push(image[0]);
+  }
+  return text.slice(0, left) + cut + middle.join("") + text.slice(right);
+}
+
 /**
  * Flatten the conversation into the single text block one ACP prompt carries. ACP has no
  * multi-message history on session/prompt. System text is included only when the CLI did not
  * advertise `sessionCapabilities.systemPrompt` (then it travels on session/new instead, never both).
  */
-export function buildAcpPrompt(parsed: OcxParsedRequest, includeSystem: boolean): string {
+export function buildAcpPrompt(parsed: OcxParsedRequest, includeSystem: boolean, imagePattern?: RegExp): string {
   const messages = parsed.context.messages;
   const latestUser = messages.findLastIndex(message => message.role === "user");
   const blocks: { text: string; priority: boolean }[] = [];
@@ -151,16 +173,13 @@ export function buildAcpPrompt(parsed: OcxParsedRequest, includeSystem: boolean)
   // Keep the decision, approved scope, paired call and outcome in order under pressure.
   // Reserve space for both ends of each anchor (a command result often ends with its exit status).
   const header = "[truncated]\n";
-  const cut = "\n[...truncated...]\n";
   let remaining = MAX_ACP_PROMPT_CHARS - header.length;
   const count = Math.max(1, blocks.filter(b => b.priority).length);
   const allowance = Math.floor(remaining / count) - 2;
   const kept = new Map<number, string>();
   for (const [i, block] of blocks.entries()) {
     if (!block.priority) continue;
-    const half = Math.floor((allowance - cut.length) / 2);
-    const text = block.text.length <= allowance ? block.text
-      : block.text.slice(0, half) + cut + block.text.slice(-half);
+    const text = clipPromptBlock(block.text, allowance, imagePattern);
     kept.set(i, text);
     remaining -= text.length + 2;
   }
@@ -196,11 +215,12 @@ export function acpPromptBlocks(parsed: OcxParsedRequest, includeSystem: boolean
     });
     return { ...message, content };
   });
-  const text = buildAcpPrompt({ ...parsed, context: { ...parsed.context, messages } }, includeSystem);
+  const pattern = new RegExp(marker + "(\\d+)" + marker, "g");
+  const text = buildAcpPrompt({ ...parsed, context: { ...parsed.context, messages } }, includeSystem, images.length ? pattern : undefined);
   const blocks: AcpPromptBlock[] = [];
   if (prefix) blocks.push({ type: "text", text: prefix + "\n\n" });
   let offset = 0;
-  for (const match of text.matchAll(new RegExp(marker + "(\\d+)" + marker, "g"))) {
+  for (const match of text.matchAll(pattern)) {
     if (match.index > offset) blocks.push({ type: "text", text: text.slice(offset, match.index) });
     blocks.push(images[Number(match[1])]!);
     offset = match.index + match[0].length;

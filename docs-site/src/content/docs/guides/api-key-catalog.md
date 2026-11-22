@@ -953,8 +953,6 @@ In an interactive Codex chat, Gemini can request tools advertised by that chat, 
   for its leader and process group on POSIX, or for tree termination and leader closure on Windows, before
   removing the workspace. If cleanup cannot be confirmed, OpenCodex logs a warning, retains
   the workspace and fails any affected turn. Retained workspaces can accumulate after repeated failures.
-- **Text only:** ACP prompts carry text, so client function tools and images are not offered to the model, and the
-  CLI's own tool use stays inside the CLI.
 
 ## A6API credit quota
 

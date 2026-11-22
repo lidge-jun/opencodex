@@ -279,7 +279,8 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     let modelSetterPending = false;
     let prompting = false;
     let usage: OcxUsage | undefined;
-    let pendingToolEvents: AdapterEvent[] = [];
+    let pendingTool: ReturnType<typeof tools.capture>;
+    let cancelledCapturedPermission = false;
     let sawFrame = false;
     let buffer = "";
     let totalBytes = 0;
@@ -321,7 +322,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       }).then(() => {
         if (!aborted && !incoming.abortSignal?.aborted && terminal) {
           if (terminal.type === "done" && terminal.stopReason === "tool_use") {
-            for (const event of pendingToolEvents) emit(event);
+            for (const event of pendingTool?.events ?? []) emit(event);
           }
           emit(terminal);
         }
@@ -476,19 +477,24 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       usage = mapAcpUsage(r.usage) ?? usage;
       const terminal = acpTerminal(r.stopReason, incoming.abortSignal?.aborted === true);
       if (terminal.kind === "aborted") return finish(undefined, true);
-      if (terminal.kind === "error") return fail(terminal.code);
+      if (terminal.kind === "error") {
+        // agy can acknowledge our cancelled permission in the same read as its captured call.
+        if (cancelledCapturedPermission && terminal.code === "agy_acp_cancelled") return;
+        return fail(terminal.code);
+      }
       if (terminal.kind === "refusal") return finish({ type: "incomplete", reason: "content_filter", retryable: false, usage });
-      if (pendingToolEvents.length) return; // The captured call settles after this batch of frames.
+      if (pendingTool) return; // The captured call settles after this batch of frames.
       if (tools.required) return fail("agy_acp_protocol", "required client tool was not called");
       finish({ type: "done", ...(usage ? { usage } : {}), ...(terminal.stopReason ? { stopReason: terminal.stopReason } : {}) });
     }
 
-    function captureClientCall(call: unknown): boolean {
+    function captureClientCall(call: unknown, permission = false): boolean {
       if (!prompting || settled || incoming.abortSignal?.aborted) return false;
-      const events = tools.capture(call);
-      if (!events || !checkSelectedModel()) return false;
-      if (pendingToolEvents.length) return true;
-      pendingToolEvents = events;
+      const captured = tools.capture(call);
+      if (!captured || !checkSelectedModel()) return false;
+      if (permission && (!pendingTool || pendingTool.id === captured.id)) cancelledCapturedPermission = true;
+      if (pendingTool) return true;
+      pendingTool = captured;
       queueMicrotask(() => {
         if (settled || incoming.abortSignal?.aborted || !checkSelectedModel() || !checkSelectedThinking()) return;
         finish({ type: "done", stopReason: "tool_use", endTurn: false, usage });
@@ -503,7 +509,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         const params = frame.params as { sessionId?: unknown; toolCall?: unknown } | undefined;
         send(frame.method === "session/request_permission" ? permissionCancelledFrame(frame.id) : methodNotFoundFrame(frame.id));
         if (frame.method === "session/request_permission" && sessionId && params?.sessionId === sessionId) {
-          captureClientCall(params.toolCall);
+          captureClientCall(params.toolCall, true);
         }
         return;
       }

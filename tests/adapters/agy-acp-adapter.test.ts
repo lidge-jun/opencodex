@@ -23,6 +23,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 type Frame = Record<string, any>;
 interface AgentApi {
   reply(id: unknown, result: unknown): void;
+  batch(frames: Frame[]): void;
   replyWithUpdate(id: unknown, result: unknown, update: Frame): void;
   endStdout(id?: unknown, result?: unknown): void;
   error(id: unknown, code: number, message: string): void;
@@ -73,6 +74,7 @@ function script(onFrame?: (frame: Frame, api: AgentApi, state: { config: Frame[]
     const updateFrame = (update: Frame, sessionId = "s1") => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update } });
     const api: AgentApi = {
       reply: (id, result) => write({ jsonrpc: "2.0", id, result }),
+      batch: frames => child.stdout.write(frames.map(encode).join("")),
       replyWithUpdate: (id, result, update) => child.stdout.write(encode({ jsonrpc: "2.0", id, result }) + encode(updateFrame(update))),
       endStdout: (id, result) => child.stdout.end(id === undefined ? "" : JSON.stringify({ jsonrpc: "2.0", id, result })),
       error: (id, code, message) => write({ jsonrpc: "2.0", id, error: { code, message } }),
@@ -1154,6 +1156,34 @@ describe("host tools and multimodal replay", () => {
     const blocks = second.sent.find(frame => frame.method === "session/prompt")?.params.prompt;
     expect(blocks.filter((block: Frame) => block.type === "image").map((block: Frame) => block.data)).toEqual(["AQ==", "Ag=="]);
     expect(terminal(second)).toMatchObject([{ type: "done" }]);
+    const unsupported = await run(script(), { parsed: request });
+    expect(errorCode(unsupported)).toBe("unsupported_input_modality");
+    expect(methods(unsupported)).not.toContain("session/prompt");
+  });
+
+  test("captures a permission request followed by its cancellation in one stdout read", async () => {
+    const result = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.batch([
+        { jsonrpc: "2.0", id: 101, method: "session/request_permission", params: { sessionId: "s1", toolCall: call } },
+        { jsonrpc: "2.0", id: frame.id, result: { stopReason: "cancelled" } },
+      ]);
+      return true;
+    }), { parsed: withTool(), deps: { createWorkspace: () => createTurnWorkspace(tmpdir() + "/test-home") } });
+    expect(terminal(result)).toMatchObject([{ type: "done", stopReason: "tool_use" }]);
+    expect(result.events.filter(event => event.type === "tool_call_start")).toHaveLength(1);
+    expect(result.sent.find(frame => frame.id === 101)?.result.outcome.outcome).toBe("cancelled");
+  });
+
+  test("long latest user input keeps its inline images in order and checks vision capability", async () => {
+    const request = parsed();
+    const large = { type: "text" as const, text: "x".repeat(MAX_ACP_PROMPT_CHARS) };
+    const images = ["AQ==", "Ag=="].map(data => ({ type: "image" as const, imageUrl: "data:image/png;base64," + data }));
+    request.context.messages = [{ role: "user", timestamp: 0, content: [large, ...images, large] }];
+    const result = await run(script(undefined, { image: true }), { parsed: request });
+    const blocks = result.sent.find(frame => frame.method === "session/prompt")!.params.prompt as Frame[];
+    expect(blocks.filter(block => block.type === "image").map(block => block.data)).toEqual(["AQ==", "Ag=="]);
+    expect(blocks.map(block => block.text ?? "").join("").length).toBeLessThanOrEqual(MAX_ACP_PROMPT_CHARS);
     const unsupported = await run(script(), { parsed: request });
     expect(errorCode(unsupported)).toBe("unsupported_input_modality");
     expect(methods(unsupported)).not.toContain("session/prompt");

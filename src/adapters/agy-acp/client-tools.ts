@@ -21,7 +21,7 @@ export async function stageClientTools(parsed: OcxParsedRequest, tmp: string) {
     const helper = fileURLToPath(new URL("../codebuddy/mcp-server.ts", import.meta.url));
     servers.push({ name: CODEBUDDY_MCP_SERVER_NAME, command: process.execPath, args: codeBuddyMcpInvocation(helper, catalog), env: [] });
   }
-  function capture(raw: unknown): AdapterEvent[] | undefined {
+  function capture(raw: unknown): { id: string; events: AdapterEvent[] } | undefined {
     if (!raw || typeof raw !== "object") return;
     const call = raw as Record<string, unknown>;
     if (typeof call.name !== "string" || typeof call.toolCallId !== "string") return;
@@ -33,11 +33,11 @@ export async function stageClientTools(parsed: OcxParsedRequest, tmp: string) {
     const props = tool.schema.properties;
     if (!(props && typeof props === "object" && Object.hasOwn(props, "toolSummary"))) delete args.toolSummary;
     // Each ACP session may number calls starting at one. Responses ids must be unique across sessions.
-    return [
+    return { id: call.toolCallId, events: [
       { type: "tool_call_start", id: "call_" + randomUUID(), name: tool.wire },
       { type: "tool_call_delta", arguments: JSON.stringify(args) },
       { type: "tool_call_end" },
-    ];
+    ] };
   }
   const instruction = names.size ? [
     'The user is working in the Codex App project. Use the tools of the "opencodex" MCP server for work on that project. Your own temporary directory is separate.',
