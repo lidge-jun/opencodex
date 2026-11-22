@@ -95,27 +95,37 @@ describe("Microsoft 365 Copilot registration and authentication", () => {
       const request = JSON.parse(frame.slice(0, -1));
       methods.push(request.method);
       const oid = "11111111-1111-1111-1111-111111111111", tid = "22222222-2222-2222-2222-222222222222";
+      const rosterBody = JSON.stringify({ bizchatAsAgentGpt: { clientPreferences: { modelSelectorMetadata: {
+        availableModelSelectionOptions: [{ id: "Magic", type: "item", menuItemTitle: "Magic" }],
+      } } } });
       const result = request.method === "Target.createTarget" ? { targetId: "target" }
         : request.method === "Target.attachToTarget" ? { sessionId: "session" }
         : request.method === "Runtime.evaluate" ? { result: { value: oid + "@" + tid } }
         : request.method === "Network.getCookies" ? { cookies: [{ name: "OhpAuth", value: "fixture", domain: ".copilot.cloud.microsoft", path: "/", secure: true }] }
+        : request.method === "Network.getResponseBody" ? { body: Buffer.from(rosterBody).toString("base64"), base64Encoded: true }
         : {};
       const reply = Buffer.from(JSON.stringify({ id: request.id, result }) + "\0");
       output.write(reply.subarray(0, 4));
       const callback = request.method === "Page.navigate" && request.params.url === "https://fixture.invalid/auth"
-        ? Buffer.from(JSON.stringify({ method: "Fetch.requestPaused", sessionId: "session", params: { requestId: "fixture", request: { url: "https://login.microsoftonline.com/common/oauth2/nativeclient?state=state&code=fixture" } } }) + "\0")
+        ? Buffer.concat([
+          Buffer.from(JSON.stringify({ method: "Fetch.requestPaused", sessionId: "session", params: { requestId: "fixture", request: { url: "https://login.microsoftonline.com/common/oauth2/nativeclient?state=state&code=fixture" } } }) + "\0"),
+          Buffer.from(JSON.stringify({ method: "Network.responseReceived", sessionId: "session", params: { requestId: "roster", response: { url: "https://copilot.cloud.microsoft/api/fixture", mimeType: "application/json" } } }) + "\0"),
+          Buffer.from(JSON.stringify({ method: "Network.loadingFinished", sessionId: "session", params: { requestId: "roster" } }) + "\0"),
+        ])
         : Buffer.alloc(0);
       output.write(Buffer.concat([reply.subarray(4), callback]));
       if (request.method === "Browser.close") child.kill();
     });
     try {
-      const deps = { executable: "/fixture/chrome", spawn } as NonNullable<Parameters<typeof captureM365BrowserCode>[3]>;
+      const deps = { executable: "/fixture/chrome", spawn, rosterWaitMs: 5_000 } as NonNullable<Parameters<typeof captureM365BrowserCode>[3]>;
       const captured = await captureM365BrowserCode("https://fixture.invalid/auth", "state", {}, deps);
       expect(launch?.args).toContain("--remote-debugging-pipe");
       expect(launch?.args.some(arg => /^--remote-debugging-(port|address)/.test(arg))).toBe(false);
       expect(launch?.stdio).toEqual(["ignore", "ignore", "ignore", "pipe", "pipe"]);
-      expect(captured).toMatchObject({ code: "fixture", m365: { cookie: "OhpAuth=fixture" } });
+      expect(captured).toMatchObject({ code: "fixture", m365: { cookie: "OhpAuth=fixture",
+        roster: [{ id: "Magic", name: "Magic", input_modalities: ["text", "image"], m365_disabled: false }] } });
       expect(methods).toContain("Fetch.fulfillRequest");
+      expect(methods).toContain("Network.enable");
       expect(methods.at(-1)).toBe("Browser.close");
     } finally { oldSpawn.mockRestore(); }
   });

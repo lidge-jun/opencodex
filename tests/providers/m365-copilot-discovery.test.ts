@@ -4,7 +4,7 @@ import { saveCredential, getCredential, credentialGeneration } from "../../src/o
 import { OAUTH_PROVIDERS, clearLoginState, getLoginStatus, getValidAccessTokenSnapshot, oauthLoginSummary } from "../../src/oauth";
 import { clearModelCache, getProviderLiveModelCount } from "../../src/codex/model-cache";
 import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
-import { normalizeM365WebSession, parseM365ModelBootstrap, readM365ModelBootstrap, M365_COPILOT_WEB_URL } from "../../src/providers/m365-copilot-discovery";
+import { normalizeM365WebSession, parseM365ModelBootstrap, parseM365RosterBody, readM365ModelBootstrap, M365_COPILOT_WEB_URL } from "../../src/providers/m365-copilot-discovery";
 import { getToneForModel } from "../../src/providers/m365-copilot-models";
 import { applyNewModelPolicy } from "../../src/providers/new-model-policy";
 import { readM365BrowserWebSession } from "../../src/oauth/m365-copilot-web-session";
@@ -88,6 +88,15 @@ test("never sends a web cookie to a retargeted provider or publishes aliases aft
   expect(calls).toBe(0);
   expect(await fetchProviderModels("m365-copilot", provider, 0)).toEqual([]); expect(calls).toBe(1);
 });
+test("model discovery falls back to the roster captured at sign-in when the chat HTML drops it", async () => {
+  await saveCredential("m365-copilot", { ...credential(), m365: { cookie, accountId,
+    roster: [{ id: "Magic", name: "Magic" }, { id: "Future_Model_99", name: "Future model" }] } });
+  globalThis.fetch = (async () => new Response("<html>sign in</html>")) as typeof fetch;
+  const provider = { ...OAUTH_PROVIDERS["m365-copilot"]!.providerConfig, fetch: ((u, o) => globalThis.fetch(u, o)) as typeof fetch };
+  const models = await fetchProviderModels("m365-copilot", provider, 0);
+  expect(models.map(model => model.id)).toEqual(["Magic", "Future_Model_99"]);
+  expect(models[1]?.displayName).toBe("M365 Copilot Future model");
+});
 test("captures only allowlisted web discovery cookies through Chromium CDP", async () => {
   const methods: string[] = [];
   const browser = { async command(method: string, params?: Record<string, unknown>) {
@@ -100,7 +109,7 @@ test("captures only allowlisted web discovery cookies through Chromium CDP", asy
     expect(params?.url).toBe(M365_COPILOT_WEB_URL); return {};
   } };
   expect(await readM365BrowserWebSession(browser, "context", new AbortController().signal)).toEqual({ accountId, cookie: "OhpAuth=fixture" });
-  expect(methods).toEqual(["Page.navigate", "Runtime.evaluate", "Network.getCookies"]);
+  expect(methods).toEqual(["Page.navigate", "Network.getCookies", "Runtime.evaluate"]);
 });
 test("falls back to the server HTML after the page drops its hydration global", async () => {
   const pages = ["<html>sign in</html>", html()];
@@ -120,19 +129,17 @@ test("falls back to the server HTML after the page drops its hydration global", 
 });
 test("stops polling the web session when the login is aborted", async () => {
   const ctrl = new AbortController();
-  let fetches = 0;
+  let polls = 0;
   const browser = { async command(method: string, params?: Record<string, unknown>) {
-    if (method === "Runtime.evaluate" && params?.awaitPromise && ++fetches === 1) ctrl.abort(new Error("fixture aborted"));
-    return method === "Runtime.evaluate" ? { result: { value: "" } } : {};
+    if (method === "Network.getCookies" && ++polls === 1) ctrl.abort(new Error("fixture aborted"));
+    return {};
   } };
   await expect(readM365BrowserWebSession(browser, "context", ctrl.signal)).rejects.toThrow("fixture aborted");
-  expect(fetches).toBe(1);
+  expect(polls).toBe(1);
 });
-test("an abort during the HTML fallback never reads cookies even when the page returns a session", async () => {
+test("an abort during the HTML fallback never resolves a session even when the page returns one", async () => {
   const ctrl = new AbortController();
-  const methods: string[] = [];
   const browser = { async command(method: string, params?: Record<string, unknown>) {
-    methods.push(method);
     if (method === "Runtime.evaluate" && params?.awaitPromise) {
       ctrl.abort(new Error("fixture aborted"));
       return { result: { value: html() } };
@@ -142,7 +149,30 @@ test("an abort during the HTML fallback never reads cookies even when the page r
     return {};
   } };
   await expect(readM365BrowserWebSession(browser, "context", ctrl.signal)).rejects.toThrow("fixture aborted");
-  expect(methods).not.toContain("Network.getCookies");
+});
+test("captures the session from cookies and token claims when the page exposes no account data", async () => {
+  const browser = { async command(method: string, params?: Record<string, unknown>) {
+    if (method === "Runtime.evaluate") return { result: { value: params?.awaitPromise ? "<html>sign in</html>" : "" } };
+    if (method === "Network.getCookies") return { cookies: [{ name: "OhpAuth", value: "fixture", domain: "copilot.cloud.microsoft", path: "/", secure: true }] };
+    return {};
+  } };
+  expect(await readM365BrowserWebSession(browser, "context", new AbortController().signal, accountId)).toEqual({ accountId, cookie: "OhpAuth=fixture" });
+});
+test("reads the roster from captured browser payloads, preferring the chat menu over agent lists", () => {
+  const agentListFirst = JSON.stringify({ data: {
+    agentList: [{ clientPreferences: { modelSelectorMetadata: { availableModelSelectionOptions: [item("Forum")] } } }],
+    bizchat: { bizchatAsAgentGpt: { clientPreferences: { modelSelectorMetadata: { availableModelSelectionOptions: [item("Magic")] } } } },
+  } });
+  expect(parseM365RosterBody(agentListFirst).map(row => row.id)).toEqual(["Magic"]);
+  expect(parseM365RosterBody(html([item("Claude_Sonnet", "Sonnet fixture")])).map(row => row.id)).toEqual(["Claude_Sonnet"]);
+  expect(parseM365RosterBody("<html>sign in</html>")).toBeUndefined();
+  expect(parseM365RosterBody("{}")).toBeUndefined();
+});
+test("stored sign-in rosters keep the bootstrap item shape and drop instead of failing the session", () => {
+  expect(normalizeM365WebSession({ cookie, accountId, roster: [{ id: "Magic", name: "Magic" }] })?.roster)
+    .toEqual([{ id: "Magic", name: "Magic", input_modalities: ["text", "image"], m365_disabled: false }]);
+  expect(normalizeM365WebSession({ cookie, accountId, roster: [{ id: "bad id", name: "x" }] })?.roster).toBeUndefined();
+  expect(normalizeM365WebSession({ cookie, accountId, roster: [] })?.roster).toBeUndefined();
 });
 async function capturedFallbackExpression(): Promise<string> {
   let expression = "";

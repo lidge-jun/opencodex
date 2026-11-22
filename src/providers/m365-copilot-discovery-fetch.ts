@@ -1,5 +1,5 @@
 import { M365_COPILOT_BASE_URL } from "./m365-copilot-models";
-import { M365_COPILOT_WEB_URL, normalizeM365WebSession, readM365ModelBootstrap } from "./m365-copilot-discovery";
+import { M365_COPILOT_WEB_URL, normalizeM365Roster, normalizeM365WebSession, readM365ModelBootstrap } from "./m365-copilot-discovery";
 import { m365CopilotClaims } from "../oauth/m365-copilot";
 import { providerOutboundGet } from "../lib/provider-outbound";
 import type { OAuthAccessSnapshot } from "../oauth";
@@ -13,5 +13,12 @@ export async function fetchM365ModelRoster(name: string, provider: OcxProviderCo
   if (session.accountId.toLowerCase() !== (claims.oid + "@" + claims.tid).toLowerCase()) throw new Error("Microsoft 365 Copilot model discovery account mismatch");
   const response = await providerOutboundGet(name, provider, M365_COPILOT_WEB_URL, { headers: { cookie: session.cookie }, signal }, { beforeSend });
   if (!response.ok || response.status >= 300) { await response.body?.cancel(); throw new Error("Microsoft 365 Copilot web sign-in expired; retry login"); }
-  return readM365ModelBootstrap(response, session.accountId, signal);
+  try {
+    return await readM365ModelBootstrap(response, session.accountId, signal);
+  } catch (error) {
+    // Microsoft stopped embedding the roster in the chat HTML; the payload captured at sign-in stays authoritative.
+    const roster = normalizeM365Roster(session.roster);
+    if (roster) return roster;
+    throw error;
+  }
 }
