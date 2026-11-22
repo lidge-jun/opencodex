@@ -6,6 +6,7 @@ import { publicOAuthAuthenticationErrorMessage } from "../oauth";
 import { getAnthropicSidecarAccessToken } from "../oauth/anthropic-routing";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../oauth/anthropic";
 import { CLAUDE_CLI_USER_AGENT } from "../providers/claude-cli-identity";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 import { sidecarThinkingOff } from "../adapters/anthropic-model-contract";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "../adapters/client-fingerprint";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
@@ -280,7 +281,13 @@ export async function runAnthropicWebSearch(
     "X-Claude-Code-Session-Id": claudeCodeSessionId(token),
     "x-client-request-id": crypto.randomUUID(),
   };
-  if (provider.headers) Object.assign(headers, provider.headers);
+  const providerHeaders = resolveProviderHeaders(provider.headers);
+  for (const name of Object.keys(providerHeaders)) {
+    for (const existing of Object.keys(headers)) {
+      if (existing.toLowerCase() === name.toLowerCase() && existing !== name) delete headers[existing];
+    }
+  }
+  Object.assign(headers, providerHeaders);
 
   const instruction = settings.describeImages ? BASE_INSTRUCTION + IMAGE_INSTRUCTION : BASE_INSTRUCTION;
   const body = {

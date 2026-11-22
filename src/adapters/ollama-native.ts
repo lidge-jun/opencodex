@@ -31,6 +31,7 @@ import {
   type TranslatorBudget,
 } from "../lib/translator-budget";
 import { redactSecretString, SENSITIVE_KEY_PATTERN } from "../lib/redact";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 import { parseDataUrl } from "./image";
 import { jsonStringPartsUtf8Bytes, jsonUtf8Bytes } from "../lib/json-byte-size";
 import {
@@ -920,7 +921,7 @@ function buildHeaders(
   // handling is case-insensitive and leaves exactly ONE effective credential spelling on the wire.
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (!local && hasCredential) headers.Authorization = `Bearer ${provider.apiKey!.trim()}`;
-  for (const [key, value] of Object.entries(provider.headers ?? {})) {
+  for (const [key, value] of Object.entries(resolveProviderHeaders(provider.headers))) {
     // Loopback/local targets get no credentials at all — not even ones the row already carried —
     // so a shared provider object cannot leak a shared credential to a local endpoint.
     if (local && SENSITIVE_KEY_PATTERN.test(key.trim())) continue;

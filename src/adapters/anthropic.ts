@@ -21,6 +21,7 @@ import type {
   OcxUsage,
 } from "../types";
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName } from "../types";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION, applyClaudeToolPrefix, stripClaudeToolPrefix } from "../oauth/anthropic";
 import { sameProviderContinuationOwner } from "../responses/provider-continuation";
 import { parseDataUrl } from "./image";
@@ -1329,7 +1330,14 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           ? { header: "authorization" as const, value: headers.Authorization }
           : { header: "x-api-key" as const, value: headers["x-api-key"]! }
         : undefined;
-      if (provider.headers) Object.assign(headers, provider.headers);
+      const providerHeaders = resolveProviderHeaders(provider.headers);
+      for (const name of Object.keys(providerHeaders)) {
+        if (name.toLowerCase() === "anthropic-beta") continue;
+        for (const existing of Object.keys(headers)) {
+          if (existing.toLowerCase() === name.toLowerCase() && existing !== name) delete headers[existing];
+        }
+      }
+      Object.assign(headers, providerHeaders);
       mergeAnthropicBetaHeader(headers, [...(fastSpeed?.betas ?? []), ...(progressUpdates ? ["thinking-display-updates-2026-08-18"] : []), ...serverToolPlan.betas]);
 
       // Prompt caching: native Anthropic supports top-level automatic caching, which

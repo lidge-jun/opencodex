@@ -1,5 +1,6 @@
 import type { OcxProviderConfig } from "../types";
 import { CODEX_RESPONSES_LITE_HEADER, mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
@@ -85,7 +86,7 @@ export async function runWebSearch(
     return { text: "", sources: [], error: "Luna Reserve compatibility is only available as a conversation model, not a search helper. Choose another search helper model." };
   }
   const mergedHeaders = mergeCodexSelectedHeaders(
-    { "Content-Type": "application/json", ...forwardProvider.headers }, selectedForwardHeaders,
+    { "Content-Type": "application/json", ...resolveProviderHeaders(forwardProvider.headers) }, selectedForwardHeaders,
   );
   mergedHeaders.delete(CODEX_RESPONSES_LITE_HEADER);
   const headers = Object.fromEntries(mergedHeaders);

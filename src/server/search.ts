@@ -1,5 +1,6 @@
 import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
 import { isolateCodexPoolClientMetadata, mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 /**
  * /v1/alpha/search relay.
  *
@@ -198,7 +199,7 @@ export async function handleSearch(
   }
 
   const headers = mergeCodexSelectedHeaders(
-    { "content-type": "application/json", ...upstream.provider.headers }, upstream.headers,
+    { "content-type": "application/json", ...resolveProviderHeaders(upstream.provider.headers) }, upstream.headers,
   );
   const url = `${upstream.provider.baseUrl}/alpha/search`;
   const timeoutMs = config.search?.timeoutMs ?? SEARCH_UPSTREAM_TIMEOUT_MS;

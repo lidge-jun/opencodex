@@ -2,6 +2,7 @@ import type { IncomingMeta, ProviderAdapter } from "./base";
 import type { OcxParsedRequest, OcxProviderConfig } from "../types";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
 import { isPlainObject } from "./openai-responses/internal";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 
 /** Shared by wire construction and pre-dispatch spend admission. */
 export function effectiveAzureOutputBudget(provider: OcxProviderConfig, budget: unknown): unknown {
@@ -44,8 +45,8 @@ export function createAzureAdapter(provider: OcxProviderConfig): ProviderAdapter
         throw new Error(`azure-openai baseUrl contains unresolved ${unresolvedPlaceholder} — set your real resource URL`);
       }
 
-      const headers = { ...request.headers };
-      headers["api-key"] = provider.apiKey;
+      const headers = { ...request.headers, ...resolveProviderHeaders(provider.headers) };
+      if (!Object.keys(headers).some(name => name.toLowerCase() === "api-key")) headers["api-key"] = provider.apiKey;
       delete headers["Authorization"];
       // The inner adapter always targets Azure's v1 API here, which needs no api-version query.
       return { ...request, headers };

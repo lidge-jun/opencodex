@@ -244,6 +244,7 @@ import { affinityLaneFromRequest, linkRequestSessionLane, reasoningReplayConvers
 import { recallComboForLane } from "./combo-session-recall";
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
 import { warnEagerCodexToolCatalog } from "./codex-tool-catalog";
+import { resolveProviderHeaders } from "../../providers/provider-header-resolve";
 
 export { COMPACT_RESPONSE_MAX_BYTES } from "./compact-response-body";
 
@@ -1263,7 +1264,7 @@ export async function handleResponsesCompact(
                 current = projectCapturedCustomToolPolicy(current, route.staticPolicy);
                 const rebuilt = new Headers(sendHeaders);
                 for (const name of Object.keys(sendProvider.headers ?? {})) rebuilt.delete(name);
-                for (const [name, value] of Object.entries(current.headers ?? {})) rebuilt.set(name, value);
+                for (const [name, value] of Object.entries(resolveProviderHeaders(current.headers))) rebuilt.set(name, value);
                 rebuilt.set("authorization", `Bearer ${resolveProviderApiKey(current.apiKey)}`);
                 const currentGateway = gatewayTransport
                   ? buildResponsesTransport({ ...current, apiKey: resolveProviderApiKey(current.apiKey) }, { headers: req.headers })

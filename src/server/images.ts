@@ -1,5 +1,6 @@
 import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
 import { isolateCodexPoolClientMetadata, mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 /**
  * /v1/images/{generations,edits} relay (issue #83).
  *
@@ -823,7 +824,7 @@ export async function handleImages(
     }
     const { provider } = forward;
     try {
-      headers = mergeCodexSelectedHeaders({ "content-type": "application/json", ...provider.headers }, forward.headers);
+      headers = mergeCodexSelectedHeaders({ "content-type": "application/json", ...resolveProviderHeaders(provider.headers) }, forward.headers);
       assertImagesUpstreamAuthorization(headers, config);
     } catch {
       releaseForwardProbe();
@@ -900,7 +901,7 @@ export async function handleImages(
     // the one that was cooling. Fail loudly instead.
     const apiKey = provider.apiKey;
     try {
-      for (const [name, value] of Object.entries(provider.headers ?? {})) headers.set(name, value);
+      for (const [name, value] of Object.entries(resolveProviderHeaders(provider.headers))) headers.set(name, value);
       headers.set("authorization", `Bearer ${apiKey}`);
       assertImagesUpstreamAuthorization(headers, config);
     } catch {

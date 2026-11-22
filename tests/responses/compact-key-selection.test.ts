@@ -112,6 +112,27 @@ function success(result: Awaited<ReturnType<typeof start>>, index: number) {
   expect(seen[0]!.url).toBe("https://api.openai.com/v1/responses/compact");
   expect(result.logCtx.accountLogLabel).toBe(apiKeyAccountLogLabel(NAME, { entryId: `k${index + 1}`, reference: KEYS[index] }));
 }
+test("compact key reselection resolves configured header references", async () => {
+  const env = "OCX_TEST_COMPACT_HEADER_ENV_REF";
+  const missing = "OCX_TEST_COMPACT_HEADER_ENV_REF_MISSING";
+  process.env[env] = "resolved-compact-header";
+  delete process.env[missing];
+  const config = fixture();
+  config.providers[NAME]!.headers = { "x-env-ref": "${" + env + "}", "x-missing-ref": "$" + missing };
+  saveConfig(config);
+  const first = await waitForProviderRequestSlot(NAME, config.providers[NAME]!);
+  const abort = new AbortController();
+  const pending = start(config, abort);
+  try {
+    await queue(config, "k1"); cool(config, 0); first.release();
+    const result = await pending;
+    expect(result.response.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.key).toBe("Bearer " + KEYS[1]);
+    expect(seen[0]!.headers.get("x-env-ref")).toBe("resolved-compact-header");
+    expect(seen[0]!.headers.has("x-missing-ref")).toBe(false);
+  } finally { delete process.env[env]; abort.abort(); first.release(); await pending.catch(() => undefined); }
+}, 10_000);
 for (const cancel of [false, true]) test(`compact cooled queued A readmits B (abort=${cancel})`, async () => {
   const config = fixture();
   const first = await waitForProviderRequestSlot(NAME, config.providers[NAME]!);

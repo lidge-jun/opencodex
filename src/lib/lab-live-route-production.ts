@@ -7,7 +7,6 @@
  *
  * @internal host integration only
  */
-import { resolveEnvValue } from "../config";
 import { resolveProviderApiKey } from "../providers/key-store";
 import {
   getValidAccessTokenSnapshot,
@@ -27,6 +26,7 @@ import type { LabRouteContext } from "../lab/live/types";
 import { createLabAuthorizedPinnedSender } from "./lab-live-pinned-sender";
 import { createHostIssuedLabRouteExecutor } from "./lab-live-host";
 import type { TrustedLabRouteExecutor } from "../lab/live/types";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 
 const CREDENTIAL_HEADER = /(authorization|api[-_]?key|token|secret|credential|cookie)/i;
 
@@ -99,10 +99,9 @@ export async function buildLabProviderAuthHeaders(
   }
 
   if (provider.headers) {
-    for (const [name, value] of Object.entries(provider.headers)) {
+    for (const [name, value] of Object.entries(resolveProviderHeaders(provider.headers))) {
       if (CREDENTIAL_HEADER.test(name)) continue;
-      const resolved = resolveEnvValue(value);
-      headers[name] = typeof resolved === "string" ? resolved : value;
+      headers[name] = value;
     }
   }
 

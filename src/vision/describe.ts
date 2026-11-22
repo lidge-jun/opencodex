@@ -1,6 +1,7 @@
 import type { OcxProviderConfig } from "../types";
 import type { VisionReasoningEffort } from "../reasoning-effort";
 import { mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
@@ -70,7 +71,7 @@ export async function describeImage(
   if (invalid) return { text: "", error: invalid };
 
   const headers = Object.fromEntries(mergeCodexSelectedHeaders(
-    { "Content-Type": "application/json", ...forwardProvider.headers }, selectedForwardHeaders,
+    { "Content-Type": "application/json", ...resolveProviderHeaders(forwardProvider.headers) }, selectedForwardHeaders,
   ));
   const content: unknown[] = [];
   if (contextText) content.push({ type: "input_text", text: `The user's request about this image: ${contextText}` });

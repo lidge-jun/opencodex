@@ -29,6 +29,7 @@ import {
   registryEntryForProviderDestination,
 } from "./registry";
 import { resolveProviderTransport } from "./xai-transport";
+import { resolveProviderHeaders } from "./provider-header-resolve";
 
 const VERTEX_PUBLISHER_MODEL_PREFIX = "publishers/google/models/";
 const VERTEX_GENERATIVE_MODEL_ID = /^(?:gemini|gemma)-/i;
@@ -359,7 +360,7 @@ export function buildVertexProviderModelsRequest(
     ? getProviderRegistryEntry(providerName)?.staticHeaders
     : undefined;
   const headers: Record<string, string> = {
-    ...(mergeRegistryStaticHeaders(registryStaticHeaders, effectiveProvider.headers) ?? {}),
+    ...(mergeRegistryStaticHeaders(registryStaticHeaders, resolveProviderHeaders(effectiveProvider.headers)) ?? {}),
   };
   const resolveUrl = (defaultUrl: string): string => resolveProviderModelDiscoveryUrl(
     providerName,
