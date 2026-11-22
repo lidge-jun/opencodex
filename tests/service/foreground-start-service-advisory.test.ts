@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
-import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
+import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 import { describe, expect, test } from "bun:test";
 import { deriveLaunchdServiceDiagnostic, foregroundStartServiceAdvisoryLines, warnForegroundStartService } from "../../src/service/diagnostics";
@@ -170,10 +170,10 @@ test("the listening proxy can answer a request while the advisory child is still
       codexHome.restore();
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
-      removeTreeAfterBackgroundWork(home);
+      await removeTreeAfterBackgroundWork(home);
     }
   }
-});
+}, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
 test("a completed probe publishes its advisory; a timed-out probe is stopped silently", async () => {
   const warnings: string[] = [];
