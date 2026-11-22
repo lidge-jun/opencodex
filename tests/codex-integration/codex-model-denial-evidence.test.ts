@@ -1,12 +1,15 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   cachedDeniedCodexAccountIdsForModel,
   cachedAvailableAccountGatedNativeModels,
   clearCodexModelDenialEvidence,
   recordCodexModelDenialEvidence,
+  resolveCodexModelEntitlements,
   resetCodexModelEntitlementCacheForTests,
   seedCodexModelEntitlementsForTests,
+  type CodexModelEntitlementCredentialSnapshot,
 } from "../../src/codex/model-entitlements";
+import { beginCodexAccountGenerationLiveCheck, readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { setObservedDenialGenerationCheck } from "../../src/codex/observed-model-denials";
 import {
   codexUnsupportedModelFromDetail,
@@ -15,6 +18,7 @@ import {
 } from "../../src/server/responses/core-codex-account";
 import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import { setConfiguredNativeOpenAiModels, setDiscoveredNativeOpenAiModels } from "../../src/codex/catalog/native-models";
+import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
 
 /** Credential generation these fixtures record under (#4952). */
 const GEN = 1;
@@ -39,6 +43,127 @@ function refusalResponse(modelId: string): Response {
 }
 
 beforeEach(() => resetCodexModelEntitlementCacheForTests());
+
+describe("a refusal fences roster fetches that started before it", () => {
+  let isolated: ReturnType<typeof installIsolatedCodexHome>;
+  const credentials: CodexModelEntitlementCredentialSnapshot[] = [];
+  const config = { codexAccounts: [] };
+  const now = 1_800_000_000_000;
+
+  function roster(...models: string[]): Response {
+    return Response.json({ models: models.map(slug => ({ slug, supported_in_api: true, visibility: "list" })) });
+  }
+
+  function deferredRoster(): { promise: Promise<Response>; resolve: (response: Response) => void } {
+    let resolve!: (response: Response) => void;
+    const promise = new Promise<Response>(settle => { resolve = settle; });
+    return { promise, resolve };
+  }
+
+  beforeEach(() => {
+    isolated = installIsolatedCodexHome("ocx-refusal-roster-flight-");
+    credentials.length = 0;
+    for (const accountId of ["a", "b"]) {
+      saveCodexAccountCredential(accountId, {
+        accessToken: `access-${accountId}`, refreshToken: `refresh-${accountId}`,
+        expiresAt: now + 3600_000, chatgptAccountId: `chatgpt-${accountId}`,
+      });
+      credentials.push({ accountId, accessToken: `access-${accountId}`, chatgptAccountId: `chatgpt-${accountId}`,
+        credentialIdentity: `pool:${readCodexAccountRecord(accountId)!.generation}:chatgpt-${accountId}` });
+    }
+    setObservedDenialGenerationCheck(beginCodexAccountGenerationLiveCheck);
+  });
+
+  afterEach(() => {
+    resetCodexModelEntitlementCacheForTests();
+    isolated.restore();
+  });
+
+  test.each([SOL, "gpt-6.2-sol"].flatMap(model => ["old-first", "new-first"].map(order => [model, order] as const)))(
+    "%s does not rejoin or publish a pre-refusal grant (%s)", async (model, order) => {
+      const old = deferredRoster();
+      const fresh = deferredRoster();
+      let calls = 0;
+      const options = { credentials: [credentials[0]!], now, clientVersion: TEST_CLIENT_VERSION,
+        fetcher: (async () => ++calls === 1 ? old.promise : fresh.promise) as typeof fetch };
+      const earlier = resolveCodexModelEntitlements(config, options);
+      let later: ReturnType<typeof resolveCodexModelEntitlements> | undefined;
+      try {
+        expect(calls).toBe(1);
+        recordCodexModelDenialEvidence("a", model, readCodexAccountRecord("a")!.generation, now);
+        later = resolveCodexModelEntitlements(config, options);
+        expect(calls).toBe(2);
+        if (order === "old-first") {
+          old.resolve(roster(model, DAYBREAK));
+          await earlier;
+          expect(cachedDeniedCodexAccountIdsForModel(model, now)).toEqual(new Set(["a"]));
+          expect(cachedAvailableAccountGatedNativeModels(now).has(DAYBREAK)).toBe(false);
+        }
+        fresh.resolve(roster(model));
+        expect((await later).confirmedAccountIds.has("a")).toBe(true);
+        expect(cachedDeniedCodexAccountIdsForModel(model, now)).toBeUndefined();
+        old.resolve(roster(model, DAYBREAK));
+        await earlier;
+        const cached = await resolveCodexModelEntitlements(config, options);
+        expect([...cached.modelsByAccount.get("a")!]).toEqual([model]);
+        expect(cachedAvailableAccountGatedNativeModels(now).has(DAYBREAK)).toBe(false);
+        expect(calls).toBe(2);
+      } finally {
+        old.resolve(roster());
+        fresh.resolve(roster());
+        await Promise.all([earlier, later]);
+      }
+    },
+  );
+
+  test("invalidating pending rosters preserves the four-flight account budget", async () => {
+    const gate = deferredRoster();
+    let calls = 0;
+    const options = { credentials: [credentials[0]!], now,
+      loadPersistedRuntime: () => ({ selectedVersion: TEST_CLIENT_VERSION }),
+      fetcher: (async () => { calls += 1; return (await gate.promise).clone(); }) as typeof fetch };
+    const pending = [TEST_CLIENT_VERSION, "0.147.0", "0.148.0", "0.149.0"].map(clientVersion => (
+      resolveCodexModelEntitlements(config, { ...options, clientVersion })
+    ));
+    try {
+      expect(calls).toBe(4);
+      recordCodexModelDenialEvidence("a", "gpt-6.2-sol", readCodexAccountRecord("a")!.generation, now);
+      const blocked = resolveCodexModelEntitlements(config, { ...options, clientVersion: TEST_CLIENT_VERSION });
+      expect(calls).toBe(4);
+      gate.resolve(roster("gpt-6.2-sol"));
+      await Promise.all(pending);
+      expect((await blocked).confirmedAccountIds.size).toBe(0);
+      expect(cachedDeniedCodexAccountIdsForModel("gpt-6.2-sol", now)).toEqual(new Set(["a"]));
+      const restored = await resolveCodexModelEntitlements(config, { ...options, clientVersion: TEST_CLIENT_VERSION });
+      expect(restored.confirmedAccountIds.has("a")).toBe(true);
+      expect(calls).toBe(5);
+      expect(cachedDeniedCodexAccountIdsForModel("gpt-6.2-sol", now)).toBeUndefined();
+    } finally {
+      gate.resolve(roster());
+      await Promise.all(pending);
+    }
+  });
+
+  test("a refusal does not invalidate another account's pending roster", async () => {
+    const gate = deferredRoster();
+    let calls = 0;
+    const options = { credentials: [credentials[1]!], now, clientVersion: TEST_CLIENT_VERSION,
+      fetcher: (async () => { calls += 1; return gate.promise; }) as typeof fetch };
+    const pending = resolveCodexModelEntitlements(config, options);
+    try {
+      recordCodexModelDenialEvidence("a", "gpt-6.2-sol", readCodexAccountRecord("a")!.generation, now);
+      gate.resolve(roster("gpt-6.2-sol", DAYBREAK));
+      await pending;
+      await resolveCodexModelEntitlements(config, options);
+      expect(calls).toBe(1);
+      expect(cachedAvailableAccountGatedNativeModels(now).has(DAYBREAK)).toBe(true);
+      expect(cachedDeniedCodexAccountIdsForModel("gpt-6.2-sol", now)).toEqual(new Set(["a"]));
+    } finally {
+      gate.resolve(roster());
+      await pending;
+    }
+  });
+});
 
 /**
  * #4906. `#4797` taught selection to order by roster denial, and the reporter still lands on a

@@ -505,6 +505,14 @@ export interface CodexEntitlementFreshnessOptions extends Pick<
 const accountModelsCache = new Map<string, CachedAccountModels>();
 const accountModelsFlights = new Map<string, Promise<CachedAccountModels>>();
 
+interface AccountModelsFlightFence {
+  invalidationGeneration: number;
+  pending: number;
+}
+
+// Retained only while an account has pending flights, never as an unbounded invalidation history.
+const accountModelsFlightFences = new Map<string, AccountModelsFlightFence>();
+
 interface NegativeCredentialMemo {
   readonly credentialIdentity: string | null;
   readonly mutationEpoch: number;
@@ -975,8 +983,12 @@ async function modelsForCredential(
     && cached.expiresAt > now
   ) return cached;
 
+  const fence = accountModelsFlightFences.get(credential.accountId)
+    ?? { invalidationGeneration: 0, pending: 0 };
+  const invalidationGeneration = fence.invalidationGeneration;
   const flightKey = `${credential.accountId}\u0000${credential.credentialIdentity}\u0000${clientVersion}`
-    + (credentialMutationEpoch === undefined ? "" : `\u0000${credentialMutationEpoch}`);
+    + (credentialMutationEpoch === undefined ? "" : `\u0000${credentialMutationEpoch}`)
+    + `\u0000${invalidationGeneration}`;
   const existing = accountModelsFlights.get(flightKey);
   if (existing) return existing;
 
@@ -1009,10 +1021,14 @@ async function modelsForCredential(
       confirmed: false,
     };
   }
+  accountModelsFlightFences.set(credential.accountId, fence);
+  fence.pending += 1;
   const flight = fetchAccountModels(credential, fetcher, now, clientVersion)
     .then(result => {
       if (
-        currentCredentialIdentity(credential.accountId) === credential.credentialIdentity
+        accountModelsFlightFences.get(credential.accountId) === fence
+        && fence.invalidationGeneration === invalidationGeneration
+        && currentCredentialIdentity(credential.accountId) === credential.credentialIdentity
         && (credentialMutationEpoch === undefined
           || codexCredentialMutationEpoch() === credentialMutationEpoch)
       ) {
@@ -1022,6 +1038,12 @@ async function modelsForCredential(
     })
     .finally(() => {
       if (accountModelsFlights.get(flightKey) === flight) accountModelsFlights.delete(flightKey);
+      fence.pending -= 1;
+      // Keep old flights in the concurrency budget until they settle. Retire their fence only
+      // when none remain, so a post-invalidation flight cannot reuse an earlier generation.
+      if (fence.pending === 0 && accountModelsFlightFences.get(credential.accountId) === fence) {
+        accountModelsFlightFences.delete(credential.accountId);
+      }
     });
   accountModelsFlights.set(flightKey, flight);
   return flight;
@@ -1670,6 +1692,8 @@ export function isCodexModelEntitlementSnapshotCurrent(snapshot: CodexModelEntit
 
 export function invalidateCodexModelEntitlementsForAccount(accountId: string | null | undefined): void {
   if (!accountId) return;
+  const fence = accountModelsFlightFences.get(accountId);
+  if (fence) fence.invalidationGeneration += 1;
   // Every version's entry for this account, since a credential change invalidates the
   // account's entitlement evidence regardless of which client version asked for it.
   for (const key of [...accountModelsCache.keys()]) {
@@ -1681,6 +1705,7 @@ export function invalidateCodexModelEntitlementsForAccount(accountId: string | n
 export function resetCodexModelEntitlementCacheForTests(): void {
   accountModelsCache.clear();
   accountModelsFlights.clear();
+  accountModelsFlightFences.clear();
   accountModelsMisses.clear();
   negativeCredentialMemo.clear();
   entitlementEnsureFlights.clear();
