@@ -313,7 +313,7 @@ async function secureSocket(
   socket: Socket,
   target: URL,
   signal: AbortSignal,
-  tlsOptions: BunFetchRequestInitTLS | undefined,
+  ecdhCurve: string | undefined,
 ): Promise<TLSSocket> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
@@ -325,7 +325,8 @@ async function secureSocket(
       socket,
       servername: target.hostname,
       rejectUnauthorized: true,
-      ...(tlsOptions as import("node:tls").ConnectionOptions | undefined),
+      // shortcut: only the curve override crosses this boundary; the transport owns verification and server name.
+      ...(ecdhCurve ? { ecdhCurve } : {}),
     });
     let settled = false;
     // Absolute deadline: a peer sending occasional TLS bytes must not extend the handshake.
@@ -698,7 +699,8 @@ export async function socks5Fetch(
   request.signal.addEventListener("abort", onAbort, { once: true });
   try {
     if (target.protocol === "https:") {
-      socket = await secureSocket(tunnel, target, request.signal, (init as BunFetchRequestInit | undefined)?.tls);
+      socket = await secureSocket(tunnel, target, request.signal,
+        ((init as BunFetchRequestInit | undefined)?.tls as { ecdhCurve?: string } | undefined)?.ecdhCurve);
     }
     socket.setTimeout(SOCKS5_RESPONSE_TIMEOUT_MS, onResponseTimeout);
     // Observe socket errors and early responses while uploading, not only after it.

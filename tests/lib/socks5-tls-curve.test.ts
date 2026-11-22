@@ -3,28 +3,38 @@ import assert from "node:assert/strict";
 import { createServer, type AddressInfo, type Socket } from "node:net";
 import { socks5Fetch } from "../../src/lib/socks5-fetch";
 
-/** Key-share group ids from the first TLS record: 0x11ec is X25519MLKEM768. */
-function keyShareGroups(hello: Buffer): number[] {
+const HYBRID_GROUP = 0x11ec; // X25519MLKEM768
+const X25519 = 0x1d;
+
+/** Walk the ClientHello extension list once, returning key-share groups and whether ALPN was offered. */
+function parseHello(hello: Buffer): { keyShareGroups: number[]; alpnOffered: boolean } {
   let p = 5 + 4 + 2 + 32;
   const u16 = () => { const n = hello.readUInt16BE(p); p += 2; return n; };
   let n = hello[p]!; p += 1 + n; n = u16(); p += n; n = hello[p]!; p += 1 + n;
   const end = p + 2 + hello.readUInt16BE(p); p += 2;
-  const groups: number[] = [];
+  const keyShareGroups: number[] = [];
+  let alpnOffered = false;
   while (p + 4 <= end) {
     const type = u16(); const len = u16(); const stop = p + len;
     if (type === 51) {
       let q = p + 2;
-      while (q + 4 <= stop) { groups.push(hello.readUInt16BE(q)); q += 4 + hello.readUInt16BE(q + 2); }
+      while (q + 4 <= stop) { keyShareGroups.push(hello.readUInt16BE(q)); q += 4 + hello.readUInt16BE(q + 2); }
     }
+    if (type === 16) alpnOffered = true;
     p = stop;
   }
-  return groups;
+  return { keyShareGroups, alpnOffered };
 }
 
-/** SOCKS stand-in that completes CONNECT, captures ClientHello, then drops the socket. */
-async function captureClientHello(init?: RequestInit): Promise<number[]> {
+/**
+ * SOCKS5 stand-in that completes CONNECT, captures the first ClientHello, then drops the socket.
+ * A fetch failure before any ClientHello rejects instead of hanging, and a capture deadline
+ * bounds the wait so the fixture always reaches cleanup.
+ */
+async function captureClientHello(init?: RequestInit): Promise<{ keyShareGroups: number[]; alpnOffered: boolean }> {
   let resolveHello: (hello: Buffer) => void;
-  const hello = new Promise<Buffer>(resolve => { resolveHello = resolve; });
+  let rejectHello: (error: Error) => void;
+  const hello = new Promise<Buffer>((resolve, reject) => { resolveHello = resolve; rejectHello = reject; });
   const sockets = new Set<Socket>();
   const server = createServer(socket => {
     sockets.add(socket);
@@ -52,24 +62,50 @@ async function captureClientHello(init?: RequestInit): Promise<number[]> {
     });
   });
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
     const port = (server.address() as AddressInfo).port;
-    await socks5Fetch("https://destination.invalid/", init, `socks5://127.0.0.1:${port}`).catch(() => undefined);
-    return keyShareGroups(await hello);
+    const outcome = socks5Fetch("https://destination.invalid/", init, `socks5://127.0.0.1:${port}`).catch(() => "settled");
+    deadline = setTimeout(() => rejectHello(new Error("ClientHello capture deadline expired")), 5_000);
+    // A fetch that settles before any ClientHello is a fixture failure, not a tolerated teardown.
+    const captured = await Promise.race([
+      hello,
+      outcome.then(() => { throw new Error("socks5Fetch settled before sending a ClientHello"); }),
+    ]);
+    await outcome;
+    return parseHello(captured);
   } finally {
+    clearTimeout(deadline);
     for (const socket of sockets) socket.destroy();
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 }
 
 describe("socks5Fetch TLS options", () => {
+  test("the pinned runtime default offers the hybrid share, so the override below is distinguishable", async () => {
+    const byDefault = await captureClientHello();
+    assert.ok(byDefault.keyShareGroups.includes(HYBRID_GROUP),
+      `control failed: runtime default offered ${byDefault.keyShareGroups.map(g => "0x" + g.toString(16))}; `
+      + "if the pinned runtime stops offering the hybrid share, this regression loses its discriminating power");
+  });
+
   test("init.tls.ecdhCurve reaches the SOCKS5 TLS handshake", async () => {
     const overridden = await captureClientHello({ tls: { ecdhCurve: "X25519:P-256:P-384" } } as BunFetchRequestInit);
-    assert.ok(overridden.length > 0, "a ClientHello key share must be captured");
-    assert.ok(!overridden.includes(0x11ec), "hybrid post-quantum share must not be offered");
-    const byDefault = await captureClientHello();
-    // The default list is runtime-owned; this pins the passthrough by contrast.
-    assert.ok(byDefault.includes(0x11ec) || byDefault.every(group => group !== 0x11ec),
-      "default capture completed; runtime group list is not asserted");
+    assert.ok(overridden.keyShareGroups.includes(X25519), "a classical key share must be offered");
+    assert.ok(!overridden.keyShareGroups.includes(HYBRID_GROUP), "the hybrid share must not be offered");
+  });
+
+  test("only ecdhCurve crosses the boundary: caller ALPN and verification options do not reach the handshake", async () => {
+    const captured = await captureClientHello({
+      tls: {
+        ecdhCurve: "X25519:P-256:P-384",
+        ALPNProtocols: ["h2", "http/1.1"],
+        rejectUnauthorized: false,
+        servername: "attacker.invalid",
+      },
+    } as BunFetchRequestInit);
+    assert.equal(captured.alpnOffered, false, "caller ALPN must not be advertised; this transport speaks HTTP/1.1 only");
+    assert.ok(!captured.keyShareGroups.includes(HYBRID_GROUP), "the curve override itself must still apply");
   });
 });
+
