@@ -137,11 +137,22 @@ function scan(
       if (char === "\n" || char === "\r") fence = null;
       else fence.closing = null;
     } else if (lineStart) {
-      const runChar = text[index];
+      // A fence line may be indented by up to three spaces; control markers stay column-zero only.
+      let runStart = index;
+      while (runStart < text.length && runStart - index < 3 && text[runStart] === " ") runStart += 1;
+      if (runStart === text.length) {
+        return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
+      }
+      const runChar = text[runStart];
       if (runChar === "`" || runChar === "~") {
-        let runEnd = index + 1;
+        let runEnd = runStart + 1;
         while (runEnd < text.length && text[runEnd] === runChar) runEnd += 1;
-        const runLength = runEnd - index;
+        const runLength = runEnd - runStart;
+        // A run cut off by the end of this chunk may still grow: an opener's length is not known yet,
+        // and a short run may still reach the length that opens or closes.
+        if (runEnd === text.length && (!fence || (runChar === fence.char && runLength < fence.length))) {
+          return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
+        }
         if (!fence && runLength >= 3) {
           fence = { char: runChar, length: runLength, closing: null };
           index = runEnd;
@@ -153,10 +164,6 @@ function scan(
           index = runEnd;
           lineStart = false;
           continue;
-        }
-        // A run cut off by the end of this chunk may still reach the length that opens or closes.
-        if (runEnd === text.length && (!fence || runChar === fence.char)) {
-          return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
         }
       }
 
