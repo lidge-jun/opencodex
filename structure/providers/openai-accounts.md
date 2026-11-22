@@ -71,8 +71,7 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6.2-sol` and `gpt-6.2-astra` (Sol and Luna added 2026-09-23 from a
   live roster probe; https://openai.com/index/introducing-gpt-6-sol-and-luna/; 6.1 Sol added
   2026-09-30 and 6.1 Terra on 2026-10-27 from openai/codex models.json). None is gated, and all are native-main
-  drain sentinels. The confirmed-denial ordering below is still scoped to the first four
-  (`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS`); the GPT-6 and GPT-6.1 rows do not feed it yet.
+  drain sentinels. Roster-absence ordering stays scoped to the first four (`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS`); every registered ungated native also learns exact upstream unsupported-model refusals, including configured and discovered models.
 
 - The always-visible flagships (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`)
   use the same rosters with the opposite polarity, and are never gated on them. Only a CONFIRMED
@@ -92,7 +91,8 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   name and never remaining quota. It is bounded and retained for six hours, it is outranked by any
   confirmed roster grant for the same pair, it is cleared when that account successfully serves
   that model, and it is discarded when the account's credential identity changes. Recording is
-  scoped to the always-visible flagships, so a 400 anywhere else cannot steer routing. Every
+  scoped to registered ungated natives, so an unrelated 400 cannot steer routing. Newer models
+  never infer denial from roster absence; a lagging roster leaves routing unchanged. Every
   consumer treats it exactly like a roster denial, so the restore-on-empty and pin-exempt rules
   above continue to hold and no request is refused before dispatch.
   Detection reads the model upstream actually named rather than rebuilding the sentence from

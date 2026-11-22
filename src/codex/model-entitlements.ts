@@ -18,6 +18,7 @@ import {
   ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
   BUILT_IN_NATIVE_OPENAI_MODELS,
   NATIVE_GPT6_ASTRA_MODEL,
+  SUPPORTED_NATIVE_OPENAI_SLUGS,
 } from "./catalog/native-models";
 import { loadPersistedCodexRuntime } from "./runtime";
 import { codexRuntimeStateEpoch } from "./runtime";
@@ -1505,7 +1506,8 @@ export const ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = n
  * "no account is denied" with "no evidence exists" — both mean the same thing here, which is that
  * selection must be left exactly as it was.
  *
- * Only `denied` counts. `unknown` covers an unconfirmed account, a roster fetched under a client
+ * Roster absence counts only for the legacy preferred set; all registered ungated natives also
+ * read exact upstream refusals. `unknown` covers an unconfirmed account or a roster under a client
  * version too old to return the model, and an expired or credential-stale entry; none of those is
  * proof that the account lacks the model, and treating them as proof is how 2.36.0 removed
  * sol/terra/luna from accounts that owned them (#3022).
@@ -1515,7 +1517,7 @@ export function cachedDeniedCodexAccountIdsForModel(
   now = Date.now(),
   options: { excludeAccountIds?: ReadonlySet<string> } = {},
 ): ReadonlySet<string> | undefined {
-  if (!modelId || !ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS.has(modelId)) return undefined;
+  if (!modelId || !SUPPORTED_NATIVE_OPENAI_SLUGS.has(modelId) || ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(modelId)) return undefined;
   const denied = new Set<string>();
   const granted = new Set<string>();
   // One resolver for the whole pass: the loop below runs once per cached (account, client version)
@@ -1548,7 +1550,7 @@ export function cachedDeniedCodexAccountIdsForModel(
       modelId,
     );
     if (state === "granted") granted.add(accountId);
-    else if (state === "denied") denied.add(accountId);
+    else if (state === "denied" && ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS.has(modelId)) denied.add(accountId);
   }
   // The roster is not the only evidence, and on this path it is usually the weaker one. A cached
   // roster expires in five minutes and nothing on the flagship request path refetches it, so
@@ -1579,11 +1581,9 @@ export function cachedDeniedCodexAccountIdsForModel(
 /**
  * Record an authenticated upstream refusal as this account's own evidence about `modelId`.
  *
- * Scoped to {@link ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS} because that is the set whose
- * availability varies per account while the row stays visible, and it is the set
- * {@link cachedDeniedCodexAccountIdsForModel} will read back. A model outside it either has no
- * per-account variance or is gated by the fail-closed roster path, where an ordering preference
- * would change nothing.
+ * Every registered ungated native can learn this exact refusal, including configured and
+ * discovered models. Roster-absence ordering stays scoped to the legacy preferred set;
+ * newer models need an actual refusal, so a lagging roster cannot shrink their pool.
  *
  * The caller must have matched the exact allow-listed refusal body first. A status alone is not
  * admissible here: 400 covers every malformed request too, and remembering one of those as an
@@ -1600,7 +1600,7 @@ export function recordCodexModelDenialEvidence(
   now = Date.now(),
 ): void {
   if (!accountId || !modelId) return;
-  if (!ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS.has(modelId)) return;
+  if (!SUPPORTED_NATIVE_OPENAI_SLUGS.has(modelId) || ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(modelId)) return;
   // A caller that cannot name a credential generation records ACCOUNT-scoped evidence rather
   // than none. The one production context in that position is `main-pool`, whose credential
   // lives in `auth.json` and has no pool generation; discarding its refusals would revert
