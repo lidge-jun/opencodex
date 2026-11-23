@@ -393,6 +393,11 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         process.exitCode = 1;
         break;
       }
+      if (ops.status() === null && !isServiceInstalled()) {
+        console.error("❌ Service is not installed. Run `ocx service install` first.");
+        process.exitCode = 1;
+        break;
+      }
       ops.start();
       await reportServiceServing("started");
       break;

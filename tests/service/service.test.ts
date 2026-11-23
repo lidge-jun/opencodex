@@ -4069,4 +4069,11 @@ describe("credential-bearing definitions harden the Windows ACL strictly", () =>
   test("a definition with no proxy env at all carries no credential", () => {
     expect(definitionCarriesCredential(buildUnit(resolvedProxyEnv({})))).toBe(false);
   });
+
+  test("service start refuses cleanly when no service is installed (#9038)", () => {
+    const cli = readFileSync(join(import.meta.dir, "../../src/service/cli.ts"), "utf8");
+    const startCase = cli.slice(cli.indexOf('case "start":'), cli.indexOf('case "stop":'));
+    expect(startCase).toContain("if (ops.status() === null && !isServiceInstalled())");
+    expect(startCase).toContain("Service is not installed");
+  });
 });
