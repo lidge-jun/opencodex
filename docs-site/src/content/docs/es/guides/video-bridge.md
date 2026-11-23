@@ -44,7 +44,7 @@ Agregue `videoBridgeEnabled: true` a su configuración `images`:
   "images": {
     "bridgeEnabled": true,
     "videoBridgeEnabled": true,
-    "videoBridgeModel": "grok-imagine-video",
+    "videoBridgeModel": "grok-imagine-video-1.5-lite",
     "videoMaxRounds": 2,
     "videoTimeoutMs": 300000
   }
@@ -54,7 +54,7 @@ Agregue `videoBridgeEnabled: true` a su configuración `images`:
 | Opción | Predeterminado | Descripción |
 |--------|---------|-------------|
 | `videoBridgeEnabled` | `false` | Interruptor maestro. Debe estar explícitamente habilitado. |
-| `videoBridgeModel` | `"grok-imagine-video"` | Id. de modelo de vídeo xAI. |
+| `videoBridgeModel` | `"grok-imagine-video-1.5-lite"` | Id. de modelo de vídeo xAI. |
 | `videoMaxRounds` | `2` | Número máximo de rondas de generación de video antes de forzar la respuesta final. |
 | `videoTimeoutMs` | `300000` (5 min) | Plazo máximo por video, incluidas las consultas de estado. |
 | `videoProvider` | sin definir (xAI) | Proveedor opcional con clave de API que atiende `video_gen` con su propio `baseUrl` y clave. Consulta [Elegir el proveedor de video](#elegir-el-proveedor-de-video). |
@@ -79,7 +79,7 @@ De forma predeterminada, el puente envía los trabajos de `video_gen` a xAI con 
   "images": {
     "videoBridgeEnabled": true,
     "videoProvider": "my-video-bridge",
-    "videoBridgeModel": "grok-imagine-video"
+    "videoBridgeModel": "grok-imagine-video-1.5-lite"
   }
 }
 ```
@@ -108,10 +108,27 @@ La herramienta `video_gen` acepta:
 
 | Parámetro | Tipo | Alcance | Descripción |
 |-----------|------|-------|-------------|
-| `prompt` | cadena | requerido | Indicación detallada de generación de vídeo |
+| `prompt` | string | opcional con una imagen o fotograma | Indicación de texto |
 | `duration` | entero | 1-15 | Duración del vídeo en segundos |
-| `resolution` | cadena | `"480p"`, `"720p"` | Resolución de vídeo |
-| `aspect_ratio` | cadena | 7 relaciones | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3` |
+| `resolution` | string | `480p`, `720p`, `1080p` | Depende del modelo; máximo 720p con `last_frame`, `keyframes` o `reference_images` |
+| `aspect_ratio` | string | depende del modelo | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2`; se rechaza si solo se anima una `image`, que conserva su proporción |
+| `image` | string | primer fotograma | URL HTTPS, URL de datos o artefacto recordado |
+| `last_frame` | string | solo 1.5 | Último fotograma |
+| `keyframes` | array | 1.5, máximo 4 | `{image, timestamp_s}`; marca de tiempo estrictamente dentro del clip (8 s si se omite `duration`) |
+| `reference_images` | array | 1.5: 14, clásico: 7 (≤ 10 s) | Referencias de imagen; el modelo clásico no puede combinarlas con `image` |
+
+Los ajustes que un modelo no puede respetar se rechazan antes de cualquier llamada de pago en lugar de descartarse.
+
+### Modelos e imágenes de entrada
+
+| Modelo | Resolución | Entradas | por segundo (480p / 720p / 1080p) |
+|-------|------------|--------|------------------|
+| `grok-imagine-video-1.5` | 480p / 720p / 1080p nativo | primer/último fotograma, 4 fotogramas clave, 14 referencias (720p máximo) | $0.08 / $0.14 / $0.25 |
+| `grok-imagine-video-1.5-lite` (predeterminado) | 480p / 720p / 1080p reescalado | primer fotograma | $0.02 / $0.03 / $0.14 |
+| `grok-imagine-video` | 480p / 720p | primer fotograma, 7 referencias | $0.05 / $0.07 / — |
+
+Configura `images.videoBridgeModel` como `grok-imagine-video-1.5` para fijar fotogramas o usar referencias. Los modelos conocidos admiten nueve relaciones de aspecto; los desconocidos conservan siete, 480p/720p y ninguna imagen. Se aceptan URL HTTPS y datos PNG/JPEG/WebP de hasta 10 MiB decodificados. Las imágenes descargadas por el puente pueden referenciarse mediante URL de artefacto, ruta absoluta o URL `file:` durante una hora: se usa la URL de origen recordada y nunca se lee el archivo local. Solo funciona con el destino xAI fijado, no con un `images.videoProvider` personalizado. Los resultados en línea no tienen URL de origen y la URL temporal puede caducar antes.
+
 
 <a id="limitations"></a>
 

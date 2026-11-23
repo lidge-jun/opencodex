@@ -14,8 +14,9 @@ without a control socket. It does not change the loaded-only commands above.
 
 ## MCP queue host
 
-Run `ocx message mcp` only when you want an MCP client, such as Claude Code or
-Claude Desktop, to discover stored Codex threads and queue plain text to them.
+Run `ocx message mcp` when you want an MCP client, such as Claude Code CLI or
+the Code tab in Claude Desktop, to discover stored Codex threads and queue
+plain text to them.
 The host runs over stdio; it exposes no network listener and registers itself in
 no client. Configure the MCP client with an explicit Codex CLI and existing home:
 
@@ -174,6 +175,45 @@ Refresh revisits partially written items; callers still manage pagination and
 update item IDs. Cancellation/disconnect clears pauses and reaps owned helpers.
 The host adds no background watch, automatic delivery, session creation or resume.
 
+### Send from Claude Code and check the reply
+
+First check that `ocx help message mcp` shows the MCP host options in your
+installed OpenCodex. Use an explicit local Codex executable and existing Codex
+home, as in the host config above. Register the server for a local workspace:
+
+- **Claude Code CLI:** Run this from that workspace. `--scope local` keeps the
+  registration in your own Claude Code settings for the workspace.
+
+  ```bash
+  claude mcp add --scope local --transport stdio opencodex-queue -- \
+    /absolute/path/to/ocx message mcp \
+    --codex /absolute/path/to/codex --codex-home /absolute/path/to/.codex \
+    --allow-reply-read
+  ```
+
+- **Claude Desktop, Code tab:** Add the server from the JSON example above to
+  the workspace's `.mcp.json`, use the absolute `ocx` path as `command`, and
+  append `--allow-reply-read` to `args`. Select that local workspace in the
+  Code tab, start a Code session and approve the project server if prompted.
+  This `.mcp.json` entry applies to Code sessions. The Desktop Chat surface
+  uses [a separate Desktop configuration](https://code.claude.com/docs/en/desktop#mcp-servers-from-the-claude-desktop-chat-app).
+
+Only enable `--allow-reply-read` if you intend to share stored Codex answer
+text with the client. For a round trip:
+
+1. Open a test conversation in your native Codex client and leave it idle.
+   In Claude Code, check that `opencodex-queue` is connected via `/mcp` in the
+   CLI or under **Connectors** in the Code tab.
+2. Have Claude call `codex_threads` to find the exact conversation UUID, then
+   call `codex_queue_message` once with a test message such as “Reply with
+   exactly `OCX_MCP_OK`.” Approve each tool call for this test if prompted. The
+   `queued` receipt contains `clientMessageId`; it does not confirm Codex has
+   processed the message. If submission is `unknown`, do not send it again.
+3. Have Claude call `codex_wait_reply` with that same `threadId` and
+   `clientMessageId`. `reply_observed` with the expected test reply confirms
+   the round trip. If the wait expires, check the same receipt again or inspect
+   the Codex conversation. A wait timeout does not justify another send.
+
 ## List local Claude Code sessions
 
 On macOS or Linux, pass the absolute path to your trusted native Claude Code
@@ -185,14 +225,16 @@ ocx message claude-sessions --claude /absolute/path/to/claude --json
 
 The `ocx-claude-sessions/1` result lists session UUIDs (`id`), `kind`
 (`interactive` or `background`) and the activity reported by Claude Code
-(`busy`, `waiting` or `idle`). Sessions without a full ID or a live PID in
-the native output are omitted. `CLAUDE_CONFIG_DIR`, if set, selects the local
-Claude configuration. Names, paths, PIDs and history are omitted from the
-result. The command invokes the Claude CLI once with a five-second deadline,
-256 KiB output limit and 256-row limit. It respects
-the `CLAUDE_CODE_DISABLE_AGENT_VIEW` opt-out and disables nonessential Claude
-CLI traffic for the lookup. Claude Code can initialize its own configuration
-on first use. On failure the command returns a sanitized error and no partial list.
+(`busy`, `waiting` or `idle`). Rows with a missing or null session ID or PID
+are skipped. When both fields are present, a shortened or otherwise invalid
+session UUID or an invalid PID causes the entire lookup to fail.
+`CLAUDE_CONFIG_DIR`, if set, selects the local Claude configuration. Names,
+paths, PIDs and history are omitted from the result. The command invokes the
+Claude CLI once with a five-second deadline, 256 KiB output limit and 256-row
+limit. It respects the `CLAUDE_CODE_DISABLE_AGENT_VIEW` opt-out and disables
+nonessential Claude CLI traffic for the lookup. Claude Code can initialize
+its own configuration on first use. On failure the command returns a
+sanitized error and no partial list.
 
 A listed session is an observed local session. This command does not test
 inbox reachability, send messages, or use enrolled SSH peers.

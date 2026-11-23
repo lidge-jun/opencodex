@@ -429,6 +429,55 @@ test("after the reload a Child shows its own link row instead of the off switch"
   expect(host.textContent).toContain("Connected");
 });
 
+test("a Remote Link Child reads its status from its own listener and shows the commands that disconnect it (#8985)", async () => {
+  declareRuntimeRole("client");
+  const calls: { url: string; method: string }[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, method: init?.method ?? "GET" });
+    if (url.startsWith("http://child/api/machine/hub-relay/api/link/status")) return response({ error: "refused", code: "link_child_read_only" }, 403);
+    return response({ ...baseStatus, role: "child", listener: { state: "off", port: null }, child: { alias: "home-one", state: "connected", since: "now", reason: null } });
+  }) as typeof fetch;
+  const host = await mount({ apiBase: "http://child/api/machine/hub-relay", statusApiBase: "http://child", diagnosticsApiBase: "http://child",
+    childLink: { linkId: "lnk_0123456789abcdef", home: "studio" } });
+  await settleUntil(() => (host.textContent ?? "").includes("ocx restart"));
+  const statusReads = calls.filter(call => call.url.includes("/api/link/status")).map(call => call.url);
+  expect(statusReads.length).toBeGreaterThan(0);
+  expect(new Set(statusReads)).toEqual(new Set(["http://child/api/link/status?children=1"]));
+  expect(host.textContent).not.toContain("Remote link request could not be completed");
+  expect(host.textContent).toContain("home-one");
+  const panel = host.querySelector("[data-section='link-child-disconnect']");
+  expect(panel?.textContent).toContain("ocx disconnect --expect-link lnk_0123456789abcdef");
+  expect(panel?.textContent).toContain("ocx restart");
+  expect(panel?.textContent).toContain("studio");
+  // The page never changes the link itself: every request it made is a read.
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+});
+
+test("a Child's own session gates its status read even before the shared session is ready (#8985)", async () => {
+  declareRuntimeRole("client");
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    calls.push(String(input));
+    return response({ ...baseStatus, role: "child", listener: { state: "off", port: null }, child: { alias: "home-one", state: "connected", since: "now", reason: null } });
+  }) as typeof fetch;
+  const host = await mount({ apiBase: "http://child/api/machine/hub-relay", sessionReady: false, statusApiBase: "http://child", statusSessionReady: true,
+    childLink: { linkId: "lnk_0123456789abcdef", home: null } });
+  await settleUntil(() => (host.textContent ?? "").includes("ocx restart"));
+  expect(calls.filter(url => url.includes("/api/link/status"))[0]).toBe("http://child/api/link/status?children=1");
+  expect(host.textContent).not.toContain("Sign in to the local dashboard session");
+  expect(host.querySelector("[data-section='link-child-disconnect']")?.textContent).toContain("ocx disconnect --expect-link lnk_0123456789abcdef");
+});
+
+test("a Home never shows the Child disconnect commands (#8985)", async () => {
+  globalThis.fetch = (async () => response({ ...baseStatus, role: "home" })) as typeof fetch;
+  const host = await mount({ childLink: undefined });
+  await flush();
+  expect(host.querySelector("[data-section='link-child-disconnect']")).toBeNull();
+  expect(host.textContent).not.toContain("ocx disconnect");
+});
+
+
 test("join maps join_port_mismatch to guidance about the configured port", async () => {
   declareRuntimeRole("standalone");
   globalThis.fetch = (async input => {

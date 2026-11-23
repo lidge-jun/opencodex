@@ -16,6 +16,7 @@ import {
 import { withNativeMainCredentialAdmission } from "./native-main-admission";
 import {
   ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
+  BUILT_IN_NATIVE_OPENAI_MODELS,
   NATIVE_GPT6_ASTRA_MODEL,
 } from "./catalog/native-models";
 import { loadPersistedCodexRuntime } from "./runtime";
@@ -410,6 +411,7 @@ interface CachedAccountModels {
   readonly models: ReadonlySet<string>;
   readonly accessProgramsByModel?: ReadonlyMap<string, CodexAvailableAccessPrograms>;
   readonly availabilityNuxByModel?: ReadonlyMap<string, { message: string }>;
+  readonly capabilitiesByModel?: ReadonlyMap<string, NativeRosterCapabilities>;
   readonly confirmed: boolean;
   readonly provenance?: CodexModelEntitlementProvenance;
 }
@@ -418,12 +420,37 @@ export interface CodexModelEntitlementSnapshot {
   readonly modelsByAccount: ReadonlyMap<string, ReadonlySet<string>>;
   readonly accessProgramsByAccount?: ReadonlyMap<string, ReadonlyMap<string, CodexAvailableAccessPrograms>>;
   readonly availabilityNuxByAccount?: ReadonlyMap<string, ReadonlyMap<string, { message: string }>>;
+  readonly capabilitiesByAccount?: ReadonlyMap<string, ReadonlyMap<string, NativeRosterCapabilities>>;
   readonly clientVersionByAccount: ReadonlyMap<string, string>;
   readonly confirmedAccountIds: ReadonlySet<string>;
   readonly credentialIdentities: ReadonlyMap<string, string>;
 }
 
 export type CodexAvailableAccessPrograms = Readonly<Record<string, readonly string[]>> | null;
+
+export interface NativeRosterCapabilities {
+  supports_reasoning_effort_updates?: boolean;
+  supports_experimental_context?: boolean;
+  context_window?: number;
+  max_context_window?: number;
+}
+
+function nativeRosterCapabilities(row: Record<string, unknown>): NativeRosterCapabilities {
+  const capabilities: NativeRosterCapabilities = {};
+  for (const field of ["supports_reasoning_effort_updates", "supports_experimental_context"] as const) {
+    if (typeof row[field] === "boolean") capabilities[field] = row[field];
+  }
+  for (const field of ["context_window", "max_context_window"] as const) {
+    const value = row[field];
+    if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) capabilities[field] = value;
+  }
+  if (capabilities.context_window !== undefined && capabilities.max_context_window !== undefined
+    && capabilities.context_window > capabilities.max_context_window) {
+    delete capabilities.context_window;
+    delete capabilities.max_context_window;
+  }
+  return capabilities;
+}
 
 export type CodexModelEntitlementState = "granted" | "denied" | "unknown";
 
@@ -655,16 +682,19 @@ function parseAccountModels(text: string): {
   models: ReadonlySet<string>;
   accessProgramsByModel: ReadonlyMap<string, CodexAvailableAccessPrograms>;
   availabilityNuxByModel: ReadonlyMap<string, { message: string }>;
+  capabilitiesByModel: ReadonlyMap<string, NativeRosterCapabilities>;
 } | null {
   try {
     const payload = JSON.parse(text) as { models?: unknown };
     if (!Array.isArray(payload.models)) return null;
     const accessProgramsByModel = new Map<string, CodexAvailableAccessPrograms>();
     const availabilityNuxByModel = new Map<string, { message: string }>();
+    const capabilitiesByModel = new Map<string, NativeRosterCapabilities>();
     const models = payload.models.flatMap(entry => {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
-      const row = entry as { slug?: unknown; supported_in_api?: unknown; visibility?: unknown; available_access_programs?: unknown; availability_nux?: unknown };
+      const row = entry as Record<string, unknown>;
       if (typeof row.slug !== "string" || row.supported_in_api !== true || row.visibility === "hide") return [];
+      if (BUILT_IN_NATIVE_OPENAI_MODELS.includes(row.slug)) capabilitiesByModel.set(row.slug, nativeRosterCapabilities(row));
       const nux = row.availability_nux;
       if (nux && typeof nux === "object" && !Array.isArray(nux)) {
         const message = (nux as { message?: unknown }).message;
@@ -683,7 +713,7 @@ function parseAccountModels(text: string): {
       }
       return [row.slug];
     });
-    return { models: new Set(models), accessProgramsByModel, availabilityNuxByModel,
+    return { models: new Set(models), accessProgramsByModel, availabilityNuxByModel, capabilitiesByModel,
       discoveredRows: validateDiscoveredNativeRows(payload.models) };
   } catch {
     return null;
@@ -781,6 +811,7 @@ async function fetchAccountModels(
       models,
       accessProgramsByModel,
       availabilityNuxByModel,
+      capabilitiesByModel: parsed.capabilitiesByModel,
       confirmed: true,
     };
   } catch (error) {
@@ -1336,6 +1367,10 @@ export async function resolveCodexModelEntitlements(
   })));
   return {
     modelsByAccount: new Map(results.map(({ credential, result }) => [credential.accountId, result.models])),
+    capabilitiesByAccount: new Map(results.flatMap(({ credential, result }) => (
+      result.confirmed && result.capabilitiesByModel
+        ? [[credential.accountId, result.capabilitiesByModel] as const] : []
+    ))),
     accessProgramsByAccount: new Map(results.flatMap(({ credential, result }) => (
       result.confirmed && result.accessProgramsByModel
         ? [[credential.accountId, result.accessProgramsByModel] as const] : []

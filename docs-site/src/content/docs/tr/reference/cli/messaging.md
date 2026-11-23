@@ -14,6 +14,9 @@ komutu, kayıtlı konuşmalar için isteğe bağlı MCP araçları sunar ve kıs
 stdio app-server başlatır. Kayıtlı konuşmaların canlı olduğu doğrulanmaz; `queued`
 yanıtı işlenmiş veya yanıtlanmış anlamına gelmez. Kurulum ve sınırlar için
 [İngilizce MCP başvurusuna](/reference/cli/messaging/#mcp-queue-host) bakın.
+Claude Code CLI ve Claude Desktop'ın Code sekmesi için
+[istemci kurulumu ve yanıtı doğrulama](/reference/cli/messaging/#send-from-claude-code-and-check-the-reply)
+adımlarına bakın. Projedeki `.mcp.json` dosyası Code oturumlarına uygulanır.
 
 `--allow-reply-read` seçeneği ayrıca `codex_read_reply` ve süre sınırlı
 `codex_wait_reply` araçlarını açar ve kayıtlı

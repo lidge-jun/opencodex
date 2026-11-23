@@ -1,6 +1,8 @@
 import { comboFailureEvidence } from "../../src/lib/client-error-body";
 import { expect, test } from "bun:test";
 import { saveConfig } from "../../src/config";
+import { getRequestLogEntries, nextRequestLogId } from "../../src/server/request-log";
+import { readRecentUsageEntries } from "../../src/usage/log";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
@@ -73,4 +75,42 @@ test("native buffered reader retains a primitive original diagnostic internally"
     expect(text.length).toBeGreaterThan(0); expect(text).not.toContain(sentinel);
     expect(context.upstreamError).toBe(sentinel);
   } finally { release(); }
+});
+
+const verificationNotice = "Your account can't receive replies from Claude right now. You can find the next step in the Anthropic Verification Portal:";
+const verificationPortal = "https://portal.anthropic.com/verify";
+
+test.each([true, false])("Claude streaming=%s receives an actionable account verification 403", async (stream) => {
+  const release = acquireOwnedSpendHome();
+  clearKeyCooldowns();
+  let calls = 0;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    calls++;
+    return Response.json({ type: "error", error: { type: "permission_error",
+      message: `${verificationNotice} ${verificationPortal}?org=${sentinel}` } }, { status: 403 });
+  } });
+  try {
+    const config = { port: 0, defaultProvider: "fixture", providers: { fixture: {
+      adapter: "anthropic", baseUrl: upstream.url.toString(), authMode: "key", apiKey: "fixture",
+      allowPrivateNetwork: true, models: ["wire-model"], transientRetry: { maxAttempts: 1 },
+    } }, protocols: { rollout: { managedMessagesNative: true } } } as OcxConfig;
+    saveConfig(config);
+    const ctx = { model: "", provider: "" };
+    const requestId = nextRequestLogId();
+    const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        model: "fixture/wire-model", stream, max_tokens: 16, messages: [{ role: "user", content: "fixture" }],
+      }),
+    }), config, ctx, { requestId, start: Date.now() });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ type: "error", error: { type: "permission_error",
+      message: `Anthropic requires account verification before Claude can reply. Open the Anthropic Verification Portal: ${verificationPortal}` } });
+    expect(calls).toBe(1);
+    const row = getRequestLogEntries().find(entry => entry.requestId === requestId);
+    expect(row).toMatchObject({ status: 403, upstreamCondition: "account_verification_required" });
+    expect(JSON.stringify(row)).not.toContain(sentinel);
+    const persisted = readRecentUsageEntries(5).find(entry => entry.requestId === requestId);
+    expect(persisted).toMatchObject({ status: 403, upstreamCondition: "account_verification_required" });
+    expect(JSON.stringify(persisted)).not.toContain(sentinel);
+  } finally { release(); await upstream.stop(true); }
 });

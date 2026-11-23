@@ -11,7 +11,7 @@ El [servidor MCP de colas](#mcp-queue-host) descrito a continuación es independ
 
 ## Servidor MCP de colas
 
-Ejecuta `ocx message mcp` solo cuando quieras que un cliente MCP, como Claude Code o Claude Desktop, descubra hilos almacenados de Codex y les envíe texto a la cola. Este servidor se comunica mediante stdio, no abre ningún listener de red ni se registra automáticamente en clientes. Configura el cliente MCP con una CLI de Codex explícita y un directorio personal existente:
+Ejecuta `ocx message mcp` cuando quieras que un cliente MCP, como la CLI de Claude Code o la pestaña Code de Claude Desktop, descubra hilos almacenados de Codex y les envíe texto a la cola. Este servidor se comunica mediante stdio, no abre ningún listener de red ni se registra automáticamente en clientes. Configura el cliente MCP con una CLI de Codex explícita y un directorio personal existente:
 
 ```json
 {
@@ -29,6 +29,8 @@ Ejecuta `ocx message mcp` solo cuando quieras que un cliente MCP, como Claude Co
 ```
 
 Sustituye ambas rutas por las rutas locales reales y usa una ruta absoluta para `ocx` si el cliente no hereda PATH. Esta primera versión admite macOS y Linux; Windows se rechaza explícitamente.
+
+Consulta la [configuración de los clientes y la prueba de ida y vuelta](#send-from-claude-code-and-check-the-reply). El archivo de proyecto `.mcp.json` se aplica a las sesiones de Code.
 
 - `codex_threads` enumera como máximo 50 hilos almacenados y no archivados. Para obtener otra página, pasa `nextCursor` como `cursor`. Devuelve identificadores y nombres, sin historial, vista previa ni directorios de trabajo. `liveStateVerified: false` significa que no demuestra que el hilo esté abierto en la aplicación ni listo para procesar un mensaje.
 - `codex_queue_message` acepta un UUID exacto `threadId` y un `message`. Envía solo mensajes autorizados por el usuario. El texto junto con la etiqueta fija de par tiene un límite de 16 KiB; se rechazan el texto vacío y NUL. No se adivinan nombres ni se cambia el modelo. Tampoco se conceden permisos ni se generan respuestas automáticas.
@@ -72,11 +74,79 @@ Solo lee datos guardados; no despierta un hilo descargado. Para continuar trabaj
 En otro caso actualiza turno o repite posición hasta el límite, devolviendo `wait_exhausted` con la última observación válida. `attempts` cuenta intentos y `lastObservationAgeMs` su antigüedad. Solo cuenta una instantánea cuyas lecturas terminaron antes del plazo; la limpieza posterior no la invalida, pero datos leídos tarde caducan. Sin observación válida, ante error o cancelación, el resultado no está disponible; nunca es espera correcta vacía. Un `turnStatus` guardado puede diferir del servidor activo y no termina la espera. El cliente administra paginación e IDs; cancelar limpia pausas y helpers. No hay vigilancia en segundo plano, entrega automática ni creación o reanudación de sesiones.
 
 
-<a id="discover-and-send"></a>
+<a id="send-from-claude-code-and-check-the-reply"></a>
 
-Para consultar sesiones locales de Claude Code, usa
-[`ocx message claude-sessions`](/reference/cli/messaging/#list-local-claude-code-sessions).
-La lista no confirma que una sesión pueda recibir mensajes.
+### Enviar desde Claude Code y comprobar la respuesta
+
+Primero comprueba que `ocx help message mcp` muestra las opciones del servidor MCP en tu
+instalación de OpenCodex. Usa un ejecutable local explícito de Codex y un directorio personal
+de Codex existente, como en la configuración del servidor anterior. Registra el servidor para un
+espacio de trabajo local:
+
+- **CLI de Claude Code:** ejecuta esto desde ese espacio de trabajo. `--scope local` guarda el
+  registro en tu propia configuración de Claude Code para ese espacio de trabajo.
+
+  ```bash
+  claude mcp add --scope local --transport stdio opencodex-queue -- \
+    /absolute/path/to/ocx message mcp \
+    --codex /absolute/path/to/codex --codex-home /absolute/path/to/.codex \
+    --allow-reply-read
+  ```
+
+- **Pestaña Code de Claude Desktop:** añade el servidor del ejemplo JSON anterior al
+  `.mcp.json` del espacio de trabajo, usa la ruta absoluta de `ocx` como `command` y
+  añade `--allow-reply-read` a `args`. Selecciona ese espacio de trabajo local en la
+  pestaña Code, inicia una sesión de Code y aprueba el servidor del proyecto si se solicita.
+  Esta entrada de `.mcp.json` se aplica a las sesiones de Code. La superficie de chat de
+  Desktop usa [una configuración de Desktop independiente](https://code.claude.com/docs/en/desktop#mcp-servers-from-the-claude-desktop-chat-app).
+
+Activa `--allow-reply-read` solo si quieres compartir con el cliente el texto de las
+respuestas guardadas de Codex. Para una prueba de ida y vuelta:
+
+1. Abre una conversación de prueba en tu cliente nativo de Codex y déjala inactiva.
+   En Claude Code, comprueba que `opencodex-queue` está conectado con `/mcp` en la
+   CLI o en **Connectors** en la pestaña Code.
+2. Pide a Claude que llame a `codex_threads` para encontrar el UUID exacto de la
+   conversación y después a `codex_queue_message` una sola vez con un mensaje de prueba como
+   «Responde exactamente `OCX_MCP_OK`». Aprueba cada llamada de herramienta de esta prueba si
+   se solicita. El recibo `queued` contiene `clientMessageId`; no confirma que Codex haya
+   procesado el mensaje. Si el envío es `unknown`, no lo envíes de nuevo.
+3. Pide a Claude que llame a `codex_wait_reply` con el mismo `threadId` y
+   `clientMessageId`. `reply_observed` con la respuesta de prueba esperada confirma la ida
+   y vuelta. Si la espera vence, vuelve a comprobar el mismo recibo o revisa la conversación de
+   Codex. Un tiempo de espera agotado no justifica otro envío.
+
+<a id="list-local-claude-code-sessions"></a>
+
+## Listar sesiones locales de Claude Code
+
+En macOS o Linux, indica la ruta absoluta a un ejecutable de confianza de
+Claude Code. Debe admitir [`claude agents --json`](https://code.claude.com/docs/en/agent-view#list-sessions-as-json).
+
+```bash
+ocx message claude-sessions --claude /absolute/path/to/claude --json
+```
+
+El resultado `ocx-claude-sessions/1` incluye el UUID de cada sesión (`id`),
+su tipo (`kind`, con valor `interactive` o `background`) y el estado de
+actividad que informa Claude Code (`busy`, `waiting` o `idle`). Se omiten
+las filas cuyo identificador de sesión o PID sea nulo o esté ausente. Si
+ambos campos están presentes, un UUID de sesión abreviado o inválido, o
+un PID inválido, provoca un fallo en toda la consulta. Si se define
+`CLAUDE_CONFIG_DIR`, esta variable selecciona la configuración local de
+Claude. El resultado omite los nombres, las rutas, los PID y el historial.
+El comando ejecuta la CLI de Claude una vez con un plazo de cinco segundos,
+un límite de salida de 256 KiB y un máximo de 256 filas. Respeta
+`CLAUDE_CODE_DISABLE_AGENT_VIEW` y desactiva el tráfico no esencial de la CLI
+de Claude durante la consulta. Claude Code puede inicializar su propia
+configuración en el primer uso. Si la consulta falla, el comando devuelve
+un error sin datos sensibles y sin resultados parciales.
+
+La lista solo refleja las sesiones locales observadas. El comando no
+comprueba si pueden recibir mensajes, no envía mensajes y no usa los pares
+SSH registrados.
+
+<a id="discover-and-send"></a>
 
 ## Descubrir y enviar
 

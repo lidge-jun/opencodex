@@ -18,9 +18,14 @@ export function recordGenerationEvent(logCtx: RequestLogContext, type: unknown, 
   if (type === "content_block_start" || type === "response.output_item.added") {
     logCtx.generationStartedAt ??= now;
   } else if (type === "content_block_delta" || (type.startsWith("response.") && type.endsWith(".delta"))) {
-    logCtx.generationStartedAt ??= now;
-    logCtx.lastOutputAt = now;
+    recordGenerationOutput(logCtx, now);
   }
+}
+
+/** Mark the receipt of a generated delta after the protocol-specific decoder recognizes it. */
+export function recordGenerationOutput(logCtx: RequestLogContext, now = Date.now()): void {
+  logCtx.generationStartedAt ??= now;
+  logCtx.lastOutputAt = now;
 }
 
 /** Request-relative `genStartMs` / `lastOutputMs`, present only when both ends were observed. */

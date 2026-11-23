@@ -88,7 +88,7 @@ native lane, and the request's features; the Messages ingress (`src/server/claud
 marks caller-forward passthrough and the managed native lane as native, the translated path as
 the bridge, and a disabled surface or a compatibility reject as blocked. The Responses ingress needs no mark: its
 path follows the final adapter's wire. Marks live in WeakMaps keyed by the request log context
-and the live attempt objects, and no mark function throws into the request.
+and the live attempt objects. The native Gemini transport marks its same-wire path when it sends.
 
 `addFinalRequestLog` derives one `ProtocolTraceV1` through `path.ts`: a blocked mark wins with
 empty paths; otherwise each attempt gets the lane-derived path (or an explicit attempt mark),
@@ -542,8 +542,8 @@ lane, the decline trace, the beta allowlist, opaque state and OAuth.
 
 ## Settings
 
-`resolveApiSurfaceSettings` and `resolveProtocolSettings` in `src/protocols/settings.ts` are the
-only readers of the `apiSurfaces` and `protocols` config keys. Responses and Chat Completions are
+`src/protocols/settings.ts` resolves the `apiSurfaces` and `protocols` config keys through
+`resolveApiSurfaceSettings`, `resolveGeminiApiSurface` and `resolveProtocolSettings`. Responses and Chat Completions are
 always served. The Messages surface uses an explicit `apiSurfaces.messages.enabled` boolean when
 present, closes when that value is present but malformed, and otherwise inherits
 `claudeCode.enabled !== false`. The unrepresentable policy defaults to `legacy` and every
@@ -562,7 +562,7 @@ through `nativeMessagesDeclineReason` by the Messages ingress, `count_tokens` an
 closed surface answers 403 before the body is read. `buildApiAccessEndpoints`
 (`src/server/management/api-access.ts`) reports the resolved `surfaces` in the keys payload and
 keeps `claudeCodeEnabled` for older dashboards, set from the resolved Messages state rather than
-from `claudeCode.enabled`.
+from `claudeCode.enabled`. The [Gemini surface](gemini-inbound.md) defaults on and has its own setting.
 
 `PATCH /api/protocols/settings` is the one writer. `src/server/management/protocol-settings-patch.ts`
 validates the body strictly and applies it in memory; the route persists through

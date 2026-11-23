@@ -22,13 +22,16 @@ import { applyNativeUltraFastTier, NATIVE_ULTRAFAST_SERVICE_TIER } from "../../s
 import type { RequestLogContext } from "../../src/server/request-log";
 import { handleResponses } from "../../src/server/responses/core";
 import type { OcxConfig } from "../../src/types";
+import { CODEX_ACCOUNT_BOUND_CATALOG_KIND } from "../../src/codex/catalog/account-models";
 
 const ULTRAFAST = { id: "ultrafast", name: "Ultrafast", description: "Lower latency, increased usage; requires an eligible plan" };
+const ULTRAFAST_MODELS = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.2-astra", "gpt-6.2-sol"];
 const fastTier = (description: string) => ({ id: "priority", name: "Fast", description });
 const nativeRow = (slug: string, extra: Partial<RawEntry> = {}): RawEntry => ({
-  // A display name equal to the slug marks a fallback row the merge replaces with the pinned
-  // upstream entry, so fixtures carry a real one to exercise preserved operator rows.
-  slug, display_name: `Test ${slug}`, visibility: "list", base_instructions: "You are Codex.",
+  // Astra also upgrades old guessed display names. Use its official name so this fixture
+  // exercises preserved operator rows rather than the existing fallback migration.
+  slug, display_name: slug === "gpt-6-astra" ? "GPT-6-Astra" : `Test ${slug}`,
+  visibility: "list", base_instructions: "You are Codex.",
   context_window: 272_000, supported_reasoning_levels: [{ effort: "high", description: "High" }],
   service_tiers: [fastTier("2x speed, increased usage")], additional_speed_tiers: ["fast"], ...extra,
 });
@@ -47,7 +50,7 @@ function merge(catalogModels: RawEntry[], ultraFastTier: boolean, extra: Partial
 const row = (rows: RawEntry[], slug: string) => rows.find(entry => entry.slug === slug)!;
 
 describe("native Ultrafast catalog projection", () => {
-  const catalog = () => [nativeRow("gpt-6-astra"), nativeRow("gpt-6.1-sol"), nativeRow("gpt-6-sol", {
+  const catalog = () => [...ULTRAFAST_MODELS.map(slug => nativeRow(slug)), nativeRow("gpt-6-sol", {
     service_tiers: [fastTier("1.5x speed")], default_service_tier: "priority",
   })];
 
@@ -55,10 +58,10 @@ describe("native Ultrafast catalog projection", () => {
     expect(NATIVE_ULTRAFAST_SERVICE_TIER).toEqual(ULTRAFAST);
   });
 
-  test("enabled: Astra and 6.1 Sol gain Ultrafast after Fast, and nothing else on any row moves", () => {
+  test("enabled: eligible native models gain Ultrafast after Fast, and nothing else on any row moves", () => {
     const off = merge(catalog(), false);
     const on = merge(catalog(), true);
-    for (const slug of ["gpt-6-astra", "gpt-6.1-sol"]) {
+    for (const slug of ULTRAFAST_MODELS) {
       expect(row(on, slug).service_tiers).toEqual([fastTier("2x speed, increased usage"), ULTRAFAST]);
       expect(row(on, slug).additional_speed_tiers).toEqual(["fast", "ultrafast"]);
       expect(row(on, slug).opencodex_generated_service_tiers).toEqual(["additional_speed_tiers", "service_tiers"]);
@@ -77,27 +80,54 @@ describe("native Ultrafast catalog projection", () => {
     expect(twice).toEqual(once);
     const withdrawn = merge(twice, false);
     expect(withdrawn).toEqual(merge(catalog(), false));
-    expect(row(withdrawn, "gpt-6.1-sol").service_tiers).toEqual([fastTier("2x speed, increased usage")]);
-    expect(row(withdrawn, "gpt-6.1-sol").additional_speed_tiers).toEqual(["fast"]);
-  });
-
-  test("an operator-written Ultrafast entry wins and survives disabling", () => {
-    const operator = { id: "ultrafast", name: "Ultra Fast", description: "operator supplied" };
-    const custom = [nativeRow("gpt-6.1-sol", {
-      service_tiers: [fastTier("2x speed, increased usage"), operator], additional_speed_tiers: ["fast", "ultrafast"],
-    })];
-    for (const enabled of [true, false]) {
-      const result = row(merge(custom, enabled), "gpt-6.1-sol");
-      expect(result.service_tiers).toEqual([fastTier("2x speed, increased usage"), operator]);
-      expect(result.additional_speed_tiers).toEqual(["fast", "ultrafast"]);
+    for (const slug of ULTRAFAST_MODELS) {
+      expect(row(withdrawn, slug).service_tiers).toEqual([fastTier("2x speed, increased usage")]);
+      expect(row(withdrawn, slug).additional_speed_tiers).toEqual(["fast"]);
     }
   });
 
-  test("routed rows that borrow the model name are not native rows", () => {
-    const routed = { slug: "gateway/gpt-6.1-sol", service_tiers: [fastTier("x")], additional_speed_tiers: ["fast"] };
+  test.each(ULTRAFAST_MODELS)("an operator-written %s Ultrafast entry wins and survives disabling", slug => {
+    const operator = { id: "ultrafast", name: "Ultra Fast", description: "operator supplied" };
+    const custom = [nativeRow(slug, {
+      service_tiers: [fastTier("2x speed, increased usage"), operator], additional_speed_tiers: ["fast", "ultrafast"],
+      default_service_tier: "ultrafast",
+    })];
+    for (const enabled of [true, false]) {
+      const result = row(merge(custom, enabled), slug);
+      expect(result.service_tiers).toEqual([fastTier("2x speed, increased usage"), operator]);
+      expect(result.additional_speed_tiers).toEqual(["fast", "ultrafast"]);
+      expect(result.default_service_tier).toBe("ultrafast");
+    }
+  });
+
+  test.each(ULTRAFAST_MODELS)("routed rows borrowing %s are not native rows", slug => {
+    const routed = { slug: `gateway/${slug}`, service_tiers: [fastTier("x")], additional_speed_tiers: ["fast"] };
     const entry = structuredClone(routed);
     applyNativeUltraFastTier(entry, true);
     expect(entry).toEqual(routed);
+  });
+
+  test.each(ULTRAFAST_MODELS)("trusted account-bound %s rows follow the optional native toggle", slug => {
+    const original = nativeRow(`personal/${slug}`, { opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND });
+    const entry = structuredClone(original);
+    applyNativeUltraFastTier(entry, false);
+    expect(entry).toEqual(original);
+    applyNativeUltraFastTier(entry, true);
+    expect(entry.service_tiers).toEqual([fastTier("2x speed, increased usage"), ULTRAFAST]);
+    expect(entry.opencodex_generated_service_tiers).toEqual(["additional_speed_tiers", "service_tiers"]);
+    applyNativeUltraFastTier(entry, false);
+    expect(entry).toEqual(original);
+  });
+
+  test.each(ULTRAFAST_MODELS)("disabling preserves an operator edit to the generated %s descriptor", slug => {
+    const entry = nativeRow(slug);
+    applyNativeUltraFastTier(entry, true);
+    const edited = { ...ULTRAFAST, description: "operator edited" };
+    entry.service_tiers[1] = edited;
+    applyNativeUltraFastTier(entry, false);
+    expect(entry.service_tiers).toEqual([fastTier("2x speed, increased usage"), edited]);
+    expect(entry.additional_speed_tiers).toEqual(["fast"]);
+    expect(entry.opencodex_generated_service_tiers).toBeUndefined();
   });
 
   test("a row missing the tier arrays still gets a well-formed declaration", () => {
@@ -111,23 +141,23 @@ describe("native Ultrafast catalog projection", () => {
     expect(entry).toEqual({ slug: "gpt-6-astra" });
   });
 
-  test("ownership comes from the provenance marker, never from matching text", () => {
+  test.each(ULTRAFAST_MODELS)("%s ownership comes from provenance, never from matching text", slug => {
     // An operator may have written the generated descriptor verbatim before this switch existed.
-    const handWritten = nativeRow("gpt-6.1-sol", {
+    const handWritten = nativeRow(slug, {
       service_tiers: [fastTier("2x speed, increased usage"), { ...ULTRAFAST }], additional_speed_tiers: ["fast", "ultrafast"],
     });
-    const off = row(merge([handWritten], false), "gpt-6.1-sol");
+    const off = row(merge([handWritten], false), slug);
     expect(off.service_tiers).toEqual([fastTier("2x speed, increased usage"), ULTRAFAST]);
     expect(off.additional_speed_tiers).toEqual(["fast", "ultrafast"]);
     // Enabling over it claims nothing, so a later disable still leaves it alone.
-    const on = row(merge([handWritten], true), "gpt-6.1-sol");
+    const on = row(merge([handWritten], true), slug);
     expect(on.opencodex_generated_service_tiers).toBeUndefined();
-    expect(row(merge([on], false), "gpt-6.1-sol").service_tiers).toEqual(off.service_tiers);
+    expect(row(merge([on], false), slug).service_tiers).toEqual(off.service_tiers);
     // Only the field the switch filled is withdrawn when the operator supplied the other.
-    const speedsOnly = nativeRow("gpt-6.1-sol", { additional_speed_tiers: ["fast", "ultrafast"] });
-    const claimed = row(merge([speedsOnly], true), "gpt-6.1-sol");
+    const speedsOnly = nativeRow(slug, { additional_speed_tiers: ["fast", "ultrafast"] });
+    const claimed = row(merge([speedsOnly], true), slug);
     expect(claimed.opencodex_generated_service_tiers).toEqual(["service_tiers"]);
-    const released = row(merge([claimed], false), "gpt-6.1-sol");
+    const released = row(merge([claimed], false), slug);
     expect(released.service_tiers).toEqual([fastTier("2x speed, increased usage")]);
     expect(released.additional_speed_tiers).toEqual(["fast", "ultrafast"]);
     expect(released.opencodex_generated_service_tiers).toBeUndefined();
@@ -175,7 +205,7 @@ for (const writer of ["retained-sync", "convergence"] as const) {
         }
         passes.push(["opencodex-catalog.json", "models_cache.json"].map(file =>
           JSON.parse(readFileSync(join(process.env.CODEX_HOME, file), "utf8")).models
-            .filter(row => ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"].includes(row.slug))
+            .filter(row => ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-sol", "gpt-6-luna"].includes(row.slug))
             .map(row => ({ slug: row.slug, tiers: row.service_tiers, speeds: row.additional_speed_tiers }))));
       }
       console.log("NATIVE_ULTRAFAST=" + JSON.stringify(passes));
@@ -191,8 +221,8 @@ for (const writer of ["retained-sync", "convergence"] as const) {
         Array<Array<Array<{ slug: string; tiers: Array<{ id: string }>; speeds: string[] }>>>;
       for (const [index, pass] of passes.entries()) for (const rows of pass) {
         const bySlug = new Map(rows.map(entry => [entry.slug, entry]));
-        expect([...bySlug.keys()].sort()).toEqual(["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"]);
-        for (const slug of ["gpt-6-astra", "gpt-6.1-sol"]) {
+        expect([...bySlug.keys()].sort()).toEqual(["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.2-astra", "gpt-6.2-sol"]);
+        for (const slug of ULTRAFAST_MODELS) {
           const entry = bySlug.get(slug)!;
           expect(entry.tiers).toEqual(index < 2
             ? [expect.objectContaining({ id: "priority" }), ULTRAFAST]

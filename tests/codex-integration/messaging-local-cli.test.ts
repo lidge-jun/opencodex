@@ -137,7 +137,10 @@ if [ -f "\${0%/*}/hang" ]; then exec /bin/sleep 30; fi
       { sessionId: "33333333-3333-4333-8333-333333333333", pid: 789, kind: "interactive", status: "waiting", summary: "fixture-private-summary" },
     ];
     writeFileSync(responsePath, JSON.stringify([
-      ...records, { sessionId: LOCAL_TARGET, summary: "fixture-private-stopped" }, { pid: 987, status: "busy" },
+      ...records,
+      { sessionId: LOCAL_TARGET, summary: "fixture-private-stopped" },
+      { pid: 987, status: "busy" },
+      { ...records[0], sessionId: null },
     ]));
     const args = ["--claude", executable];
     for (const value of ["1", "true", " Yes ", "ON"]) {
@@ -180,6 +183,7 @@ if [ -f "\${0%/*}/hang" ]; then exec /bin/sleep 30; fi
       JSON.stringify({ sessions: records }),
       JSON.stringify([records[0], { ...records[1], pid: 0 }]),
       JSON.stringify([records[0], { ...records[1], sessionId: "fixture-private-invalid-id" }]),
+      JSON.stringify([records[0], { ...records[1], sessionId: "12345678" }]),
       JSON.stringify([records[0], { ...records[1], kind: "fixture-private-invalid-kind" }]),
       JSON.stringify([records[0], { ...records[1], status: "fixture-private-invalid-status" }]),
       JSON.stringify([first, { ...first, sessionId: first.sessionId.toLowerCase() }]),

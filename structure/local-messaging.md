@@ -100,10 +100,11 @@ traffic, and has a five-second deadline and 256 KiB output limit. An enabled
 the native CLI. The executable can initialize its own local configuration.
 Cancellation stops only the directly owned executable; raw diagnostics are discarded.
 
-The snapshot has at most 256 source rows. Entries without a full session ID or
-process ID are skipped. Invalid or duplicate participating rows fail the
-snapshot. Results expose only UUID, session kind and activity status; they
-give no inbox address or permission to send and do not prove reachability.
+The snapshot has at most 256 source rows. Rows with a missing or null session
+ID or process ID are skipped. Invalid rows with both IDs present, including
+shortened session UUIDs, and duplicate session UUIDs fail the snapshot.
+Results expose only UUID, session kind and activity status; they give no
+inbox address or permission to send and do not prove reachability.
 No history, working directory, session title or process ID is returned. Neither
 the Codex transport nor the remote-peer mode uses this directory.
 

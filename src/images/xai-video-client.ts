@@ -1,3 +1,5 @@
+import { DEFAULT_VIDEO_MODEL } from "./video-capabilities";
+import { readSafeXaiErrorDetail, safeVideoFailureCode, safeXaiErrorDetail } from "./xai-upstream-error";
 /**
  * xAI video generation client.
  *
@@ -40,10 +42,14 @@ export type VideoOutboundDependencies = Pick<ProviderOutboundDependencies, "reso
 
 export interface XaiVideoSubmitRequest {
   prompt: string;
-  model?: string; // default "grok-imagine-video"
+  model?: string; // default grok-imagine-video-1.5-lite
   duration?: number; // 1-15 seconds
-  resolution?: string; // "480p" | "720p"
-  aspectRatio?: string; // "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "3:2" | "2:3"
+  resolution?: string; // model-dependent: 480p, 720p, or 1080p
+  aspectRatio?: string; // model-dependent aspect ratio
+  image?: string;
+  lastFrame?: string;
+  keyframes?: { image: string; timestampS: number }[];
+  referenceImages?: string[];
 }
 
 export interface XaiVideoSubmitResult {
@@ -54,11 +60,11 @@ export interface XaiVideoPollResult {
   status: "processing" | "done" | "failed" | "expired";
   videoUrl?: string;
   progress?: number;
+  error?: { code?: string; message?: string };
 }
 
 const SUBMIT_TIMEOUT_MS = 60_000;
 const POLL_TIMEOUT_MS = 30_000;
-const DEFAULT_VIDEO_MODEL = "grok-imagine-video";
 
 function xaiRegistryBaseUrl(): string {
   return (getProviderRegistryEntry("xai")?.baseUrl ?? "https://api.x.ai/v1").replace(/\/+$/, "");
@@ -140,6 +146,11 @@ export async function submitVideoJob(
   if (typeof req.resolution === "string") body.resolution = req.resolution;
   if (typeof req.aspectRatio === "string") body.aspect_ratio = req.aspectRatio;
 
+  if (req.image !== undefined) body.image = { url: req.image };
+  if (req.lastFrame !== undefined) body.last_frame = { url: req.lastFrame };
+  if (req.keyframes !== undefined) body.keyframes = req.keyframes.map(frame => ({ image: { url: frame.image }, timestamp_s: frame.timestampS }));
+  if (req.referenceImages !== undefined) body.reference_images = req.referenceImages.map(url => ({ url }));
+
   const timeout = AbortSignal.timeout(SUBMIT_TIMEOUT_MS);
   const linkedSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
@@ -153,8 +164,8 @@ export async function submitVideoJob(
   }, outboundDependencies(dependencies));
 
   if (!resp.ok) {
-    try { await resp.body?.cancel(); } catch { /* ignore */ }
-    const err = new Error("xAI videos API returned " + resp.status) as Error & { status: number };
+    const detail = await readSafeXaiErrorDetail(resp, linkedSignal);
+    const err = new Error("xAI videos API returned " + resp.status + (detail ? `: ${detail}` : "")) as Error & { status: number };
     err.status = resp.status;
     throw err;
   }
@@ -189,9 +200,10 @@ export async function pollVideoJob(
   }, outboundDependencies(dependencies));
 
   if (!resp.ok) {
-    try { await resp.body?.cancel(); } catch { /* ignore */ }
-    const err = new Error("xAI videos poll API returned " + resp.status) as Error & { status: number };
+    const detail = await readSafeXaiErrorDetail(resp, linkedSignal);
+    const err = new Error("xAI videos poll API returned " + resp.status + (detail ? `: ${detail}` : "")) as Error & { status: number; detail?: string };
     err.status = resp.status;
+    if (detail) err.detail = detail;
     throw err;
   }
 
@@ -202,6 +214,7 @@ export async function pollVideoJob(
     video?: { url?: string };
     videos?: Array<{ url?: string }>;
     progress?: number;
+    error?: { code?: unknown; message?: unknown };
   };
 
   // Normalize status — xAI uses "done"/"processing"/"failed"/"expired" but be lenient.
@@ -221,6 +234,7 @@ export async function pollVideoJob(
 
   return {
     status,
+    ...(json.error ? { error: { code: safeVideoFailureCode(json.error.code), message: safeXaiErrorDetail(json.error.message) } } : {}),
     ...(typeof videoUrl === "string" ? { videoUrl } : {}),
     ...(typeof json.progress === "number" ? { progress: json.progress } : {}),
   };

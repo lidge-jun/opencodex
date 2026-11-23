@@ -1109,8 +1109,8 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 
 | Messages input | Responses output |
 | --- | --- |
-| Top-level `system` | `instructions` (text blocks joined with `\n\n`) |
-| `messages[].role: "system"` | Also folded into `instructions` |
+| Top-level `system` | `instructions` (text blocks joined with `\n\n`). For GPT-6.2 Sol and Astra via Codex login, sent as the first `developer` message so it can be cached. |
+| `messages[].role: "system"` | Translated to `developer` messages at their original positions. |
 | User text / image | `input_text` / `input_image` (base64 → data URL) |
 | Assistant text | `output_text` |
 | Assistant `tool_use` | `function_call` (`input` → JSON-stringified `arguments`) |
@@ -1330,6 +1330,10 @@ fields; `null` resets context/blocklist/compact-window values.
 
 ## Troubleshooting
 
+**Claude Code says Anthropic requires account verification** — Open the
+[Anthropic Verification Portal](https://portal.anthropic.com/verify) and sign in to the affected account.
+OpenCodex keeps the HTTP 403 and records `account_verification_required` in its request logs for this notice.
+
 ### Windows Desktop apply reports `client_lifecycle_lock_failed`
 
 Update OpenCodex if Desktop apply stalls while many old lock files are present. Lifecycle acquisition
@@ -1360,7 +1364,9 @@ set (automatic with `ocx claude`). Run `ocx claude` to refresh the gateway model
 
 **200k context ceiling despite big model** — Select the `[1m]` variant in the picker, or enable
 auto-context (on by default). If the picker shows no `[1m]` row, the model's effective catalog context
-window may be below the fixed 829,800-token floor.
+window may be below the fixed 829,800-token floor. If `ocx claude` reports a timeout loading model
+context information, it skips automatic `[1m]` marking for that launch. The warning does not mean
+that the provider reduced the model's context limit.
 
 **High token count from skill loads** — The bundled `claude-api` skill (~136k tokens) auto-loads
 on Claude model mentions. This is normal for native passthrough; on routed models, opencodex stubs

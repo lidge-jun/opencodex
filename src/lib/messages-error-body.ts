@@ -2,9 +2,9 @@ import { carryReplayRefusal, isNonReplayableResponse, markResponseNonReplayable 
 import { appendClientRetryIn } from "./client-retry-after";
 import {
   ANTHROPIC_ERROR_CODES, ANTHROPIC_ERROR_TYPES, CLAUDE_CONTEXT_OVERFLOW_MESSAGE,
-  CLIENT_ERROR_CONTRACTS, clientErrorCodeMessage, actionableRefusalMessage, isProxyError, attachComboFailureEvidence, carryProxyError, proxyErrorPresentation, comboFailureEvidence, markProxyError, type ProxyErrorPresentation, type ClientErrorContract,
+  CLIENT_ERROR_CONTRACTS, clientErrorCodeMessage, actionableRefusalMessage, isProxyError, attachComboFailureEvidence, carryProxyError, proxyErrorPresentation, comboFailureEvidence, markProxyError, fixedProxyErrorMessage, type ProxyErrorPresentation, type ClientErrorContract,
 } from "./client-error-body";
-import { classifyUpstreamCondition, upstreamConditionMessage, type UpstreamCondition, type UpstreamConditionEvidence } from "./upstream-condition";
+import { classifyUpstreamCondition, isClaudeVerificationNotice, upstreamConditionMessage, type UpstreamCondition, type UpstreamConditionEvidence } from "./upstream-condition";
 
 type Rec = Record<string, unknown>;
 const STATUS_TYPES: ReadonlyMap<number, string> = new Map([
@@ -84,10 +84,19 @@ export function ownedAnthropicErrorPayload(options: OwnedAnthropicErrorOptions):
     : options.localError && isProxyError(options.localError) ? fixedLocalMessage(options.localError, options.evidence.code ?? code, options.evidence.type) ?? options.localError.message
     : actionableRefusalMessage(options.evidence, code ?? null, options.contract)
       ?? (options.contract ? CLIENT_ERROR_CONTRACTS[options.contract] : undefined)
+      // The same fixed proxy sentences the Chat presenter passes through (ownedChatErrorPayload).
+      ?? (options.contract === undefined ? fixedProxyErrorMessage(options.evidence.message) : undefined)
       ?? (options.condition ? upstreamConditionMessage(options.condition) : undefined)
       ?? clientErrorCodeMessage(code)
-      ?? upstreamConditionMessage(classifyUpstreamCondition(options.evidence) ?? "upstream_failed");
+      ?? claudeUpstreamConditionMessage(options.evidence);
   return { type: "error", error: { type, message, ...(code ? { code } : {}) } };
+}
+function claudeUpstreamConditionMessage(evidence: UpstreamConditionEvidence): string {
+  const condition = classifyUpstreamCondition(evidence) ?? "upstream_failed";
+  if (condition === "account_verification_required" && isClaudeVerificationNotice(evidence)) {
+    return "Anthropic requires account verification before Claude can reply. Open the Anthropic Verification Portal: https://portal.anthropic.com/verify";
+  }
+  return upstreamConditionMessage(condition);
 }
 export function ownedAnthropicErrorResponse(options: OwnedAnthropicErrorOptions, legacy?: Rec): Response {
   const response = Response.json(ownedAnthropicErrorPayload(options), { status: options.status, headers: { "Content-Type": "application/json" } });
