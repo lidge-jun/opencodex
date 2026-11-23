@@ -99,8 +99,8 @@ function powershellArgs(script: string): string[] {
 }
 
 /**
- * Owner enrichment admits at most 32 candidates within 1.5 s including enumeration;
- * individual CIM calls have a 1 s cap. A complete baseline precedes optional owner reads.
+ * Owner enrichment admits at most 32 candidates within 3 s including enumeration;
+ * individual CIM calls have a 3 s cap. A complete baseline precedes optional owner reads.
  * The earlier cutoff from the helper's process start also accounts for cold PowerShell startup.
  * Owner reads prioritize this home's complete launcher/script tokens before other possible
  * wrapper candidates. A fresh CIM read after GetOwnerSid binds that owner to the original
@@ -131,14 +131,14 @@ export function windowsProcessSnapshotScript(timeoutMs: number): string {
     "  (($_.Name -match '^(wscript|cscript|cmd)\\.exe$') -or (-not $_.Name) -or ($_.CommandLine -like '*opencodex-service*')) });",
     "$owners = @{};",
     "foreach ($process in ($priority + $fallback)) {",
-    "  if (!$currentSid -or $ownerBudget.Remaining -le 0 -or $ownerBudget.Clock.ElapsedMilliseconds -ge 1500",
+    "  if (!$currentSid -or $ownerBudget.Remaining -le 0 -or $ownerBudget.Clock.ElapsedMilliseconds -ge 3000",
     "    -or [DateTime]::UtcNow -ge $ownerBudget.Until) { break };",
     "  $ownerBudget.Remaining--;",
     "  try {",
-    "    $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -OperationTimeoutSec 1 -ErrorAction Stop;",
-    "    if ($ownerBudget.Clock.ElapsedMilliseconds -ge 1500 -or [DateTime]::UtcNow -ge $ownerBudget.Until) { break };",
-    "    $after = Get-CimInstance -InputObject $process -OperationTimeoutSec 1 -ErrorAction Stop;",
-    "    if ($ownerBudget.Clock.ElapsedMilliseconds -ge 1500 -or [DateTime]::UtcNow -ge $ownerBudget.Until) { break };",
+    "    $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -OperationTimeoutSec 3 -ErrorAction Stop;",
+    "    if ($ownerBudget.Clock.ElapsedMilliseconds -ge 3000 -or [DateTime]::UtcNow -ge $ownerBudget.Until) { break };",
+    "    $after = Get-CimInstance -InputObject $process -OperationTimeoutSec 3 -ErrorAction Stop;",
+    "    if ($ownerBudget.Clock.ElapsedMilliseconds -ge 3000 -or [DateTime]::UtcNow -ge $ownerBudget.Until) { break };",
     "    $owners[$process.ProcessId] = @{ Sid = $owner.Sid; ReturnValue = $owner.ReturnValue;",
     "      CreationDate = if ($after.CreationDate) { $after.CreationDate.ToUniversalTime().ToString('o') } else { $null } };",
     "  } catch { continue }",

@@ -274,17 +274,17 @@ async function ownerEnrichmentCase(budget: keyof typeof ownerBudgetCases, deadli
   ).replace("[Diagnostics.Stopwatch]::StartNew()", "(New-FixtureClock)");
   const prelude = [
     "$script:ownerReads = 0; $script:refreshReads = 0;",
-    "function New-FixtureClock { $script:elapsed = " + (budget === "expired" ? 1500 : 0) + "; $clock = [pscustomobject]@{};",
+    "function New-FixtureClock { $script:elapsed = " + (budget === "expired" ? 3000 : 0) + "; $clock = [pscustomobject]@{};",
     "  $clock | Add-Member ScriptProperty ElapsedMilliseconds { $script:elapsed }; return $clock };",
     "function Get-CimInstance { param($ClassName, $InputObject, $ErrorAction, $OperationTimeoutSec)",
-    "  if ($InputObject) { $script:refreshReads++; " + (budget === "expires-during-refresh" ? "$script:elapsed = 1500; " : "")
+    "  if ($InputObject) { $script:refreshReads++; " + (budget === "expires-during-refresh" ? "$script:elapsed = 3000; " : "")
       + (budget === "cap-during-refresh" ? "$ownerBudget.Until = [DateTime]::UtcNow.AddMinutes(-1); " : "") + "return $InputObject };",
-    budget === "expires-during-enumeration" ? "$script:elapsed = 1500;" : "",
+    budget === "expires-during-enumeration" ? "$script:elapsed = 3000;" : "",
     "  1..40 | ForEach-Object { [pscustomobject]@{ ProcessId = $_; ParentProcessId = 900; Name = 'cmd.exe';",
     "    CommandLine = if ($_ -eq 40) { 'wscript.exe \"' + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + launcher + "')) + '\"' } else { 'cmd.exe' };",
     "    CreationDate = [datetime]'2026-11-12T01:02:03Z' } } };",
     "function Invoke-CimMethod { param($InputObject, $MethodName, $ErrorAction, $OperationTimeoutSec)",
-    "  $script:ownerReads++; " + (budget === "expires-during-owner" ? "$script:elapsed = 1500; " : "")
+    "  $script:ownerReads++; " + (budget === "expires-during-owner" ? "$script:elapsed = 3000; " : "")
       + (budget === "cap-during-owner" ? "$ownerBudget.Until = [DateTime]::UtcNow.AddMinutes(-1); " : "")
       + "@{ Sid = $currentSid; ReturnValue = 0 } };",
     "$rows = & { " + script + " };",

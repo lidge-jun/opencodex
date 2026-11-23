@@ -39,10 +39,10 @@ try {
     $id = [Guid]$instance.InstanceGuid
     $enginePid = [uint32]$instance.EnginePID
     if ($id -eq [Guid]::Empty -or !$enginePid -or $instance.State -ne 4) { 'unverified-registration'; return }
-    $engine = CimCmdlets\Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $enginePid) -OperationTimeoutSec 1
+    $engine = CimCmdlets\Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $enginePid) -OperationTimeoutSec 5
     if (!$engine.CreationDate) { 'unverified-registration'; return }
-    $owner = CimCmdlets\Invoke-CimMethod -InputObject $engine -MethodName GetOwnerSid -OperationTimeoutSec 1
-    $after = CimCmdlets\Get-CimInstance -InputObject $engine -OperationTimeoutSec 1
+    $owner = CimCmdlets\Invoke-CimMethod -InputObject $engine -MethodName GetOwnerSid -OperationTimeoutSec 5
+    $after = CimCmdlets\Get-CimInstance -InputObject $engine -OperationTimeoutSec 5
     if ($owner.ReturnValue -ne 0 -or $owner.Sid -ne $sid -or $after.CreationDate -ne $engine.CreationDate) {
       'unverified-registration'; return
     }
