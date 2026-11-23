@@ -205,6 +205,13 @@ export interface ExportContext {
    * admission from `apiKey` to the `x-opencodex-api-key` header.
    */
   config?: OcxConfig;
+  /**
+   * `baseUrl` is this Home's unauthenticated loopback listener, so inference needs no
+   * admission key. Only the managed-integration context sets it, because only that path
+   * selects the listener itself. Never inferred from the URL: an SSH forward can look like
+   * loopback and still lead to an authenticated listener.
+   */
+  keylessInference?: boolean;
   droidReasoningDefaults?: DroidReasoningDefaults;
   /**
    * The parsed target document, when the caller has one in hand.
