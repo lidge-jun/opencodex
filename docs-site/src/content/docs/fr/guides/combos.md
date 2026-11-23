@@ -17,6 +17,15 @@ si vous ne connaissez pas encore les sélecteurs `provider/model`.
 
 ## Basculer quand le quota est épuisé
 
+Dans **Modèles → Combinaisons**, choisissez **OpenAI en premier** ou **Claude en premier** lorsque
+les quatre fournisseurs sont disponibles. Chaque modèle de configuration prépare l’abonnement
+choisi et sa clé API, puis l’autre abonnement et sa clé API. Réordonnez les cibles avec leur
+poignée ou les boutons fléchés. L’**Aperçu de la bascule** indique la première étape bloquée
+et les cibles qui suivent. L’interrupteur des appels payants se trouve sous l’état de l’aperçu.
+Il est désactivé par défaut dans les deux parcours. À la création, **Abonnements uniquement**
+retire les deux cibles API. Sélectionnez `combo/openai-first` ou
+`combo/claude-first` dans votre client pour utiliser la combinaison enregistrée.
+
 **Basculer uniquement si le quota est épuisé** (`quotaOnlyFallback`) suit l’ordre déclaré après
 confirmation d’un quota ou d’un crédit épuisé. Quand la cible essayée échoue sur une limite temporaire, un
 quota inconnu, une erreur d’authentification ou une requête incompatible, la chaîne s’arrête là. Une cible

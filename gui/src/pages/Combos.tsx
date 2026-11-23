@@ -20,6 +20,7 @@ import { DataSurfaceSkeleton } from "../components/data-surface";
 import { replaceHash } from "../hash-routing";
 import { jevAutoCreateDecisionProvider } from "../app-routing";
 import type { ComboAddIntent } from "../components/combo-workspace-types";
+import type { ComboProviderBilling } from "../../../src/combos/suggestion-channel";
 
 type ProviderOption = {
   name: string;
@@ -46,6 +47,7 @@ type ModelOption = {
 };
 type ProviderDto = {
   adapter: string;
+  alias?: string;
   baseUrl: string;
   disabled?: boolean;
   defaultModel?: string;
@@ -162,7 +164,7 @@ export default function Combos({
     if (!combosRes.ok || !configRes.ok || !modelsRes.ok) {
       throw new Error("combo workspace load failed");
     }
-    const combosJson = await combosRes.json();
+    const combosJson = await combosRes.json() as { providerBilling?: Record<string, ComboProviderBilling> };
     const configJson = await configRes.json() as ConfigDto;
     // /api/models returns a bare array (not { models: [...] }).
     const modelsRaw = await modelsRes.json() as unknown;
@@ -173,12 +175,15 @@ export default function Combos({
         : [];
 
     const combos = parseComboList(combosJson);
+    const providerBilling = combosJson.providerBilling ?? {};
     const allProviders = configJson.providers ?? {};
     // Collapse canonical forward aliases only in the new-member picker. Validation keeps
     // every configured provider id, including legacy chatgpt members already in a combo.
     const visibleProviders = hideRedundantChatGptForwardProviders(allProviders);
     const providers = Object.entries(allProviders).map(([name, p]) => ({
       name,
+      alias: p.alias,
+      comboBilling: Object.hasOwn(providerBilling, name) ? providerBilling[name] : undefined,
       disabled: !!p.disabled,
       hiddenFromPicker: p.adapter === "jev-decision" || !Object.hasOwn(visibleProviders, name),
       authMode: p.authMode,
@@ -356,13 +361,14 @@ export default function Combos({
   const capabilityModels = data?.capabilityModels ?? models;
   const cataloguedComboIds = new Set(data?.cataloguedComboIds ?? []);
 
-  const saveCombo = async (item: ComboItem, isCreate: boolean, renameFrom?: string) => {
+  const saveCombo = async (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null) => {
     try {
       const res = await fetch(`${apiBase}/api/combos`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(toPutBody(item, {
           ...(renameFrom ? { renameFrom } : {}),
+          stored,
           // Enabling images declares text-only members for the Vision Sidecar so the
           // operator never has to hand-edit provider config for a multimodal combo.
           ...(item.imageInput !== "disabled"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type ComboItem,
   type ProviderQuotaStates,
@@ -14,9 +14,9 @@ import { IconChevron, IconTrash } from "../icons";
 import { useT } from "../i18n/shared";
 import { Notice, Switch } from "../ui";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
-import { ComboCapabilities, EffortSelect, StrategySeg, TargetEditor } from "./combo-workspace-controls";
+import { ComboCapabilities, EffortSelect } from "./combo-workspace-controls";
+import { ComboRoutingEditor } from "./combo-workspace-fallback";
 import { ComboJevDecisionSection } from "./combo-workspace-jev-decision";
-import { COMBO_STRATEGY_HINT_KEYS, COMBO_TARGETS_HINT_KEYS } from "../combo-workspace-data";
 import { clampedNumberInput, comboDraftErrorText } from "./combo-workspace-utils";
 import type { JevDecisionRow } from "../jev-decision-service";
 import { JevStatsPanel } from "./jev-stats-panel";
@@ -76,7 +76,7 @@ export function DetailPanel({
   onBack?: () => void;
   onSaved: (item: ComboItem) => void;
   onRequestRemove?: () => void;
-  onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string) => Promise<{ ok: boolean; error?: string }>;
+  onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null) => Promise<{ ok: boolean; error?: string }>;
   onDirtyChange: (dirty: boolean) => void;
 }) {
   const t = useT();
@@ -106,7 +106,7 @@ export function DetailPanel({
   const [copied, setCopied] = useState(false);
   const dirty = !draftEquals(draft, baseline);
   const allTargetsExhausted = comboQuotaState(draft.targets, providerQuotaStates, providerMap) === "exhausted";
-  const baselineSyncKey = JSON.stringify([baseline.id, baseline.alias, baseline.nativeAlias, baseline.displayName, baseline.strategy, baseline.stickyLimit, baseline.defaultEffort, baseline.imageInput, baseline.reasoningEffortMode, baseline.decisionProvider, baseline.decisionModel, baseline.decisionTimeoutMs, baseline.sessionPin === undefined, baseline.sessionPin, baseline.targets.map(t => [t.provider, t.model, t.weight, t.reasoningEfforts, t.modelProfile])]);
+  const baselineSyncKey = JSON.stringify([baseline.id, baseline.alias, baseline.nativeAlias, baseline.displayName, baseline.strategy, baseline.stickyLimit, baseline.defaultEffort, baseline.imageInput, baseline.reasoningEffortMode, baseline.decisionProvider, baseline.decisionModel, baseline.decisionTimeoutMs, baseline.sessionPin === undefined, baseline.sessionPin, Boolean(baseline.allowMeteredTargets), Boolean(baseline.quotaOnlyFallback), Boolean(baseline.preserveFallbackModel), baseline.targets.map(t => [t.provider, t.model, t.weight, t.reasoningEfforts, t.modelProfile, Boolean(t.metered)])]);
   const effortMap = useMemo(() => {
     const map = new Map<string, string[] | undefined>();
     for (const model of capabilityModels) {
@@ -125,8 +125,16 @@ export function DetailPanel({
     onDirtyChange(!draftEquals(next, baseline));
   }, [draft, baseline, onDirtyChange]);
 
+  // The draft starts from the baseline, so only a later baseline change resets it. Resetting on
+  // mount ran after the first paint and could undo an edit made in that window.
+  const syncedBaselineKey = useRef(baselineSyncKey);
+  // A save compares against the baseline this draft was synced from, which a poll can outrun.
+  const draftBaseline = useRef(baseline);
   useEffect(() => {
+    if (syncedBaselineKey.current === baselineSyncKey) return;
+    syncedBaselineKey.current = baselineSyncKey;
     const timer = window.setTimeout(() => {
+      draftBaseline.current = baseline;
       setDraft(baseline);
       setMsg(null);
       setTab("config");
@@ -174,7 +182,7 @@ export function DetailPanel({
     };
     const renameFrom = !isCreate && trimmedId !== baseline.id ? baseline.id : undefined;
     try {
-      const res = await onSave(item, isCreate, renameFrom);
+      const res = await onSave(item, isCreate, renameFrom, isCreate ? null : draftBaseline.current);
       if (!res.ok) {
         setMsg({ ok: false, text: res.error || t("cws.saveFailed") });
         return;
@@ -202,7 +210,7 @@ export function DetailPanel({
             {t("cws.allCombos")}
           </button>
         )}
-        <h2 className={`combos-workspace-detail-title${isCreate && !draft.id.trim() ? " combos-workspace-detail-title--label" : ""}`}>{headerModel}</h2>
+        <h2 tabIndex={-1} className={`combos-workspace-detail-title${isCreate && !draft.id.trim() ? " combos-workspace-detail-title--label" : ""}`}>{headerModel}</h2>
         {!isCreate && (
           <button type="button" className="chip cwi-copy-chip" onClick={() => { void copyModel(); }} title={t("cws.copyModel")}>
             {copied ? t("cws.copied") : t("cws.copyModel")}
@@ -275,6 +283,16 @@ export function DetailPanel({
       >
         {(
           <div className="cwi-form-grid">
+            <ComboRoutingEditor
+              apiBase={apiBase}
+              draft={draft}
+              providers={providers}
+              models={models}
+              capabilityModels={capabilityModels}
+              providerQuotaStates={providerQuotaStates}
+              disabled={busy}
+              onChange={(patch) => updateDraft((d) => ({ ...d, ...patch }))}
+            />
             <div className="cwi-field">
               <label htmlFor="cwi-edit-id">{t("cws.field.id")}</label>
               <input
@@ -328,17 +346,6 @@ export function DetailPanel({
                 {t("cws.field.displayNameHint")}
               </p>
             </div>
-            <div className="cwi-field">
-              <span className="field-label">{t("cws.strategy")}</span>
-              <StrategySeg
-                value={draft.strategy}
-                disabled={busy}
-                onChange={(strategy) => updateDraft((d) => ({ ...d, strategy }))}
-              />
-              <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
-                {t(COMBO_STRATEGY_HINT_KEYS[draft.strategy])}
-              </p>
-            </div>
             {draft.strategy === "jev" && (
               <ComboJevDecisionSection
                 idPrefix="cwi-edit"
@@ -387,21 +394,6 @@ export function DetailPanel({
                 />
               </div>
             )}
-            <div className="cwi-field">
-              <span className="field-label">{t("cws.targets")}</span>
-              <TargetEditor
-                targets={draft.targets}
-                strategy={draft.strategy}
-                providers={providers}
-                models={models}
-                capabilityModels={capabilityModels}
-                providerQuotaStates={providerQuotaStates}
-                onChange={(targets) => updateDraft((d) => ({ ...d, targets }))}
-              />
-              <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
-                {t(COMBO_TARGETS_HINT_KEYS[draft.strategy])}
-              </p>
-            </div>
             <ComboCapabilities
               targets={draft.targets}
               models={capabilityModels}

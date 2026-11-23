@@ -4,7 +4,7 @@ import { act, useEffect, useState } from "react";
 import type { Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import ComboWorkspace from "../src/components/ComboWorkspace";
-import { TargetEditor } from "../src/components/combo-workspace-controls";
+import { TargetEditor } from "../src/components/combo-target-editor";
 import ProviderDetails from "../src/components/provider-workspace/ProviderDetails";
 import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuthPanel";
 import { LanguageProvider } from "../src/i18n/provider";
@@ -42,6 +42,75 @@ const existing: ComboItem = {
   targets: [{ provider: "openai", model: "gpt-5.6-luna" }],
 };
 
+test.each([
+  { intent: "openai-first", subscriptionsOnly: false },
+  { intent: "claude-first", subscriptionsOnly: false },
+  { intent: "openai-first", subscriptionsOnly: true },
+] as const)("$intent keeps paid consent explicit (subscriptions only: $subscriptionsOnly)", async ({ intent, subscriptionsOnly }) => {
+  const providerIds = ["openai", "openai-apikey", "anthropic", "anthropic-apikey"];
+  const fixtureModels = providerIds.map(provider => ({
+    provider, id: provider.startsWith("openai") ? "gpt-fixture" : "claude-fixture",
+  }));
+  const container = document.createElement("div");
+  document.body.append(container);
+  const saved: ReturnType<typeof toPutBody>[] = [];
+  await act(async () => {
+    const { createRoot } = await import("react-dom/client");
+    root = createRoot(container);
+    root.render(<LanguageProvider><ComboWorkspace
+      combos={[existing]} providerQuotaStates={{}} models={fixtureModels}
+      providers={providerIds.map(name => ({ name, comboBilling: name.endsWith("-apikey") ? "consent" : "subscription" }))}
+      adding addIntent={intent}
+      onSave={async (item, _isCreate, _renameFrom, stored) => { saved.push(toPutBody(item, { stored })); return { ok: true }; }}
+      onRefresh={() => {}} onRemove={async () => ({ ok: true })}
+      onAdd={() => {}} onCloseAdd={() => {}} onCreated={() => {}}
+    /></LanguageProvider>);
+  });
+  const dialog = container.querySelector("dialog")!;
+  const consent = [...dialog.querySelectorAll<HTMLButtonElement>("[role=switch]")]
+    .find(button => button.textContent === "Allow paid calls from local clients")!;
+  expect(consent.getAttribute("aria-checked")).toBe("false");
+  const preview = dialog.querySelector(".cwi-preview")!;
+  expect(preview.textContent).toContain("Paid API calls need permission");
+  expect(preview.textContent).toContain("Stop at step 2.");
+  expect(preview.textContent).toContain("Not reached");
+  if (subscriptionsOnly) {
+    const subscriptionAction = [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find(button => button.textContent === "Subscriptions only")!;
+    await act(async () => { subscriptionAction.click(); });
+    expect(preview.textContent).not.toContain("Paid API calls need permission");
+    await act(async () => { dialog.querySelector<HTMLButtonElement>(".cwi-modal-actions .btn-primary")!.click(); });
+    expect(saved[0]?.combo.targets.map(target => target.provider)).toEqual(["openai", "anthropic"]);
+    expect(saved[0]?.combo).not.toHaveProperty("allowMeteredTargets");
+    expect(saved[0]?.combo.targets.some(target => Object.hasOwn(target, "metered"))).toBe(false);
+    return;
+  }
+  const entries = () => [...dialog.querySelectorAll<HTMLElement>(".cwi-target-entry")];
+  const down = entries()[0]!.querySelector<HTMLButtonElement>('[aria-label="Move down"]')!;
+  down.focus();
+  await act(async () => { down.click(); });
+  expect(entries()[1]!.contains(document.activeElement)).toBe(true);
+  await act(async () => { entries()[1]!.querySelector<HTMLButtonElement>('[aria-label="Move up"]')!.click(); });
+  await act(async () => { consent.click(); });
+  expect(preview.textContent).not.toContain("Paid API calls need permission");
+  const sameModel = [...dialog.querySelectorAll<HTMLButtonElement>("[role=switch]")]
+    .find(button => button.textContent === "Keep the same model on fallback")!;
+  await act(async () => { sameModel.click(); });
+  expect(preview.textContent).toContain("Different model");
+  await act(async () => { sameModel.click(); });
+  expect(preview.textContent).toContain("Stop after the last target");
+  await act(async () => { dialog.querySelector<HTMLButtonElement>(".cwi-modal-actions .btn-primary")!.click(); });
+  expect(saved[0]?.combo).toMatchObject({
+    quotaOnlyFallback: true, allowMeteredTargets: true,
+    targets: (intent === "openai-first" ? providerIds : [...providerIds.slice(2), ...providerIds.slice(0, 2)])
+      .map(provider => ({
+        provider, model: fixtureModels.find(model => model.provider === provider)!.id,
+        ...(provider.endsWith("-apikey") ? { metered: true } : {}),
+      })),
+  });
+  expect(saved[0]?.combo.targets.filter(target => Object.hasOwn(target, "metered"))).toHaveLength(2);
+});
+
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
   originalFetch = globalThis.fetch;
@@ -73,6 +142,39 @@ async function flush(rounds = 3) {
     }
   });
 }
+
+test.each([true, false])("the Combos page offers the quota presets from the server billing classes (%s)", async withServerBilling => {
+  const { createRoot } = await import("react-dom/client");
+  const host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  // Generic API providers: only the server classification marks two of them as subscriptions.
+  const names = ["openai", "openai-apikey", "anthropic", "anthropic-apikey"];
+  const providerBilling = Object.fromEntries(names.map(name => [name, name.endsWith("-apikey") ? "consent" : "subscription"]));
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/combos")) return Response.json({ combos: [existing], ...(withServerBilling ? { providerBilling } : {}) });
+      if (url.endsWith("/api/config")) {
+        return Response.json({ providers: Object.fromEntries(names.map(name => [name, {
+          adapter: "openai-chat", baseUrl: `https://${name}.example/v1`, defaultModel: "fixture-model",
+        }])) });
+      }
+      if (url.endsWith("/api/models")) return Response.json(names.map(provider => ({ provider, id: "fixture-model" })));
+      if (url.endsWith("/api/provider-quotas")) return Response.json({ reports: [] });
+      throw new Error(`unexpected request: ${url}`);
+    },
+  });
+  // The page caches its data per API base, so each case uses its own.
+  const apiBase = withServerBilling ? "http://billing.test" : "http://fallback.test";
+  await act(async () => { root!.render(<LanguageProvider><Combos apiBase={apiBase} /></LanguageProvider>); });
+  await flush(6);
+  const presets = [...host.querySelectorAll<HTMLButtonElement>("button")]
+    .map(button => button.textContent?.trim())
+    .filter(text => text === "OpenAI first" || text === "Claude first");
+  expect(presets).toEqual(withServerBilling ? ["OpenAI first", "Claude first"] : []);
+});
 
 /** The Select triggers (ui.tsx) under `scope`, in document order. */
 function selects(scope: ParentNode): HTMLButtonElement[] {

@@ -17,6 +17,14 @@ if `provider/model` selectors are new to you.
 
 ## Fallback when quota runs out
 
+In **Models → Combos**, choose **OpenAI first** or **Claude first** when both subscription and API
+providers are available. Each preset starts with the selected subscription and its API key, then
+adds the other subscription and its API key. Drag a target by its handle or use its arrow buttons
+to reorder it. The **Fallback preview** identifies the first blocked step and shows the steps
+beyond it. The paid-call switch sits below the preview status and starts off for both presets.
+Use **Subscriptions only** when creating a preset to remove both API targets.
+Send requests to the saved `combo/openai-first` or `combo/claude-first` to use the route.
+
 **Switch only when quota runs out** (`quotaOnlyFallback`) follows the declared order after confirmed
 quota or billing exhaustion. When the attempted target fails with a temporary limit, an
 unknown quota state, an invalid credential or an incompatible request, the chain stops there. A target
@@ -58,7 +66,7 @@ capabilities, the Vision Sidecar, protocol settings or the target list, apply fr
 A request already in progress keeps the settings it started with. A pinned quota-only tool continuation
 still rechecks its target's Combo membership and route before it sends.
 
-For example, a failover chain can target Anthropic OAuth, then Cursor, then `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. Without consent, exhaustion returns the last unmetered error, with exceptions for [confirmed context overflow](#context-window-refusals) and quota refusals: an earlier 429 or 402 quota refusal takes precedence over a later 400, 401 or 403. If the subscription target returns 429 and Cursor then refuses with 401 or 403, the caller receives the subscription's 429, because the spent subscription explains the failure and Cursor's credential refusal does not. Dashboard saves retain omitted target metering and combo consent; explicitly setting either to false clears it. These consent fields are configured through the config file or API; the combo flag is also available through the CLI, while the dashboard does not expose it.
+For example, a failover chain can target Anthropic OAuth, then Cursor, then `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. In an ordinary failover Combo without consent, exhaustion returns the last unmetered error, with exceptions for [confirmed context overflow](#context-window-refusals) and quota refusals: an earlier 429 or 402 quota refusal from a dispatched target takes precedence over a later 400, 401 or 403. A quota-only Combo that reaches a paid target without consent returns `403 combo_metered_consent_required` instead. If the subscription target returns 429 and Cursor then refuses with 401 or 403, the caller receives the subscription's 429, because the spent subscription explains the failure and Cursor's credential refusal does not. Dashboard saves retain omitted target metering and combo consent; explicitly setting either to false clears it. Edit consent and target metering in the current dashboard, config file or API. The combo flag is also available through the CLI.
 
 ## 60-second quickstart
 
