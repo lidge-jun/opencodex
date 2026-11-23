@@ -8,7 +8,7 @@
  * the ordinary Chat path, and this handler owns the final request-log row. Errors use the Gemini
  * `{ error: { code, message, status } }` body with a fixed message chosen by HTTP status.
  */
-import { GeminiCodecError, chatToGeminiResponse, consumeGeminiChatChunk, createGeminiStreamState, geminiStreamTerminal, geminiToChat } from "../protocols/codecs/gemini";
+import { GeminiCodecError, chatToGeminiResponse, consumeGeminiChatChunk, createGeminiStreamState, disposeGeminiStreamTools, geminiStreamTerminal, geminiToChat } from "../protocols/codecs/gemini";
 import { createTranslatorBudget, isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import type { OcxConfig, OcxParsedRequest } from "../types";
 import type { RouteResult } from "../router";
@@ -256,11 +256,12 @@ const arrayFraming = (): GeminiFraming => {
   return { contentType: "application/json", frames, end: records => [...frames(records), encoder.encode("\n]")] };
 };
 
-function streamGemini(model: string, sse: boolean, body: ReadableStream<Uint8Array>, finalLog: NativeFinalLog, signal: AbortSignal): Response {
+export function streamGemini(model: string, sse: boolean, body: ReadableStream<Uint8Array>, finalLog: NativeFinalLog, signal: AbortSignal): Response {
   const state = createGeminiStreamState(model);
   const framing = sse ? sseFraming() : arrayFraming();
   return streamNativeFromChat({
     contentType: framing.contentType,
+    dispose: () => disposeGeminiStreamTools(state),
     chunk: parsed => framing.frames(consumeGeminiChatChunk(state, parsed)),
     terminal() {
       const record = geminiStreamTerminal(state);
