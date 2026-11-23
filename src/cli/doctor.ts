@@ -27,6 +27,7 @@ import { PROXY_ENV_KEYS, proxyEnvPresent } from "../lib/proxy-env";
 import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
 import { readCodexTokens } from "../codex/auth-collision";
 import { withNativeMainSharedClaim } from "../codex/native-main-claim";
+import { inspectNativeCodexOwnership, type OwnershipInspection } from "../integrations/native/ownership-preflight";
 import { probeNativeProfileRecoveryState, resolveNativeProfileContext } from "../codex/native-profile-store";
 import { NativeProfileError } from "../codex/native-profile-types";
 import { collectOrcaCodexHomeDiagnostic, resolveCodexHomeDir as resolveCodexHomeDirImpl, isWslRuntime, listWslWindowsCodexHomes, wslAutomountRoot, type CodexHomeDeps } from "../codex/home";
@@ -137,7 +138,21 @@ export async function fetchNativeMainAdmission(
   return { status: "blocked", reason: row.admissionBlockReason };
 }
 
-export function formatNativeMainAdmissionLines(report: NativeMainAdmissionReport): string[] {
+/** Ownership fences whose cause a local, read-only re-inspection can name. */
+export function isOwnershipFence(report: NativeMainAdmissionReport): boolean {
+  return report.status === "blocked" && (report.reason === "ownership-unknown" || report.reason === "foreign-ownership");
+}
+
+/**
+ * The proxy reports only the fence category (its admission route stays free of paths), so
+ * repeat the same read-only inspection here to say which file or registration failed.
+ */
+export function localOwnershipRecheck(inspect = inspectNativeCodexOwnership): OwnershipInspection {
+  try { return inspect(); }
+  catch (error) { return { ownership: "unknown", reason: `inspection failed: ${error instanceof Error ? error.message : String(error)}` }; }
+}
+
+export function formatNativeMainAdmissionLines(report: NativeMainAdmissionReport, recheck?: OwnershipInspection): string[] {
   if (report.status === "blocked") {
     const homeGuidance = report.reason === "foreign-ownership"
       ? "Repair the service definition and restart the proxy so it uses the recorded CODEX_HOME."
@@ -151,6 +166,7 @@ export function formatNativeMainAdmissionLines(report: NativeMainAdmissionReport
     return [
       `  !!  native-main admission is fenced (reason: ${report.reason})`,
       `       Native model requests return 503 until this clears. ${homeGuidance}`,
+      ...(recheck ? [`       Local re-check (${recheck.ownership}): ${recheck.reason}`] : []),
     ];
   }
   if (report.status === "unavailable") {
@@ -1529,7 +1545,8 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   const admission = live
     ? await fetchNativeMainAdmission(live)
     : { status: "unavailable" as const, reason: "proxy-not-found" };
-  for (const line of formatNativeMainAdmissionLines(admission)) console.log(line);
+  const recheck = isOwnershipFence(admission) ? localOwnershipRecheck() : undefined;
+  for (const line of formatNativeMainAdmissionLines(admission, recheck)) console.log(line);
 
   // Mirrors `ocx status` through the same comparison rather than a second implementation:
   // two diagnostics disagreeing about whether an install is stale is worse than one (#2701).

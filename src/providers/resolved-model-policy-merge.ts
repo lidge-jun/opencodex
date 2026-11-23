@@ -142,6 +142,14 @@ export function legacyModelSource<T>(
   registry: Readonly<Record<string, T>> | undefined,
   modelId: string,
 ): StaticPolicySource {
+  if (!registry) {
+    if (!operator) return "unknown";
+    if (Object.hasOwn(operator, modelId)) return "operator";
+    const colon = modelId.indexOf(":");
+    if (colon > 0 && Object.hasOwn(operator, modelId.slice(0, colon))) return "operator";
+    const folded = modelId.toLowerCase();
+    return Object.keys(operator).some(key => key.toLowerCase() === folded) ? "operator" : "unknown";
+  }
   // Match mapFill's case-folded ownership so provenance follows the value lookup.
   const claimed = new Set(Object.keys(operator ?? {}).map(key => key.toLowerCase()));
   const merged: Record<string, T> = {};

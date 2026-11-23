@@ -257,7 +257,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(error) = updater::install_pending(&app).await {
-                        crate::logging::log_once("updater install failed", &error);
+                        error.log();
                     }
                 });
             }

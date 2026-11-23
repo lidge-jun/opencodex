@@ -156,7 +156,7 @@ function report(
       stdout.log("Proxy running but not ready yet (pending).");
       return;
     case "failed":
-      stdout.log("Proxy running but not ready (sync failed).");
+      stdout.log("Proxy running but not ready (startup sync failed). Check the proxy startup output. After fixing the cause, restart the proxy and run 'ocx ready' again.");
       return;
     case "unreachable":
       stdout.log("Proxy not reachable or readiness unavailable.");

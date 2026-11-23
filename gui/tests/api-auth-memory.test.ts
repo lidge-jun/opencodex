@@ -669,3 +669,29 @@ test("a missing event constructor does not turn a successful key mutation into f
     else Reflect.deleteProperty(window, "CustomEvent");
   }
 });
+
+test("a Remote Link Child sends its own link status and diagnostics reads with its machine session (#8985)", async () => {
+  injectSessionMeta("ocx_session_child", "child-csrf", "http://localhost");
+  const childStatus = (link: boolean): MachineStatusV1 => ({
+    mode: "client", connected: true, machineBase: "http://localhost", sharedBase: "http://localhost/api/machine/hub-relay",
+    sharedServerOrigin: "http://localhost", managementTransport: "relay", apiKeyId: "child-key", protocolVersion: 1,
+    connectedAt: "2026-11-21T00:00:00.000Z", hubReachability: "online",
+    ...(link ? { link: { linkId: "lnk_0123456789abcdef", home: "studio", readOnly: true as const } } : {}),
+  });
+  configureApiTargets(targetsFromMachineStatus("", childStatus(true)));
+  const seen: [string, string | null][] = [];
+  await installMockAuthFetch((async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost/");
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    seen.push([url.pathname, headers.get("X-OpenCodex-API-Key")]);
+    return Response.json({});
+  }) as typeof fetch);
+  await fetch("/api/link/status?children=1");
+  await fetch("/api/link/diagnostics?limit=100");
+  expect(seen).toEqual([["/api/link/status", "ocx_session_child"], ["/api/link/diagnostics", "ocx_session_child"]]);
+  // A hub client has no link of its own on this listener; its classification is unchanged.
+  configureApiTargets(targetsFromMachineStatus("", childStatus(false)));
+  seen.length = 0;
+  await fetch("/api/link/status");
+  expect(seen).toEqual([["/api/link/status", null]]);
+});

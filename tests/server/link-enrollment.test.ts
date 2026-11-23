@@ -469,6 +469,22 @@ describe("server-owned confirmation and authority", () => {
     expect(h.state.pendingHosts.size).toBe(0); noEnrollmentEffects(h);
   });
 
+  test("a Windows Child whose cmd echoes the closing quote still probes as Windows (#8972)", async () => {
+    const h = harness("windows"); h.overrides.windows = () => result("Windows_NT\"\r\n");
+    expect((await h.call("probe", { alias: "child" })).status).toBe(200);
+    expect(h.state.pendingHosts.get("child")?.remotePlatform).toBe("windows");
+    expect(h.calls.some(call => call.step === "uname")).toBe(false);
+  });
+
+  test("an undetermined platform answers probe_failed with the remote reason (#8972)", async () => {
+    const h = harness(); h.overrides.uname = () => ({ code: 1, stdout: "", stderr: "El sistema no puede encontrar la ruta especificada.\r\n" });
+    const response = await h.call("probe", { alias: "child" });
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: { code: "probe_failed", message: "SSH host probing failed.",
+      hint: "Remote platform could not be determined: El sistema no puede encontrar la ruta especificada." } });
+    expect(h.state.pendingHosts.size).toBe(0); noEnrollmentEffects(h);
+  });
+
   test("a failed cross-shell echo refuses before platform discovery and key issuance", async () => {
     const h = harness(); h.overrides.probe = () => result("", 255);
     await denied(await h.call("probe", { alias: "child" }), "probe_failed");

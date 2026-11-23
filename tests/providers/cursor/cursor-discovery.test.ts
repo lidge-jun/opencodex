@@ -24,6 +24,8 @@ import {
   recordObservedCursorContextWindow,
   resetObservedCursorContextWindowsForTests,
 } from "../../../src/adapters/cursor/discovery";
+import { resolveCursorSelection } from "../../../src/adapters/cursor/catalog";
+import { getProviderRegistryEntry } from "../../../src/providers/registry";
 
 describe("Cursor discovery metadata", () => {
   test("no-vision list is a curated explicit subset of the static seed", () => {
@@ -112,6 +114,35 @@ describe("Cursor discovery metadata", () => {
     expect(cursorModelContextWindows(CURSOR_STATIC_MODELS)["muse-spark-1.3"]).toBe(1_048_576);
     // The base row is one umbrella row, not six effort rows.
     expect(ids.filter(id => id.startsWith("muse-spark"))).toEqual(["muse-spark-1.3"]);
+  });
+
+  test("Gemini 4 Hydrogen and Carbon are cataloged with Cursor's documented ladders (#8918)", () => {
+    const ids = cursorModelIds(CURSOR_STATIC_MODELS);
+    const efforts = cursorModelReasoningEfforts(CURSOR_STATIC_MODELS);
+    const windows = cursorModelContextWindows(CURSOR_STATIC_MODELS);
+    const cursor = getProviderRegistryEntry("cursor");
+    for (const [id, ladder, wireDefault] of [
+      ["gemini-4-hydrogen", ["low", "medium", "high", "xhigh"], "high"],
+      ["gemini-4-carbon", ["low", "medium", "high"], undefined],
+    ] as const) {
+      expect(ids).toContain(id);
+      expect(cursor?.models).toContain(id);
+      expect(efforts[id]).toEqual([...ladder]);
+      expect(windows[id]).toBe(1_048_576);
+      expect(cursor?.modelDefaultReasoningEfforts?.[id]).toBe(wireDefault);
+      for (const level of ladder) {
+        expect(resolveCursorSelection(id, level).wireId).toBe(`${id}-${level}`);
+        // Live discovery keeps the seed row when the account's roster lists any of its tiers.
+        expect(filterCursorConfiguredModelsByLiveDiscovery(
+          CURSOR_STATIC_MODELS.filter(model => model.id === id),
+          [`${id}-${level}`],
+        ).map(model => model.id)).toEqual([id]);
+      }
+      expect(isCursorModelAvailableForAccount(id, ["gemini-4-argon-high"])).toBe(false);
+      expect(ids.filter(row => row.startsWith(id))).toEqual([id]);
+    }
+    // Carbon has no xhigh rung: an xhigh request clamps to high rather than inventing a wire id.
+    expect(resolveCursorSelection("gemini-4-carbon", "xhigh").wireId).toBe("gemini-4-carbon-high");
   });
 
   test("auto is not activated by live GetUsableModels wire ids alone", () => {

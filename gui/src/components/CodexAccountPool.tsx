@@ -149,7 +149,7 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
   const [resetPopup, setResetPopup] = useState<CodexAccountEntry | null>(null);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [redeeming, setRedeeming] = useState(false);
-  const [creditDetails, setCreditDetails] = useState<{ granted_at: string; expires_at: string }[] | null>(null);
+  const [creditDetails, setCreditDetails] = useState<{ granted_at: string; expires_at: string | null }[] | null>(null);
   const [creditDetailsLoading, setCreditDetailsLoading] = useState(false);
   const doctorCopy = useCopyFeedback<string>();
   // A modal, a reauth, a confirmation or a catalog notice belongs to the target that
@@ -498,7 +498,7 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
     setCreditDetailsLoading(true);
     try {
       const resp = await fetch(`${apiBase}/api/codex-auth/reset-credits?accountId=${encodeURIComponent(account.id)}`);
-      const data = await readJsonIfOk<{ credits?: { granted_at: string; expires_at: string }[] }>(resp);
+      const data = await readJsonIfOk<{ credits?: { granted_at: string; expires_at: string | null }[] }>(resp);
       if (data) {
         const sorted = (data.credits ?? []).sort((a, b) =>
           new Date(a.granted_at).getTime() - new Date(b.granted_at).getTime()

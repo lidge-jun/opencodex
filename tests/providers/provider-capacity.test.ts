@@ -21,16 +21,23 @@ const account = (
 });
 
 describe("configured-weight Codex pool capacity", () => {
+  test("Pro 100 and Pro 500 have calibrated capacity", () => {
+    const result = aggregateCodexPoolCapacity([account("prolite", 100), account("promax", 0)], NOW);
+    expect(result.aggregation?.unknownPlanAccounts).toBe(0);
+    expect(result.aggregation?.weekly).toMatchObject({ totalWeight: 60, consumedWeight: 10, remainingWeight: 50 });
+    expect(result.quota?.weeklyPercent).toBeCloseTo(100 / 6, 8);
+  });
+
   test("Pro + Prolite + Plus produces the issue #874 estimate and recovery share", () => {
     const result = aggregateCodexPoolCapacity([
       account("pro", 10, { isMain: true, active: true, weeklyResetAt: NOW + 30_000 }),
       account("prolite", 100, { weeklyResetAt: NOW + 10_000 }),
       account("plus", 100, { weeklyResetAt: NOW + 20_000 }),
     ], NOW);
-    expect(result.quota?.weeklyPercent).toBeCloseTo(30.769230769, 8);
-    expect(result.aggregation?.weekly).toMatchObject({ totalWeight: 26, consumedWeight: 8, remainingWeight: 18 });
+    expect(result.quota?.weeklyPercent).toBeCloseTo((13 / 31 * 100), 8);
+    expect(result.aggregation?.weekly).toMatchObject({ totalWeight: 31, consumedWeight: 13, remainingWeight: 18 });
     expect(result.aggregation?.weekly?.nextRecoveryAt).toBe(NOW + 10_000);
-    expect(result.aggregation?.weekly?.nextRecoveryPercent).toBeCloseTo(19.23076923, 8);
+    expect(result.aggregation?.weekly?.nextRecoveryPercent).toBeCloseTo((10 / 31 * 100), 8);
     expect(result.aggregation?.currentAccount?.quota?.weeklyPercent).toBe(10);
   });
 
@@ -40,8 +47,8 @@ describe("configured-weight Codex pool capacity", () => {
       account("prolite", 100),
       account("prolite", 100),
     ];
-    expect(aggregateCodexPoolCapacity(rows(8), NOW).quota?.weeklyPercent).toBeCloseTo(38.66666667, 8);
-    expect(aggregateCodexPoolCapacity(rows(9), NOW).quota?.weeklyPercent).toBeCloseTo(39.33333333, 8);
+    expect(aggregateCodexPoolCapacity(rows(8), NOW).quota?.weeklyPercent).toBeCloseTo(54, 8);
+    expect(aggregateCodexPoolCapacity(rows(9), NOW).quota?.weeklyPercent).toBeCloseTo(54.5, 8);
   });
 
   test("Business Premium seats contribute five weekly units without inventing a burst window (#7440)", () => {
@@ -91,7 +98,7 @@ describe("configured-weight Codex pool capacity", () => {
       account("prolite", 40, { weeklyResetAt: NOW + 10_000 }),
       account("plus", 100, { weeklyResetAt: NOW + 20_000 }),
     ], NOW);
-    expect(result.aggregation?.weekly?.nextRecoveryPercent).toBeCloseTo(7 / 26 * 100, 8);
+    expect(result.aggregation?.weekly?.nextRecoveryPercent).toBeCloseTo(9 / 31 * 100, 8);
     expect(result.aggregation?.weekly).not.toHaveProperty("projectedUsedPercentAfterReset");
   });
 
@@ -101,7 +108,7 @@ describe("configured-weight Codex pool capacity", () => {
       account("prolite", 40, { weeklyResetAt: NOW + 20_000 }),
     ], NOW);
     expect(result.aggregation?.weekly?.nextRecoveryAt).toBe(NOW + 20_000);
-    expect(result.aggregation?.weekly?.nextRecoveryPercent).toBeCloseTo(2 / 25 * 100, 8);
+    expect(result.aggregation?.weekly?.nextRecoveryPercent).toBeCloseTo(4 / 30 * 100, 8);
   });
 
   test("missing, paused and reauth rows are excluded; an uncalibrated plan is counted at baseline", () => {
@@ -137,7 +144,7 @@ describe("configured-weight Codex pool capacity", () => {
       account("plus", 100, { monthlyPercent: 10 }),
     ], NOW);
     expect(result.aggregation?.weekly?.totalWeight).toBe(21);
-    expect(result.aggregation?.monthly?.totalWeight).toBe(6);
+    expect(result.aggregation?.monthly?.totalWeight).toBe(11);
     expect(result.aggregation).toMatchObject({
       includedAccounts: 3,
       excludedAccounts: 0,
@@ -147,7 +154,7 @@ describe("configured-weight Codex pool capacity", () => {
     expect(result.aggregation?.weekly).toMatchObject({ includedAccounts: 2, excludedAccounts: 1, incomplete: true });
     expect(result.aggregation?.monthly).toMatchObject({ includedAccounts: 2, excludedAccounts: 1, incomplete: true });
     expect(result.quota?.weeklyPercent).toBeCloseTo(23.8095238, 7);
-    expect(result.quota?.monthlyPercent).toBeCloseTo(51.6666667, 7);
+    expect(result.quota?.monthlyPercent).toBeCloseTo((610 / 11), 7);
   });
 
   test("expired resets are ignored, and uncalibrated plans now aggregate instead of falling back", () => {

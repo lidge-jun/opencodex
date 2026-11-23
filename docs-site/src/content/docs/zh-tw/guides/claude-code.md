@@ -564,8 +564,8 @@ Search 和圖像描述沿用儲存庫已有的 Claude Code OAuth fingerprint 先
 
 | Messages 輸入 | Responses 輸出 |
 | --- | --- |
-| 頂層 `system` | `instructions`（文字塊以 `\n\n` 連線） |
-| `messages[].role: "system"` | 同樣合併到 `instructions` |
+| 頂層 `system` | `instructions`（文字塊以 `\n\n` 連線）；透過 Codex 登入使用 GPT-6.2 Sol 與 Astra 時，改為第一則 `developer` 訊息送出，以便快取 |
+| `messages[].role: "system"` | 在原位置轉為 `developer` 訊息 |
 | 使用者文字 / 圖像 | `input_text` / `input_image`（base64 → data URL） |
 | Assistant 文字 | `output_text` |
 | Assistant `tool_use` | `function_call`（`input` → JSON 字串化的 `arguments`） |

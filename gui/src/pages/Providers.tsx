@@ -424,6 +424,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
     config, oauthStatus: oauthStatusWithCodex, aliveRef,
     notify,
     fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth, invalidateOauthStatusReads, setOauthStatus,
+    liveQuotaProvider: workspaceSelected,
   });
   const {
     accountSets, setAccountSets, accountLoadStates, switchingAccounts, pausingAccounts, keyPools, fetchAccountSets, fetchKeyPools, beginAccountLogout,
@@ -716,6 +717,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
             modelsLoading={data.modelsLoading}
             modelsLoadFailed={data.modelsLoadFailed}
             onRetryModels={data.onRetryModels}
+            modelVisibility={data.modelVisibility}
             oauthEmail={loginStatus?.email}
             onDeselect={() => setWorkspaceSelected(null)}
             apiBase={apiBase}

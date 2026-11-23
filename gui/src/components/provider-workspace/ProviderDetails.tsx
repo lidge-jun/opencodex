@@ -17,6 +17,7 @@ import { useProviderProbeState } from "./use-provider-probe-state";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import type { ModelRow } from "../../pages/models-shared";
 import ProviderModels from "./ProviderModels";
+import type { ProviderModelVisibility } from "../../provider-workspace/use-provider-model-visibility";
 import ProviderUsage from "./ProviderUsage";
 import ProviderAuthPanel from "./ProviderAuthPanel";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
@@ -49,6 +50,7 @@ export default function ProviderDetails({
   modelsLoading,
   modelsLoadFailed,
   onRetryModels,
+  modelVisibility,
   oauthEmail,
   onDeselect,
   apiBase,
@@ -97,6 +99,7 @@ export default function ProviderDetails({
   modelsLoading?: boolean;
   modelsLoadFailed?: boolean;
   onRetryModels?: () => void;
+  modelVisibility?: ProviderModelVisibility;
   oauthEmail?: string;
   onDeselect: () => void;
   apiBase: string;
@@ -465,6 +468,7 @@ export default function ProviderDetails({
             }
             onRetryModels={onRetryModels}
             onOpenAccounts={authSurface ? () => switchTab("accounts") : undefined}
+            modelVisibility={modelVisibility}
           />
         )}
         {tab === "usage" && (

@@ -85,6 +85,11 @@ export function slugEquals(stored: string, provider: string, id: string): boolea
   return stored === `${provider}/${id}` || stored === routedSlug(provider, id);
 }
 
+/** The same raw-or-encoded match as slugEquals, using a caller's existing index. */
+export function hasRoutedSlug(slugs: ReadonlySet<string>, provider: string, id: string): boolean {
+  return slugs.has(`${provider}/${id}`) || (id.includes("/") && slugs.has(routedSlug(provider, id)));
+}
+
 /** Stable key for the exact equivalence relation used by catalog/config slug matching. */
 export function slugEquivalenceKey(slug: string): string {
   const slash = slug.indexOf("/");

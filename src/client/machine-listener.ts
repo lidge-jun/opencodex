@@ -46,7 +46,7 @@ import {
 } from "../lib/system-restart-contract";
 import { linkRouteAllowed } from "../link/routes";
 import { linkHomeName, linkHomePhrase } from "./link-home";
-import { relayLinkManagementRead } from "./link-management-relay";
+import { linkChildAdminReadAllowed, relayLinkManagementRead } from "./link-management-relay";
 import type { ClientRestartAdmission } from "./runtime-restart";
 import { clientRestartRollbackAction } from "./runtime-restart";
 import { isLinkConnectionGeneration } from "../link/relay-auth";
@@ -275,7 +275,11 @@ export function startMachineListener(
           }
           const authError = requireManagementAuth(req, managementAuth, config);
           if (authError) return authError;
-          if (managementPrincipal(req, managementAuth, config) !== "gui-session") {
+          // The dashboard session reads the whole relay table; the local admin token reads only the
+          // passive quota pool (#8999), which GOAT polls on every Child.
+          const principal = managementPrincipal(req, managementAuth, config);
+          if (principal !== "gui-session"
+            && !(principal === "admin-token" && linkChildAdminReadAllowed(req.method, url.pathname.slice(prefix.length)))) {
             return Response.json({ error: "opencodex machine GUI session required" }, { status: 401 });
           }
           const response = await relayLinkManagementRead(req, suffix, linkIngress, linkHomePhrase(connection, sidecarOrNull));

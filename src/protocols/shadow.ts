@@ -18,8 +18,7 @@
  * - A blocked trace agrees with a blocked plan. A compatibility reject is Claude-integration
  *   policy the planner does not model, so it is not compared.
  */
-import type { ProtocolHop } from "./contract";
-import type { ProtocolPlanCandidateV1, ProtocolPlanV1, ProtocolTraceV1 } from "./dto";
+import type { ProtocolPlanCandidateV1, ProtocolPlanV1, ProtocolTraceHop, ProtocolTraceV1 } from "./dto";
 
 /** The route the request settled on, as the request log context records it. */
 export interface ShadowSettledRoute {
@@ -27,7 +26,7 @@ export interface ShadowSettledRoute {
   model?: string;
 }
 
-function samePath(a: readonly ProtocolHop[], b: readonly ProtocolHop[]): boolean {
+function samePath(a: readonly ProtocolTraceHop[], b: readonly ProtocolTraceHop[]): boolean {
   return a.length === b.length && a.every((hop, index) => hop === b[index]);
 }
 
