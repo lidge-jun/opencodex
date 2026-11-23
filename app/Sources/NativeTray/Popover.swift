@@ -1,6 +1,33 @@
 import AppKit
 import SwiftUI
 
+public enum NativeTrayToggleAction: Equatable {
+    case dismiss
+    case ignoreRecentDismissal
+    case present
+}
+
+public enum NativeTrayTogglePolicy {
+    public static let dismissGrace: TimeInterval = 0.35
+
+    public static func evaluate(
+        toggle: Bool,
+        isVisible: Bool,
+        dismissedNearButton: Bool,
+        lastDismissedAt: Date?,
+        now: Date = Date()
+    ) -> NativeTrayToggleAction {
+        if toggle && isVisible {
+            return .dismiss
+        }
+        if toggle && dismissedNearButton, let lastDismissed = lastDismissedAt,
+           now.timeIntervalSince(lastDismissed) < dismissGrace {
+            return .ignoreRecentDismissal
+        }
+        return .present
+    }
+}
+
 // All ABI calls run on Tauri's AppKit main thread. Swift copies the borrowed JSON
 // synchronously and never retains a Rust buffer or owns an application/run loop.
 @MainActor
@@ -31,7 +58,24 @@ private final class NativeTrayPopover: NSObject {
 
     func show(_ pointer: UnsafeMutableRawPointer, toggle: Bool, callback: @escaping @convention(c) (Int32) -> Void) {
         self.callback = callback
-        if toggle && panel.isVisible { panel.dismiss(); return }
+        if toggle {
+            switch NativeTrayTogglePolicy.evaluate(
+                toggle: toggle,
+                isVisible: panel.isVisible,
+                dismissedNearButton: panel.dismissedNearButton,
+                lastDismissedAt: panel.lastDismissedAt
+            ) {
+            case .dismiss:
+                panel.dismiss()
+                return
+            case .ignoreRecentDismissal:
+                panel.lastDismissedAt = nil
+                panel.dismissedNearButton = false
+                return
+            case .present:
+                break
+            }
+        }
         let item = Unmanaged<NSStatusItem>.fromOpaque(pointer).takeUnretainedValue()
         guard let button = item.button, button.window != nil else { return }
         if panel.isVisible { return }

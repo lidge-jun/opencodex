@@ -142,4 +142,51 @@ let unrelatedError = try decode(["errors": ["Usage unavailable"], "providers": [
 check(!NativeTraySwitch.settles(snapshot: unrelatedError, pendingRow: "pool-b:0"), "An unrelated error does not settle")
 let failedSwitch = try decode(["errors": ["The runtime refused that account right now."], "switchFailed": true, "refreshing": false, "providers": []])
 check(NativeTraySwitch.settles(snapshot: failedSwitch, pendingRow: "pool-b:0"), "The host's failure marker settles at once")
+
+// Toggle policy and hit testing: ensure status bar icon toggle collapses rather than loops reopen
+let testNow = Date()
+check(
+    NativeTrayTogglePolicy.evaluate(toggle: false, isVisible: true, dismissedNearButton: false, lastDismissedAt: nil, now: testNow) == .present,
+    "Show action without toggle always presents even when visible"
+)
+check(
+    NativeTrayTogglePolicy.evaluate(toggle: true, isVisible: true, dismissedNearButton: false, lastDismissedAt: nil, now: testNow) == .dismiss,
+    "Toggle when panel is visible dismisses the panel"
+)
+check(
+    NativeTrayTogglePolicy.evaluate(
+        toggle: true,
+        isVisible: false,
+        dismissedNearButton: true,
+        lastDismissedAt: testNow.addingTimeInterval(-0.1),
+        now: testNow
+    ) == .ignoreRecentDismissal,
+    "Toggle right after dismissal near button stays dismissed"
+)
+check(
+    NativeTrayTogglePolicy.evaluate(
+        toggle: true,
+        isVisible: false,
+        dismissedNearButton: true,
+        lastDismissedAt: testNow.addingTimeInterval(-0.5),
+        now: testNow
+    ) == .present,
+    "Toggle after grace period presents the panel"
+)
+check(
+    NativeTrayTogglePolicy.evaluate(
+        toggle: true,
+        isVisible: false,
+        dismissedNearButton: false,
+        lastDismissedAt: testNow.addingTimeInterval(-0.1),
+        now: testNow
+    ) == .present,
+    "Toggle after dismissal away from button presents the panel"
+)
+
+let buttonRect = NSRect(x: 100, y: 100, width: 30, height: 22)
+check(NativeTrayHitTest.isNearButton(buttonFrame: buttonRect, point: NSPoint(x: 110, y: 110)), "Inside button frame hits")
+check(NativeTrayHitTest.isNearButton(buttonFrame: buttonRect, point: NSPoint(x: 98, y: 100)), "Within button margin hits")
+check(!NativeTrayHitTest.isNearButton(buttonFrame: buttonRect, point: NSPoint(x: 50, y: 50)), "Outside button frame misses")
+
 print("PASS: \(assertions) native tray contract/formatting assertions")
