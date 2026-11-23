@@ -946,41 +946,79 @@ async function fetchMoonshotQuota(provider: string, config: OcxProviderConfig): 
  * Venice `GET /api/v1/billing/balance` — DIEM (native credits) or USD balance.
  * Shows the remaining balance; epoch allocation progress when present.
  */
+function veniceBalanceWindows(data: Record<string, unknown>): Array<{ label: string; percent: number }> | null {
+  const balances = asRecord(data.balances);
+  const diemBalance =
+    toFiniteNumber(data.balance) ??
+    toFiniteNumber(balances?.DIEM) ??
+    toFiniteNumber(balances?.diem);
+  const usdBalance =
+    toFiniteNumber(data.balance_usd) ??
+    toFiniteNumber(balances?.USD) ??
+    toFiniteNumber(balances?.usd);
+  if (diemBalance === undefined && usdBalance === undefined) return null;
+  const epochUsed = toFiniteNumber(data.diem_epoch_used);
+  const epochAllocated = toFiniteNumber(data.diem_epoch_allocated);
+  let diemPercent = 0;
+  if (epochAllocated !== undefined && epochAllocated > 0 && epochUsed !== undefined) {
+    const normalized = normalizePercent((epochUsed / epochAllocated) * 100);
+    if (normalized === undefined) return null;
+    diemPercent = normalized;
+  }
+  const windows: Array<{ label: string; percent: number }> = [];
+  if (diemBalance !== undefined) {
+    windows.push({ label: `DIEM balance (${Math.round(diemBalance)})`, percent: diemPercent });
+  }
+  if (usdBalance !== undefined) {
+    windows.push({ label: `USD balance ($${usdBalance.toFixed(2)})`, percent: 0 });
+  }
+  return windows;
+}
+
+/**
+ * Venice `GET /billing/balance` (Admin key) with fallback to
+ * `GET /api_keys/rate_limits` (Inference or Admin key).
+ */
 async function fetchVeniceQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   if (!isCanonicalVeniceBaseUrl(config.baseUrl)) return null;
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
-  const response = await quotaFetch(provider, config, `${VENICE_BASE_URL}/billing/balance`, {
-    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+  const headers = { Accept: "application/json", Authorization: `Bearer ${apiKey}` };
+  const billingResponse = await quotaFetch(provider, config, `${VENICE_BASE_URL}/billing/balance`, {
+    headers,
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  if (!response.ok) {
-    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+  if (billingResponse.ok) {
+    const body = asRecord(await readQuotaJson(billingResponse));
+    const data = asRecord(body?.data) ?? body;
+    const windows = data ? veniceBalanceWindows(data) : null;
+    if (windows) {
+      return report(provider, "venice:billing-balance", {
+        customWindows: windows,
+        updatedAt: Date.now(),
+      });
+    }
+  }
+  const rateLimitsResponse = await quotaFetch(provider, config, `${VENICE_BASE_URL}/api_keys/rate_limits`, {
+    headers,
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!rateLimitsResponse.ok) {
+    return rateLimitsResponse.status >= 400 &&
+      rateLimitsResponse.status < 500 &&
+      rateLimitsResponse.status !== 408 &&
+      rateLimitsResponse.status !== 429
       ? TERMINAL_QUOTA_FAILURE
       : null;
   }
-  const body = asRecord(await readQuotaJson(response));
-  const data = asRecord(body?.data) ?? body;
-  if (!data) return null;
-  const diemBalance = toFiniteNumber(data.balance);
-  const usdBalance = toFiniteNumber(data.balance_usd);
-  const epochUsed = toFiniteNumber(data.diem_epoch_used);
-  const epochAllocated = toFiniteNumber(data.diem_epoch_allocated);
-  if (diemBalance === undefined && usdBalance === undefined) return null;
-  const label = diemBalance !== undefined
-    ? `DIEM balance (${Math.round(diemBalance)})`
-    : `USD balance ($${usdBalance?.toFixed(2) ?? "?"})`;
-  if (epochAllocated !== undefined && epochAllocated > 0 && epochUsed !== undefined) {
-    const percent = normalizePercent((epochUsed / epochAllocated) * 100);
-    if (percent === undefined) return null;
-    return report(provider, "venice:billing-balance", {
-      customWindows: [{ label, percent }],
-      updatedAt: Date.now(),
-    });
-  }
-  return report(provider, "venice:billing-balance", {
-    customWindows: [{ label, percent: 0 }],
+  const rateLimitsBody = asRecord(await readQuotaJson(rateLimitsResponse));
+  const rateLimitsData = asRecord(rateLimitsBody?.data) ?? rateLimitsBody;
+  const rateLimitWindows = rateLimitsData ? veniceBalanceWindows(rateLimitsData) : null;
+  if (!rateLimitWindows) return null;
+  return report(provider, "venice:rate-limits", {
+    customWindows: rateLimitWindows,
     updatedAt: Date.now(),
   });
 }
@@ -1552,7 +1590,8 @@ export function keyQuotaReaderForProvider(name: string, provider: OcxProviderCon
   if (["zai", "glm", "glm-cn", "zhipu-bigmodel-coding", "zhipu-bigmodel-responses"].includes(name) && isCanonicalZaiBaseUrl(provider.baseUrl)) return fetchZaiQuota;
   if (["minimax", "minimax-cn"].includes(name) && isCanonicalMinimaxBaseUrl(provider.baseUrl)) return fetchMinimaxQuota;
   if (name === "moonshot" && isCanonicalMoonshotBaseUrl(provider.baseUrl)) return fetchMoonshotQuota;
-  if (name === "venice" && isCanonicalVeniceBaseUrl(provider.baseUrl)) return fetchVeniceQuota;
+  // The canonical-URL guard alone decides eligibility so custom Venice aliases also probe.
+  if (isCanonicalVeniceBaseUrl(provider.baseUrl)) return fetchVeniceQuota;
   if (name === "synthetic" && isCanonicalSyntheticBaseUrl(provider.baseUrl)) return fetchSyntheticQuota;
   if (name === "deepinfra" && isCanonicalDeepInfraBaseUrl(provider.baseUrl)) return fetchDeepInfraQuota;
   if (name === "neuralwatt" && isCanonicalNeuralwattBaseUrl(provider.baseUrl)) return fetchNeuralwattQuota;
