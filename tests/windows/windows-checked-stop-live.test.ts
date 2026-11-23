@@ -403,8 +403,14 @@ $instances = [pscustomobject]@{ Rows = @((New-Instance 42), (New-Instance 43)) }
 $instances | Add-Member ScriptProperty Count { $this.Rows.Count }
 $instances | Add-Member ScriptMethod Item { param($index) $this.Rows[$index - 1] }
 $script:task = [pscustomobject]@{ Xml = 'original'; State = 4; Instances = $instances }
-if ($script:scenario -in @('hidden', 'idle')) { $instances.Rows = @() }
+if ($script:scenario -in @('hidden', 'idle', 'idle-state-deadline')) { $instances.Rows = @() }
 if ($script:scenario -eq 'idle') { $script:task.State = 3 }
+if ($script:scenario -eq 'idle-state-deadline') {
+  $script:task | Add-Member -Force ScriptProperty State {
+    if ($script:taskReads -eq 2) { $script:elapsed = 2000 }
+    3
+  }
+}
 $script:task | Add-Member ScriptMethod GetInstances { param($flags) $this.Instances }
 $script:folder = [pscustomobject]@{}
 $script:folder | Add-Member ScriptMethod GetTask {
@@ -461,6 +467,7 @@ function Invoke-CimMethod {
     ["rejected", "unverified-registration", ""],
     ["hidden", "unverified-registration", ""],
     ["idle", "not-running", ""],
+    ["idle-state-deadline", "failed", ""],
     ["late-approval", "failed", ""],
     ["deadline-before-first", "failed", ""],
     ["deadline-between-stops", "failed", "42"],
