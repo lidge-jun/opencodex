@@ -150,8 +150,8 @@ catalog. Re-run `ocx export` after you add a provider or change model visibility
 Alternatively, [enable the managed integration](/guides/integrations/): `ocx sync` safely
 refreshes its already-owned blocks, leaving hand-edited or removed blocks untouched.
 
-Once merged, export the admission key before launching opencode if the inference listener requires
-authentication. A listener bound only to loopback does not require it:
+Once merged, export the admission key before launching opencode. A listener bound only to loopback
+does not check it, but OpenCode still refuses an unset key, so any nonempty value works there:
 
 ```bash
 export OPENCODEX_OPENCODE_API_KEY=<your key>
@@ -191,13 +191,16 @@ The real value is passed only through the child process environment.
 a configured API key — which is what a non-loopback bind requires.
 
 A listener bound to loopback (`127.0.0.1`, the default) does not require a data-plane key, even
-when client API keys are configured, so the `{env:…}` reference can remain unset for that listener.
-When the [managed integration](/guides/integrations/) or the dashboard's client config targets the
+when client API keys are configured. OpenCode itself still needs a nonempty `apiKey`: it refuses an
+unset `{env:…}` reference with `Missing auth credential: apiKey` before sending the request. When the
+[managed integration](/guides/integrations/) or the dashboard's client config targets the
 [unauthenticated loopback listener](/reference/configuration/server/), it writes the non-secret
-`opencodex-loopback` placeholder as `apiKey` instead, because OpenCode refuses an unset key before
-sending the request.
-A loopback URL alone does not establish this: a public listener bound to `0.0.0.0` still requires
-an accepted key when reached through `127.0.0.1`. Export the key when `hostname` is set beyond loopback;
+`opencodex-loopback` placeholder as `apiKey`, so nothing has to be exported. Other paths, including
+`ocx export` and a loopback bind without that listener, keep the reference, so export
+`OPENCODEX_OPENCODE_API_KEY` for them: the admission key where one is required, or any nonempty
+value on a loopback bind, which does not check it. A loopback URL alone does not establish that no
+key is checked: a public listener bound to `0.0.0.0` still requires an accepted key when reached
+through `127.0.0.1`. Export the key when `hostname` is set beyond loopback;
 see [Remote access](/reference/configuration/server/#remote-access). This admission key is opencodex's
 own, and is unrelated to the upstream provider keys configured under
 [Providers](/guides/providers/).
