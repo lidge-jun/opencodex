@@ -216,6 +216,14 @@ describe("relocated OpenCode serializer (accept criterion 1)", () => {
     expect(block.options.headers).toBeUndefined();
   });
 
+  test("an enabled unauthenticated loopback listener emits the loopback placeholder apiKey", () => {
+    const block = opencodeConfig(ctx({
+      config: cfg({ hostname: "127.0.0.1", unauthenticatedLoopbackListener: { enabled: true } }),
+    })).provider.opencodex!;
+    expect(block.options.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
+    expect(block.options.headers).toBeUndefined();
+  });
+
   test("the label carries the provider suffix, not a bare display name", () => {
     const models = opencodeConfig().provider.opencodex!.models;
     expect(models["gpt-5.6-luna"]!.name).toBe("gpt-5.6-luna (native)");

@@ -26,6 +26,7 @@ export { ClientPathError, piAgentDir } from "./client-path";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { shouldInjectApiAuthHeader, standaloneCodexRoutingTarget } from "../codex/inject";
+import { isLoopbackHostname } from "../codex/loopback-target";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { fileIO } from "../integrations/config-io";
 import { canonicalizeReasoningEfforts } from "../reasoning-effort";
@@ -747,6 +748,18 @@ function opencodeProviderConnection(baseURL: string, config: OcxConfig): Opencod
     if (timeouts.headerTimeoutMs !== undefined) options.headerTimeout = timeouts.headerTimeoutMs;
     if (timeouts.chunkTimeoutMs !== undefined) options.chunkTimeout = timeouts.chunkTimeoutMs;
     if (timeouts.timeoutMs !== undefined) options.timeout = timeouts.timeoutMs;
+  }
+  let targetAllowsKeylessInference = false;
+  if (config.unauthenticatedLoopbackListener?.enabled) {
+    try {
+      targetAllowsKeylessInference = isLoopbackHostname(new URL(baseURL).hostname);
+    } catch {
+      targetAllowsKeylessInference = false;
+    }
+  }
+  if (targetAllowsKeylessInference) {
+    options.apiKey = LOOPBACK_API_KEY_PLACEHOLDER;
+    return options;
   }
   // Non-loopback binds accept proxy admission only via x-opencodex-api-key so Authorization
   // stays free for Codex Direct upstream credentials when applicable.
