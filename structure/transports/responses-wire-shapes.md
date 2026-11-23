@@ -376,10 +376,8 @@ destination receives unchanged whenever a caller sends one itself.
 
 ## Passthrough SSE stream shapes (#314)
 
-On client delivery, both stream shapes mask credentials in a completed response's diagnostic fields and refusal parts. The completed event type, ordinary message content and tool arguments are preserved.
-
-Native passthrough SSE has TWO shapes, selected per request in
-`src/server/responses/core.ts`; both apply the client-only [hosted-image projection](../data-planes/images.md#hosted-responses-image-display) after continuation-cache observers: `src/lib/errors.ts` selects the first nonblank string in the canonical upstream message precedence (error, last_error, response error, incomplete details, then a flat error event). Malformed or blank fields cannot hide a later valid diagnostic; retained text is not rewritten.
+`src/server/responses/core.ts` selects one of two native passthrough SSE shapes per request. Both apply the client-only [hosted-image projection](../data-planes/images.md#hosted-responses-image-display) after continuation-cache observers. On client delivery, both mask credentials in completed-response diagnostics and refusal parts while preserving the event type, ordinary message content and tool arguments.
+`src/lib/errors.ts` selects the first nonblank string in the canonical upstream message precedence (error, last_error, response error, incomplete details, then a flat error event). Malformed or blank fields cannot hide a later valid diagnostic; retained text is not rewritten.
 
 - **Default outside Windows: tee + background inspection.** `upstreamResponse.body.tee()` sends
   branch[0] through a terminal-aware client relay while branch[1] is
