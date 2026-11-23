@@ -1180,6 +1180,9 @@ is known to lack the model and no replacement is allowed, the proxy returns 403.
 and project always come from the same account. Other providers and `/v1` requests use the
 Chat bridge.
 
+Native generation uses the Antigravity provider's [outbound proxy settings](/reference/configuration/providers/#what-the-route-covers).
+OAuth token exchange and refresh use the process-wide route.
+
 The proxy preserves successful request and response JSON source, including unknown fields,
 large integers, function arguments, and thought signatures. Streaming uses SSE with
 `alt=sse` or a streamed JSON array otherwise. `GET /v1beta/models` and model lookup include
