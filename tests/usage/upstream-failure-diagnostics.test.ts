@@ -47,6 +47,24 @@ test("upstream failures record the error code and request id without the body", 
   expect(warnings.join("\n")).not.toContain("req_abc123");
 });
 
+test("upstream failure warning includes provider, model, and valid account label", () => {
+  const log: RequestLogContext = { model: "grok-4.7", provider: "xai", accountLogLabel: "o1a2b3c" };
+  const warnings: string[] = [];
+  const warn = console.warn;
+  console.warn = ((line: string) => { warnings.push(String(line)); }) as typeof console.warn;
+  try {
+    inspectResponseLogJson(log, JSON.stringify({
+      error: { type: "rate_limit_error", code: "rate_limit_exceeded", message: "rate limited" },
+    }));
+  } finally {
+    console.warn = warn;
+  }
+  const line = warnings.find(w => w.includes("[opencodex] upstream failure")) ?? "";
+  expect(line).toContain("provider=xai");
+  expect(line).toContain("model=grok-4.7");
+  expect(line).toContain("account=o1a2b3c");
+});
+
 
 for (const shape of ["error", "last_error", "response"] as const) {
   test.each([

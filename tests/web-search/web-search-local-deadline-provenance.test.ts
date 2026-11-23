@@ -292,9 +292,11 @@ describe("T04-b local deadline provenance in the request row", () => {
         parseResponse: noParseResponse,
       });
       expect(out.row.status).toBe(504);
-      expect(warn.mock.calls.map(([line]) => String(line))).toContain(
-        "[opencodex] upstream failure status=504 type=server_error",
-      );
+      expect(
+        warn.mock.calls
+          .map(([line]) => String(line))
+          .some((line) => line.startsWith("[opencodex] upstream failure status=504 type=server_error")),
+      ).toBe(true);
     } finally {
       warn.mockRestore();
     }
