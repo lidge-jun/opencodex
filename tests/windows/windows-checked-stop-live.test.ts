@@ -467,10 +467,10 @@ function Invoke-CimMethod {
     ["rejected", "unverified-registration", ""],
     ["hidden", "unverified-registration", ""],
     ["idle", "not-running", ""],
-    ["idle-state-deadline", "failed", ""],
     ["late-approval", "failed", ""],
     ["deadline-before-first", "failed", ""],
     ["deadline-between-stops", "failed", "42"],
+    ["idle-state-deadline", "failed", ""],
   ]) {
     // Production runs the helper alone, which silences progress before its first module use. The fixture
     // runs first here and its Add-Member/[pscustomobject] calls autoload Microsoft.PowerShell.Utility, which
