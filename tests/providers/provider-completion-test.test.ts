@@ -310,4 +310,12 @@ describe("failure classification and cleanup", () => {
     expect(await f.run("test-model", {}, AbortSignal.abort())).toMatchObject({ error: { code: "aborted" } });
     expect(f.calls).toHaveLength(0);
   });
+  test("opencode-go completion test sends deterministic x-opencode-session header", async () => {
+    const f = fixture({ baseUrl: "https://opencode.ai/zen/go/v1" });
+    f.config.providers["opencode-go"] = f.row;
+    const res = await runProviderCompletionTest({ config: f.config, name: "opencode-go", model: "glm-5" });
+    expect(res).toMatchObject({ ok: true, wire: "openai-chat" });
+    expect(f.calls).toHaveLength(1);
+    expect(new Headers(f.calls[0]?.init?.headers).get("x-opencode-session")).toBeTruthy();
+  });
 });

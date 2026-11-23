@@ -12,6 +12,7 @@ import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { openAIChatTransport, stripBracketedModelSuffix } from "../../adapters/openai-chat/wire";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../../providers/openrouter-routing";
+import { resolveOpenCodeGoTransport } from "../../providers/opencode-go-transport";
 import { resolveVercelGatewayRouting, vercelGatewayProviderPayload } from "../../providers/vercel-gateway-routing";
 import { assertProviderDestinationAllowed, providerAllowsPrivateNetwork } from "../../lib/destination-policy";
 import { providerOutboundPost, ProviderOutboundPolicyError, ProviderOutboundSendCancelledError,
@@ -79,9 +80,10 @@ function nativeModel(config: OcxConfig, name: string, row: OcxProviderConfig, mo
 function derive(config: OcxConfig, name: string, row: OcxProviderConfig, model: string) {
   const resolved = routedProviderConfig(name, row);
   const native = nativeModel(config, name, resolved, model);
-  const routed = resolveWireProtocolOverride(name, native, resolved);
-  const wire = routed.adapter;
+  const wireProvider = resolveWireProtocolOverride(name, native, resolved);
+  const wire = wireProvider.adapter;
   if (wire !== "openai-chat" && wire !== "openai-responses") throw new Error("unsupported adapter");
+  const routed = resolveOpenCodeGoTransport(wireProvider, `provider-completion-test:${name}:${model}`, resolved);
   const transport = wire === "openai-chat" ? openAIChatTransport(routed)
     : buildResponsesTransport(routed, { headers: new Headers() });
   const headers = new Headers(transport.headers);
