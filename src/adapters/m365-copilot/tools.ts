@@ -225,11 +225,16 @@ interface ToolInspection { result: ParseResult; firstFenceStart?: number; inline
 function precedingToolCall(text: string, specs: ToolSpecs) {
     const index = text.search(SELF_WRITTEN_RESULT);
     if (index < 0) return;
-    const head = text.slice(0, index).trimEnd();
-    const inspection = specs ? inspectToolCalls(head, specs) : undefined;
-    if (inspection) return inspection.result.hasToolCalls ? { index, head, inspection } : undefined;
-    const open = ANY_FENCE_OPEN.exec(head);
-    if (open && head.indexOf("```", open.index + open[0].length) >= 0) return { index, head, inspection };
+    const raw = text.slice(0, index);
+    if (specs) {
+        const inspection = inspectToolCalls(raw, specs);
+        if (!inspection.result.hasToolCalls) return;
+        const head = raw.trimEnd();
+        // The original prefix establishes eligibility. Only reuse ranges for the exact delivery text.
+        return { index, head, inspection: head.length === raw.length ? inspection : undefined };
+    }
+    const open = ANY_FENCE_OPEN.exec(raw);
+    if (open && raw.indexOf("```", open.index + open[0].length) >= 0) return { index, head: raw.trimEnd(), inspection: undefined };
 }
 
 /** Classify the same source ranges that supplied the accepted calls. */

@@ -159,16 +159,30 @@ describe("Microsoft 365 Copilot native transport", () => {
   const fixtureTools = [{ function: { name: "lookup", parameters: { properties: { query: { type: "string" } } } } }];
   const block = (name: string, body: string) => ["```" + name, body, "```"].join("\n");
 
-  test("uses the accepted call IDs once before a tool result", () => {
+  test("reuses the call IDs when the result marker follows the exact delivery text", () => {
     const text = [block("lookup", "one"), block("lookup", "two")].join("\n");
     const ids = spyOn(crypto, "randomUUID");
     try {
-      const answer = parseToolAnswer(text + "\n<tool_response>example</tool_response>", fixtureTools);
+      const answer = parseToolAnswer(text + "<tool_response>example</tool_response>", fixtureTools);
       expect(answer).toMatchObject({ accepted: text, document: false, truncated: true });
       expect(answer.result.toolCalls.map(call => JSON.parse(call.function.arguments))).toEqual([{ query: "one" }, { query: "two" }]);
       expect(new Set(answer.result.toolCalls.map(call => call.id)).size).toBe(2);
       expect(ids).toHaveBeenCalledTimes(2);
     } finally { ids.mockRestore(); }
+  });
+
+  test("checks the original prefix before trimming text for delivery", () => {
+    const first = block("lookup", "one"), second = block("lookup", "two");
+    const marker = "<tool_response>example</tool_response>";
+    const prose = first + "\u00a0" + marker;
+    const untouched = parseToolAnswer(prose, fixtureTools);
+    expect(untouched).toMatchObject({ accepted: prose, truncated: false });
+    expect(untouched.result.toolCalls).toHaveLength(0);
+
+    const accepted = first + "\n" + second;
+    const both = parseToolAnswer(accepted + "\u00a0" + marker, fixtureTools);
+    expect(both).toMatchObject({ accepted, truncated: true });
+    expect(both.result.toolCalls.map(call => JSON.parse(call.function.arguments))).toEqual([{ query: "one" }, { query: "two" }]);
   });
 
   test("keeps an identical tool example nested in a document fence", () => {
