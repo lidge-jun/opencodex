@@ -1,7 +1,7 @@
 /**
  * Per-account quota rows stack again (#fb-2100): in the card layout the pool name sits on its own
- * line, the 5-hour bar on the next and the weekly bar on the third, each with its "% left" and
- * reset countdown, as v2.100.5 showed them. #8740 had put the three side by side.
+ * line, the 5-hour bar on the next and the weekly bar on the third, each with its consumed share
+ * and reset countdown, as v2.100.5 showed them. #8740 had put the three side by side.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
@@ -77,9 +77,9 @@ describe("account quota rows", () => {
       expect(cell.children[0]!.getAttribute("aria-hidden")).toBe("true");
     }
     const first = cells[0]!.children;
-    expect(first[1]!.textContent).toContain("100% left");
+    expect(first[1]!.textContent).toContain("0% used");
     expect(first[1]!.textContent).toContain("resets in");
-    expect(first[2]!.textContent).toContain("0% left");
+    expect(first[2]!.textContent).toContain("100% used");
   });
 
   test("no card-layout rule lays a pool's name and bars out side by side", async () => {
