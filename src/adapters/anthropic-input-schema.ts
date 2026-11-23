@@ -1,4 +1,6 @@
 import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
+import { jsonUtf8Bytes } from "../lib/json-byte-size";
+import { isTranslatorBudgetExceededError, TranslatorBudgetExceededError } from "../lib/translator-budget";
 
 /**
  * Anthropic rejects a root-level missing `type` and root-level `oneOf`/`anyOf`/`allOf` in
@@ -9,7 +11,8 @@ import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
  * maps, unions `required`, and keeps a property declared on both sides conjunctive under
  * `allOf`; composition on both sides is kept, not replaced. A property met twice on an all-`allOf`
  * path is conjoined the same way. Composition branches and direct alias hops share one 4096-step
- * budget. Shared by the anthropic and command-code adapters; Command Code's text-call recovery
+ * budget. Reference copies also reserve their JSON UTF-8 size against one 1 MiB catalog allowance
+ * before merging. Shared by the anthropic and command-code adapters; Command Code's text-call recovery
  * matches markup against the normalized schema and validates it against the declared one too.
  *
  * Flattening root alternatives is lossy: later branches win for a same-named property, and
@@ -24,10 +27,32 @@ const LOCAL_REF_PREFIX = "#/";
 const COMPOSITION_KEYS = ["oneOf", "anyOf", "allOf"] as const;
 /** Branch visits allowed while expanding root composition; shared ref graphs multiply. */
 const ROOT_COMPOSITION_EXPANSION_LIMIT = 4096;
+const MAX_INLINED_SCHEMA_BYTES = 1024 * 1024;
 const ROOT_COMPOSITION_LIMIT_MESSAGE =
   "tool input schema reference expansion exceeded the supported limit";
 /** Shared work budget: composition branches and direct `$ref` alias hops both count against it. */
-interface ExpansionBudget { count: number }
+interface ReferenceByteBudget { readonly limit: number; remaining: number }
+interface ExpansionBudget { count: number; references: ReferenceByteBudget }
+
+/** A fresh catalog allowance per build; each declaration pays even if it shares a schema object. */
+export function createAnthropicInputSchemaNormalizer(limit = MAX_INLINED_SCHEMA_BYTES): (schema: unknown) => Record<string, unknown> {
+  if (!Number.isSafeInteger(limit) || limit < 0 || limit > MAX_INLINED_SCHEMA_BYTES) {
+    throw new RangeError("Invalid tool schema reference byte budget");
+  }
+  const references: ReferenceByteBudget = { limit, remaining: limit };
+  return schema => normalizeInputSchema(schema, references);
+}
+
+function reserveReference(schema: Record<string, unknown>, budget: ReferenceByteBudget): void {
+  try {
+    // Measure without serializing or encoding the subtree. Repeated references pay each time:
+    // sharing their JS objects does not share their copies in the eventual outbound JSON.
+    budget.remaining -= jsonUtf8Bytes(schema, budget.remaining);
+  } catch (error) {
+    if (!isTranslatorBudgetExceededError(error)) throw error;
+    throw new TranslatorBudgetExceededError("request_copies", budget.limit);
+  }
+}
 
 function spend(budget: ExpansionBudget): void {
   budget.count += 1;
@@ -159,6 +184,7 @@ function dereferenceLocal(
   const nextSeen = new Set(seen);
   nextSeen.add(ref);
   const resolved = dereferenceLocal(target, root, nextSeen, budget) ?? target;
+  reserveReference(resolved, budget.references);
   const { $ref: _ignored, ...siblings } = record;
   return mergeRefSiblings(resolved, siblings);
 }
@@ -224,11 +250,15 @@ function collectRootComposition(
 }
 
 export function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown> {
+  return createAnthropicInputSchemaNormalizer()(schema);
+}
+
+function normalizeInputSchema(schema: unknown, references: ReferenceByteBudget): Record<string, unknown> {
   const stripped = stripResponsesOnlyEncryptedMarker(schema);
   const obj = stripped && typeof stripped === "object" && !Array.isArray(stripped)
     ? stripped as Record<string, unknown>
     : {};
-  const budget: ExpansionBudget = { count: 0 };
+  const budget: ExpansionBudget = { count: 0, references };
   const root = dereferenceLocal(obj, obj, new Set(), budget) ?? obj;
   const hasRootComposition = COMPOSITION_KEYS.some(key => Array.isArray(root[key]));
   const type = root.type;
