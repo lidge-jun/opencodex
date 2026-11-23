@@ -42,6 +42,7 @@ function poolContext() {
 const now = () => Math.floor(Date.now() / 1000);
 const monthly = (used_percent = 100) => ({ used_percent, limit_window_seconds: 2_592_000, reset_at: now() + 2_592_000 });
 const weekly = (used_percent = 0) => ({ used_percent, limit_window_seconds: 604_800, reset_at: now() + 604_800 });
+const fiveHour = (used_percent = 0) => ({ used_percent, limit_window_seconds: 18_000, reset_at: now() + 18_000 });
 const observe = (plan_type: string, rate_limit: Record<string, unknown>) => Response.json({ plan_type, rate_limit });
 const freeExhausted = () => observe("free", { allowed: false, primary_window: monthly(), secondary_window: null });
 const proLite = (extra: Record<string, unknown> = {}) =>
@@ -128,6 +129,8 @@ describe("pool WHAM monthly-window retirement (#8067)", () => {
     expect(evidence({ ...weeklyOnly, rate_limit: { ...weeklyOnly.rate_limit, tertiary_window: monthly(5) } })?.monthlyWindowAbsent).toBeUndefined();
     expect(evidence({ plan_type: "team", rate_limit: { allowed: true, primary_window: monthly(5), secondary_window: weekly() } })?.monthlyWindowAbsent).toBeUndefined();
     expect(evidence({ plan_type: "prolite", rate_limit: { primary_window: weekly() } })?.monthlyWindowAbsent).toBeUndefined();
+    expect(evidence({ plan_type: "plus", rate_limit: { allowed: true, primary_window: fiveHour(), secondary_window: weekly() } })?.monthlyWindowAbsent).toBe(true);
+    expect(evidence({ plan_type: "plus", rate_limit: { allowed: true, primary_window: fiveHour() } })?.monthlyWindowAbsent).toBeUndefined();
   });
 });
 
@@ -187,6 +190,27 @@ describe("main WHAM monthly-window retirement (#8596)", () => {
     exhaustMonthly();
     publish(plusWeeklyOnly({ tertiary_window: null }));
     for (const quota of caches()) expect(quota?.monthlyPercent).toBeUndefined();
+  });
+
+  // Plus restored its 5-hour window, so its complete read is a short primary with a weekly secondary.
+  const plusShortAndWeekly = (rate: Record<string, unknown> = {}) => ({ plan_type: "plus",
+    rate_limit: { allowed: true, limit_reached: false, primary_window: fiveHour(5), secondary_window: weekly(1), ...rate } });
+
+  test("a complete allowed 5-hour and weekly read retires the carried monthly tuple in both caches", () => {
+    observeMainQuotaIdentity(mainIdentity);
+    exhaustMonthly();
+    publish(plusShortAndWeekly({ secondary_window: undefined }));
+    publish(plusShortAndWeekly({ allowed: false }));
+    for (const quota of caches()) expect(quota?.monthlyPercent).toBe(100);
+    expect(isCodexQuotaExhausted(getAccountQuota(MAIN), "plus")).toBe(true);
+    publish(plusShortAndWeekly());
+    for (const quota of caches()) {
+      expect(quota?.weeklyPercent).toBe(1);
+      expect(quota?.monthlyPercent).toBeUndefined();
+      expect(quota?.monthlyResetAt).toBeUndefined();
+      expect(quota?.monthlyIsPrimaryWindow).toBeUndefined();
+    }
+    expect(isCodexQuotaExhausted(getAccountQuota(MAIN), "plus")).toBe(false);
   });
 
   test("a present monthly window replaces the reading instead of retiring it", () => {

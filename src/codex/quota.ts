@@ -1166,14 +1166,20 @@ function hasMalformedWhamReading(data: WhamUsageResponse): boolean {
  * #8067/#8596: the complete topology that proves short-window absence also proves there is no
  * monthly window when no window declares a monthly duration and no tertiary window is present,
  * so a plan change away from a monthly primary (Free to Pro Lite) retires the carried tuple.
+ * A complete, allowed 5-hour and weekly read supplies the same proof.
  * An explicit denial and invalid or unparseable readings never supply that proof.
  */
 function withWhamMonthlyWindowAbsence(
   data: WhamUsageResponse, observation: MainPolicyQuotaObservation,
 ): MainPolicyQuotaObservation {
-  if (observation.shortWindowAbsent !== true || data.rate_limit?.allowed === false) return observation;
+  if (data.rate_limit?.allowed === false) return observation;
   if (!isValidWhamHistoryObservation(data) || hasMalformedWhamReading(data)) return observation;
   const [primary, secondary, tertiary] = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
+  // Plus reports a 5-hour primary beside the weekly secondary, which the short-absence
+  // proof never covers; the same complete, allowed topology proves no monthly window either.
+  const completeWithShort = isMeasuredWindow(primary) && (secondary === null || isMeasuredWindow(secondary))
+    && (tertiary === null || (tertiary === undefined && data.rate_limit?.allowed === true));
+  if (observation.shortWindowAbsent !== true && !completeWithShort) return observation;
   return !isExplicitMonthlyWindow(primary) && !isExplicitMonthlyWindow(secondary) && tertiary == null
     ? { ...observation, monthlyWindowAbsent: true }
     : observation;
@@ -1181,6 +1187,10 @@ function withWhamMonthlyWindowAbsence(
 
 function isMeasuredLongWindow(window: WhamUsageWindow | null | undefined): boolean {
   return isExplicitLongWindow(window) && normalizeUsagePercent(window?.used_percent) !== undefined;
+}
+
+function isMeasuredWindow(window: WhamUsageWindow | null | undefined): boolean {
+  return (isExplicitShortWindow(window) || isExplicitLongWindow(window)) && normalizeUsagePercent(window?.used_percent) !== undefined;
 }
 
 /** Absent/null controls impose no veto; a present control requires reached:false. */
