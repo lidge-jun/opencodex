@@ -1847,7 +1847,13 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // Static seed; the ACP model options the CLI advertises at turn time decide what is accepted.
     models: [...AGY_ACP_SEED_MODELS],
     liveModels: false,
-    modelContextWindows: { "gemini-3.8-flash": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.7-flash": 1_048_576 },
+    modelContextWindows: {
+      "gemini-3.8-flash": 1_048_576,
+      "gemini-4-argon": 1_048_576,
+      "gemini-4-hydrogen": 1_048_576,
+      "gemini-4-neon": 1_048_576,
+      "gemini-3.7-flash": 1_048_576,
+    },
     // ACP prompts carry text only; client function tools are not offered to the model.
     inputModalities: ["text"],
     reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
