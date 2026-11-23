@@ -12,6 +12,70 @@ import { reduceBareUpstreamEvidence } from "../../src/server/bare-upstream-error
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+describe("completed response diagnostics", () => {
+  const marker = "demo-mask-80452719";
+  const rewrite = createTerminalErrorRedactionBlockRewrite({ "x-api-key": marker });
+  const message = { type: "message", content: [{ type: "output_text", text: "ordinary answer" }] };
+  const call = { type: "function_call", arguments: JSON.stringify({ example: "Bearer placeholder12345" }) };
+  const frame = (value: unknown) => "event: response.completed\ndata: " + JSON.stringify(value);
+  const read = (block: string) => JSON.parse(sseDataPayload(rewrite(block)[0]!)!);
+
+  test("masks diagnostic fields on both carriers while preserving normal content and error class", () => {
+    const error = { type: "invalid_request_error", code: "rate_limit_exceeded", message: marker };
+    const original = { type: "response.completed", error, last_error: marker,
+      response: { status: "completed", error: marker, last_error: error, output: [message, call] } };
+    const safe = read(frame(original));
+    expect(safe).toEqual({ type: original.type, error: { ...error, message: REDACTED_SECRET },
+      last_error: REDACTED_SECRET, response: { status: "completed", error: REDACTED_SECRET,
+        last_error: { ...error, message: REDACTED_SECRET }, output: [message, call] } });
+  });
+
+  test("masks only refusal parts when a completed message has mixed content", () => {
+    const ordinaryPart = message.content[0]!;
+    const makeMessage = (refusal: string) => ({ type: "message", content: [ordinaryPart, { type: "refusal", refusal }] });
+    const input = { type: "response.completed", output: [makeMessage(marker)], response: { output: [makeMessage(marker), call] } };
+    expect(read(frame(input))).toEqual({ type: input.type, output: [makeMessage(REDACTED_SECRET)],
+      response: { output: [makeMessage(REDACTED_SECRET), call] } });
+  });
+
+  test("keeps original wire formatting when the payload needs no masking", () => {
+    for (const response of [{ output: [message, call] }, { last_error: "test diagnostic", output: [] },
+      { incomplete_details: { reason: "max_output_tokens" }, output: [message] }]) {
+      const block = frame({ type: "response.completed", response }).replace("data: {", "data: { ");
+      expect(rewrite(block)).toEqual([block]);
+    }
+  });
+
+  test("masks the incomplete-details message and preserves its reason and ordinary content", () => {
+    const original = { type: "response.completed", response: {
+      incomplete_details: { reason: "max_output_tokens", message: marker }, output: [message, call],
+    } };
+    expect(read(frame(original))).toEqual({ type: original.type, response: {
+      incomplete_details: { reason: "max_output_tokens", message: REDACTED_SECRET }, output: [message, call],
+    } });
+  });
+
+  test("keeps the refusal field name and discriminator when the mask matches protocol vocabulary", () => {
+    const mask = createTerminalErrorRedactionBlockRewrite({ "x-api-key": "refusal" });
+    const part = { type: "refusal", refusal: "sample refusal" };
+    const block = frame({ type: "response.completed", response: { output: [{ type: "message", content: [part] }, call] } });
+    expect(JSON.parse(sseDataPayload(mask(block)[0]!)!).response.output).toEqual([
+      { type: "message", content: [{ type: "refusal", refusal: "sample " + REDACTED_SECRET }] }, call,
+    ]);
+  });
+
+  test("tee and eager delivery retain the completed verdict and masked diagnostic", async () => {
+    const original = { type: "response.completed", response: { status: "completed", last_error: marker, output: [message] } };
+    for (const mode of ["tee", "eager"] as const) {
+      const delivered = await deliver(mode, { "x-api-key": marker }, [original, "[DONE]"]);
+      expect(terminalTypes(delivered)).toEqual(["response.completed"]);
+      expect(delivered).toContain(REDACTED_SECRET);
+      expect(delivered).not.toContain(marker);
+      expect(delivered).toContain("ordinary answer");
+    }
+  });
+});
+
 function sourceStream(chunks: readonly string[]): ReadableStream<Uint8Array> {
   let i = 0;
   return new ReadableStream<Uint8Array>({
