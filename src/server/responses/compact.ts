@@ -990,6 +990,10 @@ export async function handleResponsesCompact(
         stampApiKeyAccountLabel(logCtx, route.providerName, compactProvider);
       }
     }
+    // Same configured headers as a regular Responses send; the selected credential stays authoritative.
+    for (const [name, value] of Object.entries(resolveProviderHeaders(compactProvider.headers))) {
+      if (!/^(?:authorization|chatgpt-account-id)$/i.test(name)) headers.set(name, value);
+    }
     if (compactProvider.authMode !== "forward" && isProviderApiKeyPaused(compactProvider)) {
       return formatErrorResponse(403, "permission_error", new ProviderApiKeyPausedError().message);
     }
@@ -1264,6 +1268,8 @@ export async function handleResponsesCompact(
                 current = projectCapturedCustomToolPolicy(current, route.staticPolicy);
                 const rebuilt = new Headers(sendHeaders);
                 for (const name of Object.keys(sendProvider.headers ?? {})) rebuilt.delete(name);
+                // An unset Content-Type reference must fall back to JSON instead of dropping it.
+                if (!rebuilt.has("content-type")) rebuilt.set("content-type", "application/json");
                 for (const [name, value] of Object.entries(resolveProviderHeaders(current.headers))) rebuilt.set(name, value);
                 rebuilt.set("authorization", `Bearer ${resolveProviderApiKey(current.apiKey)}`);
                 const currentGateway = gatewayTransport

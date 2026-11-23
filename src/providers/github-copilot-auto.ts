@@ -125,9 +125,9 @@ export async function resolveCopilotAuto(provider: OcxProviderConfig, requestedM
   const transport = resolveGithubCopilotTransport(provider, provider.authMode === "oauth"
     ? resolveCopilotApiBaseUrl(provider.baseUrl) : undefined);
   // Never inherit a session token from a previous account or persist it in config.
-  const cleanHeaders = new Headers(transport.headers);
-  cleanHeaders.delete("Copilot-Session-Token");
-  transport.headers = Object.fromEntries(cleanHeaders);
+  // Filter the raw record: a Headers round trip would trim and join values before references resolve.
+  transport.headers = Object.fromEntries(Object.entries(transport.headers ?? {})
+    .filter(([name]) => name.toLowerCase() !== "copilot-session-token"));
   let models: CopilotModel[];
   try { models = await fetchCopilotAutoModels(transport, signal, beforeSend, 60_000, concurrency); }
   catch (error) {

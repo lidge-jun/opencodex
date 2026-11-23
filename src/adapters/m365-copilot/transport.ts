@@ -112,8 +112,13 @@ export function runM365CopilotTurn(options: M365TurnOptions): Promise<string> {
   if (options.signal?.aborted) return Promise.reject(new M365CopilotTurnError("Microsoft 365 Copilot turn cancelled", 499));
   const requestId = crypto.randomUUID();
   const url = m365WebSocketUrl(options.token, options.model, options.conversation, requestId);
-  const headers = { Origin: "https://m365.cloud.microsoft", "User-Agent": "opencodex", "X-RoutingParameter-SessionKey": options.conversation.conversationId,
-    ...resolveProviderHeaders(options.route?.headers) };
+  const configured = resolveProviderHeaders(options.route?.headers);
+  const configuredNames = new Set(Object.keys(configured).map(name => name.toLowerCase()));
+  // A configured name replaces its default in any letter case instead of joining it.
+  const defaults = Object.entries({ Origin: "https://m365.cloud.microsoft", "User-Agent": "opencodex",
+    "X-RoutingParameter-SessionKey": options.conversation.conversationId })
+    .filter(([name]) => !configuredNames.has(name.toLowerCase()));
+  const headers: Record<string, string> = { ...Object.fromEntries(defaults), ...configured };
   const dial = m365SocketDialOptions(options.route, url, headers);
   return new Promise((resolveTurn, reject) => {
     let socket: WebSocket;

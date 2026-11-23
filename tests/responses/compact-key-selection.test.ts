@@ -133,6 +133,40 @@ test("compact key reselection resolves configured header references", async () =
     expect(seen[0]!.headers.has("x-missing-ref")).toBe(false);
   } finally { delete process.env[env]; abort.abort(); first.release(); await pending.catch(() => undefined); }
 }, 10_000);
+test("the first native compact send carries configured headers without overriding the selected key", async () => {
+  const env = "OCX_TEST_COMPACT_FIRST_SEND_HEADER";
+  process.env[env] = "resolved-first-send";
+  const config = fixture();
+  config.providers[NAME]!.headers = { "x-env-ref": "$" + env, "x-literal": "fixed" };
+  saveConfig(config);
+  const abort = new AbortController();
+  try {
+    const result = await start(config, abort);
+    expect(result.response.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.headers.get("x-env-ref")).toBe("resolved-first-send");
+    expect(seen[0]!.headers.get("x-literal")).toBe("fixed");
+    expect(seen[0]!.key).toBe("Bearer " + KEYS[0]);
+  } finally { delete process.env[env]; abort.abort(); }
+}, 10_000);
+test("compact key reselection keeps JSON when a Content-Type reference is unset", async () => {
+  const missing = "OCX_TEST_COMPACT_CONTENT_TYPE_MISSING";
+  delete process.env[missing];
+  const config = fixture();
+  config.providers[NAME]!.headers = { "Content-Type": "$" + missing };
+  saveConfig(config);
+  const first = await waitForProviderRequestSlot(NAME, config.providers[NAME]!);
+  const abort = new AbortController();
+  const pending = start(config, abort);
+  try {
+    await queue(config, "k1"); cool(config, 0); first.release();
+    const result = await pending;
+    expect(result.response.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.key).toBe("Bearer " + KEYS[1]);
+    expect(seen[0]!.headers.get("content-type")).toBe("application/json");
+  } finally { abort.abort(); first.release(); await pending.catch(() => undefined); }
+}, 10_000);
 for (const cancel of [false, true]) test(`compact cooled queued A readmits B (abort=${cancel})`, async () => {
   const config = fixture();
   const first = await waitForProviderRequestSlot(NAME, config.providers[NAME]!);

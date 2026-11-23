@@ -4,6 +4,7 @@ import { mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
 import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
+import { createOutboundCredentialMask } from "../server/responses/terminal-error-redaction";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry } from "../lib/upstream-retry";
 import { parseSidecarSSE } from "../web-search/parse";
@@ -119,7 +120,7 @@ export async function describeImage(
         recordOutcome?.(res.status);
         const t = await res.text().catch(() => "");
         console.warn(`[vision] sidecar HTTP ${res.status} (${Date.now() - t0}ms)`);
-        return { text: "", error: `vision sidecar HTTP ${res.status}: ${redactSecretString(t.slice(0, 200))}` };
+        return { text: "", error: `vision sidecar HTTP ${res.status}: ${redactSecretString(createOutboundCredentialMask(headers)(t.slice(0, 200)))}` };
       }
       const parsed = await parseSidecarSSE(res);
       if (linkedSignal.signal.aborted) throw linkedSignal.signal.reason;

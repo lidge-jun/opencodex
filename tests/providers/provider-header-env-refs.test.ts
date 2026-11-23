@@ -4,6 +4,10 @@ import { openAIChatTransport } from "../../src/adapters/openai-chat/wire";
 import { buildAnthropicMessagesPassthroughRequest } from "../../src/adapters/anthropic/passthrough";
 import { resolveProviderHeaderValue, resolveProviderHeaders } from "../../src/providers/provider-header-resolve";
 import { resolveGithubCopilotTransport } from "../../src/providers/github-copilot-transport";
+import { clearCopilotAutoModelsForTests, resolveCopilotAuto } from "../../src/providers/github-copilot-auto";
+import { createM365Conversation, runM365CopilotTurn } from "../../src/adapters/m365-copilot/transport";
+import { runWebSearch } from "../../src/web-search/executor";
+import { describeImage } from "../../src/vision/describe";
 import { resolveProviderTransport } from "../../src/providers/xai-transport";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
@@ -12,8 +16,11 @@ const ENV_NAME = "OCX_TEST_PROVIDER_HEADER_ENV_REF";
 const SECOND_ENV_NAME = "OCX_TEST_PROVIDER_HEADER_ENV_REF_SECOND";
 const previousValue = process.env[ENV_NAME];
 const previousSecondValue = process.env[SECOND_ENV_NAME];
+const originalFetch = globalThis.fetch;
 
 afterEach(() => {
+  globalThis.fetch = originalFetch;
+  clearCopilotAutoModelsForTests();
   if (previousValue === undefined) delete process.env[ENV_NAME];
   else process.env[ENV_NAME] = previousValue;
   if (previousSecondValue === undefined) delete process.env[SECOND_ENV_NAME];
@@ -132,5 +139,56 @@ describe("provider header environment references", () => {
     const requestId = sent?.get("x-grok-req-id");
     expect(requestId).toBeTruthy();
     expect(requestId).not.toContain("$");
+  });
+
+  test("Copilot Auto keeps raw header entries so each reference resolves on its own", async () => {
+    process.env[ENV_NAME] = "first";
+    process.env[SECOND_ENV_NAME] = "second";
+    let sent: Headers | undefined;
+    const provider = {
+      adapter: "openai-chat",
+      authMode: "oauth",
+      baseUrl: "https://api.githubcopilot.com",
+      headers: { "X-Custom": `$${ENV_NAME}`, "x-custom": `$${SECOND_ENV_NAME}`, "x-padded": ` $${ENV_NAME} ` },
+      fetch: (async (_url: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+        sent = new Headers(init?.headers);
+        return Response.json({ data: [{ id: "named", model_picker_enabled: true }] });
+      }) as typeof globalThis.fetch,
+    } as OcxProviderConfig & { fetch: typeof globalThis.fetch };
+    const resolved = await resolveCopilotAuto(provider, "named", { ...parsed, modelId: "named" });
+    expect(resolved.provider.headers).toMatchObject({ "X-Custom": `$${ENV_NAME}`, "x-custom": `$${SECOND_ENV_NAME}` });
+    expect(sent?.get("x-custom")).toBe("first, second");
+    expect(sent?.get("x-padded")).toBe(`$${ENV_NAME}`);
+  });
+
+  test("a configured M365 origin replaces the default in any letter case", async () => {
+    process.env[ENV_NAME] = "https://configured.example";
+    let sent: Record<string, string> | undefined;
+    await runM365CopilotTurn({
+      token: "header." + Buffer.from(JSON.stringify({ oid: "11111111-1111-1111-1111-111111111111", tid: "22222222-2222-2222-2222-222222222222",
+        exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url") + ".signature",
+      model: "Claude_Sonnet", text: "fixture", conversation: createM365Conversation(), onText() {},
+      route: { adapter: "m365-copilot", headers: { origin: `$${ENV_NAME}` } } as OcxProviderConfig,
+      createSocket(_url, headers) { sent = headers; throw new Error("stop after headers"); },
+    }).catch(() => undefined);
+    const origins = Object.entries(sent ?? {}).filter(([name]) => name.toLowerCase() === "origin");
+    expect(origins).toEqual([["origin", "https://configured.example"]]);
+  });
+
+  test("sidecar errors mask a resolved header value echoed by the upstream", async () => {
+    process.env[ENV_NAME] = "resolved-sidecar-credential";
+    globalThis.fetch = (() => Promise.resolve(new Response("bad key resolved-sidecar-credential", { status: 401 }))) as typeof fetch;
+    const forward: OcxProviderConfig = {
+      adapter: "openai-responses", baseUrl: "https://chatgpt.test", authMode: "forward",
+      headers: { "x-sidecar-api-key": `\${${ENV_NAME}}` },
+    };
+    const search = await runWebSearch("docs", { type: "web_search" }, forward, new Headers({ authorization: "Bearer token" }),
+      { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 });
+    const vision = await describeImage("data:image/png;base64,iVBORw0KGgo=", "high", "inspect", forward,
+      new Headers({ authorization: "Bearer token" }), { model: "gpt-5.6-luna", timeoutMs: 30_000 });
+    for (const error of [search.error, vision.error]) {
+      expect(error).toContain("HTTP 401");
+      expect(error).not.toContain("resolved-sidecar-credential");
+    }
   });
 });
