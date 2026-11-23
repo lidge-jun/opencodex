@@ -1113,7 +1113,8 @@ jobs:
     # setup that projects ~33.6 against the 30-minute bound. Fourteen shards put test
     # work at ~19.6 minutes and the same projection at ~26.9, the margin chosen for
     # eleven. Pay for three extra setups, keep the 30-minute job bound and all tests.
-    timeout-minutes: 30
+    # Raised to 40 as #8944 did for Linux: 14/14 hit 30 at batch 39/46 (run 44898495822).
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:

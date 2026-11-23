@@ -13,6 +13,8 @@ import type { Protocol } from "./contract";
 export type ApiSurfaceSource =
   /** Responses and Chat Completions: always served. */
   | "fixed"
+  /** Gemini: open when no setting is supplied. */
+  | "default"
   /** An explicit boolean in `apiSurfaces`. */
   | "api-surfaces"
   /** No explicit value; inherited from `claudeCode.enabled`. */
@@ -32,28 +34,30 @@ function isRec(value: unknown): value is Rec {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function resolveMessagesSurface(config: Pick<OcxConfig, "apiSurfaces" | "claudeCode">): ApiSurfaceSetting {
-  const raw: unknown = config.apiSurfaces;
-  if (raw !== undefined) {
-    if (!isRec(raw)) return { enabled: false, source: "invalid" };
-    const messages = raw.messages;
-    if (messages !== undefined) {
-      if (!isRec(messages)) return { enabled: false, source: "invalid" };
-      if (Object.hasOwn(messages, "enabled")) {
-        return typeof messages.enabled === "boolean"
-          ? { enabled: messages.enabled, source: "api-surfaces" }
-          : { enabled: false, source: "invalid" };
-      }
-    }
-  }
-  return { enabled: config.claudeCode?.enabled !== false, source: "claude-code-legacy" };
+function resolveOptionalSurface(raw: unknown, name: "messages" | "gemini", fallback: ApiSurfaceSetting): ApiSurfaceSetting {
+  if (raw === undefined) return fallback;
+  if (!isRec(raw)) return { enabled: false, source: "invalid" };
+  const surface = raw[name];
+  if (surface === undefined) return fallback;
+  if (!isRec(surface)) return { enabled: false, source: "invalid" };
+  if (!Object.hasOwn(surface, "enabled")) return fallback;
+  return typeof surface.enabled === "boolean"
+    ? { enabled: surface.enabled, source: "api-surfaces" }
+    : { enabled: false, source: "invalid" };
+}
+
+export function resolveGeminiApiSurface(config: Pick<OcxConfig, "apiSurfaces">): ApiSurfaceSetting {
+  return resolveOptionalSurface(config.apiSurfaces, "gemini", { enabled: true, source: "default" });
 }
 
 export function resolveApiSurfaceSettings(config: Pick<OcxConfig, "apiSurfaces" | "claudeCode">): ApiSurfaceSettings {
   return Object.freeze({
     responses: Object.freeze({ enabled: true, source: "fixed" as const }),
     chat: Object.freeze({ enabled: true, source: "fixed" as const }),
-    messages: Object.freeze(resolveMessagesSurface(config)),
+    messages: Object.freeze(resolveOptionalSurface(config.apiSurfaces, "messages", {
+      enabled: config.claudeCode?.enabled !== false,
+      source: "claude-code-legacy",
+    })),
   });
 }
 

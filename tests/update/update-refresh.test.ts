@@ -322,6 +322,38 @@ test("pnpm owner resolution failure is unavailable, not an unowned PATH lookup",
   expect(spawned).toBe(false);
 });
 
+async function registryAnswer(channel: "latest" | "preview", stdout: string): Promise<string | null> {
+  const child = fakeChild();
+  return latestVersionAsync(channel, "npm", {
+    ownerFn: async () => null,
+    spawnFn: (() => {
+      queueMicrotask(() => { child.stdout.write(`${stdout}\n`); child.emit("close", 0); });
+      return child;
+    }) as never,
+  });
+}
+
+test.each([
+  "2.100.6-preview.20261119.1", // dated preview with a publication attempt, as published since 2.100.5
+  "2.99.0-preview.20261108",
+  "2.100.6",
+])("the preview channel accepts the registry version %s", async version => {
+  expect(await registryAnswer("preview", version)).toBe(version);
+});
+
+test.each([
+  "2.100.6-preview.20261119.1.2",
+  "2.100.6-preview.20261119.",
+  "2.100.6-preview.20261119.1\n2.100.6",
+  "2.100.6-beta.1",
+])("the preview channel refuses the malformed registry answer %j", async answer => {
+  expect(await registryAnswer("preview", answer)).toBeNull();
+});
+
+test("the latest channel still refuses a preview version", async () => {
+  expect(await registryAnswer("latest", "2.100.6-preview.20261119.1")).toBeNull();
+});
+
 test("pnpm read probes ignore caller project hooks from a trusted directory", () => {
   const input = { npm_config_ignore_pnpmfile: "false", NPM_CONFIG_IGNORE_PNPMFILE: "false", SECRET: "retained" };
   expect(pnpmReadEnvironment(input)).toEqual({ npm_config_ignore_pnpmfile: "true", pnpm_config_ignore_pnpmfile: "true", SECRET: "retained" });

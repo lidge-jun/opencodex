@@ -18,7 +18,7 @@ export function CodexAccountResetModal({
 }: {
   resetPopup: CodexAccountEntry;
   resetConfirm: boolean;
-  creditDetails: { granted_at: string; expires_at: string }[] | null;
+  creditDetails: { granted_at: string; expires_at: string | null }[] | null;
   creditDetailsLoading: boolean;
   redeeming: boolean;
   onClose: () => void;
@@ -61,7 +61,7 @@ export function CodexAccountResetModal({
                   {creditDetails && creditDetails.length > 0 && (
                     <div className="credit-list">
                       {creditDetails.map((c, i) => (
-                        <CodexCreditItem key={`${c.granted_at}:${c.expires_at}`} index={i} grantedAt={c.granted_at} expiresAt={c.expires_at} isNext={i === 0} locale={locale} t={t} />
+                        <CodexCreditItem key={`${c.granted_at}:${c.expires_at ?? "none"}`} index={i} grantedAt={c.granted_at} expiresAt={c.expires_at} isNext={i === 0} locale={locale} t={t} />
                       ))}
                     </div>
                   )}

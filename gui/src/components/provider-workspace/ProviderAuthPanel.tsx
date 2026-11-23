@@ -22,13 +22,14 @@ import {
 } from "../../oauth-health-display";
 import CodexAccountPool from "../CodexAccountPool";
 import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
-import ClaudeNativePassthroughSetting from "./ClaudeNativePassthroughSetting";
+import NativePassthroughSetting from "./NativePassthroughSetting";
 import { LoginHint as LoginHintView } from "../login-url-block";
 import { OpenBrowserPrefToggle } from "../open-browser-pref-toggle";
 import ProviderAccountQuota from "./ProviderAccountQuota";
 import { AccountProbeButton, AccountProbeResultLine } from "./AccountProbe";
 import { ACCOUNT_PROBE_PROVIDERS, useAccountProbe } from "../../hooks/useAccountProbe";
 import { AccountQuotaTable } from "./AccountQuotaTable";
+import QuotaLiveRefreshSetting from "../QuotaLiveRefreshSetting";
 import { accountQuotaFromReport } from "../../provider-workspace/report";
 import { uncoveredWindows } from "../../provider-workspace/account-quota-table";
 import { GrokCouponBadge, GrokResetCouponModal } from "./GrokResetCoupons";
@@ -499,6 +500,10 @@ export default function ProviderAuthPanel({
         )}
       </div>
       <div className="pwi-auth-body">
+        {/* Shown only where live updates act: the account and key rows that carry a quota reading. */}
+        {((isOauth && loggedIn) || isKeyAuth) && quotaRows.some(row => row.quotaMode === "probe" || row.quotaMode === "passive") && (
+          <QuotaLiveRefreshSetting />
+        )}
         {item.name === "xai" && (
           <XaiChatOptInControl
             initialState={item.xaiResponsesOptInState ?? true}
@@ -507,7 +512,7 @@ export default function ProviderAuthPanel({
         )}
         {/* An API-key Anthropic row has no pool card, but the global switch still applies to Claude Code. */}
         {item.name === "anthropic" && !isOauth && (
-          <ClaudeNativePassthroughSetting key={`${apiBase}:passthrough`} apiBase={apiBase} targetKey={targetKey} />
+          <NativePassthroughSetting protocol="claude" key={`${apiBase}:passthrough`} apiBase={apiBase} targetKey={targetKey} />
         )}
         {isOauth && (
           <>
@@ -523,7 +528,10 @@ export default function ProviderAuthPanel({
             )}
             {/* Global Claude Code setting; it decides whether Claude Code's own traffic reaches the pool above. */}
             {item.name === "anthropic" && (
-              <ClaudeNativePassthroughSetting key={`${apiBase}:passthrough`} apiBase={apiBase} targetKey={targetKey} />
+              <NativePassthroughSetting protocol="claude" key={`${apiBase}:passthrough`} apiBase={apiBase} targetKey={targetKey} />
+            )}
+            {item.name === "google-antigravity" && (
+              <NativePassthroughSetting protocol="gemini" apiBase={apiBase} targetKey={targetKey} />
             )}
             {item.name === "google-antigravity" && (
               <div className="pwi-auth-add-key">

@@ -21,6 +21,16 @@ models use their selected account. Refreshing the integration updates these rows
 changes the account's access programs.
 OpenCodex carries the logged-in main account's live model availability prompt onto bare native model rows.
 
+For built-in native models, a confirmed model list from the selected account also supplies the
+default and maximum context windows and support for reasoning-effort updates and experimental
+context. Configured window limits and compaction budgets still apply. A confirmed default above
+the shipped opt-in ceiling is preserved unless a configured limit lowers it. Repeated catalog
+updates preserve a lower compaction budget when the final context window stays the same.
+If the saved catalog has duplicate rows for a native model, the first row supplies that
+retained budget; later duplicates are removed without replacing the first row's setting.
+An advertised capability
+requires its normal Codex client settings and backend support.
+
 The proxy exposes one bare `openai` Codex-login route with Pool(default) and Direct account modes,
 plus `openai-apikey/<model>` for the configured API key. Pool includes main plus added accounts;
 Direct uses only the caller/main bearer. The routes do not fall back to one another. Shipped v1
@@ -571,6 +581,8 @@ On an authenticated loopback route, enable client-side compaction to keep V2 sub
 ocx system settings --client-compaction on   # or "codexClientCompaction": true in config.json
 ocx sync                                     # rewrites the active config (default: ~/.codex/config.toml); restart Desktop
 ```
+
+If the CLI reports `history_paginated_openai_provider_locked`, the preference was saved but the routing change was refused. To keep existing conversations resumable, keep client compaction and desktop authless off. Repeating the sync with the same settings will encounter the same refusal.
 
 The setting defaults to off. For authenticated loopback routing, OpenCodeX selects its existing
 dedicated provider form with `requires_openai_auth = true`. If `codexDesktopAuthless` is also

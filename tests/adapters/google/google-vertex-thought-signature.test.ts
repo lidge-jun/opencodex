@@ -240,6 +240,27 @@ describe("Vertex Argon tool-result images", () => {
     expect(JSON.parse(followup.body).contents.at(-1).parts[0].functionResponse.parts).toEqual([inline()]);
   });
 
+  test("Neon continuation replays the signature, nests matched PNG/WebP images and separates duplicate images", async () => {
+    __resetAntigravityReplayCache();
+    const adapter = createGoogleAdapter(provider);
+    await adapter.buildRequest({ ...firstTurn(false), modelId: "gemini-4-neon" });
+    await adapter.parseResponse!(new Response(JSON.stringify(vertexResponseBody())));
+    const webp = { type: "image" as const, imageUrl: "data:image/webp;base64,UklGRg==" };
+    const messages = history([image(), webp]);
+    messages.push({ role: "toolResult", toolCallId: "call_shell_1", toolName: "shell_command",
+      content: [{ type: "text", text: "again" }, image("Yg==")], isError: false, timestamp: 0 });
+    const followup = await createGoogleAdapter(provider).buildRequest({ ...request(messages, false), modelId: "gemini-4-neon" });
+    const contents = JSON.parse(followup.body as string).contents;
+    expect(replayedFunctionCall(followup.body as string).thoughtSignature).toBe(SIGNATURE);
+    expect(contents.at(-2)).toEqual({ role: "user", parts: [{ functionResponse: {
+      id: "call_shell_1", name: "shell_command", response: { result: "[image][image]" },
+      parts: [inline(), { inline_data: { mime_type: "image/webp", data: "UklGRg==" } }],
+    } }] });
+    expect(contents.at(-1)).toEqual({ role: "user", parts: [
+      { text: "[tool_result without adjacent tool_use: shell_command (call_shell_1)]\nagain[image]" }, inline("Yg=="),
+    ] });
+  });
+
   test("Argon continuation replays the signature, nests the matched image and separates a duplicate image", async () => {
     __resetAntigravityReplayCache();
     const adapter = createGoogleAdapter(provider);
@@ -394,8 +415,8 @@ describe("Vertex Argon tool-result images", () => {
   });
 
   test.each([
-    ["vertex", "gemini-3.1-pro"],
-    ["vertex", "gemini-4-argon-preview"],
+    ["vertex", "gemini-2.5-pro"],
+    ["vertex", "claude-sonnet-4-6"],
     ["ai-studio", "gemini-4-argon"],
     ["cloud-code-assist", "gemini-4-argon"],
   ] as const)("other routes retain image siblings (%s, %s)", async (mode, model) => {
@@ -471,7 +492,7 @@ describe("Vertex Argon tool-result images", () => {
   });
 
   test.each([
-    ["vertex", "gemini-3.1-pro"], ["vertex", "gemini-4-argon-preview"],
+    ["vertex", "gemini-2.5-pro"], ["vertex", "claude-sonnet-4-6"],
     ["ai-studio", "gemini-4-argon"], ["cloud-code-assist", "gemini-4-argon"],
   ] as const)("other routes retain orphan image siblings (%s, %s)", async (mode, model) => {
     const messages = history("done");

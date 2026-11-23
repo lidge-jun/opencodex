@@ -22,6 +22,16 @@ combo, target or model. Operational
 selection and cooldown keys remain internal. `tests/responses/chat-error-body-normalization.test.ts`
 covers failure, wait, last-resort, reprobe and effort diagnostic output.
 
+The same child log decides whether a 429 cools the combo target or only the serving account.
+`core-combo.ts` reads the serving account from it, using the pool provider label
+(`<provider>-p<hex>`), or the `main` account label that only pool and main-pool contexts stamp
+(the main account logs under the bare provider name). It spares the target when the pool already
+holds that account's own cooldown. For the main account this applies only in effective pool mode
+(`providerCodexAccountMode`, which defaults to pool), where selection skips a cooled main. Direct
+mode serves the caller-owned main without a local cooldown check, so a direct-mode 429 still cools
+the target. `tests/server/server-combo-main-account-cooldown.test.ts` covers both modes end to
+end, including main's recovery without a stale target cooldown (#8880).
+
 The combo's request outcome and its child's [sealed upstream refusal](../usage-client-attribution.md#credential-recovery-attempts)
 can have different statuses. Child finalization preserves the refusal's physical attempt.
 

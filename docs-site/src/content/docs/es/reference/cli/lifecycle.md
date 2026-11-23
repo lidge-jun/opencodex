@@ -106,11 +106,16 @@ Una salida proxy sola no confirma que la restauración compartida Codex / Grok t
 En Windows, `ocx stop` detiene una tarea registrada del Programador de tareas o un servicio nativo WinSW mediante una parada verificada. Primero finaliza la tarea y después solo los procesos envoltorios `wscript.exe` y `cmd.exe` que puede vincular a esta instalación (el lanzador o script de servicio de este directorio, una cadena de procesos padres que conduce al proxy o al servicio del Programador de tareas, y una hora de inicio registrada), y espera a que terminen. Solo entonces detiene el proxy de forma controlada. Después confirma que el puerto permanezca libre unos seis segundos y que ningún envoltorio se haya reiniciado, para impedir que un bucle de reinicio vuelva a iniciar el proxy tras una parada exitosa.
 
 OpenCodex verifica que la tarea programada inicie esta instalación con tu cuenta de Windows
-y comprueba la cuenta de cada instancia en ejecución antes de detenerla. Una tarea deshabilitada
+y comprueba las cuentas de sus desencadenadores y de cada instancia en ejecución antes de detenerla. Una tarea deshabilitada
 de tu cuenta se considera inactiva si no tiene instancias en ejecución. Si hay una tarea en cola,
 OpenCodex no confirma la parada. Si la comprobación falla,
-revisa el lanzador y la cuenta de ejecución en el Programador de tareas y detén la tarea desde
-la sesión de esa cuenta.
+revisa el lanzador, las cuentas de los desencadenadores y la cuenta de ejecución en el Programador
+de tareas. Finalizar sus instancias no repara el registro. Repara un registro que te pertenezca
+o contacta con su propietario o administrador. La parada rechaza nuevas acciones al vencer
+su límite de tiempo, cancela el proceso auxiliar de parada y conserva los cambios confirmados
+en el resultado, incluso si la verificación final sigue pendiente.
+Si se envía la autorización y el auxiliar no responde antes del plazo, la CLI indica
+que no pudo leer el estado del servicio (`state-unknown`) y marca la parada como fallida.
 
 OpenCodex solo finaliza directamente un envoltorio si comprueba que pertenece a tu cuenta.
 Ignora los envoltorios que pertenecen a otro usuario. Si no puede verificar el propietario
@@ -289,6 +294,16 @@ Comprueba si el proxy está listo después de la sincronización mediante el end
 Los proxies antiguos sin `/readyz` se consideran `unreachable` y no se aceptan como listos; `/healthz` comprueba por separado si el proceso responde. El comando realiza una comprobación por defecto. `--wait` repite la consulta hasta que el proxy esté listo o se agote el plazo, pero termina inmediatamente al observar `failed`. El plazo predeterminado es de 45 segundos; `--timeout <seconds>` requiere `--wait` y acepta enteros de 1–300. La salida `--json` de la CLI contiene menos campos que la respuesta HTTP: `{ready, status, pid, port}`, donde `status` es `ready`, `pending`, `failed` o `unreachable`. Los códigos de salida son 0 si está listo; 1 si no está listo, sigue pendiente, falla, se agota el plazo o no es accesible; y 64 si los argumentos no son válidos.
 
 En un Child de Remote Link, la disponibilidad también incluye el enlace. Si no puede transportar solicitudes, `/readyz` devuelve `503` con `status: "pending"` y `link: {state: "unavailable", reason}`; `ocx ready --wait` sigue esperando a que se recupere. Un enlace operativo añade `link: {state: "available"}` a la respuesta `200`. En un Child, `/healthz` sigue indicando únicamente que el proceso responde. Los motivos se enumeran en [Remote Link](/es/guides/remote-link/#link-status).
+
+Si al iniciar el proxy aparece un mensaje que indica que falta el directorio de Codex, abre Codex una vez o configura `CODEX_HOME` para que apunte al directorio que Codex ya ha inicializado. Después ejecuta `ocx sync`. Si la sincronización se completa, se restablece el enrutamiento, pero `failed` sigue reflejando el fallo al iniciar el proceso actual. Reinicia el proxy y ejecuta `ocx ready` para comprobar el nuevo proceso.
+
+Para un servicio instalado con la CLI, usa los valores registrados de `CODEX_HOME` y `OPENCODEX_HOME`. Si la definición antigua del servicio omite estas rutas, ejecuta `ocx service repair` una vez con esos valores. Inicializa el directorio de Codex si hace falta, ejecuta `ocx sync` y reinicia el servicio. Si la aplicación de escritorio gestiona el proxy, reinícialo desde la aplicación.
+
+Para trasladar el servicio de la CLI a otro directorio de Codex existente, ejecuta `ocx service uninstall` con la configuración original. Si el servicio se elimina pero falla la restauración de Codex nativo, corrige el error indicado y ejecuta `ocx restore` con esa misma configuración.
+
+Si en Windows la restauración falla y deja un registro de limpieza pendiente, ejecuta `ocx stop` desde la instalación responsable con los directorios originales antes de cambiarlos. Mientras exista ese registro, `ocx update` rechazará el reemplazo del paquete.
+
+Una vez completadas la desinstalación y la restauración, conserva `OPENCODEX_HOME`, selecciona el nuevo `CODEX_HOME` y ejecuta `ocx service install` con el backend y las opciones originales. Con los nuevos valores, ejecuta `ocx sync` y comprueba el resultado con `ocx ready`. Si el inicio ha fallado, sigue los pasos de recuperación anteriores.
 
 ### `ocx resolve [--json]`
 

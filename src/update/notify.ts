@@ -80,10 +80,11 @@ function parseStable(v: string): [number, number, number] | null {
   return [Number(m[1]), Number(m[2]), Number(m[3])];
 }
 
-function parsePreview(v: string): [number, number, number, number] | null {
-  const m = /^(\d+)\.(\d+)\.(\d+)-preview\.(\d+)$/.exec(v.trim());
+/** `X.Y.Z-preview.<date>` or `X.Y.Z-preview.<date>.<attempt>`; a missing attempt sorts as 0. */
+function parsePreview(v: string): [number, number, number, number, number] | null {
+  const m = /^(\d+)\.(\d+)\.(\d+)-preview\.(\d+)(?:\.(\d+))?$/.exec(v.trim());
   if (!m) return null;
-  return [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+  return [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5] ?? 0)];
 }
 
 function gt(a: number[], b: number[]): boolean {
@@ -103,7 +104,7 @@ function gt(a: number[], b: number[]): boolean {
  *   so a stable release with a strictly higher base is offered (same base is
  *   content-lateral promotion and stays not-newer, mirroring the preview
  *   channel's O3 rule).
- * - preview channel: preview-vs-preview compares the trailing -preview.N; a
+ * - preview channel: preview-vs-preview compares the trailing -preview.N[.M]; a
  *   stable release with a strictly higher base counts as newer (O3), while a
  *   stable release with the same base as the current preview does not.
  */

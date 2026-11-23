@@ -150,6 +150,16 @@ ocx status --json
 
 透過免認證的 `GET /readyz` 端點檢查同步後的就緒狀態。就緒時回傳 `200`，或 `pending` 與終端 `failed` 時回傳附帶 `Retry-After: 1` 的 `503`。其淨化的 HTTP 身分為 `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl, features}`。`protocol` 是 Hub 目前的遠端協定版本，`minimumClientProtocol` 是相容的最低用戶端協定版本，`managementUrl` 是瀏覽器可見的標準管理 origin。沒有 `/readyz` 的舊代理會以 `unreachable` 方式 fail closed；`/healthz` 是分開的存活檢查，而非就緒檢查。此指令預設執行一次探測；`--wait` 輪詢直到就緒或逾時，但在觀察到終端 `failed` 狀態時立即退出。預設逾時為 45 秒；`--timeout <seconds>` 需要 `--wait`，接受 1–300 的正整數秒。CLI JSON 輸出 `{ready, status, pid, port}`，其中 `status` 為 `ready`、`pending`、`failed` 或 `unreachable`。離開碼為：就緒 0；未就緒、pending、failed、逾時或 unreachable 1；無效引數 64。
 
+如果代理啟動時顯示找不到 Codex 家目錄，請先啟動一次 Codex，或將 `CODEX_HOME` 指向 Codex 已初始化的目錄，然後執行 `ocx sync`。同步成功後即可恢復路由，但 `failed` 仍反映目前程序啟動時的結果。請重新啟動代理，再執行 `ocx ready` 確認新程序是否就緒。
+
+對於由 CLI 管理的服務，請使用登記時的 `CODEX_HOME` 和 `OPENCODEX_HOME`。如果舊版服務定義缺少這些路徑，請使用相同設定執行一次 `ocx service repair`。視需要初始化 Codex 家目錄，執行 `ocx sync`，再重新啟動服務。如果代理由桌面應用程式管理，請在應用程式中重新啟動。
+
+如要將 CLI 服務移至另一個現有的 Codex 家目錄，請先用原本的設定執行 `ocx service uninstall`。若服務已移除，但還原原生 Codex 設定失敗，請修正提示的錯誤，並以相同設定執行 `ocx restore`。
+
+在 Windows 上，若還原失敗後留下待清理紀錄，請在切換家目錄前，從原本管理服務的安裝實例使用原本的家目錄設定執行 `ocx stop`。紀錄仍存在時，`ocx update` 會拒絕替換套件。
+
+移除和還原都成功後，保留 `OPENCODEX_HOME`，選擇新的 `CODEX_HOME`，再以原本的後端和選項執行 `ocx service install`。使用新設定執行 `ocx sync`，並以 `ocx ready` 確認狀態。若啟動失敗，請依照上方步驟復原。
+
 ### `ocx doctor`
 
 執行唯讀環境與連線診斷：狀態路徑與檔案系統類型、WSL 雙重安裝、代理環境／設定、ChatGPT 可達性、Codex plugin 與專案設定警告，以及待處理的歷史遷移。Codex app-home 定向區段也會偵測窄義的 Windows Orca runtime-home 不符，並在適用時說明服務遷移。此診斷顯示的路徑會遮罩 OS 使用者名稱。Doctor 印出修復提示但不套用它們。

@@ -288,7 +288,70 @@ pub fn page_status(app: &AppHandle) -> PageUpdateStatus {
     })
 }
 
-pub async fn install_pending(app: &AppHandle) -> Result<PageUpdateStatus, String> {
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallFailure {
+    message: String,
+    manual_download: bool,
+    #[serde(skip)]
+    diagnostic: Option<String>,
+}
+
+enum PackageStep {
+    Download,
+    Install,
+}
+
+impl InstallFailure {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            manual_download: false,
+            diagnostic: None,
+        }
+    }
+
+    fn package(step: PackageStep, error: tauri_plugin_updater::Error) -> Self {
+        use tauri_plugin_updater::Error;
+        let (message, manual_download) = match (step, &error) {
+            (
+                _,
+                Error::Minisign(_)
+                | Error::Base64(_)
+                | Error::SignatureUtf8(_)
+                | Error::SignedVersionMismatch { .. }
+                | Error::MissingSignedVersion,
+            ) => (
+                "The update package failed signature verification. Installation was blocked.",
+                false,
+            ),
+            (PackageStep::Download, Error::Network(_) | Error::Reqwest(_)) => {
+                ("The update package could not be downloaded.", true)
+            }
+            (PackageStep::Download, _) => {
+                ("The updater could not acquire the update package.", false)
+            }
+            (PackageStep::Install, _) => (
+                "The platform installer could not install the verified update package.",
+                false,
+            ),
+        };
+        Self {
+            message: message.into(),
+            manual_download,
+            diagnostic: Some(error.to_string()),
+        }
+    }
+
+    pub fn log(&self) {
+        logging::log_once(
+            "updater install failed",
+            self.diagnostic.as_deref().unwrap_or(&self.message),
+        );
+    }
+}
+
+pub async fn install_pending(app: &AppHandle) -> Result<PageUpdateStatus, InstallFailure> {
     let state = app.state::<tray::TrayState>();
     let gate = app.state::<CheckGeneration>();
     match gate.claim_install(
@@ -304,8 +367,10 @@ pub async fn install_pending(app: &AppHandle) -> Result<PageUpdateStatus, String
         || app.state::<DesktopUpdateState>().retain_phase("installing"),
     ) {
         InstallClaim::Claimed => {}
-        InstallClaim::Busy => return Err("an update is already installing".into()),
-        InstallClaim::NoPending => return Err("no update is ready to install".into()),
+        InstallClaim::Busy => return Err(InstallFailure::new("An update is already installing.")),
+        InstallClaim::NoPending => {
+            return Err(InstallFailure::new("No update is ready to install."))
+        }
     }
     let pending = app.state::<PendingUpdate>();
     let update = pending
@@ -319,7 +384,7 @@ pub async fn install_pending(app: &AppHandle) -> Result<PageUpdateStatus, String
             app.state::<DesktopUpdateState>().retain_phase("current");
             gate.queue_ui(UiProjection::Current);
         });
-        return Err("no update is ready to install".into());
+        return Err(InstallFailure::new("No update is ready to install."));
     };
     let version = update.version.clone();
     let retry_update = update.clone();
@@ -385,14 +450,14 @@ pub async fn check(app: &AppHandle) -> Result<Option<Update>, String> {
         .map_err(|error| error.to_string())
 }
 
-pub async fn install(app: &AppHandle, update: Update) -> Result<(), String> {
+pub async fn install(app: &AppHandle, update: Update) -> Result<(), InstallFailure> {
     // Download and verify first, and separately from installing. The pinned updater checks the
     // release signature inside `download`, so these bytes are the ones the key signed; nothing has
     // been replaced yet, and a failure here costs only the download.
     let package = update
         .download(|_, _| {}, || {})
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| InstallFailure::package(PackageStep::Download, error))?;
 
     // Then stop the runtime, and confirm it stopped, *before* anything is replaced. Asking for the
     // restart after `install` is the shape that does not work: the pinned Windows installer hands off
@@ -404,17 +469,17 @@ pub async fn install(app: &AppHandle, update: Update) -> Result<(), String> {
         // Not an ending after all: the app goes back to running, so a close hides again, Quit
         // works and Install can be retried. A drain somebody else owns is left alone.
         recover_after_failed_install(app);
-        return Err(format!(
-            "the update was downloaded but not installed: {}",
+        return Err(InstallFailure::new(format!(
+            "The update was downloaded and verified, but {}. Installation has not started.",
             readiness.describe()
-        ));
+        )));
     }
 
     if let Err(error) = crate::process_spawn::with_spawn(|| update.install(package)) {
         // The installer returned a failure. The runtime was stopped for an install that did not
         // happen, so the app brings one back instead of sitting drained.
         recover_after_failed_install(app);
-        return Err(error.to_string());
+        return Err(InstallFailure::package(PackageStep::Install, error));
     }
     // Only reached where the installer returns. On Windows it does not.
     crate::exit::complete_restart(app)
@@ -516,6 +581,45 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc};
     use tauri_utils::config::BundleType;
+
+    #[test]
+    fn install_failures_publish_only_the_stage_and_download_advice() {
+        use super::{InstallFailure, PackageStep};
+        use tauri_plugin_updater::Error;
+        let private = "private-updater-detail";
+        for (step, error, stage, manual) in [
+            (
+                PackageStep::Download,
+                Error::Network(private.into()),
+                "downloaded",
+                true,
+            ),
+            (
+                PackageStep::Download,
+                Error::SignatureUtf8(private.into()),
+                "signature",
+                false,
+            ),
+            (
+                PackageStep::Install,
+                Error::MissingSignedVersion,
+                "signature",
+                false,
+            ),
+            (
+                PackageStep::Install,
+                Error::Io(std::io::Error::other(private)),
+                "installer",
+                false,
+            ),
+        ] {
+            let value = serde_json::to_value(InstallFailure::package(step, error)).unwrap();
+            assert!(value["message"].as_str().unwrap().contains(stage));
+            assert_eq!(value["manualDownload"], manual);
+            assert_eq!(value.as_object().unwrap().len(), 2);
+            assert!(!value.to_string().contains(private));
+        }
+    }
 
     #[test]
     fn a_failed_install_restarts_the_runtime_only_when_the_drain_had_stopped_it() {

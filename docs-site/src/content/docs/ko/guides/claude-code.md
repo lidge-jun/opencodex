@@ -601,8 +601,8 @@ Messages → Responses로 변환되는 요청에서는 Claude Code의 `/effort` 
 
 | Messages 입력 | Responses 출력 |
 | --- | --- |
-| 최상위 `system` | `instructions`(텍스트 블록을 `\n\n`으로 연결) |
-| `messages[].role: "system"` | `instructions`에도 합쳐요 |
+| 최상위 `system` | `instructions`(텍스트 블록을 `\n\n`으로 연결). Codex 로그인으로 GPT-6.2 Sol·Astra를 쓰면 캐시되도록 첫 `developer` 메시지로 보내요 |
+| `messages[].role: "system"` | 원래 위치의 `developer` 메시지로 바꿔요 |
 | 사용자 텍스트 / 이미지 | `input_text` / `input_image`(base64 → data URL) |
 | Assistant 텍스트 | `output_text` |
 | Assistant `tool_use` | `function_call`(`input` → JSON 문자열로 변환한 `arguments`) |
