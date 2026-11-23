@@ -24,6 +24,7 @@ import type { AuxiliaryModelSend } from "../lib/request-execution-budget";
 import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import { runExaWebSearch } from "./exa-executor";
+import { runKeenableWebSearch } from "./keenable-executor";
 import type { WebSearchBackendId } from "./index";
 import { pacingHeaderDeadline } from "./header-deadline";
 import { redactSecretString } from "../lib/redact";
@@ -396,6 +397,7 @@ export interface WebSearchLoopDeps {
   geminiSidecar?: { providerName: string; provider: OcxProviderConfig };
   /** Required for the exa backend: the operator key, read from config at plan unpack (L9). */
   exaApiKey?: string;
+  keenableApiKey?: string;
   /** Opt-in x_search options for the xai backend. */
   xaiSearchOptions?: XaiSearchOptions;
   hostedTool: Record<string, unknown>;
@@ -1176,6 +1178,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             outcome = deps.exaApiKey
               ? await runExaWebSearch(query, deps.exaApiKey, settings, signal)
               : { text: "", sources: [], error: "exa backend selected without an exaApiKey" };
+          } else if (backend === "keenable") {
+            outcome = await runKeenableWebSearch(query, deps.keenableApiKey, settings, signal);
           } else {
             outcome = await runWebSearch(query, hostedTool, forwardProvider!, selectedForwardHeaders, settings, signal, recordSidecarOutcome, deps.beforeSidecarDispatch);
           }

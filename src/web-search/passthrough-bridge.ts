@@ -67,6 +67,7 @@ import type { AuxiliaryModelSend } from "../lib/request-execution-budget";
 import { runXaiWebSearch, validateXaiSearchOptions } from "./xai-executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import { runExaWebSearch } from "./exa-executor";
+import { runKeenableWebSearch } from "./keenable-executor";
 import {
   findAnthropicSidecarProvider,
   findGeminiSidecarProvider,
@@ -239,6 +240,7 @@ export interface PassthroughWebSearchBridgeAuth {
   xai?: { providerName: string; provider: OcxProviderConfig };
   gemini?: { providerName: string; provider: OcxProviderConfig };
   exaApiKey?: string;
+  keenableApiKey?: string;
 }
 
 /**
@@ -274,6 +276,10 @@ export function resolvePassthroughWebSearchBridgeAuth(
     case "exa": {
       const exaApiKey = config.webSearchSidecar?.exaApiKey;
       return typeof exaApiKey === "string" && exaApiKey.length > 0 ? { exaApiKey } : {};
+    }
+    case "keenable": {
+      const keenableApiKey = config.webSearchSidecar?.keenableApiKey;
+      return typeof keenableApiKey === "string" && keenableApiKey.length > 0 ? { keenableApiKey } : {};
     }
     default:
       return {};
@@ -353,6 +359,7 @@ export function planPassthroughWebSearchBridge(
   if (backend === "xai" && auth?.xai) return { backend, maxSearches, timeoutMs };
   if (backend === "gemini" && auth?.gemini) return { backend, maxSearches, timeoutMs };
   if (backend === "exa" && auth?.exaApiKey) return { backend, maxSearches, timeoutMs };
+  if (backend === "keenable") return { backend, maxSearches, timeoutMs };
   return undefined;
 }
 
@@ -861,6 +868,7 @@ const DEFAULT_BRIDGE_MODELS: Record<ProviderWebSearchBridgeBackend, string> = {
   xai: DEFAULT_XAI_BRIDGE_MODEL,
   gemini: DEFAULT_GEMINI_BRIDGE_MODEL,
   exa: DEFAULT_OPENAI_BRIDGE_MODEL,
+  keenable: DEFAULT_OPENAI_BRIDGE_MODEL,
 };
 
 /**
@@ -1012,6 +1020,8 @@ export function createPassthroughWebSearchBridgeExecutor(
         }
         return runExaWebSearch(query, exaApiKey, settings, querySignal);
       }
+      case "keenable":
+        return runKeenableWebSearch(query, context.auth?.keenableApiKey, settings, querySignal);
     }
   }, signal);
 }

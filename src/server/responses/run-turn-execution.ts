@@ -931,6 +931,9 @@ export async function executeResponsesRunTurn(
           forwardProvider: wsPlan.forwardSidecar?.provider,
           forwardHeaders: wsPlan.forwardSidecar?.headers ?? requestState.selectedForwardHeaders,
           ...(wsPlan.exaConfigured ? { exaApiKey: config.webSearchSidecar?.exaApiKey } : {}),
+          ...(wsPlan.backend === "keenable" && config.webSearchSidecar?.keenableApiKey
+            ? { keenableApiKey: config.webSearchSidecar.keenableApiKey }
+            : {}),
           recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
           abortSignal: runTurnAbort.signal,
           dispatch: dispatchSearchIteration,
@@ -1083,6 +1086,9 @@ export async function executeResponsesRunTurn(
             forwardProvider: wsPlan.forwardSidecar?.provider,
             forwardHeaders: wsPlan.forwardSidecar?.headers ?? requestState.selectedForwardHeaders,
             ...(wsPlan.exaConfigured ? { exaApiKey: config.webSearchSidecar?.exaApiKey } : {}),
+          ...(wsPlan.backend === "keenable" && config.webSearchSidecar?.keenableApiKey
+            ? { keenableApiKey: config.webSearchSidecar.keenableApiKey }
+            : {}),
             recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
             abortSignal: runTurnAbort.signal,
             dispatch: dispatchSearchIteration,

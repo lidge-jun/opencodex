@@ -35,6 +35,7 @@ import type { AuxiliaryModelSend } from "../lib/request-execution-budget";
 import { runXaiWebSearch } from "./xai-executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import { runExaWebSearch } from "./exa-executor";
+import { runKeenableWebSearch } from "./keenable-executor";
 import { formatWebSearchResults } from "./format-result";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import { redactSecretString } from "../lib/redact";
@@ -58,6 +59,7 @@ export interface RunTurnWebSearchDeps {
   forwardHeaders?: Headers;
   /** Operator key for the exa backend; read from config by the caller. */
   exaApiKey?: string;
+  keenableApiKey?: string;
   abortSignal?: AbortSignal;
   recordSidecarOutcome?: SidecarOutcomeRecorder;
   dispatchSidecarSend?: AuxiliaryModelSend;
@@ -289,6 +291,8 @@ export async function* runTurnWebSearchLoop(
           return deps.exaApiKey
             ? await runExaWebSearch(query, deps.exaApiKey, plan.settings, signal)
             : { text: "", sources: [], error: "exa backend selected without an exaApiKey" };
+        case "keenable":
+          return await runKeenableWebSearch(query, deps.keenableApiKey, plan.settings, signal);
         default:
           return deps.forwardProvider
             ? await runWebSearch(query, plan.hostedTool, deps.forwardProvider, deps.forwardHeaders ?? new Headers(), plan.settings, signal, deps.recordSidecarOutcome, plan.forwardSidecar?.beforeDispatch)

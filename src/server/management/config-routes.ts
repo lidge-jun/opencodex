@@ -1088,7 +1088,7 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
     if (raw.webSearch !== undefined && !isPlainRecord(raw.webSearch)) return jsonResponse({ error: "webSearch must be an object" }, 400);
     if (raw.vision !== undefined && !isPlainRecord(raw.vision)) return jsonResponse({ error: "vision must be an object" }, 400);
     const body = raw as {
-      webSearch?: { enabled?: unknown; model?: unknown; backend?: unknown; anthropicInstance?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown; xSearch?: unknown };
+      webSearch?: { enabled?: unknown; model?: unknown; backend?: unknown; anthropicInstance?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown; keenableApiKey?: unknown; xSearch?: unknown };
       vision?: {
         model?: unknown;
         backend?: unknown;
@@ -1236,6 +1236,10 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
         if (typeof body.webSearch.exaApiKey === "string") {
           if (body.webSearch.exaApiKey === "") delete webSearchCandidate.exaApiKey;
           else webSearchCandidate.exaApiKey = body.webSearch.exaApiKey;
+        }
+        if (typeof body.webSearch.keenableApiKey === "string") {
+          if (body.webSearch.keenableApiKey === "") delete webSearchCandidate.keenableApiKey;
+          else webSearchCandidate.keenableApiKey = body.webSearch.keenableApiKey;
         }
         // Opt-in x_search block (L7): null clears; an object is doc-validated before persisting.
         if (body.webSearch.xSearch === null) delete webSearchCandidate.xSearch;

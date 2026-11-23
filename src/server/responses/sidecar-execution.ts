@@ -880,6 +880,9 @@ export async function executeResponsesSidecars(
       xaiSearchOptions: wsPlan.xaiSearchOptions,
       // The exa key never rides the plan: read it from config at unpack time (L9).
       ...(wsPlan.exaConfigured ? { exaApiKey: config.webSearchSidecar?.exaApiKey } : {}),
+      ...(wsPlan.backend === "keenable" && config.webSearchSidecar?.keenableApiKey
+        ? { keenableApiKey: config.webSearchSidecar.keenableApiKey }
+        : {}),
       hostedTool: wsPlan.hostedTool,
       selectedForwardHeaders: wsPlan.forwardSidecar?.headers ?? requestState.selectedForwardHeaders,
       settings: wsPlan.settings,
