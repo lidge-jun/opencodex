@@ -26,6 +26,9 @@ interface TargetCooldown {
   cooldownUntil: number;
   revision: number;
   status?: number;
+  quotaExhausted?: true;
+  /** Process-local credential binding. Cooldown files carry the advisory marker only. */
+  quotaBinding?: string;
 }
 
 const DEFAULT_COOLDOWN_MS = 60_000;
@@ -132,6 +135,20 @@ export function comboTargetCooldownStatus(
     ? targetCooldowns.get(cooldownMapKey(comboId, target))?.status : undefined;
 }
 
+export function strictComboTargetCooldown(
+  comboId: string,
+  target: Pick<OcxComboTarget, "provider" | "model">,
+  activeBinding: string | undefined,
+  now: number,
+): "quota exhausted" | "cooldown" | undefined {
+  if (!isComboTargetInCooldown(comboId, target, now)) return undefined;
+  const entry = targetCooldowns.get(cooldownMapKey(comboId, target))!;
+  if (!entry.quotaExhausted) return "cooldown";
+  if (activeBinding && entry.quotaBinding === activeBinding) return "quota exhausted";
+  // A replaced key or a cooldown loaded from disk has to be checked afresh.
+  return undefined;
+}
+
 /** Identity of the current live write, independent of its possibly repeated expiry. */
 export function comboTargetCooldownRevision(
   comboId: string,
@@ -223,6 +240,7 @@ export function coolComboTarget(
     status?: number;
     code?: string | null;
     message?: string;
+    quotaBinding?: string;
   },
 ): boolean {
   const now = options?.now ?? Date.now();
@@ -255,6 +273,7 @@ export function coolComboTarget(
     // Local fallbacks are capped at ten minutes; explicit server delays at one day.
     cooldownUntil: now + (serverDelayMs ?? Math.min(Math.max(cooldownMs, 1), MAX_COOLDOWN_MS)),
     status: options?.status,
+    ...(options?.quotaBinding ? { quotaExhausted: true, quotaBinding: options.quotaBinding } : {}),
   });
   sweepExpiredOnWrite(now);
   return true;
@@ -286,6 +305,7 @@ export interface CommittedTerminalServingAttempt {
 
 export interface CommittedTerminalCooldownFacts {
   comboId?: string;
+  quotaOnlyFallback?: boolean;
   terminalStatus?: string;
   terminalReason?: CommittedIncompleteReason;
   servingAttempt?: CommittedTerminalServingAttempt;
@@ -304,7 +324,7 @@ export interface CommittedTerminalCooldownFacts {
  * effort and context configuration stay untouched.
  */
 export function coolComboTargetForCommittedTerminal(facts: CommittedTerminalCooldownFacts): void {
-  if (!facts.comboId || facts.terminalStatus !== "incomplete") return;
+  if (!facts.comboId || facts.quotaOnlyFallback || facts.terminalStatus !== "incomplete") return;
   const cooldownMs = facts.terminalReason === undefined
     ? undefined
     : COMMITTED_TERMINAL_COOLDOWN_MS[facts.terminalReason];
@@ -799,6 +819,26 @@ function isProviderScopedQuotaCap(
 function hasAccountExhaustionCode(code?: string | null): boolean {
   const normalized = normalizedFailureCode(code);
   return ACCOUNT_EXHAUSTION_CODES.has(normalized) || normalized === "insufficient_quota";
+}
+
+const BILLING_EXHAUSTION_CODES = new Set([
+  "credit_balance_exhausted", "credit_balance_too_low", "insufficient_balance", "billing_hard_limit_reached",
+  "organization_spend_limit_exceeded", "project_spend_limit_exceeded", "organization_usage_limit_exceeded",
+]);
+
+/** Use structured budget evidence or a recognized quota refusal, never a bare 429. */
+export function isConfirmedComboExhaustion(status: number, message: string, code?: string, type?: string): boolean {
+  if (isAnthropicBillingFailure(status, message, code ?? type) || isAnthropicExtraUsageFailure(status, message, code ?? type)) return true;
+  const identity = code ?? type;
+  const normalized = normalizedFailureCode(identity);
+  // A structured exhaustion code is authoritative on a request, quota or upstream failure status.
+  const structuredStatus = status === 400 || status === 402 || status === 422 || status === 429 || (status >= 500 && status < 600);
+  if (structuredStatus && (hasAccountExhaustionCode(identity) || BILLING_EXHAUSTION_CODES.has(normalized))) return true;
+  if (status !== 402 && status !== 429 && status !== 502) return false;
+  if (normalized === "rate_limit_exceeded" || normalized === "too_many_requests"
+    || isTransientRequestRateLimit({ status, code: identity, message })
+    || /rate limit|per minute|per second/i.test(message)) return false;
+  return status === 429 && ACCOUNT_EXHAUSTION_TEXT.test(message);
 }
 
 /**

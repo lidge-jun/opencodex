@@ -94,6 +94,8 @@ export const RESPONSES_CORE_MODULES = [
   "spend-storage-error.ts",
   // Reached from passthrough dispatch: local pacing refusals retain 429 and Retry-After.
   "pacing-overload.ts",
+  // Reached from core.ts, the Combo loop and the physical send: Combo admission checked again at the send.
+  "send-admission.ts",
   "reset-replay.ts",
   "passthrough-delivery.ts",
   // Reached from passthrough-delivery.ts: buffered combo children must honor a required tool_choice (#7456).
