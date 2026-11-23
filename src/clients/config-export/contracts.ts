@@ -207,9 +207,9 @@ export interface ExportContext {
   config?: OcxConfig;
   /**
    * `baseUrl` is this Home's unauthenticated loopback listener, so inference needs no
-   * admission key. Only the managed-integration context sets it, because only that path
-   * selects the listener itself. Never inferred from the URL: an SSH forward can look like
-   * loopback and still lead to an authenticated listener.
+   * admission key. Set only where the serving config selected the listener itself (the
+   * managed-integration context and `/api/client-config`). Never inferred from the URL: an
+   * SSH forward can look like loopback and still lead to an authenticated listener.
    */
   keylessInference?: boolean;
   droidReasoningDefaults?: DroidReasoningDefaults;
