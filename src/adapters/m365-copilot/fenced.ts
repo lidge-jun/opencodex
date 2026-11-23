@@ -686,12 +686,21 @@ function proseOutsideFences(text: string, fences: FenceRange[]): string {
     return prose.join("");
 }
 
-/** A JSON call can leave an empty Markdown wrapper. Keep occupied examples and unrelated fences. */
-export function removeEmptyToolWrappers(text: string): string {
+/** Strip tool-call delimiters but keep prose left between accepted calls. */
+export function unwrapToolReplyFences(text: string): string {
     if (!text.includes("```")) return text;
-    const empty = scanFences(text, true).filter(block =>
-        (block.info === "" || block.info === "json" || block.info === "tool_call") && !block.inner.trim());
-    return proseOutsideFences(text, empty);
+    const delimiters: FenceRange[] = [];
+    for (const block of scanFences(text, true)) {
+        if (block.info !== "tool_call" && block.info !== "json" && block.info !== "") continue;
+        if (!block.inner.trim()) {
+            delimiters.push(block);
+        } else if (block.info === "tool_call") {
+            const opening = text.indexOf("```tool_call", block.start);
+            const closing = text.lastIndexOf("```", block.end - 1);
+            delimiters.push({ start: opening, end: opening + "```tool_call".length }, { start: closing, end: closing + 3 });
+        }
+    }
+    return proseOutsideFences(text, delimiters);
 }
 const RESTATED_SIMILARITY = 0.85;
 const RESTATEMENT_GAP_CHARS = 300;

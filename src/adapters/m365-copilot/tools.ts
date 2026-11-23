@@ -1,5 +1,5 @@
 // Adapted from cramt/m365-copilot-proxy (65905e8), copyright 2026 Alexandra Østermark. MIT; see LICENSE.
-import { buildSpecMap, currentFramingVariant, deriveFencedSpec, findToolFenceRanges, formatFencedToolDefinitions, parseFencedToolCalls, removeEmptyToolWrappers, renderFencedCall, transcriptStyleForVariant, type FenceRange } from "./fenced";
+import { buildSpecMap, currentFramingVariant, deriveFencedSpec, findToolFenceRanges, formatFencedToolDefinitions, parseFencedToolCalls, unwrapToolReplyFences, renderFencedCall, transcriptStyleForVariant, type FenceRange } from "./fenced";
 export interface ToolFunction {
     name: string;
     description?: string;
@@ -264,7 +264,7 @@ function proseDocument({ result: parsed, firstFenceStart, inline, documentRanges
         let legacy = text;
         for (const range of documentRanges) legacy = legacy.replace(text.slice(range.start, range.end), "");
         prose = cleanLooseText(legacy) ?? "";
-    } else if (text !== undefined && inline && text.includes("`")) {
+    } else if (text !== undefined && inline) {
         // JSON cleanup removed inline envelopes first, then fenced envelopes from the remaining text.
         const afterInline = proseOutsideEnvelopes(text, inline, []);
         const fenced = afterInline.includes("```tool_call") ? jsonToolEnvelopes(afterInline, true) : [];
@@ -289,11 +289,12 @@ function inspectToolCalls(text: string, specMap: ToolSpecs): ToolInspection {
     }
     const resolveName = (raw: unknown): string | undefined => typeof raw === "string" ? (specMap?.get(raw)?.name ?? raw) : undefined;
     const toolCalls: ParsedToolCall[] = [];
-    function readCall(range: JsonEnvelope, fenced: boolean): void {
+    function readCall(range: JsonEnvelope, fenced: boolean, emit: boolean): boolean {
         try {
             const parsed = JSON.parse(text.slice(range.valueStart, range.valueEnd));
             const name = resolveName(fenced ? parsed.tool || parsed.name : parsed.tool);
-            if (name) {
+            if (!name) return false;
+            if (emit) {
                 toolCalls.push({
                     id: `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
                     type: "function",
@@ -305,23 +306,22 @@ function inspectToolCalls(text: string, specMap: ToolSpecs): ToolInspection {
                     },
                 });
             }
+            return true;
         }
         catch {
-            // Preserve the text fallback when there is no accepted call.
+            return false;
         }
     }
     const inline = jsonToolEnvelopes(text, false);
-    for (const range of inline) readCall(range, false);
-    const useInline = toolCalls.length > 0;
-    const fenced = jsonToolEnvelopes(text, true);
-    if (!useInline) {
-        for (const range of fenced) readCall(range, true);
-        if (!toolCalls.length) return { result: { hasToolCalls: false, toolCalls: [], textContent: cleanLooseText(text) } };
-    }
-    const remaining = removeEmptyToolWrappers(proseOutsideEnvelopes(text, useInline ? inline : [], fenced)
+    const acceptedInline = inline.filter(range => readCall(range, false, true));
+    const useFenced = acceptedInline.length === 0;
+    const acceptedFenced = jsonToolEnvelopes(text, true).filter(range => readCall(range, true, useFenced));
+    if (!toolCalls.length) return { result: { hasToolCalls: false, toolCalls: [], textContent: cleanLooseText(text) } };
+    const remaining = unwrapToolReplyFences(proseOutsideEnvelopes(text, acceptedInline, acceptedFenced)
         .replace(CONFIDENCE_REGEX, "")
         .replace(FINAL_OBJECT_REGEX, "")).trim();
-    return { inline, result: {
+    const documentInline = acceptedInline.length !== inline.length || text.includes("`") ? inline : undefined;
+    return { inline: documentInline, result: {
         hasToolCalls: true,
         toolCalls,
         textContent: remaining || null,

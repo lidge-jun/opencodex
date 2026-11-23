@@ -223,6 +223,40 @@ describe("Microsoft 365 Copilot native transport", () => {
     );
   });
 
+  test("keeps notes inside a tool_call wrapper without emitting the wrapper as a call", () => {
+    const call = (query: string) => JSON.stringify({ tool: "lookup", arguments: { query } });
+    const one = call("one"), two = call("two");
+    for (const [body, expected] of [
+      [[one, "Keep this note.", two].join("\n"), "Keep this note."],
+      [["Opening note.", one, two, "Closing note."].join("\r\n"), "Opening note.\r\n\r\n\r\nClosing note."],
+    ] as const) {
+      const answer = parseToolAnswer(block("tool_call", body), fixtureTools);
+      expect(answer.result.toolCalls.map(tool => JSON.parse(tool.function.arguments).query)).toEqual(["one", "two"]);
+      expect(answer.result.textContent).toBe(expected);
+      expect(answer.document).toBe(false);
+    }
+  });
+
+  test("preserves unaccepted JSON text alongside real calls without changing eligibility", () => {
+    const call = JSON.stringify({ tool: "lookup", arguments: { query: "one" } });
+    const example = '{"tool":"lookup","arguments":{"query":"' + "a".repeat(300) + '",}}';
+    const answer = parseToolAnswer([call, example, call].join("\n"), fixtureTools);
+    expect(answer.result.textContent).toBe(example);
+    expect(answer.result.toolCalls).toHaveLength(2);
+    expect(answer.document).toBe(false);
+    const note = '{"memo":"Keep this note."}';
+    expect(parseToolAnswer([call, block("tool_call", note)].join("\n"), fixtureTools).result.textContent).toBe(note);
+  });
+
+  test("stripping a mixed tool_call wrapper keeps its line endings and indentation", () => {
+    const call = JSON.stringify({ tool: "lookup", arguments: { query: "one" } });
+    for (const eol of ["\n", "\r\n"]) {
+      const answer = ["Before", "  ```tool_call  ", call, "  Keep the note.", call, "  ```  ", "After"].join(eol);
+      const expected = ["Before", "    ", "", "  Keep the note.", "", "    ", "After"].join(eol);
+      expect(parseToolAnswer(answer, fixtureTools).result.textContent).toBe(expected);
+    }
+  });
+
   test("JSON call eligibility keeps its document threshold when Markdown display changes", () => {
     const call = JSON.stringify({ tool: "lookup", arguments: { query: "one" } });
     const prose = "a".repeat(289) + "\n" + block("sql", "q");
