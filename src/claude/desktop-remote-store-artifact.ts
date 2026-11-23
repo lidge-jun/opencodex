@@ -23,6 +23,29 @@ export function serviceGenerations(): string[] {
   if (token.kind === "unsafe" || backup.kind === "unsafe") throw new DesktopStoreError("unsafe");
   return [token, backup].flatMap(t => t.kind === "present" ? [t.fingerprint] : []);
 }
+export function knownDesktopCredentialCandidates(): string[] {
+  const candidates = new Set<string>(["opencodex-loopback"]);
+  const token = readServiceApiTokenState();
+  if (token.kind === "present") candidates.add(token.token);
+  const backup = readTokenBackupState();
+  if (backup.kind === "present") candidates.add(backup.token);
+  return [...candidates];
+}
+export function isSealedDesktopApiKey(value: unknown): value is string {
+  return typeof value === "string" && value.startsWith("__sealed__:v1:");
+}
+export function projectionMatchesHash(
+  value: Record<string, unknown> | null,
+  expectedHash: string,
+  extraKeys: readonly string[] = [],
+): boolean {
+  if (projectionHash(value) === expectedHash) return true;
+  if (!value || !isSealedDesktopApiKey(value.inferenceGatewayApiKey)) return false;
+  for (const key of [...extraKeys, ...knownDesktopCredentialCandidates()]) {
+    if (projectionHash({ ...value, inferenceGatewayApiKey: key }) === expectedHash) return true;
+  }
+  return false;
+}
 export function profileCredential(value: Record<string, unknown> | null): { origin: string; fingerprint: string } | null {
   if (!value || value.inferenceProvider !== "gateway" || value.inferenceCredentialKind !== "static") return null;
   if (typeof value.inferenceGatewayApiKey !== "string") throw new DesktopStoreError("unsafe");
@@ -103,7 +126,8 @@ export function establish(io: StoreIO, owner: DesktopRemoteOwner, known: readonl
   const credential = profileCredential(target?.value ?? null);
   if (credential && known.includes(credential.fingerprint) && credential.origin !== owner.serverUrl) throw new DesktopStoreError("conflict");
   const fallback = credential?.origin === owner.serverUrl;
-  if (fallback && (!known.includes(credential.fingerprint) || (entry?.name !== "opencodex" && legacy?.id !== targetId))) throw new DesktopStoreError("conflict");
+  const sealedOwned = isSealedDesktopApiKey(target?.value?.inferenceGatewayApiKey) && entry?.name === "opencodex" && targetId === entry.id;
+  if (fallback && ((!known.includes(credential.fingerprint) && !sealedOwned) || (entry?.name !== "opencodex" && legacy?.id !== targetId))) throw new DesktopStoreError("conflict");
   const priorSelection = meta.value.appliedId && selected && !(fallback && meta.value.appliedId === targetId)
     ? { id: meta.value.appliedId, hash: selected.hash } : null;
   const baseline: Baseline = {
@@ -113,7 +137,7 @@ export function establish(io: StoreIO, owner: DesktopRemoteOwner, known: readonl
   };
   const baselineHash = digest(JSON.stringify(baseline, null, 2) + "\n");
   if (bundle.state && (bundle.state.phase !== "prepared" || bundle.state.baselineHash !== baselineHash
-    || bundle.state.lastProjectionHash !== projectionHash(target?.value ?? null))) throw new DesktopStoreError("conflict");
+    || !projectionMatchesHash(target?.value ?? null, bundle.state.lastProjectionHash))) throw new DesktopStoreError("conflict");
   if (!bundle.state) saveState(io, bundle, {
     version: 1, owner, home: bundle.paths.home, library: bundle.paths.library, targetId,
     baselineRef: "baseline.json", baselineHash, baselineKind: baseline.kind, phase: "prepared",
@@ -143,7 +167,11 @@ export function artifact(io: StoreIO, bundle: Bundle, next: Projection, kind: Ar
     if (pending.kind !== kind || pending.after !== after || pending.tokenFingerprint !== tokenFingerprint
       || (before !== pending.before && before !== pending.after)) throw new DesktopStoreError("conflict");
     if (kind === "apply" && selection !== pending.beforeSelection && selection !== pending.afterSelection) throw new DesktopStoreError("conflict");
-  } else if (before !== state.lastProjectionHash) {
+  } else if (!projectionMatchesHash(
+    current?.value ?? null,
+    state.lastProjectionHash,
+    typeof next.inferenceGatewayApiKey === "string" ? [next.inferenceGatewayApiKey] : [],
+  )) {
     // Consent covers only edited fields of the selected, settled, already-owned row.
     // Owner, path, metadata, token and pending-transaction checks remain mandatory.
     if (!overwriteConflict || kind !== "apply" || state.phase !== "active" || !current

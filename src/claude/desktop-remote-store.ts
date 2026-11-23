@@ -12,8 +12,8 @@ import {
   projection, projectionHash, sameOwner, type DesktopDisconnectReceipt, type DesktopRemoteOwner, type DesktopStoreResult,
 } from "./desktop-remote-store-state";
 import {
-  artifact, cleanBackup, currentConnection, establish, loadBundle, locateLegacy, profileCredential,
-  requireOwner, saveState, selectedFile, serviceGenerations, type Bundle,
+  artifact, cleanBackup, currentConnection, establish, isSealedDesktopApiKey, loadBundle, locateLegacy, profileCredential,
+  projectionMatchesHash, requireOwner, saveState, selectedFile, serviceGenerations, type Bundle,
 } from "./desktop-remote-store-artifact";
 export type { DesktopDisconnectReceipt, DesktopRemoteOwner, DesktopStoreResult } from "./desktop-remote-store-state";
 
@@ -89,7 +89,7 @@ export function inspectRemoteDesktopStore(owner: DesktopRemoteOwner): {
       const target = profilePath(bundle.paths.library, bundle.state.targetId);
       site.path = target;
       const file = io.read(target);
-      if (projectionHash(file?.value ?? null) !== bundle.state.lastProjectionHash) return { kind: "conflict", reason: "profile_edited", path: target };
+      if (!projectionMatchesHash(file?.value ?? null, bundle.state.lastProjectionHash)) return { kind: "conflict", reason: "profile_edited", path: target };
       return { kind: bundle.state.phase === "restored" ? "restored" : "active" };
     }
     if (existsSync(bundle.paths.root) && !receipt(io)) return { kind: "unsafe", reason: "root_without_state", path: bundle.paths.root };
@@ -171,7 +171,7 @@ export function replaceRemoteDesktopCredential(held: ClientLifecycleHeld, option
       return success(io, bundle, "updated");
     }
     if (!credential || credential.origin !== options.owner.serverUrl
-      || ![options.expectedTokenFingerprint, replacement].includes(credential.fingerprint)) throw new DesktopStoreError("conflict");
+      || (![options.expectedTokenFingerprint, replacement].includes(credential.fingerprint) && !isSealedDesktopApiKey(file.value.inferenceGatewayApiKey))) throw new DesktopStoreError("conflict");
     artifact(io, bundle, { ...projection(file.value), inferenceGatewayApiKey: options.replacementKey }, "rotate", replacement);
     cleanBackup(io, bundle, [options.expectedTokenFingerprint, ...generations]);
     return success(io, bundle, "updated");
@@ -329,7 +329,7 @@ export function finishRemoteDesktopCleanup(held: ClientLifecycleHeld, owner: Des
     if (!bundle.state) return absent(io);
     if (bundle.state.phase !== "restored" && bundle.state.phase !== "cleaned") throw new DesktopStoreError("conflict");
     const target = io.read(profilePath(bundle.paths.library, bundle.state.targetId));
-    if (projectionHash(target?.value ?? null) !== bundle.state.lastProjectionHash) throw new DesktopStoreError("conflict");
+    if (!projectionMatchesHash(target?.value ?? null, bundle.state.lastProjectionHash)) throw new DesktopStoreError("conflict");
     cleanBackup(io, bundle, [r.tokenFingerprint, bundle.state.tokenFingerprint]);
     // Mark cleanup before unlink so a crash between the two remains recoverable.
     if (bundle.state.phase !== "cleaned") saveState(io, bundle, { ...bundle.state, phase: "cleaned" });

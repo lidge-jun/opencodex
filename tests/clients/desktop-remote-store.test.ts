@@ -394,4 +394,21 @@ describe("connection-owned Desktop projection store", () => {
     expect(child.stdout.trim()).toBe("unsafe");
     expect(lstatSync(target).isFIFO()).toBe(true);
   }, 20000);
+
+  test("Claude Desktop sealing inferenceGatewayApiKey to __sealed__:v1:... does not trigger profile_edited or block re-apply/restore", () => {
+    initial({ custom: true });
+    expect(apply()).toMatchObject({ ok: true, status: "applied" });
+    const meta = read(join(library, "_meta.json"));
+    const targetId = meta.appliedId as string;
+    const profileFilePath = join(library, `${targetId}.json`);
+    const current = read(profileFilePath);
+    atomicWriteFile(profileFilePath, JSON.stringify({ ...current, inferenceGatewayApiKey: "__sealed__:v1:ZmFrZS1zZWFsZWQta2V5" }));
+
+    expect(inspectRemoteDesktopStore(owner)).toMatchObject({ kind: "active" });
+    expect(apply()).toMatchObject({ ok: true, status: "applied" });
+
+    const reapplied = read(profileFilePath);
+    atomicWriteFile(profileFilePath, JSON.stringify({ ...reapplied, inferenceGatewayApiKey: "__sealed__:v1:ZmFrZS1zZWFsZWQta2V5" }));
+    expect(locked(held => restoreRemoteDesktopStore(held, { owner, knownTokenFingerprints: [fingerprint] }))).toMatchObject({ ok: true, status: "restored" });
+  });
 });
