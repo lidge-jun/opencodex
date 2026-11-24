@@ -146,28 +146,28 @@ check(NativeTraySwitch.settles(snapshot: failedSwitch, pendingRow: "pool-b:0"), 
 // Toggle policy and hit testing: ensure status bar icon toggle collapses rather than loops reopen
 let testNow = Date()
 check(
-    NativeTrayTogglePolicy.evaluate(toggle: false, isVisible: true, dismissedNearButton: false, lastDismissedAt: nil, now: testNow) == .present,
+    NativeTrayTogglePolicy.evaluate(toggle: false, isVisible: true, unconsumedButtonMouseDown: false, lastDismissedAt: nil, now: testNow) == .present,
     "Show action without toggle always presents even when visible"
 )
 check(
-    NativeTrayTogglePolicy.evaluate(toggle: true, isVisible: true, dismissedNearButton: false, lastDismissedAt: nil, now: testNow) == .dismiss,
+    NativeTrayTogglePolicy.evaluate(toggle: true, isVisible: true, unconsumedButtonMouseDown: false, lastDismissedAt: nil, now: testNow) == .dismiss,
     "Toggle when panel is visible dismisses the panel"
 )
 check(
     NativeTrayTogglePolicy.evaluate(
         toggle: true,
         isVisible: false,
-        dismissedNearButton: true,
+        unconsumedButtonMouseDown: true,
         lastDismissedAt: testNow.addingTimeInterval(-0.1),
         now: testNow
     ) == .ignoreRecentDismissal,
-    "Toggle right after dismissal near button stays dismissed"
+    "Toggle right after status-button mouse-down dismissal stays dismissed"
 )
 check(
     NativeTrayTogglePolicy.evaluate(
         toggle: true,
         isVisible: false,
-        dismissedNearButton: true,
+        unconsumedButtonMouseDown: true,
         lastDismissedAt: testNow.addingTimeInterval(-0.5),
         now: testNow
     ) == .present,
@@ -177,11 +177,11 @@ check(
     NativeTrayTogglePolicy.evaluate(
         toggle: true,
         isVisible: false,
-        dismissedNearButton: false,
+        unconsumedButtonMouseDown: false,
         lastDismissedAt: testNow.addingTimeInterval(-0.1),
         now: testNow
     ) == .present,
-    "Toggle after dismissal away from button presents the panel"
+    "Toggle after dismissal without button mouse-down presents the panel"
 )
 
 let buttonRect = NSRect(x: 100, y: 100, width: 30, height: 22)

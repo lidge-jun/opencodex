@@ -13,14 +13,14 @@ public enum NativeTrayTogglePolicy {
     public static func evaluate(
         toggle: Bool,
         isVisible: Bool,
-        dismissedNearButton: Bool,
+        unconsumedButtonMouseDown: Bool,
         lastDismissedAt: Date?,
         now: Date = Date()
     ) -> NativeTrayToggleAction {
         if toggle && isVisible {
             return .dismiss
         }
-        if toggle && dismissedNearButton, let lastDismissed = lastDismissedAt,
+        if toggle && unconsumedButtonMouseDown, let lastDismissed = lastDismissedAt,
            now.timeIntervalSince(lastDismissed) < dismissGrace {
             return .ignoreRecentDismissal
         }
@@ -62,15 +62,17 @@ private final class NativeTrayPopover: NSObject {
             switch NativeTrayTogglePolicy.evaluate(
                 toggle: toggle,
                 isVisible: panel.isVisible,
-                dismissedNearButton: panel.dismissedNearButton,
+                unconsumedButtonMouseDown: panel.unconsumedButtonMouseDown,
                 lastDismissedAt: panel.lastDismissedAt
             ) {
             case .dismiss:
                 panel.dismiss()
+                panel.lastDismissedAt = nil
+                panel.unconsumedButtonMouseDown = false
                 return
             case .ignoreRecentDismissal:
                 panel.lastDismissedAt = nil
-                panel.dismissedNearButton = false
+                panel.unconsumedButtonMouseDown = false
                 return
             case .present:
                 break
