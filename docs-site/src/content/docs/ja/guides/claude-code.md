@@ -50,7 +50,7 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 自動コンテキスト圧縮のしきい値(デフォルト `829800`)。自動コンテキストがオンのときのみ注入します |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (任意) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (任意、従来の `ANTHROPIC_SMALL_FAST_MODEL` もサポート) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（サブスクリプション起動で未設定の場合はネイティブの `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`） |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`。ローカルでサブスクリプションを使って起動し、`nativePassthrough` が有効でコンテキストの計算モードが 1M（既定）の場合、自動マーキングの対象となる未設定スロットにはネイティブの `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` が入ります。Fable には Claude Code 2.1.290 以降で `claude-fable-5-2[1m]`、それより古い場合やバージョンが不明な場合は `claude-fable-5-1[1m]` が入ります。`claudeCode.contextAccounting` を `200k` に設定すると、`[1m]` は自動付与されず、未設定スロットは空のままです。 ダッシュボードの手動設定用コマンドは、Fable スロットが設定されている場合にのみ Fable をエクスポートします。未設定の場合、コマンドを貼り付けたシェルの Claude Code がモデルを選びます。 |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex がルーティングエイリアスを設定した Tier スロットの `/model` ラベル（例: `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`）。launchd のシステム環境とシェルフックにも同じ組で書き込みます。モデル ID はエイリアスのままです。自分で設定したスロットやラベルは変更しません |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` がオンなら `1` (条件付き) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` が設定されている場合 (条件付き、既定では注入せず Claude Code 自身の既定値に従う) |
@@ -548,8 +548,8 @@ Messages → Responses に変換されるリクエストでは、Claude Code の
 
 | Messages 入力 | Responses 出力 |
  --- | --- |
-| 最上位 `system` | `instructions`(テキストブロックを `\n\n` で連結) |
-| `messages[].role: "system"` | `instructions` にもマージ |
+| 最上位 `system` | `instructions`(テキストブロックを `\n\n` で連結)。Codex ログイン経由の GPT-6.2 Sol と Astra では、キャッシュできるよう最初の `developer` メッセージとして送信 |
+| `messages[].role: "system"` | 元の位置で `developer` メッセージに変換 |
 | ユーザーテキスト / 画像 | `input_text` / `input_image`(base64 → data URL) |
 | Assistant テキスト | `output_text` |
 | Assistant `tool_use` | `function_call`(`input` → JSON 文字列に変換した `arguments`) |

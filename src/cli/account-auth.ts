@@ -139,6 +139,7 @@ function publicLoginStatus(value: unknown): Record<string, unknown> {
     for (const key of ["id", "alias", "email"]) if (typeof row[key] === "string") account[key] = row[key];
     for (const key of ["active", "needsReauth"]) if (typeof row[key] === "boolean") account[key] = row[key];
     if (row.needsReauthReason === "verify_account") account.needsReauthReason = "verify_account";
+    if (row.needsReauthReason === "verify_account" && row.needsReauthCause === "tos_violation") account.needsReauthCause = "tos_violation";
     if (typeof row.expiresAt === "number" && Number.isFinite(row.expiresAt)) account.expiresAt = row.expiresAt;
     if (row.plan === null) account.plan = null;
     return account;

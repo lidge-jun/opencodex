@@ -143,3 +143,65 @@ describe("Gemini codec response mapping", () => {
     expect(() => consumeGeminiChatChunk(state, { choices: [{ index: 0, delta: { content: "b" } }] })).toThrow();
   });
 });
+
+
+describe("Gemini thought signatures through the Chat projection", () => {
+  const SIG = "CiQB0e2Kb7xQ9Zt0SignatureFixtureAAAA==";
+  test("a signed functionCall, or one after a signed thought part, carries the signature to Chat", () => {
+    const chat = geminiToChat("m", { contents: [
+      { role: "user", parts: [{ text: "go" }] },
+      { role: "model", parts: [{ text: "plan", thought: true, thoughtSignature: SIG }, { functionCall: { id: "c1", name: "f", args: {} } }, { functionCall: { id: "c2", name: "g", args: {} } }] },
+      { role: "user", parts: [{ functionResponse: { id: "c1", name: "f", response: {} } }, { functionResponse: { id: "c2", name: "g", response: {} } }] },
+      { role: "model", parts: [{ functionCall: { id: "c3", name: "f", args: {} }, thoughtSignature: SIG }] },
+      { role: "user", parts: [{ functionResponse: { id: "c3", name: "f", response: {} } }] },
+    ] }, false) as { messages: Array<Record<string, any>> };
+    const calls = chat.messages.filter(message => message.role === "assistant").flatMap(message => message.tool_calls);
+    expect(calls.map(call => call.extra_content?.google?.thought_signature)).toEqual([SIG, undefined, SIG]);
+  });
+
+  test("a malformed signature is dropped, never refused", () => {
+    const chat = geminiToChat("m", { contents: [
+      { role: "user", parts: [{ text: "go" }] },
+      { role: "model", parts: [{ functionCall: { id: "c1", name: "f", args: {} }, thoughtSignature: 123 }] },
+      { role: "user", parts: [{ functionResponse: { id: "c1", name: "f", response: {} } }] },
+    ] }, false) as { messages: Array<Record<string, any>> };
+    expect(JSON.stringify(chat.messages)).not.toContain("extra_content");
+  });
+
+  test("Chat extra_content becomes thoughtSignature on buffered and streamed functionCall parts", () => {
+    const extra = { google: { thought_signature: SIG } };
+    const buffered = chatToGeminiResponse("m", { choices: [{ index: 0, finish_reason: "tool_calls", message: { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "f", arguments: "{}" }, extra_content: extra }] } }] }) as Record<string, any>;
+    expect(buffered.candidates[0].content.parts).toEqual([{ functionCall: { id: "c1", name: "f", args: {} }, thoughtSignature: SIG }]);
+    const state = createGeminiStreamState("m");
+    consumeGeminiChatChunk(state, { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "f", arguments: "{}" }, extra_content: extra }] }, finish_reason: null }] });
+    const records = consumeGeminiChatChunk(state, { choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }) as Array<Record<string, any>>;
+    expect(records[0]!.candidates[0].content.parts).toEqual([{ functionCall: { id: "c1", name: "f", args: {} }, thoughtSignature: SIG }]);
+  });
+});
+
+describe("Gemini codec request fidelity (CodeRabbit round)", () => {
+  test("schema literals keep their values; only schema types are lower-cased", () => {
+    const tool = { name: "pick", parameters: { type: "OBJECT", properties: { mode: { type: "STRING", enum: ["UPPER", { type: "UPPER" }], default: "UPPER" } } } };
+    const chat = geminiToChat("m", { contents: [{ role: "user", parts: [{ text: "hi" }] }], tools: [{ functionDeclarations: [tool] }] }, false);
+    const params = (chat.tools as Array<{ function: { parameters: Record<string, any> } }>)[0]!.function.parameters;
+    expect(params.type).toBe("object");
+    expect(params.properties.mode).toEqual({ type: "string", enum: ["UPPER", { type: "UPPER" }], default: "UPPER" });
+  });
+
+  test("properties named like literal keywords are still schemas", () => {
+    const tool = { name: "pick", parameters: { type: "OBJECT", properties: {
+      enum: { type: "STRING" }, default: { type: "INTEGER", default: "KEEP" }, examples: { type: "ARRAY", items: { type: "STRING" } },
+    }, $defs: { const: { type: "BOOLEAN" } } } };
+    const chat = geminiToChat("m", { contents: [{ role: "user", parts: [{ text: "hi" }] }], tools: [{ functionDeclarations: [tool] }] }, false);
+    const params = (chat.tools as Array<{ function: { parameters: Record<string, any> } }>)[0]!.function.parameters;
+    expect(params.properties).toEqual({
+      enum: { type: "string" }, default: { type: "integer", default: "KEEP" }, examples: { type: "array", items: { type: "string" } },
+    });
+    expect(params.$defs).toEqual({ const: { type: "boolean" } });
+  });
+
+  test("includeThoughts false is an explicit opt-out", () => {
+    const chat = geminiToChat("m", { contents: [{ role: "user", parts: [{ text: "hi" }] }], generationConfig: { thinkingConfig: { thinkingLevel: "HIGH", includeThoughts: false } } }, false);
+    expect(chat).toMatchObject({ reasoning_effort: "high", include_reasoning: false });
+  });
+});

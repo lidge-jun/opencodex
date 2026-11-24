@@ -8,7 +8,11 @@ On some Windows hosts, a connection to an unused local port such as
 with “Proxy ownership is unverified” or “Shared-client owner could not be
 verified.” The Task Scheduler service can then retry and exit repeatedly.
 
-When a startup connection attempt times out, OpenCodex can briefly bind the
+Some hosts reject the connection immediately instead, for example with
+`connect EACCES ::1:10100` when IPv6 loopback traffic is filtered. OpenCodex
+treats that the same way as a timeout.
+
+When a startup connection attempt times out or is denied, OpenCodex can briefly bind the
 same address and port exclusively. It also checks for listeners bound to all
 addresses in that address family, which can overlap a Windows loopback bind.
 Startup continues only after the ownership checks permit it. A busy port, an

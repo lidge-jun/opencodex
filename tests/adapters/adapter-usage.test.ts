@@ -346,7 +346,8 @@ describe("adapter reasoning and usage details", () => {
 
     expect(events?.at(-1)).toEqual({
       type: "done",
-      usage: { inputTokens: 13, outputTokens: 5, cachedInputTokens: 3, reasoningOutputTokens: 2 },
+      // Output includes thinking: candidates 5 + thoughts 2 (Google bills thinking as output).
+      usage: { inputTokens: 13, outputTokens: 7, cachedInputTokens: 3, reasoningOutputTokens: 2 },
     });
   });
 });

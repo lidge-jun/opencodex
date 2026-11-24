@@ -188,3 +188,27 @@ test("a response timeout or a mixed reset and connect timeout provides no bind e
   expect(ipv4Calls).toBe(3);
   expect(bindAttempts).toBe(0);
 });
+
+const deniedConnect = (code = "EACCES", syscall: string | null = "connect") => (async (input: RequestInfo | URL) => {
+  if (new URL(String(input)).hostname === "[::1]") throw Object.assign(new Error(`connect ${code} ::1:10100`), { code, syscall });
+  throw refused();
+}) as typeof fetch;
+
+test("Windows startup can prove a ::1 endpoint absent when the connect is denied with EACCES", async () => {
+  const binds: string[] = [];
+  const opts = windowsStartup("::1", { fetchFn: deniedConnect(), bindProofFn: async address => { binds.push(address); return true; } });
+  expect(await observeProxyLiveness(opts)).toEqual({ kind: "absent", live: null, loopbackBindProven: true });
+  expect(binds).toEqual(["::1", "::"]);
+  expect(await observeProxyLiveness({ ...opts, platform: "darwin" })).toEqual({ kind: "unknown", live: null });
+  expect(await observeProxyLiveness({ ...opts, bindProofFn: async () => false })).toEqual({ kind: "unknown", live: null });
+});
+
+test.each([["EACCES", null], ["EACCES", "bind"], ["EPERM", "connect"]] as const)(
+  "a %s failure outside connect (syscall %s) provides no bind evidence",
+  async (code, syscall) => {
+    let binds = 0;
+    const opts = windowsStartup("::1", { fetchFn: deniedConnect(code, syscall), bindProofFn: async () => { binds++; return true; } });
+    expect(await observeProxyLiveness(opts)).toEqual({ kind: "unknown", live: null });
+    expect(binds).toBe(0);
+  },
+);

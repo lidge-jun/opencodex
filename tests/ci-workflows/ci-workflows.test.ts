@@ -113,10 +113,10 @@ describe("GitHub Actions hardening", () => {
     // Job-scoped: a global count still passes if values are swapped between jobs.
     // Pin ownership explicitly. The Windows leg is sharded like the Linux ones
     // since 8034cd7c0 — a single leg reached 30m on a green suite and was killed
-    // in cleanup, so each shard now holds the same 15m a Linux shard holds. A
-    // shard that needs longer is wedged, not slow.
+    // in cleanup. Linux shards hold 20m: hosted runners were cancelled at 15m in
+    // their last batches with no failing tests (#8651). Far longer is wedged.
     expect(ci.jobs?.["select-windows-runner"]?.["timeout-minutes"]).toBe(2);
-    expect(ci.jobs?.test?.["timeout-minutes"]).toBe(15);
+    expect(ci.jobs?.test?.["timeout-minutes"]).toBe(20);
     expect(ci.jobs?.gates?.["timeout-minutes"]).toBe(15);
     // 30 with four shards: run 43508374033 cancelled all four at the 20-minute
     // wall with no failing tests, and no fifth macOS slot exists for another
@@ -127,7 +127,7 @@ describe("GitHub Actions hardening", () => {
     expect(ci.jobs?.["macos-control"]?.["timeout-minutes"]).toBe(75);
     // Higher than the Linux shards on purpose: at 15 the Windows leg cancelled a
     // shard mid-suite, which reports as neither pass nor fail (#2152).
-    expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(30);
+    expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(40);
     expect(ci.jobs?.["keyring-smoke"]?.["timeout-minutes"]).toBe(8);
     // Same lesson as the Windows shards above, one job later: at 8 the Windows leg
     // spent ~7 minutes installing dependencies and was cancelled at the wall before

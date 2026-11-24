@@ -80,6 +80,7 @@ import {
   withCors,
   withManagementCors,
 } from "../auth-cors";
+import { connectionReplayScopeLive, releaseConnectionReplayScope } from "../../responses/state/connection-scope";
 import {
   disableResponsesRequestTimeout,
   handleResponses,
@@ -377,12 +378,17 @@ export function createWebsocketHandler(
             const retainedPrincipal = ws.data.replayPrincipal;
             const replayPrincipal = retainedPrincipal && (isContextPrincipalCurrent(retainedPrincipal.clientPrincipalId, config)
               ? retainedPrincipal : { clientPrincipalId: undefined });
+            // The connection scope is a live-socket capability, not a retained credential:
+            // once closed or expired it stops backfilling the replay owner entirely.
+            const retainedScope = ws.data.replayScope;
+            const replayScope = retainedScope && connectionReplayScopeLive(retainedScope) ? retainedScope : undefined;
             const response = await handleResponses(req, config, logCtx, {
               advisorAdmissionPolicy,
               ...(wsAdmission ? { admission: wsAdmission } : {}),
               // Keep an empty holder after revocation: a different forwarded bearer
               // must not become this connection's retained replay owner.
               ...(replayPrincipal ? { replayPrincipal } : {}),
+              ...(replayScope ? { replayScope } : {}),
               forceEmptyResponseId: true,
               inboundTransport: "websocket",
               nativeControl,
@@ -489,6 +495,10 @@ export function createWebsocketHandler(
         unregisterCodexWebSocket(ws);
         ws.data.admissionLease?.release();
         ws.data.admissionLease = undefined;
+        // Close the connection scope before cancelling the turn so a late completion
+        // write is refused; then drop every entry this socket still owns.
+        releaseConnectionReplayScope(ws.data.replayScope);
+        ws.data.replayScope = undefined;
         ws.data.cancel?.(); // RC2: abort the upstream when the client disconnects
       },
   } as const;

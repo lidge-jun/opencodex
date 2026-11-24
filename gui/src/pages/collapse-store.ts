@@ -28,16 +28,18 @@ export interface CollapseStore {
 
 function resolveStorage(storage?: StorageLike): StorageLike | undefined {
   if (storage) return storage;
-  // SSR/test environments without a DOM: no storage is a valid state, not an error.
+  // SSR/test environments without a DOM: no storage is a valid state, not an error. Reading the
+  // global can itself throw (a SecurityError when site storage is blocked), so callers resolve
+  // it inside their try.
   return typeof localStorage === "undefined" ? undefined : localStorage;
 }
 
 export function makeCollapseStore(key: string): CollapseStore {
   return {
     read(storage) {
-      const store = resolveStorage(storage);
-      if (!store) return null;
       try {
+        const store = resolveStorage(storage);
+        if (!store) return null;
         const saved = store.getItem(key);
         if (saved === null) return null;
         const parsed = JSON.parse(saved) as unknown;
@@ -52,12 +54,12 @@ export function makeCollapseStore(key: string): CollapseStore {
       }
     },
     write(collapsed, storage) {
-      const store = resolveStorage(storage);
-      if (!store) return;
       try {
+        const store = resolveStorage(storage);
+        if (!store) return;
         store.setItem(key, JSON.stringify([...collapsed]));
       } catch {
-        /* quota / private-mode — collapse is a preference, never a hard failure */
+        /* blocked storage, quota, private mode — collapse is a preference, never a hard failure */
       }
     },
   };

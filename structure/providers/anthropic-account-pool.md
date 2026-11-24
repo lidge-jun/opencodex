@@ -128,7 +128,7 @@ direct Pool 2 account recovery never selects the primary pool.
 Translated Responses [hosted Advisor ceiling checks](../transports/responses-spend.md#prepaid-initial-sends) use the admitted credential snapshot's provider and account ID, independently of display tags and the ambient active account; equal account IDs in different instances retain separate identities. Every selected adapter builder checks the captured hosted-work policy again after an admitted account replacement, including sidecar request copies; an earlier withholding remains in force for the turn. This read-only binding does not change ordinary main-model accounting scopes.
 
 `src/oauth/anthropic-send-ownership.ts` captures the account incarnation and
-login identity before the physical fetch. Header publication and refusal binding
+credential revision before the physical fetch. Header publication and refusal binding
 retain that same owner after the await; response arrival cannot adopt a newly
 registered row with identical credentials. Ordinary cooldown observations do not
 invalidate the send incarnation. Numeric config generation remains a separate
@@ -230,18 +230,17 @@ quota, reset eligibility, billing credit or routing capacity.
 `src/providers/quota/anthropic-account-quota.ts` probes per-account usage for either
 instance. It refuses an unconfigured instance, resolves token renewal before keying its
 flight on the credential actually dispatched, and publishes only while the instance's
-quota epoch, configured row, account incarnation and login identity are unchanged.
+quota epoch, configured row, account incarnation and credential revision are unchanged. `src/oauth/store.ts` advances the persisted revision under the auth store lock when a login or credential replacement changes its owner. Alias edits preserve the revision.
 `captureProviderAccountQuotaEpoch(instance)` and the cache keys in
 `src/providers/quota/account-cache.ts` are per instance, so clearing Pool 2 quota never
-invalidates the primary pool. With the pool on and two or more accounts, `fetchAnthropicQuota` (`src/providers/quota/vendor-probes-oauth.ts`) reports a display-only estimate via `aggregateCodexPoolCapacity`: seats weigh 1, inactive seats use their last-good row (no extra probes), paused, reauth or stale seats count as incomplete coverage. Every Anthropic report is current only while the pool switch and each seat's id, paused and reauth state are unchanged; pool off or one account keeps the active report. Quota reset detection observes the active seat's own reading (`observedQuotaFor`), never the estimate, which has no reset times (`tests/providers/provider-anthropic-pool-capacity.test.ts`).
+invalidates the primary pool. With the pool on and two or more accounts, `fetchAnthropicQuota` (`src/providers/quota/vendor-probes-oauth.ts`) reports a display-only estimate via `aggregateCodexPoolCapacity`: seats weigh 1, inactive seats use their last-good row (no extra probes), paused, reauth or stale seats count as incomplete coverage. Report ownership includes the pool switch, each seat's credential revision and routing status, and the active selection. Quota reset detection observes the active seat's own reading (`observedQuotaFor`), never the estimate, which has no reset times (`tests/providers/provider-anthropic-pool-capacity.test.ts`).
 
-A failed probe names one closed `quotaFailure` code from
-`src/providers/quota/failure-codes.ts`: `account_unavailable` when no usable credential could
-be obtained (no request is sent), the HTTP status class (`access_denied`, `rate_limited`,
-`upstream_error`, `redirect_blocked`), `response_unusable` for a body with no usable quota,
-and `timeout` or `transport_error` for a thrown dispatch. Both probe writers cache `unavailable: true`
-and `quotaFailure: "response_unusable"` on retirement-only responses. Ownership and cooldown refusals
-set no code. The code requires a current flight, carries no upstream text and never changes account health or `needsReauth`.
+Each failed probe names one closed `quotaFailure` code from `src/providers/quota/failure-codes.ts`: `account_unavailable` if a credential is unusable (no request is sent), the HTTP status class (`access_denied`, `rate_limited`, `upstream_error`, `redirect_blocked`), `response_unusable` for a body without usable quota, or `timeout` or `transport_error` for a thrown dispatch.
+Both probe writers cache `unavailable: true` and `quotaFailure: "response_unusable"` on retirement-only responses.
+Ownership and cooldown refusals set no code. The code requires a current flight, carries no upstream text and never changes account health or `needsReauth`.
+Live bars kept after a failed or retirement-only probe retain their original credential fence. The disk cache drops owned rows whose opaque revision binding differs from the current auth store. Legacy display rows carry no weighted routing evidence.
+A retirement-only result preserves the original observation times of unchanged plan bars for
+[weighted routing](reset-near-weighted.md).
 
 `src/providers/anthropic-reset-grant-ledger.ts` names the journal by instance:
 `anthropic-reset-grant-ledger.json` keeps the primary pool's existing bytes and records,
@@ -322,26 +321,26 @@ Regression coverage: `tests/adapters/anthropic/anthropic-account-pause.test.ts`,
 
 ## Claude credential identity
 
-`src/oauth/anthropic-identity.ts` observes only authenticated `account.uuid` from the exact
-bearer's fixed-origin profile response or the token exchange in `src/oauth/anthropic.ts`.
-Its private versioned proof binds the UUID to SHA-256 of the access bearer. Store normalization
-in `src/oauth/store.ts` drops malformed or stale proofs; account summaries omit the entire field.
-Profile observations reject redirects and use a ten-second deadline and 64 KiB body limit.
-Organization, email, generic account ID, disk location and active selection do not establish proof.
+`src/oauth/anthropic-identity.ts` binds authenticated `account.uuid` to the access bearer's SHA-256. The fixed-origin profile rejects redirects
+and applies a ten-second deadline and 64 KiB body limit. `src/oauth/store.ts` drops invalid or stale proofs, and summaries omit the proof.
+Each grant serves one organization. Its proof may carry `organizationUuid` (a lowercase UUID) as slot scope. Browser login and refresh in
+`src/oauth/anthropic.ts` fill missing token-response proof from the same bearer's profile. The exchange's validated organization constrains enrichment even when the exchange omits the account UUID. A conflicting account or organization leaves token evidence and labels untouched. If the exchange attests an organization without an account UUID and the profile attests a different organization, browser login fails before account selection and refresh keeps the rotated grant with the exchange scope. Both paths keep private, bearer-bound exchange scope when the profile is unavailable and the exchange supplies only organization proof.
+For an identified account, `src/oauth/anthropic-login-slot.ts` prefers a row in the same organization for login and CLI import, with an unknown row as a fallback. A proven other organization gets a new row.
+When browser login provides email and proven organization scope without an account UUID, a unique email match within that proven organization reuses its row without carrying over account UUID proof. The matcher trims surrounding whitespace, compares the local part and internationalized domains exactly, and ignores ASCII case in other domains. With no proven match, sign-in appends a slot and preserves legacy rows, including an unidentified active row. Multiple matches in the proven organization are refused under the store lock. A later login with account UUID proof can recover a unique UUID-less slot with matching email and proven organization if it shares a refresh token or the slot's own bearer proves the same account UUID. The writer rechecks the slot and bearer under lock, including the token match when used. Unavailable, conflicting or stale continuity preserves the existing slot and permits an append with a distinct token. Sign-in and explicit reauthentication check refresh-token ownership under the writer lock. If another slot in the same pool holds the incoming token, the write stops and asks the user to sign in again.
+For a normal login without an account UUID or email, `src/oauth/store.ts` checks the active row under the writer lock. Different proven organizations get separate rows. The login can still replace the active row when the organizations agree or either scope is unknown.
+`src/oauth/reauth-precheck.ts` checks account identity before observation. Login, CLI import and reauth probe unknown same-account rows with their own unexpired bearers before the store lock. Each write checks observations against
+the current bearer and account and stops if a relevant observation goes stale and current proof cannot resolve it. Reauth refuses a different proven organization or one a sibling proves. With a scoped email-only grant, reauth also probes a target with a stored account UUID, matching email and no organization through its own bearer. Under the writer lock it requires the target's current email to match by the same rules, the target's organization to be proven and equal, and no other row of that organization to share the email. Own-grant refresh retains scope until fresh proof names one.
 
-`src/oauth/anthropic-continuity.ts` permits usable changed local-CLI generations with a shared
-nonempty token. A fully rotated pair instead requires matching authenticated account UUIDs.
-The old bearer may use its stored bound proof or a fresh observation; independent old/new
-observations run in parallel. Shared-refresh adoption cannot copy proof to a new access bearer.
-A provider refresh also drops proof unless its new bearer carries fresh authenticated evidence;
-conflicting authenticated UUIDs refuse persistence. Generic display metadata is not promoted to proof.
+`src/oauth/anthropic-continuity.ts` accepts usable changed CLI generations with a shared nonempty token. Full rotation requires matching authenticated account UUIDs.
+The old bearer uses stored or fresh proof. Independent old/new reads run in parallel, and stored proof missing its organization may prompt one profile read.
+Full rotation requires matching organizations whenever either pool has a same-account sibling. The writer checks both current rosters and refuses adoption when a sibling already proves the incoming organization or the other pool's registration rule refuses the new grant.
+Shared-refresh adoption cannot copy proof to a new bearer. Provider refresh needs new bearer proof and refuses a conflicting authenticated account UUID.
 
 The refresh owner captures login ID, token generation and identity metadata before observation.
 It rechecks them, pause/removal and selection revision after observation and inside serialized persistence.
-The CLI generation is re-read by an awaited `claudeCredentialGenerationCurrent`: once after observation, and for adoption again inside the serialized writer through `afterPrePersistRead`, so a rotation while the writer was queued is caught (the read is async, so the synchronous predicate only consumes its result and fails closed on a missing, unreadable, near-expiry or different generation). A read that arrives while a metadata probe holds the Keychain slot waits for that probe instead of reading as absent. Superseding writes win. An unresolved full rotation leaves the row and
-pending intent intact, without replaying a possibly consumed refresh or setting reauthentication
-solely from the identity failure. A proven different account may use its own stored refresh only
-when no pending intent blocks it. Intent cleanup follows successful durable adoption.
+The CLI generation is re-read by an awaited `claudeCredentialGenerationCurrent`. A `different` or `unresolved` observation re-reads it once right after observation. Adoption skips that read and checks the generation only inside the serialized writer through `afterPrePersistRead`, so a rotation while the writer was queued is caught (the read is async, so the synchronous predicate only consumes its result and fails closed on a missing, unreadable, near-expiry or different generation). A read that arrives while a metadata probe holds the Keychain slot waits for that probe instead of reading as absent. Superseding writes win. An unresolved full rotation leaves the row and
+pending intent intact, without replaying a possibly consumed refresh or setting reauthentication solely from the identity failure.
+A proven different account may use its own stored refresh only when no pending intent blocks it. Intent cleanup follows successful durable adoption.
 An unsent token request proven by structured `getaddrinfo` `ENOTFOUND` for the token host,
 with no outbound proxy configured in either the startup or current environment and a single
 HTTP/1.1 attempt without keep-alive reuse or redirect following, releases its intent as
@@ -368,7 +367,7 @@ The metadata probe (`probe()`, no `-w` or `-g`, output discarded) shares that sl
 
 ## Model routes
 
-For Anthropic OAuth, `src/oauth/anthropic-routing.ts` applies the first matching `anthropicAccountPool.routes` rule to every eligible pick. The declared account order is stable while its candidates remain eligible; active, manual, affinity, quota and strategy preferences only choose inside that set. A healthy session affinity outside a model route is ignored for that request and retained for later unrouted or differently routed models; the routed commit does not overwrite it. An explicit fallback widens an empty route to the ordinary pool, and fill-first then advances in ordinary pool order from the active account. A missing eligible route fails locally without that fallback. The rules are operator allowlists, not provider entitlement evidence. Request logs use `route:#<n>` for the 1-based rule position, not the operator name.
+For Anthropic OAuth, `src/oauth/anthropic-routing.ts` applies the first matching `anthropicAccountPool.routes` rule to every eligible pick. The declared account order is stable while its candidates remain eligible. Active, manual, affinity, quota and strategy preferences, including [reset-near-weighted](reset-near-weighted.md), choose inside that set. A healthy session affinity outside a model route is ignored for that request and retained for later unrouted or differently routed models; the routed commit does not overwrite it. An explicit fallback widens an empty route to the ordinary pool, and fill-first then advances in ordinary pool order from the active account. A missing eligible route fails locally without that fallback. The rules are operator allowlists, not provider entitlement evidence. Request logs use `route:#<n>` for the 1-based rule position, not the operator name.
 
 ## Quota labels
 
@@ -439,10 +438,11 @@ rejection does not assert shared exhaustion. A transient Retry-After pauses acco
 without clearing affinity; a request gets one same-account wait up to one second and at most
 one eligible sibling detour. Timer rounding at the captured retry deadline permits that
 retry, while a concurrent admission-pause extension still blocks it. Headerless/invalid-hint
-refusals get at most one short same-account
-retry and never cool the roster or invent a client Retry-After. Main, pre-output continuation
-and sidecars share the request-local allowance and physical-send budget. Cancellation,
-ambiguous-send markers, replaced credentials and committed streaming output forbid replay.
+refusals get at most one short same-account retry and never cool the roster or invent a
+client Retry-After. Main, pre-output continuation and sidecars share the request-local
+allowance and physical-send budget. Cancellation, ambiguous-send markers, replaced credentials
+and committed streaming output forbid replay. Inline retries add a send to the current attempt.
+Native Messages, translated Responses, continuations and sidecars split the attempt on a credential change.
 Default single-account users acquire no new retry or admission pause.
 
 Regression coverage: `tests/adapters/anthropic/anthropic-429-policy.test.ts`.
@@ -585,10 +585,9 @@ Responses captures the routing-reset generation before credential resolution and
 While a live JEV combo enables quota signals, auth-store load/persist and accepted quota producer
 boundaries hand bounded secret-free rosters/windows to the core slot `src/lib/decision-quota-sink.ts`,
 which forwards them to the activation-owned snapshot; otherwise those calls are no-ops
-([activation](jev-decision.md#loaded-advisory-quota)). These owner-observed generations
-are separate from display caches and serving-account selection. Request decisions consume only
+([activation](jev-decision.md#loaded-advisory-quota)). These owner-observed generations are separate from display caches and serving-account selection. Request decisions consume only
 loaded evidence; cold or mismatched generations remain unknown. Usability, partial-window clocks
-and late-writer fences follow [loaded advisory quota](jev-decision.md#loaded-advisory-quota). Only the primary `anthropic` pool publishes; `anthropic2` is excluded and stays unknown.
+and late-writer fences follow [loaded advisory quota](jev-decision.md#loaded-advisory-quota). Only the primary `anthropic` pool publishes. The `anthropic2` pool stays unknown.
 
 ## Permanent refusal auto-pause
 

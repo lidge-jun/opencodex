@@ -3,23 +3,30 @@
  * /v1beta|v1/models/{model}:generateContent|streamGenerateContent (countTokens and the embed
  * methods answer 501).
  *
- * Same shape as the Ollama inbound (./ollama-inbound): the model list describes configured
- * provider routes, generation is translated into an internal Chat Completions request handled by
+ * Like the Ollama inbound (./ollama-inbound), the catalog starts with configured
+ * provider routes. Unless the native leg applies, generation is translated into an internal Chat Completions request handled by
  * the ordinary Chat path, and this handler owns the final request-log row. Errors use the Gemini
  * `{ error: { code, message, status } }` body with a fixed message chosen by HTTP status.
  */
 import { GeminiCodecError, chatToGeminiResponse, consumeGeminiChatChunk, createGeminiStreamState, geminiStreamTerminal, geminiToChat } from "../protocols/codecs/gemini";
 import { createTranslatorBudget, isTranslatorBudgetExceededError } from "../lib/translator-budget";
-import type { OcxConfig } from "../types";
+import type { OcxConfig, OcxParsedRequest } from "../types";
+import type { RouteResult } from "../router";
+import { configuredContextWindow, configuredMaxInputTokens } from "../codex/catalog/model-hints";
+import { modelRecordValue } from "../reasoning-effort";
+import { getModelMetadata, resolveMetadataProvider } from "../generated/model-metadata";
+import { chatConversationToIr } from "../protocols/codecs/chat-ir";
+import { ChatCompletionsRequestError } from "../chat/inbound";
+import { estimateInputTokens } from "./responses/input-admission";
 import type { DataPlaneAdmission } from "./auth-cors";
 import { resolveAdmissionModelScope, routeAllowedByScope } from "./admission-model-scope";
-import { handleChatCompletions } from "./chat-completions";
 import type { GeminiMethod } from "./gemini-native-paths";
+import { geminiNativeCatalogAliases, geminiNativeCatalogLookup, geminiNativeDiscoveredRoutes } from "./gemini-native-catalog";
 import {
   applyLocalRefusalCode,
   commitCancelled,
   drainedInnerErrorMessage,
-  internalChatRequest,
+  handleNativeChat,
   nativeRefusalParts,
   nativeRetryAfter,
   streamNativeFromChat,
@@ -33,6 +40,9 @@ import { addFinalRequestLog, type RequestLogContext } from "./request-log";
 const STATUS_NAMES: Readonly<Record<number, string>> = {
   400: "INVALID_ARGUMENT", 401: "UNAUTHENTICATED", 403: "PERMISSION_DENIED", 404: "NOT_FOUND", 413: "INVALID_ARGUMENT",
   429: "RESOURCE_EXHAUSTED", 499: "CANCELLED", 501: "UNIMPLEMENTED", 503: "UNAVAILABLE", 504: "DEADLINE_EXCEEDED",
+  // google.rpc.Code by HTTP mapping; 402 has no canonical code, so the closest precondition.
+  402: "FAILED_PRECONDITION", 405: "UNIMPLEMENTED", 408: "DEADLINE_EXCEEDED", 409: "ABORTED", 422: "INVALID_ARGUMENT",
+  500: "INTERNAL", 502: "UNAVAILABLE",
 };
 
 export function geminiErrorBody(status: number, message: string): { error: { code: number; message: string; status: string } } {
@@ -56,27 +66,84 @@ export function toGeminiRefusal(response: Response): Response {
   return applyLocalRefusalCode(geminiError(parts.status, parts.message, parts.retryAfter), parts.localRefusalCode);
 }
 
-function eligibleRoutes(config: OcxConfig, req: Request, admission: DataPlaneAdmission) {
-  const scope = resolveAdmissionModelScope(config, admission);
-  return listOllamaRoutes(config, req)
-    .filter(row => routeAllowedByScope(scope, { providerName: row.route.providerName, modelId: row.route.modelId }));
+function geminiCatalogRoutes(config: OcxConfig, req: Request) {
+  const configured = listOllamaRoutes(config, req);
+  const selectors = new Set(configured.map(row => row.selector));
+  const discovered = geminiNativeDiscoveredRoutes(config, req).filter(row => !selectors.has(row.selector));
+  return [...configured, ...discovered];
 }
 
-const modelResource = (selector: string) => ({
-  name: `models/${selector}`,
-  displayName: selector,
-  supportedGenerationMethods: ["generateContent", "streamGenerateContent"],
+/** Token limits from configuration first, then generated model metadata; omitted when unknown. */
+function tokenLimits(config: OcxConfig, route: RouteResult): { inputTokenLimit?: number; outputTokenLimit?: number } {
+  const metadataProvider = resolveMetadataProvider(route.providerName) ?? route.providerName;
+  const metadata = getModelMetadata(metadataProvider, route.modelId);
+  const custom = config.customModels?.find(row => row.provider === route.providerName && row.modelId === route.modelId);
+  const customContext = custom?.contextWindow;
+  const input = configuredMaxInputTokens(route.provider, route.modelId)
+    ?? configuredContextWindow(route.provider, route.modelId)
+    ?? (typeof customContext === "number" && customContext > 0 ? customContext : metadata?.contextWindow);
+  const output = modelRecordValue(route.provider.modelMaxOutputTokens, route.modelId) ?? route.provider.defaultMaxOutputTokens ?? metadata?.maxTokens;
+  return {
+    ...(typeof input === "number" && input > 0 ? { inputTokenLimit: input } : {}),
+    ...(typeof output === "number" && output > 0 ? { outputTokenLimit: output } : {}),
+  };
+}
+
+const modelResource = (config: OcxConfig, row: { selector: string; route: RouteResult }) => ({
+  name: `models/${row.selector}`,
+  displayName: row.selector,
+  ...tokenLimits(config, row.route),
+  supportedGenerationMethods: ["generateContent", "streamGenerateContent", "countTokens"],
 });
 
 export function handleGeminiModels(config: OcxConfig, req: Request, admission: DataPlaneAdmission): Response {
-  return Response.json({ models: eligibleRoutes(config, req, admission).map(row => modelResource(row.selector)) });
+  const scope = resolveAdmissionModelScope(config, admission);
+  const candidates = geminiCatalogRoutes(config, req);
+  const rows = candidates.filter(row => routeAllowedByScope(scope, row.route));
+  // A key can allow a concrete effort tier while excluding its source family.
+  const aliases = geminiNativeCatalogAliases(config, req, candidates, scope);
+  return Response.json({ models: [...rows, ...aliases].map(row => modelResource(config, row)) });
+}
+
+function findGeminiCatalogRow(config: OcxConfig, req: Request, admission: DataPlaneAdmission, model: string) {
+  const row = findOllamaRoute(config, model, req) ?? geminiNativeDiscoveredRoutes(config, req, model)[0];
+  const scope = resolveAdmissionModelScope(config, admission);
+  if (row && routeAllowedByScope(scope, row.route)) return row;
+  return geminiNativeCatalogLookup(config, req, model, () => geminiCatalogRoutes(config, req), scope);
 }
 
 export function handleGeminiModel(config: OcxConfig, req: Request, admission: DataPlaneAdmission, model: string): Response {
-  const row = findOllamaRoute(config, model, req);
-  const scope = resolveAdmissionModelScope(config, admission);
-  if (!row || !routeAllowedByScope(scope, { providerName: row.route.providerName, modelId: row.route.modelId })) return geminiError(404, "model not found");
-  return Response.json(modelResource(row.selector));
+  const row = findGeminiCatalogRow(config, req, admission, model);
+  return row ? Response.json(modelResource(config, row)) : geminiError(404, "model not found");
+}
+
+/**
+ * `:countTokens`: a local estimate over the same Chat projection generation uses, for the routes the
+ * key may reach. No upstream call. Body: `{contents, systemInstruction, tools}` or `{generateContentRequest}`.
+ */
+export async function handleGeminiCountTokens(config: OcxConfig, req: Request, admission: DataPlaneAdmission, model: string): Promise<Response> {
+  const row = findGeminiCatalogRow(config, req, admission, model);
+  if (!row) return geminiError(404, "model not found");
+  const limit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
+  const budget = createTranslatorBudget();
+  try {
+    const body = await readJsonRequestBody(req, budget, limit);
+    const source = body && typeof body === "object" && !Array.isArray(body) && (body as Record<string, unknown>).generateContentRequest !== undefined
+      ? (body as Record<string, unknown>).generateContentRequest
+      : body;
+    const chat = geminiToChat(row.route.modelId, source, false);
+    const conversation = chatConversationToIr(chat, row.route.modelId);
+    const totalTokens = estimateInputTokens({ ...conversation, modelId: row.route.modelId } as unknown as OcxParsedRequest, row.route.modelId, row.route.provider);
+    return Response.json({ totalTokens });
+  } catch (error) {
+    if (req.signal.aborted) return geminiError(499, "request cancelled");
+    if (error instanceof DecompressedBodyTooLargeError) return geminiError(413, "request body too large");
+    if (isTranslatorBudgetExceededError(error)) return geminiError(502, "request translation buffer exceeded the safe limit");
+    if (error instanceof GeminiCodecError || error instanceof ChatCompletionsRequestError) return geminiError(400, error.message);
+    return geminiError(400, "invalid JSON body");
+  } finally {
+    budget.dispose();
+  }
 }
 
 function failBeforeInner(ids: NativeLogIds, logCtx: RequestLogContext, status: number, message: string): Response {
@@ -102,9 +169,11 @@ export async function handleGeminiGeneration(
   const limit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
   const stream = method === "streamGenerateContent";
   const budget = createTranslatorBudget();
+  let originalBody: unknown;
   let chat: Record<string, unknown>;
   try {
-    chat = geminiToChat(model, await readJsonRequestBody(req, budget, limit), stream);
+    originalBody = await readJsonRequestBody(req, budget, limit);
+    chat = geminiToChat(model, originalBody, stream);
   } catch (error) {
     if (req.signal.aborted) return failBeforeInner(ids, logCtx, 499, "request cancelled");
     if (error instanceof DecompressedBodyTooLargeError) return failBeforeInner(ids, logCtx, 413, "request body too large");
@@ -121,11 +190,10 @@ export async function handleGeminiGeneration(
   }
   const chatJson = JSON.stringify(chat);
   if (Buffer.byteLength(chatJson) > limit) return failBeforeInner(ids, logCtx, 413, "request body too large");
-  const internal = internalChatRequest(req, chatJson);
   const finalLog = createNativeFinalLog(ids.requestId, ids.start, logCtx);
   let inner: Response;
   try {
-    inner = await handleChatCompletions(internal, config, logCtx, { ...ids, suppressProtocolTrace: true });
+    inner = await handleNativeChat(req, originalBody, chatJson, config, logCtx, ids);
   } catch {
     await finalLog.waitForInner();
     if (req.signal.aborted) return cancelledNonStream(finalLog);

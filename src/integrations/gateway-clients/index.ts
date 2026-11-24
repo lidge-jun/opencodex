@@ -81,7 +81,8 @@ export function disconnectGatewayClient(id: GatewayClientId, ctx: GatewayClientC
 export function gatewayActionBody(outcome: GatewayActionOutcome): Record<string, unknown> {
   if (!outcome.ok) {
     const files = "changedFiles" in outcome ? outcome.changedFiles : [];
-    return { ok: false, code: outcome.code, message: outcome.message, ...(files.length ? { changedFiles: files } : {}) };
+    const profilePath = "profilePath" in outcome ? outcome.profilePath : undefined;
+    return { ok: false, code: outcome.code, message: outcome.message, ...(profilePath ? { profilePath } : {}), ...(files.length ? { changedFiles: files } : {}) };
   }
   const { ok, id, action, changed, changedFiles, restore, message, notes, status } = outcome;
   return { ok, id, action, changed, changedFiles, ...(restore ? { restore } : {}), message, notes, status };

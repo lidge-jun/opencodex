@@ -24,6 +24,8 @@ export interface OcxApiSurfacesConfig {
    * `claudeCode.enabled !== false`"; a present non-boolean value disables the surface.
    */
   messages?: { enabled?: boolean };
+  /** Gemini-compatible routes. The surface is open by default. */
+  gemini?: { enabled?: boolean };
 }
 
 /** Protocol delivery policy (devlog/_plan/260924_protocol_first_class). */
@@ -48,6 +50,8 @@ export interface OcxProtocolsConfig {
      * answered through the direct encoders, with no internal Responses body in either direction.
      */
     antigravityDirect?: boolean;
+    /** Preserve native Gemini payloads for concrete Antigravity OAuth routes on /v1beta. Default off. */
+    geminiNativeAntigravity?: boolean;
     /** Compare the dispatch plan with the observed path; never sends a second request. */
     shadowPlan?: boolean;
   };
@@ -1352,6 +1356,8 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
   codexPinnedTransientPolicy?: "hold" | "detour-new-threads";
   /** Opt-in: retain one Codex WebSocket per account and thread across turns. Default off. */
   codexWsReuseAcrossTurns?: boolean;
+  /** Opt-in native WS upload deltas; implies cross-turn reuse. Default off. */
+  codexWsIncrementalUpload?: boolean;
   /**
    * Opt-in provider-origin circuit threshold for proven pre-connection reachability failures.
    * Default 0 (disabled); range 0..20. The circuit never counts timeouts or HTTP responses.
@@ -1375,6 +1381,8 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
    * and every other destination are unchanged. Compression runs synchronously on the event loop.
    */
   upstreamRequestCompression?: "off" | "gzip" | "zstd";
+  /** Optional lossy shortening of historical native Codex images/tool text. */
+  upstreamHistorySlim?: "off" | "codex";
   /**
    * Opt-in ceiling, in bytes, on a decompressed INBOUND data-plane request body (#3573).
    *
@@ -1549,6 +1557,8 @@ export interface OcxComboConfig {
    */
   reasoningEffortMode?: OcxComboReasoningEffortMode;
   jevEffortMode?: import("./combo-jev-effort-mode").OcxComboJevEffortMode; // wire-effort owner on a `jev` combo; omitted = "decide"
+  capabilityPolicy?: import("./combo-capability-policy").OcxComboCapabilityPolicy; // omitted = "intersection"
+  onUnservable?: import("./combo-capability-policy").OcxComboOnUnservable; // `union` only; omitted = "degrade"
   /**
    * Disable image input even when every target supports it.
    * Omitted / `"auto"` keeps automatic capability derivation (default: enabled when
@@ -1627,7 +1637,7 @@ export interface OcxImagesConfig {
   timeoutMs?: number;
   /** Master switch for the image bridge. Default false — set true to enable paid xAI Grok Imagine generation. */
   bridgeEnabled?: boolean;
-  /** xAI image model id. Default "grok-imagine-image-quality" (see DEFAULT_MODEL in images/plan.ts). */
+  /** xAI image model id. Default "grok-imagine-image-2.0". */
   bridgeModel?: string;
   /** Max image-generation loop iterations before forced-final. Default 3; clamped to [0, 10]. */
   maxRounds?: number;
@@ -1637,7 +1647,8 @@ export interface OcxImagesConfig {
   videoBridgeEnabled?: boolean;
   /** Optional API-key provider that serves `video_gen` (its own baseUrl and key). Unset keeps xAI; an unusable value fails closed. */
   videoProvider?: string;
-  /** Model for xAI video generation. Default "grok-imagine-video". */
+  /** Model for xAI video generation. Default "grok-imagine-video-1.5-lite" (see src/images/video-capabilities.ts). */
+  /** Defaults to grok-imagine-video-1.5-lite. */
   videoBridgeModel?: string;
   /** Max video-gen rounds before forced-final. Default 2 (video is slower than image). */
   videoMaxRounds?: number;

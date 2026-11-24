@@ -59,11 +59,16 @@ describe("the Responses passthrough lane reads the provider transient policy", (
     const allowanceBacked = occurrences(packed, "attempts:allowance.attempts");
     const prepaidInitial = occurrences(packed, "attempts:sendBudgetState.initialSendAllowance(transientSendAttempts())");
     expect(prepaidInitial).toBe(1);
-    // Combo receipt mode settles directly; other sends keep the shared reporter. Copilot's
-    // reporter defers its charge until physical dispatch, after negotiation can refuse locally.
-    expect(packed).toContain("constinitialAccounting=copilotSendAccounting()");
-    expect(packed).toContain("onPhysicalDispatch:recordPhysicalSend(receiptMode?sendBudgetState.noteInitialDispatch:initialAccounting.onPhysicalDispatch)");
-    expect(packed).toContain("...(receiptMode?{}:{onSendsConsumed:initialAccounting.report})");
+    // Combo receipt mode settles directly and scopes recovery without reporting the initial
+    // send. Other sends keep the shared reporter, with Copilot deferring charge until dispatch.
+    expect(packed).toContain(dense(
+      "const initialAccounting = codexWsReceiptMode(sendBudgetState.adapterSendBudget, Boolean(options.comboInitialSend))\n"
+      + "  ? { report: transientSendReporter(undefined, true), onPhysicalDispatch: sendBudgetState.noteInitialDispatch }\n"
+      + "  : copilotSendAccounting();",
+    ));
+    expect(packed).toContain("onPhysicalDispatch:recordPhysicalSend(initialAccounting.onPhysicalDispatch)");
+    expect(packed).toContain("onSendsConsumed:initialAccounting.report");
+    expect(packed).toContain("captureCodexWsRecovery:capturePhysicalSendRecovery");
     expect(packed).toContain("=>physicalSendAccounting(transientSendReporter(permit),");
     expect(budgeted + allowanceBacked + prepaidInitial).toBe(sites);
 

@@ -9,6 +9,7 @@ import {
   MOONSHOT_INTL_BASE_URL,
 } from "../base-url-choices";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "../command-code-efforts";
+import { COMMAND_CODE_DECISION_MODEL_DISCOVERY_FILTER } from "../command-code-decision-models";
 import { MIMO_THINKING_CAPABILITIES, MIMO_THINKING_MODELS } from "../mimo-thinking";
 import {
   CODEBUDDY_CN_MODELS,
@@ -112,6 +113,10 @@ import {
   OPPER_MODEL_CONTEXT_WINDOWS,
   OPPER_MODEL_MAX_OUTPUT_TOKENS,
   OPPER_MODEL_INPUT_MODALITIES,
+  STEP_CLI_MODELS,
+  STEP_CLI_MODEL_CONTEXT_WINDOWS,
+  STEP_CLI_NO_VISION_MODELS,
+  STEP_CLI_REASONING_EFFORTS,
   AISTUPIDLEVEL_ROUTING_MODES,
   AISTUPIDLEVEL_MODEL_CONTEXT_WINDOWS,
   AISTUPIDLEVEL_MODEL_MAX_OUTPUT_TOKENS,
@@ -126,6 +131,9 @@ import {
   MORPH_ULTRA_MODEL_INPUT_MODALITIES,
   MORPH_ULTRA_REASONING_EFFORTS,
   MORPH_ULTRA_REASONING_EFFORT_MAPS,
+  ABLITERATEDLLM_MODELS,
+  ABLITERATEDLLM_MODEL_CONTEXT_WINDOWS,
+  ABLITERATEDLLM_MODEL_INPUT_MODALITIES,
   ANTHROPIC_MODELS,
   ANTHROPIC_MODEL_CONTEXT_WINDOWS,
   ANTHROPIC_MODEL_INPUT_MODALITIES,
@@ -217,6 +225,8 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       path: "models",
       maxResponseBytes: 256 * 1024,
       maxModels: 256,
+      // Decision models are not chat rows (#8997); see command-code-decision-models.ts.
+      filter: COMMAND_CODE_DECISION_MODEL_DISCOVERY_FILTER,
     },
     // Verified 2026-08-03: public /provider/v1/models returns 51 rows; /chat/completions returns
     // 401 UNAUTHORIZED without a Bearer key. Primary source: https://commandcode.ai/docs/provider.
@@ -1424,6 +1434,38 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelReasoningEffortMap: { "deepseek-v4-1-flash": { ...deepseekReasoningMapFor("deepseek-v4-1-flash"), none: "none" } },
     note: "Pay-per-token API gateway for open-weight models (DeepSeek, GLM, Kimi) and Grok, billed from a prepaid USD balance. Create an API key at console.cheapaimodel.ai. Live discovery lists the models your key can call; deepseek-v4-1-flash is the default. Chat Completions only.",
   },
+  {
+    // AbliteratedLLM. Contract checked 2026-11-14: https://abliteratedllm.dev/docs/chat-completions
+    // and https://abliteratedllm.dev/docs/models. GET /v1/models is public and answers 200 for any
+    // Bearer value, so discovery needs no key but cannot verify one (GET /v1/balance is the
+    // key-gated route). Chat Completions serves every catalog model, so every inbound stays on Chat;
+    // the stateless Responses and the Anthropic Messages endpoints are not used. reasoning_effort is
+    // documented as low, medium or high for every model, so higher Codex levels clamp to high.
+    // glm-5.3-flash-abliterated lists 131,072 output tokens; every other row's output limit equals
+    // its window. The env reference derived from the id is ${ABLITERATEDLLM_API_KEY}.
+    // Routing checked 2026-11-15: GET /v1/models listed 15 models, glm-5.3-flash-abliterated
+    // (variant "abliterated") and 14 with provider_label "Stock model". None carried "Official
+    // DeepSeek API", the label https://abliteratedllm.dev/privacy uses for requests forwarded to
+    // DeepSeek's own API; the listed models, the DeepSeek ones included, run on Fireworks AI with
+    // zero data retention. The note states only that observation, not a retention promise for any
+    // model the service lists later.
+    id: "abliteratedllm",
+    label: "AbliteratedLLM",
+    adapter: "openai-chat",
+    baseUrl: "https://api.abliteratedllm.dev/v1",
+    authKind: "key",
+    dashboardUrl: "https://abliteratedllm.dev/dashboard/keys",
+    liveModels: false,
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    defaultModel: "glm-5.3-flash-abliterated",
+    models: ABLITERATEDLLM_MODELS,
+    modelContextWindows: ABLITERATEDLLM_MODEL_CONTEXT_WINDOWS,
+    modelMaxOutputTokens: { "glm-5.3-flash-abliterated": 131_072 },
+    modelInputModalities: ABLITERATEDLLM_MODEL_INPUT_MODALITIES,
+    reasoningEfforts: ["low", "medium", "high"],
+    note: "Pay-per-token API for abliterated (refusal-removed) and stock open-weight models, prepaid in USD by card or crypto. Create an API key at abliteratedllm.dev/dashboard/keys. glm-5.3-flash-abliterated is the default. On 2026-11-15 the public model list showed 15 models: glm-5.3-flash-abliterated, the only abliterated one, and 14 labelled Stock model, the vendors' original weights. None was labelled Official DeepSeek API, the privacy policy's label for requests forwarded to DeepSeek's own API; the listed models, the DeepSeek ones included, run on Fireworks AI with zero data retention. The preset uses this seeded model list: the public model list answers without a key and cannot validate one, so live discovery is off. The preset sends every client through Chat Completions.",
+  },
   // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect
   // (https://mimo.mi.com/docs/en-US/updates/deprecate), so the first-party presets default to V2.6.
   // Saved defaults are not rewritten; V2.5 stays listed until it stops answering.
@@ -1706,6 +1748,40 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noVisionModels: STEPFUN_NO_VISION_MODELS,
     reasoningEfforts: STEPFUN_REASONING_EFFORTS,
     note: "StepFun (阶跃星辰) official OpenAI-compatible API.",
+  },
+  {
+    // StepCode (阶跃星辰) CLI as the transport for a Step Plan subscription (§三十一). The CLI owns the
+    // account: this row stores no Step token, reads none and injects none, so the only credential in
+    // play is the operator's own `step login`, which the CLI resolves itself.
+    //
+    // GOVERNANCE: routing a Step Plan subscription through a third-party agent harness is Step
+    // 星辰's call, not OpenCodex's — flagged for maintainer review alongside the CodeBuddy and Claude
+    // Code rows above. The Step Plan terms document `step_plan` endpoints for third-party coding
+    // tools, and `--sdk-stdio` is StepCode's own published, MIT-licensed external-client surface; that
+    // is the strongest authorization evidence available without a written permission, and it is not
+    // the same thing as one.
+    id: "step-cli",
+    label: "StepCode CLI (subscription)",
+    adapter: "step-cli",
+    // The destination the subscription's traffic reaches. OpenCodex never sends this host: the CLI
+    // performs every request, so the value exists so the adapter can fail closed when a row is
+    // repointed somewhere this route cannot speak to.
+    baseUrl: "https://api.stepfun.com/step_plan",
+    // `key` + `keyOptional` for the same reason as `claude-cli`: the traffic leaves the machine, so
+    // `local` would misreport the row, but the route is keyless, which is what `keyOptional` states.
+    authKind: "key",
+    keyOptional: true,
+    dashboardUrl: "https://platform.stepfun.com/docs/zh/step-plan/quick-start",
+    defaultModel: "step-5-preview",
+    models: [...STEP_CLI_MODELS],
+    // Static roster, exactly like the Claude Code and CodeBuddy rows. The CLI serves its catalog over
+    // the SDK stdio protocol rather than at an HTTP path the adapter polls, and a live-discovery
+    // attempt against this row would 404 and then fall back to these ids anyway.
+    liveModels: false,
+    modelContextWindows: { ...STEP_CLI_MODEL_CONTEXT_WINDOWS },
+    noVisionModels: [...STEP_CLI_NO_VISION_MODELS],
+    reasoningEfforts: [...STEP_CLI_REASONING_EFFORTS],
+    note: "Runs Step Plan subscription traffic through StepCode's own harness: the official `step` CLI over its length-prefixed SDK stdio protocol, one long-lived process per conversation. OpenCodex stores no Step token, reads none and injects none — the CLI signs in with `step login` and bills the Step Plan account itself. The sign-in is the one of the user this proxy runs as, so every request served through this row spends that same account. Tool ownership stays with the client: the adapter declares the request's tools as StepCode SDK tools and lets the CLI call back over stdio, so no tool ever executes inside Step and approval never leaves the client. Requires the StepCode CLI (`~/.stepcode/bin/step`) and a signed-in Step Plan session. This route shares the CLI family's 128-tool / 2 MiB catalog ceiling, which a real Codex client can exceed because it flattens every MCP server's tools into the function catalog (measured on Codex 0.162.0: 1749 tools, 2.5 MB); the refusal names both counts so the cause is visible, and the fix is to disable or narrow MCP servers for this provider. LIMITATIONS: StepCode carries conversation history only inside its own process, so one conversation needs one process and a process that dies cannot be reconstructed; a tool that takes longer than two minutes to come back exceeds the CLI's own tool-result window; and the CLI's session system prompt cannot be replaced, so a client instruction is prepended to the turn rather than installed as the system prompt. Routing authorization flagged for maintainer security review.",
   },
   {
     // Official Claude Code CLI as the transport for a Claude subscription (§三十一). The CLI owns

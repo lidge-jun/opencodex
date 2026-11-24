@@ -45,6 +45,8 @@ export interface IncomingMeta {
   beforePhysicalSend?: () => void;
   /** Recheck credential authority without recording a physical dispatch. */
   beforeCredentialSend?: () => void;
+  /** Router-owned receipt at the guarded provider executor's physical dispatch boundary. */
+  onGuardedDispatch?: () => void;
   /**
    * Image-normalization ladder bias for upstream-413 tightened retries: every image
    * starts one tier lower (devlog/260714_image_normalization_pipeline/030). Consumed by
@@ -83,8 +85,9 @@ export interface ProviderAdapter {
   name: string;
 
   /**
-   * This adapter reports every physical inference send through `IncomingMeta.onPhysicalSend`,
-   * including its first.
+   * This adapter reports every physical inference send, including its first, through
+   * `IncomingMeta.onPhysicalSend`. A `fetchResponse` adapter using its own executor can also
+   * opt in by calling `AdapterFetchContext.onPhysicalSend` after its final dispatch guards.
    *
    * The caller normally logs the first send before handing control over, which is correct for a
    * transport whose sends it can see. An adapter that admits its own sends through the shared
@@ -93,6 +96,9 @@ export interface ProviderAdapter {
    * boundary where it is actually dispatched.
    */
   reportsPhysicalSends?: boolean;
+
+  /** Upper bound on physical sends for one hosted-tool model iteration. */
+  hostedIterationSendLimit?: number;
 
   /**
    * Convert an already-read provider HTTP error into client-safe text. This hook must be pure and

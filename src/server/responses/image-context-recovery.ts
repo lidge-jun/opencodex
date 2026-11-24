@@ -2,13 +2,13 @@ import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../../adapte
 import type { OcxParsedRequest } from "../../types";
 import type { PhysicalSendReporter } from "../../lib/request-execution-budget";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { isRewrittenUpstreamError, markRewrittenUpstreamError } from "../../adapters/upstream-http-error";
 import { carryProxyError, isProxyError } from "../../lib/client-error-body";
 import { checkOutboundBodySize } from "./outbound-body-guard";
 import { releaseTranslatedEvent, type TranslatorBudget } from "../../lib/translator-budget";
 import { isNonReplayableResponse, SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import { COMPACT_PROMPT, SUMMARY_PREFIX } from "../../responses/compaction";
 import { sameProviderContinuationOwner } from "../../responses/provider-continuation";
-import { readDisplaySafeErrorText } from "./core-errors";
 import { deferPhysicalSendReporter } from "./deferred-send-reporter";
 import { fetchWithHeaderTimeout, providerFetch } from "./fetch-helpers";
 import { transientSendCapFor, type ResponsesSendBudget } from "./request-send-budget";
@@ -37,11 +37,22 @@ export type AnthropicImageRecovery = (
 export async function retainAdapterFailureResponse(response: Response, signal: AbortSignal): Promise<{
   response: Response; text: string;
 }> {
-  const text = await readDisplaySafeErrorText(response, signal, "");
+  // Same contract as readDisplaySafeErrorText, but remembering whether the whole body survived: a
+  // retained copy of a truncated, unsafe or unreadable body is not the provider's evidence (#9017).
+  let text = "";
+  let complete = false;
+  try {
+    const body = await readBoundedResponseBody(response, { signal });
+    text = body.displaySafe ? body.text : "";
+    complete = body.displaySafe && !body.truncated;
+  } catch {
+    text = "";
+  }
   const headers = new Headers(response.headers);
   headers.delete("content-length");
   headers.delete("content-encoding");
   const retained = new Response(text, { status: response.status, statusText: response.statusText, headers });
+  if (!complete || isRewrittenUpstreamError(response)) markRewrittenUpstreamError(retained);
   return { response: carryProxyError(response, retained), text };
 }
 

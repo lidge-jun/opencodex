@@ -135,9 +135,19 @@ test("an unreadable database reads as unknown, never as absent", async () => {
 test("an NSS directory stat failure reads as unknown without invoking certutil", async () => {
   const root = pickerRoot();
   const db = nss();
-  const inaccessibleHome = join(home(false), "h".repeat(512));
-  expect(await inspectPickerTrustLinux(root.sha1, db.run, inaccessibleHome)).toBe("unknown");
-  expect(db.calls).toEqual([]);
+  const h = home(false);
+  const nssDir = join(h, ".pki", "nssdb");
+  const lstat = fs.lstatSync;
+  const stat = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+    if (path === nssDir) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    return lstat(path, options);
+  }) as typeof lstat);
+  try {
+    expect(await inspectPickerTrustLinux(root.sha1, db.run, h)).toBe("unknown");
+    expect(db.calls).toEqual([]);
+  } finally {
+    stat.mockRestore();
+  }
 });
 
 test("confirmed NSS directory absence skips certutil for inspection and removal", async () => {

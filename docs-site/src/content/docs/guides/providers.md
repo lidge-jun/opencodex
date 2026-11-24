@@ -16,6 +16,17 @@ account selection or defaults.
 While a provider login is in progress, its Accounts panel offers **Cancel** once sign-in
 instructions appear.
 
+## Reasoning-effort rejection diagnostics
+
+Automatic retries of the same provider and model at a lower effort, and learned unsupported
+efforts, use a complete upstream error diagnostic of at most 1,024 UTF-16 code units, including
+any wrapper text. Larger diagnostics cannot authorize this retry or learning from their prefix.
+The original error body remains available to normal handling, including ordinary Combo failover;
+existing client error-display limits still apply. A long but legitimate effort error therefore
+does not trigger automatic effort repair or update the learned effort ladder. Short diagnostics such as
+`cannot use parameter 'reasoning_effort'` still identify effort; an actual unrelated field
+continues to block this retry and learning.
+
 ## OpenAI account modes
 
 | Provider id | Use | Credential/account rule |
@@ -55,7 +66,7 @@ reset is expected to recover as `+N% pool capacity`. **Incomplete coverage** mea
 accounts could not safely contribute to the estimate, for example because their plan or quota is
 unknown, their reading is stale, or the account is paused or needs reauthentication.
 
-Business Premium seats reported as `self_serve_business_prolite` count as five Standard-seat units in this estimate. This display weight does not select accounts or create a five-hour window when the upstream reports only weekly usage. The calibration follows the [official Business usage limits](https://help.openai.com/en/articles/12003714-chatgpt-business-models-and-limits), checked 2026-10-20; unknown plans continue to count at the baseline with the unknown-plan count disclosed. An enabled Anthropic OAuth account pool with two or more accounts gets the same kind of estimate, every routable account weighted equally: inactive accounts use their last measured reading (no extra usage requests), paused, reauthenticating or stale accounts count as incomplete coverage, and with the pool off or one account the row shows the active account's own reading as before.
+Pro 100 (`prolite`), Pro 200 (`pro`), and Pro 500 (`promax`) count as 10, 20, and 50 Plus-seat units respectively. Business Premium seats reported as `self_serve_business_prolite` count as five Standard-seat units in this estimate. This display weight does not select accounts or create a five-hour window when the upstream reports only weekly usage. The calibration follows the [official Business usage limits](https://help.openai.com/en/articles/12003714-chatgpt-business-models-and-limits), checked 2026-10-20; unknown plans continue to count at the baseline with the unknown-plan count disclosed. An enabled Anthropic OAuth account pool with two or more accounts gets the same kind of estimate, every routable account weighted equally: inactive accounts use their last measured reading (no extra usage requests), paused, reauthenticating or stale accounts count as incomplete coverage, and with the pool off or one account the row shows the active account's own reading as before.
 
 A **partial window coverage** warning means some included accounts reported one quota window but
 not another. The overview keeps those windows separate and marks each affected window incomplete
@@ -287,7 +298,7 @@ eligible Enterprise accounts. Cloud Code Assist serves Argon only to the Antigra
 OpenCodex sends every Gemini 4 model request and model discovery with the CLI User-Agent
 (`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model. Gemini 4 Hydrogen (low, medium, high by default, and xhigh) appears on `google-antigravity` only when your account's model list includes it, each level mapping to its `gemini-4-hydrogen-*` wire model; requesting `max` or `ultra` also selects xhigh.
 
-Vertex AI model discovery, its credential rules and how Gemini 4 Argon, Carbon and Hydrogen
+Vertex AI model discovery, its credential rules and how Vertex Gemini 3+ models (including Gemini 4 Argon, Carbon, Hydrogen and Neon)
 receive tool images are described in [Google Vertex AI](/guides/google-vertex/).
 
 For Gemini on Antigravity, including Argon, provider-marked thought summaries stay separate
@@ -601,6 +612,8 @@ distinct one. Kiro accounts use the profile ARN together with the signed-in user
 pool accounts have a separate ledger.
 Tokens stay in `~/.opencodex/auth.json`; `/api/oauth/accounts` returns masked metadata only.
 
+New Codex and Anthropic OAuth pool sessions can use [`reset-near-weighted`](/reference/configuration/providers/#reset-near-weighted) to favor weekly quota that will reset soon. Existing session bindings are preserved.
+
 ### Cockpit Tools Antigravity import
 
 For v1, OpenCodex imports only a **Cockpit Tools Antigravity** JSON export for the `google-antigravity` provider. In the Providers dashboard, choose the local JSON file from that provider's Accounts tab. The dashboard does not show the file contents or credential values; it reports only imported, updated, failed, and unsupported counts. Other Cockpit providers are rejected in v1.
@@ -694,18 +707,9 @@ the dashboard Codex account pool also performs. See
 
 ### Kiro request credits
 
-On tool-enabled turns, opencodex holds Kiro's ordinary text until completion is validated.
-If Kiro ends with plain text instead of its private final-answer tool, one bounded retry
-still runs, and only the resulting final answer is displayed. Progress accompanying a real
-tool call remains visible. A normal private final answer needs no completion retry.
-
-When Kiro's safety filter stops a turn (`CONTENT_FILTERED`, for example the Claude `BIO` classifier), the request ends as a refusal that clients do not retry: Claude clients see `stop_reason: "refusal"` and Codex sees a failed response carrying Kiro's category and explanation. If the filter stops the bounded retry, no final answer is displayed; the progress held from the first attempt and any partial text from the retry are shown as commentary before the refusal.
-
-When Kiro emits credit metering, request logs preserve the reported spend as
-`usage.providerCredits`, including in the persisted usage ledger. These are Kiro credits;
-token counts may still be estimated, and the credit value does not replace USD cost estimates.
-Completion fallback requests add their reported credits. An absent value means Kiro did not
-report credit usage; an explicit zero means it reported no spend.
+Kiro's completion guardrails, its safety-filter refusals and the credit metering that lands in
+request logs are covered in [Kiro request credits](/guides/kiro-request-credits/), beside how to
+price those credits in USD.
 
 ### Kiro refresh attention
 
@@ -801,6 +805,7 @@ are on the [API-key catalog](/guides/api-key-catalog/) page. Its sections:
 - [Official CodeBuddy Code CLI (Global & CN)](/guides/api-key-catalog/#official-codebuddy-code-cli-global--cn)
 - [Official Qoder CLI (Global & CN)](/guides/api-key-catalog/#official-qoder-cli-global--cn)
 - [Claude Code CLI (subscription)](/guides/api-key-catalog/#claude-code-cli-subscription)
+- [StepCode CLI (subscription)](/guides/step-cli/)
 - [Antigravity CLI (ACP, local)](/guides/api-key-catalog/#antigravity-cli-acp-local)
 - [A6API credit quota](/guides/api-key-catalog/#a6api-credit-quota)
 - [BigModel Coding Plan over Responses](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses)
@@ -969,3 +974,5 @@ An access-denied result does not by itself prove an expired login or an ineligib
 ## Large inline images on Chat providers
 
 Translated OpenAI-compatible Chat requests shrink inline images when their combined base64 data exceeds 3.5 MiB. Older images lose detail first. This is a best-effort image budget, so large text, schemas, or images that cannot be processed may still exceed an upstream request limit. Remote image URLs are not downloaded, and images that cannot be shrunk remain attached. Native Chat passthrough keeps its original image bytes.
+
+After budget normalization, Venice requests enlarge small inline images to a minimum edge of 64 pixels when their dimensions can be read and the image codec confirms that the source is at most 16 million pixels. If enlargement is skipped or fails, the request keeps the image from the budget step, which may already have re-encoded it. Venice may still reject an image below its minimum.

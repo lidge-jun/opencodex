@@ -7,9 +7,11 @@ This page holds section 3 of the [Providers](/guides/providers/) guide: the buil
 and the provider-specific notes that go with them. Auth modes, account logins, and local providers
 stay on that page.
 
-opencodex ships 110 built-in presets: 88 key-based, 18 OAuth, three local, and one default
+For subscription account rotation, see [`reset-near-weighted`](/reference/configuration/providers/#reset-near-weighted) for the Codex and Anthropic OAuth pools. API-key pools use their own [key selection settings](/reference/configuration/providers/).
+
+opencodex ships 112 built-in presets: 90 key-based, 18 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
-validates the key, and stores it; validation is provider-specific. Notable entries:
+validates the key where the provider can check one, and stores it. Notable entries:
 
 **ClinePass** uses a Cline API key with the [official subscription catalog](https://docs.cline.bot/getting-started/clinepass)
 and [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions), operated by Cline Bot Inc. under
@@ -101,6 +103,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Modelflare | `https://modelflare.dev/v1` |
 | AI Stupid Level | `https://aistupidlevel.info/v1` |
 | cheapaimodel | `https://api.cheapaimodel.ai/v1` |
+| AbliteratedLLM | `https://api.abliteratedllm.dev/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -234,6 +237,23 @@ preset sends every request through Chat Completions, the one interface every cat
 it does not use the gateway's Responses or Anthropic Messages endpoints. cheapaimodel's
 [terms](https://cheapaimodel.ai/terms) and [privacy policy](https://cheapaimodel.ai/privacy) apply to
 requests sent to this service.
+
+**AbliteratedLLM** is a pay-per-token API for abliterated (refusal-removed) and stock open-weight
+models, prepaid in USD by card or crypto. Create an [API key](https://abliteratedllm.dev/dashboard/keys),
+then select **AbliteratedLLM** in `ocx init` or the dashboard's **Add provider** picker, or run
+`ocx provider add abliteratedllm`, and give it the key directly or as the reference
+`${ABLITERATEDLLM_API_KEY}`. The preset sends every client through [Chat Completions](https://abliteratedllm.dev/docs/chat-completions)
+at `https://api.abliteratedllm.dev/v1`, not the service's stateless Responses or Anthropic Messages
+endpoints, and uses a seeded model list: the public [`GET /v1/models`](https://abliteratedllm.dev/docs/models)
+answers without a key and cannot validate one, so live discovery is off. `glm-5.3-flash-abliterated` is the default.
+On 2026-11-15 `GET /v1/models` listed 15 models: `glm-5.3-flash-abliterated`, the only abliterated
+model (marked `variant: "abliterated"`), and 14 with `provider_label: "Stock model"`, the vendors'
+original weights. None was labelled "Official DeepSeek API", the privacy policy's label for requests
+forwarded to DeepSeek's own API; the listed models, the DeepSeek ones included, run on Fireworks AI
+with zero data retention. `glm-5.3` and `glm-5.3-fast` are text only, so images for them go to the
+vision sidecar. `reasoning_effort` is sent as `low`, `medium` or `high`; higher levels are sent as
+`high`. AbliteratedLLM's [terms](https://abliteratedllm.dev/terms) and
+[privacy policy](https://abliteratedllm.dev/privacy) apply to requests sent to this service.
 
 The provider editor also accepts an optional `inputModalities` fallback: a nonempty array containing
 `text`, `image`, `audio`, or `video`. Exact per-model declarations take precedence. Invalid values
@@ -747,7 +767,7 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
 - **Output guard:** If the CLI echoes OpenCodex tool-call/result replay envelopes into assistant text, the turn fails with `vendor_scaffold_detected` (502) instead of returning the envelope as a successful answer, and neither reasoning nor tool calls following the envelope are forwarded. Reasoning starts a fresh replay-text block, so earlier prose or code fences cannot hide an envelope in later text. If the CLI's turn already ended with its own error, that error is reported instead, still without the envelope. The proxy does not retry that failure automatically. Ordinary prose and closed fenced examples follow the shared envelope recognizer; an unverified overflowing fenced example is refused. Assistant text preserves Unicode characters split across CLI frames; unpaired surrogates are replaced with U+FFFD.
 - **Image Input:** Global continues forwarding supported images through the shared projection without a per-model vision allowlist. CN retains its vision-sidecar defaults. Its raw-image route admits only one canonical base64 PNG of at most 1 MiB decoded, 8192 pixels per edge, and 16 million total pixels in a single user turn with `DeepSeek-Flash` or `Qwen3.8-Flash`. Use `qoderclicn 1.1.70`: [issue #7516](https://github.com/lidge-jun/opencodex/issues/7516) reports Windows 11 x64 live success for those models on both `--attachment` and inline `--input-format stream-json --output-format stream-json` stdin; OpenCodex uses only stdin. The adapter validates base64 length/padding, decoded PNG signature and basic IHDR fields before CLI discovery; it does not decompress pixels or validate every PNG chunk/CRC. These ceilings are OpenCodex resource policy, not verified vendor maxima: the reported live evidence covers a 96×96 PNG, whose RGBA raster is only 36 KiB. Larger inputs require separate verification. Other CLI versions have not been verified, and the adapter does not probe the installed version. CN refuses raw URL images, other image formats/models, multiple images, tool-result images and image-bearing history/multi-turn replay before starting the CLI with `unsupported_input_modality`; use the vision sidecar for those inputs. Injected CLI tests cover serialization and cancellation without claiming live upstream support. Qoder's supported projection keeps image blocks in conversation order and marks unsupported references as `[image omitted: unsupported reference]`. Global stateless replay can still associate historical images unreliably with their original text; CN does not enable that unverified replay surface.
 - **PAT recovery:** For both Qoder presets, a multi-key API-key pool can switch to another PAT on a supported authentication rejection or account-level quota exhaustion, but only before response content or an event that makes replay unsafe. Recovery requires Qoder-specific classification and respects credential-hop and send budgets; an HTTP 401/429 or quota message alone is not permission to replay. Single-key configurations do not rotate. Sharing the CLI runner does not enable this API-key recovery for CodeBuddy or self-authenticated Claude CLI.
-- **Quota:** No public quota API is used, so totals and reset times are unavailable. Codes 110 (account daily limit) and 118 (personal Credits exhaustion) report `insufficient_quota` and permit consideration of PAT recovery. Other supported quota codes also report `insufficient_quota` but do not authorize it. Numeric error codes take precedence: an unrecognized numeric code does not fall back to quota or authentication text. Without a numeric code, only the supported account-daily message beginning “You've reached your daily usage limit for Chat”, with no team/model/shared qualifier, grants quota recovery; generic credit-limit text does not. Only quota failures eligible for PAT recovery enter key cooldown handling. When such a failure has no reset time, the failed key uses the existing default cooldown; nonrecoverable quota classifications do not create a cooldown through this path, and no next-day reset is inferred.
+- **Quota:** No public quota API is used, so totals and reset times are unavailable. Codes 110 (account daily limit) and 118 (personal Credits exhaustion)—whether reported as numbers or pure-numeric strings—report `insufficient_quota` and permit consideration of PAT recovery. Other supported quota codes also report `insufficient_quota` but do not authorize it. On `qoder-cn`, when `error_code` is absent, outer HTTP `403`/`"403"`, or `112`/`"112"` (with no non-403 error code on the response JSON object or its top-level `error`/`data` object, and no top-level field other than `pricingUrl` and 403 codes, so explanatory text such as a lock or permission message keeps the original error), the verified `inference.remoteChat.stream failed (403)` response whose JSON body carries `pricingUrl` at `https://qoder.com.cn/pricing` also reports `insufficient_quota` and permits PAT recovery; Global and unrelated 403s do not. Other explicit vendor error codes take precedence: any other numeric or non-numeric `error_code` (such as `114`, `130`, `PERMISSION_DENIED`, or `112` without that verified CN pricing-URL response) does not fall back to quota, pricing-URL, or authentication text. Without an explicit `error_code`, only the supported account-daily messages beginning “You've reached your daily usage limit for Chat” or “You have reached the daily usage limit”, with no team/model/shared qualifier, grant quota recovery; generic credit-limit text does not. Only quota failures eligible for PAT recovery enter key cooldown handling. When such a failure has no reset time, the failed key uses the existing default cooldown; nonrecoverable quota classifications do not create a cooldown through this path, and no next-day reset is inferred.
 - **Operators:** Qoder Global is operated by BRIGHT ZENITH PRIVATE LIMITED under the [product service terms](https://qoder.com/product-service); Qoder CN by 通义云启（杭州）信息技术有限公司 with Alibaba Cloud. Verify `ocx provider test qoder` (or `qoder-cn`) after configuring.
 
 ## Claude Code CLI (subscription)

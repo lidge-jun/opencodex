@@ -58,7 +58,7 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Порог автосжатия контекста (по умолчанию `829800`); внедряется только при включённом автоконтексте |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (необязательно) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (необязательно; поддерживается и устаревшая `ANTHROPIC_SMALL_FAST_MODEL`) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (при запуске по подписке, если не задано: нативные `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`) |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`. При локальном запуске по подписке с включённым `nativePassthrough` и режимом учёта контекста 1M (по умолчанию) в незаданные слоты, для которых применима автоматическая маркировка, подставляются нативные `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]`. Для Fable используется `claude-fable-5-2[1m]` в Claude Code 2.1.290 и новее, а в более ранних версиях или при неизвестной версии — `claude-fable-5-1[1m]`. Если установить `claudeCode.contextAccounting` в `200k`, автоматическая маркировка `[1m]` отключается, а незаданные слоты остаются пустыми. Блок ручного запуска в панели управления экспортирует Fable только при настроенном слоте. Если слот пуст, модель Fable выбирает Claude Code в оболочке, куда вставлен блок. |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | Подпись `/model` для слота уровня, которому OpenCodex назначил маршрутизируемый псевдоним (например, `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`). Та же пара записывается в системное окружение launchd и в shell-хук. Идентификатор модели остаётся псевдонимом. Слоты и подписи, заданные вами, не изменяются |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1`, когда включён `alwaysEnableEffort` (условно) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`, когда задан (условно; по умолчанию не задаётся, действует значение Claude Code по умолчанию) |
@@ -584,8 +584,8 @@ Claude Code — это лишь учётные данные для доступ�
 
 | Вход Messages | Выход Responses |
 | --- | --- |
-| `system` верхнего уровня | `instructions` (текстовые блоки объединяются через `\n\n`) |
-| `messages[].role: "system"` | Также сворачивается в `instructions` |
+| `system` верхнего уровня | `instructions` (текстовые блоки объединяются через `\n\n`). Для GPT-6.2 Sol и Astra через вход Codex отправляется первым сообщением `developer`, чтобы его можно было кэшировать |
+| `messages[].role: "system"` | Преобразуется в сообщения `developer` на исходных позициях |
 | Текст / изображение пользователя | `input_text` / `input_image` (base64 → data URL) |
 | Текст ассистента | `output_text` |
 | `tool_use` ассистента | `function_call` (`input` → `arguments` в виде JSON-строки) |

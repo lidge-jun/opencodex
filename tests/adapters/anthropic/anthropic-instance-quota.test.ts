@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createAnthropicInstanceFixture, INSTANCE_FIXTURE_INSTANCES, anthropicInstanceBarrier,
   type AnthropicInstanceFixture,
 } from "../../helpers/anthropic-instance-fixture";
+import type { ProviderQuota } from "../../../src/providers/quota-types";
 import type { AnthropicInstanceId } from "../../../src/providers/anthropic-instance-id";
 import type { GenerationContext } from "../../../src/lib/state-store-sweeper";
+import { resetNearWeightOf } from "../../../src/routing/machine-weighted-routing";
 
 let f: AnthropicInstanceFixture;
 let cache: typeof import("../../../src/providers/quota/account-cache");
@@ -260,6 +262,225 @@ afterEach(async () => {
   await f.dispose();
   // dispose's provider-only clears schedule writes; the all-cache clear only cancels them.
   cache.clearAccountQuotaCache();
+});
+
+async function seedWeightedAnthropicQuota() {
+  const instance = "anthropic";
+  const id = f.ids[0];
+  await f.store.saveCredential(instance, {
+    access: "synthetic-quota-third-access", refresh: "synthetic-quota-third-refresh",
+    expires: Date.now() + 3_600_000, source: "oauth",
+    accountId: "55555555-5555-4555-8555-555555555555",
+  });
+  await f.store.setActiveAccount(instance, id);
+  const ids = f.store.getAccountSet(instance)!.accounts.map(row => row.id);
+  expect(ids).toHaveLength(3);
+  const observedAt = Math.floor(Date.now() / 1000) * 1000 - 60_000;
+  const observedClock = spyOn(Date, "now").mockReturnValue(observedAt);
+  try {
+    const reset = String((observedAt + 3_600_000) / 1000);
+    cache.recordAnthropicAccountQuotaFromHeadersForInstance(instance, id, new Headers({
+      "anthropic-ratelimit-unified-5h-utilization": "0.30",
+      "anthropic-ratelimit-unified-5h-reset": reset,
+      "anthropic-ratelimit-unified-7d-utilization": "0.30",
+      "anthropic-ratelimit-unified-7d-reset": reset,
+    }), sweeper.captureConfigGeneration(), 200);
+  } finally { observedClock.mockRestore(); }
+  const evidence = (now = Date.now()) => cache.getAnthropicResetNearQuota(instance, id, now);
+  const weight = (now = Date.now()) => resetNearWeightOf(ids, accountId =>
+    cache.getAnthropicResetNearQuota(instance, accountId, now), now)?.(id) ?? 1;
+  const original = f.store.getAccountCredential(instance, id)!;
+  const rotate = async () => {
+    expect(await f.store.saveAccountCredential(instance, id, {
+      ...original, access: "synthetic-quota-rotated-access", refresh: "synthetic-quota-rotated-refresh",
+      anthropicIdentity: undefined,
+    })).toBe(true);
+  };
+  expect(weight()).toBe(2);
+  return { instance, id, original, observedAt, evidence, weight, rotate };
+}
+
+function planUsageResponse(): Response {
+  const resetsAt = new Date(Date.now() + 3_600_000).toISOString();
+  return Response.json({
+    five_hour: { utilization: 30, resets_at: resetsAt },
+    seven_day: { utilization: 30, resets_at: resetsAt },
+    limits: [],
+  });
+}
+
+test.each([false, true])("Anthropic weighted evidence stays retired on credential reuse (new login ID: %s)", async rotateLoginId => {
+  const { instance, id, original, weight, rotate } = await seedWeightedAnthropicQuota();
+  const oldLoginId = f.store.getAccountSet(instance)!.accounts.find(row => row.id === id)!.loginId;
+  const { fetchAnthropicAccountQuota } = await import("../../../src/providers/quota/anthropic-account-quota");
+  expect(await f.store.setAccountAlias(instance, id, "Renamed seat")).toBe(true);
+  expect(weight()).toBe(2);
+  await rotate();
+  expect(weight()).toBe(1);
+  await f.store.saveAccountCredential(instance, id, original, { rotateLoginId });
+  const newLoginId = f.store.getAccountSet(instance)!.accounts.find(row => row.id === id)!.loginId;
+  expect(newLoginId !== oldLoginId).toBe(rotateLoginId);
+  expect(weight()).toBe(1);
+  globalThis.fetch = (async () => planUsageResponse()) as typeof fetch;
+  expect((await fetchAnthropicAccountQuota(instance, id, true, f.config)).quota?.fiveHourPercent).toBe(30);
+  expect(weight()).toBe(2);
+});
+
+test.each(["account", "provider"] as const)("Anthropic %s refresh rejects a response dispatched before credential reuse", async scope => {
+  const { instance, id, original, weight, rotate } = await seedWeightedAnthropicQuota();
+  const { fetchAnthropicAccountQuota } = await import("../../../src/providers/quota/anthropic-account-quota");
+  const { fetchAnthropicQuota } = await import("../../../src/providers/quota/vendor-probes-oauth");
+  const started = anthropicInstanceBarrier();
+  const finish = anthropicInstanceBarrier();
+  let sends = 0;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const sentOriginal = new Headers(init?.headers).get("authorization") === `Bearer ${original.access}`;
+    expect(sentOriginal).toBe(true);
+    sends++;
+    started.release();
+    await finish.wait;
+    return planUsageResponse();
+  }) as typeof fetch;
+  const pending = scope === "account"
+    ? fetchAnthropicAccountQuota(instance, id, true, f.config).then(entry => entry.quota)
+    : fetchAnthropicQuota(instance, f.config);
+  const outcome = observePending(pending);
+  try {
+    await waitForDispatch(started, outcome);
+    await rotate();
+    await f.store.saveAccountCredential(instance, id, original);
+  } finally {
+    finish.release();
+    await outcome;
+  }
+  expect(sends).toBe(1);
+  expect(pendingValue(await outcome)).toBeNull();
+  expect(f.quota.getCachedProviderAccountQuota(instance, id)).toBeNull();
+  expect(weight()).toBe(1);
+});
+
+test("Anthropic account and provider refreshes both stamp fresh weighted plan evidence", async () => {
+  const { instance, id, evidence, weight } = await seedWeightedAnthropicQuota();
+  const { fetchAnthropicAccountQuota } = await import("../../../src/providers/quota/anthropic-account-quota");
+  const { fetchAnthropicQuota } = await import("../../../src/providers/quota/vendor-probes-oauth");
+  globalThis.fetch = (async () => planUsageResponse()) as typeof fetch;
+  const expectFreshWeight = () => {
+    expect(evidence()).toMatchObject({
+      fiveHourPercent: 30, weeklyPercent: 30, fiveHourObservedAt: expect.any(Number), weeklyObservedAt: expect.any(Number),
+    });
+    expect(weight()).toBe(2);
+  };
+  cache.clearAccountQuotaCache();
+  expect((await fetchAnthropicAccountQuota(instance, id, true, f.config)).quota?.fiveHourPercent).toBe(30);
+  expectFreshWeight();
+  cache.clearAccountQuotaCache();
+  expect(await fetchAnthropicQuota(instance, f.config)).not.toBeNull();
+  expectFreshWeight();
+});
+
+test("persisted Anthropic quota projects cleanly on downgrade and stays revision-bound on hydration", async () => {
+  const { instance, id, original, observedAt, weight, rotate } = await seedWeightedAnthropicQuota();
+  const { settleAccountQuotaPersistForTests } = await import("../../../src/providers/account-quota-disk");
+  let flush!: () => void;
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void) => {
+    flush = callback;
+    return 0;
+  }) as typeof setTimeout);
+  try { cache.persistAccountQuotaCache(); } finally { timer.mockRestore(); }
+  flush();
+  await settleAccountQuotaPersistForTests();
+  const key = cache.accountCacheKey(instance, id);
+  const path = join(f.paths.OPENCODEX_HOME, "provider-account-quota-cache.json");
+  const raw = readFileSync(path, "utf8");
+  const snapshot = JSON.parse(raw) as {
+    version: number;
+    rows?: Record<string, ProviderQuota>;
+    anthropicCredentialKeys?: Record<string, string>;
+  };
+  // The parent reader (25463d7f80) checks the v1 row and passes all its fields through
+  // Anthropic hydration to the account DTO. This fixture holds only live plan meters.
+  const row = snapshot.version === 1 && snapshot.rows && typeof snapshot.rows === "object"
+    ? snapshot.rows[key] : undefined;
+  const now = Date.now();
+  const priorQuota = row && typeof row === "object" && Number.isFinite(row.updatedAt)
+    && now - row.updatedAt <= 6 * 60 * 60_000 ? cache.normalizeAnthropicQuota(row, now) : null;
+  const priorAccountDto = { id, quota: priorQuota };
+  expect(priorAccountDto).toEqual({ id, quota: {
+    fiveHourPercent: 30, fiveHourResetAt: observedAt + 3_600_000,
+    weeklyPercent: 30, weeklyResetAt: observedAt + 3_600_000, updatedAt: observedAt,
+  } });
+
+  const ownership = snapshot.anthropicCredentialKeys?.[key];
+  expect(ownership).toMatch(/^[a-f0-9]{64}$/);
+  const inlineSnapshot = JSON.stringify({ version: 1, rows: { [key]: { ...row, anthropicCredentialKey: ownership } } });
+  for (const contents of [raw, inlineSnapshot]) {
+    writeFileSync(path, contents);
+    cache.clearAccountQuotaCache();
+    cache.hydrateAccountQuotaCache();
+    expect(f.quota.getCachedProviderAccountQuota(instance, id)).toEqual(priorQuota);
+    expect(weight()).toBe(1); // Hydration never restores live observation clocks.
+  }
+
+  await rotate();
+  await f.store.saveAccountCredential(instance, id, original);
+  for (const contents of [raw, inlineSnapshot]) {
+    writeFileSync(path, contents);
+    cache.clearAccountQuotaCache();
+    cache.hydrateAccountQuotaCache();
+    expect(f.quota.getCachedProviderAccountQuota(instance, id)).toBeNull();
+  }
+});
+
+test.each(["before", "after"] as const)("failed Anthropic usage probe retains weight only until credential rotation %s the probe", async rotation => {
+  const { instance, id, weight, rotate } = await seedWeightedAnthropicQuota();
+  const { fetchAnthropicAccountQuota } = await import("../../../src/providers/quota/anthropic-account-quota");
+  const rotateFirst = rotation === "before";
+  if (rotateFirst) {
+    await rotate();
+    expect(weight()).toBe(1);
+  }
+  globalThis.fetch = (async () => Response.json({}, { status: 500 })) as typeof fetch;
+  const entry = await fetchAnthropicAccountQuota(instance, id, true, f.config);
+  expect(entry).toMatchObject({ unavailable: true, quotaFailure: "upstream_error" });
+  expect(weight()).toBe(rotateFirst ? 1 : 2);
+  if (rotateFirst) expect(entry.quota).toBeNull();
+  else {
+    await rotate();
+    expect(weight()).toBe(1);
+  }
+});
+
+test.each([
+  ["account", "unchanged"], ["account", "rotated"],
+  ["provider", "unchanged"], ["provider", "rotated"],
+] as const)("Anthropic %s monthly retirement keeps original plan clocks only for the same owner (%s credential)", async (scope, credential) => {
+  const { instance, id, observedAt, evidence, weight, rotate } = await seedWeightedAnthropicQuota();
+  const rotated = credential === "rotated";
+  if (rotated) {
+    await rotate();
+    expect(weight()).toBe(1);
+  }
+  globalThis.fetch = (async () => Response.json({ extra_usage: { is_enabled: false } })) as typeof fetch;
+  if (scope === "account") {
+    const { fetchAnthropicAccountQuota } = await import("../../../src/providers/quota/anthropic-account-quota");
+    await fetchAnthropicAccountQuota(instance, id, true, f.config);
+  } else {
+    const { fetchAnthropicQuota } = await import("../../../src/providers/quota/vendor-probes-oauth");
+    expect(await fetchAnthropicQuota(instance, f.config)).toBeNull();
+  }
+  const entry = cache.accountQuotaCache.get(cache.accountCacheKey(instance, id));
+  expect(entry).toMatchObject({ unavailable: true, quotaFailure: "response_unusable" });
+  expect(weight()).toBe(rotated ? 1 : 2);
+  if (rotated) {
+    expect(entry?.quota).toBeNull();
+  } else {
+    expect(evidence()).toMatchObject({
+      fiveHourPercent: 30, weeklyPercent: 30, fiveHourObservedAt: observedAt, weeklyObservedAt: observedAt,
+    });
+    expect(weight(observedAt + 15 * 60_000 + 1)).toBe(1);
+    await rotate();
+    expect(weight()).toBe(1);
+  }
 });
 
 test("controlled dispatch reports premature settlement instead of orphaning its started barrier", async () => {

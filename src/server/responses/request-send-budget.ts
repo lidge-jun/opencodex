@@ -139,7 +139,7 @@ export function createResponsesSendBudget(
   const noteTransientSends = (used: number): void => recordTransientSends(used, pendingHopPermit ?? inheritedPermit);
   const physicalSendReporter = (permit?: SingleUseDispatchPermit, explicitContinuation = false,
     wireEstimate?: { inputTokens: number; outputCeilingTokens: number },
-    targetKey = explicitContinuation ? `native-continuation:${crypto.randomUUID()}` : undefined) => {
+    receiptOwned = false, targetKey = explicitContinuation ? `native-continuation:${crypto.randomUUID()}` : undefined) => {
     let unreportedWorkflowStarts = 0;
     const reporter = createPhysicalSendReporter(sendBudget, () => ({ ...responsesSpendTarget(logCtx),
       ...(targetKey ? { targetKey } : {}),
@@ -149,7 +149,7 @@ export function createResponsesSendBudget(
       const prepaid = Math.min(unreportedWorkflowStarts, Math.max(0, charged));
       unreportedWorkflowStarts -= prepaid;
       if (!physicalWorkflowAccounting) chargeWorkflowSends(workflowRootId, charged - prepaid);
-    }, { explicitContinuation });
+    }, { explicitContinuation, receiptOwned });
     if (compactHandoffSendCeiling !== undefined && !explicitContinuation && reporter.beforeSend) {
       const beforeSend = reporter.beforeSend;
       let prepaid = permit !== undefined;
@@ -159,7 +159,7 @@ export function createResponsesSendBudget(
         return true;
       };
     }
-    if (workflowRootId && !physicalWorkflowAccounting) {
+    if (!receiptOwned && workflowRootId && !physicalWorkflowAccounting) {
       const beforeSend = reporter.beforeSend, close = reporter.close;
       let closed = false;
       reporter.beforeSend = reserveRetrySpend => {
@@ -176,7 +176,8 @@ export function createResponsesSendBudget(
     return reporter;
   };
   // Capture at helper creation, before another leg can replace the pending handoff.
-  const transientSendReporter = (permit = pendingHopPermit ?? inheritedPermit) => physicalSendReporter(permit);
+  const transientSendReporter = (permit = pendingHopPermit ?? inheritedPermit, receiptOwned = false) =>
+    physicalSendReporter(permit, false, undefined, receiptOwned);
   // A helper owns a fresh booking, never a routed leg's permit or target-local retry counter.
   const dispatchSidecarSend: AuxiliaryModelSend = async (target, dispatch) => {
     if (!isRequestExecutionBudget(sendBudget)) {
@@ -252,23 +253,15 @@ export function createResponsesSendBudget(
   /**
    * Records an adapter's OWN inner retries against this attempt.
    *
-   * Ordinal 1 is the send each call site already recorded through `noteRoutedAttemptSend`, so only
-   * the extra physical sends are added here and an adapter that does not retry internally
-   * leaves its log byte-for-byte as it was. Kiro reaches roughly eighteen sends per call and
-   * Cursor re-sends a whole turn, and both reported one; a count that cannot be observed
-   * cannot be pinned by a regression, which is why the instrumentation precedes the cap.
+   * The first receipt binds the attempt's identity. The budget counts every receipt, and
+   * subsequent sends add to the active attempt without rebinding the credential.
    */
   const noteAdapterPhysicalSend = (
     inputTokens: number | undefined,
     send: { ordinal: number; recovery?: AttemptRecoveryKind },
-    options: { readonly includeFirst?: boolean } = {},
   ): void => {
-    // Ordinal 1 is skipped because the caller normally records it before dispatch. An adapter
-    // that reports every send asks for it to be counted here instead, so that the first send is
-    // logged where it actually happens rather than before admission could still refuse it.
     targetSendsUsed += 1;
-    if (send.ordinal <= 1 && options.includeFirst !== true) return;
-    noteAttemptSend(logCtx.activeAttempt, inputTokens, send.recovery);
+    if (send.ordinal > 1) noteAttemptSend(logCtx.activeAttempt, inputTokens, send.recovery);
   };
   /**
    * Records a recovery an adapter was ready to make and the budget refused.
@@ -430,7 +423,7 @@ export function createResponsesSendBudget(
     imageRecoverySendReporter: (body: string, maxOutputTokens: number) => {
       // Each leg needs its own seed at normal capacity, on the ordinary physical-send counter.
       const reporter = physicalSendReporter(undefined, false, { inputTokens: estimateTokens(body, logCtx.model),
-        outputCeilingTokens: maxOutputTokens }, `image-413:${crypto.randomUUID()}`);
+        outputCeilingTokens: maxOutputTokens }, false, `image-413:${crypto.randomUUID()}`);
       const beforeSend = reporter.beforeSend;
       reporter.beforeSend = () => {
         const target = responsesSpendTarget(logCtx);
@@ -464,7 +457,7 @@ export function createResponsesSendBudget(
     initialSendAllowance: (cap: number): number => Math.min(cap,
       remainingTransientSendBudget(cap) + (initialPermit ? 1 : 0)),
     /** At final executor admission, settle only the owning booking or reserve this send. */
-    noteInitialDispatch: (prepaid = initialPermit): void => {
+    noteInitialDispatch: (prepaid = initialPermit, reserveUnbookedSend = false): void => {
       const policy = currentWorkflowBudgetPolicy();
       if (!physicalWorkflowAccounting && workflowSendCeilingReached(workflowRootId, policy)) {
         prepaid?.release();
@@ -473,13 +466,14 @@ export function createResponsesSendBudget(
       if (prepaid) {
         if (!prepaid.assumeCharge()) { prepaid.release(); throw new SendBudgetExhaustedError(); }
         if (prepaid === initialPermit) initialPermit = undefined;
-      } else if (adapterSendBudget && (options.comboInitialSend || options.compactionRecoveryPermit)) {
+      } else if (adapterSendBudget && (reserveUnbookedSend || options.comboInitialSend || options.compactionRecoveryPermit)) {
         const decision = adapterSendBudget.reserveDispatch({ sendClass: "transient",
           targetKey: adapterSendBudget.lastTargetKey ?? `${logCtx.provider}/${logCtx.model}` });
         if (!decision.allowed) throw new SendBudgetExhaustedError();
         if (!decision.permit.use()) { decision.permit.release(); throw new SendBudgetExhaustedError(); }
       } else {
         // Legacy direct callers can prebook without handing over a permit; keep their reporter.
+        if (reserveUnbookedSend && sendBudgetExhausted()) throw new SendBudgetExhaustedError();
         if (adapterSendBudget?.claimWorkflowSend && !adapterSendBudget.claimWorkflowSend()) throw new SendBudgetExhaustedError();
         if (!physicalWorkflowAccounting && !reserveWorkflowSend(workflowRootId, policy)) throw new SendBudgetExhaustedError();
         recordTransientSends(1, pendingHopPermit ?? inheritedPermit, true);

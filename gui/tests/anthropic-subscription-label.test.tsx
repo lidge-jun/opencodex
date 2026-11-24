@@ -5,6 +5,7 @@ import { en } from "../src/i18n/en";
 import type { TFn } from "../src/i18n/shared";
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { Window } from "happy-dom";
 import { LanguageProvider } from "../src/i18n/provider";
 import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuthPanel";
 import ProviderCurrentQuota from "../src/components/provider-workspace/ProviderCurrentQuota";
@@ -24,11 +25,15 @@ for (const provider of ["anthropic", "anthropic2"]) {
       expect(markup).toContain(`>${label}</span>`);
       expect(markup).not.toContain("private@example.test");
       expect(markup).not.toContain("synthetic-private-account");
-      expect(markup).toContain("37% used");
+      // The quota table shows remaining capacity: 37% used weekly -> 63% left, 18% used 5-hour -> 82% left.
+      expect(markup).toContain("63% left");
       if (plan === "pro" || plan === "max_5x") {
-        expect(markup).toContain("5-hour limit");
-        expect(markup).toContain("18% used");
-      } else expect(markup).not.toContain("5-hour limit");
+        expect(markup).toContain(`class="aqt-bar-label">${en["acctTable.fiveHour"]}</span>`);
+        expect(markup).toContain("82% left");
+      } else {
+        expect(markup).not.toContain(`class="aqt-bar-label">${en["acctTable.fiveHour"]}</span>`);
+        expect(markup).not.toContain("82% left");
+      }
     });
   }
 }
@@ -38,6 +43,29 @@ test("current quota shows subscription even when the usage read is unavailable",
   const markup = renderToStaticMarkup(<LanguageProvider><ProviderCurrentQuota reading={reading} /></LanguageProvider>);
   expect(markup).toContain(">Ultra</span>");
   expect(markup).toContain("data-quota-state=\"unavailable\"");
+});
+
+test("same-account rows show distinct organization names as literal text and omit missing names", async () => {
+  const item = { name: "anthropic", adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" } as WorkspaceItem;
+  const shared = { accountLabel: "s***d@example.test", email: "shared@example.test" };
+  const accounts: OAuthAccountRow[] = [
+    { ...shared, id: "slot-a", active: true, organizationName: "Synthetic Team" },
+    { ...shared, id: "slot-b", active: false, organizationName: "<strong>Research & Design</strong>" },
+    { ...shared, id: "slot-c", active: false },
+  ];
+  const win = new Window();
+  try {
+    win.document.body.innerHTML = renderToStaticMarkup(
+      <LanguageProvider><ProviderAuthPanel item={item} apiBase="" authHandlers={handlers} accounts={accounts} oauth={{ loggedIn: true }} /></LanguageProvider>,
+    );
+    const rows = [...win.document.querySelectorAll(".aqt-row")];
+    expect(rows.map(row => row.querySelector(".aqt-account-label")?.textContent)).toEqual(accounts.map(() => shared.accountLabel));
+    expect(rows.map(row => row.querySelector(".aqt-account-organization")?.textContent)).toEqual([
+      "Synthetic Team", "<strong>Research & Design</strong>", undefined,
+    ]);
+    expect(rows[1]?.querySelector("strong")).toBeNull();
+    expect(rows[2]?.querySelector(".aqt-account-organization")).toBeNull();
+  } finally { await win.happyDOM.close(); }
 });
 
 for (const [provider, adapter, marked, privateIdentity] of [

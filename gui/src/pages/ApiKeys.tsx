@@ -49,6 +49,7 @@ interface KeysResponse extends UsageReadMetadata {
   chatCompletionsEndpoint?: string;
   messagesEndpoint?: string;
   modelsEndpoint?: string;
+  geminiModelsEndpoint?: string;
   claudeCodeEnabled?: boolean;
   surfaces?: unknown;
   audio?: unknown;
@@ -188,6 +189,8 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         chatCompletions: data.chatCompletionsEndpoint ?? derived.chatCompletions,
         messages: data.messagesEndpoint ?? derived.messages,
         models: data.modelsEndpoint ?? derived.models,
+        ...(typeof data.geminiModelsEndpoint === "string" && data.geminiModelsEndpoint
+          ? { geminiModels: data.geminiModelsEndpoint } : {}),
         ...(isAudioApiInfo(data.audio, data.baseUrl ?? derived.baseUrl) ? { audio: data.audio } : {}),
       },
       claudeCodeEnabled: data.claudeCodeEnabled !== false,

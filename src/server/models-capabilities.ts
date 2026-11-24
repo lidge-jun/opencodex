@@ -1,3 +1,4 @@
+import { grokDefaultReasoningEffort } from "../grok/effort";
 import type { CursorEffortTable } from "../integrations/cursor-effort-table";
 
 /**
@@ -16,6 +17,29 @@ import type { CursorEffortTable } from "../integrations/cursor-effort-table";
  * LibreChat) that inspects flat properties rather than Cursor's nested `capabilities.*` shape.
  * A row that gains a nested capacity value must gain the top-level mirror in the same change.
  */
+
+// Grok Build discovers models through this endpoint, and its model picker only
+// enables /effort for entries that advertise the reasoning ladder in the Grok model
+// catalog shape (supports_reasoning_effort + reasoning_efforts[]). The Codex catalog
+// branch already carries the same ladders, so mirror them here — native rows
+// from the upstream snapshot, routed rows from the configured provider tiers. The
+// default uses the same canonical fallback as the Codex catalog resolver
+// (configured default, then medium, then high, then the first tier). Extra fields
+// are ignored by plain OpenAI clients.
+const grokEffortOption = (value: string, isDefault: boolean) => ({
+  value,
+  label: `${value[0].toUpperCase()}${value.slice(1)} Effort`,
+  ...(isDefault ? { default: true } : {}),
+});
+export function grokEffortFields(efforts: string[], configuredDefault?: string) {
+  const defaultEffort = grokDefaultReasoningEffort(efforts, configuredDefault);
+  if (defaultEffort === undefined) return {};
+  return {
+    supports_reasoning_effort: true,
+    reasoning_effort: defaultEffort,
+    reasoning_efforts: efforts.map(effort => grokEffortOption(effort, effort === defaultEffort)),
+  };
+}
 
 /**
  * Membership is load-bearing for Cursor: its wire selector picks the Anthropic Messages path only

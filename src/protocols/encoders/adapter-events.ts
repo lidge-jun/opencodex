@@ -1,3 +1,4 @@
+import type { OcxProviderOpaqueToolCallMetadata } from "../../types";
 import { markProxyError, isProxyError } from "../../lib/client-error-body";
 /**
  * AdapterEvent -> client wire, without the internal Responses SSE (PF-09).
@@ -131,7 +132,7 @@ export interface ClientWireWriter {
   toolStart(call: ClientToolCall): void;
   toolArgsDelta(itemId: string, delta: string): void;
   toolArgsDone(itemId: string, args: string): void;
-  toolDone(call: ClientToolCall & { arguments: string; status: "completed" | "incomplete" }): void;
+  toolDone(call: ClientToolCall & { arguments: string; status: "completed" | "incomplete"; providerMetadata?: OcxProviderOpaqueToolCallMetadata }): void;
   webSearchDone(search: ClientWebSearch): void;
   terminal(terminal: EncodedTerminal): void;
   overflow(): void;
@@ -180,7 +181,7 @@ export interface AdapterEventEncodeOptions {
   };
 }
 
-type OpenToolCall = ClientToolCall & { args: string; argsBytes: number; namespace?: string };
+type OpenToolCall = ClientToolCall & { args: string; argsBytes: number; namespace?: string; providerMetadata?: OcxProviderOpaqueToolCallMetadata };
 
 /** Drive `events` through `writer` as a pull-based byte stream. */
 export function encodeAdapterEventStream(
@@ -421,6 +422,7 @@ export function encodeAdapterEventStream(
       itemId: call.itemId, callId: call.callId, name: call.name, kind: call.kind,
       arguments: call.kind === "function" ? argsStr : call.args,
       status: "completed",
+      ...(call.providerMetadata ? { providerMetadata: call.providerMetadata } : {}),
     });
     budget.closeCall(call.callId);
     currentToolCall = null;
@@ -687,7 +689,7 @@ export function encodeAdapterEventStream(
             const itemId = `${toolSearch ? "tsc" : freeform ? "ctc" : "fc"}_${uuid()}`;
             const call: ClientToolCall = { itemId, callId: event.id, name, kind };
             writer.toolStart(call);
-            currentToolCall = { ...call, args: "", argsBytes: 0, ...(mapped ? { namespace: mapped.namespace } : {}) };
+            currentToolCall = { ...call, args: "", argsBytes: 0, ...(mapped ? { namespace: mapped.namespace } : {}), ...(event.providerMetadata ? { providerMetadata: event.providerMetadata } : {}) };
             budget.openCall(event.id);
             break;
           }

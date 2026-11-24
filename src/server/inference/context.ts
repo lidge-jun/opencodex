@@ -7,6 +7,7 @@ import type { SpendAdmissionPolicy } from "../../lib/spend-reservation-ledger";
 
 // Only ingress owns an expandable policy. Exact caller budgets and combo-derived scopes
 // never enter this map, even when their policy happens to equal the default profile.
+const oauthExpanded = new WeakSet<TransientSendBudget>();
 const ingressPolicies = new WeakMap<TransientSendBudget, {
   maxTotalModelSends: number;
   baseSendAllowance: number;
@@ -50,10 +51,20 @@ function expandIngressSendBudget(budget: TransientSendBudget | undefined, sends:
     return;
   }
   const policy = ingressPolicies.get(budget);
-  if (!policy || budget.used !== 0 || ("physicalStarted" in budget && Number(budget.physicalStarted) > 0)) {
+  if (!policy || oauthExpanded.has(budget) || budget.used !== 0 || ("physicalStarted" in budget && Number(budget.physicalStarted) > 0)) {
     return;
   }
-  ingressPolicies.delete(budget);
+  // One ingress expansion per request; the policy stays for the hosted-search allowance.
+  oauthExpanded.add(budget);
   policy.baseSendAllowance = Math.max(policy.baseSendAllowance, sends);
   policy.maxTotalModelSends = Math.max(policy.maxTotalModelSends, sends);
+}
+
+
+/** Fund the hosted loop's bounded model sends before its first dispatch. */
+export function expandInferenceSearchSendBudget(budget: TransientSendBudget | undefined, baseSends: number): void {
+  const policy = budget && ingressPolicies.get(budget);
+  if (!policy || baseSends <= policy.baseSendAllowance) return;
+  policy.maxTotalModelSends += baseSends - policy.baseSendAllowance;
+  policy.baseSendAllowance = baseSends;
 }

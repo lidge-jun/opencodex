@@ -95,7 +95,10 @@ describe("Anthropic helper physical admission", () => {
     ];
     const adapter: ProviderAdapter = { name: "nonterminal-auxiliary-fixture",
       buildRequest: () => ({ url: "https://routed.test", method: "POST", headers: {}, body: "{}" }),
-      fetchResponse: async () => new Response("wire"), async *parseStream() { yield* passes.shift()!; } };
+      fetchResponse: async (_req, ctx) => {
+        ctx?.onPhysicalSend?.({ ordinal: 1 });
+        return new Response("wire");
+      }, async *parseStream() { yield* passes.shift()!; } };
     const translatorBudget = createTranslatorBudget();
     try {
       const response = await runWithWebSearch({ parsed: parsedWithWebSearch(), adapter, backend: "anthropic",
@@ -175,7 +178,10 @@ describe("Anthropic helper physical admission", () => {
           const adapter: ProviderAdapter = {
             name: "helper-admission-fixture",
             buildRequest: request => { continued = request; return { url: "https://routed.test", method: "POST", headers: {}, body: "{}" }; },
-            fetchResponse: async () => new Response("wire"),
+            fetchResponse: async (_req, ctx) => {
+              ctx?.onPhysicalSend?.({ ordinal: 1 });
+              return new Response("wire");
+            },
             async *parseStream() { yield* passes.shift()!; },
           };
           const response = await runWithWebSearch({ parsed, adapter, backend: "anthropic", anthropicSidecar,

@@ -1,4 +1,5 @@
 {
+  "resolved-model-policy-catalog-reuse.test.ts": "providers",
   "m365-copilot-security.test.ts": "providers",
   "m365-copilot-executor.test.ts": "providers",
   "cursor-auto-tool-result-replay.test.ts": "providers/cursor",
@@ -13,6 +14,7 @@
   "xai-replay-provenance.test.ts": "providers/xai",
   "xai-device-login.test.ts": "providers/xai",
   "xai-loaded-tool-provenance.test.ts": "providers/xai",
+  "abliteratedllm-provider.test.ts": "providers",
   "free-directory-llmtr.test.ts": "providers",
   "free-directory-runcrate.test.ts": "providers",
   "cc-switch-import.test.ts": "providers",
@@ -23,5 +25,6 @@
   "model-discovery-skip-invalid-rows.test.ts": "providers",
   "management-provider-model-discovery.test.ts": "server",
   "claude-cli-fixture-stdout-flush.test.ts": "providers",
-  "alibaba-token-plan-developer-role.test.ts": "providers"
+  "alibaba-token-plan-developer-role.test.ts": "providers",
+  "provider-quota-probe-isolation.test.ts": "providers"
 }

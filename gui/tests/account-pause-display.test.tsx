@@ -5,6 +5,7 @@ import { Window } from "happy-dom";
 import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuthPanel";
 import { CodexAccountPoolCards } from "../src/components/codex-account-pool-cards";
 import type { ProviderAuthHandlers } from "../src/components/provider-workspace/types";
+import type { OAuthAccount } from "../src/hooks/useProviderAccountPools";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import { I18nContext, DICTS, interpolate, LOCALES, type Locale, type TFn } from "../src/i18n/shared";
 import { formatAccountPauseTooltip } from "../src/account-pause-display";
@@ -45,11 +46,83 @@ test.each(["fr", "ko"] as const)("provider OAuth and key tooltips use the app lo
       accounts={[{ id: "account-fixture", alias: "Reserve account", active: false, paused: true, pauseDetails: details }]}
       keys={[{ id: "key-fixture", label: "Reserve key", masked: "****", active: false, disabled: true, pauseDetails: details }]} />, locale);
     try {
-      expect(win.document.querySelector(".badge-muted[title]")?.getAttribute("title")).toBe(expected);
+      // OAuth accounts render in the quota table (pause tooltip on the account button); key rows keep the badge.
+      const tooltipHost = authMode === "oauth" ? ".aqt-account-main[title]" : ".badge-muted[title]";
+      expect(win.document.querySelector(tooltipHost)?.getAttribute("title")).toBe(expected);
       if (authMode === "key") {
         expect(win.document.querySelector(".pwi-auth-row-main")?.getAttribute("aria-label"))
           .toBe(`${t("pws.resumeAndActivateKey")} — Reserve key`);
       }
+    } finally { void win.happyDOM.close(); }
+  }
+});
+
+const appealHref = "https://forms.gle/appeal-fixture";
+
+test("the banned quota row shows only the display fields from the OAuth pause response", () => {
+  const account = {
+    id: "banned-account-fixture",
+    alias: "Banned account fixture",
+    active: false,
+    paused: true,
+    pauseDetails: { ...details, reason: "account_permission_denied" },
+    pauseEvidence: {
+      message: "This service has been disabled in this account for violation of Terms of Service.",
+      statusCode: 403,
+      appealUrl: appealHref,
+      appealText: "Request a review",
+    },
+  } satisfies OAuthAccount;
+  const item = { name: "google-antigravity", authMode: "oauth", adapter: "google" } as WorkspaceItem;
+  const win = render(<ProviderAuthPanel item={item} apiBase="" oauth={{ loggedIn: true }} authHandlers={handlers}
+    accounts={[account]} />, "en");
+
+  try {
+    const row = win.document.querySelector('[data-testid="account-quota-table"] tbody')!;
+    const notice = row.querySelector("details")!;
+    notice.open = true;
+    expect(Array.from(notice.children, child => child.textContent)).toEqual([
+      DICTS.en["acctTable.bannedRow"] + DICTS.en["acctTable.bannedReason"],
+      account.pauseEvidence.message,
+      new Date(account.pauseDetails.pausedAt).toLocaleString() + " · HTTP 403",
+    ]);
+    const link = row.querySelector("a");
+    expect(link?.textContent).toBe(account.pauseEvidence.appealText);
+    expect(link?.getAttribute("href")).toBe(appealHref);
+    expect(row.textContent).not.toContain(account.id);
+    expect(row.textContent).not.toContain(account.pauseDetails.reason);
+    expect(row.textContent).not.toContain(appealHref);
+  } finally { void win.happyDOM.close(); }
+});
+
+function renderAppeal(locale: Locale, appealText?: string, paused = true, appealUrl = appealHref) {
+  const item = { name: "google-antigravity", authMode: "oauth", adapter: "google" } as WorkspaceItem;
+  return render(<ProviderAuthPanel item={item} apiBase="" oauth={{ loggedIn: true }} authHandlers={handlers}
+    accounts={[{ id: "account-fixture", alias: "Appeal fixture", active: false, paused, pauseDetails: details,
+      pauseEvidence: { statusCode: 403, appealUrl, appealText } }]} />, locale);
+}
+
+test.each(LOCALES)("paused OAuth details show the translated appeal action in $code", ({ code }) => {
+  const win = renderAppeal(code, "<b>Invalid vendor label</b>");
+  try {
+    const link = win.document.querySelector(`.aqt-detail a[href="${appealHref}"]`);
+    expect(link?.textContent).toBe(DICTS[code]["accountPause.submitAppeal"]);
+    expect(link?.textContent?.trim()).toBeTruthy();
+    expect(link?.getAttribute("target")).toBe("_blank");
+    expect(link?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(link?.closest("button")).toBeNull();
+  } finally { void win.happyDOM.close(); }
+});
+
+test("paused OAuth details use a plain vendor label and omit links on resumed rows or unsafe URLs", () => {
+  for (const [paused, url, expected] of [
+    [true, appealHref, "Request a review"],
+    [false, appealHref, undefined],
+    [true, "javascript:void(0)", undefined],
+  ] as const) {
+    const win = renderAppeal("en", "Request a review", paused, url);
+    try {
+      expect(win.document.querySelector(".aqt-detail a")?.textContent).toBe(expected);
     } finally { void win.happyDOM.close(); }
   }
 });

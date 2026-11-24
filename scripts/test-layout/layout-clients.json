@@ -1,4 +1,5 @@
 {
+  "link-served-runtime-trust.test.ts": "clients",
   "claude-endpoint-lifetime.test.ts": "claude-integration",
   "omo-responses-loop.test.ts": "clients",
   "codex-launcher-endpoint.test.ts": "codex-integration",
@@ -7,6 +8,7 @@
   "windows-config-root-integration-writers.test.ts": "windows",
   "windows-cli-config-root-startup.test.ts": "windows",
   "t3code-client-lifecycle.test.ts": "clients",
+  "gateway-client-restore.test.ts": "clients",
   "gateway-client-safety.test.ts": "clients",
   "gateway-clients.test.ts": "clients",
   "gateway-client-command.test.ts": "cli",

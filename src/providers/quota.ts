@@ -123,12 +123,12 @@ async function maybeFetchProviderQuota(
   try {
     if (provider.adapter === "claude-cli") return await fetchClaudeCliObservedQuota(name, forceRefresh);
     if (isBuiltInChatGptForwardProvider(name, provider)) {
-      return fetchChatGptForwardQuota(config, name, provider, forceRefresh, prefetchedCodexSnapshot);
+      return await fetchChatGptForwardQuota(config, name, provider, forceRefresh, prefetchedCodexSnapshot);
     }
     if (provider.authMode === "oauth" && explicitAccountReader(name)) return await fetchExplicitCurrentQuota(name, provider, config);
-    if (provider.authMode === "oauth" && configuredAnthropicInstance(config, name)) return fetchAnthropicQuota(name, config);
+    if (provider.authMode === "oauth" && configuredAnthropicInstance(config, name)) return await fetchAnthropicQuota(name, config);
     if (provider.authMode === "oauth" && name === ANTIGRAVITY_OAUTH_STORE_KEY) return await fetchAntigravityQuota(name, { ...provider });
-    if (provider.authMode === "oauth" && name === "kiro") return fetchKiroQuota(name);
+    if (provider.authMode === "oauth" && name === "kiro") return await fetchKiroQuota(name);
     // meta-muse: a device-logged-in account can be probed at the key endpoint; an
     // imported or pasted one cannot, and falls back to its last in-band observation.
     // The probe is tried first and its failure is never fatal to the row.
@@ -138,7 +138,7 @@ async function maybeFetchProviderQuota(
     const reader = keyQuotaReaderForProvider(name, provider);
     // Keep destination/auth fields bound to the same request as the reader's captured
     // bearer, even if the live provider object changes while the quota probe awaits.
-    return reader ? reader(name, { ...provider }) : null;
+    return reader ? await reader(name, { ...provider }) : null;
   } catch {
     return null;
   }

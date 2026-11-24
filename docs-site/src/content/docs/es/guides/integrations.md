@@ -756,8 +756,14 @@ Usa `--model` solo con `ocx connect antigravity` para fijar el modelo predetermi
 
 Conectar registra lo que reemplazó. Desconectar restaura los bytes originales cuando el archivo no ha
 cambiado y, en caso contrario, revierte solo las entradas propias de OpenCodex y conserva tus otras
-ediciones. El bloque marcado de `agy` en un perfil de shell se elimina entero, incluida cualquier edición
-hecha dentro de él. Un enlace simbólico de un perfil de `agy` debe apuntar a otro perfil compatible
+ediciones. Antigravity puede restaurar la configuración aunque se reordenen las claves JSON y conserva
+el archivo y el registro de restauración si hay un conflicto con un ajuste gestionado.
+Para resolver un conflicto de Antigravity, repón el valor que aplicó OpenCodex y vuelve a intentarlo.
+Si OpenCodex muestra `agy-profile-restore-required`, abre el perfil de shell indicado en el error.
+Recupera de una copia el bloque completo de `agy`, incluidas las dos líneas de marcador y la función
+entre ellas, y vuelve a intentar la desconexión o la desinstalación. OpenCodex elimina el bloque entero
+y conserva los cambios que quedan fuera. También puedes restaurar el perfil original guardado, lo que
+reemplaza las ediciones posteriores. Un enlace simbólico de un perfil de `agy` debe apuntar a otro perfil compatible
 de la misma familia de shells dentro de tu directorio personal. El archivo de configuración de
 Antigravity debe resolverse a la ruta exacta `~/.antigravity/settings.json`. Reinicia Antigravity, o
 abre una terminal nueva para `agy`, para aplicar un cambio. Al desconectar, `agy` omite los perfiles
@@ -772,3 +778,9 @@ variables `AGY_LLM_GATEWAY_*` y después la configuración del usuario. El estad
 configuración de la organización y las variables de entorno que puede ver. Solo consulta el entorno
 del proceso de OpenCodex. Si la variable se fija únicamente en el proceso de Antigravity, el estado
 no la detecta. En Windows `agy` no está probado, porque Google lo publica solo para macOS y Linux.
+
+Para conservar el JSON de Gemini, inicia sesión con `ocx login google-antigravity` y configura
+`protocols.rollout.geminiNativeAntigravity` como `true` en el JSON de OpenCodex. También puedes activar la transmisión nativa de Gemini en la pestaña **Cuentas** de Google Antigravity. Esta opción se
+aplica a las solicitudes de generación Gemini de `/v1beta` que se enrutan al proveedor OAuth
+canónico `google-antigravity`. Las demás rutas usan el puente de Chat.
+Consulta [Gemini nativo con Antigravity](/es/reference/proxy-formats/#native-gemini-with-antigravity).

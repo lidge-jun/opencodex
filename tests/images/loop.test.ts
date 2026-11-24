@@ -3,13 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ProviderAdapter, IncomingMeta } from "../../src/adapters/base";
-import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
+import type { AdapterEvent, OcxParsedRequest, OcxUsage } from "../../src/types";
 import type { AttemptRecoveryKind } from "../../src/usage/log";
 import type { ImageBridgePlan, ImageCallResult } from "../../src/images/types";
 import type { ImageBridgeDeps } from "../../src/images/loop";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { PROVIDER_INPUT_TOO_LARGE_MESSAGE } from "../../src/server/responses/context-overflow";
-import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
+import { SendBudgetExhaustedError, markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
 import { bridgeToResponsesSSE as realBridgeToResponsesSSE } from "../../src/bridge";
 import { parseStreamWithProgress, WebSearchConsumerInactivityError, type ParseStreamWithProgressOptions } from "../../src/web-search/progress-stream";
@@ -324,7 +324,10 @@ describe.each(["runTurn", "parseStream"] as const)("image-loop collection bounds
 const mockAdapter: ProviderAdapter = {
   name: "test",
   buildRequest: async () => { buildRequestCalls++; return { url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" }; },
-  fetchResponse: async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+  fetchResponse: async (_request, ctx) => {
+    ctx?.onPhysicalSend?.({ ordinal: 1 });
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  },
   parseStream: async function* (): AsyncGenerator<AdapterEvent> {
     const events = streamQueue.shift();
     if (events) for (const e of events) yield e;
@@ -402,7 +405,8 @@ describe("runWithImageBridge", () => {
       adapter: {
         ...mockAdapter,
         formatErrorBody: (_status, _headers, body) => body,
-        fetchResponse: async () => {
+        fetchResponse: async (_req, ctx) => {
+          ctx?.onPhysicalSend?.({ ordinal: 1 });
           if (sends++ === 0) return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
           const failed = new Response("This model's maximum context length is 8192 tokens", { status: 413 });
           markResponseNonReplayable(failed);
@@ -582,7 +586,8 @@ describe("runWithImageBridge", () => {
     let retrySends = 0;
     const retryingAdapter: ProviderAdapter = {
       ...mockAdapter,
-      fetchResponse: async () => {
+      fetchResponse: async (_req, ctx) => {
+        ctx?.onPhysicalSend?.({ ordinal: 1 });
         sends += 1;
         if (sends === 1) {
           return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
@@ -622,7 +627,8 @@ describe("runWithImageBridge", () => {
     let sends = 0;
     const retryingAdapter: ProviderAdapter = {
       ...mockAdapter,
-      fetchResponse: async () => {
+      fetchResponse: async (_req, ctx) => {
+        ctx?.onPhysicalSend?.({ ordinal: 1 });
         sends += 1;
         if (sends === 1) {
           return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
@@ -732,7 +738,8 @@ describe("runWithImageBridge", () => {
     let rotations = 0;
     const retryingAdapter: ProviderAdapter = {
       ...mockAdapter,
-      fetchResponse: async () => {
+      fetchResponse: async (_req, ctx) => {
+        ctx?.onPhysicalSend?.({ ordinal: 1 });
         sends += 1;
         if (sends === 1 || sends === 3) {
           return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
@@ -777,7 +784,8 @@ describe("runWithImageBridge", () => {
     let rotations = 0;
     const retryingAdapter: ProviderAdapter = {
       ...mockAdapter,
-      fetchResponse: async () => {
+      fetchResponse: async (_req, ctx) => {
+        ctx?.onPhysicalSend?.({ ordinal: 1 });
         sends += 1;
         return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
           status: 429,
@@ -799,7 +807,8 @@ describe("runWithImageBridge", () => {
           ? {
               adapter: {
                 ...mockAdapter,
-                fetchResponse: async () => {
+                fetchResponse: async (_req, ctx) => {
+                  ctx?.onPhysicalSend?.({ ordinal: 1 });
                   sends += 1;
                   return new Response("{}", { status: 429 });
                 },
@@ -1023,6 +1032,27 @@ describe("runWithImageBridge", () => {
     expect(seen).toEqual({ inputTokens: 13, outputTokens: 6 });
   });
 
+  test.each([[2, 3, 5], [undefined, 3, -1], [2, undefined, -1]])(
+    "image continuation credits account for both dispatched legs (%s, %s)", async (first, second, total) => {
+      const reported: (OcxUsage | undefined)[] = [];
+      streamQueue = [
+        [
+          { type: "tool_call_start", id: "call_1", name: "image_gen" },
+          { type: "tool_call_delta", arguments: '{"prompt":"a cat"}' },
+          { type: "tool_call_end" },
+          { type: "done", usage: first === undefined ? undefined : { inputTokens: 10, outputTokens: 4, providerCredits: first } },
+        ],
+        [{ type: "text_delta", text: "ready" },
+          { type: "done", usage: second === undefined ? undefined : { inputTokens: 3, outputTokens: 2, providerCredits: second } }],
+      ];
+      const response = await runWithImageBridge({
+        parsed: makeParsed(), adapter: mockAdapter, plan, maxRounds: 1, onUsage: usage => reported.push(usage),
+      });
+      expect(await response.text()).toContain("response.completed");
+      expect(reported).toEqual([expect.objectContaining({ providerCredits: total })]);
+    },
+  );
+
   test("429 OAuth rotation awaits a refreshed adapter and retries the iteration", async () => {
     let fetchCalls = 0;
     let rotations = 0;
@@ -1034,7 +1064,8 @@ describe("runWithImageBridge", () => {
         if (label === "after-rotate") retryState = requestParsed;
         return { url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" };
       },
-      fetchResponse: async () => {
+      fetchResponse: async (_req, ctx) => {
+        ctx?.onPhysicalSend?.({ ordinal: 1 });
         fetchCalls++;
         if (fetchCalls === 1) return new Response("rate limited", { status: 429, headers: { "retry-after": "1" } });
         streamQueue = [[{ type: "text_delta", text: "after rotate" }, { type: "done" }]];
@@ -1086,7 +1117,8 @@ describe("runWithImageBridge", () => {
       const makeAdapter = (label: string): ProviderAdapter => ({
         name: label,
         buildRequest: async () => ({ url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" }),
-        fetchResponse: async () => {
+        fetchResponse: async (_req, ctx) => {
+          ctx?.onPhysicalSend?.({ ordinal: 1 });
           fetchCalls++;
           if (fetchCalls === 1) return new Response("rate limited", { status: 429, headers: { "retry-after": "1" } });
           streamQueue = [[{ type: "text_delta", text: "after rotate" }, { type: "done" }]];
@@ -1410,7 +1442,7 @@ describe.each(["runTurn", "parseStream"] as const)("image-loop provider identity
         seen.push(incoming.providerName);
         return { url: "https://example.invalid/model", method: "POST", headers: {}, body: "{}" };
       },
-      fetchResponse: async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+      fetchResponse: mockAdapter.fetchResponse,
       parseStream: async function* (): AsyncGenerator<AdapterEvent> { for (const e of eventsFor()) yield e; },
       ...(mode === "runTurn" ? {
         runTurn: async (_parsed: OcxParsedRequest, incoming: IncomingMeta, emit: (event: AdapterEvent) => void) => {
@@ -1483,7 +1515,10 @@ describe("image-loop rotated usage", () => {
     let sends = 0;
     const adapter: ProviderAdapter = {
       ...mockAdapter,
-      fetchResponse: async () => ++sends === 2 ? new Response("rate limited", { status: 429 }) : new Response("{}"),
+      fetchResponse: async (_req, ctx) => {
+        ctx?.onPhysicalSend?.({ ordinal: 1 });
+        return ++sends === 2 ? new Response("rate limited", { status: 429 }) : new Response("{}");
+      },
     };
     const offered: unknown[] = [];
     let reported: unknown;
@@ -1499,4 +1534,47 @@ describe("image-loop rotated usage", () => {
     expect(reported).toEqual(accepted ? { inputTokens: 30, outputTokens: 3 } : { inputTokens: 40, outputTokens: 7 });
     expect(sse).toContain('"input_tokens":40');
   });
+});
+
+test("a continuation refused before dispatch preserves image credits", async () => {
+  streamQueue = [[
+    { type: "tool_call_start", id: "call_1", name: "image_gen" },
+    { type: "tool_call_delta", arguments: '{"prompt":"a cat"}' },
+    { type: "tool_call_end" },
+    { type: "done", usage: { inputTokens: 10, outputTokens: 4, providerCredits: 2 } },
+  ]];
+  let calls = 0;
+  const reported: (OcxUsage | undefined)[] = [];
+  const response = await runWithImageBridge({
+    parsed: makeParsed(), plan, maxRounds: 1,
+    adapter: { ...mockAdapter, fetchResponse: async (request, ctx) => {
+      if (++calls === 2) throw new SendBudgetExhaustedError("fixture");
+      return mockAdapter.fetchResponse!(request, ctx);
+    } },
+    onUsage: usage => reported.push(usage),
+  });
+  expect(await response.text()).toContain("response.failed");
+  expect(calls).toBe(2);
+  expect(reported).toEqual([expect.objectContaining({ providerCredits: 2 })]);
+});
+
+test("rotation separates a usage-less image leg from the replacement reading", async () => {
+  streamQueue = [[{ type: "text_delta", text: "ready" },
+    { type: "done", usage: { inputTokens: 3, outputTokens: 2, providerCredits: 3 } }]];
+  const rotated: (OcxUsage | undefined)[] = [];
+  const reported: (OcxUsage | undefined)[] = [];
+  const response = await runWithImageBridge({
+    parsed: makeParsed(), plan,
+    adapter: { ...mockAdapter, fetchResponse: async (_request, ctx) => {
+      ctx?.onPhysicalSend?.({ ordinal: 1 });
+      return new Response("refused", { status: 429 });
+    } },
+    on429: async () => ({ adapter: mockAdapter }),
+    onRotatedUsage: usage => { rotated.push(usage); return true; },
+    onUsage: usage => reported.push(usage),
+  });
+  expect(await response.text()).toContain("response.completed");
+  expect(rotated).toEqual([undefined]);
+  expect(reported).toEqual([expect.objectContaining({ providerCredits: 3 })]);
+  expect(bridgeEvents.find(event => event.type === "done")).toMatchObject({ usage: { providerCredits: -1 } });
 });

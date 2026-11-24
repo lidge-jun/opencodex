@@ -467,8 +467,9 @@
       "path": "transports/responses-combo-boundaries.md",
       "tier": 3,
       "title": "Combo Streaming Boundaries",
-      "scope": "Combo preflight output commitment, turn lease lifetime, and bounded hop warnings. Original client labels on terminal envelopes and failed-turn request identities.",
+      "scope": "Combo preflight output commitment, turn lease lifetime, and bounded hop warnings. Reasoning-effort diagnostic limits for repair and fallback. Original client labels on terminal envelopes and failed-turn request identities.",
       "documents": [
+        "src/providers/reasoning-metadata.ts",
         "src/server/"
       ]
     },
@@ -549,6 +550,19 @@
       "documents": ["src/claude/", "src/server/responses/", "src/types/claude-tool-loading.ts"]
     },
     {
+      "path": "data-planes/gemini-native.md",
+      "tier": 3,
+      "title": "Native Gemini Inbound",
+      "scope": "Opt-in source-preserving Gemini requests over Antigravity OAuth within the shared Gemini ingress.",
+      "documents": [
+        "src/server/gemini-native.ts",
+        "src/server/gemini-native-wire.ts",
+        "src/server/gemini-native-catalog.ts",
+        "src/server/gemini-native-log.ts",
+        "src/server/index/gemini-routes.ts"
+      ]
+    },
+    {
       "path": "data-planes/ollama-inbound.md",
       "tier": 3,
       "title": "Ollama-Compatible Inbound",
@@ -567,9 +581,12 @@
       "path": "data-planes/gemini-inbound.md",
       "tier": 3,
       "title": "Gemini-Compatible Inbound",
-      "scope": "Gemini-shaped models/generateContent/streamGenerateContent routes translated onto Chat Completions, the x-goog-api-key and ?key= credential move, the native error shape, SSE and JSON-array streaming, and the Chat bridge shared with the Ollama inbound.",
+      "scope": "Gemini-shaped models/generateContent/streamGenerateContent and Interactions API routes translated onto Chat Completions, the x-goog-api-key and ?key= credential move, the native error shape, SSE and JSON-array streaming, the Interactions SSE vocabulary, and the Chat bridge shared with the Ollama inbound.",
       "documents": [
         "src/server/gemini-inbound.ts",
+        "src/server/gemini-interactions-inbound.ts",
+        "src/protocols/codecs/gemini-interactions.ts",
+        "src/server/gemini-interactions-store.ts",
         "src/server/gemini-native-paths.ts",
         "src/server/native-chat-bridge.ts",
         "src/server/index/gemini-routes.ts",
@@ -619,10 +636,11 @@
     {
       "path": "data-planes/chat-reasoning-details.md",
       "tier": 3,
-      "title": "Anthropic Thinking Signatures on the Chat Wire",
-      "scope": "The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429).",
+      "title": "Provider Signatures on the Chat Wire",
+      "scope": "The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429), and the extra_content carrier for Gemini thought signatures on tool calls, including the native Chat decline for non-Google destinations.",
       "documents": [
-        "src/chat/reasoning-details.ts"
+        "src/chat/reasoning-details.ts",
+        "src/server/chat-native-eligibility.ts"
       ]
     },
     {
@@ -708,6 +726,15 @@
         "src/server/",
         "src/types/",
         "src/web-search/"
+      ]
+    },
+    {
+      "path": "providers/step-cli-transport.md",
+      "tier": 4,
+      "title": "StepCode CLI Transport",
+      "scope": "StepCode as a Step Plan transport: its own framed stdio wire, one process per conversation, inline SDK tools instead of an MCP catalog, and the bounded tool-result window.",
+      "documents": [
+        "src/adapters/step-cli/"
       ]
     },
     {
@@ -894,6 +921,13 @@
       "documents": ["src/codex/routing/selection.ts"]
     },
     {
+      "path": "providers/reset-near-weighted.md",
+      "tier": 4,
+      "title": "Reset-near-weighted Account Ordering",
+      "scope": "Opt-in Codex and Anthropic placement weights, observation freshness, eligibility and affinity.",
+      "documents": ["src/routing/machine-weighted-routing.ts", "src/codex/routing/selection.ts", "src/codex/quota-observation-freshness.ts", "src/oauth/anthropic-routing.ts", "src/oauth/pool-kernel.ts", "src/providers/quota/account-cache.ts"]
+    },
+    {
       "path": "providers/openai-signed-in-preservation.md",
       "tier": 4,
       "title": "Preserve Signed-In Codex Quota",
@@ -913,8 +947,10 @@
       "path": "providers/google.md",
       "tier": 4,
       "title": "Google Provider",
-      "scope": "Gemini thought-text, response parts, thought-signature replay, and adjacency repair.",
-      "documents": []
+      "scope": "Gemini thought-text, response parts, thought-signature replay, adjacency repair, and Google error classification.",
+      "documents": [
+        "src/adapters/google-error-details.ts"
+      ]
     },
     {
       "path": "providers/kiro.md",
@@ -1133,7 +1169,7 @@
       "path": "pricing.md",
       "tier": 5,
       "title": "Model Price Overrides",
-      "scope": "User price policies, prompt-length rate selection, persistence and estimate cache invalidation.",
+      "scope": "User price policies, prompt-length rate selection, credit-billing bounds and provenance, persistence and estimate cache invalidation.",
       "documents": [
         "src/config/live-reconcile.ts",
         "src/cli/models-runtime.ts",
@@ -1141,6 +1177,7 @@
         "src/config/schema/leaf-validators.ts",
         "src/server/management/model-routes.ts",
         "src/usage/cost.ts",
+        "src/usage/credit-billing.ts",
         "src/usage/user-cost-overlays.ts",
         "src/usage/user-cost-validation.ts",
         "gui/src/components/ModelPriceDialog.tsx"
@@ -1373,7 +1410,7 @@
       "tier": 6,
       "title": "Managed Service Logging",
       "scope": "Service-only console timestamps and bounded copy-truncate log retention. Producer bounds for combo positions, target providers and effort diagnostics.",
-      "documents": ["src/service/logging.ts", "src/combos/resolve.ts", "src/combos/request.ts", "src/server/responses/core-combo.ts"]
+      "documents": ["src/service/logging.ts", "src/combos/resolve.ts", "src/combos/request.ts", "src/combos/request-capability.ts", "src/server/responses/core-combo.ts"]
     },
     {
       "path": "ops/service-health-recovery.md",
@@ -1593,6 +1630,25 @@
       ]
     },
     {
+      "path": "transports/upload-reduction.md",
+      "tier": 3,
+      "title": "Optional Codex Upload Reduction",
+      "scope": "Opt-in lossy historical image/tool slimming and acknowledged native WS input-prefix deltas.",
+      "documents": [
+        "src/server/responses/history-slim.ts",
+        "src/server/responses/codex-ws-incremental.ts",
+        "src/server/responses/ws-upstream.ts",
+        "src/server/responses/codex-ws-exchange.ts",
+        "src/server/responses/codex-ws-pool.ts",
+        "src/server/responses/codex-ws-session.ts",
+        "src/server/responses/codex-ws-request.ts",
+        "src/server/responses/fetch-helpers.ts",
+        "src/config/",
+        "src/lib/state-store-registrations.ts",
+        "src/server/management/system-routes.ts"
+      ]
+    },
+    {
       "path": "telemetry.md",
       "tier": 5,
       "title": "Telemetry",
@@ -1612,6 +1668,16 @@
   "contracts": {
     "version": 1,
     "entries": [
+      {
+        "id": "reasoning-effort-diagnostic-limits",
+        "owner": {
+          "document": "transports/responses-combo-boundaries.md",
+          "anchor": "reasoning-effort-diagnostics"
+        },
+        "dependents": [
+          "providers-and-adapters.md"
+        ]
+      },
       {
         "id": "paginated-history-writer",
         "owner": {

@@ -47,14 +47,16 @@ send never counts toward a pause. For Codex pool accounts this includes the work
 At the threshold, OpenCodex excludes the account using its existing pause mechanism and
 attempts an eligible sibling for the current request within the existing retry/send budget.
 Fixed Codex account selectors and account-bound uploaded files retain their restrictions.
-A pause never cancels already dispatched work or changes credentials. It emits one generic
-log line without account identifiers or upstream error text.
+A pause never cancels already dispatched work or changes credentials. It emits a generic
+log line without account identifiers or upstream error text. When a Cloud Code Assist appeal
+link is available, the process also logs its availability once per account without printing the URL.
 
 `ocx account list <provider>` shows the pause reason. The dashboard's Paused badge exposes
 the reason and time. For automatically paused OAuth accounts, the account list API can also
-return the refusal's HTTP status and redacted message in `pauseEvidence`. This includes the
-Cloud Code Assist appeal sentence when it appears in the refusal message.
+return the refusal's HTTP status and redacted message in `pauseEvidence`. When a confirmed,
+first-party Cloud Code Assist ban includes an approved Google appeal URL, the paused account
+shows an appeal link in the dashboard. The account list API includes the link in `pauseEvidence.appealUrl`.
 Use `ocx account resume <provider> <account-id-or-alias>` to clear the
-reason and allow selection again. On an API-key row, clicking Resume also activates the key.
+pause details and evidence and allow selection again. On an API-key row, clicking Resume also activates the key.
 This policy never resumes an account automatically; an explicit login clears a pause it recorded, and
 [`resume --if-healthy`](/reference/cli/providers-accounts/#resume-if-healthy) resumes after a health read.

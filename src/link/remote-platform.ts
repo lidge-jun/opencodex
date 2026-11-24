@@ -1,7 +1,7 @@
 /** Remote platform is discovered only through the link's pinned SSH host key. */
 import { buildExecArgv, buildWindowsProbeArgv, REMOTE_COMMAND_NOT_FOUND, REMOTE_PLATFORM_UNSUPPORTED } from "./ssh-argv";
 import type { ExplicitRoute } from "./explicit-route";
-import type { SshRunner, SshRunResult } from "./ssh-runner";
+import { SshDiagnosticError, sshFailureHint, type SshRunner, type SshRunResult } from "./ssh-runner";
 
 export type RemotePlatform = "windows" | "posix" | "unknown";
 
@@ -20,6 +20,21 @@ const REMOTE_FRAMED_UNAME_ARGV: readonly string[] = ["sh", "-c", "printf 'ocx-pl
 /** Does this output come from cmd.exe or PowerShell refusing a POSIX command? */
 export function isWindowsShellRefusal(output: string): boolean {
   return WINDOWS_SHELL_REFUSAL.test(output);
+}
+
+/**
+ * Is this one line cmd's answer to WINDOWS_OS_PROBE? cmd may print the closing quote of the
+ * `cmd.exe /c "<command>"` line Win32-OpenSSH builds (#8972), so one trailing `"` is accepted;
+ * nothing else is.
+ */
+export function isWindowsNtAnswer(line: string): boolean {
+  return /^Windows_NT"?$/.test(line.trim());
+}
+
+/** A platform failure that tells the dashboard why: the message, then the failing call's stderr reason. */
+function platformError(message: string, failed: SshRunResult): SshDiagnosticError {
+  const reason = sshFailureHint(failed.stderr);
+  return new SshDiagnosticError(message, reason ? `${message}: ${reason}` : message);
 }
 
 /** Classify one remote command result. Transport failures and odd output stay unknown. */
@@ -45,7 +60,7 @@ export function mayBeWindowsShell(result: SshRunResult): boolean {
 export async function confirmWindowsShell(runner: SshRunner, alias: string, route: ExplicitRoute | null, knownHostsFile: string, timeoutMs = 30_000): Promise<boolean> {
   try {
     const result = await runner.run(buildWindowsProbeArgv({ alias, knownHostsFile, route }), { timeoutMs });
-    return result.code === 0 && result.stdout.trim().split(/\r?\n/)[0]?.trim() === "Windows_NT";
+    return result.code === 0 && isWindowsNtAnswer(result.stdout.trim().split(/\r?\n/)[0] ?? "");
   } catch { return false; }
 }
 
@@ -69,23 +84,23 @@ export async function requireRemotePlatform(
   const timeoutMs = over.timeoutMs ?? 10_000;
   const runOptions = over.signal ? { timeoutMs, signal: over.signal } : { timeoutMs };
   const windows = await runner.run(buildWindowsProbeArgv({ alias, knownHostsFile, destination: over.destination, route }), runOptions);
-  if (windows.code === 255) throw new Error("SSH platform discovery failed");
-  if (windows.code === 0 && windows.stdout.trim() === "Windows_NT") return "windows";
+  if (windows.code === 255) throw platformError("SSH platform discovery failed", windows);
+  if (windows.code === 0 && isWindowsNtAnswer(windows.stdout)) return "windows";
   const result = await runner.run(buildExecArgv({ alias, knownHostsFile, destination: over.destination, argv: REMOTE_UNAME_ARGV, route }), runOptions);
   const platform = classifyRemotePlatform(result);
-  if (platform === "unknown") throw new Error("Remote platform could not be determined");
+  if (platform === "unknown") throw platformError("Remote platform could not be determined", result);
   return platform;
 }
 
 /** Fan-out ignores login-shell output and trusts only one framed uname line. */
 export async function requireRemotePlatformFramed(runner: Pick<SshRunner, "run">, alias: string, route: ExplicitRoute | null, knownHostsFile: string): Promise<"posix" | "windows"> {
   const windows = await runner.run(buildWindowsProbeArgv({ alias, knownHostsFile, route }), { timeoutMs: 10_000 });
-  if (windows.code === SSH_TRANSPORT_FAILURE) throw new Error("SSH platform discovery failed");
-  if (windows.code === 0 && windows.stdout.split(/\r?\n/).some(line => line.trim() === "Windows_NT")) return "windows";
+  if (windows.code === SSH_TRANSPORT_FAILURE) throw platformError("SSH platform discovery failed", windows);
+  if (windows.code === 0 && windows.stdout.split(/\r?\n/).some(isWindowsNtAnswer)) return "windows";
   const result = await runner.run(buildExecArgv({ alias, knownHostsFile, argv: REMOTE_FRAMED_UNAME_ARGV, route }), { timeoutMs: 10_000 });
-  if (result.code === SSH_TRANSPORT_FAILURE) throw new Error("SSH platform discovery failed");
+  if (result.code === SSH_TRANSPORT_FAILURE) throw platformError("SSH platform discovery failed", result);
   const frames = result.stdout.split(/\r?\n/).filter(line => line.startsWith("ocx-platform:"));
   const name = frames.length === 1 ? frames[0]!.slice("ocx-platform:".length) : "";
-  if (result.code !== 0 || !POSIX_UNAME.test(name)) throw new Error("Remote platform could not be determined");
+  if (result.code !== 0 || !POSIX_UNAME.test(name)) throw platformError("Remote platform could not be determined", result);
   return WINDOWS_UNAME.test(name) ? "windows" : "posix";
 }
