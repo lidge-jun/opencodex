@@ -1177,8 +1177,8 @@ function withWhamMonthlyWindowAbsence(
   const [primary, secondary, tertiary] = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
   // Plus reports a 5-hour primary beside the weekly secondary, which the short-absence
   // proof never covers; the same complete, allowed topology proves no monthly window either.
-  const completeWithShort = isMeasuredWindow(primary) && (secondary === null || isMeasuredWindow(secondary))
-    && (tertiary === null || (tertiary === undefined && data.rate_limit?.allowed === true));
+  const completeWithShort = data.rate_limit?.allowed === true && isMeasuredWindow(primary)
+    && (secondary === null || isMeasuredWindow(secondary)) && tertiary == null;
   if (observation.shortWindowAbsent !== true && !completeWithShort) return observation;
   return !isExplicitMonthlyWindow(primary) && !isExplicitMonthlyWindow(secondary) && tertiary == null
     ? { ...observation, monthlyWindowAbsent: true }

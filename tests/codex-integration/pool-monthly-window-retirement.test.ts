@@ -131,6 +131,7 @@ describe("pool WHAM monthly-window retirement (#8067)", () => {
     expect(evidence({ plan_type: "prolite", rate_limit: { primary_window: weekly() } })?.monthlyWindowAbsent).toBeUndefined();
     expect(evidence({ plan_type: "plus", rate_limit: { allowed: true, primary_window: fiveHour(), secondary_window: weekly() } })?.monthlyWindowAbsent).toBe(true);
     expect(evidence({ plan_type: "plus", rate_limit: { allowed: true, primary_window: fiveHour() } })?.monthlyWindowAbsent).toBeUndefined();
+    expect(evidence({ plan_type: "plus", rate_limit: { primary_window: fiveHour(), secondary_window: weekly(), tertiary_window: null } })?.monthlyWindowAbsent).toBeUndefined();
   });
 });
 
