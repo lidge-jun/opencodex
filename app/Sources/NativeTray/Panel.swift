@@ -13,7 +13,7 @@ public enum NativeTrayHitTest {
 final class NativeTrayPanel: NSPanel {
     var onDismiss: (() -> Void)?
     var lastDismissedAt: Date?
-    var dismissedNearButton = false
+    var unconsumedButtonMouseDown = false
     private var outsideMonitor: Any?
     private weak var statusButton: NSStatusBarButton?
 
@@ -38,7 +38,7 @@ final class NativeTrayPanel: NSPanel {
 
     func present(from button: NSStatusBarButton) {
         lastDismissedAt = nil
-        dismissedNearButton = false
+        unconsumedButtonMouseDown = false
         statusButton = button
         guard let buttonWindow = button.window else { return }
         let visible = (buttonWindow.screen ?? NSScreen.main)?.visibleFrame
@@ -58,6 +58,8 @@ final class NativeTrayPanel: NSPanel {
                     let mouse = NSEvent.mouseLocation
                     let buttonFrame = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
                     if NativeTrayHitTest.isNearButton(buttonFrame: buttonFrame, point: mouse) {
+                        self.unconsumedButtonMouseDown = true
+                        self.lastDismissedAt = Date()
                         return
                     }
                 }
@@ -68,13 +70,6 @@ final class NativeTrayPanel: NSPanel {
 
     func dismiss() {
         guard isVisible else { return }
-        if let button = statusButton, let buttonWindow = button.window {
-            let buttonFrame = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
-            dismissedNearButton = NativeTrayHitTest.isNearButton(buttonFrame: buttonFrame, point: NSEvent.mouseLocation)
-        } else {
-            dismissedNearButton = false
-        }
-        lastDismissedAt = Date()
         if let outsideMonitor { NSEvent.removeMonitor(outsideMonitor) }
         outsideMonitor = nil
         statusButton = nil
@@ -82,7 +77,11 @@ final class NativeTrayPanel: NSPanel {
         onDismiss?()
     }
 
-    override func cancelOperation(_ sender: Any?) { dismiss() }
+    override func cancelOperation(_ sender: Any?) {
+        unconsumedButtonMouseDown = false
+        lastDismissedAt = nil
+        dismiss()
+    }
     override func resignKey() {
         super.resignKey()
         dismiss()
