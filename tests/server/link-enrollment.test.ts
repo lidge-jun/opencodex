@@ -355,8 +355,8 @@ describe("Home enrollment of a standalone Child", () => {
     expect(timeouts.get("catalog")).toBe(42_200);
   });
 
-  test("relay deadline pays SSH setup for both probes, so a slow Windows health check leaves time for the catalog", async () => {
-    const h = harness(); h.confirmed("child", 3600);
+  test.each(["posix", "windows"] as const)("relay deadline pays SSH setup for both probes, so a slow health check leaves time for the catalog (%s)", async platform => {
+    const h = harness(platform); h.confirmed("child", 3600);
     h.overrides.health = () => { h.advance(10_800); return health("client"); };
     h.overrides.catalog = () => { h.emit("catalog"); h.advance(4500); return http({ models: [] }); };
     expect((await h.call("apply", { alias: "child" })).status).toBe(202);
