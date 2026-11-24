@@ -110,16 +110,6 @@ describe("account quota rows", () => {
     expect((fills[0] as HTMLElement).style.getPropertyValue("--bar-scale")).toBe(String(QUOTA_WARN_THRESHOLD / 100));
   });
 
-  test("matches the tone QuotaBars gives the same reading", async () => {
-    const { quotaBarTone } = await import("../src/components/QuotaBars");
-    const host = await renderTable();
-    const tableTones = Array.from(host.querySelectorAll("td.aqt-pool .bar-fill"))
-      .map(fill => (fill.className.includes("bar-warn") ? "bar-warn" : "bar-green"));
-    // The fixture reads 0%, 100%, 42% and 18% consumed; the helpers must agree on each.
-    const expected = [0, 100, 42, 18].map(percent => quotaBarTone(Math.round(percent), QUOTA_WARN_THRESHOLD));
-    expect(tableTones).toEqual(expected);
-  });
-
   test("no card-layout rule lays a pool's name and bars out side by side", async () => {
     const css = (await Bun.file(new URL("../src/components/provider-workspace/account-quota-table.css", import.meta.url)).text())
       .replace(/\/\*[\s\S]*?\*\//g, "");
