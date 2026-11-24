@@ -52,9 +52,9 @@ final class NativeTrayPanel: NSPanel {
             y: max(visible.minY + 8, anchor.minY - size.height - 6)))
         makeKeyAndOrderFront(nil)
         if outsideMonitor == nil {
-            outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
                 guard let self else { return }
-                if let button = self.statusButton, let buttonWindow = button.window {
+                if event.type == .leftMouseDown, let button = self.statusButton, let buttonWindow = button.window {
                     let mouse = NSEvent.mouseLocation
                     let buttonFrame = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
                     if NativeTrayHitTest.isNearButton(buttonFrame: buttonFrame, point: mouse) {
