@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { useT, type TKey } from "../../i18n/shared";
+import { QUOTA_WARN_THRESHOLD, quotaBarTone } from "../QuotaBars";
 import {
   buildQuotaTable, formatCountdown,
   type AccountFlag, type PoolCell, type PoolKey, type QuotaTableAccount, type QuotaTableRow,
@@ -24,8 +25,9 @@ function PoolBar({ label, cell, now }: { label: string; cell: PoolCell; now: num
   const t = useT();
   // Consumed share, matching QuotaBars and the Codex account cards: the bar fills as the
   // allowance is spent, so a fresh account reads 0% and an exhausted one reads 100%.
+  // The tone comes from the shared helpers so this cell cannot drift from the other surfaces.
   const used = Math.round(cell.used);
-  const tone = used >= 80 ? "bar-warn" : "bar-green";
+  const tone = quotaBarTone(used, QUOTA_WARN_THRESHOLD);
   const countdown = cell.resetAt === undefined ? null : formatCountdown(cell.resetAt, now);
   return (
     <div className="aqt-bar" title={cell.resetAt === undefined ? undefined : new Date(cell.resetAt).toLocaleString()}>
