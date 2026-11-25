@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { resolveCursorSelection } from "../../src/adapters/cursor/catalog";
+import { CURSOR_STATIC_MODELS, cursorModelContextWindows, cursorModelIds, cursorModelReasoningEfforts } from "../../src/adapters/cursor/discovery";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { findExpectedPriceOverlay } from "../../src/usage/expected-prices";
 
@@ -149,5 +151,18 @@ describe("OpenRouter seed (openrouter.ai/api/v1/models, 2026-11-26)", () => {
     for (const id of ["openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/gpt-5.6-luna", "openai/gpt-6.2-sol", "openai/gpt-6.2-astra"]) {
       expect(openrouter.models).toContain(id);
     }
+  });
+});
+
+describe("Cursor fallback seed (cursor.com/docs/models/gemini-4-neon, 2026-11-26)", () => {
+  test("seeds gemini-4-neon as a preemptive cold-start row shaped like Hydrogen", () => {
+    const cursor = getProviderRegistryEntry("cursor")!;
+    expect(cursorModelIds(CURSOR_STATIC_MODELS)).toContain("gemini-4-neon");
+    expect(cursor.models).toContain("gemini-4-neon");
+    // Cursor's page shows the 200k default window and the 1M maximum; the row advertises the maximum,
+    // as the Hydrogen row does for the identical pair.
+    expect(cursorModelContextWindows(CURSOR_STATIC_MODELS)["gemini-4-neon"]).toBe(1_048_576);
+    expect(cursorModelReasoningEfforts(CURSOR_STATIC_MODELS)["gemini-4-neon"]).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(resolveCursorSelection("gemini-4-neon", "xhigh").wireId).toBe("gemini-4-neon-xhigh");
   });
 });
