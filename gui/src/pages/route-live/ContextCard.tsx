@@ -61,7 +61,7 @@ function ContextCardBody({ row }: { row: RouteRow }) {
   const shares = useMemo(() => calibrateContext(breakdown, contextInputTokens(row)), [breakdown, row]);
 
   const used = Math.max(shares.used, 1);
-  const fraction = windowTokens ? shares.used / windowTokens : undefined;
+  const fraction = windowTokens && !shares.held ? shares.used / windowTokens : undefined;
   const tokensText = (tokens: number) => formatCount(Math.round(tokens), localeTag);
   /** Share of the prompt, not of the window: the header already says how full the window is. */
   const share = (tokens: number) => {

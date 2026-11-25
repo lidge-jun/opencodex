@@ -237,9 +237,9 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 
 | 值 | 为 `null` 的情况 |
 | --- | --- |
-| `speed` | 请求失败、被取消或未完整结束；用量缺失或为估算值；缺少输出 token；生成窗口未记录、短于 1 秒或不一致；请求经过多次尝试（`multiple_attempts`），其窗口会包含尝试之间的间隔。速度是输出 token 除以生成窗口，而不是墙钟时间。 |
-| `cache.percent` | 用量缺失或为估算值、缺少输入数，或缓存读取并非实测：仅存在于线路层或来源未知（`cache.reason` 为 `cache_unobserved`）。 |
-| `context.percent` | 用量缺失或为估算值，或该模型的上下文窗口不在已持久化的 Codex 目录中（`context.reason` 为 `limit_unknown`）。 |
+| `speed.value` | 请求失败、被取消或未完整结束；用量缺失或为估算值；缺少输出 token；生成窗口未记录、短于 1 秒或不一致；请求经过多次尝试（`multiple_attempts`），其窗口会包含尝试之间的间隔。速度是输出 token 除以生成窗口，而不是墙钟时间。 |
+| `cache.percent` | 用量缺失或为估算值、缺少输入数，或缓存读取未报告、仅存在于线路层或来源未知（`cache.reason` 为 `cache_unobserved`）。 |
+| `context.percent` | 用量缺失或为估算值、该模型的上下文窗口不在已持久化的 Codex 目录中（`context.reason` 为 `limit_unknown`），或请求经过多次尝试（`context.reason` 为 `multiple_attempts`）。 |
 
 ### OAuth 账户、provider 密钥和数据平面密钥
 

@@ -173,8 +173,10 @@ the list below it, you see:
 - **The context window.** Estimated tokens for the system prompt, tools, skills, memory files such
   as `AGENTS.md` and `CLAUDE.md`, files, tool results and the conversation, as one bar with each
   part's share of the prompt, how full the serving model's window is, and the prompt-cache hit
-  rate. Context breakdowns are measured only while the tab or `GET /v1/usage/live` has been read
-  recently; only sizes are recorded, never prompt text, and they live in memory with the request log.
+  rate. If the provider holds earlier turns, the tab shows the visible breakdown but no window
+  fill percentage or health label. Context breakdowns are measured only while the tab or
+  `GET /v1/usage/live` has been read recently; only sizes, never prompt text, are kept in memory
+  with the request log.
 
 The request list groups by request, session or API key and shows the account, model, effort,
 duration, time to first token, tokens, cache-hit rate, tokens per second and estimated cost.

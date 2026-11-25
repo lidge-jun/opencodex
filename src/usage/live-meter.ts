@@ -19,13 +19,14 @@ export type MeterSpeedReason =
   | "generation_window_too_short" | "invalid_generation_window" | "multiple_attempts";
 
 export type MeterPercentReason = "usage_missing" | "tokens_estimated" | "input_missing" | "limit_unknown" | "cache_unobserved";
+type MeterContextReason = MeterPercentReason | "multiple_attempts";
 
 export interface LiveMeter {
   speed: { value: number | null; reason: MeterSpeedReason | null };
   outputTokens: number | null;
   generationMs: number | null;
   cache: { readTokens: number | null; inputTokens: number | null; percent: number | null; reason: MeterPercentReason | null };
-  context: { usedTokens: number | null; limitTokens: number | null; percent: number | null; reason: MeterPercentReason | null };
+  context: { usedTokens: number | null; limitTokens: number | null; percent: number | null; reason: MeterContextReason | null };
   model: string | null;
   provider: string | null;
   client: string | null;
@@ -83,7 +84,9 @@ export function liveMeterFromEntry(entry: RequestLogEntry, contextLimitTokens: n
   const cacheObserved = !!usage && cacheObservationFromUsage(usage, entry.cacheProvenance).provenance === "observed";
   const cacheKnown = readTokens !== null && inputTokens !== null && inputTokens > 0
     && cacheObserved && readTokens <= inputTokens;
-  const used = count(usage?.contextTotalTokens)
+  // Aggregate usage across attempts describes spend, not a single model window.
+  const multipleAttempts = (entry.attempts?.length ?? 0) > 1;
+  const used = multipleAttempts ? null : count(usage?.contextTotalTokens)
     ?? (inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null);
   const limit = contextLimitTokens !== null && Number.isFinite(contextLimitTokens) && contextLimitTokens > 0
     ? contextLimitTokens : null;
@@ -95,12 +98,14 @@ export function liveMeterFromEntry(entry: RequestLogEntry, contextLimitTokens: n
       readTokens, inputTokens,
       percent: cacheKnown ? (100 * readTokens) / inputTokens : null,
       reason: cacheKnown ? null : usageReason
-        ?? (readTokens !== null && inputTokens !== null && inputTokens > 0 && !cacheObserved ? "cache_unobserved" : "input_missing"),
+        ?? (inputTokens !== null && inputTokens > 0 && (readTokens === null || !cacheObserved)
+          ? "cache_unobserved" : "input_missing"),
     },
     context: {
       usedTokens: used, limitTokens: limit,
       percent: used !== null && limit !== null ? Math.min(100, (100 * used) / limit) : null,
-      reason: used === null ? usageReason ?? "input_missing" : limit === null ? "limit_unknown" : null,
+      reason: multipleAttempts ? "multiple_attempts"
+        : used === null ? usageReason ?? "input_missing" : limit === null ? "limit_unknown" : null,
     },
     model: entry.model ?? null,
     provider: entry.provider ?? null,

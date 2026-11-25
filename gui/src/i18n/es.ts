@@ -8,6 +8,7 @@ import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { connectionsCopy } from "./connections-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
+import { routeLiveCopy } from "./route-live-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
 import { usageV2Copy } from "./v2-pages/usage-copy";
@@ -145,6 +146,7 @@ export const es = {
   ...connectionsCopy("es"),
   ...modelsV2Copy("es"),
   ...modelsOverallCopy("es"),
+  ...routeLiveCopy("es"),
   ...accountsV2Copy("es"),
   ...subagentsV2Copy("es"),
   ...usageV2Copy("es"),

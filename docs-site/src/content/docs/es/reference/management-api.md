@@ -461,9 +461,9 @@ Un valor es `null` (se muestra como `--`) en lugar de una estimación cuando no 
 
 | Valor | `null` cuando |
 | --- | --- |
-| `speed` | La solicitud falló, se canceló o terminó incompleta; el uso falta o es estimado; faltan los tokens de salida; la ventana de generación no se registró, dura menos de 1 s o es incoherente; la solicitud se reintentó en más de un intento (`multiple_attempts`), cuya ventana abarcaría la pausa entre ellos. La velocidad es tokens de salida entre la ventana de generación, nunca el tiempo total. |
-| `cache.percent` | El uso falta o es estimado, falta el recuento de entrada, o la lectura de caché no se observó: solo existe en el cable o su procedencia es desconocida (`cache.reason` es `cache_unobserved`). |
-| `context.percent` | El uso falta o es estimado, o la ventana de contexto del modelo no está en el catálogo persistido de Codex (`context.reason` es `limit_unknown`). |
+| `speed.value` | La solicitud falló, se canceló o terminó incompleta; el uso falta o es estimado; faltan los tokens de salida; la ventana de generación no se registró, dura menos de 1 s o es incoherente; la solicitud se reintentó en más de un intento (`multiple_attempts`), cuya ventana abarcaría la pausa entre ellos. La velocidad es tokens de salida entre la ventana de generación, nunca el tiempo total. |
+| `cache.percent` | El uso falta o es estimado, falta el recuento de entrada, o la lectura de caché no se informó, solo existe en el protocolo o su procedencia es desconocida (`cache.reason` es `cache_unobserved`). |
+| `context.percent` | El uso falta o es estimado, la ventana de contexto del modelo no está en el catálogo persistido de Codex (`context.reason` es `limit_unknown`), o la solicitud tuvo más de un intento (`context.reason` es `multiple_attempts`). |
 
 <a id="oauth-accounts-provider-keys-and-data-plane-keys"></a>
 

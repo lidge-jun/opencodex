@@ -237,6 +237,6 @@ export function tokPerSecondOf(row: RouteRow): { value: number; estimated: boole
 export function costUsdOf(row: RouteRow): number | undefined {
   const cost = row.displayMetrics?.cost;
   if (cost?.kind !== "value") return undefined;
-  const total = cost.estimate.cost.total;
+  const total = cost.estimate?.cost?.total;
   return finite(total) && total >= 0 ? total : undefined;
 }

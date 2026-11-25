@@ -292,9 +292,7 @@ export async function prepareResponsesRequest(
   options.clientModelLabel ??= clientFacingModelLabel(originalSelector);
   redactHostedImageDisplayPaths(body);
   observeCacheDiagnosticInbound(
-    logCtx,
-    body,
-    req.headers,
+    logCtx, body, req.headers,
     options.promptCacheKeyIsSharedCohort === true
       ? "system-derived"
       : options.promptCacheKeyIsSharedCohort === false ? "metadata-derived" : "caller",

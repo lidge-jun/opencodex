@@ -63,7 +63,10 @@ describe("live meter cache and context", () => {
     expect(liveMeterFromEntry(row({ usage: { inputTokens: 1000, outputTokens: 5, cachedInputTokens: 500 } }), null).cache.percent).toBe(50);
   });
   test("cache is null, never guessed, when unreported, estimated or synthesized", () => {
-    expect(liveMeterFromEntry(row(), null).cache).toMatchObject({ percent: null, readTokens: null });
+    expect(liveMeterFromEntry(row(), null).cache)
+      .toEqual({ percent: null, readTokens: null, inputTokens: 1000, reason: "cache_unobserved" });
+    expect(liveMeterFromEntry(row({ usage: { inputTokens: 0, outputTokens: 5 } }), null).cache.reason)
+      .toBe("input_missing");
     expect(liveMeterFromEntry(row({ usageStatus: "estimated", usage: { inputTokens: 10, outputTokens: 1, cacheReadInputTokens: 5 } }), null).cache)
       .toMatchObject({ percent: null, reason: "tokens_estimated" });
     expect(liveMeterFromEntry(row({ cacheProvenance: "synthesized", usage: { inputTokens: 10, outputTokens: 1, cacheReadInputTokens: 5 } }), null).cache.percent).toBeNull();
@@ -78,6 +81,25 @@ describe("live meter cache and context", () => {
     expect(m.context).toEqual({ usedTokens: 380_900, limitTokens: 1_000_000, percent: 38.09, reason: null });
     const abs = liveMeterFromEntry(row({ usage: { inputTokens: 10, outputTokens: 5, contextTotalTokens: 200 } }), 1000);
     expect(abs.context.usedTokens).toBe(200);
+  });
+  test("retried requests do not use aggregated usage to fill one context window", () => {
+    const attempt = { ordinal: 1, provider: "p", model: "fixture", adapter: "a", status: 502, durationMs: 1,
+      sendCount: 1, recoveryKinds: [], usageStatus: "reported", usage: { inputTokens: 40_000, outputTokens: 50 } } as const;
+    const m = liveMeterFromEntry(row({
+      attempts: [{ ...attempt, recoveryKinds: [] }, { ...attempt, ordinal: 2, status: 200, recoveryKinds: [] }],
+      usage: { inputTokens: 80_000, outputTokens: 100 },
+    }), 64_000);
+    expect(m.context).toEqual({ usedTokens: null, limitTokens: 64_000, percent: null, reason: "multiple_attempts" });
+    expect(m.outputTokens).toBe(100);
+  });
+  test("a failed or subsecond request can still report measured cache and context", () => {
+    const usage = { inputTokens: 1000, outputTokens: 600, cacheReadInputTokens: 500 };
+    for (const delta of [{ status: 502 }, { genStartMs: 7950 }]) {
+      const m = liveMeterFromEntry(row({ usage, ...delta }), 3200);
+      expect(m.speed.value).toBeNull();
+      expect(m.cache.percent).toBe(50);
+      expect(m.context.percent).toBe(50);
+    }
   });
   test("an unknown or invalid limit leaves the percentage null but keeps the used count", () => {
     for (const limit of [null, 0, -5, NaN]) {

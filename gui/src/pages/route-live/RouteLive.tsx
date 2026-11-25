@@ -127,14 +127,15 @@ export default function RouteLive({ apiBase, active }: { apiBase: string; active
       ? <Notice tone="err">{t("routeLive.loadFailed")}</Notice>
       : <DataSurfaceSkeleton label={t("common.loading")} rows={5} />;
   }
-  if (rows.length === 0 || !selected || !flow) {
-    return <EmptyState title={t("routeLive.empty")} />;
-  }
   return (
     <div className="rl-page">
       {resource.error != null && !resource.lastAttemptOk && <Notice tone="err">{t("routeLive.loadFailed")}</Notice>}
-      <Selected row={selected} flow={flow} pinned={pinnedRow !== undefined} onBack={() => setPinnedKey(null)} />
-      <RequestList rows={rows} pinnedKey={pinnedRow ? pinnedKey : null} onPin={setPinnedKey} mode={mode} onMode={setMode} names={names} />
+      {selected && flow ? (
+        <>
+          <Selected row={selected} flow={flow} pinned={pinnedRow !== undefined} onBack={() => setPinnedKey(null)} />
+          <RequestList rows={rows} pinnedKey={pinnedRow ? pinnedKey : null} onPin={setPinnedKey} mode={mode} onMode={setMode} names={names} />
+        </>
+      ) : <EmptyState title={t("routeLive.empty")} />}
     </div>
   );
 }

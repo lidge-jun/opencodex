@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildRouteFlow, summarizePool } from "../src/pages/route-live/flow-model";
 import { groupRows } from "../src/pages/route-live/request-groups";
-import { cacheHitPercent, parseRouteRows, readableAccountLabel, requestedOf, type RouteRow } from "../src/pages/route-live/route-rows";
+import { cacheHitPercent, costUsdOf, parseRouteRows, readableAccountLabel, requestedOf, type RouteRow } from "../src/pages/route-live/route-rows";
 
 const base = { timestamp: 1000, model: "m", provider: "p", status: 200, durationMs: 900 };
 const row = (extra: Partial<RouteRow>): RouteRow => ({ ...base, ...extra } as RouteRow);
@@ -67,6 +67,13 @@ describe("route rows and groups", () => {
     ] });
     expect(rows.map(r => r.requestId)).toEqual(["b", "a"]);
     expect(rows[0]!.attempts).toHaveLength(1);
+  });
+
+  test("incomplete or invalid cost metrics are unavailable, but a measured zero is retained", () => {
+    const cost = (estimate?: unknown) => ({ ...base, displayMetrics: { cost: { kind: "value", estimate } } });
+    const rows = parseRouteRows({ logs: [cost(), cost({}), cost({ cost: null }),
+      cost({ cost: { total: -1 } }), cost({ cost: { total: "1" } }), cost({ cost: { total: 0 } })] });
+    expect(rows.map(costUsdOf)).toEqual([undefined, undefined, undefined, undefined, undefined, 0]);
   });
 
   test("grouping by session and key keeps aggregates and the no-session bucket", () => {

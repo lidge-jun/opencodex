@@ -127,18 +127,25 @@ const REMINDER_CLOSE = "</system-reminder>";
 const REMINDERS = /<system-reminder(?:\s[^>]*)?>[\s\S]*?<\/system-reminder>/g;
 /** What the user typed in the Codex app, after the context it puts first. */
 const MY_REQUEST = /^## My request(?: for Codex)?:[ \t]*\n?/gm;
-const HARNESS_USER_LEADS = ["<environment_context>", "<user_instructions>", "<turn_aborted>", "<user_shell_command>"];
+const NOTIFICATION_LEADS = ["<subagent_notification>", "<task-notification>", "<subagent-notification>"];
 /** How a text the agent put in as the user begins; none of these is the user speaking. */
 const INJECTED_LEADS = [
   "<system-reminder", "<environment_context>", "<user_instructions>", "<turn_aborted>",
-  "<user_shell_command>", "<subagent_notification>", "<in-app-browser-context",
+  "<user_shell_command>", "<in-app-browser-context",
   "<external_codex_apps_open_page>", "<session-context",
-  "<task-notification>", "<subagent-notification>", "<plugin_reference>",
+  "<plugin_reference>",
   "Available agent types for the Agent tool:", "Available agent types and the tools they have access to:",
   "New agent types are now available for the Agent tool:",
   "The TodoWrite tool hasn't been used recently.", "The task tools haven't been used recently.",
   "Conversation rewind applied.", "Workspace rewind applied.",
 ];
+
+function userTextCategory(text: string): "chat" | "memory" | "results" | "system" {
+  if (AGENTS_FOR.test(text)) return "memory";
+  if (NOTIFICATION_LEADS.some(lead => text.startsWith(lead))) return "results";
+  if (INJECTED_LEADS.some(lead => text.startsWith(lead))) return "system";
+  return "chat";
+}
 
 function trimLeftNewlines(s: string): string {
   let i = 0;
@@ -156,9 +163,7 @@ export function userSays(text: string): boolean {
     for (const m of t.matchAll(MY_REQUEST)) end = m.index + m[0].length;
     if (end >= 0) t = t.slice(end).trim();
   }
-  if (t === "" || AGENTS_FOR.test(t)) return false;
-  for (const lead of INJECTED_LEADS) if (t.startsWith(lead)) return false;
-  return true;
+  return t !== "" && userTextCategory(t) === "chat";
 }
 
 // --- tool calls and what they read ---
@@ -331,17 +336,9 @@ export class BreakdownAccumulator {
       t = t.slice(end).trim();
     }
     if (t === "") return;
-    if (AGENTS_FOR.test(t)) {
-      this.memory += tokensOfText(t);
-      return;
-    }
-    for (const lead of HARNESS_USER_LEADS) {
-      if (t.startsWith(lead)) {
-        this.system += tokensOfText(t);
-        return;
-      }
-    }
-    this.chat(tokensOfText(leading ? t : text));
+    const category = userTextCategory(t);
+    if (category === "chat") this.chat(tokensOfText(leading ? t : text));
+    else this[category] += tokensOfText(t);
   }
 
   private reminder(span: string): void {

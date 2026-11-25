@@ -233,6 +233,32 @@ ${fill(80, "u")}` }] }],
     expect(b.parts.chat).toBe(20);
   });
 
+  test("injected notifications before and after a user message count as results, not turns", () => {
+    const before = "<subagent_notification>done</subagent_notification>";
+    const after = "<task-notification>finished</task-notification>";
+    const b = measureContextBreakdown({
+      messages: [{ role: "user", content: before }, { role: "user", content: fill(80) }, { role: "user", content: after }],
+    }, "messages")!;
+    expect(b.parts.results).toBe(tok(before) + tok(after));
+    expect(b.turns).toEqual([20]);
+    expect(b.parts.chat).toBe(20);
+  });
+
+  test.each(["image", "document"])("a direct %s alone starts a user turn, but tool result media does not", type => {
+    const attachment = { type, source: { type: "base64", data: "AAAA" } };
+    const b = measureContextBreakdown({
+      messages: [
+        { role: "user", content: fill(40) },
+        { role: "user", content: [{ type: "tool_result", content: [attachment] }] },
+        { role: "assistant", content: fill(20) },
+        { role: "user", content: [attachment] },
+        { role: "assistant", content: fill(80) },
+      ],
+    }, "messages")!;
+    expect(b.turns).toEqual([15, 20]);
+    expect(b.parts.files).toBe(3200);
+  });
+
   test("system as a plain string and system-role messages are system", () => {
     const b = measureContextBreakdown({ system: fill(40), messages: [{ role: "system", content: fill(80) }, { role: "user", content: "hi" }] }, "messages")!;
     expect(b.parts.system).toBe(10 + 20);

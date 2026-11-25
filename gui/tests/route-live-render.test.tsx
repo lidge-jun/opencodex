@@ -1,12 +1,13 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ReactNode } from "react";
+import { act, type ReactNode } from "react";
 import { Window } from "happy-dom";
 import { I18nContext, DICTS, interpolate, LOCALES, type Locale, type TFn } from "../src/i18n/shared";
 import { ContextCard } from "../src/pages/route-live/ContextCard";
 import { FlowDiagram } from "../src/pages/route-live/FlowDiagram";
 import { RequestList } from "../src/pages/route-live/RequestList";
-import { PoolLine, WhyLine } from "../src/pages/route-live/RouteLive";
+import { clearClientResourceStoresForTests, invalidateClientResource } from "../src/client-resource";
+import RouteLive, { PoolLine, WhyLine } from "../src/pages/route-live/RouteLive";
 import { TimeSection } from "../src/pages/route-live/TimeBar";
 import { buildRouteFlow } from "../src/pages/route-live/flow-model";
 import { ROUTE_REASONS } from "../src/pages/route-live/route-reasons";
@@ -72,13 +73,15 @@ test("request list groups by session, shows dashes for unknown metrics, and mark
     <RequestList rows={[sparse, failover]} pinnedKey="r1" onPin={() => {}} mode={mode} onMode={() => {}} names={{}} />,
   );
   const flat = list("request");
-  expect(flat.querySelectorAll("button.rl-row").length).toBe(2);
-  expect(flat.querySelector(".rl-row--pinned")?.getAttribute("aria-pressed")).toBe("true");
-  expect(flat.querySelectorAll("button.rl-row")[0]!.textContent).toContain("—");
+  const region = flat.querySelector(`section[aria-label="${translator("zh")("routeLive.listLabel")}"]`)!;
+  const rowButtons = [...region.querySelectorAll("li button[aria-pressed]")];
+  expect(rowButtons).toHaveLength(2);
+  expect(rowButtons.find(button => button.textContent?.includes(failover.model))?.getAttribute("aria-pressed")).toBe("true");
+  expect(rowButtons[0]!.textContent).toContain("—");
   // headings are aria-hidden, so each value names itself for screen readers
   expect(flat.querySelector(".rl-bad")?.textContent).toBe(`${translator("zh")("logs.col.status")}: 500`);
   expect(flat.querySelector(".rl-bad .sr-only")?.textContent).toBe(`${translator("zh")("logs.col.status")}: `);
-  expect([...flat.querySelectorAll("button.rl-row")[0]!.querySelectorAll(".sr-only")].map(s => s.textContent)).toContain(`${translator("zh")("routeLive.colTtft")}: `);
+  expect([...rowButtons[0]!.querySelectorAll(".sr-only")].map(s => s.textContent)).toContain(`${translator("zh")("routeLive.colTtft")}: `);
   const grouped = list("session");
   expect(grouped.querySelectorAll(".rl-group-head").length).toBe(2);
   expect(grouped.querySelector(".rl-group-head")?.getAttribute("aria-expanded")).toBe("true");
@@ -141,6 +144,47 @@ test("context card says so when the window is unknown, the sizes are estimated, 
 
 test("context card is hidden for a row without a breakdown", () => {
   expect(render(<ContextCard row={failover} />).body.innerHTML).toBe("");
+});
+
+test("held history keeps the estimated breakdown but not fill or health, even with a known window", () => {
+  const row = withContext();
+  const doc = render(<ContextCard row={{ ...row, contextBreakdown: { ...row.contextBreakdown!, held: true } }} />);
+  expect(doc.querySelector(".rl-ctx-legend")).not.toBeNull();
+  expect(doc.querySelector(".rl-ctx-badge")).not.toBeNull();
+  expect(doc.body.textContent).toContain(translator("zh")("routeLive.ctxHeld"));
+  expect(doc.querySelector(".rl-ctx-health")).toBeNull();
+});
+
+test("a failed refresh remains visible after a successful empty response", async () => {
+  const win = new Window();
+  const apiBase = "http://route-live.test";
+  let failed = false;
+  const globals = { window: win, document: win.document, IS_REACT_ACT_ENVIRONMENT: true,
+    fetch: async () => failed ? new Response(null, { status: 503 }) : Response.json({ logs: [] }) };
+  const previous = Object.fromEntries(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { configurable: true, value });
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(document.body);
+  const t = translator("en");
+  try {
+    await act(async () => root.render(
+      <I18nContext.Provider value={{ locale: "en", setLocale() {}, t }}><RouteLive apiBase={apiBase} active /></I18nContext.Provider>,
+    ));
+    expect(document.body.textContent).toContain(t("routeLive.empty"));
+    expect(document.body.textContent).not.toContain(t("routeLive.loadFailed"));
+    failed = true;
+    await act(async () => invalidateClientResource(`route-live:rows:${apiBase}`));
+    expect(document.body.textContent).toContain(t("routeLive.empty"));
+    expect(document.body.textContent).toContain(t("routeLive.loadFailed"));
+  } finally {
+    await act(async () => root.unmount());
+    clearClientResourceStoresForTests();
+    win.close();
+    for (const [key, descriptor] of Object.entries(previous)) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  }
 });
 
 test.each(LOCALES)("every reason key the registry points at has copy in $code", ({ code }) => {

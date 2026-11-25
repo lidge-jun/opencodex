@@ -102,9 +102,11 @@ function readMessages(acc: BreakdownAccumulator, body: Rec): void {
       continue;
     }
     if (role === "user") {
-      // a message that answers tool calls goes on with the turn; one where the user says something begins one
+      // Tool answers continue the turn; direct user text or attachments start a new one.
       const answersCalls = blocks.some(x => x.type === "tool_result");
-      if (!answersCalls && blocks.some(x => x.type === "text" && userSays(str(x.text)))) acc.newTurn();
+      if (!answersCalls && blocks.some(x =>
+        x.type === "image" || x.type === "document" || (x.type === "text" && userSays(str(x.text)))
+      )) acc.newTurn();
     }
     for (const x of blocks) messagesBlock(acc, role, x);
   }

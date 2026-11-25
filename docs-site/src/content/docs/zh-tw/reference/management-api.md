@@ -240,9 +240,9 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 
 | 值 | 為 `null` 的情況 |
 | --- | --- |
-| `speed` | 請求失敗、被取消或未完整結束；用量缺失或為估算值；缺少輸出 token；生成視窗未記錄、短於 1 秒或不一致；請求經過多次嘗試（`multiple_attempts`），其視窗會包含嘗試之間的間隔。速度是輸出 token 除以生成視窗，而不是牆鐘時間。 |
-| `cache.percent` | 用量缺失或為估算值、缺少輸入數，或快取讀取並非實測：僅存在於線路層或來源未知（`cache.reason` 為 `cache_unobserved`）。 |
-| `context.percent` | 用量缺失或為估算值，或該模型的上下文視窗不在已持久化的 Codex 目錄中（`context.reason` 為 `limit_unknown`）。 |
+| `speed.value` | 請求失敗、被取消或未完整結束；用量缺失或為估算值；缺少輸出 token；生成視窗未記錄、短於 1 秒或不一致；請求經過多次嘗試（`multiple_attempts`），其視窗會包含嘗試之間的間隔。速度是輸出 token 除以生成視窗，而不是牆鐘時間。 |
+| `cache.percent` | 用量缺失或為估算值、缺少輸入數，或快取讀取未回報、僅存在於線路層或來源未知（`cache.reason` 為 `cache_unobserved`）。 |
+| `context.percent` | 用量缺失或為估算值、該模型的上下文視窗不在已持久化的 Codex 目錄中（`context.reason` 為 `limit_unknown`），或請求經過多次嘗試（`context.reason` 為 `multiple_attempts`）。 |
 
 ### OAuth 帳號、供應商金鑰與 data-plane 金鑰
 

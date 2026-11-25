@@ -722,9 +722,9 @@ A value is `null` (shown as `--`) instead of a guess when it cannot be measured:
 
 | Value | `null` when |
 | --- | --- |
-| `speed` | The request failed, was cancelled or ended incomplete; usage is missing or estimated; output tokens are missing; the generation window is not recorded, shorter than 1 s or inconsistent; the request was retried across more than one attempt (`multiple_attempts`), whose window would span the gap between them. Speed is output tokens over the generation window, never wall time. |
-| `cache.percent` | Usage is missing or estimated, the input count is missing, or the cache read was not observed: wire-only or of unknown provenance (`cache.reason` is `cache_unobserved`). |
-| `context.percent` | Usage is missing or estimated, or the model's context window is not in the persisted Codex catalog (`context.reason` is `limit_unknown`). |
+| `speed.value` | The request failed, was cancelled or ended incomplete; usage is missing or estimated; output tokens are missing; the generation window is not recorded, shorter than 1 s or inconsistent; the request was retried across more than one attempt (`multiple_attempts`), whose window would span the gap between them. Speed is output tokens over the generation window, never wall time. |
+| `cache.percent` | Usage is missing or estimated, the input count is missing, or the cache read was absent, wire-only or of unknown provenance (`cache.reason` is `cache_unobserved`). |
+| `context.percent` | Usage is missing or estimated, the model's context window is not in the persisted Codex catalog (`context.reason` is `limit_unknown`), or the request used more than one attempt (`context.reason` is `multiple_attempts`). |
 
 ### OAuth accounts, provider keys, and data-plane keys
 
