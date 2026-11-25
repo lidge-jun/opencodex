@@ -104,6 +104,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | [`providers-and-adapters.md`](providers-and-adapters.md) | Provider and adapter selection, the adapter inventory, live model discovery, and the hosted-search continuation bridge. |
 | [`providers/step-cli-transport.md`](providers/step-cli-transport.md) | StepCode as a Step Plan transport: its own framed stdio wire, one process per conversation, inline SDK tools instead of an MCP catalog, and the bounded tool-result window. |
 | [`providers/opengateway.md`](providers/opengateway.md) | Preset discovery, paired Responses tool-result projection and bounded empty-completion recovery. |
+| [`providers/aimlapi.md`](providers/aimlapi.md) | Type-filtered Chat discovery, seeded models and attribution headers bound to the preset destination. |
 | [`providers/jev-decision.md`](providers/jev-decision.md) | JEV Combo decision methods (TypeSafe, self-hosted System One rows, opencodex models), the decision request path, dashboard surfaces, and the content-free statistics projection. |
 | [`providers/anthropic-output-caps.md`](providers/anthropic-output-caps.md) | Routed omitted-output caps for adapter:anthropic rows keyed by Claude model id, precedence and unknown-id fallback. |
 | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) | Default-off one-shot image-413 recovery and its physical credential, destination, and budget fences. |
@@ -427,6 +428,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/oauth/api-key-pool-preserve.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/oauth/dsh.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/oauth/generic-account-failover.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/oauth/index.ts` | [`providers/aimlapi.md`](providers/aimlapi.md) |
 | `src/oauth/login-cli.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
 | `src/oauth/m365-copilot-browser.ts` | [`providers/m365-copilot.md`](providers/m365-copilot.md) |
 | `src/oauth/m365-copilot-web-session.ts` | [`providers/m365-copilot.md`](providers/m365-copilot.md) |
@@ -469,7 +471,11 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/providers/quota/dsh-account.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/providers/quota/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/providers/reasoning-metadata.ts` | [`transports/responses-combo-boundaries.md`](transports/responses-combo-boundaries.md) |
+| `src/providers/registry-static-headers.ts` | [`providers/aimlapi.md`](providers/aimlapi.md) |
+| `src/providers/registry.ts` | [`providers/aimlapi.md`](providers/aimlapi.md) |
+| `src/providers/registry/entries-extended.ts` | [`providers/aimlapi.md`](providers/aimlapi.md) |
 | `src/providers/request-pacing.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
+| `src/providers/routed-config.ts` | [`providers/aimlapi.md`](providers/aimlapi.md) |
 | `src/providers/workbuddy-credit-balance.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/providers/workbuddy-models.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/providers/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
