@@ -31,7 +31,7 @@ import type { OcxConfig } from "../types";
 import { geminiError } from "./gemini-inbound";
 import { commitCancelled, drainedInnerErrorMessage, handleNativeChat, streamNativeFromChat, type NativeLogIds } from "./native-chat-bridge";
 import { createNativeFinalLog, type NativeFinalLog } from "./native-final-log";
-import { forgetInteraction, interactionEntryBytes, MAX_INTERACTION_BYTES, recallInteraction, rememberInteraction } from "./gemini-interactions-store";
+import { forgetInteraction, interactionEntryBytes, KEYLESS_INTERACTION_OWNER, MAX_INTERACTION_BYTES, recallInteraction, rememberInteraction } from "./gemini-interactions-store";
 import { resolveContextPrincipal, type DataPlaneAdmission } from "./auth-cors";
 import { preflightOllamaRoute } from "./ollama-route-policy";
 import { DecompressedBodyTooLargeError, readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
@@ -56,7 +56,7 @@ export const INTERACTION_STORED_HEADER = "x-opencodex-interaction-stored";
  * a keyless loopback caller. Rotating a key mints a new principal, so its chains then answer 404.
  */
 export function interactionOwner(req: Request, config: OcxConfig, admission: DataPlaneAdmission | undefined): string | undefined {
-  return resolveContextPrincipal(req, config, admission) ?? (admission?.kind === "loopback" ? "loopback" : undefined);
+  return resolveContextPrincipal(req, config, admission) ?? (admission?.kind === "loopback" ? KEYLESS_INTERACTION_OWNER : undefined);
 }
 
 /** POST /v1beta/interactions. `req` is the admitted, session-promoted request. */

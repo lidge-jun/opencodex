@@ -135,9 +135,11 @@ mints a new principal, so its earlier chains answer 404. A lookup, delete or can
 indistinguishable from a missing id. The dispatcher sets `Cache-Control: no-store` on both
 Interactions aliases, including successes and owner-scoped misses. Bounds: 24 hours from the last write (expiry is lazy, on the next
 write or lookup), 1,000 entries and 64 MiB in total, 200 entries and 16 MiB per owner, and per entry the smaller of 8 MiB and the inbound body limit, since a larger history
-could never be chained. A write evicts only its own owner's oldest entries, at the owner and the global limits;
-when the store is full and the writer owns nothing to evict, the interaction is not kept (the answer is unaffected
-and `x-opencodex-interaction-stored` says `false`), so one key's traffic never removes another's history. Only the
+could never be chained. A keyed write evicts only its own owner's oldest entries, at the owner and the global limits;
+when the store is full and the writer owns nothing to evict, the interaction is not kept. Because keyless loopback
+callers have no caller identity, their shared owner never evicts an already retained entry: at either capacity the
+new interaction is not kept. The settled answer is still returned. Buffered answers report
+`x-opencodex-interaction-stored: false` when retention fails. Only the
 app-owned memory budget evicts across owners. The store is `gemini_interactions` on the app-owned memory roster (category
 `continuation`, passively evictable).
 

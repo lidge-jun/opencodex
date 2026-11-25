@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   INTERACTION_TTL_MS,
+  KEYLESS_INTERACTION_OWNER,
   MAX_INTERACTION_BYTES,
   MAX_OWNER_INTERACTIONS,
   clearInteractionsForTests,
@@ -25,6 +26,7 @@ describe("stored Gemini interactions", () => {
   test("an entry is visible only to its owner", () => {
     expect(rememberInteraction(entry("a", "owner-1"), 1_000)).toBe(true);
     expect(recallInteraction("a", "owner-1", 1_001)?.history).toEqual([{ role: "user", content: "hi" }]);
+    expect(rememberInteraction(entry("a", "owner-2", "different"), 1_001)).toBe(false);
     expect(recallInteraction("a", "owner-2", 1_001)).toBeUndefined();
     expect(recallInteraction("a", undefined, 1_001)).toBeUndefined();
     expect(forgetInteraction("a", "owner-2", 1_001)).toBe(false);
@@ -57,6 +59,20 @@ describe("stored Gemini interactions", () => {
     expect(recallInteraction("other", "o2", 10_001)).toBeDefined();
   });
 
+  test("keyless writes preserve retained history at capacity and reuse expired space", () => {
+    for (let i = 0; i < MAX_OWNER_INTERACTIONS; i++) {
+      expect(rememberInteraction(entry(String(i), KEYLESS_INTERACTION_OWNER), i)).toBe(true);
+    }
+    expect(rememberInteraction(entry("0", KEYLESS_INTERACTION_OWNER, "updated"), 0)).toBe(true);
+    const next = entry("next", KEYLESS_INTERACTION_OWNER);
+    expect(rememberInteraction(next, MAX_OWNER_INTERACTIONS)).toBe(false);
+    expect(recallInteraction("0", KEYLESS_INTERACTION_OWNER, MAX_OWNER_INTERACTIONS)).toBeDefined();
+    expect(recallInteraction("next", KEYLESS_INTERACTION_OWNER, MAX_OWNER_INTERACTIONS)).toBeUndefined();
+    expect(rememberInteraction(next, INTERACTION_TTL_MS)).toBe(true);
+    expect(recallInteraction("1", KEYLESS_INTERACTION_OWNER, INTERACTION_TTL_MS)).toBeDefined();
+    expect(interactionsRetainedStoreSnapshot().count).toBe(MAX_OWNER_INTERACTIONS);
+  });
+
   test("the app-owned budget sees every byte as evictable and evicts oldest first", () => {
     rememberInteraction(entry("a", "o"), 5);
     rememberInteraction(entry("b", "o"), 6);
@@ -81,16 +97,20 @@ describe("stored Gemini interactions", () => {
 describe("stored Gemini interactions at the global limit", () => {
   test("a full store never evicts another owner's entry; the writer evicts its own oldest or keeps nothing", () => {
     for (let owner = 0; owner < 5; owner++) {
-      for (let n = 0; n < MAX_OWNER_INTERACTIONS; n++) expect(rememberInteraction(entry(`o${owner}-${n}`, `owner-${owner}`), 1_000 + n)).toBe(true);
+      for (let n = 0; n < MAX_OWNER_INTERACTIONS; n++) {
+        const ownerId = owner === 0 && n === 0 ? KEYLESS_INTERACTION_OWNER : `owner-${owner}`;
+        expect(rememberInteraction(entry(`o${owner}-${n}`, ownerId), 1_000 + n)).toBe(true);
+      }
     }
     expect(interactionsRetainedStoreSnapshot().count).toBe(1_000);
+    expect(rememberInteraction(entry("shared-new", KEYLESS_INTERACTION_OWNER), 5_000)).toBe(false);
     // A newcomer owns nothing to evict, so its interaction is not kept and nobody loses history.
     expect(rememberInteraction(entry("new", "owner-new"), 5_000)).toBe(false);
-    expect(recallInteraction("o0-0", "owner-0", 5_001)).toBeDefined();
+    expect(recallInteraction("o0-0", KEYLESS_INTERACTION_OWNER, 5_001)).toBeDefined();
     // An owner already in the store makes room from its own entries.
     expect(rememberInteraction(entry("o1-next", "owner-1"), 5_002)).toBe(true);
     expect(recallInteraction("o1-0", "owner-1", 5_003)).toBeUndefined();
-    expect(recallInteraction("o0-0", "owner-0", 5_003)).toBeDefined();
+    expect(recallInteraction("o0-0", KEYLESS_INTERACTION_OWNER, 5_003)).toBeDefined();
     expect(interactionsRetainedStoreSnapshot().count).toBe(1_000);
   });
 });

@@ -9,11 +9,12 @@
  * an expired entry is dropped on the next write or lookup, and the app-owned memory budget can evict it
  * before that. Bounds: 24 hours from the last
  * write, 1,000 entries and 64 MiB in total, 200 entries and 16 MiB per owner, 8 MiB per entry. A write
- * evicts only its own owner's entries; when the store is full and the writer owns nothing to evict, the
- * interaction is not kept. Only the app-owned memory budget evicts across owners.
+ * can rotate entries belonging to its own key. Shared keyless writes never rotate retained history.
+ * A new interaction that cannot fit is not kept. Only the app-owned memory budget evicts across owners.
  */
 import type { RetainedStoreSnapshot } from "../lib/app-owned-memory";
 
+export const KEYLESS_INTERACTION_OWNER = "loopback";
 export const INTERACTION_TTL_MS = 24 * 60 * 60 * 1_000;
 export const MAX_STORED_INTERACTIONS = 1_000;
 export const MAX_INTERACTION_STORE_BYTES = 64 * 1024 * 1024;
@@ -56,8 +57,8 @@ function sweep(now: number): void {
   }
 }
 
-function oldestOf(owner: string): string | undefined {
-  for (const [id, entry] of entries) if (entry.owner === owner) return id;
+function oldestOf(owner: string, exceptId: string): string | undefined {
+  for (const [id, entry] of entries) if (entry.owner === owner && id !== exceptId) return id;
   return undefined;
 }
 
@@ -73,21 +74,20 @@ export function rememberInteraction(
 ): boolean {
   const bytes = interactionEntryBytes(entry);
   if (bytes > Math.min(maxBytes, MAX_INTERACTION_BYTES)) return false;
-  drop(entry.id);
   sweep(now);
+  const previous = entries.get(entry.id);
+  if (previous && previous.owner !== entry.owner) return false;
+  const extraCount = previous ? 0 : 1;
+  const extraBytes = bytes - (previous?.bytes ?? 0);
   const owned = () => ownerTotals.get(entry.owner) ?? { count: 0, bytes: 0 };
-  while (owned().count + 1 > MAX_OWNER_INTERACTIONS || owned().bytes + bytes > MAX_OWNER_INTERACTION_BYTES) {
-    const oldest = oldestOf(entry.owner);
-    if (oldest === undefined) break;
-    drop(oldest);
-  }
-  // At the global limits a writer evicts only its own oldest entries; with none left, this one is
-  // not kept (the answer is unaffected), so one key's traffic never removes another's history.
-  while (entries.size + 1 > MAX_STORED_INTERACTIONS || totalBytes + bytes > MAX_INTERACTION_STORE_BYTES) {
-    const oldest = oldestOf(entry.owner);
+  while (owned().count + extraCount > MAX_OWNER_INTERACTIONS || owned().bytes + extraBytes > MAX_OWNER_INTERACTION_BYTES
+    || entries.size + extraCount > MAX_STORED_INTERACTIONS || totalBytes + extraBytes > MAX_INTERACTION_STORE_BYTES) {
+    if (entry.owner === KEYLESS_INTERACTION_OWNER) return false;
+    const oldest = oldestOf(entry.owner, entry.id);
     if (oldest === undefined) return false;
     drop(oldest);
   }
+  drop(entry.id);
   entries.set(entry.id, { ...entry, bytes, writtenAt: now });
   totalBytes += bytes;
   const totals = owned();
