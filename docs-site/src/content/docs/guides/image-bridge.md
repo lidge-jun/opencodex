@@ -10,6 +10,41 @@ When you route Codex through a non-OpenAI model (Claude, Gemini, Grok, etc.), th
 execution environment. The Image Bridge detects these calls and transparently reroutes them to
 xAI Grok Imagine, so the model you're actually chatting with can still generate images.
 
+Azure's native Responses image tool uses a fixed deployment on the Azure resource,
+not this xAI bridge. See [Azure Responses hosted image generation](#azure-responses-hosted-image-generation)
+for operator configuration and member-key permissions.
+
+## Azure Responses hosted image generation
+
+For the `azure-openai` adapter (or its `azure` alias), set the hosted image deployment
+in the provider's operator-controlled headers:
+
+```json
+{
+  "headers": {
+    "x-ms-oai-image-generation-deployment": "my-image-deployment"
+  }
+}
+```
+
+Use the image deployment on the same Azure resource as the Responses model. This
+setting does not create an Azure deployment. A scoped member key must be allowed
+to use both the main model and `my-image-deployment`, either as bare model ids or
+as `provider-name/model-id` entries in `allowedModels`. Provider restrictions and
+inherited scopes also apply. Unrestricted keys retain their existing authority.
+
+The header is not accepted from clients, including through `forwardClientHeaders`.
+Configure exactly one case-insensitive header entry with a nonempty deployment id.
+Omit the image tool's `model`, or set it to that exact deployment; `auto` and other
+explicit values are refused. Missing, ambiguous or conflicting configuration returns
+a local 400; a disallowed destination returns 403. These refusals do not trigger
+another provider or account attempt.
+
+The checks cover hosted `image_generation` declarations in `tools` and
+`additional_tools`, including tools produced by `modelPreferHostedTools`. Text-only
+requests and image input do not require image-generation permission. Other providers
+and the separate `/v1/images` relay keep their existing behavior.
+
 ## Prerequisites
 
 - **Enable the bridge** by setting `images.bridgeEnabled: true` in your config (it is off by

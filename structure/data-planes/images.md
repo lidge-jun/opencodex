@@ -1,5 +1,21 @@
 # Images Data Plane
 
+## Azure hosted image deployment admission
+
+`src/server/responses/azure-hosted-image.ts` binds the final `azure-openai` request
+to the provider's fixed `x-ms-oai-image-generation-deployment` header. The serialized
+main model and image deployment must both pass the captured admission scope. Tool
+inspection includes `tools` and `input[].additional_tools` after hosted-tool lowering;
+input images, past image results and ordinary client functions are not declarations.
+
+`src/server/responses/request-transport.ts` checks every build and the effective
+dispatch body, then checks the destination and header again after upstream plugin
+rewrites. Credential rebuilds transfer the new request's binding. Build refusals
+release body observations. Missing or ambiguous configuration and conflicting tool
+models return a local non-replayable 400; scope denials use the existing 403 contract
+and original-selector log projection. Client header forwarding is unchanged.
+`tests/responses/responses-azure-hosted-image.test.ts` covers this boundary.
+
 Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
 Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.

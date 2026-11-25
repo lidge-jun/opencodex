@@ -1,3 +1,4 @@
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -213,6 +214,43 @@ describe("Azure OpenAI adapter hardening", () => {
       if (existsSync(testDir)) removeTreeWithRetry(testDir);
     }
   });
+});
+
+describe("Azure repair reviewed regression", () => {
+const provider = { adapter: "azure-openai", baseUrl: "https://test.services.ai.azure.com/openai/v1", apiKey: "fixture", supportsResponsesCustomTools: true } as any;
+test("Azure preserves plaintext tool history and removes incompatible encrypted call metadata", async () => {
+  const input = [
+    { type: "custom_tool_call", call_id: "call_custom", name: "exec", input: "echo fixture", encrypted_content: "old-ciphertext" },
+    { type: "custom_tool_call_output", call_id: "call_custom", output: "fixture" },
+    { type: "function_call", call_id: "call_function", name: "read", arguments: "{}", encrypted_content: "old-ciphertext" },
+    { type: "function_call_output", call_id: "call_function", output: "done" },
+  ];
+  const original = JSON.stringify(input);
+  const request = await createAzureAdapterProduction(provider).buildRequest({ modelId: "gpt-6-astra", context: [], options: {}, _rawBody: { model: "gpt-6-astra", input } } as any,
+    { headers: new Headers(), translatorBudget: createTranslatorBudget() });
+  const body = JSON.parse(request.body);
+  const calls = body.input.filter((i: any) => i.type.endsWith("tool_call") || i.type === "function_call");
+  expect(calls).toHaveLength(2);
+  expect(calls.every((i: any) => !Object.hasOwn(i, "encrypted_content"))).toBe(true);
+  expect(calls[0].input).toBe("echo fixture");
+  expect(calls[1].arguments).toBe("{}");
+  expect(calls.map((i: any) => i.call_id)).toEqual(["call_custom", "call_function"]);
+  expect(body.input.filter((i: any) => i.type.endsWith("_output"))).toEqual([input[1], input[3]]);
+  expect(JSON.stringify(input)).toBe(original);
+  expect(request.headers["api-key"]).toBe("fixture");
+});
+
+test("Encrypted-only calls retain their payload", async () => {
+  const input = [
+    { type: "function_call", call_id: "call_opaque", name: "read", encrypted_content: "opaque-only" },
+    { type: "function_call_output", call_id: "call_opaque", output: "done" },
+  ];
+  const request = await createAzureAdapterProduction(provider).buildRequest({ modelId: "gpt-6-astra", context: [], options: {}, _rawBody: { model: "gpt-6-astra", input } } as any,
+    { headers: new Headers(), translatorBudget: createTranslatorBudget() });
+  const call = JSON.parse(request.body).input.find((i: any) => i.type === "function_call");
+  expect(call.encrypted_content).toBe("opaque-only");
+});
+
 });
 
 describe("Azure Responses include compatibility", () => {

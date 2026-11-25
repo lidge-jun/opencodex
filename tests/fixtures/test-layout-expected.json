@@ -1390,6 +1390,7 @@
   "responses-anthropic-thinking-recovery.test.ts": "responses",
   "responses-anthropic-legal-history.test.ts": "responses",
   "responses-azure-opaque-blob-recovery.test.ts": "responses", "responses-bare-echo-helper-fence.test.ts": "responses",
+  "responses-azure-hosted-image.test.ts": "responses",
   "responses-canonical-only-top-level-fields.test.ts": "responses",
   "responses-chatgpt-web-replay-metadata.test.ts": "responses", "responses-code-mode-goal-helpers.test.ts": "responses",
   "responses-code-mode-mcp-direct.test.ts": "responses", "local-read-response-proof.test.ts": "server",
