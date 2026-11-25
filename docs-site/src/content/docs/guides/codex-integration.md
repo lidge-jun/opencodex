@@ -435,7 +435,16 @@ wire_api = "responses"
 requires_openai_auth = true
 env_key = "OPENCODEX_API_AUTH_TOKEN"
 # supports_websockets = true   # only when config.websockets is true
+capabilities = { cyber_access_programs = true }
 ```
+
+The `capabilities` line lets Codex forward a Cyber access-program selection through this table. Codex
+turns that capability off by default for every provider id except its built-in `openai`, and the
+loopback form already uses that id. Codex releases that predate the field ignore it. A table written by an
+earlier OpenCodex release, without the line, is still recognized by `ocx restore` and uninstall. The
+`ocx codex` launcher trusts only the current shape: after upgrading, if `ocx codex` stops supplying
+credentials, run `ocx sync` once to rewrite the table. This needs the Codex integration on; while it is off,
+OpenCodex leaves your Codex config as it is, and neither `ocx sync` nor a restart rewrites the table.
 
 When OpenCodex owns routing, both modes write `$CODEX_HOME/opencodex.config.toml` as a
 reference/fallback config. On loopback it contains the root keys you can merge manually if automatic
@@ -610,6 +619,7 @@ name = "OpenCodex Proxy"
 base_url = "http://127.0.0.1:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
+capabilities = { cyber_access_programs = true }
 ```
 
 Codex then owns compaction and stores a portable plaintext summary rather than a new OpenCodeX
@@ -730,6 +740,7 @@ name = "OpenCodex Proxy"
 base_url = "http://127.0.0.1:10100/v1"
 wire_api = "responses"
 requires_openai_auth = false
+capabilities = { cyber_access_programs = true }
 ```
 
 Desktop then starts without a login and routes every turn through the proxy. The setting survives

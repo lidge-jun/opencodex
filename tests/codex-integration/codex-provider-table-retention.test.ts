@@ -4,6 +4,9 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deriveCodexInjectionPlan } from "../../src/codex/inject/plan";
+import { buildProviderTableBlockForTarget } from "../../src/codex/inject/config-toml";
+import { standaloneCodexRoutingTarget } from "../../src/codex/inject/routing-target";
+import { codexConfigKeyChanges, displayCodexConfigKey } from "../../src/codex/restore-preview";
 import { OCX_ROUTING_MARKER_LINE, OCX_SECTION_MARKER } from "../../src/codex/injected-marker";
 import { repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -232,3 +235,78 @@ describe("provider table ownership markers", () => {
     }
   }, 2 * SPAWN_BUDGET_MS);
 });
+
+describe("Cyber access-program capability in the legacy table (openai/codex 708e3e2c70)", () => {
+  // codex-rs/model-provider-info/src/lib.rs:706-710 @5505daf388 defaults cyber_access_programs to off for any
+  // provider id other than openai, so the legacy table must opt in for Cyber selections to reach the backend.
+  const target = standaloneCodexRoutingTarget(12199, { port: 12199, hostname: "0.0.0.0" });
+  const capability = "capabilities = { cyber_access_programs = true }";
+  const oldShape = (block: string) => block.split("\n").filter(line => line !== capability).join("\n");
+  const user = '[model_providers.mine]\nbase_url = "https://mine.example/v1"\ncapabilities = { cyber_access_programs = false }\n';
+
+  test("every writer variant opts in without touching an auth line", () => {
+    const variants = [
+      buildProviderTableBlockForTarget(target),
+      buildProviderTableBlockForTarget(target, true, "Custom"),
+      buildProviderTableBlockForTarget({ ...target, desktopAuthless: true }),
+      buildProviderTableBlockForTarget({ ...target, requiresAdmissionToken: true, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" }),
+    ];
+    for (const block of variants) {
+      expect(block).toContain(capability);
+      const provider = (Bun.TOML.parse(block) as { model_providers: { opencodex: Record<string, unknown> } }).model_providers.opencodex;
+      expect(provider.capabilities).toEqual({ cyber_access_programs: true });
+      expect(oldShape(block)).not.toContain("capabilities");
+      expect(hasOcxProviderTable(block)).toBe(true);
+    }
+  });
+
+  test("restore and retention treat the old and new shapes as the same table", () => {
+    const fresh = buildProviderTableBlockForTarget(target);
+    const legacy = oldShape(fresh);
+    expect(fresh).not.toBe(legacy);
+    expect(appendOcxProviderTableBlock(user + legacy, fresh)).toBe(user + legacy);
+    expect(appendOcxProviderTableBlock(user + fresh, legacy)).toBe(user + fresh);
+  });
+
+  test("any other capabilities value is still a different table", () => {
+    const fresh = buildProviderTableBlockForTarget(target);
+    for (const changed of [
+      fresh.replace("cyber_access_programs = true", "cyber_access_programs = false"),
+      fresh.replace("cyber_access_programs = true", 'cyber_access_programs = true, remote_compaction = "v2"'),
+    ]) {
+      expect(() => appendOcxProviderTableBlock(user + changed, fresh)).toThrow("different [model_providers.opencodex] table");
+    }
+  });
+
+  test("removal takes either shape whole and leaves an unrelated user table byte-identical", () => {
+    const fresh = buildProviderTableBlockForTarget(target);
+    for (const block of [fresh, oldShape(fresh)]) {
+      const content = user + block;
+      // The blank separator line the writer emits before its marker stays with the surrounding file.
+      expect(removeOcxSection(content)).toBe(user + "\n");
+      expect(hasOcxProviderTable(removeOcxSection(content))).toBe(false);
+    }
+  });
+
+  test("the restore preview lists the capability line the writer emits, in both directions", () => {
+    const fresh = buildProviderTableBlockForTarget(target);
+    const userKeys = user + 'secret_named_key = "x"\n';
+    const withTable = userKeys + fresh;
+    const removal = codexConfigKeyChanges(withTable, userKeys);
+    expect(removal).toContainEqual({ file: "config.toml", key: "model_providers.opencodex.capabilities", change: "remove" });
+    const addition = codexConfigKeyChanges(userKeys, withTable);
+    expect(addition).toContainEqual({ file: "config.toml", key: "model_providers.opencodex.capabilities", change: "add" });
+    // The old shape differs only by that key.
+    expect(codexConfigKeyChanges(userKeys + oldShape(fresh), withTable))
+      .toEqual([{ file: "config.toml", key: "model_providers.opencodex.capabilities", change: "add" }]);
+    // Unrelated user keys stay masked and unchanged.
+    for (const change of [...removal, ...addition]) expect(change.key).not.toContain("mine");
+    expect(displayCodexConfigKey("model_providers.mine.capabilities")).toBe("model_providers.….capabilities");
+    // A rewriter that quotes the inline key or a value holding '#' is still one recognized value.
+    for (const line of ['capabilities = { "cyber_access_programs" = true }', "capabilities = { 'cyber_access_programs' = true, note = \"a#b\" }"]) {
+      expect(codexConfigKeyChanges(userKeys, userKeys + "[model_providers.opencodex]\n" + line + "\n"))
+        .toContainEqual({ file: "config.toml", key: "model_providers.opencodex.capabilities", change: "add" });
+    }
+  });
+});
+

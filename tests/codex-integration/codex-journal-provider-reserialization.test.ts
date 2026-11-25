@@ -73,3 +73,32 @@ test.each(["inline", "dotted"])("%s provider refusal preserves the actual journa
     expect(result.retained).toBe(true);
   } finally { removeTreeWithRetry(root); }
 });
+
+const cyberOriginal = 'model = "native"\n';
+const legacyInjected = 'model_provider = "opencodex"\n[model_providers.opencodex]\nbase_url = "http://127.0.0.1:10100/v1"\nrequires_openai_auth = true\n';
+const cyberInjected = legacyInjected + "capabilities = { cyber_access_programs = true }\n";
+const userTable = '[model_providers.mine]\nbase_url = "https://mine.example/v1"\n';
+
+test.each([
+  ["an old-shape journal", legacyInjected, cyberInjected],
+  ["a new-shape journal", cyberInjected, legacyInjected],
+])("%s restores the other table shape and keeps an unrelated user edit", (_name, recorded, onDisk) => {
+  const owned = { injectedConfigFields: captureJournalConfigFields(recorded, {}) };
+  const current = onDisk.slice(0, onDisk.indexOf("[")) + userTable + onDisk.slice(onDisk.indexOf("["));
+  // `model` is a preference the restore leaves alone; the owned table and root selection go.
+  expect(restoreJournalConfigFields(current, cyberOriginal, owned)).toBe(userTable);
+});
+
+test.each([
+  ["a changed capability", cyberInjected.replace("= true }", "= false }")],
+  ["an extra capability", cyberInjected.replace("= true }", '= true, remote_compaction = "v2" }')],
+  ["a changed base_url", cyberInjected.replace("10100", "10101")],
+  ["an added env_key", cyberInjected + 'env_key = "OTHER_TOKEN"\n'],
+  ["a changed auth requirement", cyberInjected.replace("requires_openai_auth = true", "requires_openai_auth = false")],
+])("%s against either recorded shape still refuses field restoration", (_name, onDisk) => {
+  for (const recorded of [legacyInjected, cyberInjected]) {
+    const owned = { injectedConfigFields: captureJournalConfigFields(recorded, {}) };
+    expect(restoreJournalConfigFields(onDisk, cyberOriginal, owned)).toBeNull();
+  }
+});
+
