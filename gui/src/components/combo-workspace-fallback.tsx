@@ -35,8 +35,8 @@ function useFallbackRoutes(apiBase: string | undefined, draft: ComboItem, provid
     const controller = new AbortController();
     void fetch(url, { signal: controller.signal })
       .then(async response => response.ok ? (await response.json() as { routes?: FallbackRoutes }).routes : undefined)
-      .catch(() => undefined)
-      .then(routes => { if (!controller.signal.aborted) setSnapshot({ key, routes }); });
+      .then(routes => { if (!controller.signal.aborted) setSnapshot({ key, routes }); })
+      .catch(() => { if (!controller.signal.aborted) setSnapshot({ key, routes: undefined }); });
     return () => controller.abort();
   }, [url, key]);
   // Until an answer carries routes (pending, offline, refused, or an older server), the preview shows the configured targets.
@@ -102,6 +102,7 @@ export function ComboFallbackPreview({ draft, providers, consent, routes, routes
   const heading = useId();
   if (draft.strategy !== "failover" || !draft.targets.some(target => target.provider)) return null;
   const { steps, stop } = fallbackSteps(draft, providers, routes);
+  const keyCounts = new Map<string, number>();
   const StatusIcon = stop?.reason === "consent" ? IconLock : stop ? IconAlert : IconRoute;
   return (
     <section className="cwi-preview" aria-labelledby={heading}>
@@ -115,8 +116,11 @@ export function ComboFallbackPreview({ draft, providers, consent, routes, routes
       </div>
       {consent && <div className="cwi-preview-consent">{consent}</div>}
       <ol className="cwi-preview-steps" role="list">
-        {steps.map(({ target, provider, model, billing, state, reason, paid }, index) => (
-          <li key={target.clientKey ?? index} data-state={state}>
+        {steps.map(({ target, provider, model, billing, state, reason, paid }, index) => {
+          const identity = JSON.stringify([target.provider, target.model]);
+          const occurrence = keyCounts.get(identity) ?? 0;
+          keyCounts.set(identity, occurrence + 1);
+          return <li key={target.clientKey ?? `${identity}:${occurrence}`} data-state={state}>
             <span className="cwi-preview-index" aria-hidden="true">{index + 1}</span>
             <div className="cwi-preview-step">
               <strong>{target.provider ? comboTargetProviderName(provider?.name ?? target.provider, provider, t) : t("cws.target.pickProvider")}</strong>
@@ -125,8 +129,8 @@ export function ComboFallbackPreview({ draft, providers, consent, routes, routes
               {state === "skipped" && reason && <span>{t("cws.preview.skipped", { reason: t(`cws.preview.${reason}`) })}</span>}
             </div>
             {billing && <span className="cwi-billing-label" data-paid={paid ? "" : undefined}>{t(billing)}</span>}
-          </li>
-        ))}
+          </li>;
+        })}
       </ol>
       <p className="cwi-preview-note">{t(routesUnchecked ? "cws.preview.unchecked" : "cws.preview.note")}</p>
     </section>
