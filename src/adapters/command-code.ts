@@ -14,7 +14,7 @@ import { configuredReasoningEfforts, modelRecordValue } from "../reasoning-effor
 import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
 import { identifyRoutedModel } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
-import { normalizeAnthropicInputSchema } from "./anthropic-input-schema";
+import { createAnthropicInputSchemaNormalizer } from "./anthropic-input-schema";
 import { parseDataUrl } from "./image";
 import { createAdapterPhysicalSend } from "./physical-send";
 import { SendBudgetExhaustedError } from "../lib/upstream-retry";
@@ -212,9 +212,10 @@ function toolChoiceInstruction(parsed: OcxParsedRequest): string | undefined {
 
 function prepareTools(tools: OcxTool[]) {
   const declared = new Map<string, CommandCodeDeclaredTool>();
+  const normalizeInputSchema = createAnthropicInputSchemaNormalizer();
   const wire = tools.map(tool => {
     const name = namespacedToolName(tool.namespace, tool.name);
-    const schema = normalizeAnthropicInputSchema(tool.parameters);
+    const schema = normalizeInputSchema(tool.parameters);
     declared.set(name, tool.freeform === true
       ? { freeform: true, schema: tool.parameters }
       : { freeform: false, schema: recoverySchema(schema), declaredSchema: tool.parameters });

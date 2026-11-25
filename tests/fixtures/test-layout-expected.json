@@ -345,6 +345,7 @@
   "responses-devin-401-replay.test.ts": "responses",
   "responses-direct-chat-tool-choice.test.ts": "responses", "responses-oauth-refresh-capacity.test.ts": "responses", "responses-grok-devin-preflight.test.ts": "responses",
   "abort-idle-deadline.test.ts": "lib", "tool-envelope-echo-whole-line.test.ts": "adapters",
+  "json-byte-size.test.ts": "lib",
   "abort-race.test.ts": "adapters", "account-import.test.ts": "server",
   "account-import-project-fallback.test.ts": "server",
   "main-account-hard-lock-profile-dispatch.test.ts": "codex-integration",
