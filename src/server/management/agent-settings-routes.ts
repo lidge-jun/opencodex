@@ -93,6 +93,7 @@ import {
   sidecarOptionsAuth,
   type WebSearchBackend,
 } from "./web-search-sidecar-options";
+import { webSearchBackendIgnoresModel } from "../../web-search/backends";
 import { drainAndShutdown } from "../lifecycle";
 import { inheritedAnthropicInstance } from "../../sidecar/auth";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
@@ -1864,8 +1865,10 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
             : submittedBackend === null
               ? config.webSearchSidecar?.backend ?? "openai"
               : stored?.backend ?? config.webSearchSidecar?.backend ?? "openai";
-          const effectiveModel = effectiveBackend === "parallel"
-            ? (typeof section.model === "string" ? section.model : undefined)
+          // A model-free backend runs no model, so the one this page preserves and
+          // resends on every Save is inert and must round-trip rather than 400.
+          const effectiveModel = webSearchBackendIgnoresModel(effectiveBackend)
+            ? undefined
             : section.model === ""
               ? config.webSearchSidecar?.model
               : typeof section.model === "string"

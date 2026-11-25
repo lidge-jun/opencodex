@@ -17,6 +17,13 @@ export interface WebSearchBackendDescriptor {
   isActive(auth: SidecarAuthState, config: OcxConfig): boolean;
   /** Which candidate rows this backend's executor can actually run. */
   eligibleModel(candidate: SidecarCandidate, auth: SidecarAuthState): boolean;
+  /**
+   * The executor runs no model at all, so a stored `webSearchSidecar.model` is
+   * inert here. Not the same as an empty `eligibleModel`: exa matches no
+   * candidate either, but its configured model is still the destination its
+   * api-key scope is judged against (modelForAlphaSearchBackend).
+   */
+  ignoresModel?: true;
 }
 
 export const WEB_SEARCH_BACKENDS: readonly WebSearchBackendDescriptor[] = [
@@ -79,8 +86,16 @@ export const WEB_SEARCH_BACKENDS: readonly WebSearchBackendDescriptor[] = [
     backend: "parallel",
     isActive: (_auth, config) => config.webSearchSidecar?.backend === "parallel" && config.webSearchSidecar.enabled !== false,
     eligibleModel: () => false,
+    // planWebSearch and alpha-search both pin settings.model to "parallel", so
+    // nothing ever reads the configured model on this backend.
+    ignoresModel: true,
   },
 ];
+
+/** True when the backend's executor runs no model, so a stored `model` is inert. */
+export function webSearchBackendIgnoresModel(backend: WebSearchBackendId): boolean {
+  return WEB_SEARCH_BACKENDS.some(entry => entry.backend === backend && entry.ignoresModel === true);
+}
 
 /**
  * (picker-visible ∪ auth slots) ∩ (active backend able to run the row).

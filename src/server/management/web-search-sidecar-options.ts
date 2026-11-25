@@ -18,7 +18,7 @@ import { AUTH_SLOT_MODELS, resolveSidecarAuth, resolveAnthropicSidecarAuth, reso
 import { ANTHROPIC_INSTANCE_IDS, isAnthropicInstanceId, type AnthropicInstanceId } from "../../providers/anthropic-instance-id";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { pickerVisibleSidecarCandidates, type SidecarCandidate } from "../../sidecar/candidates";
-import { WEB_SEARCH_BACKENDS, webSearchSidecarCandidates } from "../../web-search/backends";
+import { WEB_SEARCH_BACKENDS, webSearchBackendIgnoresModel, webSearchSidecarCandidates } from "../../web-search/backends";
 import type { WebSearchBackendId } from "../../web-search/index";
 
 // The full configured union. Rows only ever materialize for backends whose
@@ -120,11 +120,19 @@ export function webSearchModelOptionsFrom(
     });
   }
   const persisted = config.webSearchSidecar?.model;
-  if (persisted && config.webSearchSidecar?.backend !== "parallel" && !byValue.has(persisted)) {
+  const backend = config.webSearchSidecar?.backend;
+  // A model-free backend admits no candidate, so grandfathering its inert
+  // persisted model would offer a row the write gate used to refuse — and
+  // suppressing the row outright left nothing to re-select once the sidecar was
+  // switched off. Offer the backend itself instead: picking it re-enables the
+  // backend and drops the inert model in the same write.
+  if (backend && webSearchBackendIgnoresModel(backend)) {
+    byValue.set(backend, { value: backend, label: backend, backend, model: "" });
+  } else if (persisted && !byValue.has(persisted)) {
     byValue.set(persisted, {
       value: persisted,
       label: persisted,
-      backend: config.webSearchSidecar?.backend ?? "openai",
+      backend: backend ?? "openai",
       model: persisted,
     });
   }

@@ -117,13 +117,17 @@ test("Parallel planning requires a hosted search declaration and skips passthrou
   expect(planWebSearch(cfg, { ...parsed, options: { ...parsed.options, toolChoice: "none" } }, false, routed, "model")).toBeUndefined();
 });
 
-test("Parallel settings preserve an existing model without advertising it as runnable by Parallel", async () => {
+test("Parallel settings preserve an existing model and offer the backend itself as the picker row", async () => {
   const cfg = config({ webSearchSidecar: { backend: "openai", model: "existing-slot" } });
   const response = await putSidecar(cfg, { backend: "parallel" });
   expect(response.status).toBe(200);
   expect(cfg.webSearchSidecar).toMatchObject({ backend: "parallel", model: "existing-slot" });
-  expect((await response.json()).webSearchModels).not.toContainEqual(expect.objectContaining({ backend: "parallel" }));
-  expect((await putSidecar(cfg, { model: "unrelated-model" })).status).toBe(400);
+  expect((await response.json()).webSearchModels).toContainEqual(
+    expect.objectContaining({ value: "parallel", backend: "parallel", model: "" }),
+  );
+  // Parallel runs no model, so the preserved one is inert rather than illegal:
+  // the pickers resend it on every save and must not be 400'd for it.
+  expect((await putSidecar(cfg, { model: "unrelated-model" })).status).toBe(200);
 
   const override = config({ webSearchSidecar: { backend: "openai", model: "existing-slot" } });
   expect((await putClaudeCode(override, { webSearchSidecar: { backend: "parallel" } })).status).toBe(200);

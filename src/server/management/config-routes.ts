@@ -118,6 +118,7 @@ import {
   webSearchModelRejection,
   sidecarAnthropicPoolOptions, sidecarOptionsAuth, sidecarSettingsAfterPatch,
 } from "./web-search-sidecar-options";
+import { webSearchBackendIgnoresModel } from "../../web-search/backends";
 import { validateXaiSearchOptions } from "../../web-search/xai-executor";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
 import { getInjectionDebugLogEntries } from "../../lib/injection-debug-log";
@@ -1210,9 +1211,14 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
           : submittedBackend === null
             ? "openai"
             : config.webSearchSidecar?.backend ?? "openai";
-        const effectiveModel = typeof body.webSearch.model === "string"
-          ? body.webSearch.model || undefined
-          : effectiveBackend === "parallel" ? undefined : config.webSearchSidecar?.model;
+        // A model-free backend runs no model, so neither a submitted nor a
+        // preserved one can be wrong — gating it would refuse the very row the
+        // picker offers for that backend and make Off a one-way trip.
+        const effectiveModel = webSearchBackendIgnoresModel(effectiveBackend)
+          ? undefined
+          : typeof body.webSearch.model === "string"
+            ? body.webSearch.model || undefined
+            : config.webSearchSidecar?.model;
         if (pairTouched && effectiveModel) {
           const candidates = webEvidence!;
           if (webSearchModelIsRejected(effectiveBackend, effectiveModel, candidates)) {
