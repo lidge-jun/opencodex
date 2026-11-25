@@ -1,3 +1,4 @@
+import { bindCodexAccountEgressConfig } from "../codex/account-egress-runtime";
 import { bindCodexWsIncrementalConfig } from "../config/codex-ws-incremental-setting";
 import { bindUpstreamHistorySlimConfig } from "../server/responses/history-slim";
 import {
@@ -89,6 +90,7 @@ export function setLiveStateStoreConfig(config: OcxConfig): void {
   bindUpstreamHistorySlimConfig(config);
   bindCodexWsIncrementalConfig(config);
   bindWorkflowBudgetConfig(config);
+  bindCodexAccountEgressConfig(config);
   notifyLiveConfigObservers(config);
 }
 

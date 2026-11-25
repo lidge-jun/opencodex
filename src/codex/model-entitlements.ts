@@ -1,3 +1,4 @@
+import { codexAccountFetch } from "./account-egress-runtime";
 import { createHash } from "node:crypto";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { CodexAccountCredentialRecord, OcxConfig } from "../types";
@@ -755,7 +756,7 @@ async function fetchAccountModels(
       Accept: "application/json",
     });
     if (credential.chatgptAccountId) headers.set("ChatGPT-Account-Id", credential.chatgptAccountId);
-    const response = await fetcher(codexModelsUrl(clientVersion), {
+    const response = await codexAccountFetch(credential.accountId, fetcher)(codexModelsUrl(clientVersion), {
       headers,
       redirect: "error",
       signal: controller.signal,
@@ -909,7 +910,7 @@ async function fetchDiscoveryRoster(
     const now = options.now ?? Date.now();
     const cached = discoveryEtags.get(credential.credentialIdentity);
     if (cached && now - cached.fetchedAt < DISCOVERY_ETAG_MAX_AGE_MS) headers.set("If-None-Match", cached.etag);
-    const response = await fetcher(codexModelsUrl(CODEX_ROSTER_DISCOVERY_CLIENT_VERSION), {
+    const response = await codexAccountFetch(credential.accountId, fetcher)(codexModelsUrl(CODEX_ROSTER_DISCOVERY_CLIENT_VERSION), {
       headers,
       redirect: "error",
       signal: controller.signal,

@@ -114,9 +114,8 @@ import {
   retryCodexPoolOnAlternateAccount,
   PoolPreOutputRefusals,
   subscriptionPreOutputRefusalHold,
-  codexLogAccountId,
+  codexPoolAccountEgressRoute,
 } from "./core-codex-account";
-import { codexAccountEgressRoute } from "../../codex/account-egress";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 import {
   clearCodexModelDenialEvidence,
@@ -272,7 +271,7 @@ export async function preparePassthroughExchange(
 ) {
   const { config, logCtx, options, req } = requestContext;
   // Read at each physical send: failover may move this request to another pool account.
-  const accountRoute = () => codexAccountEgressRoute(config, codexLogAccountId(admissionState.authCtx));
+  const accountRoute = () => codexPoolAccountEgressRoute(config, admissionState.authCtx);
   const codexWsCaller = codexWsAdmittedCaller(options.replayPrincipal, () => resolveContextPrincipal(req, config, options.admission));
   const {
     route,

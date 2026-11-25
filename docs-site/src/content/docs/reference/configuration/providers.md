@@ -1425,11 +1425,10 @@ provider in question.
 `apiKeys[]` entries contain `id`, `name`, generated `key`, and ISO `createdAt` strings. Optional `allowMeteredComboTargets: true` explicitly permits targets marked `metered: true`; omitted or false consent denies them. The environment token never qualifies. Local loopback-only callers can instead use per-combo `allowMeteredTargets: true`; configured-key and linked callers still need key consent. See [Metered fallback consent](/guides/combos/#metered-fallback-consent).
 `codexAccounts[]` entries require `id`, `email`, and `isMain`, with optional `plan`,
 `chatgptAccountId`, and privacy-safe `logLabel`. These records are normally dashboard-managed.
-An optional `egress` object gives one pool account its own route, with the same `proxy` and `noProxy`
-values as a provider's [per-provider egress](#per-provider-egress): an account `proxy` replaces the
-provider's for that account's requests and token refreshes, an omitted `proxy` keeps the provider's,
-and the account's `noProxy` entries apply ahead of the provider's. The main login has no pool entry and
-always uses the provider's route.
+An optional `egress` object gives one pool account its own route, with the same `proxy` and `noProxy` values as a provider's [per-provider egress](#per-provider-egress): an account `proxy` replaces the `openai` provider's for that account's requests, compactions, token refreshes, usage checks, model discovery and reset-credit calls; an omitted `proxy` keeps the provider's, and the account's `noProxy` entries apply ahead of the provider's.
+A pool account without an `egress` object sends those calls by the `openai` provider's route too.
+If `config.json` cannot be read, a CLI command refuses these calls instead of sending them without the configured route.
+The main login has no pool entry and always uses the provider's route.
 
 ### `tokenGuardian` (`OcxTokenGuardianConfig`)
 

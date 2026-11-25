@@ -123,6 +123,10 @@ export function codexLogAccountId(authCtx: CodexAuthContext): string | null {
   return authCtx.kind === "pool" || authCtx.kind === "main-pool" ? authCtx.accountId : null;
 }
 
+/** The route of the pool account this auth context sends with (`codexAccounts[].egress`), if it has one. */
+export function codexPoolAccountEgressRoute(config: OcxConfig, authCtx: CodexAuthContext) {
+  return codexAccountEgressRoute(config, codexLogAccountId(authCtx));
+}
 
 export function isFixedCodexAccount(authCtx: CodexAuthContext): boolean {
   return (authCtx.kind === "pool" || authCtx.kind === "main-pool")
@@ -1086,7 +1090,7 @@ export async function retryCodexPoolOnAlternateAccount(
             upstream.signal,
             connectMs,
             stream,
-            providerFetch(retryProvider, options.codexWsRuntimeIdentity, { account: () => codexAccountEgressRoute(config, codexLogAccountId(retryAuthCtx)),
+            providerFetch(retryProvider, options.codexWsRuntimeIdentity, { account: () => codexPoolAccountEgressRoute(config, retryAuthCtx),
               httpOnly,
               providerName: route.providerName,
               modelId: route.modelId,
