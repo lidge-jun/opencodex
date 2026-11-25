@@ -1664,8 +1664,13 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     featured: false,
     dashboardUrl: "https://github.com/settings/copilot",
     liveModels: true,
-    models: ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "claude-sonnet-4", "gemini-2.5-pro", "gpt-5-mini", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"],
-    defaultModel: "gpt-4o",
+    // 2026-11-26 (docs.github.com/en/copilot/reference/ai-models/supported-models): retired ids
+    // leave the cold-start seed (gpt-4.1 06-01, claude-sonnet-4 05-01, gemini-2.5-pro 07-31,
+    // gpt-5-mini/5.4/5.4-mini/5.5 10-19, gpt-5.6-terra 11-16; gpt-4o and gpt-4.1-mini are not on
+    // the supported list). The default is GPT-5.3-Codex, which GitHub names its long-term support
+    // model and the fallback when no other model is available. Wire defaults below are untouched.
+    models: ["gpt-5.3-codex", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"],
+    defaultModel: "gpt-5.3-codex",
     // Copilot fronts a mixed-wire catalog: these models reject /chat/completions for
     // real Codex-agent traffic (function tools + reasoning), so every inbound wire
     // rides Responses. Evidence: issue #748 field runs, pi.dev/models/github-copilot/*

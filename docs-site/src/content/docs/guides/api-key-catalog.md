@@ -1098,6 +1098,13 @@ device-flow login for a short-lived Copilot API token — not a pasted API key. 
 a key/subscription-token gateway on its OpenAI-compatible endpoint. **Cloudflare AI
 Gateway** needs your account + gateway ids filled into the URL.
 
+Copilot's model list comes from your account's live catalog. Before the first successful fetch the
+preset offers a fallback list of current GPT models and defaults to `gpt-5.3-codex`, which GitHub
+names its long-term support model. Models GitHub has retired, such as `gpt-4o`, `gpt-4.1` and
+`gpt-5.5`, are no longer in that fallback
+([supported models](https://docs.github.com/en/copilot/reference/ai-models/supported-models),
+checked 2026-11-26).
+
 Copilot automatically uses Auto when every valid row in a nonempty account catalog explicitly
 reports that manual selection is unavailable. Missing or malformed permissions retain named routes;
 the picker removes only explicitly denied rows. Auto-only discovery supplies `github-copilot/auto`,

@@ -43,3 +43,23 @@ describe("Google Gemini API preset (ai.google.dev models, deprecations and prici
     }
   });
 });
+
+describe("GitHub Copilot cold-start seed (docs.github.com supported-models, 2026-11-26)", () => {
+  const copilot = getProviderRegistryEntry("github-copilot")!;
+
+  test("defaults to the long-term support model GitHub falls back to", () => {
+    expect(copilot.defaultModel).toBe("gpt-5.3-codex");
+  });
+
+  test("drops ids GitHub lists as retired or no longer supports", () => {
+    for (const retired of [
+      "gpt-4o", "gpt-4.1", "gpt-4.1-mini", "claude-sonnet-4", "gemini-2.5-pro",
+      "gpt-5-mini", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-terra",
+    ]) {
+      expect(copilot.models).not.toContain(retired);
+    }
+    for (const ga of ["gpt-5.3-codex", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra"]) {
+      expect(copilot.models).toContain(ga);
+    }
+  });
+});
