@@ -66,6 +66,7 @@ import { oauthCredentialSlot } from "../../oauth/credential-siblings";
 import { antigravityAccountSupportsModel } from "../../providers/antigravity-account-roster";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
 import type { AnthropicInstanceId } from "../../providers/anthropic-instance-id";
+import type { AnthropicRouteDecision } from "../../oauth/anthropic-model-routes";
 import { isKeyQuotaSpent } from "../../providers/api-key-cooldowns";
 import { readQuotaResetAt } from "../../providers/key-failover";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/account-id";
@@ -158,6 +159,14 @@ function anthropicAccountOnlyRatePaused(instance: AnthropicInstanceId, now: numb
   const { anthropicRatePauseUntil } = anthropicRatePolicyFor(instance);
   return (getAccountSet(instance)?.accounts ?? []).some(account => account.paused !== true && account.needsReauth !== true
     && anthropicRatePauseUntil(account.id, now) !== undefined && routing.getAnthropicAccountHealthSnapshot(account.id, now) === null);
+}
+
+/** A spent pool's own limit replaces an ordinary 429 after the last eligible account refuses. */
+export function exhaustedAnthropicPoolLimit(
+  response: Response, route: RouteResult, instance: AnthropicInstanceId | undefined, decision: AnthropicRouteDecision | null,
+) {
+  if (!instance || route.provider.authMode !== "oauth" || response.status !== 429 || isAutomaticReplayBlocked(response)) return null;
+  return anthropicRoutingFor(instance).anthropicPoolUsageLimitAfterRefusal(Date.now(), decision, route.modelId);
 }
 
 /**

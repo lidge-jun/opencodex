@@ -108,7 +108,7 @@ import { createAnthropicThinkingRecovery } from "./anthropic-thinking-recovery";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-zen-rate-limit";
 import { formatAdapterUpstreamFailure } from "./adapter-failure-message";
-import { consumeComboFailure, readQuotaRefusal, recordGenericAccountRefusal } from "./core-combo-failure";
+import { consumeComboFailure, exhaustedAnthropicPoolLimit, readQuotaRefusal, recordGenericAccountRefusal } from "./core-combo-failure";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse, lateAttributionLimitResponse } from "./context-overflow";
 import { OllamaLateAttributionBudgetError } from "../../adapters/ollama-native";
 import { isFixedCodexAccount } from "./core-codex-account";
@@ -1873,10 +1873,8 @@ export async function prepareAdapterExchange(
       if (route.providerName === "kiro")
         upstreamResponse = await normalizeFinalKiroHttpError(upstreamResponse, upstream.signal);
       const grokOAuth = isXaiGrokOAuth(route.providerName, route.provider);
-      const poolUsageLimit = (!options.comboAttempt || logCtx.comboQuotaOnlyFallback)
-        && upstreamResponse.status === 429 && anthropicInstance && route.provider.authMode === "oauth"
-        && !isAutomaticReplayBlocked(upstreamResponse)
-        ? anthropicRoutingFor(anthropicInstance).anthropicPoolUsageLimitAfterRefusal(Date.now(), transportState.anthropicRouteDecision, route.modelId)
+      const poolUsageLimit = !options.comboAttempt || logCtx.comboQuotaOnlyFallback
+        ? exhaustedAnthropicPoolLimit(upstreamResponse, route, anthropicInstance, transportState.anthropicRouteDecision)
         : null;
       if (options.comboAttempt) {
         if (poolUsageLimit) {
@@ -1939,9 +1937,6 @@ export async function prepareAdapterExchange(
           requestState.subagentFallbackAccountId,
         );
       }
-      // The last pool account just refused on spent quota and recovery found no replacement:
-      // answer the usage limit now (#6991), so Codex stops instead of retrying into the local
-      // refusal that every later attempt meets until the first window reopens.
       if (poolUsageLimit) return anthropicPoolCooldownResponse(poolUsageLimit, { logCtx });
       // Upstreams occasionally echo request details in error bodies — scrub token-shaped
       // material before it reaches the client-facing error surface.
