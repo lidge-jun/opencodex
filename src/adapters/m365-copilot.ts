@@ -7,7 +7,7 @@ import { M365_COPILOT_BASE_URL } from "../providers/m365-copilot-models";
 import { m365CopilotClaims } from "../oauth/m365-copilot";
 import { SendBudgetExhaustedError, providerErrorDestinationLabel } from "../lib/upstream-retry";
 import { estimateTokens } from "../lib/token-estimate";
-import { formatMessages, formatToolResponse, parseToolCalls, isProseDocument, fabricatedToolResponseAt, truncateAtFabricatedToolResponse, type Message, type ToolDef, type ToolChoice } from "./m365-copilot/tools";
+import { formatMessages, formatToolResponse, parseToolAnswer, type Message, type ToolDef, type ToolChoice } from "./m365-copilot/tools";
 import { defaultFramingForModel } from "./m365-copilot/fenced";
 import { createM365Conversation, runM365CopilotTurn, m365RequestSocketRoute, M365CopilotTurnError, type M365Conversation, type M365TurnOptions } from "./m365-copilot/transport";
 import { m365ImageUrls, uploadM365Images, MAX_IMAGES } from "./m365-copilot/images";
@@ -103,10 +103,9 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
         state.sent = messages.length; state.prefix = digest(JSON.stringify(messages)); state.accessed = Date.now();
         state.sentImages = imageUrls.length; state.imagePrefix = digest(JSON.stringify(imageUrls));
         if (toolMode) {
-          if (fabricatedToolResponseAt(answer, tools) >= 0) state.pendingNote = "Only tool calls returned to the client were executed. Any tool output you wrote yourself did not happen; the following is the real client output.";
-          const cleaned = truncateAtFabricatedToolResponse(answer, tools);
-          const result = parseToolCalls(cleaned, tools);
-          if (isProseDocument(result, cleaned, tools)) emit({ type: "text_delta", text: cleaned });
+          const { accepted, result, truncated, document } = parseToolAnswer(answer, tools!);
+          if (truncated) state.pendingNote = "Only tool calls returned to the client were executed. Any tool output you wrote yourself did not happen; the following is the real client output.";
+          if (document) emit({ type: "text_delta", text: accepted });
           else {
             // Validate every call before emitting anything: a malformed or undeclared call must not leave the client with partial output.
             const calls = result.toolCalls.map(call => {
