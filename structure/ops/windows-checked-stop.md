@@ -178,9 +178,9 @@ objects. The final manager-state probe treats both running and queued tasks as a
 [Task Scheduler permissions](https://learn.microsoft.com/en-us/windows/win32/taskschd/security-contexts-for-running-tasks)
 [Instance stop protocol](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tsch/b3572584-8727-441f-83e6-9b02101ea7f4)
 
-The task's running state is read from `schtasks /query /fo CSV`. The status words observed from shipped zh-CN and
-ko-KR resources are recognized there (#8863), because a cold `Get-ScheduledTask` takes 1.6 s to
-4.9 s and cannot finish inside the 1 s cap. Any other localized word still falls back to it.
+The task's running state is read from `schtasks /query /fo CSV`. The status words observed from shipped
+zh-CN, ko-KR, and ja-JP resources are recognized there, because a cold `Get-ScheduledTask` takes
+1.6 s to 4.9 s (#8863) and cannot finish inside the 1 s cap. Any other localized word still falls back to it.
 The instance stop maps an access-denied HRESULT to `denied`. A running WinSW service is only this home's manager
 when `sc qc` shows a `BINARY_PATH_NAME` naming this installation's WinSW executable, the same
 proof the guarded manager path uses: the service ID is fixed, so a successful `sc query` alone

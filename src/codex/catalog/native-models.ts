@@ -264,7 +264,7 @@ function configuredNativePresentation(slug: string): { displayName: string; desc
  *
  * Devlog: 260816_codexrs_multiagent_v2_and_history_perf/011 §4-bis.
  */
-const BUILT_IN_NATIVE_OPENAI_MODELS: readonly string[] = Object.freeze([
+export const BUILT_IN_NATIVE_OPENAI_MODELS: readonly string[] = Object.freeze([
   "gpt-5.5",
   "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
   NATIVE_DAYBREAK_BLUE_MODEL,

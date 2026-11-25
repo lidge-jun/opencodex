@@ -256,6 +256,13 @@ const PINNED_NATIVE_CAPABILITY_ENTRIES: Map<string, RawEntry> = new Map(
   }),
 );
 
+export function pinnedNativeCapabilityFlag(
+  slug: string, flag: "supports_reasoning_effort_updates" | "supports_experimental_context",
+): boolean | undefined {
+  const value = PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)?.[flag];
+  return typeof value === "boolean" ? value : undefined;
+}
+
 /**
  * The user-owned levers that set a native window, carried together.
  *
@@ -348,14 +355,15 @@ function longWindowOptInCeiling(slug: string): number | undefined {
   return longWindow;
 }
 
-function narrowToLimits(raw: number | undefined, slug: string, input: NativeContextLimitsInput): number | undefined {
+/** Apply the same per-model opt-in policy to pinned or confirmed roster windows. */
+export function narrowNativeOpenAiContextWindow(raw: number | undefined, slug: string, input: NativeContextLimitsInput): number | undefined {
   if (raw === undefined) return undefined;
   const limit = nativeOpenAiConfiguredContextLimit(slug, input);
+  // A confirmed default is already authoritative. The shipped opt-in ceiling
+  // constrains only a user-requested increase, never that default or a lower cap.
+  if (limit === undefined || limit <= raw) return limit ?? raw;
   const optInCeiling = longWindowOptInCeiling(slug);
-  if (optInCeiling !== undefined) {
-    return Math.min(limit ?? raw, optInCeiling);
-  }
-  return applyProviderContextCap(raw, limit);
+  return optInCeiling === undefined ? raw : Math.max(raw, Math.min(limit, optInCeiling));
 }
 
 export function nativeOpenAiContextWindow(slug: string, limits?: NativeContextLimitsInput): number | undefined {
@@ -363,7 +371,7 @@ export function nativeOpenAiContextWindow(slug: string, limits?: NativeContextLi
     ?? (typeof PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)?.context_window === "number"
       ? PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)!.context_window as number
       : undefined);
-  return narrowToLimits(raw, slug, limits);
+  return narrowNativeOpenAiContextWindow(raw, slug, limits);
 }
 
 export function nativeOpenAiMaxOutputTokens(slug: string): number | undefined {
@@ -410,7 +418,7 @@ export function nativeOpenAiMaxInputTokens(slug: string, limits?: NativeContextL
   const raw = NATIVE_OPENAI_CONTEXT_OVERRIDES[slug]?.maxInputTokens;
   if (raw === undefined) return undefined;
   const window = nativeOpenAiContextWindow(slug, limits);
-  const narrowed = narrowToLimits(raw, slug, limits) ?? raw;
+  const narrowed = narrowNativeOpenAiContextWindow(raw, slug, limits) ?? raw;
   return window === undefined ? narrowed : Math.min(narrowed, window);
 }
 

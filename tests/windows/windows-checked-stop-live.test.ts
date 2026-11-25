@@ -191,6 +191,22 @@ describe("capped command answers", () => {
     expect(programs).toEqual(["schtasks /query"]);
   });
 
+  test.each([
+    ["準備完了", "not-running"],
+    ["無効", "not-running"],
+    ["実行中", "running"],
+    ["キューに登録済み", "running"],
+  ])("ja-JP task state %s is read from the CSV without starting PowerShell", async (status, expected) => {
+    const deps = windowsCheckedStopLiveDeps({
+      run: async (program, args) => {
+        expect(program).toBe("schtasks");
+        expect(args).toEqual(["/query", "/tn", "opencodex-proxy", "/fo", "CSV", "/nh"]);
+        return result(0, `"\\opencodex-proxy","N/A","${status}"\r\n`);
+      },
+    });
+    expect(await deps.taskState(1_000)).toBe(expected);
+  });
+
   test("the helper must finish successfully and receive proof approval before reporting success", async () => {
     const sid = "S-1-5-21-100-200-300-1001";
     const xml = buildWindowsTaskXml(undefined, windowsLauncherVbsPath(), undefined, sid)

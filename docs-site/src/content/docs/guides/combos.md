@@ -193,8 +193,8 @@ still advance.
 
 A streamed error event that carries no status of its own but an integral numeric `code` between
 400 and 599 is judged with that code as its HTTP status, so it gets the same decision and cooldown
-as the matching HTTP response. Before output starts, a generic streamed 400, 409, 413 or 422 therefore
-stops the combo as it does over HTTP, a 401, 402 or 403 cools the provider, and a recognized context
+as the matching HTTP response. Before output starts, a generic streamed 400, 409 or 422 therefore stops
+the combo as it does over HTTP, a provider 413 advances to the next target, a 401, 402 or 403 cools the provider, and a recognized context
 overflow still advances.
 
 ### Round-robin: smooth weighted batches
@@ -1256,6 +1256,8 @@ window or a credential/billing failure, otherwise 60 seconds). Explicit
 `Retry-After` delays are capped at 24 hours; the other cooldowns are capped at 10 minutes.
 
 Validation errors (HTTP 400/422) that quote quota or free-tier cap text do not trigger fallback by that text alone. A structured `free_rate_limited` refusal still tries the next eligible target without cooling the healthy provider or target.
+
+A provider's HTTP 413 says that target cannot take a request this large, not that the request is impossible. Targets have different intake limits (Groq, for example, refuses a turn above the account's tokens-per-minute tier with 413 and `rate_limit_exceeded`), so the combo tries the next untried target and cools nothing. If every remaining target refuses as well, the combo returns its context-size error: HTTP 413 for non-streaming clients, and a `response.failed` event with `context_length_exceeded` for streaming Responses clients. An earlier confirmed HTTP 400 context refusal still takes precedence, as described under [Context-window refusals](#context-window-refusals). A 413 whose body OpenCodex could not read in full also stops the combo. A 413 produced by OpenCodex itself (`translation_buffer_limit`, `inbound_body_too_large`, `outbound_body_too_large`, or the Ollama late-attribution limit) still stops the combo, because every target would hit the same limit.
 
 ### Why was my alias rejected?
 

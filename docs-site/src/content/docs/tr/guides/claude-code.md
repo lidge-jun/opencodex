@@ -747,8 +747,8 @@ dönüştürür:
 
 | Messages girdisi | Responses çıktısı |
 | --- | --- |
-| Üst düzey `system` | `instructions` (`\n\n` ile birleştirilmiş metin blokları) |
-| `messages[].role: "system"` | Ayrıca `instructions` içine katlanır |
+| Üst düzey `system` | `instructions` (`\n\n` ile birleştirilmiş metin blokları). Codex girişiyle GPT-6.2 Sol ve Astra için önbelleğe alınabilmesi amacıyla ilk `developer` mesajı olarak gönderilir |
+| `messages[].role: "system"` | Özgün konumlarında `developer` mesajlarına çevrilir |
 | Kullanıcı metni / görsel | `input_text` / `input_image` (base64 → veri URL'si) |
 | Asistan metni | `output_text` |
 | Asistan `tool_use` | `function_call` (`input` → JSON dizgeleştirilmiş `arguments`) |

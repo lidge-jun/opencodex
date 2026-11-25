@@ -548,8 +548,8 @@ Messages → Responses に変換されるリクエストでは、Claude Code の
 
 | Messages 入力 | Responses 出力 |
  --- | --- |
-| 最上位 `system` | `instructions`(テキストブロックを `\n\n` で連結) |
-| `messages[].role: "system"` | `instructions` にもマージ |
+| 最上位 `system` | `instructions`(テキストブロックを `\n\n` で連結)。Codex ログイン経由の GPT-6.2 Sol と Astra では、キャッシュできるよう最初の `developer` メッセージとして送信 |
+| `messages[].role: "system"` | 元の位置で `developer` メッセージに変換 |
 | ユーザーテキスト / 画像 | `input_text` / `input_image`(base64 → data URL) |
 | Assistant テキスト | `output_text` |
 | Assistant `tool_use` | `function_call`(`input` → JSON 文字列に変換した `arguments`) |

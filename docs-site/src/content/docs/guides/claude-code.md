@@ -1109,8 +1109,8 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 
 | Messages input | Responses output |
 | --- | --- |
-| Top-level `system` | `instructions` (text blocks joined with `\n\n`) |
-| `messages[].role: "system"` | Also folded into `instructions` |
+| Top-level `system` | `instructions` (text blocks joined with `\n\n`). For GPT-6.2 Sol and Astra via Codex login, sent as the first `developer` message so it can be cached. |
+| `messages[].role: "system"` | Translated to `developer` messages at their original positions. |
 | User text / image | `input_text` / `input_image` (base64 → data URL) |
 | Assistant text | `output_text` |
 | Assistant `tool_use` | `function_call` (`input` → JSON-stringified `arguments`) |
@@ -1329,6 +1329,10 @@ available route ids, aliases, and port. `PUT /api/claude-code` is partial and pr
 fields; `null` resets context/blocklist/compact-window values.
 
 ## Troubleshooting
+
+**Claude Code says Anthropic requires account verification** — Open the
+[Anthropic Verification Portal](https://portal.anthropic.com/verify) and sign in to the affected account.
+OpenCodex keeps the HTTP 403 and records `account_verification_required` in its request logs for this notice.
 
 ### Windows Desktop apply reports `client_lifecycle_lock_failed`
 

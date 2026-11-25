@@ -1,5 +1,5 @@
 import { comboFailureDecision } from "../combos";
-import { isProviderModerationRefusal } from "../combos/failover";
+import { isProviderIntakeRefusalBody, isProviderModerationRefusal } from "../combos/failover";
 import { attachComboFailureEvidence } from "../lib/client-error-body";
 import { explicitErrorEventStatus } from "./responses/combo-stream-preflight";
 import { httpStatusFromTerminalError } from "../lib/errors";
@@ -117,6 +117,7 @@ export async function preflightNativeMessagesResponse(
           // The whole event, as the HTTP and stream readers judge it, so transports cannot disagree.
           providerModerationRefusal: status === 400 || status === 422
             ? framedAllowsModeration && isProviderModerationRefusal(status, wholeEvent, undefined, true) : undefined,
+          providerIntakeRefusal: status === 413 ? isProviderIntakeRefusalBody(wholeEvent) : undefined,
         }) === "hop") {
           failure = error; failureStatus = status;
           failureEvidence = moderation && (status === 400 || status === 422) ? wholeEvent : undefined;
