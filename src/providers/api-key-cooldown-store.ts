@@ -151,12 +151,16 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
    * process's clear: this process's own in-memory holds for it are dropped too, so a later refusal
    * starts a fresh hold instead of extending the cleared one.
    */
-  private adopt(state: StoredState): void {
-    if (!this.bumpedAll) {
+  private adopt(state: StoredState, written?: { providers: ReadonlySet<string>; all: boolean }): void {
+    // A counter this flush itself wrote is our own clear, possibly rebased above a peer's: the holds
+    // tagged with it were recorded after that clear and must stay.
+    if (written?.all) this.allEpoch = state.allEpoch;
+    else if (!this.bumpedAll) {
       if (this.adopted && state.allEpoch > this.allEpoch) resetLocalApiKeyCooldowns();
       this.allEpoch = state.allEpoch;
     }
     for (const [provider, epoch] of Object.entries(state.epochs)) {
+      if (written?.providers.has(provider)) { this.epochs.set(provider, epoch); continue; }
       if (this.bumped.has(provider)) continue;
       if (this.adopted && epoch > (this.epochs.get(provider) ?? 0)) resetLocalApiKeyCooldowns(provider);
       this.epochs.set(provider, epoch);
@@ -228,8 +232,9 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
       this.schedule();
       return false;
     }
+    const own = { providers: new Set(this.bumped), all: this.bumpedAll };
     this.discardPending();
-    if (written) this.adopt(written);
+    if (written) this.adopt(written, own);
     return true;
   }
 

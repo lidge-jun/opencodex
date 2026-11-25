@@ -305,6 +305,27 @@ test("a peer's clear also drops this process's in-memory hold, so a later refusa
   expect(stored().rows.map(r => r.cooldownUntil)).toEqual([now + 30_000]);
 });
 
+for (const scope of ["provider", "global"] as const) {
+  test(`a ${scope} clear rebased above a peer's keeps the hold recorded after it`, () => {
+    const cfg = config({ a: "sk-alpha-0001" });
+    const store = installApiKeyCooldownPersistence(cfg);
+    const now = Date.now();
+    const peer = new ApiKeyCooldownStore(home);
+    peer.load(now);
+    if (scope === "provider") peer.clear("p"); else peer.clear();
+    expect(peer.flush(now)).toBe(true);
+
+    // This process clears without having seen the peer's clear, then records a fresh refusal.
+    clearKeyCooldowns(scope === "provider" ? "p" : undefined);
+    setKeyCooldown("p", "a", now + 60_000, "sk-alpha-0001");
+    expect(store.flush(now)).toBe(true);
+    expect(getKeyCooldownUntil("p", "a", now)).toBe(now + 60_000);
+    expect(stored().rows.map(r => r.cooldownUntil)).toEqual([now + 60_000]);
+    restart(cfg);
+    expect(getKeyCooldownUntil("p", "a", now)).toBe(now + 60_000);
+  });
+}
+
 test("a server for another home started after the last one stopped inherits no holds", () => {
   const now = Date.now();
   installApiKeyCooldownPersistence(config({ a: "sk-one" }), now);
