@@ -200,7 +200,7 @@ unset `{env:…}` reference with `Missing auth credential: apiKey` before sendin
 `OPENCODEX_OPENCODE_API_KEY` for them: the admission key where one is required, or any nonempty
 value on a loopback bind, which does not check it. A loopback URL alone does not establish that no
 key is checked: a public listener bound to `0.0.0.0` still requires an accepted key when reached
-through `127.0.0.1`. Export the key when `hostname` is set beyond loopback;
+through `127.0.0.1`, and so does an authenticated listener reached through an SSH forward. Export the key when `hostname` is set beyond loopback;
 see [Remote access](/reference/configuration/server/#remote-access). This admission key is opencodex's
 own, and is unrelated to the upstream provider keys configured under
 [Providers](/guides/providers/).

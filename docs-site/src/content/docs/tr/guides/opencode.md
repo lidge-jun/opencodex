@@ -135,8 +135,11 @@ Ancak OpenCode boş olmayan bir `apiKey` gerektirir ve ayarlanmamış bir `{env:
 istek gönderilmeden `Missing auth credential: apiKey` ile reddeder. Yönetilen entegrasyon veya
 panodaki istemci yapılandırması kimlik doğrulamasız geri döngü dinleyicisini hedeflediğinde `apiKey`
 olarak gizli olmayan `opencodex-loopback` yer tutucusunu yazar; dışa aktarılacak bir şey kalmaz.
-`ocx export` dahil diğer yollar referansı korur: gerektiği yerde kabul anahtarını, geri döngüde ise boş
-olmayan herhangi bir değeri `OPENCODEX_OPENCODE_API_KEY` olarak dışa aktarın. `hostname` geri
+`ocx export` dahil diğer yollar referansı korur: gerektiği yerde kabul anahtarını, anahtarı denetlemeyen bir geri döngü bağlantısında ise boş
+olmayan herhangi bir değeri `OPENCODEX_OPENCODE_API_KEY` olarak dışa aktarın. Yalnızca bir geri döngü URL'si,
+hiçbir anahtarın denetlenmediğini göstermez: `0.0.0.0` adresine bağlı genel bir dinleyici `127.0.0.1` üzerinden
+erişildiğinde de kabul edilen bir anahtar ister; SSH yönlendirmesiyle erişilen kimlik doğrulamalı bir dinleyici de
+öyledir. `hostname` geri
 döngünün ötesine ayarlandığında anahtar gerekir; bkz. [Uzaktan erişim](/tr/reference/configuration/server/#uzaktan-erişim). Bu
 kabul anahtarı opencodex'in kendisine aittir ve
 [Sağlayıcılar](/tr/guides/providers/) altında yapılandırılan yukarı akış

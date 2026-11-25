@@ -128,7 +128,9 @@ OpenCode는 비어 있지 않은 `apiKey`가 필요해, 설정되지 않은 `{en
 `Missing auth credential: apiKey`로 거부합니다. 관리형 통합이나 대시보드 클라이언트 설정이 인증 없는
 loopback 리스너를 대상으로 하면 비밀이 아닌 자리표시자 `opencodex-loopback`을 `apiKey`로 기록하므로
 따로 export할 필요가 없습니다. `ocx export` 등 다른 경로는 참조를 유지하므로, 키가 필요한 곳에서는
-인증 키를, loopback에서는 비어 있지 않은 아무 값을 `OPENCODEX_OPENCODE_API_KEY`로 export하세요.
+인증 키를, 키를 검사하지 않는 loopback 바인드에서는 비어 있지 않은 아무 값을 `OPENCODEX_OPENCODE_API_KEY`로
+export하세요. loopback URL만으로는 키를 검사하지 않는다고 단정할 수 없습니다. `0.0.0.0`에 바인드된 공개 리스너는
+`127.0.0.1`로 접근해도 허용된 키를 요구하며, SSH 포워드로 접근하는 인증 리스너도 마찬가지입니다.
 `hostname`이 루프백을 벗어나면 인증 키가 필요합니다. [원격 접속](/ko/reference/configuration/server/#remote-access)을
 보세요. 이 인증 키는 opencodex 전용이며, [공급자](/guides/providers/) 아래에
 설정한 upstream provider 키와는 무관합니다.
