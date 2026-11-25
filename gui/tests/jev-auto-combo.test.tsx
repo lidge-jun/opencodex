@@ -98,6 +98,7 @@ test.each([
   await act(async () => { sameModel.click(); });
   // No route lookup is available in this fixture, so the model lock is unverified.
   expect(preview.textContent).not.toContain("Different model");
+  expect(preview.textContent).toContain("Routes have not been checked");
   await act(async () => { sameModel.click(); });
   expect(preview.textContent).toContain("Stop after the last target");
   await act(async () => { dialog.querySelector<HTMLButtonElement>(".cwi-modal-actions .btn-primary")!.click(); });

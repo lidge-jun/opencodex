@@ -41,7 +41,8 @@ function useFallbackRoutes(apiBase: string | undefined, draft: ComboItem, provid
   }, [url, key]);
   // Until an answer carries routes (pending, offline, refused, or an older server), the preview shows the configured targets.
   const answer = snapshot?.key === key ? snapshot : undefined;
-  return { routes: answer?.routes, unchecked: url !== undefined && answer?.routes === undefined };
+  return { routes: answer?.routes, unchecked: draft.strategy === "failover"
+    && draft.targets.some(target => target.provider && target.model) && answer?.routes === undefined };
 }
 
 function requiresConsent(target: ComboTarget, provider: ProviderOption | undefined, strict: boolean, routes?: FallbackRoutes) {
