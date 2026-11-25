@@ -81,7 +81,7 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 - 回环或私有网络的 `baseUrl` 与其他提供方流量一样，需要在该提供方上设置 `allowPrivateNetwork: true`。
 - OpenCodex 能识别为 xAI 的密钥（`xai-` 格式的密钥、任何 `xai` 条目持有的密钥，或以 xAI、Grok 命名的环境变量引用）只会发送到 `https://api.x.ai` 或 `https://cli-chat-proxy.grok.com`，其他来源一律拒绝。没有这些特征的密钥无法识别，因此不要把 xAI 密钥粘贴到其他提供方的条目中。指向其他提供方机密的钥匙串引用始终会被拒绝，已暂停的当前密钥同样会被拒绝，`baseUrl` 也不能包含凭据、查询参数或片段。
 - 如果提供方不存在、已禁用、已暂停、没有密钥或被拒绝，每次 `video_gen` 调用都会把该错误返回给模型。不会发送任何内容，也不会回退到 xAI。
-- 生成的视频仍然只从 base64 `data:` URL 或公网 `https:` URL 下载，因此本地桥接必须以 `video.url` 返回其中之一。
+- 使用 xAI 协议时，生成的视频只从 base64 `data:` URL 或公网 `https:` URL 下载，因此本地桥接必须以 `video.url` 返回其中之一。从自身主机提供生成文件的后端应改为设置 `"videoApi": "openai"`（参见[英文指南的 OpenAI Videos API 一节](/guides/video-bridge/#openai-videos-api-backends)）。
 
 ## 工作原理
 
