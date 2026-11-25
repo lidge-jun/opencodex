@@ -86,6 +86,8 @@ export function applyEol(content: string, eol: "\r\n" | "\n"): string {
 
 /** Label Codex shows for the injected provider when the operator has not chosen one. */
 export const DEFAULT_CODEX_PROVIDER_DISPLAY_NAME = "OpenCodex Proxy";
+/** The legacy table's Cyber access-program opt-in; see buildProviderTableBlockForTarget. */
+export const OCX_PROVIDER_CAPABILITIES_LINE = "capabilities = { cyber_access_programs = true }";
 
 /** Longest label accepted, matching the display-label policy used for provider names. */
 const MAX_CODEX_PROVIDER_DISPLAY_NAME_LENGTH = 128;
@@ -175,6 +177,11 @@ export function buildProviderTableBlockForTarget(
     lines.push(`env_key = ${tomlString(target.tokenEnv)}`);
   }
   if (supportsWebsockets) lines.push("supports_websockets = true");
+  // Codex defaults explicit Cyber access-program selections to off for any provider id other
+  // than `openai` (openai/codex 708e3e2c70; codex-rs/model-provider-info/src/lib.rs:706-710
+  // @5505daf388). This table is the `opencodex` id, so it opts in. Inline, so the owned span stays
+  // one table with no child header; Codex releases before this field ignore it.
+  lines.push(OCX_PROVIDER_CAPABILITIES_LINE);
   return lines.join("\n") + "\n";
 }
 
