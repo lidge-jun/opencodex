@@ -247,7 +247,7 @@ JSON result contains `text`, plus `languages` (an array of `{ "code": string }`)
 the upstream reports detected languages. Files must be nonempty and no larger than
 25,000,000 bytes; multipart bodies are limited to 32 MiB and text fields to
 16 KiB. The configured listener body limit can impose a smaller ceiling.
-Duplicate or unsupported fields, including `stream`, are rejected. This endpoint
+Duplicate scalar fields and unsupported fields, including `stream`, are rejected. This endpoint
 does not promise timestamps, diarization, subtitles, or token-usage metadata.
 
 With an OpenAI API-key provider, `model=gpt-transcribe` takes repeated `keywords[]`
@@ -920,7 +920,7 @@ defaults to that identifier, Codex's current GPT-Live model; `gpt-live-1` and
 the same aliases apply to a call-create session. A key scoped to a live model is judged
 on the resolved name. When `POST /v1/live` carries no session, OpenCodex writes one
 with that default model and the destination's default voice: `cove` for a ChatGPT
-account and `marin` for an OpenAI API key. A session you send keeps its own fields.
+account and `marin` for an OpenAI API key. A session you send keeps its own fields; only a model alias in it is resolved.
 This is not a claim that every public OpenAI Realtime SDK or API key supports GPT-Live.
 
 For a new standalone connection, send the source-compatible initialization below

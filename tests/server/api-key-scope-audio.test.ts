@@ -283,6 +283,41 @@ test("a call-create alias is judged as the model it forwards", async () => {
   expect(upstreamCalls).toEqual(["https://api.openai.com/v1/live"]);
 });
 
+
+test("a scoped call-create forwards, binds and rejoins on the model it was judged on", async () => {
+  const cfg = config({ allowedModels: ["gpt-live-1.1-codex"] });
+  const sessions: unknown[] = [];
+  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+    upstreamCalls.push(String(input));
+    const form = init?.body as FormData;
+    sessions.push(JSON.parse(String(form.get("session"))));
+    return new Response("v=0\r\n", { status: 201, headers: { "content-type": "application/sdp", location: "https://api.openai.com/v1/live/rtc_scope_fixture" } });
+  }) as unknown as typeof fetch;
+  const audio = client(cfg);
+  const bindings = new LiveCallBindings();
+  const created = await handleExternalLive(
+    new Request("http://localhost/v1/live", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-opencodex-api-key": SCOPED_KEY },
+      body: JSON.stringify({ sdp: "v=0", session: { model: "gpt-live-1.1", instructions: "client" } }),
+    }),
+    cfg, logContext(), { client: audio, lease: lease(), bindings },
+  );
+  expect(created.status).toBe(201);
+  await created.text();
+  expect(sessions).toEqual([{ model: "gpt-live-1.1-codex", instructions: "client" }]);
+  const alias = created.headers.get("location")!.split("/").at(-1)!;
+  expect(bindings.get(alias, audio.owner)?.model).toBe("gpt-live-1.1-codex");
+  const joined = await resolveExternalLiveSocket(
+    audio, cfg, logContext(), { style: "frameless-path", callId: alias }, { lease: lease(), bindings },
+  );
+  expect(joined).not.toBeInstanceOf(Response);
+  if (joined instanceof Response) return;
+  try {
+    expect(joined.upstreamWsUrl).toBe("wss://api.openai.com/v1/live/rtc_scope_fixture");
+  } finally { joined.finish(); }
+});
+
 test("a key with no scope keeps every audio destination", async () => {
   const cfg = config({ allowedProviders: ["some-other-provider"] });
   const response = await handleAudioTranscriptions(
