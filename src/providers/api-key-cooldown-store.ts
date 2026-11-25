@@ -181,16 +181,17 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
   }
 
   /**
-   * Live rows on disk now, adopting the file's clear counters. A clear of this store's that is not
-   * written yet still applies, so a row it cleared is not returned. Throws on a read error other
-   * than a missing file.
+   * Live rows on disk now, adopting the file's clear counters. While a clear of this store's is not
+   * written yet, every disk row it covers is left out (a peer may have reached the same counter
+   * independently, so the counter alone cannot tell a row recorded after it); only this store's
+   * own pending holds recorded after the clear survive it. Throws on a read error other than a
+   * missing file.
    */
   load(now = Date.now()): ApiKeyCooldownRow[] {
     const state = readApiKeyCooldownState(this.path);
     this.adopt(state);
-    const epochs = Object.assign(epochTable(), state.epochs);
-    for (const provider of this.bumped) epochs[provider] = this.epochs.get(provider) ?? 0;
-    return liveRows(state.rows, epochs, this.bumpedAll ? this.allEpoch : state.allEpoch, now);
+    if (this.bumpedAll) return [];
+    return liveRows(state.rows, state.epochs, state.allEpoch, now).filter(row => !this.bumped.has(row.provider));
   }
 
   /**

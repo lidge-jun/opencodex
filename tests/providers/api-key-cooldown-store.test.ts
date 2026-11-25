@@ -598,3 +598,32 @@ test("a pending hold is restored on rebind even when the file cannot be read", a
     removeTreeWithRetry(otherHome);
   }
 }, 15_000);
+
+for (const scope of ["provider", "global"] as const) {
+  test(`a pending ${scope} clear hides a peer's row at the same counter on rebind`, async () => {
+    const cfg = config({ a: "sk-alpha-0001" });
+    saveConfig(cfg);
+    const first = acquireServerBackgroundLifecycle(() => {}, cfg);
+    const otherHome = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-collide-"));
+    const blocker = new Database(join(home, "config-mutation.sqlite"));
+    try {
+      blocker.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+      // A peer cleared and then recorded a hold at counter 1, which this process has not read.
+      const peerUntil = Date.now() + 600_000;
+      writeFileSync(file(), JSON.stringify(scope === "provider"
+        ? { version: 1, rows: [{ ...row("a", "sk-alpha-0001", peerUntil), epoch: 1 }], epochs: { p: 1 }, allEpoch: 0 }
+        : { version: 1, rows: [{ ...row("a", "sk-alpha-0001", peerUntil), allEpoch: 1 }], epochs: {}, allEpoch: 1 }));
+      if (scope === "provider") clearKeyCooldowns("p"); else clearKeyCooldowns(); // also reaches counter 1 locally
+      process.env.OPENCODEX_HOME = otherHome;
+      const second = acquireServerBackgroundLifecycle(() => {}, config({ a: "sk-alpha-0001" }));
+      await second.release();
+      expect(isKeyInCooldown("p", "a")).toBe(false);
+    } finally {
+      blocker.exec("ROLLBACK");
+      blocker.close();
+      process.env.OPENCODEX_HOME = home;
+      await first.release();
+      removeTreeWithRetry(otherHome);
+    }
+  }, 15_000);
+}
