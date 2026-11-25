@@ -200,6 +200,9 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "integrations.tab.workbuddyAi",
   // T3 Code is a product name, identical in every locale.
   "integrations.tab.t3code",
+  // GitHub Copilot is a product name, identical in every locale.
+  "integrations.tab.githubCopilot",
+  "api.clientConfig.clientGithubCopilot",
   // Antigravity is a product name, identical in every locale.
   "gatewayClients.tab",
   "api.clientConfig.clientT3code",

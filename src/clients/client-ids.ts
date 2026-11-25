@@ -2,6 +2,6 @@
 export const EXPORT_CLIENT_IDS = [
   "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "opencode", "pi", "omp", "hermes",
   "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside",
-  "raycast", "omo", "cline", "kilo", "droid", "gentle-shell", "t3code",
+  "raycast", "omo", "cline", "kilo", "droid", "gentle-shell", "t3code", "github-copilot",
 ] as const;
 export type ExportClientId = (typeof EXPORT_CLIENT_IDS)[number];

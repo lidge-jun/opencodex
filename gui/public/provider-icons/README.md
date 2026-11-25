@@ -411,6 +411,14 @@ committing it.
   The 40×40 artwork retains its green background, gradients and white mark;
   render it as an image in either theme. Used to identify the `workbuddy-ai`
   provider, with the same asset embedded by the native tray.
+## GitHub Copilot (2026-11-25)
+
+- `github-copilot.svg` — the `copilot` octicon, `icons/copilot-16.svg` from `primer/octicons`
+  (MIT, © GitHub Inc.), fetched 2026-11-25 from the repository's default branch and committed with
+  the fixed `width`/`height` dropped so the `viewBox` scales (1524 bytes). `viewBox="0 0 16 16"`,
+  one filled path and no ink of its own, so it is **masked** like `prime-agent.svg`: as an image the
+  default black fill vanishes on the dark tile.
+
 ## T3 Code (2026-10-22)
 
 - `t3code.svg` — `assets/prod/logo.svg` from `pingdotgg/t3code` (MIT, © T3 Tools Inc.), the

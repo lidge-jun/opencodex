@@ -549,7 +549,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   {
     name: "export",
     usage: `ocx export --client <${EXPORT_CLIENT_IDS.join("|")}> [--model-names <alias|routed>] [--json] [--out <path>] [--force]`,
-    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Command Code, Prime Agent, Aside, Raycast, omo, Cline, Kilo, Factory Droid, Qoder, Qoder CN, WorkBuddy, WorkBuddy AI, Gentle Shell, T3 Code) wired to the running proxy.",
+    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Command Code, Prime Agent, Aside, Raycast, omo, Cline, Kilo, Factory Droid, Qoder, Qoder CN, WorkBuddy, WorkBuddy AI, Gentle Shell, T3 Code, GitHub Copilot) wired to the running proxy.",
     details: [
       "--json prints the generated document as JSON on stdout; use --out for the client's native format.",
       "--out <path> writes the native config there and refuses to replace an existing file without --force.",
@@ -557,6 +557,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "Droid exports documented customModels for settings.json; use integration client enable --client droid for a journaled write.",
       "Gentle Shell uses its persistent selected home; use integration client enable --client gentle-shell for a journaled write, or Pi for link/shared homes.",
       "T3 Code exports providerInstances.opencodex for settings.json, a Claude provider instance routed through the proxy; use integration client enable --client t3code for a journaled write.",
+      "GitHub Copilot exports an opencodex provider and its models for the CLI's providers.json; use integration client enable --client github-copilot for a journaled write.",
       "The config never contains a real key; it carries a documented env reference or a non-secret loopback placeholder.",
       "The destination path is printed for merging by hand — ocx never writes your real client config.",
       "Hermes and Command Code accept --model-names alias|routed; explicit naming uses a passive cached roster and can refuse while cold or stale. Omission keeps the existing routed export flow without changing managed policy.",

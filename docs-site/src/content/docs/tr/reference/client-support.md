@@ -46,6 +46,7 @@ opencodex, yapay zekâ kodlama araçlarınız ve modelleriniz için tek bir yere
 | Factory Droid | — | JSON | Evet | Chat Completions | test-covered ([test](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/droid-client.test.ts)) | — | Yalnızca yerel dinleyici. [kılavuz](/tr/guides/factory-droid/) |
 | Gentle Shell | — | JSON | Evet | Chat Completions | test-covered ([test](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/gentle-shell-client.test.ts)) | — | Yalnızca yerel dinleyici. |
 | T3 Code | — | JSON | Evet | Anthropic Messages | test-covered ([test](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/t3code-client.test.ts)) | — | Yalnızca yerel dinleyici. Uygulamadan önce istemciye özgü bir denetim çalışır ve reddedebilir. |
+| GitHub Copilot | — | JSON | Evet | OpenAI uyumlu (uç noktayı istemci seçer) | test-covered ([test](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/github-copilot-client.test.ts)) | — | Yalnızca yerel dinleyici. Uygulamadan önce istemciye özgü bir denetim çalışır ve reddedebilir. |
 
 ## Gelen uç noktalar
 

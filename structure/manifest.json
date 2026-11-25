@@ -1350,6 +1350,16 @@
       ]
     },
     {
+      "path": "clients/github-copilot.md",
+      "tier": 5,
+      "title": "GitHub Copilot Client Integration",
+      "scope": "GitHub Copilot CLI providers.json OpenAI-provider ownership, model rows and loopback placeholder rules.",
+      "documents": [
+        "src/clients/",
+        "src/integrations/"
+      ]
+    },
+    {
       "path": "desktop-shell.md",
       "tier": 6,
       "title": "Desktop shell",

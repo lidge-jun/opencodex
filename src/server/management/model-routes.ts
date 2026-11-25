@@ -664,9 +664,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       if (!(error instanceof ClientPathError)) throw error;
       return jsonResponse({ error: error.message }, 400, req, config);
     }
-    if ((requested === "t3code" || requested === "raycast" || requested === "droid" || requested === "qoder" || requested === "qoder-cn" || requested === "workbuddy" || requested === "workbuddy-ai") && shouldInjectApiAuthHeader(config)) {
+    if ((requested === "t3code" || requested === "github-copilot" || requested === "raycast" || requested === "droid" || requested === "qoder" || requested === "qoder-cn" || requested === "workbuddy" || requested === "workbuddy-ai") && shouldInjectApiAuthHeader(config)) {
       return jsonResponse({
-        error: `${requested === "t3code" ? "T3 Code" : requested === "droid" ? "Factory Droid" : requested.startsWith("qoder") ? "Qoder" : requested.startsWith("workbuddy") ? "WorkBuddy" : "Raycast"} export requires an unauthenticated loopback destination; this listener requires an admission header the client cannot supply.`,
+        error: `${requested === "t3code" ? "T3 Code" : requested === "github-copilot" ? "GitHub Copilot" : requested === "droid" ? "Factory Droid" : requested.startsWith("qoder") ? "Qoder" : requested.startsWith("workbuddy") ? "WorkBuddy" : "Raycast"} export requires an unauthenticated loopback destination; this listener requires an admission header the client cannot supply.`,
         reason: "non_loopback",
       }, 400, req, config);
     }

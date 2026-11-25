@@ -65,7 +65,7 @@ describe("no secret reaches a client config", () => {
     // credential wiring is deliberately deferred from those initial generated
     // integrations -- omo and Gentle Shell reuse Pi's builder, which emits no headers at all.
     const loopbackOnly = EXPORT_CLIENT_IDS.filter(id => EXPORT_CLIENTS[id].loopbackOnly);
-    expect(loopbackOnly).toEqual(["qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "droid", "gentle-shell", "t3code"]);
+    expect(loopbackOnly).toEqual(["qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "droid", "gentle-shell", "t3code", "github-copilot"]);
   });
 
   test("every client that is not loopback-only carries the header on a remote bind", () => {
@@ -86,7 +86,7 @@ describe("no secret reaches a client config", () => {
 
   test("even a non-loopback bind never serializes the key", () => {
     for (const id of EXPORT_CLIENT_IDS) {
-      if (id === "t3code" || id === "qoder" || id === "qoder-cn" || id === "workbuddy" || id === "workbuddy-ai") {
+      if (id === "t3code" || id === "github-copilot" || id === "qoder" || id === "qoder-cn" || id === "workbuddy" || id === "workbuddy-ai") {
         expect(() => buildClientConfigText(id, ctx(REMOTE))).toThrow("loopback");
         continue;
       }

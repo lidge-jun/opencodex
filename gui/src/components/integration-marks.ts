@@ -70,6 +70,7 @@ export const INTEGRATION_MARKS: Record<OverviewClientId | "antigravity", string 
   workbuddy: null,
   "workbuddy-ai": null,
   t3code: CLIENT_MARKS.t3code ?? null,
+  "github-copilot": CLIENT_MARKS["github-copilot"] ?? null,
   // The Antigravity tab is a gateway-client switch, not an overview row.
   antigravity: "/provider-icons/antigravity-color.svg",
 };

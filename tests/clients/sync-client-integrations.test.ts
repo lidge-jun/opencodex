@@ -66,7 +66,7 @@ describe("ocx sync fans out to enabled native clients and owned file integration
     expect(fn).toContain("grokIntegrationEnabled(config)");
     expect(fn).toContain("claudeDesktopIntegrationEnabled(config)");
     expect(fn).toContain('catalogRefreshClientIds(unattended ? "unattended" : "serverSync")');
-    expect(catalogRefreshClientIds("serverSync")).toEqual(["mcode", "pi", "aside", "raycast", "omo", "cline", "commandcode", "dsh", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]);
+    expect(catalogRefreshClientIds("serverSync")).toEqual(["mcode", "pi", "aside", "raycast", "omo", "cline", "commandcode", "dsh", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code", "github-copilot"]);
     expect(fn).toContain("refreshOwnedCatalogIntegrations");
     // Native clients keep their catches; the owned catalog helper isolates file clients.
     expect(fn.match(/catch \(error\)/g)?.length).toBe(2);
@@ -916,7 +916,7 @@ test("the direct ocx sync command refreshes owned clients including OpenCode and
   // Command Code joined this fan-out with its integration: a sync must refresh its
   // provider block too, or the client keeps a stale catalog until the next apply.
   expect(command).toContain('catalogRefreshClientIds("cliSync")');
-  expect(catalogRefreshClientIds("cliSync")).toEqual(["mcode", "raycast", "omo", "cline", "commandcode", "dsh", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]);
+  expect(catalogRefreshClientIds("cliSync")).toEqual(["mcode", "raycast", "omo", "cline", "commandcode", "dsh", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code", "github-copilot"]);
   // #8287: Pi's nested selectors are proven by the serving proxy, so its refresh is server-owned
   // like Aside's and never runs through the local fan-out.
   expect(command).toContain("refreshPiThroughServer");

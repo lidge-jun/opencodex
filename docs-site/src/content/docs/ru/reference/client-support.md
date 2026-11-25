@@ -46,6 +46,7 @@ opencodex — единый локальный шлюз для ваших ИИ-и
 | Factory Droid | — | JSON | Да | Chat Completions | test-covered ([тест](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/droid-client.test.ts)) | — | Только локальный слушатель. [руководство](/ru/guides/factory-droid/) |
 | Gentle Shell | — | JSON | Да | Chat Completions | test-covered ([тест](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/gentle-shell-client.test.ts)) | — | Только локальный слушатель. |
 | T3 Code | — | JSON | Да | Anthropic Messages | test-covered ([тест](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/t3code-client.test.ts)) | — | Только локальный слушатель. Перед применением выполняется проверка, специфичная для клиента, и возможен отказ. |
+| GitHub Copilot | — | JSON | Да | Совместим с OpenAI (эндпоинт выбирает клиент) | test-covered ([тест](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/github-copilot-client.test.ts)) | — | Только локальный слушатель. Перед применением выполняется проверка, специфичная для клиента, и возможен отказ. |
 
 ## Входящие эндпоинты
 
