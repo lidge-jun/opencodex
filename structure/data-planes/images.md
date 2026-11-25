@@ -125,7 +125,7 @@ collapse onto another path of the same host. Bridge arguments map to `seconds`, 
 ## Public Videos
 
 `src/server/videos.ts` serves `POST /v1/videos`, `GET /v1/videos/{id}` and `GET /v1/videos/{id}/content`
-(`src/server/video-routes.ts` matches them; other methods and subpaths reach the JSON `/v1/*` 404).
+(`src/lib/video-routes.ts` matches them; other methods and subpaths reach the JSON `/v1/*` 404).
 The dispatcher applies the Images admission: draining refusal, `resolveApiAuth`, origin policy and a
 request-log row (`usage.jsonl`); only the paid create takes an admitted turn slot and the inbound body
 gate (`/v1/videos` is in `CONFIGURABLE_JSON_BODY_ROUTES`). The loopback listener and Remote Link admit

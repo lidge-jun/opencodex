@@ -30,7 +30,7 @@ import { readBoundedRequestBodyBytes, readJsonRequestBody, resolveInboundBodyLim
 import { decodeRequestErrorResponse } from "./responses";
 import { ensureVideoHandleKey, isVideoHandleKeyError, openVideoHandle, sealVideoHandle, videoHandleClaimsError, videoHandlePrincipal } from "./video-handle";
 import { safeXaiErrorDetail } from "../images/xai-upstream-error";
-import type { VideoRoute } from "./video-routes";
+import type { VideoRoute } from "../lib/video-routes";
 
 let outboundDependencies: VideoOutboundDependencies = {};
 

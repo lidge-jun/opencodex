@@ -134,7 +134,7 @@ import { buildDesktopDiscoveryInputs } from "../../claude/desktop-discovery-inpu
 import { observeModelCacheRevision } from "../../codex/model-cache";
 import { handleImages } from "../images";
 import { handleVideos } from "../videos";
-import { matchVideoRoute } from "../video-routes";
+import { matchVideoRoute } from "../../lib/video-routes";
 import {
   handleLive,
   logLiveSidebandFrame,

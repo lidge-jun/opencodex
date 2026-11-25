@@ -204,7 +204,7 @@ import {
 import { createReadinessGate, type ReadinessGate } from "./readiness";
 import { createServeOptions, type ServerIngress } from "./index/serve-options";
 import { createOptionalListenerSet, LINK_INGRESS_HOSTNAME } from "./index/optional-listeners";
-import { matchVideoRoute } from "./video-routes";
+import { matchVideoRoute } from "../lib/video-routes";
 import { createPackageTreeIntegrityGuardForServer } from "./index/package-tree-guard";
 import { inspectStartupOwnership, logProxyEndpoints, resolveInboundBodyLimitWithWarning, setStartupCacheInvalidationWrite, warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup, type StartServerDeps } from "./index/startup-warnings";
 import { acquireSpendLedgerServerLifecycle, recordFailedStartRollback, type SpendLedgerServerLifecycle } from "./index/spend-ledger-lifecycle";

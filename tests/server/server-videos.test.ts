@@ -13,7 +13,7 @@ import { MODEL_NOT_ALLOWED_FOR_KEY } from "../../src/server/admission-model-scop
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { setVideoHandleKeyForTests } from "../../src/server/video-handle";
-import { matchVideoRoute } from "../../src/server/video-routes";
+import { matchVideoRoute } from "../../src/lib/video-routes";
 import { handleVideos, setVideoOutboundDependenciesForTests } from "../../src/server/videos";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";

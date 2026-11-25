@@ -1,4 +1,4 @@
-import { matchVideoRoute } from "../server/video-routes";
+import { matchVideoRoute } from "../lib/video-routes";
 
 const CONTEXT_PATHS = new Set([
   "/v1/alpha/history/v2/list_windows",
