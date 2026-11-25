@@ -27,8 +27,13 @@ export function ocxChildCargoTest(args: string[]): string {
     stderr: "pipe",
     timeout: OCX_CHILD_CARGO_RUN_MS,
   });
+  const stdout = run.stdout.toString();
   // libtest reports each finished case on stdout, so a run cut by the bound shows which cases had not finished.
-  if (run.signalCode) throw new Error(`cargo test ${args.join(" ")} ended by ${run.signalCode}:\n${run.stderr.toString()}\nstdout:\n${run.stdout.toString()}`);
-  expect(run.exitCode, `${run.stderr.toString()}\ntoolchain: ${ocxChildToolchain.describe()}`).toBe(0);
-  return run.stdout.toString();
+  if (run.signalCode) throw new Error(`cargo test ${args.join(" ")} ended by ${run.signalCode}:\n${run.stderr.toString()}\nstdout:\n${stdout}`);
+  if (run.exitCode !== 0) {
+    // Report case names without copying fixture output or panic messages into CI.
+    const failed = stdout.match(/^test [\w:]{1,256} \.\.\. FAILED\r?$/gm)?.slice(0, 16) ?? [];
+    expect(run.exitCode, [...failed, run.stderr.toString(), `toolchain: ${ocxChildToolchain.describe()}`].join("\n")).toBe(0);
+  }
+  return stdout;
 }
