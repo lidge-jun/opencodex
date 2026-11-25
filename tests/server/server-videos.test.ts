@@ -17,6 +17,8 @@ import { matchVideoRoute } from "../../src/lib/video-routes";
 import { handleVideos, setVideoOutboundDependenciesForTests } from "../../src/server/videos";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath } from "../helpers/repo-root";
+import type { AdmissionLease } from "../../src/lib/admission";
 
 const HOST = "videos.relay.example";
 const KEY = "synthetic-video-row-key";
@@ -307,6 +309,60 @@ describe("review regressions", () => {
     expect(sent).toEqual([]);
     expect((await call(config(), "GET", "/v1/videos/" + handle, undefined, ALICE, {})).response.status).not.toBe(404);
   });
+});
+
+describe("turn lease and listener timeout", () => {
+  test("shutdown aborts the in-flight paid create through the turn lease and answers 503", async () => {
+    let bound: AbortController | undefined;
+    const lease = { bindAbortController(ac: AbortController) { bound = ac; } } as unknown as AdmissionLease;
+    let started!: () => void;
+    const sending = new Promise<void>(resolve => { started = resolve; });
+    setVideoOutboundDependenciesForTests({
+      ...deps,
+      pinnedPost: async (url, pinned, body, signal) => {
+        sent.push({ method: "POST", url, address: pinned.address, authorization: null, body: JSON.parse(body) });
+        started();
+        return new Promise<Response>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      },
+    });
+    const url = new URL("http://localhost/v1/videos");
+    const req = new Request(url, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + ALICE_SECRET }, body: JSON.stringify({ model: "aistudio/m", prompt: "p" }) });
+    const pending = handleVideos(req, url, config(), { kind: "create" }, logContext(), ALICE, { lease });
+    await sending;
+    expect(bound).toBeDefined();
+    bound!.abort(new Error("shutdown"));
+    const response = await pending;
+    expect(response.status).toBe(503);
+    expect((await response.json() as { error: { message: string } }).error.message).toBe("video create stopped during shutdown");
+    expect(sent).toHaveLength(1);
+  });
+
+  test("the listener timeout is lifted only after the create body was read", async () => {
+    const events: string[] = [];
+    answer = () => { events.push("upstream"); return Response.json({ id: "video_up_9", status: "queued" }); };
+    const url = new URL("http://localhost/v1/videos");
+    const headers = { "content-type": "application/json", authorization: "Bearer " + ALICE_SECRET };
+    const ok = await handleVideos(new Request(url, { method: "POST", headers, body: JSON.stringify({ model: "aistudio/m", prompt: "p" }) }),
+      url, config(), { kind: "create" }, logContext(), ALICE, { onRequestBodyRead: () => events.push("body-read") });
+    expect(ok.status).toBe(200);
+    expect(events).toEqual(["body-read", "upstream"]);
+    events.length = 0;
+    const bad = await handleVideos(new Request(url, { method: "POST", headers, body: "{not json" }),
+      url, config(), { kind: "create" }, logContext(), ALICE, { onRequestBodyRead: () => events.push("body-read") });
+    expect(bad.status).toBe(400);
+    expect(events).toEqual([]);
+  });
+});
+
+test("the loopback listener hands /v1/videos paths to the same matcher and nothing broader", async () => {
+  const source = await Bun.file(repoPath("src", "server", "index.ts")).text();
+  const start = source.indexOf("function loopbackRouteAllowed");
+  const gate = source.slice(start, source.indexOf("\n  }", start));
+  expect(gate).toContain('if (path === "/v1/videos" || path.startsWith("/v1/videos/")) return matchVideoRoute(req.method, path) !== undefined;');
+  // The one gate line names the bare path and its subtree, and delegates both to matchVideoRoute.
+  expect(gate.match(/\/v1\/videos/g)?.length).toBe(2);
 });
 
 test("route matching admits only the three documented shapes", () => {

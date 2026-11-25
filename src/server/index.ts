@@ -423,6 +423,8 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     if (path === "/v1/images/generations" || path === "/v1/images/edits") {
       return req.method === "POST";
     }
+    // Videos (#9110) mirror images: a direct-spawn client may create, poll and fetch through this socket; handles
+    // minted here belong to the shared "loopback" principal, so every local process on it is one caller.
     if (path === "/v1/videos" || path.startsWith("/v1/videos/")) return matchVideoRoute(req.method, path) !== undefined;
     if (path === "/v1/models") return req.method === "GET";
     // Gemini wire (#8732): `ocx connect agy` points the CLI at this socket. Same admission as the

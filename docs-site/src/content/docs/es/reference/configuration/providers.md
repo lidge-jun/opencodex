@@ -409,7 +409,7 @@ Las declaraciones de insumos explícitos y las modalidades notificadas siguen te
 
 ### Lo que un proveedor guarda
 
-`POST /api/providers` con el nombre de un proveedor existente sustituye la fila almacenada por la de la solicitud. Como el formulario no envía todos los campos, conserva los omitidos que describen el comportamiento del proveedor: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools` y `forwardAdvisorTool`.
+`POST /api/providers` con el nombre de un proveedor existente sustituye la fila almacenada por la de la solicitud. Como el formulario no envía todos los campos, conserva los omitidos que describen el comportamiento del proveedor: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools`, `forwardAdvisorTool` y `videoApi`.
 
 | Guardado | Los once ajustes | `apiKeyPool` almacenado |
 | --- | --- | --- |

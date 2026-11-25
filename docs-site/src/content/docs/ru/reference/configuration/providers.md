@@ -215,7 +215,7 @@ Claude Code настраивается через
 
 ### Что сохраняется при сохранении провайдера
 
-`POST /api/providers` с именем существующего провайдера заменяет сохранённую строку строкой, собранной из запроса. Форма добавления и редактирования в панели не может отправить все поля, поэтому сохранение переносит часть сохранённых полей, которые запрос опустил. Четырнадцать из них описывают поведение конкретного апстрима: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools`, `forwardAdvisorTool`.
+`POST /api/providers` с именем существующего провайдера заменяет сохранённую строку строкой, собранной из запроса. Форма добавления и редактирования в панели не может отправить все поля, поэтому сохранение переносит часть сохранённых полей, которые запрос опустил. Четырнадцать из них описывают поведение конкретного апстрима: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools`, `forwardAdvisorTool`, `videoApi`.
 
 | Сохранение | Четырнадцать настроек | Сохранённый `apiKeyPool` |
 | --- | --- | --- |

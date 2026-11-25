@@ -536,7 +536,7 @@ and `modelContextWindows` for that exact id when needed. Unknown ids are not gue
 
 ### What a provider save keeps
 
-`POST /api/providers` with the name of an existing provider replaces the stored row with one built from the request. The dashboard's add/edit form cannot send every field, so the save keeps some stored fields the request omits. Fourteen of them record how one upstream behaves: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools` and `forwardAdvisorTool`.
+`POST /api/providers` with the name of an existing provider replaces the stored row with one built from the request. The dashboard's add/edit form cannot send every field, so the save keeps some stored fields the request omits. Fourteen of them record how one upstream behaves: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools`, `forwardAdvisorTool` and `videoApi`.
 
 | Save | The fourteen settings | Stored `apiKeyPool` |
 | --- | --- | --- |

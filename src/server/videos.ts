@@ -28,6 +28,8 @@ import type { DataPlaneAdmission } from "./auth-cors";
 import type { RequestLogContext } from "./request-log";
 import { readBoundedRequestBodyBytes, readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import { decodeRequestErrorResponse } from "./responses";
+import { registerTurn, unregisterTurn } from "./lifecycle";
+import type { AdmissionLease } from "../lib/admission";
 import { ensureVideoHandleKey, isVideoHandleKeyError, openVideoHandle, sealVideoHandle, videoHandleClaimsError, videoHandlePrincipal } from "./video-handle";
 import { safeXaiErrorDetail } from "../images/xai-upstream-error";
 import type { VideoRoute } from "../lib/video-routes";
@@ -130,7 +132,14 @@ async function readMultipartCreateBody(req: Request, maxBytes: number): Promise<
   return body;
 }
 
-async function handleCreate(req: Request, config: OcxConfig, logCtx: RequestLogContext, admission: DataPlaneAdmission): Promise<Response> {
+export interface VideoRouteOptions {
+  /** The create's turn lease: shutdown aborts the upstream create through it. */
+  lease?: AdmissionLease;
+  /** Called once the create body is read, when the listener timeout may be lifted. */
+  onRequestBodyRead?: () => void;
+}
+
+async function handleCreate(req: Request, config: OcxConfig, logCtx: RequestLogContext, admission: DataPlaneAdmission, options: VideoRouteOptions): Promise<Response> {
   const limit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
   let body: unknown;
   try {
@@ -140,6 +149,7 @@ async function handleCreate(req: Request, config: OcxConfig, logCtx: RequestLogC
   } catch (error) {
     return decodeRequestErrorResponse(error, "videos");
   }
+  options.onRequestBodyRead?.();
   if (body instanceof Response) return body;
   if (!body || typeof body !== "object" || Array.isArray(body)) return invalid("request body must be a JSON object");
   const fields = body as Record<string, unknown>;
@@ -165,11 +175,16 @@ async function handleCreate(req: Request, config: OcxConfig, logCtx: RequestLogC
   // The handle must be sealable before anything is paid for: a key failure here sends nothing.
   ensureVideoHandleKey();
   let job: Record<string, unknown>;
+  const operation = new AbortController();
+  if (options.lease) registerTurn(operation, options.lease);
   try {
     // Video creation is paid, non-idempotent work: one attempt, no retry.
-    job = await createOpenAiVideo(upstreamBody, target.auth, req.signal, outboundDependencies);
+    job = await createOpenAiVideo(upstreamBody, target.auth, AbortSignal.any([req.signal, operation.signal]), outboundDependencies);
   } catch (error) {
+    if (operation.signal.aborted && !req.signal.aborted) return formatErrorResponse(503, "server_draining", "video create stopped during shutdown");
     return failureResponse(error, req, "video create");
+  } finally {
+    if (options.lease) unregisterTurn(operation);
   }
   const handle = sealVideoHandle({
     provider: target.providerName, upstreamId: job.id as string, ...(target.modelId !== undefined ? { model: target.modelId } : {}),
@@ -297,9 +312,10 @@ export async function handleVideos(
   route: VideoRoute,
   logCtx: RequestLogContext,
   admission: DataPlaneAdmission,
+  options: VideoRouteOptions = {},
 ): Promise<Response> {
   try {
-    if (route.kind === "create") return await handleCreate(req, config, logCtx, admission);
+    if (route.kind === "create") return await handleCreate(req, config, logCtx, admission, options);
     if (route.kind === "retrieve") return await handleRetrieve(req, config, route.handle, logCtx, admission);
     return await handleContent(req, url, config, route.handle, logCtx, admission);
   } catch (error) {

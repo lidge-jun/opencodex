@@ -1698,6 +1698,7 @@
   "video-openai-wire-bridge.test.ts": "videos",
   "server-videos.test.ts": "server",
   "server-videos-routes.test.ts": "server",
+  "management-provider-video-api.test.ts": "server",
   "video-handle.test.ts": "server",
   "xai-web-search-compat.test.ts": "providers/xai",
   "xai-web-search.test.ts": "providers/xai",
