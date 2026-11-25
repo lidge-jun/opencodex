@@ -646,6 +646,8 @@ describe("headless GUI parity CLI", () => {
       ["/api/routing-profiles", "ocx route policy"],
       ["/api/fallback", "ocx fallback"],
       ["/api/routing-analytics", "(none — GUI analytics surface; history via ocx observe/logs)"],
+      // Catch-up 010: the read-only Connections view; its CLI verb is a deferred-verb owned by 020.
+      ["/api/connections", "(none — read-only Connections view; CLI verb deferred in clients/connections.md)"],
       // Remote Workspace is one product family in both surfaces. The current CLI owns
       // executor pairing, presence, and local status; Hub/device/session inspection is
       // intentionally dashboard-only until the deferred Hub-status verbs documented in

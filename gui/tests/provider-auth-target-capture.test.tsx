@@ -113,7 +113,7 @@ test("cached Gemini quota keeps its timeout and distinct read timestamps in the 
     }],
   });
   const table = host.querySelector('[data-testid="account-quota-table"]')!;
-  expect(table.textContent).toContain("80% left");
+  expect(table.textContent).toContain("20% used");
   expect(table.textContent).toContain("The quota request timed out.");
   expect(table.textContent).toMatch(/Quota updated: 10m ago/);
   expect(table.textContent).toMatch(/Last read: 2m ago/);

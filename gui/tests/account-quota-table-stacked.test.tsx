@@ -1,13 +1,14 @@
 /**
  * Per-account quota rows stack again (#fb-2100): in the card layout the pool name sits on its own
- * line, the 5-hour bar on the next and the weekly bar on the third, each with its "% left" and
- * reset countdown, as v2.100.5 showed them. #8740 had put the three side by side.
+ * line, the 5-hour bar on the next and the weekly bar on the third, each with its consumed share
+ * and reset countdown, as v2.100.5 showed them. #8740 had put the three side by side.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { AccountQuotaTable } from "../src/components/provider-workspace/AccountQuotaTable";
+import { QUOTA_WARN_THRESHOLD } from "../src/components/QuotaBars";
 import { LanguageProvider } from "../src/i18n/provider";
 import { DICTS } from "../src/i18n/shared";
 
@@ -77,9 +78,36 @@ describe("account quota rows", () => {
       expect(cell.children[0]!.getAttribute("aria-hidden")).toBe("true");
     }
     const first = cells[0]!.children;
-    expect(first[1]!.textContent).toContain("100% left");
+    expect(first[1]!.textContent).toContain("0% used");
     expect(first[1]!.textContent).toContain("resets in");
-    expect(first[2]!.textContent).toContain("0% left");
+    expect(first[2]!.textContent).toContain("100% used");
+  });
+
+  test("the warn tone flips at the consumed-share threshold the other surfaces use", async () => {
+    // `isQuotaWarn`/`quotaBarTone` drive QuotaBars and the harness; this cell must agree with
+    // them at the boundary instead of hardcoding its own number.
+    const now = Date.now();
+    const host = testWindow.document.createElement("div");
+    testWindow.document.body.appendChild(host as never);
+    const { createRoot } = await import("react-dom/client");
+    await act(async () => {
+      root = createRoot(host);
+      root.render(
+        <LanguageProvider>
+          <AccountQuotaTable accounts={[
+            { id: "at-threshold", label: "at@example.test", plan: "max", active: true, paused: false,
+              quota: { fiveHourPercent: QUOTA_WARN_THRESHOLD, fiveHourResetAt: now + HOUR, weeklyPercent: QUOTA_WARN_THRESHOLD - 1, weeklyResetAt: now + 60 * HOUR } },
+          ]} />
+        </LanguageProvider>,
+      );
+    });
+    const fills = Array.from(host.querySelectorAll("td.aqt-pool .bar-fill"));
+    expect(fills).toHaveLength(2);
+    // 80% consumed is warn (threshold is inclusive); 79% is not.
+    expect(fills[0]!.className).toContain("bar-warn");
+    expect(fills[1]!.className).toContain("bar-green");
+    // The bar tracks the consumed share, not the remainder.
+    expect((fills[0] as HTMLElement).style.getPropertyValue("--bar-scale")).toBe(String(QUOTA_WARN_THRESHOLD / 100));
   });
 
   test("no card-layout rule lays a pool's name and bars out side by side", async () => {

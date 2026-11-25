@@ -9,8 +9,10 @@ export interface LocalControlDeps {
 /**
  * Send one `ocx link status` read over the runtime's local control socket when it has one (#8184).
  * A hub whose public listener is not loopback refuses the admin token on its TCP listeners, and the
- * socket is the ingress that may accept it. A runtime without the socket (Windows, a loopback bind,
- * an older version), or one whose socket cannot be reached, is asked over TCP exactly as before.
+ * socket is the ingress that may accept it. Windows has it too (#8998), once its directory and the
+ * whole path to it pass the ACL and reparse checks in src/lib/local-control-socket.ts. A runtime
+ * without the socket (a loopback bind, an older version, a path that is not trusted), or one whose
+ * socket cannot be reached, is asked over TCP exactly as before.
  */
 export async function viaLocalControlSocket<T, D extends RuntimeApiDeps & LocalControlDeps>(
   baseUrl: string,
