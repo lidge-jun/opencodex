@@ -178,7 +178,10 @@ for (const receipt of ["complete", "pending", "other-owner"] as const) {
   }, 20_000);
 }
 
-for (const [contention, waits, exit] of [["config-release", 1, 1], ["config-held", 2, undefined], ["config-takeover", 1, undefined]] as const) {
+for (const [contention, waits, exit] of [
+  ["config-release", 1, 1], ["config-held", 2, undefined],
+  ["config-takeover", 1, undefined], ["config-at-deadline", 2, 1],
+] as const) {
   test(`a listenerless rollback rechecks completed disconnect ownership after config contention (${contention})`, async () => {
     const report = await runStop({ mode: "file-restart-control", preserve: "restart-rollback", refusedDisconnectRecycle: contention });
     expect(report.result).toMatchObject({ replacementAttempts: 1, recycleAdmissions: 1, runtimePresent: true, proofWaits: waits });

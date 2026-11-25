@@ -37,7 +37,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   missingStopRecord?: "absent" | "invalid";
   startIdentityChanges?: "request" | "escalation";
   failedRollback?: "before-rebind" | "during-rebind";
-  refusedDisconnectRecycle?: "complete" | "pending" | "other-owner" | "config-release" | "config-held" | "config-takeover";
+  refusedDisconnectRecycle?: "complete" | "pending" | "other-owner" | "config-release" | "config-held" | "config-takeover" | "config-at-deadline";
   legacyOwnerRecord?: boolean;
   stopConnectionDrift?: "invalid" | "mismatched" | "disconnected" | "other-link" | "hub";
   driftDuringFallback?: boolean;
@@ -390,7 +390,7 @@ if (options.mode === "retry") {
           now += ms;
           if (!contendProof) return;
           proofWaits++;
-          if (options.refusedDisconnectRecycle === "config-held") return;
+          if (options.refusedDisconnectRecycle === "config-held" || (options.refusedDisconnectRecycle === "config-at-deadline" && now < 100)) return;
           proofLock!.close(); proofLock = undefined;
           if (options.refusedDisconnectRecycle === "config-takeover") (await import("../../src/client/state")).markClientConnectPending(expected.tokenFingerprint);
         },
