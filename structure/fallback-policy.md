@@ -30,6 +30,79 @@ the load warning name the section. A whole-config write does not degrade: `valid
 save cannot silently drop a refusal. Map keys are validated by the resolver, so one bad key never drops its
 siblings.
 
+### Quota-only Combo execution
+
+For an ordered Combo with `quotaOnlyFallback`, `pickComboTarget` skips only exhausted targets.
+Evidence is a fresh routing quota reading bound to the current credential or a live cooldown
+explicitly marked by a confirmed upstream refusal. Existing cooldown rows without this marker
+retain their normal expiry and are temporary blocks in this mode. The picker stops at the first
+unattempted target blocked for another reason. It follows configured order and bypasses cooldown
+wait, reprobe and last-resort reordering. The quota reading belongs to the destination the target
+resolves to after model redirects. For the canonical Codex pool it is the pool's confirmed usage
+limits. Selection in the Combo loop, a Combo the router collapses to one pick and a pinned tool
+continuation all read this destination quota.
+
+The cooldown evidence is bound to the single key and route used for the send, including its model
+redirects, aliases, adapters, send paths and Vertex project and location. A one-entry key pool
+counts as a single key. The binding is private to the process. Replaced credentials,
+edited routes and reloaded advisory cooldowns are checked again.
+OAuth and key pools keep their native quota evaluation.
+
+After dispatch the Combo consumes bounded upstream failure evidence and trusted local pool
+exhaustion. A generic 429, temporary throttle, request-wide budget refusal and quota-policy
+hard lock carry no exhaustion evidence. A structured account or billing exhaustion code counts on
+HTTP 400, 402, 422, 429 and 5xx responses. A pool answers for its own accounts. The native Codex
+pool needs proof for each usable account. The native Anthropic pool supplies its own exhausted
+verdict, and a credit refusal advances once no Anthropic account remains eligible and none is
+held by a rate pause alone. A generic
+OAuth pool advances once no account other than the refused one is eligible for the model and the
+last refusal of every unavailable sibling proved a spent quota. An Antigravity sibling whose model
+roster omits the model does not count. A key pool advances once every
+enabled key refused with a spent quota or credit. Both verdicts come from the refusal body on the
+adapter send path and last as long as the cooldown of that refusal. A rotation on another send path
+records none, which keeps the Combo on the pool. A committed output ceiling does not cool a quota-only target. Scoped fallback policy, consent, account selection and replay
+safeguards remain in force. Destinations outside recognized subscription channels and configured
+loopback local routes require consent, including custom API providers and redirected destinations.
+Without consent the Combo returns `combo_metered_consent_required`.
+A tool continuation uses its remembered resolved target, including its send paths, per-model adapter
+and the Codex account and account mode it resolves to. It stops with `combo_tool_target_unavailable` when that target cannot be established or used,
+and with `combo_metered_consent_required` when the target still serves but lost paid-call consent. A pinned
+tool continuation waits on its serving target. It records confirmed exhaustion only for a target
+served by a single key of its own provider, a one-entry key pool included, so a redirected target,
+an OAuth account pool or a pool of several keys keeps no target cooldown from it.
+The lane keeps the last Combo turn only, without the IDs of the calls that turn issued, and a turn
+served outside a Combo does not replace it. A continuation of a call from another turn on the same
+lane therefore follows that last Combo turn.
+A request continues a tool loop when it ends with a tool output, after any trailing developer items. A
+request that ends with a user message starts a new turn. Turning `quotaOnlyFallback` off releases
+outstanding continuations to ordinary Combo behavior.
+`preserveFallbackModel` compares resolved model IDs even when the provider differs and returns
+a conflict on mismatch, including for a Combo the router collapses to one pick. A continuation
+compares against the model its lane recorded when that turn completed, even when the target can no longer be
+selected or its selector now resolves elsewhere.
+The lock also covers the model a Combo child settled on.
+A Combo the router collapses to one pick, such as a subagent fallback alias, re-reads the key's
+model scope and paid consent from the live config before its send, and a quota-only one that stops at a paid target without
+consent returns `combo_metered_consent_required`. A quota-only one records its serving lane when it
+completes, so its tool continuation stays on the target that lane remembers or stops like a
+continuation in the Combo loop. A subagent continuation on that lane stops with
+`combo_tool_target_unavailable` once its Combo is deleted or no longer in the request's fallback chain.
+Reconciling the live config keeps such a lane until it expires, so a retry is refused as well.
+A Combo child and a collapsed pick check the key's live model scope against the settled admission
+destination, which includes a wire override only when that override is part of admission, and check
+paid consent once more at the physical HTTP send and before each WebSocket frame or HTTP fallback,
+after preparation and provider pacing. Consent follows the live target, Combo rule and destination
+row as well as the admitted ones, and covers the destination a Combo child settled on. A Combo
+deleted during the wait keeps the strictest rule. A
+configured key removed since admission refuses every send, a native child's included. A
+scope narrowed during those waits returns the model-scope refusal, withdrawn consent returns
+`combo_metered_consent_required`, and a pinned target returns `combo_tool_target_unavailable` when it
+left its Combo, its selector now resolves to another route or its Combo child settled on another provider, model or Codex
+account. Nothing is sent in each case. A quota-only turn whose child settled on another destination
+records that destination for its lane. A quota refusal there is judged against that destination's own
+accounts and fallback policy, and leaves the planned target without a cooldown. A nested
+request, such as a decision call, adds its own checks to its own sends only.
+
 `resolveFallbackPolicy`: a device entry set to `false` for the kind refuses; a device `true` never
 reopens a hop. Otherwise the first route selector with a boolean decides, then the provider the hop
 starts from, then the global switch, then the default (allowed). Route selectors are the public
