@@ -1,11 +1,13 @@
 import { recordUpstreamProviderErrorDetail, recordUpstreamValidationDetail, type FailureDetail } from "../request-log-failure-detail";
-import { carryProxyErrorPresentation } from "../../lib/client-error-body";
+import { carryProxyErrorPresentation, isProxyError, isProxyQuotaExhaustion } from "../../lib/client-error-body";
 import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { comboFailureEvidence, carryProxyError } from "../../lib/client-error-body";
 import { carryWorkflowRefusal } from "../workflow-refusal";
 import {
   codexAccountModelRefusal,
   codexAccountModelRefusalHardStopCode,
+  coolComboTarget,
+  isConfirmedComboExhaustion,
   isMalformedResponseFormatRequest,
   isOpenRouterOpaque400Envelope,
   isUnofferedToolCallRefusal,
@@ -17,7 +19,11 @@ import {
 import { parseRetryAfterMs } from "../../combos";
 import type { ConsumedComboFailure, HandleResponsesOptions } from "./core-options";
 import type { OcxConfig, OcxUsage } from "../../types";
+import type { RouteResult } from "../../router";
 import { codexQuotaScopeForModel, getCodexQuotaHealthSnapshot } from "../../codex/routing";
+import { codexPoolHasConfirmedUsageLimit } from "../../codex/routing/selection";
+import { isCodexAccountGenerationLive } from "../../codex/account-store";
+import type { CodexAuthContext } from "../../codex/auth-context";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { carryAnthropicRefusalCredential } from "../../oauth/anthropic-account-refusal";
 import { carryCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
@@ -46,12 +52,22 @@ import { stampMetaMusePlanRefusal } from "../../providers/meta-muse-plan-refusal
 import type { RequestFailureCause } from "../../usage/telemetry-contract";
 import { isRewrittenUpstreamError } from "../../adapters/upstream-http-error";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
+import { comboPickQuotaBinding, type ComboPick } from "../../combos/resolve";
 import { getAccountSet } from "../../oauth/store";
 import { anthropicRefusalCredentialIsCurrent } from "../../oauth/anthropic-account-refusal";
 import { isAnthropicBillingFailure } from "../../providers/anthropic-billing-refusal";
 import { anthropicRoutingFor, formatAnthropicProviderForLog } from "../../oauth/anthropic-routing";
 import { codexAccountLogLabel, oauthAccountLogLabel } from "../../codex/account-label";
-import { isGenericFailoverProvider, rotateGenericOAuthAccountOn429 } from "../../oauth/generic-account-failover";
+import {
+  eligibleFailoverAccounts, hasEligibleGenericOAuthFailoverTarget, isGenericFailoverProvider, rotateGenericOAuthAccountOn429,
+} from "../../oauth/generic-account-failover";
+import { classifyModelFamilyForQuota } from "../../oauth/account-quota-rank";
+import { oauthCredentialSlot } from "../../oauth/credential-siblings";
+import { antigravityAccountSupportsModel } from "../../providers/antigravity-account-roster";
+import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
+import type { AnthropicInstanceId } from "../../providers/anthropic-instance-id";
+import { isKeyQuotaSpent } from "../../providers/api-key-cooldowns";
+import { readQuotaResetAt } from "../../providers/key-failover";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/account-id";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { baseProviderLabel } from "../../providers/label";
@@ -91,24 +107,76 @@ export function cooledPoolAccountLabel(config: OcxConfig, providerName: string, 
  * cools it under the pool's own Retry-After policy, and spare the target only when the pool still
  * has an eligible sibling. The rotator only peeks round-robin here: nothing is sent to that sibling.
  * A lone account or an all-cooled pool returns null and cools the target.
+ * The refusal's quota verdict is recorded first, for a quota-only Combo's sibling check.
  */
 export function cooledGenericOAuthAccountLabel(
   config: OcxConfig, providerName: string, modelId: string, label: string | undefined, retryAfter: string | undefined,
+  quotaExhausted: boolean,
 ): string | undefined {
   const provider = config.providers[providerName];
   if (!label || !provider || !isGenericFailoverProvider(providerName, provider)) return undefined;
   const base = baseProviderLabel(providerName);
   const matches = getAccountSet(providerName)?.accounts.filter(account =>
     oauthAccountLogLabel(account.id, base) === label) ?? [];
-  return matches.length === 1
-    && rotateGenericOAuthAccountOn429(config, providerName, matches[0]!.id, retryAfter, Date.now(), modelId, false)
+  if (matches.length !== 1) return undefined;
+  recordGenericAccountRefusal(providerName, matches[0]!.id, modelId, retryAfter, quotaExhausted);
+  return rotateGenericOAuthAccountOn429(config, providerName, matches[0]!.id, retryAfter, Date.now(), modelId, false)
     ? label : undefined;
 }
 
 /**
- * A 402 credit-balance refusal names one Anthropic OAuth account -- the evidence the pool already
- * accepts on a 403 -- but the pool rotates only on 401/403/429, so the 402 reaches the combo with
- * that account still selectable. Cool it under the pool's entitlement backoff and spare the target
+ * Generic OAuth accounts whose last 429 proved a spent quota. The pool records only that an account
+ * cooled, so a quota-only Combo reads this to tell a spent sibling from a rate-limited one. A verdict
+ * lasts as long as the cooldown the pool derives from the same Retry-After. A later ordinary refusal
+ * neither clears nor extends it, because a spent quota does not return before its own deadline.
+ */
+const genericQuotaVerdicts = new Map<string, number>();
+const genericVerdictKey = (providerName: string, accountId: string, modelId: string | null | undefined): string =>
+  [oauthCredentialSlot(providerName), accountId, classifyModelFamilyForQuota(providerName, modelId) ?? ""].join("\0");
+
+/** Record what a generic OAuth 429 proved before the pool cools that account. */
+export function recordGenericAccountRefusal(
+  providerName: string, accountId: string, modelId: string | null | undefined,
+  retryAfter: string | null | undefined, quotaExhausted: boolean, now = Date.now(),
+): void {
+  for (const [key, until] of genericQuotaVerdicts) if (until <= now) genericQuotaVerdicts.delete(key);
+  if (!quotaExhausted) return;
+  const key = genericVerdictKey(providerName, accountId, modelId);
+  // The pool's own defaults for an undated 429 (rotateGenericOAuthAccountOnRefusal).
+  const cooldownMs = parseRetryAfterMs(retryAfter, now, { preserveImmediate: true, preserveServerDelay: true })
+    ?? (providerName === "kiro" ? 10_000 : 60_000);
+  genericQuotaVerdicts.set(key, Math.max(genericQuotaVerdicts.get(key) ?? 0, now + cooldownMs));
+}
+
+export function clearGenericAccountQuotaVerdictsForTests(): void {
+  genericQuotaVerdicts.clear();
+}
+
+/** True while a usable Anthropic account is held by a transient rate pause and by no quota or credit refusal. */
+function anthropicAccountOnlyRatePaused(instance: AnthropicInstanceId, now: number): boolean {
+  const routing = anthropicRoutingFor(instance);
+  const { anthropicRatePauseUntil } = anthropicRatePolicyFor(instance);
+  return (getAccountSet(instance)?.accounts ?? []).some(account => account.paused !== true && account.needsReauth !== true
+    && anthropicRatePauseUntil(account.id, now) !== undefined && routing.getAnthropicAccountHealthSnapshot(account.id, now) === null);
+}
+
+/**
+ * True while an account other than the refused one is unavailable with no spent-quota verdict, such as
+ * one cooling after a rate limit. It may serve again soon, so a quota-only Combo stays on the pool.
+ */
+function genericSiblingMayRecover(providerName: string, refusedId: string, now: number, modelId: string): boolean {
+  const ready = new Set(eligibleFailoverAccounts(providerName, now, classifyModelFamilyForQuota(providerName, modelId)));
+  return (getAccountSet(providerName)?.accounts ?? []).some(account => account.id !== refusedId
+    && account.paused !== true && account.needsReauth !== true && !ready.has(account.id)
+    // An Antigravity sibling whose roster omits the model cannot serve it once it recovers.
+    && (providerName !== "google-antigravity" || antigravityAccountSupportsModel(providerName, account.id, modelId) !== false)
+    && (genericQuotaVerdicts.get(genericVerdictKey(providerName, account.id, modelId)) ?? 0) <= now);
+}
+
+/**
+ * A credit-balance refusal (402, or 400 with the same body) names one Anthropic OAuth account --
+ * the evidence the pool already accepts on a 403 -- but the pool rotates only on 401/403/429, so it
+ * reaches the combo with that account still selectable. Cool it under the pool's entitlement backoff and spare the target
  * only while a sibling is eligible; a lone account or an exhausted pool still cools the target.
  */
 export function creditRefusedAnthropicAccountLabel(
@@ -117,7 +185,7 @@ export function creditRefusedAnthropicAccountLabel(
 ): string | undefined {
   const instance = configuredAnthropicInstance(config, providerName);
   if (!label || !instance || config.providers[providerName]?.authMode !== "oauth"
-    || !isAnthropicBillingFailure(402, message, code)) return undefined;
+    || !isAnthropicBillingFailure(response.status, message, code)) return undefined;
   const routing = anthropicRoutingFor(instance);
   const matches = getAccountSet(instance)?.accounts.filter(account =>
     formatAnthropicProviderForLog(instance, account.id) === label) ?? [];
@@ -154,6 +222,92 @@ export function isAnthropicPoolLocalRefusal(
     && failedAccount === undefined
     && anthropicRoutingFor(instance).getEligibleAnthropicAccounts(now).length === 0
     && anthropicRoutingFor(instance).getAnthropicPoolRetryAfterSeconds(now) !== null;
+}
+
+/**
+ * The pick's quota binding names its provider's credential together with the redirects and aliases
+ * that resolve its model, so it still describes a route that stayed with that provider.
+ */
+export function dispatchedComboQuotaBinding(pick: ComboPick, route: RouteResult): string | undefined {
+  return pick.target.provider === route.providerName ? comboPickQuotaBinding(pick) : undefined;
+}
+
+export function rememberPinnedComboExhaustion(pick: ComboPick, route: RouteResult, failure: ConsumedComboFailure): void {
+  const quotaBinding = dispatchedComboQuotaBinding(pick, route);
+  if (!quotaBinding || isProxyQuotaExhaustion(failure.response)) return;
+  coolComboTarget(pick.comboId, pick.target, {
+    quotaBinding, writerGeneration: pick.writerGeneration, status: failure.response.status,
+    code: failure.upstreamCode, message: failure.classificationText, retryAfter: failure.retryAfter, resetAt: failure.resetAt,
+  });
+}
+
+export function confirmedComboExhaustion(failure: ConsumedComboFailure): boolean {
+  const { response, upstreamMessage, classificationText, upstreamCode, upstreamType } = failure;
+  return !isReplayRefusalResponse(response) && (isProxyQuotaExhaustion(response) || (
+    !isProxyError(response) && isConfirmedComboExhaustion(response.status, upstreamMessage ?? classificationText, upstreamCode, upstreamType)
+  ));
+}
+
+/**
+ * Whether a confirmed exhaustion lets a quota-only Combo leave this target. A pool answers for its
+ * own accounts, so the Combo advances only once none of them is eligible for the model. A sibling
+ * of a generic OAuth pool or a key in a pool must also have proved its quota spent, because one that
+ * was only rate-limited serves again when its window passes.
+ */
+export function comboAccountExhaustionCanAdvance(
+  config: OcxConfig, route: RouteResult, response: Response, servedAccountLabel: string | undefined, now: number,
+  auth: CodexAuthContext | undefined,
+): boolean {
+  if (route.codexAccountMode === "pool" && isCanonicalOpenAiForwardProvider(route.provider)) {
+    if (route.codexAccountId || codexQuotaScopeForModel(route.modelId) !== "shared") return false;
+    const refusedId = !isProxyError(response) && auth?.kind === "pool" && !auth.fixedAccount
+      && isCodexAccountGenerationLive(auth.accountId, auth.generation) ? auth.accountId : undefined;
+    return codexPoolHasConfirmedUsageLimit(config, now, refusedId);
+  }
+  const anthropic = route.provider.authMode === "oauth" ? configuredAnthropicInstance(config, route.providerName) : undefined;
+  if (anthropic) {
+    // The pool marks its own spent verdict. A credit refusal was already recorded on its account, and
+    // it advances once no account is eligible or only waiting out a rate pause.
+    return isProxyQuotaExhaustion(response) || ((response.status === 400 || response.status === 402)
+      && anthropicRoutingFor(anthropic).getEligibleAnthropicAccounts(now, route.modelId).length === 0
+      && !anthropicAccountOnlyRatePaused(anthropic, now));
+  }
+  if (isGenericFailoverProvider(route.providerName, route.provider)) {
+    const base = baseProviderLabel(route.providerName);
+    const refused = getAccountSet(route.providerName)?.accounts
+      .find(account => oauthAccountLogLabel(account.id, base) === servedAccountLabel)?.id;
+    return !hasEligibleGenericOAuthFailoverTarget(route.providerName, refused ?? "", now, route.modelId)
+      && !genericSiblingMayRecover(route.providerName, refused ?? "", now, route.modelId);
+  }
+  // A key pool advances once every enabled key refused with a spent quota. A key that was only
+  // rate-limited serves again when its window passes, so its cooldown keeps the Combo here.
+  const keyPool = route.provider.apiKeyPool ?? [];
+  if (keyPool.length > 1) {
+    const enabledKeys = keyPool.filter(entry => !entry.disabled);
+    return isProxyQuotaExhaustion(response) || (enabledKeys.length > 0
+      && enabledKeys.every(entry => isKeyQuotaSpent(route.providerName, entry.id, now)));
+  }
+  return true;
+}
+
+/**
+ * Peek a 429's bounded body prefix for the reset it dates and whether it proves a spent quota. A
+ * pool records that verdict with the cooldown, so a quota-only Combo can tell a spent key or
+ * account from one that is only rate-limited. The returned response replays the same body.
+ */
+export async function readQuotaRefusal(response: Response, signal?: AbortSignal): Promise<{
+  response: Response; at: number | undefined; quotaExhausted: boolean;
+}> {
+  const peeked = await readQuotaResetAt(response, { signal });
+  if (isNonReplayableResponse(response)) markResponseNonReplayable(peeked.response);
+  carryReplayRefusal(response, peeked.response);
+  carryProxyError(response, peeked.response);
+  const refusal = normalizeUpstreamErrorText(peeked.text, "");
+  return {
+    response: peeked.response,
+    at: peeked.at,
+    quotaExhausted: isConfirmedComboExhaustion(response.status, refusal.message ?? refusal.safeText, refusal.code, refusal.type),
+  };
 }
 
 export function sanitizedRetryAfter(value: string | null, now: number): string | undefined {
