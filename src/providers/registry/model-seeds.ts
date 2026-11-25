@@ -847,8 +847,12 @@ export const KIMI_AUTO_TOOL_CHOICE_ONLY_MODELS = ["kimi-for-coding"];
 export const KIMI_API_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
   KIMI_API_MODELS.map(id => [id, KIMI_API_K3_SERIES_MODELS.includes(id) ? KIMI_K3_1M_CONTEXT_WINDOW : 262_144]),
 );
+// "kimi-k3.1-pro and kimi-k3 support text, image, and video input" (Kimi vision guide,
+// platform.moonshot.ai/docs/guide/use-kimi-vision-model, read 2026-11-25). Video rides the Chat
+// `video_url` part as base64 or an ms:// file id. Only the two documented ids declare it.
+const KIMI_API_VIDEO_INPUT_MODELS = ["kimi-k3", "kimi-k3.1-pro"];
 export const KIMI_API_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
-  KIMI_API_K3_SERIES_MODELS.map(id => [id, ["text", "image"]]),
+  KIMI_API_K3_SERIES_MODELS.map(id => [id, KIMI_API_VIDEO_INPUT_MODELS.includes(id) ? ["text", "image", "video"] : ["text", "image"]]),
 );
 
 // 260715 NVIDIA NIM kimi family (issue #126): documented served ids on integrate
