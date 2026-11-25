@@ -162,14 +162,18 @@ is a `POST` to the canonical Responses URL or a configured WebSocket route, and 
 falls back to it when the request cannot be prepared, the `response.create` frame exceeds its size
 limit, or the proxy route cannot carry the socket.
 
-The size limit follows the ChatGPT backend's own advertisement. When the socket's handshake carries
-`x-codex-websocket-max-message-bytes`, a frame larger than that value never leaves the proxy: the
-turn falls back to SSE before anything is sent, as Codex itself does. A turn that needs native
-steering or injection has no SSE equivalent, so it fails visibly instead. Without an advertisement,
-the fixed 16 MiB ceiling applies. On this route the proxy also forwards Codex's
-`x-codex-exclude` and `x-codex-exclude-stream-fields` requests, so the backend leaves out the
-echoed tool catalog, per-item usage attribution, delta sequence numbers and preliminary reasoning
-ciphertext. Other destinations never receive these headers.
+The size limit also follows the ChatGPT backend's own advertisement. When the socket's handshake
+carries `x-codex-websocket-max-message-bytes`, a frame larger than that value is not sent on that
+socket. An opening `response.create` falls back to SSE before anything is uploaded, as Codex itself
+does. If an incremental delta was already sent and the backend asks for the full frame, a full frame
+above the limit also takes the SSE path. A turn that needs native steering or injection cannot use
+SSE: an oversized opening frame fails visibly, and an oversized steering or injection frame is
+refused so that the client can send a corrected one. Without an advertisement, the fixed ceiling
+just below 16 MiB applies, and that pre-dial check falls back to SSE. On this route the proxy also
+forwards Codex's `x-codex-exclude` and `x-codex-exclude-stream-fields` request headers unchanged,
+so the backend can leave out the fields Codex names in them. By default these are the echoed tool
+catalog, per-item usage attribution, delta sequence numbers and preliminary reasoning ciphertext.
+Other destinations never receive these headers.
 
 To keep the built-in ChatGPT provider on HTTP/SSE, set `providers.openai.upstreamWebsocket`
 to `false` in `~/.opencodex/config.json` and restart the proxy. Merge this field into the

@@ -549,7 +549,9 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
               const text = JSON.stringify(outgoing);
               nativeControl.assertOutboundFrame?.(text);
               if (codexWsCreateFrameExceedsLimit(text) || codexWsFrameExceedsAdvertisedLimit(text, session.advertisedMessageLimit())) {
-                throw new Error("Native steering frame exceeds the transport byte limit");
+                // A typed refusal is a known non-delivery: the channel rolls the frame back so a
+                // corrected one can be queued, instead of failing as an unknown delivery.
+                throw new NativeSteeringError("invalid_input", "Native steering frame exceeds the transport byte limit");
               }
               return { outgoing, text };
             };

@@ -18,9 +18,11 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * The advertised message ceiling, read like Codex reads it: one unsigned decimal integer, zero
- * included (nothing fits). A missing, repeated, signed, exponent or non-digit value is no
- * advertisement, which leaves the static ceiling alone in charge.
+ * The advertised message ceiling, read like Codex's `usize` parse: an optional `+` and decimal
+ * digits, leading zeros allowed, zero included (nothing fits). A value beyond JavaScript's safe
+ * integers is larger than any frame this process can build, so it limits nothing. A missing,
+ * repeated, negative, exponent or non-digit value is no advertisement, which leaves the static
+ * ceiling alone in charge.
  */
 export function readCodexWsAdvertisedMessageLimit(payload: unknown): number | undefined {
   try {
@@ -35,11 +37,11 @@ export function readCodexWsAdvertisedMessageLimit(payload: unknown): number | un
       if (name.toLowerCase() !== CODEX_WS_MAX_MESSAGE_BYTES_HEADER) continue;
       if (seen) return undefined;
       seen = true;
-      const digits = value.trim();
-      if (!/^\d{1,16}$/.test(digits)) return undefined;
-      const parsed = Number(digits);
-      if (!Number.isSafeInteger(parsed)) return undefined;
-      limit = parsed;
+      const match = /^\+?(\d+)$/.exec(value.trim());
+      if (!match) return undefined;
+      const digits = match[1]!.replace(/^0+(?=\d)/, "");
+      const parsed = digits.length <= 16 ? Number(digits) : Number.POSITIVE_INFINITY;
+      limit = Number.isSafeInteger(parsed) ? parsed : undefined;
     }
     return limit;
   } catch {

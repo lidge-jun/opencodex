@@ -3,6 +3,7 @@ import type { IncrementalPlan } from "../../src/server/responses/codex-ws-increm
 import { readCodexWsAdvertisedMessageLimit } from "../../src/server/responses/codex-ws-metadata";
 import { codexWsUpstreamFetch } from "../../src/server/responses/ws-upstream";
 import type { NativeResponseControl } from "../../src/server/responses/native-response-control";
+import { NativeSteeringError } from "../../src/server/responses/native-steering";
 import { codexWsExchange } from "../../src/server/responses/codex-ws-exchange";
 import { CodexWsSession } from "../../src/server/responses/codex-ws-session";
 import { CODEX_RESPONSES_HTTP_URL, prepareCodexWsRequest } from "../../src/server/responses/codex-ws-request";
@@ -226,8 +227,17 @@ describe("advertisement parsing", () => {
     expect(readCodexWsAdvertisedMessageLimit(handshake([[HEADER, "0"]]))).toBe(0);
   });
 
+  test("Rust usize syntax: a plus sign and leading zeros are valid", () => {
+    expect(readCodexWsAdvertisedMessageLimit(handshake([[HEADER, "+7"]]))).toBe(7);
+    expect(readCodexWsAdvertisedMessageLimit(handshake([[HEADER, "000064"]]))).toBe(64);
+    expect(readCodexWsAdvertisedMessageLimit(handshake([[HEADER, "00000000000000000000"]]))).toBe(0);
+    expect(readCodexWsAdvertisedMessageLimit(handshake([[HEADER, "0000000000000000000000064"]]))).toBe(64);
+    // Larger than any frame this process can build: it limits nothing.
+    expect(readCodexWsAdvertisedMessageLimit(handshake([[HEADER, "99999999999999999999"]]))).toBeUndefined();
+  });
+
   test("anything else is no advertisement", () => {
-    for (const value of ["", "abc", "-5", "1e3", "+7", "1.5", "99999999999999999"]) {
+    for (const value of ["", "abc", "-5", "1e3", "+", "++7", "1.5", "0x10"]) {
       expect(readCodexWsAdvertisedMessageLimit(handshake([[HEADER, value]]))).toBeUndefined();
     }
     expect(readCodexWsAdvertisedMessageLimit(handshake([[HEADER, "10"], [HEADER, "20"]]))).toBeUndefined();
@@ -236,7 +246,7 @@ describe("advertisement parsing", () => {
   });
 });
 
-type Reply = "complete" | "cache-miss";
+type Reply = "complete" | "cache-miss" | "created";
 
 /** Real Bun upgrade that advertises a ceiling; no credentials and no provider traffic. */
 async function withAdvertisingServer(
@@ -260,6 +270,10 @@ async function withAdvertisingServer(
           return;
         }
         const id = `response-${frames.length}`;
+        if (reply(frames.length - 1) === "created") {
+          if (frames.length === 1) send({ type: "response.created", response: { id, status: "in_progress", output: [] } });
+          return;
+        }
         send({ type: "response.created", response: { id, status: "in_progress", output: [] } });
         send({ type: "response.completed", response: { id, status: "completed", output: [], usage } });
       },
@@ -380,6 +394,30 @@ describe("stateful paths", () => {
       expect(frames).toEqual([delta]);
       expect(counters.fallbacks).toBe(1);
       expect(counters.physical).toBe(1);
+    });
+  });
+
+  test("an oversized native control frame is a typed refusal the channel can roll back", async () => {
+    const opening = [{ role: "user", content: "hi" }];
+    const limit = bytes(sizedRequest(opening).prepared.frameText) + 64;
+    await withAdvertisingServer(String(limit), () => "created", async ({ session, frames }) => {
+      let send: ((frame: Record<string, unknown>) => void) | undefined;
+      const nativeControl = {
+        kind: "injection",
+        attach: (sender: (frame: Record<string, unknown>) => void) => { send = sender; return () => {}; },
+        observe: () => false,
+      } as unknown as NativeResponseControl;
+      const { response } = await exchange(session, opening, fresh(), { nativeControl });
+      expect(response.status).toBe(200);
+      expect(frames).toHaveLength(1);
+      const oversized = { type: "response.inject", response_id: "response-1", input: [{ type: "function_call_output", call_id: "c", output: "x".repeat(limit) }] };
+      expect(() => send!(oversized)).toThrow(NativeSteeringError);
+      expect(frames).toHaveLength(1);
+      // The corrected frame still goes out on the same channel.
+      send!({ type: "response.inject", response_id: "response-1", input: [{ type: "function_call_output", call_id: "c", output: "ok" }] });
+      await Bun.sleep(20);
+      expect(frames).toHaveLength(2);
+      expect(JSON.parse(frames[1]!).input[0].output).toBe("ok");
     });
   });
 
