@@ -75,10 +75,7 @@ pub fn toggle(app: &AppHandle, item: &CheckMenuItem<Wry>) {
     }
     let _ = item.set_checked(preference.enabled());
 
-    let visible = app
-        .get_webview_window("main")
-        .is_some_and(|window| window.is_visible().unwrap_or(false));
-    crate::window::set_tray_policy(app, visible);
+    crate::window::refresh_tray_policy(app);
 }
 
 #[cfg(test)]

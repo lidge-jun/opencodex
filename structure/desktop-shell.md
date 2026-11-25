@@ -142,8 +142,10 @@ The macOS tray's **Hide Dock icon** checkbox is a local desktop preference. The
 is loaded before AppKit launches and updated before the live preference changes.
 When the preference is enabled, showing the dashboard keeps the app in accessory
 mode while the window can still take focus. A failed tray installation restores
-Dock access when startup shows the dashboard. The preference and its tray item
-are macOS-only and do not depend on the proxy.
+Dock access when startup shows the dashboard. The shell reads the current
+dashboard visibility, preference, and tray verdict in the same main-thread
+turn that applies both native policies. The preference and its tray item are
+macOS-only and do not depend on the proxy.
 
 The host window also answers whether the dashboard is visible at all. Windows WebView2 is reported
 to keep `document.visibilityState === "visible"` while the Tauri window sits hidden in the tray

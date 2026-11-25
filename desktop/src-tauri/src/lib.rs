@@ -426,7 +426,7 @@ pub fn run() {
             if startup::LaunchOrigin::detect() == startup::LaunchOrigin::User {
                 window::show(&window);
             } else {
-                window::set_tray_policy(app.handle(), false);
+                window::refresh_tray_policy(app.handle());
             }
 
             recovery::register(app.handle());
