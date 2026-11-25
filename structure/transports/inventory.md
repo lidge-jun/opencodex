@@ -195,7 +195,19 @@ Kiro generation in `src/adapters/kiro-retry.ts` passes the routed provider execu
 A reset-triggered rebuild may retarget the request to another region's canonical host mid-flight; that admission is marked `rebasedTarget` and does not consume or require an unused transition/alternate-target allowance (the total-send and replay-safety checks still apply), and the alternate-host fallback resolves the legacy gateway from the current request URL so rebuilt credentials stay with their own region.
 
 `src/lib/provider-egress.ts` resolves a provider route for one destination. The route is carried only
-by transports that can preserve that request-local decision:
+by transports that can preserve that request-local decision. An explicit HTTP(S) proxy is never sent
+toward a destination that the process `NO_PROXY` or `no_proxy` exempts, because Bun's fetch and
+WebSocket connect directly there: `providerEgressSendInit` refuses such a route against the destination
+actually sent, before its dispatch receipt (and before `beforeDispatch` when no plugin rewrite or
+dispatch override can still change the destination), `configuredOutboundFetch` refuses the send with
+`ExplicitProxyExemptedError` as a backstop for every other caller (the Antigravity TLS profile
+transport, reachable only through `providerFetch`, therefore never receives such a route), the Responses WebSocket upstream leaves such a turn to that HTTP path, and
+the Microsoft 365 Copilot ChatHub dial refuses before creating its socket. `processNoProxyExempts`
+matches at least as broadly as Bun: `bunNoProxyMatches` ports the `NO_PROXY` matcher of Bun 1.4.4
+(comma and whitespace separators, subdomains, CIDR blocks, numeric ports, canonical addresses), unioned
+with `noProxyMatches`, for either spelling. While a bypass list is set, an explicit-proxy request in `follow` mode is sent with `redirect: "manual"`
+and a redirect answer is refused (`ExplicitProxyRedirectRefusedError`) instead of being followed, because
+Bun would apply the bypass list to the next hop; callers that handle redirects pass `manual` themselves. `tests/lib/explicit-proxy-no-proxy.test.ts` checks the route on real loopback sockets.
 
 | Request path | Per-provider route | Current contract |
 | --- | --- | --- |

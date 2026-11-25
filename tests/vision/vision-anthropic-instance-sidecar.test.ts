@@ -121,3 +121,20 @@ test("vision planner turns an unavailable selected pool into no plan instead of 
   delete fixture.config.visionSidecar.anthropicInstance;
   expect(vision.planVisionSidecar(fixture.config, target, fixture.model, parsed, undefined, { providerName: "anthropic" })?.anthropicSidecar?.providerName).toBe("anthropic");
 });
+
+test("vision checks the selected Anthropic instance and effective model", async () => {
+  const { planVisionSidecar } = await import("../../src/vision");
+  const { parseRequest } = await import("../../src/responses/parser");
+  const target: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://main.test/v1", inputModalities: ["text"] };
+  fixture.config.visionSidecar = { backend: "anthropic", anthropicInstance: "anthropic2", model: fixture.model };
+  const request = parseRequest({ model: "main/text", input: [{ role: "user", content: [
+    { type: "input_image", image_url: "data:image/png;base64,YQ==" },
+  ] }] });
+  const select = (provider: string, model: string) => planVisionSidecar(
+    fixture.config, target, "text", request, undefined,
+    { providerName: "main", admissionScope: { providers: [provider], models: [model] } },
+  );
+  expect(select("anthropic", fixture.model)).toBeUndefined();
+  expect(select("anthropic2", "another-model")).toBeUndefined();
+  expect(select("anthropic2", `anthropic2/${fixture.model}`)?.anthropicSidecar?.providerName).toBe("anthropic2");
+});

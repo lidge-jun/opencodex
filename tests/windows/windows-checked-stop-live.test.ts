@@ -25,7 +25,7 @@ import {
 } from "../../src/service/windows-checked-stop-live";
 import { windowsProcessNative, type WindowsProcessNativeApi } from "../../src/service/windows-process-native";
 import { windowsLauncherVbsPath } from "../../src/service/state";
-import { WINDOWS_TASK_INSTANCE_STOP_SCRIPT } from "../../src/service/windows-task-instance-stop";
+import { windowsTaskInstanceStopScript } from "../../src/service/windows-task-instance-stop";
 import { buildWindowsTaskXml, windowsTaskRegistrationHealthy } from "../../src/service/windows-taskxml";
 import { resolveTrustedWindowsPowerShellExe } from "../../src/lib/windows-elevation";
 import { winswExePath } from "../../src/lib/winsw";
@@ -255,6 +255,54 @@ describe("capped command answers", () => {
     }
   });
 
+  test("native engine proof matches every captured instance before releasing the Scheduler helper", async () => {
+    const sid = "S-1-5-21-100-200-300-1001";
+    const xml = buildWindowsTaskXml(undefined, windowsLauncherVbsPath(), undefined, sid)
+      .replace('<Principal id="Author">', '<Principal id="Author"><UserId>' + sid + '</UserId>');
+    const ticks = 638628778070001230n;
+    const first = { id: "00000000-0000-0000-0000-000000000001", pid: 41, ticks: String(ticks) };
+    const second = { ...first, id: "00000000-0000-0000-0000-000000000002", pid: 42 };
+    const elapsed = { now: 0 };
+    const now = spyOn(performance, "now").mockImplementation(() => elapsed.now);
+    const check = async (fields: Record<string, unknown>, capture: (pid: number) => bigint | null,
+      verdict = "ended") => {
+      elapsed.now = 0;
+      const pids: number[] = [];
+      let releases = 0;
+      const deps = windowsCheckedStopLiveDeps({ taskEngineIdentity: (pid, withCommand, callerSid) => {
+        expect([withCommand, callerSid]).toEqual([false, sid]);
+        pids.push(pid);
+        const sample = capture(pid);
+        return sample === null ? null : { ticks: sample };
+      }, run: async (_program, args, _timeout, authorizeProof) => {
+        expect(Buffer.from(args.at(-1)!, "base64").toString("utf16le")).toStartWith("$nativeOwners = $true");
+        const line = Buffer.from(JSON.stringify({ xml, sid, ...fields })).toString("base64");
+        return result(0, await authorizeProof!(line) ? verdict : "unverified-registration");
+      } });
+      const status = await deps.endTask(2_000, () => { releases++; });
+      return [status, pids, releases];
+    };
+    const live = { count: 2, engines: [first, second] };
+    try {
+      expect(await check(live, () => ticks)).toEqual(["ended", [41, 42], 1]);
+      expect(await check(live, pid => pid === 42 ? null : ticks)).toEqual(["unverified-registration", [41, 42], 0]);
+      expect(await check(live, () => ticks + 10n)).toEqual(["unverified-registration", [41], 0]);
+      expect(await check(live, () => { elapsed.now = 2_000; return ticks; })).toEqual(["unverified-registration", [41], 0]);
+      for (const fields of [{}, { ...live, engines: [] }, { ...live, engines: [first] }, { ...live, sid: "S-1-5-18" },
+        { ...live, xml: "<Task/>" }, { count: 33, engines: Array(33).fill(first) },
+        ...[{ id: "00000000-0000-0000-0000-000000000000" }, { pid: 0 }, { ticks: "3e18" }].map(invalid => ({
+          count: 1, engines: [{ ...first, ...invalid }],
+        }))]) {
+        expect(await check(fields, () => ticks)).toEqual(["unverified-registration", [], 0]);
+      }
+      expect(await check({ ...live, engines: [first, first] }, () => ticks)).toEqual(["unverified-registration", [41], 0]);
+      const idle = { count: 0, engines: [] };
+      expect(await check(idle, () => null, "not-running")).toEqual(["not-running", [], 1]);
+      expect(await check(idle, () => null, "unverified-registration")).toEqual(["unverified-registration", [], 1]);
+      expect(await check(idle, () => null, "ended")).toEqual(["failed", [], 1]);
+    } finally { now.mockRestore(); }
+  });
+
   test("sc.exe query and stop", () => {
     expect(parseScQueryState(result(1060, "[SC] EnumQueryServicesStatus:OpenService FAILED 1060:"))).toBe("nonexistent");
     expect(parseScQueryState(result(0, "        STATE              : 4  RUNNING"))).toBe("running");
@@ -403,8 +451,21 @@ $instances = [pscustomobject]@{ Rows = @((New-Instance 42), (New-Instance 43)) }
 $instances | Add-Member ScriptProperty Count { $this.Rows.Count }
 $instances | Add-Member ScriptMethod Item { param($index) $this.Rows[$index - 1] }
 $script:task = [pscustomobject]@{ Xml = 'original'; State = 4; Instances = $instances }
-if ($script:scenario -in @('hidden', 'idle')) { $instances.Rows = @() }
+if ($script:scenario -in @('hidden', 'idle', 'idle-state-deadline')) { $instances.Rows = @() }
 if ($script:scenario -eq 'idle') { $script:task.State = 3 }
+if ($script:scenario -in @('native-idle', 'native-queued')) {
+  $instances.Rows = @()
+  $script:task | Add-Member -Force ScriptProperty State {
+    if ($script:taskReads -eq 1) { throw 'state read before registration recheck' }
+    if ($script:scenario -eq 'native-queued') { 2 } else { 3 }
+  }
+}
+if ($script:scenario -eq 'idle-state-deadline') {
+  $script:task | Add-Member -Force ScriptProperty State {
+    if ($script:taskReads -eq 2) { $script:elapsed = 2000 }
+    3
+  }
+}
 $script:task | Add-Member ScriptMethod GetInstances { param($flags) $this.Instances }
 $script:folder = [pscustomobject]@{}
 $script:folder | Add-Member ScriptMethod GetTask {
@@ -434,21 +495,28 @@ function Get-CimInstance {
 }
 function Invoke-CimMethod {
   param($InputObject, $MethodName, $OperationTimeoutSec)
+  if ($script:scenario -like 'native-*') { throw 'native proof must not use WMI owner lookup' }
   if ($MethodName -ne 'GetOwnerSid') { throw 'wrong method' }
   $owner = if ($script:scenario -eq 'foreign' -and $InputObject.Pid -eq 43) { $script:sid + '1' } else { $script:sid }
   @{ ReturnValue = 0; Sid = $owner }
 }
+function Get-FixtureProcess([int]$enginePid) {
+  $ticks = [long]638628778070001237 + $enginePid * 10
+  if ($script:scenario -eq 'native-reused' -and $script:taskReads -eq 2 -and $enginePid -eq 43) { $ticks++ }
+  $obj = [pscustomobject]@{ StartTime = [datetime]::new($ticks, [DateTimeKind]::Utc) }
+  $obj | Add-Member ScriptMethod Dispose {}
+  $obj
+}
 `;
-  const helper = WINDOWS_TASK_INSTANCE_STOP_SCRIPT
+  const fixtureHelper = (native: boolean) => windowsTaskInstanceStopScript(native)
     .replace("[Diagnostics.Stopwatch]::StartNew()", "Start-FixtureClock")
     .replace("[Console]::ReadLine()", "Read-FixtureApproval")
     .replace(/^\s*Import-Module .*'CimCmdlets\.psd1'.*$/m, "")
     .replaceAll("CimCmdlets\\", "")
     .replace("Microsoft.PowerShell.Utility\\New-Object -ComObject Schedule.Service", "New-Object -ComObject FixtureScheduler")
+    .replace("[Diagnostics.Process]::GetProcessById($enginePid)", "Get-FixtureProcess $enginePid")
     .replace("[Security.Principal.WindowsIdentity]::GetCurrent()",
       "([pscustomobject]@{ User = @{ Value = $script:sid }; Name = 'HOST\\test' })");
-  expect(helper).toContain("$service = New-Object -ComObject FixtureScheduler");
-  expect(helper).not.toContain("Schedule.Service");
   // All launches share one 60 s window (each capped at the spawn budget), so a hang fails here
   // with the active scenario named, inside the 120 s Linux batch deadline.
   const deadline = Date.now() + 60_000;
@@ -461,10 +529,20 @@ function Invoke-CimMethod {
     ["rejected", "unverified-registration", ""],
     ["hidden", "unverified-registration", ""],
     ["idle", "not-running", ""],
+    ["native-verified", "ended", "42,43"],
+    ["native-reused", "unverified-registration", ""],
+    ["native-idle", "not-running", ""],
+    ["native-queued", "unverified-registration", ""],
     ["late-approval", "failed", ""],
     ["deadline-before-first", "failed", ""],
     ["deadline-between-stops", "failed", "42"],
+    ["idle-state-deadline", "failed", ""],
   ]) {
+    const native = scenario!.startsWith("native-");
+    const helper = fixtureHelper(native);
+    expect(helper).toContain("$service = New-Object -ComObject FixtureScheduler");
+    expect(helper).not.toContain("Schedule.Service");
+    expect(helper).not.toContain("::GetProcessById");
     // Production runs the helper alone, which silences progress before its first module use. The fixture
     // runs first here and its Add-Member/[pscustomobject] calls autoload Microsoft.PowerShell.Utility, which
     // writes a "Preparing modules for first use" CLIXML progress record to stderr on a cold runner.
@@ -481,6 +559,17 @@ function Invoke-CimMethod {
     ]);
     expect({ scenario, stderr, code, output: stdout.trim().split(/\r?\n/).slice(-2) })
       .toEqual({ scenario, stderr: "", code: 0, output: [status, "Stopped=" + stopped] });
+    if (native) {
+      const line = stdout.trim().split(/\r?\n/)[0]!;
+      const proof = JSON.parse(Buffer.from(line, "base64").toString("utf8"));
+      if (scenario === "native-idle" || scenario === "native-queued") {
+        expect(proof).toMatchObject({ count: 0, engines: [] });
+        expect(proof).not.toHaveProperty("state");
+      } else {
+        expect(proof).toMatchObject({ count: 2,
+          engines: [{ pid: 42, ticks: "638628778070001650" }, { pid: 43, ticks: "638628778070001660" }] });
+      }
+    }
   }
 }, 65_000);
 

@@ -460,7 +460,7 @@ describe("POST /api/stop teardown", () => {
     expect(teardownSource).toContain("restoreNativeCodexAsync(options)");
   });
 
-  test("an unreadable scheduler state gets the same diagnosis from the CLI and the API", () => {
+  test("CLI and API distinguish an unverified stop from a service that stayed running", () => {
     const serviceSource = readFileSync(repoPath("src", "service", "orchestration.ts"), "utf8");
     // A manager that refused to stop and a query that could not answer are different
     // problems: reporting the second as "did not stop" sends the operator looking for the
@@ -490,6 +490,9 @@ describe("POST /api/stop teardown", () => {
     expect(handler).toContain('if (serviceStop === "state-unknown")');
     // The route answers the post-stop case with the same code as the pre-check.
     expect((handler.match(/service_state_unknown/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    const postStopUnknown = handler.slice(handler.indexOf('if (serviceStop === "state-unknown")'), handler.indexOf("await performStopTeardown"));
+    expect(postStopUnknown).toContain("service or process state could not be verified");
+    expect(postStopUnknown).not.toContain("repair Task Scheduler access");
   });
 
   test("maps a failed shutdown drain to a nonzero process exit", () => {

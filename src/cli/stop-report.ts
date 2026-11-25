@@ -61,6 +61,8 @@ export interface StopRunRecord {
   receiptClearFailed: boolean;
   /** Windows checked stop: the reason a Part A or Part B result was not a success. */
   serviceStopReason?: StopServiceReason;
+  /** Operator diagnostic from the checked stop, used in the existing summary message. */
+  serviceStopMessage?: string;
   /** Windows checked stop: Part B found another program on the port after ours were gone. */
   portHeldByForeign?: boolean;
 }
@@ -126,8 +128,8 @@ function stopMessage(record: StopRunRecord, signals: StopRunSignals, outcome: St
   if (record.proxy === "ownership-refused") return "The proxy refused the stop; it belongs to a different opencodex home.";
   if (record.proxy === "unresolvable-pid") return "A proxy is answering, but its process id could not be resolved, so it was not stopped.";
   if (record.proxy === "stop-failed") return "The proxy process could not be stopped.";
-  if (record.service === "failed") return "The installed service manager did not stop and may respawn the proxy.";
-  if (record.service === "state-unknown") return "The service manager state could not be read.";
+  if (record.service === "failed") return record.serviceStopMessage ?? "The installed service manager did not stop and may respawn the proxy.";
+  if (record.service === "state-unknown") return record.serviceStopMessage ?? "The service manager state could not be read.";
   if (record.service === "error") return "Stopping the installed service failed.";
   if (record.inheritedTeardownBlocks) return "An earlier stop left an outstanding shared teardown that could not be confirmed.";
   if (record.sharedTeardown === "failed") return "The shared teardown failed; client configuration may still point at the stopped proxy.";

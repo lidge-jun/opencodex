@@ -1,5 +1,7 @@
 import { StepCliSession, StepSessionError, type StepSessionDeps, type StepSessionEvent, type StepSessionHandlers, type StepSessionOptions } from "./session";
 
+const MAX_SESSIONS_PER_HOME = 8;
+
 /** Conversation identity the client echoes back through `providerState`. */
 export interface StepConversationRef {
   sessionId: string;
@@ -114,6 +116,12 @@ export class StepSessionPool implements StepConversationHost {
     }
     const inFlight = this.#opening.get(ref.handle);
     if (inFlight) return inFlight;
+    if (this.#sessions.size >= MAX_SESSIONS_PER_HOME) {
+      throw new StepSessionError(
+        `The StepCode pool for this OpenCodex home is full (${MAX_SESSIONS_PER_HOME} sessions). Retry when a session closes.`,
+        "step_cli_pool_full",
+      );
+    }
     const opening = (async () => {
       const session = await StepCliSession.open(this.#options.buildOptions(), this.#handlers, this.#deps, owned => {
         this.#sessions.add(owned);

@@ -30,6 +30,8 @@ ocx start --socks5-off
 
 无人监督的 Link Child 处理退出信号时，会在每次写入前核对连接，并在关闭监听器前恢复 Codex 原生配置及受管理的 Grok。服务/Desktop、sibling、重启交接和父进程 stop 收据会保留配置。退出中的重启请求返回 `409 runtime_stopping`。强制终止可能跳过信号处理，仍需父进程 `ocx stop` 的恢复路径。
 
+在 Windows x64 上，如果 WMI 未返回匹配的服务包装进程的所有者，OpenCodex 可以通过运行中进程的句柄核实 Windows 帐户和进程创建时间。无法确认所有者时，该进程将继续运行。如果错误明确指出任务计划程序的注册问题，请用 `ocx service status` 查看注册状态。
+
 停止正在运行的代理（按 PID），移除 PID 文件；独立运行的所有者还会恢复原生 Codex。如果安装了受管后台服务，`ocx stop` 还会先停止该服务，这样它就无法重新拉起代理。Web 仪表盘侧栏的代理拉杆拉到底时，在多数后端执行同样的操作（`POST /api/stop`），但 Windows 任务计划程序除外：任务结束后包装器仍可能重新拉起代理，只有运行在代理之外的 stop 才能在恢复客户端配置前确认这个重启窗口，因此仪表盘会以 `respawnable_service` 拒绝、不做任何更改，并提示改用 `ocx stop`。
 
 对于已连接的 hub 客户端，`ocx stop`（包括成功的 API 停止）会保留连接所拥有的 Codex 路由、模型目录和 Grok 配置。`ocx start` 使用这些保留的配置恢复服务，不会重新注入路由。要让 Codex 回到自己的账户，请运行 `ocx disconnect`；若已恢复为原生路由，要重新应用连接路由，请运行 `ocx sync --restart-codex`。
@@ -341,6 +343,8 @@ Unix 包管理器升级保留私有 wrapper；未激活时，请加载输出的�
 在 Linux 上，如果后台服务记录的启动器是 mise 的包启动器（`<tool>/latest/node_modules/.bin/ocx`，而不是 mise shim），服务会自动跟随 `mise upgrade`：新版本稳定后约十秒内，它会排空进行中的请求并在新版本上重启；如果 mise 之后清理了它正在运行的版本，也会以同样方式恢复。在 macOS 上、通过 mise shim 安装的服务以及前台代理，请在升级后自行重启（macOS 上先运行 `ocx service repair`）。
 
 从 npm 自更新 opencodex。稳定版安装使用 `@latest`；预览版安装保持在 `@preview`，除非你传入 `--tag latest|preview`。它会检测源码检出，并提示你改为运行 `git pull && bun install`；如果你已经是该标签的最新版本，则不会执行任何操作。对于 npm 安装，它会在停止任何进程之前，对 Unix 缓存的所有权和访问权限执行有界检查。嵌套符号链接会通过 `lstat` 检查但不会跟随；Windows 会明确跳过这项仅适用于 Unix 的检查。检查失败时，更新会在托盘和代理仍运行的情况下中止。随后才会在替换文件之前停止正在运行的代理；已安装的服务会自动重建并启动，而前台安装则会打印 `ocx start` 作为下一步。持久化前，仪表板更新记录会隐去用户配置文件/缓存路径以及 UID/GID 值。
+
+预览版的命名为 `X.Y.Z-preview.<date>` 或 `X.Y.Z-preview.<date>.<attempt>`，例如 `2.100.6-preview.20261119.1`；次数是该日期的发布序号。在 preview 通道中，预览版依次按基础版本、日期、次数比较，没有次数的版本视为次数 0。在任一通道中，只有当稳定版的基础版本高于预览版时，才会向预览版安装提供该稳定版；稳定通道从不提供预览版。这些规则适用于更新检查、通知和仪表盘的更新提示。`ocx update` 本身只要所选标签指向的版本与已安装版本不同就会安装它，因此在预览版安装上运行 `ocx update --tag latest` 会切换到当前稳定版，即使其基础版本并不更高。
 
 ```bash
 ocx update
