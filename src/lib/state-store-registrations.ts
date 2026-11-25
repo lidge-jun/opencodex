@@ -83,7 +83,11 @@ export function notifyLiveConfigObservers(config: OcxConfig): void {
   }
 }
 
-export function setLiveStateStoreConfig(config: OcxConfig): void {
+/**
+ * Install the server's live config. `persistApiKeyCooldowns` is set by server startup only, so a
+ * test or tool that adopts a config never binds the API-key cooldown file of whatever home it uses.
+ */
+export function setLiveStateStoreConfig(config: OcxConfig, options: { persistApiKeyCooldowns?: boolean } = {}): void {
   liveServerConfig = config;
   // The one place the server's live config object is installed; detached configs (catalog sync)
   // never come through here, so the outbound compression opt-in follows the running server only.
@@ -91,8 +95,7 @@ export function setLiveStateStoreConfig(config: OcxConfig): void {
   bindUpstreamHistorySlimConfig(config);
   bindCodexWsIncrementalConfig(config);
   bindWorkflowBudgetConfig(config);
-  // Confirmed API-key holds survive a restart; only the running server binds the file.
-  installApiKeyCooldownPersistence(config);
+  if (options.persistApiKeyCooldowns === true) installApiKeyCooldownPersistence(config);
   notifyLiveConfigObservers(config);
 }
 

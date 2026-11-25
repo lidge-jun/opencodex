@@ -39,7 +39,10 @@ export function setKeyCooldown(providerName: string, keyId: string, cooldownUnti
   const until = sameKey ? Math.max(prior.cooldownUntil, cooldownUntil) : cooldownUntil;
   const kept = generation ?? (sameKey ? prior.generation : undefined);
   keyCooldowns.set(key, kept === undefined ? { cooldownUntil: until } : { cooldownUntil: until, generation: kept });
-  if (persistence && kept !== undefined) persistence.record({ provider: providerName, keyId, generation: kept, cooldownUntil: until });
+  // Only a hold bound to the key that just failed is written, and only for a key the store accepts.
+  if (persistence && generation !== undefined && credential !== undefined && persistence.persists(credential)) {
+    persistence.record({ provider: providerName, keyId, generation, cooldownUntil: until, recordedAt: Date.now() });
+  }
 }
 
 export function isKeyInCooldown(providerName: string, keyId: string, now = Date.now()): boolean {
@@ -87,15 +90,17 @@ export function attachApiKeyCooldownPersistence(sink: ApiKeyCooldownPersistence)
   return () => { if (persistence === sink) persistence = undefined; };
 }
 
-/** Adopt rows a store loaded; the caller has already matched their generation to the current keys. */
+/**
+ * Adopt rows a store loaded; the caller has already matched their generation to the current keys,
+ * so a row replaces a local hold of any other generation and extends one of the same generation.
+ */
 export function restoreApiKeyCooldowns(rows: readonly ApiKeyCooldownRow[], now = Date.now()): number {
   let restored = 0;
   for (const row of rows) {
     if (row.cooldownUntil <= now) continue;
     const key = cooldownKey(row.provider, row.keyId);
     const prior = keyCooldowns.get(key);
-    // A hold this process already recorded wins over a different key's row and over an earlier expiry.
-    if (prior && ((prior.generation !== undefined && prior.generation !== row.generation) || prior.cooldownUntil >= row.cooldownUntil)) continue;
+    if (prior && (prior.generation === undefined || prior.generation === row.generation) && prior.cooldownUntil >= row.cooldownUntil) continue;
     keyCooldowns.set(key, { cooldownUntil: row.cooldownUntil, generation: row.generation });
     restored += 1;
   }
