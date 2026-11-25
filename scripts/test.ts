@@ -121,6 +121,8 @@ export function createIsolatedTestEnvironment(
       HOME: root,
       USERPROFILE: root,
       OPENCODEX_HOME: opencodexHome,
+      // Run baseline ACL contracts with their shipped sequence; opt-in tests set this explicitly.
+      OPENCODEX_ACL_BATCH_RESTRICTIONS: "0",
       // Pin per process for both the preload and children that inherit this environment.
       OCX_OWNER_REGISTRY_DIR: join(opencodexHome, "ocx-homes"),
       CODEX_HOME: codexHome,

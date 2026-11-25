@@ -26,6 +26,7 @@ import {
   CodexCredentialRefreshStaleError,
 } from "../codex/account-store";
 import { codexWarmupFailureReason, warmCodexAccount } from "../codex/warmup";
+import { codexAccountFetch } from "../codex/account-egress-runtime";
 import { getMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
@@ -246,6 +247,7 @@ export async function guardianSweep(nowMs: number = Date.now()): Promise<Guardia
               accessToken: token.accessToken,
               chatgptAccountId: token.chatgptAccountId,
               model: opts.codexWarmupModel,
+              transport: codexAccountFetch(id),
             });
             markCodexAccountValidated(id, Date.now(), token.generation);
             result.warmed.push(key);

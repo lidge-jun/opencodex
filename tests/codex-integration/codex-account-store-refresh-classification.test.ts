@@ -1,4 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach, spyOn } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,6 +36,7 @@ describe("codex refresh-failure classification", () => {
     setAsyncIcaclsRunnerForTests(async () => ICACLS_OK);
     TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-codex-refresh-class-"));
     process.env.OPENCODEX_HOME = TEST_DIR;
+    bindStoredCodexPoolRoutingForTests();
   });
 
   afterEach(async () => {

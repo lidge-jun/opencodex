@@ -1,4 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach, spyOn } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
@@ -28,6 +29,7 @@ function installScratchHome(): void {
   TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-codex-accounts-"));
   ACCOUNTS_PATH = join(TEST_DIR, "codex-accounts.json");
   process.env.OPENCODEX_HOME = TEST_DIR;
+  bindStoredCodexPoolRoutingForTests();
 }
 
 async function removeScratchHome(): Promise<void> {

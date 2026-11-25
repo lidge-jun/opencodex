@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -111,6 +112,7 @@ beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   testHome = mkdtempSync(join(tmpdir(), "ocx-quota-auto-refresh-"));
   process.env.OPENCODEX_HOME = testHome;
+  bindStoredCodexPoolRoutingForTests();
   clearAccountQuota();
   resetCodexQuotaAutoRefreshForTests();
 });

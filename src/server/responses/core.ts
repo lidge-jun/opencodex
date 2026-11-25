@@ -23,6 +23,7 @@ import { captureAdmissionPolicy } from "../capture-admission-policy";
 import { captureHostedAdvisorSpendScope } from "./hosted-advisor-spend";
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { isUnattendedAgyAcpHttpTurn } from "../../adapters/agy-acp/policy";
+import { withSendAdmissionScope } from "./send-admission";
 /**
  * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
  * wire, image/web-search bridges, and the terminal-guard continuation.
@@ -63,7 +64,8 @@ export async function handleResponses(
       hostedAdvisorSpendScope,
       // Once at ingress, spend observer included: a combo child inherits the parent's holder.
       sendBudget: options.sendBudget ?? createInferenceSendBudget(req, logCtx, hostedAdvisorSpendScope?.ceilings),
-    }, (req, config, logCtx, options) => handleResponsesInner(req, config, logCtx, options, requestDispatchers));
+    }, (req, config, logCtx, options) => withSendAdmissionScope(
+      () => handleResponsesInner(req, config, logCtx, options, requestDispatchers)));
     const finalResponse = ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget, abortSignal) : response;
     if (!accountLoad.lease) { release(); return finalResponse; }
     return finalizeAccountLease(finalResponse, release);

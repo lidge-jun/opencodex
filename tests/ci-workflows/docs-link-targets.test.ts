@@ -218,12 +218,27 @@ describe("docs link targets", () => {
     const manifest = JSON.parse(readFileSync(repoPath("readme/i18n-manifest.json"), "utf8")) as {
       locales: Record<string, { file: string; docsPath: string }>;
     };
-    for (const entry of Object.values(manifest.locales)) {
+    for (const [locale, entry] of Object.entries(manifest.locales)) {
       const localeReadme = readFileSync(repoPath(entry.file), "utf8");
       expect(localeReadme, entry.file).not.toContain("will not transfer any information to other networked systems");
-      expect(localeReadme, entry.file).toContain(
-        expectedPrivacy + " See the [telemetry guide](https://opencodex.me/" + entry.docsPath + "/guides/telemetry/).",
-      );
+      const guideUrl = "https://opencodex.me/" + entry.docsPath + "/guides/telemetry/";
+      if (locale === "es") {
+        // The Spanish README translates the notice; keep the privacy claims on the notice
+        // itself rather than accepting unrelated mentions anywhere in the file.
+        const notice = localeReadme.match(/^- Privacidad: ([^\r\n]+)/m)?.[1] ?? "";
+        expect(notice).toContain("telemetry.opencodex.me un resumen anónimo diario de uso");
+        expect(notice).toContain("Nunca incluye prompts, salidas del modelo, claves, cuentas, nombres de host ni rutas.");
+        expect(notice).toContain("ha visto el aviso en el panel o en la CLI interactiva y no ha rechazado el envío");
+        for (const control of ["ocx telemetry disable", "OCX_TELEMETRY=0", "DO_NOT_TRACK=1", "ocx telemetry profile connect"]) {
+          expect(notice).toContain(control);
+        }
+        expect(notice).toContain("desactivado hasta que lo conectes");
+        expect(notice).toContain("Nunca comparte tu ID de telemetría anónima.");
+        expect(notice).toContain("Al desconectar el perfil se elimina.");
+        expect(notice).toContain("(" + guideUrl + ")");
+      } else {
+        expect(localeReadme, entry.file).toContain(expectedPrivacy + " See the [telemetry guide](" + guideUrl + ").");
+      }
     }
 
     const codeSigning = readFileSync(repoPath("docs-site/src/content/docs/reference/code-signing.md"), "utf8");

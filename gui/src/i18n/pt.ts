@@ -5,6 +5,7 @@ import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
+import { connectionsCopy } from "./connections-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
@@ -145,6 +146,7 @@ export const pt: Record<TKey, string> = {
   ...remoteLinkDiagnosticsCopy("pt"),
   ...remoteLinkChildCopy("pt"),
   ...gatewayClientsCopy("pt"),
+  ...connectionsCopy("pt"),
   ...modelsV2Copy("pt"),
   ...modelsOverallCopy("pt"),
   ...accountsV2Copy("pt"),
@@ -3644,6 +3646,27 @@ export const pt: Record<TKey, string> = {
   "cws.tabsLabel": "Seções de detalhe do combo",
   "cws.tab.config": "Configuração",
   "cws.tab.about": "Sobre",
+  "cws.quotaPreset.openai-first": "OpenAI primeiro",
+  "cws.quotaPreset.claude-first": "Claude primeiro",
+  "cws.quotaOnly": "Mudar só quando a cota acabar",
+  "cws.preserveModel": "Manter o mesmo modelo na alternativa",
+  "cws.allowPaidLocal": "Permitir chamadas pagas de clientes locais",
+  "cws.meteredTarget": "Destino de API paga",
+  "cws.preview.title": "Prévia da alternativa",
+  "cws.preview.note": "A prévia usa as configurações do combo. As permissões do cliente e a cota real são verificadas no envio.",
+  "cws.preview.unchecked": "As rotas não foram verificadas, então a prévia mostra os destinos configurados. Os redirecionamentos, as permissões do cliente e a cota real são verificados no envio.",
+  "cws.preview.paid": "API paga",
+  "cws.preview.billingUnknown": "Cobrança desconhecida",
+  "cws.preview.consent": "Chamadas de API paga exigem permissão",
+  "cws.preview.model": "Modelo diferente com o bloqueio ativado",
+  "cws.preview.provider": "Provedor indisponível",
+  "cws.preview.incomplete": "Destino incompleto",
+  "cws.preview.unreached": "Não alcançado",
+  "cws.preview.skipped": "Ignorado · {reason}",
+  "cws.preview.terminal": "Para após o último destino se ele também falhar.",
+  "cws.preview.stopAt": "Para na etapa {step}.",
+  "cws.preview.quotaRule": "Só avança após confirmar que a cota ou o saldo se esgotou.",
+  "cws.preview.subscriptionsOnly": "Somente assinaturas",
   "cws.strategy": "Estratégia",
   "cws.strategy.failover": "Failover",
   "cws.strategy.roundRobin": "Round-robin",
@@ -3685,6 +3708,7 @@ export const pt: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "Este esforço não está na escala comum dos destinos — será ignorado ou ajustado no momento da requisição.",
   "cws.field.defaultEffortUnsupportedOption": "fora da interseção",
   "cws.targets": "Destinos",
+  "cws.targets.order": "Ordem dos destinos",
   "cws.targets.failoverHint": "A ordem importa — o primeiro é o principal.",
   "cws.targets.roundRobinHint": "Os pesos controlam a seleção relativa determinística; a ordem desempata no anel de rotação.",
   "cws.targets.randomHint": "Os pesos controlam a probabilidade de cada sorteio; a ordem não importa.",

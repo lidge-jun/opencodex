@@ -5,6 +5,7 @@ import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
+import { connectionsCopy } from "./connections-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
@@ -143,6 +144,7 @@ export const zh: Record<TKey, string> = {
   ...remoteLinkDiagnosticsCopy("zh"),
   ...remoteLinkChildCopy("zh"),
   ...gatewayClientsCopy("zh"),
+  ...connectionsCopy("zh"),
   ...modelsV2Copy("zh"),
   ...modelsOverallCopy("zh"),
   ...accountsV2Copy("zh"),
@@ -3594,6 +3596,27 @@ export const zh: Record<TKey, string> = {
   "cws.tabsLabel": "组合详情分区",
   "cws.tab.config": "配置",
   "cws.tab.about": "关于",
+  "cws.quotaPreset.openai-first": "OpenAI 优先",
+  "cws.quotaPreset.claude-first": "Claude 优先",
+  "cws.quotaOnly": "仅在配额耗尽时切换",
+  "cws.preserveModel": "回退时保持相同模型",
+  "cws.allowPaidLocal": "允许本地客户端发起付费调用",
+  "cws.meteredTarget": "付费 API 目标",
+  "cws.preview.title": "回退预览",
+  "cws.preview.note": "预览基于组合设置。调用方的权限和实际配额会在请求发出时检查。",
+  "cws.preview.unchecked": "路由尚未检查，因此预览显示已配置的目标。重定向、调用方的权限和实际配额会在请求发出时检查。",
+  "cws.preview.paid": "付费 API",
+  "cws.preview.billingUnknown": "计费方式未知",
+  "cws.preview.consent": "付费 API 调用需要授权",
+  "cws.preview.model": "已锁定模型，但此处模型不同",
+  "cws.preview.provider": "提供方不可用",
+  "cws.preview.incomplete": "目标配置不完整",
+  "cws.preview.unreached": "不会到达",
+  "cws.preview.skipped": "已跳过 · {reason}",
+  "cws.preview.terminal": "如果最后一个目标也失败，则停止。",
+  "cws.preview.stopAt": "在第 {step} 步停止。",
+  "cws.preview.quotaRule": "仅在确认配额或额度耗尽后切换到下一个目标。",
+  "cws.preview.subscriptionsOnly": "仅使用订阅",
   "cws.strategy": "策略",
   "cws.strategy.failover": "故障转移",
   "cws.strategy.roundRobin": "轮询",
@@ -3635,6 +3658,7 @@ export const zh: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "该级别不在目标的公共阶梯中 — 请求时会被忽略或就近映射。",
   "cws.field.defaultEffortUnsupportedOption": "不在交集中",
   "cws.targets": "目标",
+  "cws.targets.order": "目标顺序",
   "cws.targets.failoverHint": "顺序很重要 — 第一个为主。",
   "cws.targets.roundRobinHint": "权重控制确定性的相对选择；顺序用于打破轮换环中的平局。",
   "cws.targets.randomHint": "权重控制每次抽取的概率，顺序无关紧要。",

@@ -5,6 +5,7 @@ import { fastPolicyForModel } from "../../providers/service-tier";
 import type { ResolvedFastPolicy } from "../../providers/fastwire";
 import { catalogModelSlug, type CatalogModel, type RawEntry } from "./parsing";
 import { preserveOperatorUltraFastTiers } from "./operator-tiers";
+import { NATIVE_ULTRAFAST_SERVICE_TIER } from "./native-ultrafast";
 
 const MANAGED_ULTRAFAST = "opencodex_managed_ultrafast";
 
@@ -50,7 +51,8 @@ export function applyConfiguredUltraFast(
   if (!configured) return;
   entry.service_tiers = [...(Array.isArray(entry.service_tiers) ? entry.service_tiers : []), {
     id: "ultrafast",
-    name: "Ultra Fast",
+    // Clients key on the name: Codex CLI makes it a slash command, T3 Code matches "Ultrafast".
+    name: NATIVE_ULTRAFAST_SERVICE_TIER.name,
     description: "Higher speed and usage; provider access required",
   }];
   entry.additional_speed_tiers = [

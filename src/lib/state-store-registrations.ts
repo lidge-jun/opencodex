@@ -45,6 +45,7 @@ import { configuredAnthropicInstance } from "../providers/anthropic-instance";
 import { listLiveOAuthAccountKeys, reconcileOAuthReauthState } from "../oauth/store";
 import { reconcileGuardianBackoff } from "../oauth/token-guardian";
 import { sweepExpiredApiKeyCooldowns } from "../providers/key-failover";
+import { reconcileApiKeyCooldownGenerations } from "../providers/api-key-cooldowns";
 import { reconcileProviderRequestPacing } from "../providers/request-pacing";
 import { sweepAbandonedResponseStateTemps, sweepExpiredResponseStates, sweepOrphanedResponseSpills } from "../responses/state";
 import { sweepExpiredAntigravityReplay } from "../adapters/google-antigravity-replay";
@@ -128,7 +129,8 @@ export function buildGenerationContext(): GenerationContext {
 
 export const STATE_STORE_REGISTRATIONS = [
   { name: "subagent-model-health", sweepExpired: sweepExpiredSubagentModelHealth },
-  { name: "api-key-cooldowns", sweepExpired: sweepExpiredApiKeyCooldowns },
+  { name: "api-key-cooldowns", sweepExpired: sweepExpiredApiKeyCooldowns,
+    reconcileGeneration: () => reconcileApiKeyCooldownGenerations(liveServerConfig?.providers) },
   { name: "provider-request-pacing", reconcileGeneration: reconcileProviderRequestPacing },
   {
     name: "combo-target-cooldowns",

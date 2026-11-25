@@ -75,8 +75,8 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   windowsPartAReject?: boolean;
 };
 if (options.legacyWindowsEvidence) {
-  // Fake Windows command output at the OS boundary. The production SID, argv
-  // and listener readers and the standalone proof all run in this subprocess.
+  // Fake Windows process evidence at the OS boundary. The production argv/listener
+  // readers and standalone proof run here without touching the host's process table.
   const evidence = options.legacyWindowsEvidence;
   const record = { pid: 4242, port: 10100, hostname: "127.0.0.1",
     ...(evidence === "client-role" ? { role: "client" as const } : {}),
@@ -84,9 +84,19 @@ if (options.legacyWindowsEvidence) {
   };
   const { proveStandaloneStopRecord } = await import("../../src/cli/stop-restore");
   const { setProcessCommandLinePlatformForTests } = await import("../../src/config/process-state");
-  const { setWindowsProcessNativeForTests } = await import("../../src/service/windows-process-native");
-  setWindowsProcessNativeForTests(null); // Exercise the mocked CIM fallback on Windows too.
   setProcessCommandLinePlatformForTests("win32");
+  const { readSameUserWindowsStart, setWindowsProcessNativeForTests } = await import("../../src/service/windows-process-native");
+  setWindowsProcessNativeForTests({ creationTime: () => null, terminate: () => ({ status: "unavailable" }),
+    openWatch: () => ({ status: "unavailable" }), scheduleServicePid: () => null,
+    sameUserIdentity: pid => {
+      const ticks = readSameUserWindowsStart(pid, {
+        open: target => target === record.pid ? 1 : 0, close: () => {},
+        fileTime: () => 134_088_768_000_000_000n, exited: () => false,
+        ownerSid: () => evidence === "foreign-sid" ? "S-1-5-21-2" : "S-1-5-21-1", currentSid: () => "S-1-5-21-1",
+      });
+      return ticks === null ? null : { ticks };
+    },
+  });
   const windows = await import("../../src/lib/windows-elevation");
   mock.module("../../src/lib/windows-elevation", () => ({ ...windows,
     resolveTrustedWindowsSystemDirectory: () => "system",
@@ -99,9 +109,6 @@ if (options.legacyWindowsEvidence) {
         const pid = evidence === "wrong-pid" ? 4243 : record.pid;
         const port = evidence === "wrong-port" ? record.port + 1 : record.port;
         return `TCP ${host}:${port} 0.0.0.0:0 LISTENING ${pid}\r\n`;
-      }
-      if (args.at(-1)?.includes("GetOwnerSid")) {
-        return evidence === "foreign-sid" ? "" : "639000000000000000\r\n";
       }
       if (file.endsWith("WMIC.exe")) {
         const verb = evidence === "wrong-argv" ? 'status "start"' : "start";

@@ -15,14 +15,17 @@ import {
   getAnthropicAccountHealthSnapshot, recordAnthropicAccount429, recordAnthropicAccountRefusal,
 } from "../../../src/oauth/anthropic-routing";
 import { claimAnthropicFamilyRevalidation, clearAllAnthropicFamilyQuota, observeAnthropicFamilyQuota } from "../../../src/oauth/anthropic-model-quota";
+import { clearAllAnthropicRatePauses, pauseAnthropicRateAdmission } from "../../../src/oauth/anthropic-rate-limit-policy";
 import { clearGenericFailoverHealth } from "../../../src/oauth/generic-account-failover";
 import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
 import { clearAccountQuotaCache, resetProviderQuotaReconcileStateForTests } from "../../../src/providers/quota";
 import { clearResponseStateForTests } from "../../../src/responses/state";
 import { handleResponses } from "../../../src/server/responses";
+import { handleClaudeMessages } from "../../../src/server/claude-messages";
 import { anthropicPoolCooldownResponse } from "../../../src/server/responses/core-errors";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { chatStream, chatSuccess } from "../../helpers/combo-failover-upstream";
 
 const originalHome = process.env.OPENCODEX_HOME;
 let originalFetch: typeof globalThis.fetch;
@@ -39,6 +42,7 @@ beforeEach(() => {
   clearAnthropicAccountPoolState();
   forgetAnthropicFailoverQuorum();
   clearAllAnthropicFamilyQuota();
+  clearAllAnthropicRatePauses();
   clearGenericFailoverHealth();
   clearAccountQuotaCache();
   resetProviderQuotaReconcileStateForTests();
@@ -53,6 +57,7 @@ afterEach(() => {
   clearAnthropicAccountPoolState();
   forgetAnthropicFailoverQuorum();
   clearAllAnthropicFamilyQuota();
+  clearAllAnthropicRatePauses();
   clearGenericFailoverHealth();
   resetProviderQuotaReconcileStateForTests();
   clearResponseStateForTests();
@@ -155,6 +160,88 @@ test.each([true, false])("every account held on quota answers usage_limit_reache
   expect(Number(response.headers.get("retry-after"))).toBeLessThanOrEqual(20 * 60);
   expect(sent).toHaveLength(0);
   expectNoAccountMaterial(text, ids);
+});
+
+test.each(["responses", "messages"])("quota-only %s fallback waits for the Anthropic pool verdict", async wire => {
+  const ids = await seed();
+  const config = configFor(true, () => spent("7d", 60));
+  config.providers.anthropic!.baseUrl = "https://api.anthropic.com";
+  config.providers.backup = { adapter: "openai-chat", baseUrl: "https://backup.example/v1", apiKey: "fixture",
+    fetch: (async (_input, init) => {
+      sent.push("backup");
+      return JSON.parse(String(init?.body)).stream ? chatStream("fallback") : chatSuccess("fallback", "m");
+    }) as typeof fetch };
+  config.combos = { strict: { strategy: "failover", quotaOnlyFallback: true, allowMeteredTargets: true,
+    targets: [{ provider: "anthropic", model: "claude-sonnet-4-5" }, { provider: "backup", model: "m" }] } };
+  holdOnQuota(config, ids[0]!, 60, Date.now());
+  const admission = { kind: "loopback", source: "loopback" } as const;
+  const req = new Request(`http://localhost/v1/${wire}`, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(wire === "responses" ? { model: "combo/strict", input: "fixture", stream: false }
+      : { model: "combo/strict", messages: [{ role: "user", content: "fixture" }], max_tokens: 32, stream: false }) });
+  const log = { model: "", provider: "" };
+  const response = wire === "responses" ? await handleResponses(req, config, log, { admission })
+    : await handleClaudeMessages(req, config, log, { admission, requestId: "fixture", start: Date.now() });
+  expect(response.status, JSON.stringify({ body: await response.text(), attempts: sent.length })).toBe(200);
+  expect(sent).toHaveLength(2);
+  expect(sent[1]).toBe("backup");
+});
+
+test("an ordinary Combo keeps the upstream 429 after the last pool account refuses", async () => {
+  const ids = await seed();
+  const config = configFor(true, () => spent("7d", 60));
+  config.combos = { ordinary: { strategy: "failover", targets: [{ provider: "anthropic", model: "claude-sonnet-4-5" }] } };
+  holdOnQuota(config, ids[0]!, 60, Date.now());
+  const response = await post(config, { model: "combo/ordinary" });
+  expect(response.status).toBe(429);
+  expect(String((await errorOf(response)).message)).toContain("synthetic window spent");
+  expect(sent).toHaveLength(1);
+});
+
+for (const status of [400, 402]) test.each([1, 2])(`quota-only advances on a ${status} credit refusal only once no pool account remains (%p accounts)`, async count => {
+  await seed(count);
+  const config = configFor(true, () => Response.json({ type: "error", error: {
+    type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API.",
+  } }, { status }));
+  config.providers.anthropic!.baseUrl = "https://api.anthropic.com";
+  config.providers.backup = { adapter: "openai-chat", baseUrl: "https://backup.example/v1", apiKey: "fixture",
+    fetch: (async () => { sent.push("backup"); return chatSuccess("fallback", "m"); }) as typeof fetch };
+  config.combos = { strict: { strategy: "failover", quotaOnlyFallback: true, allowMeteredTargets: true,
+    targets: [{ provider: "anthropic", model: "claude-sonnet-4-5" }, { provider: "backup", model: "m" }] } };
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "combo/strict", input: "fixture", stream: false }),
+  }), config, { model: "", provider: "" }, { admission: { kind: "loopback", source: "loopback" } });
+  const body = await response.text();
+  expect(sent[0]).not.toBe("backup");
+  if (count === 1) {
+    expect(response.status, body).toBe(200);
+    expect(sent.at(-1)).toBe("backup");
+  } else {
+    // The refused account is recorded, and its sibling serves the next request.
+    expect(response.status, body).toBe(status);
+    expect(sent).not.toContain("backup");
+  }
+});
+
+test("quota-only stays on the Anthropic pool after a credit refusal while a sibling waits out a rate pause", async () => {
+  const ids = await seed(2);
+  const config = configFor(true, () => Response.json({ type: "error", error: {
+    type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API.",
+  } }, { status: 402 }));
+  config.providers.anthropic!.baseUrl = "https://api.anthropic.com";
+  config.providers.backup = { adapter: "openai-chat", baseUrl: "https://backup.example/v1", apiKey: "fixture",
+    fetch: (async () => { sent.push("backup"); return chatSuccess("fallback", "m"); }) as typeof fetch };
+  config.combos = { strict: { strategy: "failover", quotaOnlyFallback: true, allowMeteredTargets: true,
+    targets: [{ provider: "anthropic", model: "claude-sonnet-4-5" }, { provider: "backup", model: "m" }] } };
+  // The other account is only throttled for a minute and serves again after it.
+  pauseAnthropicRateAdmission(ids[0]!, Date.now() + MINUTE);
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "combo/strict", input: "fixture", stream: false }),
+  }), config, { model: "", provider: "" }, { admission: { kind: "loopback", source: "loopback" } });
+  const body = await response.text();
+  expect(response.status, body).toBe(402);
+  expect(sent).not.toContain("backup");
 });
 
 test("resets_at is the upstream window reset, and is omitted when any held account's reset is unknown", async () => {

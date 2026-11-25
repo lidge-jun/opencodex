@@ -12,6 +12,30 @@ Esto es útil cuando usted quiere:
 
 Los combos se evalúan antes del enrutamiento normal de proveedores. Consulta primero [Enrutamiento de modelos](/es/guides/model-routing/) si aún no conoces los selectores `provider/model`.
 
+## Fallback al agotarse la cuota
+
+En **Modelos → Combos**, elija **OpenAI primero** o **Claude primero** para ordenar una suscripción
+y su clave de API, seguidas de la otra suscripción y su clave. Arrastre los destinos o utilice sus
+flechas para reordenarlos. La vista previa muestra el primer paso bloqueado. Al crear un preajuste,
+**Solo suscripciones** retira las dos claves. Solicite `combo/openai-first` o `combo/claude-first`
+para usar la ruta guardada.
+
+**Cambiar solo cuando se agote la cuota** (`quotaOnlyFallback`) avanza tras confirmar que se agotó
+la cuota o el saldo. Un destino con varias claves de API avanza cuando cada clave activa informa
+una cuota o un saldo agotados. Los destinos fuera de una suscripción reconocida o una ruta local explícita de
+loopback requieren consentimiento, incluidas las claves personalizadas y las redirecciones. Un destino
+sin autorización devuelve `combo_metered_consent_required`. Si no se puede recuperar el destino de
+una llamada a herramienta, la continuación devuelve `409 combo_tool_target_unavailable`. El límite
+de tokens de salida deja el modelo disponible para el turno siguiente.
+
+**Mantener el mismo modelo** (`preserveFallbackModel`) exige el mismo identificador de modelo
+resuelto, incluso entre proveedores. Si cambia, devuelve `409 combo_model_change_refused`.
+
+```bash
+ocx combo set openai-first --quota-only-fallback on
+ocx combo set exact-model --preserve-fallback-model on
+```
+
 <a id="metered-fallback-consent"></a>
 
 ## Consentimiento de fallback medido
@@ -21,18 +45,22 @@ Marque un objetivo combinado de pago por uso con `"metered": true` cuando siga l
 - **Local Claude Code o Codex:** en un proxy solo loopback, establezca `"allowMeteredTargets": true` en el combo o ejecute `ocx combo set <id> --allow-metered-targets on`. Esto permite explícitamente a las personas que llaman locales usar sus objetivos marcados. El valor predeterminado es falso; `off` borra el consentimiento. La autenticación de loopback no lee las claves API.
 - **Llamadas en red o vinculadas:** la entrada `apiKeys[]` configurada por el llamante debe tener `"allowMeteredComboTargets": true`. Un proxy con un oyente que no es loopback ignora la bandera combinada, incluso en su oyente de loopback secundario. Las personas que llaman vinculadas también retienen su requisito de consentimiento de clave configurada cuando el oyente principal es loopback. El token de entorno nunca califica.
 
-Los encabezados de solicitud no pueden otorgar consentimiento. Los alcances de modelo/proveedor todavía se aplican. Esto cubre la selección inicial, la conmutación por error y la recuperación a través de estrategias combinadas, compactación, Messages, Chat Completions y WebSocket, y un modelo de subagente alternativo que nombra un alias combinado. Una reserva colapsada intenta un objetivo no medido utilizable antes de rechazarlo. Los objetivos no marcados conservan el comportamiento existente; el operador declara la medición en lugar de detectarla automáticamente.
+Los encabezados de solicitud no pueden otorgar consentimiento. Los alcances de modelo/proveedor todavía se aplican. Esto cubre la selección inicial, la conmutación por error y la recuperación a través de estrategias combinadas, compactación, Messages, Chat Completions y WebSocket, y un modelo de subagente alternativo que nombra un alias combinado. Fuera del modo de cuota, una reserva colapsada intenta un objetivo no medido utilizable antes de rechazarlo. Un combo colapsado con cambio solo por cuota se detiene en el primer destino de pago sin consentimiento con `combo_metered_consent_required`. Fuera del modo de cuota, solo la marca `metered` del operador hace que un objetivo necesite consentimiento. En el modo de cuota, un objetivo no marcado también lo necesita cuando su destino está fuera de una suscripción reconocida o de una ruta local explícita de loopback.
 
 Una solicitud vuelve a comprobar el consentimiento y el alcance de modelos de su clave justo antes de
 cada envío de pago: la llamada de decisión de JEV y cada intento de destino, incluidos la conmutación
 por error, los reintentos y los envíos fijados. Por eso, retirar el consentimiento o reducir el alcance
 de una clave detiene los envíos que la solicitud aún no ha hecho. Se omite el destino que ya no cumple
 los requisitos y otro destino elegible puede atender la solicitud; si no queda ninguno, la solicitud
-termina con el `combo_unavailable` habitual o con el rechazo por alcance. Los demás cambios del combo,
+termina con el `combo_unavailable` habitual o con el rechazo por alcance. Un combo con cambio solo por
+cuota no omite un destino que perdió el consentimiento. Devuelve `403 combo_metered_consent_required`,
+igual que una continuación de herramienta fijada a ese destino. Los demás cambios del combo,
 como las capacidades, el Vision Sidecar, los ajustes de protocolo o la lista de destinos, se aplican a
-partir de la siguiente solicitud. Una solicitud en curso conserva la configuración con la que empezó.
+partir de la siguiente solicitud. Una solicitud en curso conserva la configuración con la que empezó. Una continuación de herramienta
+fijada de un combo con cambio solo por cuota vuelve a comprobar antes del envío que su destino sigue en el
+combo y que su ruta no cambió.
 
-Por ejemplo, una cadena de fallback puede probar Anthropic OAuth, después Cursor y finalmente `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. Sin consentimiento, al agotar los destinos se devuelve el último error de un objetivo no medido, con las excepciones de [desbordamiento de contexto confirmado](#context-window-refusals) y de cuota: un rechazo anterior 429 o 402 tiene prioridad sobre un 400, 401 o 403 posterior. Si la suscripción devuelve 429 y Cursor luego rechaza con 401 o 403, se devuelve el 429 porque explica el agotamiento de la suscripción. Los guardados del dashboard conservan la medición de objetivos y el consentimiento del combo cuando se omiten; `false` explícito los elimina. Estos ajustes se configuran en el archivo o la API; la bandera del combo también está disponible en la CLI, pero el dashboard no la expone.
+Por ejemplo, una cadena de fallback puede probar Anthropic OAuth, después Cursor y finalmente `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. En un combo de conmutación ordinario sin consentimiento, al agotar los destinos se devuelve el último error de un objetivo no medido, con las excepciones de [desbordamiento de contexto confirmado](#context-window-refusals) y de cuota: un rechazo anterior 429 o 402 de un destino enviado tiene prioridad sobre un 400, 401 o 403 posterior. Un combo con cambio solo por cuota que llega a un destino de pago sin consentimiento devuelve `403 combo_metered_consent_required`. Si la suscripción devuelve 429 y Cursor luego rechaza con 401 o 403, se devuelve el 429 porque explica el agotamiento de la suscripción. Los guardados del dashboard conservan la medición de objetivos y el consentimiento del combo cuando se omiten; `false` explícito los elimina. Edite estos ajustes en el dashboard actual, el archivo de configuración o la API. La bandera del combo también está disponible en la CLI.
 
 <a id="60-second-quickstart"></a>
 
@@ -518,7 +546,8 @@ terminal incompleto puede poner ese destino en enfriamiento para la siguiente so
 puede aparecer en el evento terminal o en su instantánea `response`. Un rechazo en cualquiera
 de los dos tiene prioridad. `upstream_stall_timeout` aplica un enfriamiento de 60 segundos.
 `max_output_tokens` aplica uno de 10 minutos si el intento alcanza el límite de salida conocido
-del modelo y el turno termina sin pausa.
+del modelo y el turno termina sin pausa. Un combo con `quotaOnlyFallback` no aplica este enfriamiento, así
+que el objetivo sigue disponible para el turno siguiente.
 El preajuste de Devin requiere que el límite de salida se configure explícitamente en el
 proveedor para aplicar este enfriamiento. Si ya hay un enfriamiento con un vencimiento
 posterior, ese vencimiento se conserva.
@@ -589,7 +618,7 @@ Un combo también puede avanzar después de un HTTP 400 `invalid_request_error` 
 
 Cuando un modelo le pide a su cliente que ejecute una herramienta, la solicitud que devuelve el resultado de la herramienta finaliza el mismo turno de asistente. OpenCodex envía esa solicitud al objetivo que emitió la llamada a la herramienta, siempre que el objetivo aún esté habilitado, aún en el combo y fuera del tiempo de reutilización. Esto se aplica a todas las estrategias, incluido JEV, que omite su decisión para esa solicitud. El siguiente mensaje de usuario elige un destino normalmente.
 
-El seguimiento utiliza el hilo o el identificador de sesión del cliente, por lo que un cliente que no envía ninguno recibe una selección normal. Si el objetivo original no está disponible o falla, el combo falla como de costumbre, y el nuevo objetivo recibe las llamadas a la herramienta anterior de la forma que acepta. DeepSeek modelos de pensamiento obtienen un marcador de posición de razonamiento de un espacio para una llamada de herramienta que otro modelo emitió sin razonamiento. Gemini obtiene el marcador de posición de firma documentado de Google. Anthropic recibe una simple llamada de herramienta y resultado. Las versiones anteriores podían enviar DeepSeek una llamada de herramienta desnuda aquí y fallar con `The reasoning_text in the
+El seguimiento utiliza el hilo o el identificador de sesión del cliente, por lo que un cliente que no envía ninguno recibe una selección normal. Si el objetivo original no está disponible o falla, el combo falla como de costumbre, y el nuevo objetivo recibe las llamadas a la herramienta anterior de la forma que acepta. Con `quotaOnlyFallback`, la continuación se queda en ese objetivo: un fallo vuelve al cliente, y un objetivo que no puede atenderla devuelve `409 combo_tool_target_unavailable`, o `429 combo_tool_target_quota_exhausted` cuando agotó su cuota. DeepSeek modelos de pensamiento obtienen un marcador de posición de razonamiento de un espacio para una llamada de herramienta que otro modelo emitió sin razonamiento. Gemini obtiene el marcador de posición de firma documentado de Google. Anthropic recibe una simple llamada de herramienta y resultado. Las versiones anteriores podían enviar DeepSeek una llamada de herramienta desnuda aquí y fallar con `The reasoning_text in the
 thinking mode must be passed back to the API`.
 
 <a id="default-reasoning-effort"></a>

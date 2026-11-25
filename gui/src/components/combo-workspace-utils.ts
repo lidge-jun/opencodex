@@ -1,17 +1,30 @@
 import {
   type ComboDraftError,
   type ComboItem,
+  emptyDraft,
+  newComboTarget,
   JEV_DECISION_ISSUE_LABEL_KEYS,
   jevDecisionProviderIssue,
 } from "../combo-workspace-data";
 import type { TFn } from "../i18n/shared";
+import { formatProviderDisplayName } from "../provider-icons";
 import {
   type JevDecisionRow,
   JEV_DECISION_TIMEOUT_MAX_MS,
   JEV_DECISION_TIMEOUT_MIN_MS,
 } from "../jev-decision-service";
-import type { ModelOption, ProviderOption } from "./combo-workspace-types";
+import type { ModelOption, ProviderOption, QuotaComboPreset } from "./combo-workspace-types";
 import { JEV_SESSION_PIN_TTL_MIN_MS, JEV_SESSION_PIN_TTL_MAX_MS } from "../../../src/combos/jev-session-pin-config";
+import { comboProviderBilling } from "../../../src/combos/suggestion-channel";
+
+export function comboTargetBilling(provider: ProviderOption) {
+  return provider.comboBilling ?? comboProviderBilling(provider);
+}
+
+export function comboTargetProviderName(name: string, provider: ProviderOption | undefined, t: TFn): string {
+  const identity = provider?.alias || name;
+  return identity === "anthropic-apikey" ? "Anthropic API" : formatProviderDisplayName(identity, t);
+}
 
 /** Localized validation message, with the bounds or the decision-service reason filled in. */
 export function comboDraftErrorText(
@@ -84,4 +97,36 @@ export function modelsForProvider(
     ids.push(m.id);
   }
   return ids.toSorted((a, b) => a.localeCompare(b));
+}
+
+const OPENAI_QUOTA_PAIR = ["openai", "openai-apikey"] as const;
+const ANTHROPIC_QUOTA_PAIR = ["anthropic", "anthropic-apikey"] as const;
+
+export function quotaComboDraft(
+  preset: QuotaComboPreset,
+  providers: ProviderOption[],
+  models: ModelOption[],
+): ComboItem | undefined {
+  const enabled = enabledProviders(providers);
+  const providerFor = (id: string) => enabled.find(provider => provider.name === id)
+    ?? enabled.find(provider => provider.alias === id);
+  const targets = [];
+  const pairs = preset === "openai-first"
+    ? [OPENAI_QUOTA_PAIR, ANTHROPIC_QUOTA_PAIR]
+    : [ANTHROPIC_QUOTA_PAIR, OPENAI_QUOTA_PAIR];
+  for (const [subscription, api] of pairs) {
+    const included = providerFor(subscription);
+    const key = providerFor(api);
+    if (!included || !key || comboTargetBilling(included) === "consent" || comboTargetBilling(key) !== "consent") return undefined;
+    const includedModels = modelsForProvider(models, included.name, providers);
+    const keyModels = modelsForProvider(models, key.name, providers);
+    const includedModel = included.defaultModel || includedModels[0];
+    const keyModel = includedModel && keyModels.includes(includedModel) ? includedModel : key.defaultModel || keyModels[0];
+    if (!includedModel || !keyModel) return undefined;
+    targets.push(
+      newComboTarget({ provider: included.name, model: includedModel, metered: false }),
+      newComboTarget({ provider: key.name, model: keyModel, metered: true }),
+    );
+  }
+  return { ...emptyDraft(preset), targets, quotaOnlyFallback: true };
 }
