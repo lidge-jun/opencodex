@@ -1789,7 +1789,7 @@ describe("fetchProviderQuotaReports", () => {
 
     expect(result.reports).toHaveLength(1);
     expect(result.reports[0]?.source).toBe("venice:billing-balance");
-    expect(result.reports[0]?.quota.customWindows?.[0]?.label).toContain("DIEM balance (250)");
+    expect(result.reports[0]?.quota.customWindows?.[0]?.label).toContain("DIEM balance (250.00)");
     expect(result.reports[0]?.quota.customWindows?.[0]?.percent).toBe(30);
     expect(seen[0]?.url).toBe("https://api.venice.ai/api/v1/billing/balance");
     expect(seen[0]?.authorization).toBe("Bearer venice-secret");
@@ -1814,7 +1814,7 @@ describe("fetchProviderQuotaReports", () => {
     expect(result.reports[0]?.provider).toBe("venice-custom");
     expect(result.reports[0]?.source).toBe("venice:rate-limits");
     expect(result.reports[0]?.quota.customWindows).toEqual([
-      { label: "DIEM balance (91)", percent: 0 },
+      { label: "DIEM balance (90.50)", percent: 0 },
       { label: "USD balance ($25.00)", percent: 0 },
     ]);
     expect(seen).toEqual([

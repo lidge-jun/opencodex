@@ -967,7 +967,7 @@ function veniceBalanceWindows(data: Record<string, unknown>): Array<{ label: str
   }
   const windows: Array<{ label: string; percent: number }> = [];
   if (diemBalance !== undefined) {
-    windows.push({ label: `DIEM balance (${Math.round(diemBalance)})`, percent: diemPercent });
+    windows.push({ label: `DIEM balance (${diemBalance.toFixed(2)})`, percent: diemPercent });
   }
   if (usdBalance !== undefined) {
     windows.push({ label: `USD balance ($${usdBalance.toFixed(2)})`, percent: 0 });
@@ -988,8 +988,8 @@ async function fetchVeniceQuota(provider: string, config: OcxProviderConfig): Pr
     headers,
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (billingResponse.ok) {
+  }).catch(() => null);
+  if (billingResponse?.ok) {
     const body = asRecord(await readQuotaJson(billingResponse));
     const data = asRecord(body?.data) ?? body;
     const windows = data ? veniceBalanceWindows(data) : null;
