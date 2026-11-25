@@ -26,7 +26,7 @@
  * therefore a configuration error naming both real alternatives.
  */
 import type { OcxProviderConfig } from "../types";
-import { isSocks5ProxyUrl, noProxyMatches } from "./proxy-env";
+import { explicitProxyExemptedError, isSocks5ProxyUrl, noProxyMatches, processNoProxyExempts } from "./proxy-env";
 
 export class InvalidProviderEgressError extends Error {
   override readonly name = "InvalidProviderEgressError";
@@ -281,6 +281,15 @@ export function providerEgressSendInit(
   const url = egressTargetUrl(input);
   if (url === null) return {};
   const egress = resolveProviderEgress({ providerName: binding.providerName, provider: binding.provider, url });
+  // Decided here, before any dispatch side effect (attempt accounting, dispatch receipts): an HTTP(S)
+  // proxy route toward a destination the process NO_PROXY exempts would leave without the proxy.
+  // `configuredOutboundFetch` keeps the same check as a backstop for callers outside this boundary.
+  if (egress.kind === "proxy" && egress.transport === "http") {
+    const target = parseTargetUrl(binding.providerName, url);
+    if ((target.protocol === "http:" || target.protocol === "https:") && processNoProxyExempts(target)) {
+      throw explicitProxyExemptedError(target);
+    }
+  }
   if (providerEgressIsExplicit(egress) && !isEgressTransparentExecutor(physicalFetch)) {
     // Name the field that actually made the route explicit. A bypass-list match with no
     // `proxy` field at all would otherwise tell the operator to remove an override they

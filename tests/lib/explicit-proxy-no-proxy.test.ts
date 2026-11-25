@@ -14,6 +14,8 @@ import {
   type ProxyCapableRequestInit,
 } from "../../src/lib/proxy-env";
 import { providerEgressFetchInit, resolveProviderEgress } from "../../src/lib/provider-egress";
+import { providerFetch } from "../../src/server/responses/fetch-helpers";
+import type { OcxProviderConfig } from "../../src/types";
 
 const ENV_KEYS = ["NO_PROXY", "no_proxy", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] as const;
 const saved = new Map<string, string | undefined>();
@@ -157,6 +159,44 @@ test("every entry form Bun 1.4.4 treats as a bypass is a bypass here", () => {
   expect(processNoProxyExempts(new URL("http://[::1]:8080/x"), { NO_PROXY: "[::1]" })).toBe(true);
 });
 
+describe("the provider send boundary", () => {
+  const provider = () => ({ adapter: "openai-chat", baseUrl: `http://127.0.0.1:${dest.port}/v1`, proxy: proxyUrl }) as unknown as OcxProviderConfig;
+
+  test("an exempted provider proxy route is refused before any dispatch side effect", async () => {
+    process.env.NO_PROXY = "127.0.0.1";
+    let receipts = 0;
+    let checked = 0;
+    const send = providerFetch(provider(), undefined, {
+      providerName: "p", onPhysicalDispatch: () => { receipts += 1; }, beforeDispatch: () => { checked += 1; },
+    });
+    await expect(send(destUrl, { method: "POST", body: "synthetic-body" })).rejects.toBeInstanceOf(ExplicitProxyExemptedError);
+    expect({ receipts, checked }).toEqual({ receipts: 0, checked: 0 });
+    expect(hits).toEqual({ dest: 0, proxy: 0 });
+  });
+
+  test("a destination rebuilt by a dispatch override is decided before its dispatch receipt", async () => {
+    process.env.NO_PROXY = "localhost";
+    let receipts = 0;
+    const send = providerFetch(provider(), undefined, {
+      providerName: "p", onPhysicalDispatch: () => { receipts += 1; },
+      // The queued request is rebuilt against another host at its physical send.
+      dispatchOverride: (_input, init, execute) => execute(`http://localhost:${dest.port}/v1/models`, init),
+    });
+    await expect(send(destUrl, { method: "POST", body: "synthetic-body" })).rejects.toBeInstanceOf(ExplicitProxyExemptedError);
+    expect(receipts).toBe(0);
+    expect(hits).toEqual({ dest: 0, proxy: 0 });
+  });
+
+  test("a route that is not exempted still dispatches once through the proxy", async () => {
+    process.env.NO_PROXY = "example.invalid";
+    let receipts = 0;
+    const send = providerFetch(provider(), undefined, { providerName: "p", onPhysicalDispatch: () => { receipts += 1; } });
+    expect(await (await send(destUrl, { method: "POST", body: "synthetic-body" })).text()).toBe("proxy");
+    expect(receipts).toBe(1);
+    expect(hits).toEqual({ dest: 0, proxy: 1 });
+  });
+});
+
 describe("redirects of an explicit-proxy request", () => {
   type Seen = { method: string; path: string; body: string };
   const viaProxy: Seen[] = [];
@@ -230,6 +270,15 @@ describe("redirects of an explicit-proxy request", () => {
     expect(response.redirected).toBe(false);
     expect(response.clone().redirected).toBe(false);
     expect(await response.text()).toBe("landed GET ");
+  });
+
+  test("a caller's error redirect mode reaches Bun unchanged and makes no second request", async () => {
+    process.env.NO_PROXY = "example.invalid";
+    redirectTo = `http://127.0.0.1:${dest.port}/landing`;
+    const error = await configuredOutboundFetch(startUrl(), proxied({ redirect: "error" })).then(() => null, (cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(ExplicitProxyRedirectRefusedError);
+    expect(viaProxy.map(request => request.path)).toEqual(["/start"]);
   });
 
   test("a caller's manual redirect mode is left to the caller", async () => {

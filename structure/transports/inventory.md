@@ -197,8 +197,9 @@ A reset-triggered rebuild may retarget the request to another region's canonical
 `src/lib/provider-egress.ts` resolves a provider route for one destination. The route is carried only
 by transports that can preserve that request-local decision. An explicit HTTP(S) proxy is never sent
 toward a destination that the process `NO_PROXY` or `no_proxy` exempts, because Bun's fetch and
-WebSocket connect directly there: `configuredOutboundFetch` refuses the send with
-`ExplicitProxyExemptedError`, the Responses WebSocket upstream leaves such a turn to that HTTP path, and
+WebSocket connect directly there: `providerEgressSendInit` refuses such a route before any dispatch
+side effect (attempt accounting, dispatch receipts), `configuredOutboundFetch` refuses the send with
+`ExplicitProxyExemptedError` as a backstop for every other caller, the Responses WebSocket upstream leaves such a turn to that HTTP path, and
 the Microsoft 365 Copilot ChatHub dial refuses before creating its socket. `processNoProxyExempts`
 matches at least as broadly as Bun: `bunNoProxyMatches` ports the `NO_PROXY` matcher of Bun 1.4.4
 (comma and whitespace separators, subdomains, CIDR blocks, numeric ports, canonical addresses), unioned
