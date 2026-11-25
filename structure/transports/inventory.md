@@ -220,7 +220,7 @@ Bun would apply the bypass list to the next hop; callers that handle redirects p
 | OAuth-backed quota probes in `src/providers/quota/vendor-probes-oauth.ts` and `src/providers/quota/devin.ts` | Not honoured | `fetchXaiQuota`, `fetchAnthropicQuota`, `fetchCursorQuota`, `fetchDevinQuota` and their neighbours receive a provider name and a token rather than a provider config. |
 | API-key validation probes in `src/oauth/key-providers.ts` | Not honoured | `validateApiKey` receives a `KeyLoginProvider` derived preset, which carries no egress fields, and its caller builds the real provider record afterwards. |
 | Responses WebSocket upstream in `src/server/responses/ws-upstream.ts` | Not directly | The WebSocket dial selects its proxy from the process environment. An explicit provider route therefore serves that provider's turns over HTTP/SSE instead and emits one warning per provider per process. |
-| Caller-supplied `provider.fetch` executor | Not honoured | The caller owns that executor's transport. An explicit provider route is refused instead of being ignored. When the Antigravity TLS profile is enabled on the same provider, the profile owns the physical send and the caller-supplied executor is not used. |
+| Caller-supplied `provider.fetch` executor | Not honoured | The caller owns that executor's transport. An explicit provider route is refused instead of being ignored. Azure's TLS ceiling wrapper inherits its delegate's egress-transparent marker; it cannot make an opaque executor routable. When the Antigravity TLS profile is enabled on the same provider, the profile owns the physical send and the caller-supplied executor is not used. |
 | Opt-in Antigravity TLS profile in `src/lib/provider-tls-profile.ts` (`providers.google-antigravity.tlsProfile`) | Honoured or refused | Selected inside `providerFetch` only for the canonical Antigravity OAuth provider and destination, and marked egress-transparent. A decided HTTP(S) or SOCKS5(H) route is passed to the native `wreq-js` transport; an inherited route is resolved from the environment. The native transport reads proxy variables itself and has no per-request direct switch, so a direct route (`"direct"`, `noProxy`, or a global `NO_PROXY` match) is refused while any outbound proxy variable is set. |
 | Cursor's default HTTP/2 transport in `src/adapters/cursor/live-transport.ts` | Not honoured | The native HTTP/2 dial does not consume the provider route. |
 | Coding-agent subprocess providers in `src/adapters/coding-agent/turn.ts` | Not honoured | Their scoped child environment omits proxy variables, so a provider route is not projected into the subprocess. |
@@ -394,6 +394,11 @@ HTTPS tunnels in `src/lib/socks5-fetch.ts` give the TLS handshake its own absolu
 the response timer takes over; timeout, caller cancellation, error and premature
 close release the owned socket and listeners. Certificate verification stays enabled.
 `tests/lib/socks5-tls-lifecycle.test.ts` exercises stalled and interrupted handshakes.
+The fetch tunnel accepts only TLS 1.2 or 1.3 ceilings in `init.tls.maxVersion`
+(numeric 771/772 or `TLSv1.2`/`TLSv1.3`) and passes the validated string to Node's
+TLS handshake. Unsupported ceilings fail before CONNECT. Without a ceiling, the
+runtime default remains unchanged. No other caller TLS options are forwarded, so
+the caller cannot replace the socket, SNI or certificate-verification policy.
 
 `src/config/proxy-env.ts` activates configured SOCKS5 through `src/lib/proxy-env.ts`;
 the compatibility config facade does not own a second activation path.

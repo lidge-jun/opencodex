@@ -3,6 +3,8 @@ import { providerAffinityGenerationIsCurrent } from "../../providers/api-key-sel
 import { markProxyError } from "../../lib/client-error-body";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { passthroughBuildErrorResponse } from "./passthrough-build-error";
+import { AzureHostedImageError, azureHostedImageRefusalResponse } from "./azure-hosted-image";
+import { AdmissionModelDeniedError } from "../admission-model-scope";
 import { recoverAutoPausedAccount, rotatePassthroughKeyOn429 } from "./passthrough-key-rotation";
 import { createAutoPauseRefreshErrorMapper } from "./account-auto-pause-recovery";
 import { physicalSendAccounting } from "./deferred-send-reporter";
@@ -922,7 +924,7 @@ export async function preparePassthroughExchange(
       }
       const pacingRefusal = requestPacingOverloadResponse(refusal);
       if (pacingRefusal) logCtx.terminalSource = "synthetic";
-      const localDispatchRefusal = pacingRefusal ?? copilotRefusalResponse(refusal);
+      const localDispatchRefusal = azureHostedImageRefusalResponse(refusal) ?? pacingRefusal ?? copilotRefusalResponse(refusal);
       if (localDispatchRefusal) {
         releaseUpstreamHostAdmission(nativeHostState.lease); nativeHostState.lease = null;
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
@@ -1146,7 +1148,7 @@ export async function preparePassthroughExchange(
         refreshRequestToolAliases(request);
         if (!replay) { recordAdapterReasoning(logCtx, request); recordAdapterTier(logCtx, request); }
       } catch (err) {
-        if (err instanceof CodexInstallationIdUnavailableError) return { failed: transportFailureResponse(err) };
+        if (err instanceof CodexInstallationIdUnavailableError || err instanceof AzureHostedImageError || err instanceof AdmissionModelDeniedError) return { failed: transportFailureResponse(err) };
         upstream.abort();
         if (options.abortSignal?.aborted) return { failed: clientCancelledResponse() };
         const msg = err instanceof Error ? err.message : String(err);
@@ -1416,7 +1418,7 @@ export async function preparePassthroughExchange(
         });
         refreshRequestToolAliases(request);
       } catch (err) {
-        if (err instanceof CodexInstallationIdUnavailableError) return transportFailureResponse(err);
+        if (err instanceof CodexInstallationIdUnavailableError || err instanceof AzureHostedImageError || err instanceof AdmissionModelDeniedError) return transportFailureResponse(err);
         upstream.abort();
         if (options.abortSignal?.aborted) return clientCancelledResponse();
         const msg = err instanceof Error ? err.message : String(err);

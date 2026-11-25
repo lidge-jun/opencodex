@@ -1,4 +1,5 @@
 import { publicOAuthErrorPresentation } from "../../oauth";
+import { createAzureHostedImageGuard, type AzureHostedImageGuard } from "./azure-hosted-image";
 import { observeProviderFailureEvent, projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { markProxyError } from "../../lib/client-error-body";
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
@@ -287,6 +288,7 @@ export async function prepareResponsesTransport(
   const requestBindings = new WeakMap<AdapterRequest, DispatchBinding>();
   const capturedImagePins = new WeakSet<AnthropicImageRecoveryPin>();
   const imageHistoryPins = new WeakMap<AnthropicImageRecoveryPin["owner"], (request: AdapterRequest) => ImageDispatchPin>();
+  const azureImageGuards = new WeakMap<AdapterRequest, AzureHostedImageGuard>();
   const hostedAdvisorDispatches = new WeakMap<AdapterRequest, {
     credential: NonNullable<ReturnType<typeof hostedAdvisorCredentials.get>>;
     rebuild: (refusal: HostedAdvisorSpendRefusal, signal: AbortSignal) => Promise<AdapterRequest>;
@@ -889,6 +891,7 @@ export async function prepareResponsesTransport(
     const build = resolved.buildRequest.bind(resolved);
     const fileProvider = route.provider;
     const fileProviderName = route.providerName;
+    const azureImageProvider = resolved.name === "azure-openai" ? { ...provider, headers: { ...provider.headers } } : undefined;
     // Persistence consent is configuration: capture its generation with the provider snapshot.
     const fileConsentGeneration = captureConfigGeneration();
     resolved.buildRequest = async (requestParsed, incoming) => {
@@ -897,6 +900,13 @@ export async function prepareResponsesTransport(
         if (!selectionIsCurrent(binding)) throw new Error("Credential selection changed before auxiliary send");
       } } : incoming;
       const request = await build(requestParsed, guardedIncoming);
+      if (azureImageProvider) {
+        const guard = createAzureHostedImageGuard(fileProviderName, azureImageProvider, request.url,
+          requestState.admissionScope, requestState.inboundSelector, logCtx);
+        try { guard(request.body, new Headers(request.headers), request.url); }
+        catch (error) { request.releaseBodyObservation?.(); throw error; }
+        azureImageGuards.set(request, guard);
+      }
       // Capture at adapter creation, never from mutable serving state after an await.
       if (binding) requestBindings.set(request, binding);
       const allowedImageFileModels = fileProvider.modelCapabilities
@@ -1154,6 +1164,7 @@ export async function prepareResponsesTransport(
           const snapshot = anthropicInstance !== undefined && binding?.kind === "oauth"
             ? binding.snapshot : undefined;
           const target = destination instanceof Request ? destination.url : String(destination);
+          const azureImageGuard = azureImageGuards.get(wireRequest)?.(dispatchInit.body, new Headers(dispatchInit.headers), target);
           if (authorizedAnthropicTarget && target !== authorizedAnthropicTarget) {
             throw new OAuthLoginRequiredError(anthropicInstance!);
           }
@@ -1214,7 +1225,7 @@ export async function prepareResponsesTransport(
             // Copilot's local negotiation may refuse before this point, and spend admission
             // may still refuse at the HTTP executor. Its note follows that final admission.
             const deferredCopilotNote = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
-            const deferAttemptNote = deferredCopilotNote || advisorCredential !== undefined || pinned !== undefined;
+            const deferAttemptNote = deferredCopilotNote || advisorCredential !== undefined || pinned !== undefined || azureImageGuard !== undefined;
             if (!explicitAttemptCommit && !deferAttemptNote) commitKeyAttemptSend();
             // The WS executor dials its own socket: HTTP connection policy and body coding do not apply.
             // WS eligibility (egress, pacing, URL) was checked for the provider it was built for; a
@@ -1233,7 +1244,8 @@ export async function prepareResponsesTransport(
                   const attempt = logCtx.activeAttempt;
                   if (attempt?.sendCount) copilotReceipt = { attempt, ordinal: attempt.ordinal, sendCount: attempt.sendCount };
                 } : undefined),
-                ...(pinned || recoveryOwner || vertexAuthority || advisorCredential || stripAdvisorBeta ? physicalSendGuardInit((finalTarget, finalHeaders) => {
+                ...(pinned || recoveryOwner || vertexAuthority || advisorCredential || stripAdvisorBeta || azureImageGuard ? physicalSendGuardInit((finalTarget, finalHeaders) => {
+                    azureImageGuard?.(finalTarget, finalHeaders);
                     if (pinned && (!pinned.current() || !pinned.matches(finalTarget, finalHeaders))) {
                       throw new Error("Anthropic image recovery destination or credential changed before dispatch");
                     }
@@ -1359,6 +1371,9 @@ export async function prepareResponsesTransport(
         wireRequest.releaseBodyObservation?.();
         Object.assign(wireRequest, rebuilt);
         copyVertexRequestAuthority(rebuilt, wireRequest);
+        const azureImageGuard = azureImageGuards.get(rebuilt);
+        if (azureImageGuard) azureImageGuards.set(wireRequest, azureImageGuard);
+        else azureImageGuards.delete(wireRequest);
         const hostedAdvisor = hostedAdvisorDispatches.get(rebuilt);
         if (hostedAdvisor) hostedAdvisorDispatches.set(wireRequest, hostedAdvisor);
         else hostedAdvisorDispatches.delete(wireRequest);

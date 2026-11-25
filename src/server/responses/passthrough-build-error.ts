@@ -10,10 +10,11 @@ import { OpenGatewayInputCompatibilityError } from "../../adapters/openai-respon
 import { UnsupportedInputModalityError } from "../../adapters/input-media-guard";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { HostedAdvisorSpendRefusal } from "./policy-request-scope";
+import { azureHostedImageRefusalResponse } from "./azure-hosted-image";
 
 /** Input-lowering errors are 400; late credential/identity failures retain their own contract. */
 export function passthroughBuildErrorResponse(error: unknown, accountSelector?: string): Response | undefined {
-  const refusal = mapCodexAuthContextErrorToResponse(error, { now: Date.now(), accountSelector });
+  const refusal = azureHostedImageRefusalResponse(error) ?? mapCodexAuthContextErrorToResponse(error, { now: Date.now(), accountSelector });
   if (refusal) return refusal;
   if (error instanceof NamespaceToolCollisionError
     || error instanceof XaiToolSchemaCompatibilityError
@@ -29,9 +30,9 @@ export function passthroughBuildErrorResponse(error: unknown, accountSelector?: 
 /** Local refusals precede generic adapter-build 400s and preservation of an older rejection. */
 export function adapterBuildRefusal(error: unknown, context: CodexAuthContext | undefined,
   accountSelector?: string, cleanup?: () => void): Response | undefined {
-  const refusal = error instanceof UnsupportedInputModalityError ? unsupportedInputModalityResponse(error.message)
+  const refusal = azureHostedImageRefusalResponse(error) ?? (error instanceof UnsupportedInputModalityError ? unsupportedInputModalityResponse(error.message)
     : error instanceof HostedAdvisorSpendRefusal ? error.response()
-    : mapCodexAuthContextErrorToResponse(error, { now: Date.now(), accountSelector });
+    : mapCodexAuthContextErrorToResponse(error, { now: Date.now(), accountSelector }));
   if (refusal) {
     cleanup?.();
     releaseCodexAuthContextProbeLease(context);

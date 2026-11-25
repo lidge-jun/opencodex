@@ -71,6 +71,7 @@ export const RESPONSES_CORE_MODULES = [
   "compaction-recovery-policy.ts",
   "memory-models.ts",
   "request-transport.ts",
+  "azure-hosted-image.ts",
   // Reached from request-transport.ts: opt-in DeepSeek upload-backed image replay.
   "deepseek-image-files.ts",
   "request-sidecar-auth.ts",

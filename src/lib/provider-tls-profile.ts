@@ -1,7 +1,7 @@
 import type { OcxProviderConfig } from "../types";
 import { redactSecretString } from "./redact";
 import { runtimeProviderFetch } from "./provider-runtime-fetch";
-import { markEgressTransparentExecutor } from "./provider-egress";
+import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "./provider-egress";
 import {
   outboundProxyConfigured,
   proxyEnvPresent,
@@ -172,6 +172,32 @@ export function providerTlsFetch(
 ): typeof globalThis.fetch {
   if (provider.tlsProfile === undefined) {
     status.set(name, "disabled");
+    if (provider.adapter === "azure" || provider.adapter === "azure-openai") {
+      let azureOrigin: string | undefined;
+      try {
+        const url = new URL(provider.baseUrl);
+        if (url.protocol === "https:" &&
+          (url.hostname.endsWith(".services.ai.azure.com") || url.hostname.endsWith(".openai.azure.com"))) {
+          azureOrigin = url.origin;
+        }
+      } catch {
+        return fallback;
+      }
+      if (azureOrigin) {
+        const wrapped = (async (input, init) => {
+          const destination = typeof input === "string" || input instanceof URL ? input : input.url;
+          if (new URL(destination).origin !== azureOrigin) return fallback(input, init);
+          const options = init as (RequestInit & { tls?: Record<string, unknown> }) | undefined;
+          return fallback(input, {
+            ...options,
+            tls: { ...options?.tls, maxVersion: 771 },
+          } as RequestInit);
+        }) as typeof globalThis.fetch;
+        return isEgressTransparentExecutor(fallback)
+          ? markEgressTransparentExecutor(wrapped)
+          : wrapped;
+      }
+    }
     return fallback;
   }
   if (providerTlsProfileConfigError(name, provider)) {

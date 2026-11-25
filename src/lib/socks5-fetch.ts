@@ -309,7 +309,23 @@ function requestHeaders(request: Request, target: URL): { text: string; chunked:
   };
 }
 
-async function secureSocket(socket: Socket, target: URL, signal: AbortSignal): Promise<TLSSocket> {
+type Socks5TlsMaxVersion = "TLSv1.2" | "TLSv1.3";
+
+function requestTlsMaxVersion(init: RequestInit | undefined): Socks5TlsMaxVersion | undefined {
+  const value: unknown = (init as (RequestInit & { tls?: { maxVersion?: unknown } }) | undefined)?.tls?.maxVersion;
+  switch (value) {
+    case undefined: return undefined;
+    case 771:
+    case "TLSv1.2": return "TLSv1.2";
+    case 772:
+    case "TLSv1.3": return "TLSv1.3";
+    default: throw new Socks5FetchError("SOCKS5 transport cannot honor the TLS maxVersion");
+  }
+}
+
+async function secureSocket(
+  socket: Socket, target: URL, signal: AbortSignal, maxVersion?: Socks5TlsMaxVersion,
+): Promise<TLSSocket> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
       socket.destroy();
@@ -320,6 +336,7 @@ async function secureSocket(socket: Socket, target: URL, signal: AbortSignal): P
       socket,
       servername: target.hostname,
       rejectUnauthorized: true,
+      ...(maxVersion === undefined ? {} : { maxVersion }),
     });
     let settled = false;
     // Absolute deadline: a peer sending occasional TLS bytes must not extend the handshake.
@@ -676,6 +693,7 @@ export async function socks5Fetch(
   if (target.protocol !== "http:" && target.protocol !== "https:") {
     throw new Socks5FetchError(`SOCKS5 fetch only supports HTTP(S) URLs, got ${target.protocol}`);
   }
+  const maxVersion = target.protocol === "https:" ? requestTlsMaxVersion(init) : undefined;
   const tunnel = await socks5Connect(proxy, target, request.signal);
   if (request.signal.aborted) {
     tunnel.destroy();
@@ -691,7 +709,7 @@ export async function socks5Fetch(
   };
   request.signal.addEventListener("abort", onAbort, { once: true });
   try {
-    if (target.protocol === "https:") socket = await secureSocket(tunnel, target, request.signal);
+    if (target.protocol === "https:") socket = await secureSocket(tunnel, target, request.signal, maxVersion);
     socket.setTimeout(SOCKS5_RESPONSE_TIMEOUT_MS, onResponseTimeout);
     // Observe socket errors and early responses while uploading, not only after it.
     reader = new SocketReader(socket);

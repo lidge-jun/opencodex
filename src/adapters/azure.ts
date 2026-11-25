@@ -48,7 +48,18 @@ export function createAzureAdapter(provider: OcxProviderConfig): ProviderAdapter
       headers["api-key"] = provider.apiKey;
       delete headers["Authorization"];
       // The inner adapter always targets Azure's v1 API here, which needs no api-version query.
-      return { ...request, headers };
+      const body = JSON.parse(request.body);
+      if (Array.isArray(body.input)) {
+        body.input = body.input.map((item: unknown) => {
+          if (!isPlainObject(item) || typeof item.call_id !== "string") return item;
+          const hasPlaintext = (item.type === "custom_tool_call" && typeof item.input === "string")
+            || (item.type === "function_call" && typeof item.arguments === "string");
+          if (!hasPlaintext || !Object.hasOwn(item, "encrypted_content")) return item;
+          const { encrypted_content: _encrypted, ...plaintextCall } = item;
+          return plaintextCall;
+        });
+      }
+      return { ...request, headers, body: JSON.stringify(body) };
     },
   };
 }

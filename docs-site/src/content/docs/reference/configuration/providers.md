@@ -519,7 +519,7 @@ input support and context/output limits even when the provider has a custom name
 `/models` inference and chat flags alone do not describe image support or token limits.
 opencodex supplements them with the public [models.dev catalog](https://models.dev), using its
 Azure rows before bundled Azure metadata and other vendor bundles. Model-id lookup is exact
-or case-insensitive; a newly published model does not require a new opencodex release.
+or case-insensitive; a newly published model does not require a new opencodex release. For native Responses image generation, see [Azure hosted images](/guides/image-bridge/#azure-responses-hosted-image-generation).
 
 The public metadata snapshot refreshes during discovery at most once per 24 hours, with a
 two-second deadline and a 16 MiB body limit. It is stored in `azure-model-metadata-cache.json`

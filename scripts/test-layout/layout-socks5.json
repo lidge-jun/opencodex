@@ -1,0 +1,9 @@
+{
+  "socks5-fetch.test.ts": "lib",
+  "socks5-reader-lifecycle.test.ts": "lib",
+  "socks5-timeout-cleanup.test.ts": "lib",
+  "socks5-tls-lifecycle.test.ts": "lib",
+  "socks5-tls-options.test.ts": "lib",
+  "socks5-upload-lifecycle.test.ts": "lib",
+  "ws-upstream-socks5.test.ts": "responses"
+}

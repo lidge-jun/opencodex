@@ -125,6 +125,7 @@ import { createAntigravityModelDenialRecovery, recoverAntigravityAccount } from 
 import { isAntigravityFaultRotatable } from "./antigravity-fault-rotation";
 import { adapterSendBudgetRefusal } from "../workflow-refusal";
 import { AdmissionModelDeniedError, admissionModelDeniedResponse, projectAdmissionModelDeniedLog } from "../admission-model-scope";
+import { azureHostedImageRefusalResponse } from "./azure-hosted-image";
 import { rejectAnthropicPerMessageEffort } from "../../adapters/anthropic/per-message-effort";
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
@@ -571,7 +572,7 @@ export async function prepareAdapterExchange(
       releaseCodexAuthContextProbeLease(admissionState.authCtx);
       return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(refusal, logCtx));
     }
-    const codexRefusal = mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
+    const codexRefusal = azureHostedImageRefusalResponse(unwrapUpstreamRetryEvidenceError(err)) ?? mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
       now: Date.now(), accountSelector: route.codexAccountNamespace,
     });
     if (codexRefusal) {
@@ -853,9 +854,9 @@ export async function prepareAdapterExchange(
           return { failed: scopeRefusal instanceof HostedAdvisorSpendRefusal ? scopeRefusal.response()
             : admissionModelDeniedResponse(projectAdmissionModelDeniedLog(scopeRefusal, logCtx)) };
         }
-        const codexRefusal = !options.abortSignal?.aborted && mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
+        const codexRefusal = !options.abortSignal?.aborted && (azureHostedImageRefusalResponse(scopeRefusal) ?? mapCodexAuthContextErrorToResponse(scopeRefusal, {
           now: Date.now(), accountSelector: route.codexAccountNamespace,
-        });
+        }));
         if (codexRefusal) {
           cleanupUpstreamAbort();
           upstream.abort();

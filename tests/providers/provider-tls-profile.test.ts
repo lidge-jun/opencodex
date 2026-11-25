@@ -8,7 +8,7 @@ import {
   resetProviderTlsProfileForTests,
   setProviderTlsRuntimeForTest,
 } from "../../src/lib/provider-tls-profile";
-import { isEgressTransparentExecutor } from "../../src/lib/provider-egress";
+import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../../src/lib/provider-egress";
 import { providerManagementConfigError } from "../../src/server/auth-cors";
 import { providerFetch } from "../../src/server/responses/fetch-helpers";
 import type { OcxProviderConfig } from "../../src/types";
@@ -341,4 +341,51 @@ describe("provider TLS profile", () => {
     expect(seen.calls).toBe(0);
     expect(getProviderTlsProfileStatus("gemini")).toBe("disabled");
   });
+});
+
+describe("Azure repair reviewed regression", () => {
+const provider = { adapter: "azure-openai", baseUrl: "https://test.services.ai.azure.com/openai/v1", apiKey: "fixture", supportsResponsesCustomTools: true } as any;
+test("Azure TLS wrappers inherit rather than grant egress transparency", () => {
+  for (const adapter of ["azure", "azure-openai"]) {
+    const fallback = (async () => new Response("ok")) as typeof globalThis.fetch;
+    expect(isEgressTransparentExecutor(providerTlsFetch("azure", { ...provider, adapter }, fallback))).toBe(false);
+    expect(isEgressTransparentExecutor(fallback)).toBe(false);
+    markEgressTransparentExecutor(fallback);
+    expect(isEgressTransparentExecutor(providerTlsFetch("azure", { ...provider, adapter }, fallback))).toBe(true);
+  }
+});
+
+test("TLS workaround preserves cancellation, proxy, certificate checks and caller options", async () => {
+  let observed: any;
+  let sends = 0;
+  const fallback = (async (_: any, init: any) => { sends++; observed = init; return new Response("ok"); }) as any;
+  const fetch = providerTlsFetch("azure-openai", provider, fallback);
+  const signal = new AbortController().signal;
+  const init = { signal, proxy: false, redirect: "manual", tls: { rejectUnauthorized: true } } as any;
+  await fetch(provider.baseUrl + "/responses", init);
+  expect(observed.tls).toEqual({ rejectUnauthorized: true, maxVersion: 771 });
+  expect(observed.proxy).toBe(false);
+  expect(observed.signal).toBe(signal);
+  expect(observed.redirect).toBe("manual");
+  expect(init.tls).toEqual({ rejectUnauthorized: true });
+  expect(sends).toBe(1);
+  await fetch("https://example.com/responses", init);
+  expect(observed).toBe(init);
+});
+
+test("Other providers and invalid Azure hosts retain their existing transport", () => {
+  const fallback = (() => Promise.resolve(new Response())) as any;
+  for (const changed of [{ adapter: "openai" }, { baseUrl: "https://example.com" }, { baseUrl: "invalid" }, { baseUrl: "http://test.services.ai.azure.com" }]) {
+    expect(providerTlsFetch("test", { ...provider, ...changed }, fallback)).toBe(fallback);
+  }
+});
+
+test("Ambiguous transport errors remain single-send failures", async () => {
+  let sends = 0;
+  const error = new Error("ECONNRESET");
+  const fallback = (async () => { sends++; throw error; }) as any;
+  const fetch = providerTlsFetch("azure-openai", provider, fallback);
+  await expect(fetch(provider.baseUrl + "/responses")).rejects.toBe(error);
+  expect(sends).toBe(1);
+});
 });

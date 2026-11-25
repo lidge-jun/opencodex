@@ -174,6 +174,44 @@ describe("per-provider egress on the inference dispatch", () => {
     }
   });
 
+  test("Azure TLS wrapping refuses an explicit proxy on an opaque custom executor before dispatch", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const executor = mock(async () => new Response("unexpected send"));
+    const configured = provider({
+      adapter: "azure-openai",
+      baseUrl: "https://fixture.services.ai.azure.com/openai/v1",
+      proxy: PROVIDER_PROXY,
+    }) as OcxProviderConfig & { fetch?: typeof globalThis.fetch };
+    configured.fetch = executor as unknown as typeof globalThis.fetch;
+    const beforeDispatch = mock(() => undefined);
+    await expect(providerFetch(configured, undefined, { providerName: "azure-openai", beforeDispatch })(
+      `${configured.baseUrl}/responses`, { method: "POST", body: "{}" },
+    )).rejects.toThrow(InvalidProviderEgressError);
+    expect(beforeDispatch).not.toHaveBeenCalled();
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  test("Azure TLS wrapping keeps the built-in executor routable through an explicit proxy", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const captured = captureDispatch();
+    const configured = provider({
+      adapter: "azure-openai",
+      baseUrl: "https://fixture.services.ai.azure.com/openai/v1",
+      proxy: PROVIDER_PROXY,
+    });
+    const beforeDispatch = mock(() => undefined);
+    try {
+      const response = await providerFetch(configured, undefined, { providerName: "azure-openai", beforeDispatch })(
+        `${configured.baseUrl}/responses`, { method: "POST", body: "{}" },
+      );
+      expect(response.status).toBe(200);
+      expect(beforeDispatch).toHaveBeenCalledTimes(1);
+      expect(captured.calls).toEqual([{ url: `${configured.baseUrl}/responses`, proxy: `${PROVIDER_PROXY}/` }]);
+    } finally {
+      captured.restore();
+    }
+  });
+
   test("a rebuilt request resolves its route against the destination it is actually sent to", async () => {
     // A queued request can be rebuilt at its physical send -- account reselection can move the
     // upstream host -- so a route decided when the executor was constructed would be applied to
