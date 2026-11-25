@@ -1247,12 +1247,14 @@ Como Codex reproduce el historial de subagentes en cada turno, el hilo sigue fal
 que se convierte el elemento. Se conservan las partes del contenido, y el autor y el
 destinatario siguen siendo metadatos de texto explícitos.
 
-Para `api.x.ai` y `cli-chat-proxy.grok.com` por HTTPS en el puerto estándar, el envío de
+Para `api.x.ai`, `us.api.x.ai` y `cli-chat-proxy.grok.com` por HTTPS en el puerto estándar, el envío de
 Responses sin reenvío de autenticación también convierte un resultado de subagente que sea
 una cadena con contenido en una sola parte `input_text`. La cadena original conserva sus
 espacios y saltos de línea. Los demás destinos mantienen los mensajes con valor de cadena
-sin cambios. Las cadenas vacías o con solo espacios en blanco, las estructuras incompletas
-y las que mezclan contenido cifrado o desconocido se conservan tal como llegan. El contenido
+sin cambios. Las cadenas vacías o con solo espacios en blanco se conservan tal como llegan,
+igual que las listas de contenido vacías y las que mezclan partes cifradas o desconocidas. Una
+lista no vacía cuyas partes usan todas un tipo admitido se convierte tal como llega, aunque a
+una parte le falte su campo esperado. El contenido
 cifrado o desconocido no se normaliza; las tareas cifradas nativas siguen requiriendo activar
 por separado la [recuperación de tareas](/es/reference/configuration/agents/#encrypted-v2-task-recovery).
 

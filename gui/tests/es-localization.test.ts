@@ -70,7 +70,7 @@ describe("Spanish localization contract", () => {
         expect(catalog[key].trim(), key).not.toBe("");
         expect(placeholders(catalog[key]), key).toEqual(placeholders(en[key]));
         expect(catalog[key], key).not.toMatch(/ZXQ\d|QXZ|\u2047|\uFFFD/);
-        expect(catalog[key], key).not.toMatch(/tarifa limitada|teclas (?:API|activas)|rotación de teclas|discapacitad|\bAmable\b|escritorio Claude|Claude escritorio/i);
+        expect(catalog[key], key).not.toMatch(/tarifa limitada|teclas (?:API|activas)|rotación de teclas|discapaci|bañera|Herramientas de cabina|\bAmable\b|escritorio Claude|Claude escritorio/i);
       }
     }
     for (const key of Object.keys(NATIVE_MAIN_EN) as (keyof typeof NATIVE_MAIN_EN)[]) {
