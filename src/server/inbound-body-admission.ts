@@ -32,7 +32,7 @@ export const CONFIGURABLE_JSON_BODY_ROUTES: ReadonlySet<string> = new Set([
 
 /**
  * Loopback routes deliberately outside this gate. Audio uploads, realtime/live
- * control and the model list do not read JSON under `maxInboundBodyBytes`, so
+ * control, the model list and live usage do not read JSON under `maxInboundBodyBytes`, so
  * reserving that allowance for them would refuse traffic the limit never covered.
  */
 export const UNGATED_LOOPBACK_ROUTES: ReadonlySet<string> = new Set([
@@ -42,6 +42,7 @@ export const UNGATED_LOOPBACK_ROUTES: ReadonlySet<string> = new Set([
   "/v1/realtime",
   "/v1/realtime/calls",
   "/v1/live",
+  "/v1/usage/live",
 ]);
 
 export class InboundBodyCapacityError extends Error {
