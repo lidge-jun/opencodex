@@ -178,6 +178,15 @@ for (const receipt of ["complete", "pending", "other-owner"] as const) {
   }, 20_000);
 }
 
+for (const [contention, waits, exit] of [["config-release", 1, 1], ["config-held", 2, undefined], ["config-takeover", 1, undefined]] as const) {
+  test(`a listenerless rollback rechecks completed disconnect ownership after config contention (${contention})`, async () => {
+    const report = await runStop({ mode: "file-restart-control", preserve: "restart-rollback", refusedDisconnectRecycle: contention });
+    expect(report.result).toMatchObject({ replacementAttempts: 1, recycleAdmissions: 1, runtimePresent: true, proofWaits: waits });
+    expect(report.result.rollbackExit).toBe(exit);
+    expect(report.protectedUnchanged).toBe(true);
+  }, 20_000);
+}
+
 test("a pending restart admission cannot leave routing behind on signal shutdown", async () => {
   const report = await runStop({ mode: "runtime", preserve: "restart" });
   expect(report.after).toBe('model = "native"\n');

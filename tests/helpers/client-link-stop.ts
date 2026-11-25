@@ -77,9 +77,11 @@ export async function runStop(options: Record<string, unknown>) {
     } else if (String(options.preserve).startsWith("restart-rollback")) {
       expect(exit, stdout).toBe(0);
       const first = "[client] restart: the replacement did not start (not_ready); attempting recovery";
-      const code = options.refusedDisconnectRecycle === "complete" ? "client_recycle_unpublished"
+      const code = options.refusedDisconnectRecycle === "complete" || options.refusedDisconnectRecycle === "config-release" ? "client_recycle_unpublished"
         : options.retryRollbackPublication === "exhausted" && options.mode === "file-restart-control" ? "client_rollback_unpublished" : undefined;
-      expect(stderr.trim()).toBe(code ? first + `\n[client] restart: this runtime could not serve again (${code}); run 'ocx start'` : first);
+      const extra = code ? `\n[client] restart: this runtime could not serve again (${code}); run 'ocx start'`
+        : options.refusedDisconnectRecycle === "config-held" ? "\n[client] restart: could not verify disconnect ownership before the recovery deadline; check ocx status" : "";
+      expect(stderr.trim()).toBe(first + extra);
     } else expect({ exit, stderr }, stdout).toEqual({ exit: 0, stderr: "" });
     const report = JSON.parse(readFileSync(join(home, "result.json"), "utf8"));
     const atExit = JSON.parse(readFileSync(join(home, "exit.json"), "utf8"));

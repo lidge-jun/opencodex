@@ -15,6 +15,7 @@ import { createLocalAttestationSecret } from "../lib/local-management-attestatio
 import { loadServiceTokenFromFile, serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
 import {
+  CLIENT_RESTART_REBIND_WAIT_MS,
   DESKTOP_RESTART_EXIT_CODE,
   DESKTOP_SUPERVISED_ENV,
   DESKTOP_SUPERVISED_PORT_WAIT_MS,
@@ -532,7 +533,7 @@ export async function startClientRuntime(
   };
 
   let shuttingDown = false;
-  const ownsCompletedDisconnect = () => {
+  const completedDisconnectOwnership = () => {
     try {
       return withConfigMutationLockSync(() => {
         if (shuttingDown || observeExplicitStop()) return false;
@@ -542,13 +543,15 @@ export async function startClientRuntime(
           && receipt.kind === "valid" && receipt.value.phase === "complete"
           && sameClientConnectionOwner(receipt.value.owner, state.value)
           && receipt.value.tokenFingerprint === state.value.tokenFingerprint;
-      });
-    } catch { return false; }
+      }) ? "owned" : "refused";
+    } catch (error) {
+      return retryableClientRollbackLock(error) ? "busy" : "refused";
+    }
   };
   standaloneRecycleAllowed = () => {
     // A retained sync fence is not an active exit. Only this owner's completed disconnect
     // permits recovery after that fence.
-    try { return !shuttingDown && !observeExplicitStop() && (!clientStopping || ownsCompletedDisconnect()); }
+    try { return !shuttingDown && !observeExplicitStop() && (!clientStopping || completedDisconnectOwnership() === "owned"); }
     catch { return false; }
   };
   const restartController: ClientRestartController = createClientRestartController({
@@ -581,14 +584,21 @@ export async function startClientRuntime(
       );
     },
     resume: async () => {
+      const deadline = performance.now() + CLIENT_RESTART_REBIND_WAIT_MS;
       const recycleAfterRollback = async () => {
         if (standaloneRecycleAllowed()) await recycleStandalone(state.value.tokenFingerprint);
         // An admitted recycle exits this process. A refused one may return after the original
         // listener stopped. Fail only while this generation still owns the completed disconnect.
-        if (!activeServer && activeLinkForRecycle?.connection === state.value && activeLinkForRecycle.isServingGeneration()
-          && ownsCompletedDisconnect()) {
+        const current = () => !activeServer && activeLinkForRecycle?.connection === state.value && activeLinkForRecycle.isServingGeneration();
+        const probe = () => current() ? completedDisconnectOwnership() : "refused";
+        let proof = await retryClientRollback(probe, { deadline });
+        // The rebind can use the whole budget. Still take one immediate, locked observation
+        // before reporting unresolved ownership; this does not start another wait.
+        if (proof === "busy") proof = probe();
+        if (proof === "owned" && current() && !observeExplicitStop()) {
           throw Object.assign(new Error("Could not hand off the disconnected Link listener"), { code: "client_recycle_unpublished" });
         }
+        if (proof === "busy" && current()) console.warn("[client] restart: could not verify disconnect ownership before the recovery deadline; check ocx status");
       };
       // The connection may have changed while the replacement was starting (`ocx disconnect`, a
       // new connect). Serving the old one again would be a stale runtime nothing recycles; hand
@@ -597,11 +607,11 @@ export async function startClientRuntime(
         await recycleAfterRollback();
         return;
       }
-      if (!(await retryClientRollback(async remainingMs => {
+      if (await retryClientRollback(async remainingMs => {
         observeExplicitStop();
         if (clientRestartRollbackAction(state.value, readClientConnectionState()) === "recycle") return "refused";
         return serve({ port: servedPort, portWaitMs: remainingMs });
-      }))) {
+      }, { deadline }) !== "published") {
         // A recycle cannot take over an unchanged Link. Its last unpublished listener has
         // already closed; let the restart controller report failure unless a stop owns exit.
         if (linkMode && clientRestartRollbackAction(state.value, readClientConnectionStateWithEvidence()) === "resume") {

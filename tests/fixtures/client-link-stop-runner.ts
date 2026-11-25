@@ -37,7 +37,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   missingStopRecord?: "absent" | "invalid";
   startIdentityChanges?: "request" | "escalation";
   failedRollback?: "before-rebind" | "during-rebind";
-  refusedDisconnectRecycle?: "complete" | "pending" | "other-owner";
+  refusedDisconnectRecycle?: "complete" | "pending" | "other-owner" | "config-release" | "config-held" | "config-takeover";
   legacyOwnerRecord?: boolean;
   stopConnectionDrift?: "invalid" | "mismatched" | "disconnected" | "other-link" | "hub";
   driftDuringFallback?: boolean;
@@ -352,12 +352,19 @@ if (options.mode === "retry") {
     protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
   };
   let recycleAdmissions = 0;
+  let proofWaits = 0, proofLock: Database | undefined;
+  const contendProof = options.refusedDisconnectRecycle?.startsWith("config-");
   if (options.refusedDisconnectRecycle) {
     const apply = await import("../../src/client/link-home");
     const withApply = apply.withLinkApply;
     mock.module("../../src/client/link-home", () => ({ ...apply, withLinkApply: <T>(work: () => Promise<T>, lockPath?: string) => {
       if (!replacementAttempts) return withApply(work, lockPath);
       recycleAdmissions++;
+      if (contendProof) {
+        proofLock = new Database(prepareConfigMutationDatabasePathForWrite());
+        proofLock.exec("BEGIN IMMEDIATE");
+        return withApply(work, lockPath);
+      }
       throw new apply.LinkApplyBusyError();
     } }));
   }
@@ -372,14 +379,21 @@ if (options.mode === "retry") {
       return result;
     } }));
   }
-  if (options.retryRollbackPublication === "exhausted") {
-    lock(() => {}, lifecycleLockDeps);
+  if (options.retryRollbackPublication === "exhausted" || contendProof) {
+    if (!contendProof) lock(() => {}, lifecycleLockDeps);
     const rollback = await import("../../src/client/runtime-rollback");
     const retry = rollback.retryClientRollback;
     let now = 0;
     mock.module("../../src/client/runtime-rollback", () => ({ ...rollback,
       retryClientRollback: (attempt: Parameters<typeof retry>[0]) => retry(attempt, {
-        now: () => now, budgetMs: 50, sleep: async ms => { now += ms; },
+        now: () => now, deadline: contendProof ? 100 : 50, sleep: async ms => {
+          now += ms;
+          if (!contendProof) return;
+          proofWaits++;
+          if (options.refusedDisconnectRecycle === "config-held") return;
+          proofLock!.close(); proofLock = undefined;
+          if (options.refusedDisconnectRecycle === "config-takeover") (await import("../../src/client/state")).markClientConnectPending(expected.tokenFingerprint);
+        },
       }),
     }));
   }
@@ -472,8 +486,9 @@ if (options.mode === "retry") {
     }
     if (options.failedRollback || options.refusedDisconnectRecycle) {
       await restartSettled!();
+      proofLock?.close();
       report({ preflight, replacementAttempts, runtimePresent: readRuntimePort(process.pid) !== null,
-        ...(options.refusedDisconnectRecycle ? { rollbackExit, recycleAdmissions } : {}),
+        ...(options.refusedDisconnectRecycle ? { rollbackExit, recycleAdmissions, proofWaits } : {}),
         explicitStop: readRuntimePort(process.pid)?.clientStopRequested });
       process.exit(0);
     }
