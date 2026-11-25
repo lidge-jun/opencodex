@@ -439,8 +439,8 @@ export function pickPreserveLongQuotaCodexAccount(
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | null {
   const available = ids.filter(id => hasPreserveLongQuotaHeadroom(config, id, selectionOptions, now));
-  if (available.length === 0) return pickLowestUsageAmong(config, ids, selectionOptions, now);
-  return pickLowestUsageAmong(config, preserveLongQuotaCandidates(available, getAccountQuota, now), selectionOptions, now);
+  const candidates = available.length === 0 ? ids : preserveLongQuotaCandidates(available, getAccountQuota, now);
+  return pickLowestUsageAmong(config, candidates, selectionOptions, now, preserveLongQuotaShortUsage);
 }
 
 /** Earliest future shared short/weekly reset; missing evidence and ties use usage order. */
@@ -709,12 +709,16 @@ export function pickLowestUsageAmong(
   ids: readonly string[],
   selectionOptions?: CodexAccountUsabilityOptions,
   now: number = Date.now(),
+  shortOnlyUsage?: typeof preserveLongQuotaShortUsage,
 ): string | null {
   let best: string | null = null;
   let bestUsage = Number.POSITIVE_INFINITY;
   for (const id of ids) {
-    const usage = computeCodexUsageScore(
-      getAccountQuota(id),
+    const quota = getAccountQuota(id);
+    const short = shortOnlyUsage?.(quota, now);
+    // Keep the shared terminal-window and credit handling at exhaustion.
+    const usage = short !== undefined && short < 100 ? short : computeCodexUsageScore(
+      quota,
       getPoolAccountPlanForSelection(config, id, selectionOptions),
       now,
       codexAccountUsesCreditsAfterLimit(config, id),

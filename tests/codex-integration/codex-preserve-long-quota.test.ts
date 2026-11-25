@@ -354,6 +354,15 @@ describe("preserve-long-quota", () => {
     for (const [id, usage] of [["a", 95], ["b", 90], ["c", 99]] as const) quota(id, { weeklyPercent: usage, weeklyResetAt: now + HOUR });
     expect(first()).toBe("b");
   });
+  test.each([[90, 80], [70, 60]] as const)("prefers lower proven short-only usage: %i vs %i", (higher, lower) => {
+    config.codexAccounts = config.codexAccounts!.filter(account => account.id !== "c");
+    for (const [id, usage] of [["a", higher], ["b", lower]] as const) {
+      const data = shortOnlyWham();
+      data.rate_limit!.primary_window!.used_percent = usage;
+      publishWham(id, data);
+    }
+    expect(first()).toBe("b");
+  });
   test.each(["reserve"] as const)("independent %s scopes keep quota behavior", scope => {
     quota("a", { weeklyPercent: 10, weeklyResetAt: now + 120 * HOUR });
     quota("b", { weeklyPercent: 40, weeklyResetAt: now + HOUR });
