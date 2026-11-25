@@ -4,6 +4,7 @@ import { captureAccountAutoPauseAttempt, wasPermanentAccountRefusal } from "../.
 import type { OcxConfig, OcxProviderConfig, OcxParsedRequest } from "../../types";
 import type { CodexAuthContext, CodexAuthPolicyConfig } from "../../codex/auth-context";
 import type { CodexUpstreamOutcome } from "../../codex/routing";
+import type { CodexUpstreamOutcomeMeta } from "../../codex/routing/cooldown-math";
 import {
   recordCodexUpstreamOutcome,
   computeQuotaCooldown,
@@ -34,6 +35,7 @@ import {
   codexWsPreOutputRefusalHold,
   codexWsPreOutputRefusalOutcomeRecorded,
   isCodexWsPreOutputRefusal,
+  isCodexWsPreludeProjection,
   noteCodexWsPreOutputRefusalOutcome,
   restoreCodexWsPreOutputRefusal,
   type CodexWsPreOutputRefusalHold,
@@ -640,18 +642,13 @@ export function applyCodexAccountGatedWireNormalization(parsed: OcxParsedRequest
 }
 
 
-/**
- * Workspace-denial evidence for a 403, read from the upstream body.
- *
- * #1789: a valid K12 credential gets 403 `codex_workspace_access_denied` on a routed prompt.
- * Without this the account is quarantined for reauthentication, which cannot fix a workspace
- * grant and loops forever. Fails closed: an unreadable body keeps the historical handling.
- */
-export async function codexDenialOutcomeMeta(response: Response): Promise<{ denial?: "workspace" | "entitlement" }> {
+/** Keep an ambiguous HTTP 403 request-local while retaining the WebSocket prelude policy. */
+export async function codexDenialOutcomeMeta(response: Response): Promise<Pick<CodexUpstreamOutcomeMeta, "denial">> {
   if (response.status !== 403) return {};
   const { classifyCodexPreStreamRejection } = await import("../../codex/quota-rejection");
-  const rejection = await classifyCodexPreStreamRejection(response);
-  return rejection.denial ? { denial: rejection.denial } : {};
+  const { denial } = await classifyCodexPreStreamRejection(response);
+  if (denial) return { denial };
+  return isCodexWsPreludeProjection(response) ? {} : { denial: "ambiguous" };
 }
 
 

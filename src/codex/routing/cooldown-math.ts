@@ -7,6 +7,7 @@ import { hasElapsedShortWindow, hasSpendableCodexCredits, isTerminalShortWindow,
 import type { CodexQuotaScope } from "./health-store";
 import type { TransientProbeGrant } from "./thread-affinity";
 import type { MainQuotaDispatch } from "../main-account-cache";
+import type { CodexForbiddenDenial } from "../quota-rejection";
 
 export { TERMINAL_SHORT_WINDOW_FRESHNESS_MS } from "../quota-types";
 
@@ -42,6 +43,8 @@ export type CodexUpstreamOutcomeClass = "success" | "credential"
   | "workspace" | "quota" | "transient" | "caller" | "neutral" | "unknown";
 export type CodexCooldownSource = "retry-after" | "reset-derived" | "default";
 
+type CodexForbiddenOutcomeEvidence = CodexForbiddenDenial | "ambiguous";
+
 export type CodexUpstreamOutcomeMeta = {
   retryAfter?: string | null;
   resetAt?: unknown | unknown[];
@@ -49,11 +52,10 @@ export type CodexUpstreamOutcomeMeta = {
   /** (provider, host) ledger key for account-neutral reachability failures (#914). */
   hostKey?: string;
   /**
-   * Upstream denial evidence for a 403. A workspace/entitlement denial means the CREDENTIAL
-   * is fine and the account simply cannot reach this workspace, so it must not be quarantined
-   * for reauthentication (#1789). Absent evidence keeps the historical credential handling.
+   * Structured 403 evidence, or "ambiguous" when the HTTP Responses body was checked without a
+   * verdict. Callers that do not classify the body keep their existing 403 handling.
    */
-  denial?: "workspace" | "entitlement";
+  denial?: CodexForbiddenOutcomeEvidence;
   /** Stable transport code recorded alongside a neutral host failure. */
   lastFailureCode?: string;
   /** Native model selected for this request; used only for confirmed scoped quotas. */
@@ -152,7 +154,7 @@ export function computeCodexUsageScore(quota: {
 
 export function classifyCodexUpstreamOutcome(
   outcome: CodexUpstreamOutcome,
-  denial?: "workspace" | "entitlement",
+  denial?: CodexForbiddenOutcomeEvidence,
 ): CodexUpstreamOutcomeClass {
   if (outcome === "connect_neutral") return "neutral";
   if (outcome === "connect_error" || outcome === "timeout") return "transient";
@@ -163,12 +165,12 @@ export function classifyCodexUpstreamOutcome(
   // and says nothing about the credential. Relayed as the neutral class so a
   // stray 3xx cannot increment an account's transient streak.
   if (outcome >= 300 && outcome < 400) return "neutral";
-  // 401 is always a credential problem. A 403 is only a credential problem when nothing
-  // tells us otherwise: a workspace/entitlement denial (#1789) means the credential is valid
-  // and the account simply lacks access here, so quarantining it for reauth is wrong advice.
-  // Absent denial evidence the historical mapping stands, so the change fails safe.
-  if (outcome === 403 && denial !== undefined) return "workspace";
-  if (outcome === 401 || outcome === 403) return "credential";
+  if (outcome === 403) {
+    if (denial === "workspace" || denial === "entitlement") return "workspace";
+    if (denial === "ambiguous") return "caller";
+    return "credential";
+  }
+  if (outcome === 401) return "credential";
   // 402 Payment Required is treated as quota exhaustion for pool cooldown/failover
   // (same-request alternate retry records this outcome for the depleted account).
   if (outcome === 429 || outcome === 402) return "quota";

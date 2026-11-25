@@ -1120,6 +1120,10 @@ has reached Codex the turn is never sent again. If every attempt is declined, Co
 the same error it would have received without the retries. Native compact requests move to
 another Pool account on a server error in the same way.
 
+### HTTP 403 before a response starts
+
+A ChatGPT Responses HTTP 403 with no recognized authentication code still fails the current request. An empty or unrecognized refusal alone does not put the account into **Needs reauthentication**. An account-qualified request stays on the selected account. If ChatGPT explicitly reports that the current stored credential was invalidated, OpenCodex still asks the user to sign in again.
+
 ### Runtime agent instances (Codex 0.164+)
 
 Codex 0.164 can sign each request with a runtime agent assertion when
