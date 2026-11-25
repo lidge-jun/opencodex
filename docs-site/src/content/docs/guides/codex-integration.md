@@ -443,7 +443,9 @@ turns that capability off by default for every provider id except its built-in `
 loopback form already uses that id. Codex releases that predate the field ignore it. A table written by an
 earlier OpenCodex release, without the line, is still recognized by `ocx restore` and uninstall. The
 `ocx codex` launcher trusts only the current shape: after upgrading, if `ocx codex` stops supplying
-credentials, run `ocx start` once to rewrite the table.
+credentials, run `ocx sync` once with the Codex integration on to rewrite the table. With the integration
+off, stop the proxy with `ocx stop` and run `ocx start`; a bare `ocx start` beside a running proxy exits
+before it writes the Codex config.
 
 When OpenCodex owns routing, both modes write `$CODEX_HOME/opencodex.config.toml` as a
 reference/fallback config. On loopback it contains the root keys you can merge manually if automatic
