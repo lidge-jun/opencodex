@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { buildClientContribution, type ExportModel } from "../../src/clients/config-export";
 import { refreshOwnedCatalogIntegrations } from "../../src/integrations/catalog-refresh";
 import { assertIntegrationWriteOwnership, fileIO, type IntegrationIO } from "../../src/integrations/config-io";
-import { canonicalContribution, fingerprint } from "../../src/integrations/ownership";
+import { canonicalContribution, fingerprint, semanticContribution } from "../../src/integrations/ownership";
 import { protectedContributionFingerprint } from "../../src/integrations/ownership-policy";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
@@ -465,6 +465,89 @@ describe("apply", () => {
       baseURL: "http://127.0.0.1:10102/v1",
     });
     expect(readIntegrationState(request)).toMatchObject({ state: "current" });
+  });
+
+  describe("OpenCode admission key per destination (#9069)", () => {
+    type OpencodeDocument = {
+      provider: { opencodex: { options: Record<string, unknown> } };
+      providers: { opencodex: { settings: Record<string, unknown>; headers?: Record<string, string> } };
+    };
+    const LISTENER_HUB = {
+      ...CONFIG,
+      runtimeRole: "hub",
+      hostname: "100.64.0.10",
+      unauthenticatedLoopbackListener: { enabled: true, port: 10102 },
+    } as unknown as OcxConfig;
+    const read = (path: string) => JSON.parse(readFileSync(path, "utf8")) as OpencodeDocument;
+
+    test("the keyless listener gets the placeholder in both generations, on enable and refresh", () => {
+      const configPath = installOpencode();
+      const request = input({ clientId: "opencode", config: LISTENER_HUB });
+      expect(applyIntegration(request).ok).toBe(true);
+
+      const document = read(configPath);
+      // An unset `{env:…}` reference resolves to "", which OpenCode refuses before sending.
+      expect(document.provider.opencodex.options).toMatchObject({
+        baseURL: "http://127.0.0.1:10102/v1",
+        apiKey: "opencodex-loopback",
+      });
+      expect(document.provider.opencodex.options.headers).toBeUndefined();
+      expect(document.providers.opencodex.settings).toMatchObject({
+        baseURL: "http://127.0.0.1:10102/v1",
+        apiKey: "opencodex-loopback",
+      });
+      expect(document.providers.opencodex.headers).toBeUndefined();
+      expect(readIntegrationState(request)).toMatchObject({ state: "current" });
+
+      // A block the previous generator wrote carries the reference; refresh replaces it.
+      const previous = read(configPath);
+      previous.provider.opencodex.options.apiKey = "{env:OPENCODEX_OPENCODE_API_KEY}";
+      previous.providers.opencodex.settings.apiKey = "{env:OPENCODEX_OPENCODE_API_KEY}";
+      const previousText = `${JSON.stringify(previous, null, 2)}\n`;
+      writeFileSync(configPath, previousText);
+      const written = {
+        clientId: "opencode" as const,
+        fragments: [
+          { path: ["provider", "opencodex"], value: previous.provider.opencodex },
+          { path: ["providers", "opencodex"], value: previous.providers.opencodex },
+        ],
+      };
+      store.putRecord({
+        ...store.readRecords().opencode!,
+        fileFingerprint: fingerprint(previousText),
+        blockFingerprint: fingerprint(canonicalContribution(written)),
+        semanticBlockFingerprint: fingerprint(semanticContribution(written)),
+      });
+      expect(readIntegrationState(request)).toMatchObject({ state: "stale" });
+
+      const refreshed = refreshIntegration(request);
+      expect(refreshed.ok).toBe(true);
+      if (refreshed.ok) expect(refreshed.changed).toBe(true);
+      const after = read(configPath);
+      expect(after.provider.opencodex.options.apiKey).toBe("opencodex-loopback");
+      expect(after.providers.opencodex.settings.apiKey).toBe("opencodex-loopback");
+      expect(readIntegrationState(request)).toMatchObject({ state: "current" });
+    });
+
+    test("an authenticated bind keeps the admission header and a loopback bind keeps the reference", () => {
+      const authenticatedPath = installOpencode();
+      const authenticated = input({ clientId: "opencode", config: { ...CONFIG, hostname: "100.64.0.10" } as OcxConfig });
+      expect(applyIntegration(authenticated).ok).toBe(true);
+      const remote = read(authenticatedPath);
+      expect(remote.provider.opencodex.options).toMatchObject({
+        apiKey: "opencodex-loopback",
+        headers: { "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}" },
+      });
+      expect(remote.providers.opencodex.headers).toEqual({ "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}" });
+      expect(disableIntegration(authenticated).ok).toBe(true);
+
+      // Without the listener, a loopback base URL does not prove a keyless destination.
+      expect(applyIntegration(input({ clientId: "opencode" })).ok).toBe(true);
+      const loopback = read(authenticatedPath);
+      expect(loopback.provider.opencodex.options.apiKey).toBe("{env:OPENCODEX_OPENCODE_API_KEY}");
+      expect(loopback.providers.opencodex.settings.apiKey).toBe("{env:OPENCODEX_OPENCODE_API_KEY}");
+      expect(exportContextOf({ models: MODELS, config: CONFIG, port: 10100 }).keylessInference).toBeUndefined();
+    });
   });
 
   test("ZCode key-order normalization stays refreshable with derived metadata (#2759)", () => {
