@@ -61,7 +61,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 與啟動器的 runtime 區塊不同，合併後的區塊是靜態快照：它不會跟著你的目錄變動。新增供應商或變更
 模型可見度之後，請重新執行 `ocx export`。
 
-合併完成後，在啟動 opencode 之前先匯出 admission key——除非 proxy 在 loopback 上，此時不需要：
+合併完成後，在啟動 opencode 之前先匯出 admission key。僅綁定 loopback 的監聽器不會檢查它，但 OpenCode 會拒絕未設定的金鑰，因此在那裡任何非空值即可：
 
 ```bash
 export OPENCODEX_OPENCODE_API_KEY=<your key>

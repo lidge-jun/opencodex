@@ -87,8 +87,8 @@ anlık görüntüdür: kataloğunuzu takip etmez. Bir sağlayıcı ekledikten ve
 görünürlüğünü değiştirdikten sonra `ocx export`'u yeniden çalıştırın.
 
 Birleştirildikten sonra opencode'u başlatmadan önce kabul anahtarını dışa
-aktarın — proxy'nin geri döngüde olduğu durumlar hariç (orada hiçbir anahtar
-gerekmez):
+aktarın. Yalnızca geri döngüye bağlı bir dinleyici anahtarı denetlemez, ancak OpenCode
+ayarlanmamış bir anahtarı reddeder; orada boş olmayan herhangi bir değer yeterlidir:
 
 ```bash
 export OPENCODEX_OPENCODE_API_KEY=<anahtarınız>
@@ -130,10 +130,14 @@ Gerçek değer yalnızca alt süreç ortamı üzerinden iletilir.
 belirteci dosyası, ardından yapılandırılmış bir API anahtarı gelir — geri döngü
 olmayan bir bağlantının gerektirdiği budur.
 
-Bir geri döngü bağlantısı (`127.0.0.1`, varsayılan) hiçbir şeyi doğrulamaz, bu
-nedenle `{env:…}` referansı etkisizdir ve değişkeni ayarlanmamış
-bırakabilirsiniz. Yalnızca `hostname` geri döngünün ötesine ayarlandığında
-önemlidir; bkz. [Uzaktan erişim](/tr/reference/configuration/server/#uzaktan-erişim). Bu
+Bir geri döngü bağlantısı (`127.0.0.1`, varsayılan) veri düzlemi anahtarı istemez.
+Ancak OpenCode boş olmayan bir `apiKey` gerektirir ve ayarlanmamış bir `{env:…}` referansını
+istek gönderilmeden `Missing auth credential: apiKey` ile reddeder. Yönetilen entegrasyon veya
+panodaki istemci yapılandırması kimlik doğrulamasız geri döngü dinleyicisini hedeflediğinde `apiKey`
+olarak gizli olmayan `opencodex-loopback` yer tutucusunu yazar; dışa aktarılacak bir şey kalmaz.
+`ocx export` dahil diğer yollar referansı korur: gerektiği yerde kabul anahtarını, geri döngüde ise boş
+olmayan herhangi bir değeri `OPENCODEX_OPENCODE_API_KEY` olarak dışa aktarın. `hostname` geri
+döngünün ötesine ayarlandığında anahtar gerekir; bkz. [Uzaktan erişim](/tr/reference/configuration/server/#uzaktan-erişim). Bu
 kabul anahtarı opencodex'in kendisine aittir ve
 [Sağlayıcılar](/tr/guides/providers/) altında yapılandırılan yukarı akış
 sağlayıcı anahtarlarıyla ilgisizdir.
