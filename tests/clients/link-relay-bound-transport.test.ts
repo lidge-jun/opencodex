@@ -155,7 +155,7 @@ describe("connection-bound link relay", () => {
       req.once("end", () => jest.advanceTimersByTime(authTimeoutMs));
     }, async port => {
       // A missing probe still releases the socket and restores real timers.
-      const signal = AbortSignal.timeout(5_000);
+      const signal = AbortSignal.timeout(2_000); // well inside the 5 s test timeout
       jest.useFakeTimers();
       try {
         await expect(fetchBoundLinkRelay(target(port), `http://127.0.0.1:${port}/v1/responses`, {
