@@ -396,10 +396,12 @@ describe.skipIf(!windows || ROOT === null)("Windows hub with a non-loopback publ
     expect(listener.socketPath()).toBe(localControlSocketPath(publicPort));
     const lease = localControlLeasePath(publicPort);
     // Another process holds the record open without FILE_SHARE_DELETE: it stays readable, but no
-    // unlink can remove it until that handle closes.
+    // unlink can remove it until that handle closes. The path travels as a quoted literal: copying
+    // process.env into the child can carry both SYSTEMROOT and SystemRoot, which breaks the spawn.
+    const quoted = "'" + lease.replaceAll("'", "''") + "'";
     const holder = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-      "$f = [IO.File]::Open($env:OCX_HELD_LEASE, 'Open', 'Read', 'Read'); [Console]::Out.WriteLine('held'); [Console]::Out.Flush(); [void][Console]::In.ReadLine(); $f.Close()"],
-    { env: { ...process.env, OCX_HELD_LEASE: lease }, stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+      "$ErrorActionPreference = 'Stop'; $f = [IO.File]::Open(" + quoted + ", 'Open', 'Read', 'Read'); [Console]::Out.WriteLine('held'); [Console]::Out.Flush(); [void][Console]::In.ReadLine(); $f.Close()"],
+    { stdin: "pipe", stdout: "pipe", stderr: "ignore" });
     try {
       const reader = holder.stdout.getReader();
       let seen = "";
