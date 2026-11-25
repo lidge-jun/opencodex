@@ -267,7 +267,9 @@ describe("Responses provider input overflow", () => {
     }
   });
 
-  test.each([true, false])("a combo stops on 413 without dispatching a second target (stream=%s)", async stream => {
+  // #9017: a provider 413 is that target's intake limit, so the combo tries the next untried
+  // target; when the last one refuses too, the client gets the classified 413.
+  test.each([true, false])("a provider 413 advances the combo and the last target's 413 reaches the client (stream=%s)", async stream => {
     let firstHits = 0;
     let secondHits = 0;
     const first = upstream413(() => { firstHits += 1; });
@@ -301,6 +303,36 @@ describe("Responses provider input overflow", () => {
           code: "context_length_exceeded",
         } });
       }
+      expect(firstHits).toBe(1);
+      expect(secondHits).toBe(1);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  // The proxy's own 413 says nothing about the next target, so it still ends the chain.
+  test.each([
+    [true, "request translation buffer exceeded the safe limit"],
+    [false, "request translation buffer exceeded the safe limit"],
+    // Context-overflow wording does not turn a proxy-owned 413 into a size hop on either transport.
+    [true, "Your input exceeds the context window of this model. Please adjust your input and try again."],
+    [false, "Your input exceeds the context window of this model. Please adjust your input and try again."],
+  ] as const)("a proxy-owned 413 stops the combo without dispatching a second target (stream=%s, %s)", async (stream, message) => {
+    let firstHits = 0;
+    let secondHits = 0;
+    const buffer = { message, type: "request_too_large", code: "translation_buffer_limit" };
+    const next = config({
+      first: provider("openai-chat", upstreamEnvelope(buffer, () => { firstHits += 1; })),
+      second: provider("openai-chat", upstream413(() => { secondHits += 1; })),
+    });
+    next.combos = { fallback: { strategy: "failover", targets: [
+      { provider: "first", model: "kimi-k3" }, { provider: "second", model: "kimi-k3" },
+    ] } };
+    saveConfig(next);
+    const server = startServer(0);
+    try {
+      const response = await request(String(server.url), "combo/fallback", stream);
+      await response.text();
       expect(firstHits).toBe(1);
       expect(secondHits).toBe(0);
     } finally {
@@ -352,6 +384,34 @@ describe("Responses provider input overflow", () => {
       await server.stop(true);
     }
   });
+
+  // #9017: Groq answers a turn above its tokens-per-minute tier with HTTP 413 and a structured
+  // `rate_limit_exceeded` code. That is this target's cap, so the combo must reach the next one.
+  test.each([true, false])("a 413 with a structured per-minute token cap advances the combo (stream=%s)", async stream => {
+    let firstHits = 0;
+    let secondHits = 0;
+    const tpmCap = { message: "Request too large for model `kimi-k3` on tokens per minute (TPM): Limit 8000, Requested 9611",
+      type: "tokens", code: "rate_limit_exceeded" };
+    const next = config({
+      first: provider("openai-chat", upstreamEnvelope(tpmCap, () => { firstHits += 1; })),
+      second: provider("openai-chat", upstream413(() => { secondHits += 1; })),
+    });
+    next.combos = { fallback: { strategy: "failover", targets: [
+      { provider: "first", model: "kimi-k3" }, { provider: "second", model: "kimi-k3" },
+    ] } };
+    saveConfig(next);
+    const server = startServer(0);
+    try {
+      const response = await request(String(server.url), "combo/fallback", stream);
+      const text = await response.text();
+      expect(text).not.toContain("should-not-reach-client");
+      expect(text).toContain("context_length_exceeded");
+      expect(firstHits).toBe(1);
+      expect(secondHits).toBe(1);
+    } finally {
+      await server.stop(true);
+    }
+  });
 });
 
 describe("combo handling of the Ollama late-attribution refusal", () => {
@@ -378,7 +438,7 @@ describe("combo handling of the Ollama late-attribution refusal", () => {
     }
   }
 
-  // comboFailureDecision stops on a plain 413 (only a target-local cap marker hops), so the
+  // comboFailureDecision stops on this proxy-owned 413 (a provider 413 hops, #9017), so the
   // late-attribution refusal reaches the stop site; the exhaustion and child-stop sites are
   // unreachable for it and keep their existing overflow mapping.
   test.each([false, true])("the refusal reaches the client only as the literal constant envelope (stream=%s)", async stream => {
@@ -390,12 +450,12 @@ describe("combo handling of the Ollama late-attribution refusal", () => {
     expect(result.secondHits).toBe(0);
   });
 
-  test.each([false, true])("a suffixed message is not the constant and keeps the generic overflow mapping (stream=%s)", async stream => {
+  test.each([false, true])("a suffixed message is not the constant: it hops like a provider 413 and keeps the generic overflow mapping (stream=%s)", async stream => {
     const result = await runCombo({ ...localShape, message: `${OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE} private suffix should-not-reach-client` }, stream);
     expect(result.text).not.toContain("should-not-reach-client");
     expect(result.text).not.toContain(OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE);
     expect(result.text).toContain("context_length_exceeded");
-    expect(result.secondHits).toBe(0);
+    expect(result.secondHits).toBe(1);
   });
 
   test("a conflicting envelope with the constant but another code is not replaced and keeps dev's handling", async () => {

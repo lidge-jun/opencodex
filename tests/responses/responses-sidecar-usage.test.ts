@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KIRO_COMPLETION_TOOL_NAME } from "../../src/adapters/kiro-constants";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { encodeMessage } from "../../src/lib/eventstream-decoder";
 import { saveCredential } from "../../src/oauth/store";
 import { handleResponses } from "../../src/server/responses/core";
@@ -46,22 +47,27 @@ afterEach(() => {
 });
 
 /** Build the synthetic Kiro completion frames consumed by all three dispatch fixtures. */
-function completedAnswer(): Response {
+function completedAnswer(searchRound?: number): Response {
   const frame = (type: string, value: Record<string, unknown>) => encodeMessage(
     { ":message-type": "event", ":event-type": type },
     new TextEncoder().encode(JSON.stringify(value)),
   );
-  const tool = { name: KIRO_COMPLETION_TOOL_NAME, toolUseId: "synthetic-completion" };
+  const tool = searchRound === undefined
+    ? { name: KIRO_COMPLETION_TOOL_NAME, toolUseId: "synthetic-completion" }
+    : { name: "web_search", toolUseId: `synthetic-search-${searchRound}` };
   return new Response(Buffer.concat([
     frame("toolUseEvent", tool),
-    frame("toolUseEvent", { ...tool, input: JSON.stringify({ answer: "Completed fixture answer." }) }),
+    frame("toolUseEvent", { ...tool, input: JSON.stringify(searchRound === undefined ? { answer: "Completed fixture answer." } : { query: `fixture ${searchRound}` }) }),
     frame("toolUseEvent", { ...tool, stop: true }),
   ]), { headers: { "content-type": "application/vnd.amazon.eventstream" } });
 }
 
 describe("sidecar prompt usage accounting", () => {
-  for (const sidecar of ["none", "web-search", "images"] as const) {
-    test(`${sidecar}: persists the full Kiro prompt estimate into daily activity`, async () => {
+  for (const [sidecar, cap] of [
+    ["none", 1], ["web-search", 2], ["images", 2], ["web-search", 1], ["images", 1],
+  ] as const) {
+    test(`${sidecar}: accounts for Kiro sends with a ${cap}-send cap`, async () => {
+      const retry = sidecar !== "none";
       let sends = 0;
       globalThis.fetch = (async input => {
         const url = input instanceof Request ? input.url : String(input);
@@ -69,6 +75,7 @@ describe("sidecar prompt usage accounting", () => {
           throw new Error("Unexpected network target blocked by sidecar usage fixture");
         }
         sends++;
+        if (retry && sends === 1) throw Object.assign(new Error("synthetic reset"), { code: "ECONNRESET" });
         return completedAnswer();
       }) as typeof fetch;
       const config = {
@@ -98,14 +105,27 @@ describe("sidecar prompt usage accounting", () => {
       });
       const log: RequestLogContext = { model: "", provider: "" };
       const started = Date.now();
-      const response = await handleResponses(request, config, log);
+      const sendBudget = createRequestExecutionBudget({
+        maxTotalModelSends: cap, baseSendAllowance: cap, finalRecoveryAllowance: 0,
+        maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+      });
+      const response = await handleResponses(request, config, log, { sendBudget });
       const logged = responseWithDeferredRequestLog(response, `sidecar-usage-${sidecar}`, started, log);
+      const body = await logged.text();
+      expect(sends).toBe(cap);
+      expect(sendBudget.used).toBe(sends);
+      if (retry && cap === 1) {
+        expect(response.status).toBe(429);
+        expect(body).not.toContain("Completed fixture answer.");
+        expect(log.activeAttempt?.sendCount).toBe(1);
+        return;
+      }
       expect(response.status).toBe(200);
-      expect(await logged.text()).toContain("Completed fixture answer.");
-      expect(sends).toBe(1);
+      expect(body).toContain("Completed fixture answer.");
 
       const entries = readUsageEntries();
       expect(entries).toHaveLength(1);
+      expect(entries[0]!.attempts?.map(attempt => attempt.sendCount)).toEqual([sends]);
       expect(entries[0]!.usageStatus).toBe("estimated");
       // The newest user message is tiny; the persisted request and physical attempt must
       // still include the replayed prompt, just as the ordinary dispatch path does.
@@ -119,3 +139,140 @@ describe("sidecar prompt usage accounting", () => {
     });
   }
 });
+
+test("direct Kiro hosted search funds the answer after three searches", async () => {
+  let sends = 0;
+  let searches = 0;
+  globalThis.fetch = (async input => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === "https://api.exa.ai/search") {
+      searches++;
+      return Response.json({ results: [{ title: "Fixture", url: "https://example.invalid/", text: "Result" }] });
+    }
+    if (url !== "https://runtime.us-east-1.kiro.dev/") throw new Error("Unexpected network target");
+    return completedAnswer(++sends <= 3 ? sends : undefined);
+  }) as typeof fetch;
+  const config = {
+    defaultProvider: "kiro", emptyCompletionRetry: false,
+    webSearchSidecar: { backend: "exa", exaApiKey: "synthetic-search-key" },
+    providers: {
+      kiro: { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev",
+        authMode: "oauth", models: ["claude-opus-5.5"] },
+    },
+  } as OcxConfig;
+  const request = new Request("http://localhost/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "kiro/claude-opus-5.5", stream: true, store: false,
+      input: "Search three times.", tools: [{ type: "web_search" },
+        { type: "function", name: "fixture_lookup", parameters: { type: "object", properties: {} } }] }),
+  });
+  const log: RequestLogContext = { model: "", provider: "" };
+  const response = await handleResponses(request, config, log);
+  const body = await response.text();
+  expect(searches).toBe(3);
+  expect(sends).toBe(4);
+  expect(body).toContain("Completed fixture answer.");
+  expect(log.activeAttempt?.sendCount).toBe(4);
+});
+
+describe("direct generic HTTP sidecar send accounting", () => {
+  for (const tool of ["web_search", "image_generation"]) {
+    for (const cap of [1, 2]) {
+      test(`${tool}: charges the first send and gates the reset retry with cap ${cap}`, async () => {
+        const sendBudget = createRequestExecutionBudget({
+          maxTotalModelSends: cap, baseSendAllowance: cap, finalRecoveryAllowance: 0,
+          maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+        });
+        const usedAtDispatch: number[] = [];
+        globalThis.fetch = (async input => {
+          const url = input instanceof Request ? input.url : String(input);
+          if (url !== "https://relay.example.com/v1/chat/completions") {
+            throw new Error("Unexpected network target blocked by sidecar usage fixture");
+          }
+          usedAtDispatch.push(sendBudget.used);
+          if (usedAtDispatch.length === 1) throw Object.assign(new Error("synthetic reset"), { code: "ECONNRESET" });
+          const chunk = { id: "fixture", object: "chat.completion.chunk", model: "kimi-k3",
+            choices: [{ index: 0, delta: { content: "Completed HTTP fixture." }, finish_reason: "stop" }] };
+          return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+            headers: { "content-type": "text/event-stream" },
+          });
+        }) as typeof fetch;
+        const config = {
+          defaultProvider: "relay",
+          webSearchSidecar: { backend: "exa", exaApiKey: "fixture-search-key" },
+          images: { bridgeEnabled: true },
+          providers: {
+            relay: { adapter: "openai-chat", baseUrl: "https://relay.example.com/v1",
+              authMode: "key", apiKey: "fixture-relay-key", models: ["kimi-k3"] },
+            xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1",
+              authMode: "key", apiKey: "fixture-image-key", models: ["fixture"] },
+          },
+        } as OcxConfig;
+        const request = new Request("http://127.0.0.1/v1/responses", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "relay/kimi-k3", stream: true, store: false,
+            input: "Continue.", tools: [{ type: tool }] }),
+        });
+        const log: RequestLogContext = { model: "", provider: "" };
+        const response = await handleResponses(request, config, log, { sendBudget });
+        const body = await response.text();
+        expect(usedAtDispatch).toEqual(cap === 1 ? [1] : [1, 2]);
+        expect(sendBudget.used).toBe(cap);
+        expect(log.activeAttempt?.sendCount).toBe(cap);
+        expect(response.status).toBe(cap === 1 ? 429 : 200);
+        if (cap === 2) expect(body).toContain("Completed HTTP fixture.");
+      });
+    }
+  }
+});
+
+for (const attempts of [4, 20]) {
+  test(`direct hosted search retries ${attempts} upstream 429s through Responses ingress`, async () => {
+    const searchRounds = attempts === 20 ? 2 : 0;
+    let sends = 0;
+    let searches = 0;
+    globalThis.fetch = (async input => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === "https://api.exa.ai/search") {
+        searches++;
+        return Response.json({ results: [{ title: "Fixture", url: "https://example.invalid/", text: "Result" }] });
+      }
+      if (url !== "https://relay.example.com/v1/chat/completions") {
+        throw new Error("Unexpected network target blocked by sidecar usage fixture");
+      }
+      if (++sends <= attempts) return new Response("rate limited", { status: 429 });
+      const search = sends <= attempts + searchRounds;
+      const delta = search
+        ? { tool_calls: [{ index: 0, id: `search-${sends}`, type: "function", function: {
+          name: "web_search", arguments: JSON.stringify({ query: `fixture ${sends}` }),
+        } }] }
+        : { content: "Completed HTTP fixture." };
+      const chunk = { id: "fixture", object: "chat.completion.chunk", model: "kimi-k3",
+        choices: [{ index: 0, delta, finish_reason: search ? "tool_calls" : "stop" }] };
+      return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+    const config = {
+      defaultProvider: "relay",
+      webSearchSidecar: { backend: "exa", exaApiKey: "fixture-search-key" },
+      providers: {
+        relay: { adapter: "openai-chat", baseUrl: "https://relay.example.com/v1",
+          authMode: "key", apiKey: "fixture-relay-key", models: ["kimi-k3"], retryOn429: { attempts, intervalMs: 1, maxIntervalMs: 1 } },
+      },
+    } as OcxConfig;
+    const request = new Request("http://127.0.0.1/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "relay/kimi-k3", stream: true, store: false,
+        input: "Continue.", tools: [{ type: "web_search" }] }),
+    });
+    const log: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(request, config, log);
+    const body = await response.text();
+    expect(sends).toBe(attempts + searchRounds + 1);
+    expect(searches).toBe(searchRounds);
+    expect(response.status).toBe(200);
+    expect(body).toContain("Completed HTTP fixture.");
+    expect(log.activeAttempt?.sendCount).toBe(sends);
+  });
+}

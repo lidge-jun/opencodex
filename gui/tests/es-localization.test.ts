@@ -37,10 +37,10 @@ const machineTokens = (value: string): Set<string> => new Set((value.match(machi
 // Reviewed identical spellings: Spanish cognates, brands, protocol/strategy names,
 // wire identifiers and compact units. New English prose does not enter this list automatically.
 const identicalValues = new Set([
-  "Error", "Total", "Normal", "Original", "Local", "General", "Alias", "Ultra", "Zoom", "no", "No", "auto", "Manual",
+  "Error", "Total", "Normal", "Original", "Local", "General", "Alias", "Ultra", "Zoom", "no", "No", "auto", "Manual", "Plan",
   "Manual: {mode}", "{active}/{total} visible", " · local", "arena {total}",
   "Pool", "Direct", "Home", "Child", "Hub", "Proxy", "Backend", "Combos", "Combo", "Round-robin", "Suite", "Fallback",
-  "Anthropic", "Anthropic · Pool 2", "OpenAI", "Claude", "Codex", "GitHub", "Google", "Grok", "Grok Build",
+  "Anthropic", "Anthropic · Pool 2", "OpenAI", "Claude", "Codex", "GitHub", "Google", "Gemini", "Antigravity", "Argon", "Grok", "Grok Build",
   "Claude Code", "Claude Desktop", "Kiro CLI", "Builder ID", "Cursor", "OpenCode", "Pi", "OMP", "Hermes", "OpenClaw",
   "gjc", "DSH", "DeepSeek Harness (DSH)", "ZCode", "Aside", "Raycast", "omo", "Qoder", "Cline CLI", "Kilo",
   "Factory Droid", "GentleShell", "Kimi CLI", "MCode", "Prime CLI", "Codex CLI", "TypeSafe",

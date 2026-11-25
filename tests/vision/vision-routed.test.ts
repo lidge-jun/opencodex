@@ -387,3 +387,24 @@ test("explicit routed image capability enables a describer despite stale legacy 
   const plan = planVisionSidecar({ port: 10100, defaultProvider: "main", providers: { main, helper }, visionSidecar: { enabled: true, backend: "routed", model: "helper/vision" } } as OcxConfig, main, "blind", parsed);
   expect(plan?.backend).toBe("routed");
 });
+
+test.each(["missing", "disabled", "outside caller scope", "outside self-fetch key scope"] as const)("routed vision planning excludes a describer that is %s", reason => {
+  const main: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://main.test/v1", inputModalities: ["text"] };
+  const helper: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://helper.test/v1", disabled: reason === "disabled" };
+  const config: OcxConfig = {
+    port: 10100, defaultProvider: "main",
+    providers: reason === "missing" ? { main } : { main, helper },
+    ...(reason === "outside self-fetch key scope" ? {
+      apiKeys: [{ id: "fixture", key: "fixture-secret", name: "Fixture", createdAt: "2026-01-01T00:00:00Z", allowedProviders: ["main"] }],
+    } : {}),
+    visionSidecar: { enabled: true, backend: "routed", model: "helper/vision" },
+  };
+  const parsed = parseRequest({ model: "main/blind", input: [{ role: "user", content: [{ type: "input_image", image_url: PNG_DATA_URL }] }] });
+  const options = reason === "outside caller scope" ? {
+    advisorAdmissionPolicy: {
+      modelScope: { providers: ["main"], models: [] },
+      allowMeteredComboTargets: false, meteredRequiresComboOptIn: false, fallbackPolicies: [],
+    },
+  } : undefined;
+  expect(planVisionSidecar(config, main, "blind", parsed, undefined, options)).toBeUndefined();
+});

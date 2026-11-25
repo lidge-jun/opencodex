@@ -38,6 +38,7 @@ import {
   journalOwner,
   restoreJournalState,
 } from "../codex/journal";
+import { ConfigWriteContentChanged } from "../codex/config-write-lock";
 import { readCodexHomeJournal } from "../codex/codex-home-owner";
 import { DEFAULT_CATALOG_PATH, getCodexHome } from "../codex/paths";
 import {
@@ -53,6 +54,7 @@ import {
   writeServiceApiTokenFile,
 } from "../lib/service-secrets";
 import { MAX_REMOTE_CATALOG_BYTES } from "../server/catalog-download";
+import { readHubCredential, removeHubCredential, writeHubCredential, type HubRelayCredential } from "./hub-session";
 import type {
   OcxClientConnectionConfig,
   OcxConfig,
@@ -68,7 +70,9 @@ import {
   issueClientKey,
   normalizeHubOrigin,
   probeClientKeyId,
+  requestHubRelayCredential,
   revokeClientKey,
+  revokeHubRelayLease,
   startClientKeyRotation,
   type ConnectGuiSession,
   type IssuedClientKey,
@@ -249,6 +253,29 @@ function localGuiOrigin(): string {
   return `http://localhost:${Number.isInteger(port) && port > 0 ? port : 10100}`;
 }
 
+type ConnectCredential = { kind: "admin"; value: Uint8Array } | { kind: "gui-session"; value: ConnectGuiSession };
+
+async function provisionHubRelay(
+  connection: OcxClientConnectionConfig, authority: ConnectCredential, key: string, fetchImpl?: typeof fetch,
+): Promise<HubRelayCredential | null> {
+  try {
+    return await requestHubRelayCredential(connection.managementUrl, authority, connection.apiKeyId, key, fetchImpl);
+  } catch {
+    console.warn("Warning: Hub relay credential unavailable. Local management reads require a current Hub relay credential.");
+    return null;
+  }
+}
+
+/** The caller holds the configuration mutation lock for this connection generation. */
+function persistHubRelay(connection: OcxClientConnectionConfig, credential: HubRelayCredential | null): void {
+  try {
+    if (credential) writeHubCredential(credential, connection);
+    else removeHubCredential();
+  } catch {
+    console.warn("Warning: could not update the local Hub relay credential.");
+  }
+}
+
 function clientKeyName(): string {
   const raw = `ocx connect ${hostname() || "client"}`;
   return raw.slice(0, 80);
@@ -266,7 +293,7 @@ async function rotationAuthority(
   connection: OcxClientConnectionConfig,
   options: RotateClientOptions,
   deps: ClientConnectDeps,
-): Promise<{ kind: "admin"; value: Uint8Array } | { kind: "gui-session"; value: ConnectGuiSession }> {
+): Promise<ConnectCredential> {
   if (options.credential.kind === "admin") return { kind: "admin", value: options.credential.value };
   const session = await exchangeConnectPairingGrant(
     connection.managementUrl,
@@ -275,6 +302,22 @@ async function rotationAuthority(
     { fetchImpl: deps.fetchImpl },
   );
   return { kind: "gui-session", value: session };
+}
+
+async function replaceHubRelayCredential(
+  connection: ClientRotationResult, authority: ConnectCredential, key: string, deps: ClientConnectDeps,
+): Promise<ClientRotationResult> {
+  const credential = await provisionHubRelay(connection, authority, key, deps.fetchImpl);
+  const { rotationOutcome: _rotationOutcome, ...committed } = connection;
+  try {
+    withConfigMutationLockSync(() => {
+      assertClientConnectionUnchanged(committed);
+      persistHubRelay(committed, credential);
+    });
+  } catch {
+    console.warn("Warning: the Hub key rotated but the local relay credential could not be published.");
+  }
+  return connection;
 }
 
 export type ClientRotationResult = OcxClientConnectionConfig & {
@@ -367,7 +410,7 @@ function finalizeRotation(
 async function recoverRotationWithAuthority(
   held: ClientLifecycleHeld,
   connection: OcxClientConnectionConfig,
-  authority: { kind: "admin"; value: Uint8Array } | { kind: "gui-session"; value: ConnectGuiSession },
+  authority: ConnectCredential,
   deps: ClientConnectDeps,
 ): Promise<ClientRotationResult> {
   try {
@@ -403,10 +446,10 @@ async function recoverRotationWithAuthority(
       alignDesktopCredential(held, connection, backup.fingerprint, current);
       await commitClientKeyRotation(connection.managementUrl, authority, connection.apiKeyId, pending.rotationId, { fetchImpl: deps.fetchImpl });
       assertFresh();
-      return finalizeRotation(held, connection, backup.fingerprint, current, "committed");
+      return await replaceHubRelayCredential(finalizeRotation(held, connection, backup.fingerprint, current, "committed"), authority, current.token, deps);
     }
     if (currentAccepted && !backupAccepted) {
-      return finalizeRotation(held, connection, backup.fingerprint, current, "committed");
+      return await replaceHubRelayCredential(finalizeRotation(held, connection, backup.fingerprint, current, "committed"), authority, current.token, deps);
     }
     if (!currentAccepted && backupAccepted) {
       // Remote abort is confirmed before either local credential is rolled back.
@@ -433,7 +476,6 @@ export async function recoverPendingClientRotation(
       if (state.kind !== "connected" || !state.value.pendingOperation) throw new Error("no pending client key rotation to recover");
       if (isLinkConnection(state.value)) throw new Error("connect rotate is unavailable in link mode");
       const authority = await rotationAuthority(state.value, options, deps);
-      assertClientConnectionUnchanged(state.value);
       return recoverRotationWithAuthority(held, state.value, authority, deps);
     }, deps.lifecycleLockDeps);
   } finally { releaseCredential(options.credential); }
@@ -454,7 +496,7 @@ async function rotateConnectedClientKeyHeld(
   deps: ClientConnectDeps,
 ): Promise<ClientRotationResult> {
   let connection: OcxClientConnectionConfig | null = null;
-  let authority: { kind: "admin"; value: Uint8Array } | { kind: "gui-session"; value: ConnectGuiSession } | null = null;
+  let authority: ConnectCredential | null = null;
   let started: { rotationId: string; key: string; createdAt: string } | null = null;
   let markerPersisted = false;
   let backupCreated = false;
@@ -484,7 +526,6 @@ async function rotateConnectedClientKeyHeld(
       });
     }
     authority = await rotationAuthority(connection, options, deps);
-    assertClientConnectionUnchanged(connection);
     if (connection.pendingOperation) return recoverRotationWithAuthority(held, connection, authority, deps);
     withConfigMutationLockSync(() => {
       assertClientConnectionUnchanged(connection!);
@@ -521,7 +562,8 @@ async function rotateConnectedClientKeyHeld(
       return await recoverRotationWithAuthority(held, connection, authority, deps);
     }
     hubCommitted = true;
-    return finalizeRotation(held, connection, current.fingerprint, { token: rotation.key, fingerprint: replacement.fingerprint }, "committed");
+    const finalized = finalizeRotation(held, connection, current.fingerprint, { token: rotation.key, fingerprint: replacement.fingerprint }, "committed");
+    return await replaceHubRelayCredential(finalized, authority, rotation.key, deps);
   } catch (error) {
     if (error instanceof RotationRecoveryRequiredError || hubCommitted) {
       throw error instanceof RotationRecoveryRequiredError ? error : new RotationRecoveryRequiredError("committed rotation requires local recovery");
@@ -562,7 +604,7 @@ async function rotateConnectedClientKeyHeld(
 
 async function cleanupIssuedKey(
   managementUrl: string,
-  credential: { kind: "admin"; value: Uint8Array } | { kind: "gui-session"; value: ConnectGuiSession },
+  credential: ConnectCredential,
   issuedId: string,
   deps: ClientConnectDeps,
 ): Promise<string | null> {
@@ -623,7 +665,7 @@ async function connectClientUnlocked(
   let linkMode = false;
   let linkMetadata: { tunnelPort: number; linkId: string } | undefined;
   let issued: IssuedClientKey | null = null;
-  let cleanupCredential: { kind: "admin"; value: Uint8Array } | { kind: "gui-session"; value: ConnectGuiSession } | null = null;
+  let cleanupCredential: ConnectCredential | null = null;
   let tokenFingerprint: string | null = null;
   let pendingConnectFingerprint: string | null = null;
   let priorCatalog: CatalogSnapshot | null = null;
@@ -829,6 +871,9 @@ async function connectClientUnlocked(
       catalogSyncedAt: now,
       ...(linkMode ? { transport: "link" as const, link: linkMetadata } : {}),
     };
+    const relayCredential = cleanupCredential && issued
+      ? await provisionHubRelay(connection, cleanupCredential, issued.key, fetchImpl)
+      : null;
     withClientLifecycleSync(() => withConfigMutationLockSync(() => {
       assertActiveConnectingState(persisted.fingerprint);
       if (linkMetadata && options.selectedClientsExplicit) {
@@ -840,6 +885,7 @@ async function connectClientUnlocked(
       clearClientConnectPending(persisted.fingerprint);
       commitClientConnection(connection);
       committed = true;
+      if (!linkMode) persistHubRelay(connection, relayCredential);
     }), deps.lifecycleLockDeps);
     // Only now does the routing belong to this connection: take over a journal another owner wrote
     // (src/codex/journal.ts adoptJournalForClient). A failure keeps the connection; sync retries.
@@ -894,8 +940,15 @@ async function connectClientUnlocked(
   } catch (error) {
     const rollbackFailures: string[] = [];
     if (injectionCommitted) {
-      const restored = restoreJournalState();
-      if (!restored.complete) rollbackFailures.push("Codex journal restore was partial");
+      try {
+        const restored = restoreJournalState();
+        if (!restored.complete) rollbackFailures.push("Codex journal restore was partial");
+      } catch (restoreError) {
+        // A concurrent config.toml write refuses the restore and keeps the journal; report it as a
+        // partial rollback instead of abandoning the rest of the rollback.
+        if (!(restoreError instanceof ConfigWriteContentChanged)) throw restoreError;
+        rollbackFailures.push("Codex journal restore deferred: config.toml changed during rollback");
+      }
     }
     try {
       withClientLifecycleSync(() => withConfigMutationLockSync(() => {
@@ -1376,7 +1429,7 @@ function drainLoneNativeIntentOriginals(lifecycleLockDeps?: ClientLifecycleLockD
 
 export async function disconnectClient(
   options: Parameters<typeof disconnectClientAttempt>[0] = {},
-  deps: Pick<ClientConnectDeps, "lifecycleLockDeps"> = {},
+  deps: Pick<ClientConnectDeps, "lifecycleLockDeps" | "fetchImpl"> = {},
 ): ReturnType<typeof disconnectClientAttempt> {
   // The attempt lock is a file under the config directory: wait for parent ACL admission first,
   // as every other phase does, so nothing is created under a directory still being hardened.
@@ -1386,7 +1439,7 @@ export async function disconnectClient(
 
 async function disconnectClientAttempt(
   options: { keepCatalog?: boolean; expectedOwner?: DesktopRemoteOwner; expectLink?: string; recoverConfig?: boolean } = {},
-  deps: Pick<ClientConnectDeps, "lifecycleLockDeps"> = {},
+  deps: Pick<ClientConnectDeps, "lifecycleLockDeps" | "fetchImpl"> = {},
 ): Promise<{
   restored: boolean; tokenRemoved: boolean; catalogRemoved: boolean; catalogRestored: boolean; apiKeyId: string;
   desktopRestoration?: "owned_projection" | "standard_fallback" | "selection_preserved";
@@ -1464,7 +1517,8 @@ async function disconnectClientAttempt(
     catch (error) { throw abortPreparedDisconnect(prepared, error, deps); }
   }
 
-  return withConfigDirHardeningSettled(getConfigDir(), () => withClientLifecycleSync(held => withConfigMutationLockSync(() => {
+  let revokeRelay: (() => Promise<void>) | undefined;
+  const result = await withConfigDirHardeningSettled(getConfigDir(), () => withClientLifecycleSync(held => withConfigMutationLockSync(() => {
     const read = readDesktopDisconnectReceipt();
     if (read.kind !== "valid" || JSON.stringify(read.value) !== JSON.stringify(prepared.receipt)) {
       throw new Error("client_disconnect_receipt_changed");
@@ -1526,12 +1580,20 @@ async function disconnectClientAttempt(
     // The locks and the receipt checked above already fence this; a retry is idempotent.
     if (!disconnectAtLeast(receipt, "removing_token")) restoreNativeIntentOriginals(() => {});
     if (!disconnectAtLeast(receipt, "removing_token")) advance("removing_token");
+    if (connection && !isLinkConnection(connection) && token.kind === "present") {
+      const stored = readHubCredential(connection);
+      if (stored.kind === "present") {
+        const { managementUrl, apiKeyId } = connection;
+        revokeRelay = () => revokeHubRelayLease(managementUrl, apiKeyId, token.token, stored.credential, deps.fetchImpl);
+      }
+    }
     const tokenRemoval = removeServiceApiTokenFileIfOwned(receipt.tokenFingerprint);
     if (tokenRemoval === "changed") throw new Error("client_token_changed");
     if (!disconnectAtLeast(receipt, "token_removed")) advance("token_removed");
     if (!disconnectAtLeast(receipt, "clearing_connection")) advance("clearing_connection");
     if (clearClientConnection(receipt.owner) === "conflict") throw new Error("client_disconnect_owner_changed");
     if (!disconnectAtLeast(receipt, "connection_cleared")) advance("connection_cleared");
+    removeHubCredential();
     if (connection?.transport === "link" && connection.link) {
       // A corrupt sidecar is left in place: the connection is already cleared, the client runtime
       // will not start a tunnel for a disconnected client, and the next join overwrites the file.
@@ -1555,6 +1617,11 @@ async function disconnectClientAttempt(
       ...(desktop.restoration ? { desktopRestoration: desktop.restoration } : {}),
     };
   }), deps.lifecycleLockDeps));
+  if (revokeRelay) {
+    try { await revokeRelay(); }
+    catch { console.warn("Warning: Hub relay revocation was not confirmed. Its credential expires after the Hub's idle timeout."); }
+  }
+  return result;
 }
 
 /**

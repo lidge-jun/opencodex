@@ -24,4 +24,4 @@ the compact body keeps every custom tool and its history unchanged. A custom-too
 HTTP 400 before network dispatch and releases host admission without recording a transport failure.
 `tests/responses/model-custom-tool-capability.test.ts` covers lowering and collision refusal.
 
-The separate [Responses include normalization](responses-wire-shapes.md) is gated to xAI and Meta; it does not change this projection or its destination boundary.
+The separate [Responses include normalization](responses-wire-shapes.md) follows its own destination policy; it does not change this projection or its destination boundary.

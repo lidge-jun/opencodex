@@ -66,6 +66,7 @@ import type { ExportModel, OpencodeLaunchEnv, OpencodeCatalogModel, ExportContex
 import { OPENCODE_API_KEY_ENV_REF, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG, OPENCODE_CONFIG_SCHEMA, OPENCODE_PROVIDER_ID, PI_API_DIALECT, LOOPBACK_API_KEY_PLACEHOLDER, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV_REF, OPENCODE_API_KEY_ENV, HERMES_API_KEY_ENV, OPENCLAW_API_KEY_ENV, KILO_API_KEY_ENV } from "./config-export/constants";
 import { exportModelLabel, authoritativeContextWindow, outputBudgetFor, inputBudgetFor, normalizeExportModels, inputModalitiesForClient, opencodeModelCapabilities, proxyAdmissionHeaders, singleFragment } from "./config-export/model-metadata";
 import { exportReasoningEfforts, exportDefaultReasoningEffort, legacyReasoningMetadata, type LegacyEffortVariant } from "./config-export/reasoning-metadata";
+import { opencodeModelUsesChat } from "./config-export/opencode-wire";
 import { buildOmpClientConfig, summarizeOmp, buildOmpContribution } from "./config-export/omp";
 import { buildDshClientConfig, summarizeDsh, buildDshContribution, DSH_DESKTOP_PROFILE } from "./config-export/dsh";
 import { buildMcodeClientConfig, summarizeMcode, buildMcodeContribution } from "./config-export/mcode";
@@ -98,6 +99,7 @@ export { buildT3CodeClientConfig, t3codeConfigPath, t3codeHomeDir, type T3CodeGe
 
 export interface OpencodeModelEntry {
   name: string;
+  provider?: { npm: typeof OPENCODE_CHAT_NPM };
   limit?: { context: number; input?: number; output: number };
   /**
    * opencode's own capability fields, derived from the catalog row's declared input
@@ -126,6 +128,7 @@ export interface OpencodeModelVariant {
 
 export interface OpencodeV2ModelEntry {
   name: string;
+  package?: typeof OPENCODE_CHAT_PACKAGE;
   limit?: { context: number; input?: number; output: number };
   capabilities?: { tools: boolean; input?: string[]; output?: string[] };
   compatibility?: { reasoningField: "reasoning_content" };
@@ -164,7 +167,8 @@ export interface OpencodeProviderBlock {
 export interface OpencodeV2ProviderBlock {
   package: string;
   name: string;
-  settings: OpencodeProviderConnection;
+  settings: Omit<OpencodeProviderConnection, "headers">;
+  headers?: Record<string, string>;
   models: Record<string, OpencodeV2ModelEntry>;
 }
 
@@ -186,17 +190,10 @@ export interface OpencodeGeneratedConfig {
   providers: Record<string, OpencodeV2ProviderBlock>;
 }
 
-/**
- * The proxy speaks the OpenAI-compatible shape at /v1, which opencode reaches through
- * the AI SDK's openai-compatible package (the same wiring users hand-write today).
- */
-const OPENCODE_PROVIDER_NPM = "@ai-sdk/openai-compatible";
-
-/**
- * Canonical V2 runtime spelling. Current clients alias the old @opencode-ai scope,
- * but exported documents use the documented package rather than depending on that alias.
- */
-const OPENCODE_V2_PROVIDER_PACKAGE = "@opencode/ai/providers/openai-compatible";
+const OPENCODE_CHAT_NPM = "@ai-sdk/openai-compatible";
+const OPENCODE_CHAT_PACKAGE = "@opencode/ai/providers/openai-compatible";
+const OPENCODE_RESPONSES_NPM = "@ai-sdk/openai";
+const OPENCODE_RESPONSES_PACKAGE = "@opencode/ai/providers/openai-compatible-responses";
 
 /** Display name for the provider block, identical in both generations. */
 const OPENCODE_PROVIDER_NAME = "OpenCodex";
@@ -737,7 +734,7 @@ export function raycastConfigPath(env: OpencodeLaunchEnv = process.env, home: st
   return join(raycastAiDir(env, home), "providers.yaml");
 }
 
-/** Endpoint plus admission, identical for the V1 `options` and V2 `settings` field. */
+/** Same endpoint and credentials, with the admission header serialized by generation. */
 function opencodeProviderConnection(baseURL: string, config: OcxConfig): OpencodeProviderConnection {
   const options: OpencodeProviderConnection = { baseURL };
   // Opt-in opencode-side timeout overrides. Omitted by default so opencode keeps its native
@@ -755,6 +752,8 @@ function opencodeProviderConnection(baseURL: string, config: OcxConfig): Opencod
   // stays free for Codex Direct upstream credentials when applicable.
   if (shouldInjectApiAuthHeader(config)) {
     options.headers = { "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF };
+    // The OpenAI SDK requires a key even when the proxy's admission uses its own header.
+    options.apiKey = LOOPBACK_API_KEY_PLACEHOLDER;
     return options;
   }
   options.apiKey = OPENCODE_API_KEY_ENV_REF;
@@ -791,7 +790,13 @@ export function opencodeProviderBlocks(
   const v2Models: Record<string, OpencodeV2ModelEntry> = {};
   for (const model of expandFastExportModels(catalogModels)) {
     const key = model.namespaced;
-    const entry: OpencodeModelEntry = { name: exportModelLabel(model), ...legacyReasoningMetadata(model) };
+    const usesChat = opencodeModelUsesChat(model, config);
+    const { interleaved, ...reasoning } = legacyReasoningMetadata(model);
+    const entry: OpencodeModelEntry = {
+      name: exportModelLabel(model),
+      ...reasoning,
+      ...(usesChat ? { provider: { npm: OPENCODE_CHAT_NPM }, ...(interleaved ? { interleaved } : {}) } : {}),
+    };
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.limit = { context, output: outputBudgetFor(context, model) };
@@ -819,22 +824,26 @@ export function opencodeProviderBlocks(
       name: entry.name,
       ...(entry.limit ? { limit: { ...entry.limit } } : {}),
       ...(v2Capabilities ? { capabilities: v2Capabilities } : {}),
-      ...(entry.interleaved ? { compatibility: { reasoningField: "reasoning_content" } } : {}),
+      ...(usesChat ? { package: OPENCODE_CHAT_PACKAGE } : {}),
+      ...(usesChat && interleaved ? { compatibility: { reasoningField: interleaved.field } } : {}),
       ...(defaultEffort !== undefined ? { settings: { reasoningEffort: defaultEffort } } : {}),
       variants: opencodeEffortVariants(model),
     };
   }
+  const connection = opencodeProviderConnection(baseURL, config);
+  const { headers, ...settings } = connection;
   return {
     v1: {
-      npm: OPENCODE_PROVIDER_NPM,
+      npm: OPENCODE_RESPONSES_NPM,
       name: OPENCODE_PROVIDER_NAME,
-      options: opencodeProviderConnection(baseURL, config),
+      options: connection,
       models: v1Models,
     },
     v2: {
-      package: OPENCODE_V2_PROVIDER_PACKAGE,
+      package: OPENCODE_RESPONSES_PACKAGE,
       name: OPENCODE_PROVIDER_NAME,
-      settings: opencodeProviderConnection(baseURL, config),
+      settings,
+      ...(headers ? { headers } : {}),
       models: v2Models,
     },
   };
@@ -1157,6 +1166,12 @@ function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}):
  */
 const PI_EXPORT_OPTIONS: PiExportOptions = { sendSessionAffinityHeaders: true, foldDeveloperRole: true };
 const PI_NATIVE_SELECTOR_OPTIONS: PiExportOptions = { ...PI_EXPORT_OPTIONS, rawNestedModelIds: true, omitNativeInCodexDirect: true };
+/**
+ * Prime and Aside run the Pi runtime and read the same models.json, so they need Pi's developer-role
+ * statement (#8864): without it they send their system prompt as `developer`, which DashScope and
+ * Moonshot reject with a 400. Session affinity stays Pi's alone (eb8cc9ab73).
+ */
+const PI_DEVELOPER_ROLE_OPTIONS: PiExportOptions = { foldDeveloperRole: true };
 
 /** Do not let provider-controlled catalog text become an environment lookup. */
 function containsEnvInterpolation(value: string): boolean {
@@ -1413,7 +1428,7 @@ function buildGajaeContribution(ctx: ExportContext): ManagedContribution {
  * code is stamping the right client id on the ownership record.
  */
 function buildPrimeContribution(ctx: ExportContext): ManagedContribution {
-  const doc = buildPiClientConfig(ctx);
+  const doc = buildPiClientConfig(ctx, PI_DEVELOPER_ROLE_OPTIONS);
   return singleFragment("prime", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
@@ -1436,7 +1451,7 @@ function buildPrimeContribution(ctx: ExportContext): ManagedContribution {
  * the fragment this client recorded and not one another client wrote.
  */
 function buildAsideContribution(ctx: ExportContext): ManagedContribution {
-  const doc = buildPiClientConfig(ctx);
+  const doc = buildPiClientConfig(ctx, PI_DEVELOPER_ROLE_OPTIONS);
   return singleFragment("aside", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
@@ -1449,9 +1464,8 @@ function buildAsideContribution(ctx: ExportContext): ManagedContribution {
  * `thinkingLevelMap` levels. Evidence:
  * `devlog/_fin/260912_omo_client_integration/001_omo_contract.md`.
  *
- * The flag is passed HERE as well as in the spec's `build`, which is the one
- * thing Prime and Aside do not do. They pass the default on both paths, so they
- * are consistent; passing it on only one would make `ocx export --client omo`
+ * The flag is passed HERE as well as in the spec's `build`, the same rule Prime
+ * and Aside follow with their own options; passing it on only one would make `ocx export --client omo`
  * emit a `compat` block while enable and refresh wrote a file without it, and
  * the two would drift apart at the first refresh.
  *
@@ -1668,7 +1682,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     destination: env => primeConfigPath(env),
     apiKeyEnv: "",
     exportHint: "Prime Agent reads a non-secret placeholder from models.json; loopback needs no key.",
-    build: buildPiClientConfig,
+    build: ctx => buildPiClientConfig(ctx, PI_DEVELOPER_ROLE_OPTIONS),
     format: "json",
     summarize: summarizePi,
     buildContribution: buildPrimeContribution,
@@ -1686,7 +1700,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     destination: env => asideConfigPath(env),
     apiKeyEnv: "",
     exportHint: "Aside reads a non-secret placeholder from models.json; loopback needs no key.",
-    build: buildPiClientConfig,
+    build: ctx => buildPiClientConfig(ctx, PI_DEVELOPER_ROLE_OPTIONS),
     format: "json",
     summarize: summarizePi,
     buildContribution: buildAsideContribution,

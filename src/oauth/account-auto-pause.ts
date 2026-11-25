@@ -1,8 +1,7 @@
-import { captureAccountAutoPauseFence, accountAutoPauseFenceIsLocal, accountAutoPauseFenceMatchesDisk } from "../config/account-auto-pause-revisions";
+import { captureAccountAutoPauseFence, accountAutoPauseFenceIsLocal, accountAutoPauseFenceMatchesDisk, effectiveAccountAutoPause } from "../config/account-auto-pause-revisions";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { OAuthAccessSnapshot } from "./index";
 import type { CodexAuthContext } from "../codex/auth-context";
-import type { AccountPauseReason } from "../types/account-auto-pause";
 import { credentialGeneration, getAccountSet, setAccountPaused } from "./store";
 import { mutatePersistedConfig } from "../config";
 import { isCodexAccountGenerationLive, readCodexAccountRecord } from "../codex/account-store";
@@ -12,12 +11,14 @@ import { apiKeyPoolEntryId } from "../providers/api-keys";
 import { resolveProviderApiKey } from "../providers/api-key-resolve";
 import { createHash } from "node:crypto";
 import { setProviderApiKeyPaused } from "../providers/api-key-pause";
-import { AccountRefusalStreaks, autoPauseThreshold, permanentAccountRefusal } from "./account-auto-pause-policy";
+import { AccountRefusalStreaks, permanentAccountRefusalEvidence, type PermanentAccountRefusalEvidence } from "./account-auto-pause-policy";
 import { clearThreadAccountMapForAccount, reconcileCodexActiveAfterExclusion } from "../codex/routing";
 import { isNonReplayableResponse } from "../lib/upstream-retry";
 import { hasUpstreamRewriters, upstreamRewriterEpoch } from "../plugins/upstream-hooks";
+import { isCanonicalAntigravityUrl } from "../lib/provider-tls-profile";
 
 const streaks = new WeakMap<OcxConfig, AccountRefusalStreaks>();
+const appealNotices = new Set<string>();
 export { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../lib/account-auto-pause-response";
 import { markAccountAutoPaused, markPermanentAccountRefusal } from "../lib/account-auto-pause-response";
 export interface AccountAutoPauseBinding {
@@ -29,7 +30,7 @@ export interface AccountAutoPauseBinding {
 /** Capture before transport. A later response cannot acquire authority over a newer login/resume. */
 export type AccountAutoPauseObserver = ((response: Response) => Promise<Response>) & {
   /** Final-send report: only a response whose wire credential and destination match is counted. */
-  physical: (sameDestination: boolean, headers: Headers) => void;
+  physical: (sameDestination: boolean, headers: Headers, destination: string) => void;
 };
 const CREDENTIAL_HEADERS = ["authorization", "x-api-key", "x-goog-api-key", "api-key"] as const;
 const CODEX_SELECTOR_HEADERS = ["openai-organization", "openai-project"] as const;
@@ -42,18 +43,28 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
   AccountAutoPauseObserver | undefined {
   if (!binding) return;
   const { config, oauth, codex } = binding;
-  const threshold = autoPauseThreshold(config.providers[name]?.accountAutoPause);
-  if (!threshold) return;
+  const effective = effectiveAccountAutoPause(config.providers[name]);
+  if (!effective) return;
+  const { threshold, conclusiveOnly } = effective;
+  // The implicit default trusts only Google's own answer: an OAuth send to a first-party Cloud Code
+  // Assist host, checked on the sending provider here and on the final destination in `physical`.
+  if (conclusiveOnly && (provider.authMode !== "oauth" || !isCanonicalAntigravityUrl(provider.baseUrl))) return;
+  const samePolicy = (row: unknown) => {
+    const live = effectiveAccountAutoPause(row);
+    return live?.threshold === threshold && live.conclusiveOnly === conclusiveOnly;
+  };
   const configured = config.providers[name];
   if (!configured || configured.disabled) return;
+  const firstPartyCloudCodeProvider = provider.authMode === "oauth" && provider.adapter === "google"
+    && provider.googleMode === "cloud-code-assist" && isCanonicalAntigravityUrl(provider.baseUrl);
   const fence = captureAccountAutoPauseFence(config, name);
   if (!fence) return;
   const route = JSON.stringify([configured.baseUrl, configured.adapter, configured.authMode]);
   const policyCurrent = () => accountAutoPauseFenceIsLocal(name, fence) && !config.providers[name]?.disabled
-    && autoPauseThreshold(config.providers[name]?.accountAutoPause) === threshold
+    && samePolicy(config.providers[name])
     && JSON.stringify([config.providers[name]?.baseUrl, config.providers[name]?.adapter, config.providers[name]?.authMode]) === route;
   let key: string, incarnation: string, current: () => boolean, owns: (wire: Headers) => boolean;
-  let pause: (reason: AccountPauseReason) => Promise<boolean>;
+  let pause: (refusal: PermanentAccountRefusalEvidence) => Promise<boolean>;
   if (provider.authMode === "oauth") {
     if (!oauth || oauth.provider !== name || headers?.get("authorization") !== `Bearer ${oauth.accessToken}` || headers.has("x-api-key")) return;
     const row = getAccountSet(name)?.accounts.find(a => a.id === oauth.accountId);
@@ -66,9 +77,10 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
       const live = getAccountSet(name)?.accounts.find(a => a.id === oauth.accountId);
       return !!live && !live.paused && live.pauseRevision === revision && credentialGeneration(live.credential) === oauth.generation;
     };
-    pause = async reason => (await setAccountPaused(name, oauth.accountId, true, {
+    pause = async ({ reason, ...evidence }) => (await setAccountPaused(name, oauth.accountId, true, {
       generation: oauth.generation, pauseRevision: revision, isCurrent: policyCurrent,
       assertPolicyBeforePersist: () => { if (!accountAutoPauseFenceMatchesDisk(name, fence)) throw new Error("Account auto-pause policy changed before persistence"); }, details: { reason, pausedAt: Date.now() },
+      evidence,
     })).status === "updated";
   } else if (provider.authMode === "forward") {
     if (!codex || codex.kind !== "pool" && codex.kind !== "main-pool") return;
@@ -90,12 +102,12 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     incarnation = `${codex.kind === "pool" ? readCodexAccountRecord(accountId)?.quotaHistoryIdentity ?? codex.generation : mainDispatch?.credentialGeneration}\0${revision ?? ""}`;
     current = () => !isCodexAccountPaused(config, accountId)
       && config.codexAccountPauseState?.[accountId]?.revision === revision && credentialCurrent();
-    pause = async reason => {
+    pause = async ({ reason }) => {
       let pauseState: OcxConfig["codexAccountPauseState"];
       const outcome = mutatePersistedConfig(fresh => {
         if (!policyCurrent() || !accountAutoPauseFenceMatchesDisk(name, fence, fresh) || !credentialCurrent() || isCodexAccountPaused(fresh, accountId)
           || fresh.codexAccountPauseState?.[accountId]?.revision !== revision
-          || autoPauseThreshold(fresh.providers[name]?.accountAutoPause) !== threshold) return { changed: false, value: false };
+          || !samePolicy(fresh.providers[name])) return { changed: false, value: false };
         setCodexAccountPaused(fresh, accountId, true, { reason, pausedAt: Date.now() });
         pauseState = structuredClone(fresh.codexAccountPauseState);
         return { changed: true, value: true };
@@ -126,7 +138,7 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
       const live = configured?.apiKeyPool?.find(e => e.id === id) ?? (!configured?.apiKeyPool?.length && configured?.apiKey === reference ? entry : undefined);
       return !!live && !live.disabled && live.key === reference && live.pauseRevision === pauseRevision && resolveProviderApiKey(reference) === resolvedKey;
     };
-    pause = async reason => setProviderApiKeyPaused(config, name, id, true, {
+    pause = async ({ reason }) => setProviderApiKeyPaused(config, name, id, true, {
       selection, pauseRevision, resolvedKey, fence, details: { reason, pausedAt: Date.now() },
     });
   }
@@ -139,6 +151,7 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
   // so no plugin could have rewritten the dial in between.
   const rewriterEpoch = hasUpstreamRewriters() ? undefined : upstreamRewriterEpoch();
   let wireOwned: boolean | undefined;
+  let firstPartyCloudCodeSend = false;
   const observer = (async (response: Response) => {
     if (observed.has(response) || isNonReplayableResponse(response)) return response;
     observed.add(response);
@@ -149,9 +162,9 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     if (counted.has(key)) return response;
     countedResponses.set(response, counted.add(key));
     try {
-      const verdict = permanentAccountRefusal(response).then(reason => {
-        if (reason) markPermanentAccountRefusal(response);
-        return reason;
+      const verdict = permanentAccountRefusalEvidence(response, undefined, conclusiveOnly, firstPartyCloudCodeSend).then(refusal => {
+        if (refusal) markPermanentAccountRefusal(response);
+        return refusal;
       });
       const paused = await tracker.observe(key, incarnation, threshold, verdict, response.ok,
         () => policyCurrent() && current(), pause);
@@ -159,6 +172,13 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
         markAccountAutoPaused(response);
         // Fixed codes only. Never print the upstream body, provider label, or account identifier.
         console.warn(`[account-auto-pause] paused after ${threshold} consecutive permanent account refusals`);
+        if ((await verdict)?.appealUrl) {
+          const noticeKey = `${fence.configPath}\0${key}`;
+          if (!appealNotices.has(noticeKey)) {
+            appealNotices.add(noticeKey);
+            console.warn("[account-auto-pause] appeal link available");
+          }
+        }
       }
     } catch {
       // Optional persistence must preserve the original provider response.
@@ -166,6 +186,10 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     }
     return response;
   }) as AccountAutoPauseObserver;
-  observer.physical = (sameDestination, wire) => { wireOwned = sameDestination && owns(wire); };
+  observer.physical = (sameDestination, wire, destination) => {
+    wireOwned = sameDestination && owns(wire) && (!conclusiveOnly || isCanonicalAntigravityUrl(destination));
+    firstPartyCloudCodeSend = wireOwned && firstPartyCloudCodeProvider && isCanonicalAntigravityUrl(destination)
+      && !wire.has("x-goog-api-key") && !wire.has("api-key");
+  };
   return observer;
 }

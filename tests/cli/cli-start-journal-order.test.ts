@@ -182,7 +182,8 @@ describe("start and ensure journal ownership (#1230)", () => {
         + cli.slice(cli.indexOf("async function handleEnsure("), cli.indexOf("async function handleTrayProxyStart("));
       const recovery = readFileSync(repoPath("src/cli/start-owner-fence.ts"), "utf8");
       const recheck = recovery.slice(recovery.indexOf("export async function recoverStartJournalAfterOwnerRecheck("), recovery.indexOf("/** Hold ownership stable"));
-      const executable = new Bun.Transpiler({ loader: "ts" }).transformSync(bodies + recheck.replace("export ", ""));
+      const relocatedBodies = bodies.replace('"../client/stop-teardown-owner"', JSON.stringify(repoPath("src/client/stop-teardown-owner.ts")));
+      const executable = new Bun.Transpiler({ loader: "ts" }).transformSync(relocatedBodies + recheck.replace("export ", ""));
       const script = join(fx.root, "missed-owner.ts");
       writeFileSync(script, `
         import { reconcileStartupJournal } from ${JSON.stringify(repoPath("src/cli/cross-home-owner.ts"))};
@@ -321,7 +322,7 @@ describe("start and ensure journal ownership (#1230)", () => {
         expect(health.role).toBe("client");
         expect(runtime.hostname).toBe("127.0.0.1");
         expect((await fetch(`http://127.0.0.1:${runtime.port}/v1/models`)).status).toBe(404);
-        expect((await fetch(`http://127.0.0.1:${runtime.port}/api/config`)).status).toBe(404);
+        expect((await fetch(`http://127.0.0.1:${runtime.port}/api/config`)).status).toBe(401);
         expect(readFileSync(fx.configPath, "utf8")).toBe(matches ? injected : original);
         expect(existsSync(fx.journalPath)).toBe(matches);
       } finally {

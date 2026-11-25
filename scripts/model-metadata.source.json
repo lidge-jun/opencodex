@@ -13328,6 +13328,25 @@
 				"maxLevel": "xhigh"
 			}
 		},
+		"gemini-4-neon": {
+			"id": "gemini-4-neon",
+			"name": "Gemini 4 Neon",
+			"api": "google-generative-ai",
+			"provider": "google",
+			"baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"contextWindow": 1048576,
+			"maxTokens": 65536,
+			"thinking": {
+				"mode": "google-level",
+				"minLevel": "low",
+				"maxLevel": "xhigh"
+			}
+		},
 		"gemini-flash-latest": {
 			"id": "gemini-flash-latest",
 			"name": "Gemini Flash Latest",
@@ -60851,6 +60870,58 @@
 				"maxLevel": "max"
 			}
 		},
+		"gpt-6.2-sol": {
+			"id": "gpt-6.2-sol",
+			"name": "GPT-6.2 Sol",
+			"cost": {
+				"input": 2,
+				"output": 10,
+				"cacheRead": 0.1,
+				"cacheWrite": 2.5
+			},
+			"api": "openai-responses",
+			"provider": "openai",
+			"baseUrl": "",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"contextWindow": 1050000,
+			"maxTokens": 128000,
+			"applyPatchToolType": "freeform",
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "low",
+				"maxLevel": "max"
+			}
+		},
+		"gpt-6.2-astra": {
+			"id": "gpt-6.2-astra",
+			"name": "GPT-6.2 Astra",
+			"cost": {
+				"input": 8,
+				"output": 40,
+				"cacheRead": 0.4,
+				"cacheWrite": 10
+			},
+			"api": "openai-responses",
+			"provider": "openai",
+			"baseUrl": "",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"contextWindow": 1050000,
+			"maxTokens": 128000,
+			"applyPatchToolType": "freeform",
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "low",
+				"maxLevel": "max"
+			}
+		},
 		"gpt-6.1-terra": {
 			"id": "gpt-6.1-terra",
 			"name": "GPT-6.1 Terra",
@@ -61730,6 +61801,60 @@
 				"image"
 			],
 			"contextWindow": 373000,
+			"maxTokens": 128000,
+			"preferWebsockets": true,
+			"applyPatchToolType": "freeform",
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "low",
+				"maxLevel": "max"
+			}
+		},
+		"gpt-6.2-sol": {
+			"id": "gpt-6.2-sol",
+			"name": "GPT-6.2 Sol",
+			"cost": {
+				"input": 2,
+				"output": 10,
+				"cacheRead": 0.1,
+				"cacheWrite": 2.5
+			},
+			"api": "openai-codex-responses",
+			"provider": "openai-codex",
+			"baseUrl": "https://chatgpt.com/backend-api",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"contextWindow": 500000,
+			"maxTokens": 128000,
+			"preferWebsockets": true,
+			"applyPatchToolType": "freeform",
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "low",
+				"maxLevel": "max"
+			}
+		},
+		"gpt-6.2-astra": {
+			"id": "gpt-6.2-astra",
+			"name": "GPT-6.2 Astra",
+			"cost": {
+				"input": 8,
+				"output": 40,
+				"cacheRead": 0.4,
+				"cacheWrite": 10
+			},
+			"api": "openai-codex-responses",
+			"provider": "openai-codex",
+			"baseUrl": "https://chatgpt.com/backend-api",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"contextWindow": 272000,
 			"maxTokens": 128000,
 			"preferWebsockets": true,
 			"applyPatchToolType": "freeform",
@@ -70481,6 +70606,56 @@
 				"cacheWrite": 2.5
 			},
 			"contextWindow": 373000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "low",
+				"maxLevel": "max"
+			}
+		},
+		"openai/gpt-6.2-sol": {
+			"id": "openai/gpt-6.2-sol",
+			"name": "GPT-6.2 Sol",
+			"api": "openai-completions",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 10,
+				"cacheRead": 0.1,
+				"cacheWrite": 2.5
+			},
+			"contextWindow": 1050000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "low",
+				"maxLevel": "max"
+			}
+		},
+		"openai/gpt-6.2-astra": {
+			"id": "openai/gpt-6.2-astra",
+			"name": "GPT-6.2 Astra",
+			"api": "openai-completions",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 8,
+				"output": 40,
+				"cacheRead": 0.4,
+				"cacheWrite": 10
+			},
+			"contextWindow": 1050000,
 			"maxTokens": 128000,
 			"thinking": {
 				"mode": "effort",

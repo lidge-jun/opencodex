@@ -28,6 +28,9 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "remoteLinkDiagnostics.colPort", // "Port" is the same word in French (a network port column).
   "usageV2.remoteLink", // Remote Link is the product name.
   "nav.claude", // Product name.
+  "acctTable.pool.gemini", // Quota pool named after the product.
+  "acctTable.pool.claudeGpt", // Quota pool named after the products.
+  "acctTable.pool.argon", // Quota pool name used by the Antigravity quota API.
   "nav.codexSet", // Product name: the sidebar row reads "Codex" in every locale.
   "codexCliUpdate.tab", // Product name: the Codex CLI tab reads "Codex CLI" in every locale.
   "codexCliUpdate.provNpmGlobal", // "npm (global)": the tool name plus a word French spells the same.
@@ -42,6 +45,7 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "integrations.cursor.noControl",
   "uptime.hour",
   "uptime.second",
+  "quotaLive.unit", // The SI symbol for seconds, "s" in French too.
   // "auto" is the same word in French, and it labels a machine-derived alias source rather
   // than prose. Translating it would invent a difference the UI does not have.
   "models.aliasAuto",
@@ -181,6 +185,8 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "integrations.tab.workbuddyAi",
   // T3 Code is a product name, identical in every locale.
   "integrations.tab.t3code",
+  // Antigravity is a product name, identical in every locale.
+  "gatewayClients.tab",
   "api.clientConfig.clientT3code",
   "models.reasoningEffort.minimal",
   "models.reasoningEffort.max",

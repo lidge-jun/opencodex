@@ -3,10 +3,11 @@ import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { oauthRiskAcknowledgementBody } from "../oauth-tos-risk";
-import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-barrier";
+import { afterOAuthCancellation, cancelOAuthLogin, oauthLoginStatusUrl, readOAuthLoginStart, type OAuthLoginAttempt } from "../oauth-cancellation-barrier";
 import type { LoginHintData } from "./login-url-block";
 import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
 import { BROWSER_LOGIN_POLL_ATTEMPTS, loginPollAttempts } from "../oauth-login-budget";
+import { isServerOwnedLogin, serverOwnedLoginAttempts } from "../oauth-server-owned-login";
 import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
 import { useRenderTargetCapture } from "../use-render-target-capture";
 
@@ -53,7 +54,7 @@ export function useAddProviderOAuth({
   // The hook's render owns the target for a login started from this surface.
   const renderCapture = useRenderTargetCapture(apiBase, targetKey);
   const activeProvidersRef = useRef(new Map<string, OAuthLoginSetters>());
-  const activeCapturesRef = useRef(new Map<string, ApiTargetCapture>());
+  const activeCapturesRef = useRef(new Map<string, OAuthLoginAttempt>());
   // The capture of each provider's last login that ended on this target (timed out, cancelled,
   // failed or done), so a late pasted code can say the login ended instead of blaming the target.
   const endedCapturesRef = useRef(new Map<string, ApiTargetCapture>());
@@ -74,7 +75,10 @@ export function useAddProviderOAuth({
       setters.setOauthMsg("");
     }
     // Cancel each abandoned login on the target it started against.
-    for (const [providerId, capture] of captures) void cancelOAuthLogin(capture, providerId);
+    for (const [providerId, capture] of captures) {
+      if (isServerOwnedLogin(providerId)) continue;
+      void cancelOAuthLogin(capture, providerId);
+    }
   }, [targetKey]);
 
   const bumpLoginGeneration = useCallback((providerId: string) => {
@@ -87,7 +91,7 @@ export function useAddProviderOAuth({
    * Cancel a login on the target it started against. A missing capture fails closed:
    * falling back to the live target would send an old login's cancel to the new server.
    */
-  const cancelServerLogin = useCallback((capture: ApiTargetCapture, providerId: string) =>
+  const cancelServerLogin = useCallback((capture: OAuthLoginAttempt, providerId: string) =>
     cancelOAuthLogin(capture, providerId), []);
 
   useEffect(() => {
@@ -96,15 +100,23 @@ export function useAddProviderOAuth({
       const captures = new Map(activeCapturesRef.current);
       activeProvidersRef.current.clear();
       activeCapturesRef.current.clear();
-      for (const [providerId, capture] of captures) endedCapturesRef.current.set(providerId, capture);
       for (const [providerId, setters] of providers) {
+        const capture = captures.get(providerId);
+        if (isServerOwnedLogin(providerId)) {
+          // Keep the active capture for Cancel if the page returns from the back-forward cache.
+          if (clearUi && capture) {
+            activeProvidersRef.current.set(providerId, setters);
+            activeCapturesRef.current.set(providerId, capture);
+          }
+          continue;
+        }
+        if (capture) endedCapturesRef.current.set(providerId, capture);
         bumpLoginGeneration(providerId);
         if (clearUi) {
           setters.setOauthBusy(false);
           setters.setOauthUrl("", providerId);
           setters.setOauthMsg("");
         }
-        const capture = captures.get(providerId);
         if (capture) void cancelServerLogin(capture, providerId);
       }
     };
@@ -126,10 +138,12 @@ export function useAddProviderOAuth({
     activeProvidersRef.current.delete(providerId);
     activeCapturesRef.current.delete(providerId);
     if (capture) endedCapturesRef.current.set(providerId, capture);
+    if (aliveRef.current) {
+      setters.setOauthBusy(false);
+      setters.setOauthUrl("", providerId);
+    }
     if (capture) await cancelServerLogin(capture, providerId);
     if (!aliveRef.current || loginGenerationRef.current.get(providerId) !== generation) return;
-    setters.setOauthBusy(false);
-    setters.setOauthUrl("", providerId);
     setters.setOauthMsgTone("warn");
     setters.setOauthMsg(t("prov.loginCancelled", { provider: providerLabel }));
   }, [aliveRef, bumpLoginGeneration, cancelServerLogin, t]);
@@ -139,10 +153,12 @@ export function useAddProviderOAuth({
     setters: OAuthLoginSetters,
     // Only the warning dialog's Continue passes true (see oauthRiskAcknowledgementBody).
     riskAcknowledged = false,
+    /** A sibling row (Kimi (Responses)) the login publishes instead of the login's own row. */
+    row?: string,
   ) => {
     // A per-login clone keeps the render target while letting the capture map tell an
     // older login's cleanup from its replacement.
-    const capture = { ...renderCapture };
+    const capture: OAuthLoginAttempt = { ...renderCapture };
     activeCapturesRef.current.set(providerId, capture);
     endedCapturesRef.current.delete(providerId);
     const { setOauthBusy, setOauthMsg, setOauthMsgTone, setOauthUrl, setManualCode, setManualCodeMsg, setManualCodeOk } = setters;
@@ -164,18 +180,20 @@ export function useAddProviderOAuth({
     setManualCodeMsg("");
     setManualCodeOk(true);
     try {
-      const res = await afterOAuthCancellation(capture, providerId, () => {
+      const result = await afterOAuthCancellation(capture, providerId, () => {
         if (!aliveRef.current || !isCurrent()) return;
         return targetFetch(capture, `${apiBase}/api/oauth/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider: providerId, ...openBrowserRequestField(), ...oauthRiskAcknowledgementBody(providerId, riskAcknowledged) }),
-        });
+          body: JSON.stringify({ provider: providerId, ...(row ? { row } : {}), ...openBrowserRequestField(), ...oauthRiskAcknowledgementBody(providerId, riskAcknowledged) }),
+        }).then(res => readOAuthLoginStart(capture, providerId, res));
       });
-      if (!res || !aliveRef.current || !isCurrent()) return;
-      if (!res.ok) {
+      if (!result) return;
+      const { data, errorResponse } = result;
+      if (errorResponse) {
+        if (!aliveRef.current || !isCurrent()) return;
         releaseSetters();
-        const data = await res.json().catch(() => ({})) as { error?: string };
+        const data = await errorResponse.json().catch(() => ({})) as { error?: string };
         if (!aliveRef.current || !isCurrent()) return;
         setOauthMsgTone("warn");
         setOauthMsg(data.error === "target_changed"
@@ -188,19 +206,27 @@ export function useAddProviderOAuth({
       // A device flow may return a user code with no URL, and `instructions` may
       // carry the only human-readable step. Keep all three: the hint renderer
       // decides what to show, rather than this hook deciding what to discard.
-      const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string; error?: string; browserLaunch?: unknown };
       if (!aliveRef.current || !isCurrent()) return;
       setOauthUrl(data.url ?? "", providerId, data.deviceCode, data.instructions, parseBrowserLaunch(data.browserLaunch));
       if (data.url || data.deviceCode) setOauthMsg(t("modal.waitingLogin"));
       else setOauthMsg(data.instructions || t("modal.loggingIn"));
       // A device grant outlives the browser budget; see oauth-login-budget.ts.
       let deviceFlow = Boolean(data.deviceCode);
-      for (let i = 0; i < loginPollAttempts(deviceFlow, OAUTH_LOGIN_POLL_INTERVAL_MS, BROWSER_LOGIN_POLL_ATTEMPTS); i++) {
+      const pollAttempts = isServerOwnedLogin(providerId)
+        ? serverOwnedLoginAttempts(OAUTH_LOGIN_POLL_INTERVAL_MS)
+        : BROWSER_LOGIN_POLL_ATTEMPTS;
+      for (let i = 0; i < loginPollAttempts(deviceFlow, OAUTH_LOGIN_POLL_INTERVAL_MS, pollAttempts); i++) {
         await new Promise(r => setTimeout(r, OAUTH_LOGIN_POLL_INTERVAL_MS));
         if (!aliveRef.current || !isCurrent()) return;
-        const sRes = await targetFetch(capture, `${apiBase}/api/oauth/status?provider=${providerId}`).catch(() => null);
-        const s = sRes ? await readJsonIfOk<{ loggedIn?: boolean; error?: string; hint?: LoginHintData }>(sRes) : null;
+        const sRes = await targetFetch(capture, oauthLoginStatusUrl(apiBase, providerId, capture.flowId)).catch(() => null);
+        const s = sRes ? await readJsonIfOk<{ loggedIn?: boolean; status?: string; error?: string; hint?: LoginHintData }>(sRes) : null;
         if (!aliveRef.current || !isCurrent()) return;
+        if (capture.flowId && sRes?.status === 404) {
+          releaseSetters();
+          setOauthMsgTone("warn");
+          setOauthMsg(t("prov.loginExpired"));
+          return;
+        }
         if (s?.error) {
           releaseSetters();
           setOauthMsgTone("warn");
@@ -209,10 +235,12 @@ export function useAddProviderOAuth({
             : t("modal.loginError", { error: s.error }));
           return;
         }
-        if (s?.loggedIn) {
+        // `loggedIn` reads the stored credential, which an earlier login (the shared Kimi login) can
+        // already hold; a flow the server still reports as pending is not finished yet.
+        if (s?.loggedIn && (capture.flowId ? s.status === "complete" : s.status !== "pending")) {
           releaseSetters();
           setOauthMsg("");
-          onAdded(providerId);
+          onAdded(row ?? providerId);
           return;
         }
         const hint = s?.hint;

@@ -1,15 +1,73 @@
 import { describe, expect, test } from "bun:test";
 import {
   addFinalRequestLog, aggregateAttemptUsage, beginRequestAttempt, finishRequestAttempt, noteProviderAttemptSend,
-  recordKeyAttemptFailure, recordKeyAttemptUsage, applyResponseLogMetadata, sealRequestAttemptIdentity,
-  inspectResponseLogSsePayload, type RequestLogContext, type RequestLogEntry,
+  recordKeyAttemptUsage, applyResponseLogMetadata, sealRequestAttemptIdentity, noteAttemptSend,
+  recordAdapterReasoning,
+  inspectResponseLogSsePayload, recordAdapterTierMetadata, type RequestLogContext, type RequestLogEntry,
 } from "../../src/server/request-log";
+import { recordKeyAttemptFailure } from "../../src/server/request-log-key-failure";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 import { normalizeUsageEntryForTest } from "../../src/usage/log";
 import { formatAnthropicProviderForLog } from "../../src/oauth/anthropic-routing";
+import { createAdapterTierMetadata } from "../../src/providers/fastwire";
+import { sealCredentialRefusal } from "../../src/server/credential-recovery-attempt";
+import { attributeFinalRequest } from "../../src/server/request-log-failure-attribution";
 
 describe("key attempt accounting", () => {
+  test.each([200, 429, 499])("logical finalization at %d preserves a sealed physical refusal", status => {
+    const active = beginRequestAttempt(1, "test", "model", "openai-chat");
+    const ctx: RequestLogContext = { provider: "test", model: "model", accountLogLabel: "o111111", activeAttempt: active };
+    noteProviderAttemptSend(ctx, "test", { adapter: "openai-chat", authMode: "oauth", baseUrl: "https://example.test" }, 42);
+    const tier = createAdapterTierMetadata({ capability: true, eligibility: "eligible",
+      fastWire: { kind: "service-tier", canonicalToWire: { priority: "priority" }, foreignCallerTiers: "verbatim" },
+      demandDecision: "force-fast" }, { kind: "set", value: "priority" }, "service-tier", "priority")!;
+    recordAdapterTierMetadata(ctx, tier);
+    sealCredentialRefusal(ctx, 401, "oauth-401");
+    expect(active).toMatchObject({ status: 401, sendCount: 1,
+      accountLogLabel: "o111111", failureStage: "headers-only", failureCause: "credential-rejected" });
+    const refused = structuredClone(active);
+    tier.observeResponseServiceTier("priority");
+    recordAdapterTierMetadata(ctx, undefined);
+    recordAdapterReasoning(ctx, { url: "https://example.test", method: "POST", headers: {}, body: "{}",
+      reasoningLog: { effectiveEffort: "high", wireField: "reasoning_effort", wireValue: "high" } });
+    noteAttemptSend(active, 9, "connection-reset");
+    recordKeyAttemptUsage(ctx, { inputTokens: 9, outputTokens: 1 });
+    sealRequestAttemptIdentity(active, "other", "anthropic", "o222222");
+    finishRequestAttempt(active, status, 10_000);
+    attributeFinalRequest({ status, outputObserved: false, locallyAnswered: false, attempt: active });
+    expect(active).toEqual(refused);
+  });
+
+  test("recovery can measure an HTTP failure without attributing it to a key attempt", async () => {
+    const active = beginRequestAttempt(1, "test", "model", "anthropic");
+    const ctx: RequestLogContext = { provider: "test", model: "model", activeAttempt: active };
+    const payload = { usage: { input_tokens: 5000, output_tokens: 4 } };
+    const failed = Response.json(payload, { status: 400 });
+    expect(await recordKeyAttemptFailure(ctx, failed)).toBeUndefined();
+    expect(await recordKeyAttemptFailure(ctx, failed, undefined, true)).toMatchObject({ inputTokens: 5000, outputTokens: 4 });
+    expect(active).toMatchObject({ status: 0, usageStatus: "unreported" });
+    expect(active.usage).toBeUndefined();
+    expect(await failed.json()).toEqual(payload);
+  });
+
+  test("credit aggregation includes missing readings only for dispatched attempts", () => {
+    const metered = {
+      ...finishRequestAttempt(beginRequestAttempt(1, "kiro", "model", "kiro"), 200, 1),
+      sendCount: 1,
+      usageStatus: "reported" as const,
+      usage: { inputTokens: 10, outputTokens: 2, providerCredits: 3 },
+    };
+    const unmetered = finishRequestAttempt(beginRequestAttempt(2, "kiro", "model", "kiro"), 503, 1);
+    expect(aggregateAttemptUsage([metered, unmetered]).usage?.providerCredits).toBe(3);
+    expect(aggregateAttemptUsage([metered, { ...unmetered, sendCount: 1 }]).usage?.providerCredits).toBe(-1);
+    expect(aggregateAttemptUsage([metered, {
+      ...metered,
+      ordinal: 2,
+      usage: { inputTokens: 5, outputTokens: 1 },
+    }]).usage?.providerCredits).toBe(-1);
+  });
+
   test("a combo parent copied before streaming rotation cannot overwrite the final key's usage", () => {
     const active = beginRequestAttempt(1, "test", "model", "openai-chat");
     const child: RequestLogContext = { provider: "test", model: "model", comboId: "stream",
@@ -256,6 +314,81 @@ describe("key attempt accounting", () => {
       noteProviderAttemptSend(ctx, "anthropic", oauth, undefined, recovery);
       expect(ctx.attempts?.[0]).toMatchObject({ ordinal: 1, status });
     });
+  test.each([
+    ["oauth-401", 401], ["key-401", 401], ["oauth-account-402", 402],
+    ["oauth-account-403", 403], ["key-429", 429], ["anthropic-oauth-429", 429], ["oauth-account-429", 429],
+  ] as const)("same-account %s recovery keeps each physical attempt's outcome and usage", (recovery, status) => {
+    const oauth = { adapter: "openai-responses" as const, authMode: "oauth" as const, baseUrl: "https://example.test" };
+    const active = beginRequestAttempt(1, "test", "model", "openai-responses");
+    const ctx: RequestLogContext = { provider: "test", model: "model", accountLogLabel: "o111111",
+      activeAttempt: active, attempts: [active] };
+    noteProviderAttemptSend(ctx, "test", oauth, 100);
+    recordKeyAttemptUsage(ctx, { inputTokens: 100, outputTokens: 10 });
+    noteProviderAttemptSend(ctx, "test", oauth, 200, recovery);
+    expect(ctx.activeAttempt).toBe(active);
+    expect(ctx.attempts).toHaveLength(2);
+    expect(ctx.attempts?.[0]).toMatchObject({ ordinal: 1, status, sendCount: 1, accountLogLabel: "o111111",
+      usage: { inputTokens: 100, outputTokens: 10 } });
+    expect(ctx.attempts?.[0].inputTokenEstimate).toBeUndefined();
+    expect(active).toMatchObject({ ordinal: 2, status: 0, sendCount: 1, inputTokenEstimate: 200,
+      accountLogLabel: "o111111", recoveryKinds: [recovery] });
+    expect(active.usage).toBeUndefined();
+    recordKeyAttemptUsage(ctx, { inputTokens: 200, outputTokens: 20 });
+    const rows: RequestLogEntry[] = [];
+    addFinalRequestLog("same-account-recovery", Date.now(), ctx, 200, undefined, row => rows.push(row));
+    const persisted = normalizeUsageEntryForTest(JSON.parse(JSON.stringify(rows[0])));
+    expect(persisted.attempts?.map(attempt => attempt.status)).toEqual([status, 200]);
+    expect(persisted.usage).toMatchObject({ inputTokens: 300, outputTokens: 30 });
+  });
+  test.each(["rate-limit-429", "transient-5xx", "connection-reset", "offline-resend", "opaque-blob-rejection"] as const)(
+    "same-account %s resend stays on its existing attempt", recovery => {
+      const oauth = { adapter: "openai-responses" as const, authMode: "oauth" as const, baseUrl: "https://example.test" };
+      const active = beginRequestAttempt(1, "test", "model", "openai-responses");
+      const ctx: RequestLogContext = { provider: "test", model: "model", activeAttempt: active, attempts: [active] };
+      noteProviderAttemptSend(ctx, "test", oauth, undefined);
+      noteProviderAttemptSend(ctx, "test", oauth, undefined, recovery);
+      expect(ctx.attempts).toHaveLength(1);
+      expect(active).toMatchObject({ ordinal: 1, sendCount: 2, recoveryKinds: [recovery] });
+    });
+  test("same-account OAuth recovery keeps the live tier observer and snapshots the refused tier", () => {
+    const oauth = { adapter: "openai-responses" as const, authMode: "oauth" as const, baseUrl: "https://example.test" };
+    const active = beginRequestAttempt(1, "test", "model", "openai-responses");
+    const ctx: RequestLogContext = { provider: "test", model: "model", activeAttempt: active, attempts: [active] };
+    const metadata = createAdapterTierMetadata({ capability: true, eligibility: "eligible",
+      fastWire: { kind: "service-tier", canonicalToWire: { priority: "priority" }, foreignCallerTiers: "verbatim" },
+      demandDecision: "force-fast" }, { kind: "set", value: "priority" }, "service-tier", "priority")!;
+    recordAdapterTierMetadata(ctx, metadata);
+    noteProviderAttemptSend(ctx, "test", oauth, undefined);
+    noteProviderAttemptSend(ctx, "test", oauth, undefined, "oauth-401");
+    expect(active.tierOutcome).toBe(metadata.outcome);
+    expect(ctx.attempts?.[0].tierOutcome).not.toBe(metadata.outcome);
+    metadata.observeResponseServiceTier("priority");
+    const rows: RequestLogEntry[] = [];
+    addFinalRequestLog("same-account-tier-recovery", Date.now(), ctx, 200, undefined, row => rows.push(row));
+    const persisted = normalizeUsageEntryForTest(JSON.parse(JSON.stringify(rows[0])));
+    expect(persisted.attempts?.[0].tierOutcome).toMatchObject({ confirmation: "assumed", fastOutcome: "applied" });
+    expect(persisted.attempts?.[0].tierOutcome?.responseServiceTier).toBeUndefined();
+    expect(persisted.attempts?.[1].tierOutcome).toMatchObject({ confirmation: "confirmed", responseServiceTier: "priority" });
+  });
+  test("a same-key recovery preserves the observed refusal status", () => {
+    const key = { adapter: "openai-chat" as const, authMode: "key" as const, baseUrl: "https://example.test",
+      _apiKeyAttempt: { reference: "synthetic-same-key" } };
+    const active = beginRequestAttempt(1, "test", "model", "openai-chat");
+    const ctx: RequestLogContext = { provider: "test", model: "model", activeAttempt: active, attempts: [active] };
+    noteProviderAttemptSend(ctx, "test", key, undefined);
+    active.status = 403;
+    noteProviderAttemptSend(ctx, "test", key, undefined, "key-401");
+    expect(ctx.attempts?.map(attempt => attempt.status)).toEqual([403, 0]);
+    expect(active.accountLogLabel).toBe(ctx.attempts?.[0].accountLogLabel);
+  });
+  test("credential recovery before the first send does not create a phantom attempt", () => {
+    const oauth = { adapter: "openai-responses" as const, authMode: "oauth" as const, baseUrl: "https://example.test" };
+    const active = beginRequestAttempt(1, "test", "model", "openai-responses");
+    const ctx: RequestLogContext = { provider: "test", model: "model", activeAttempt: active, attempts: [active] };
+    noteProviderAttemptSend(ctx, "test", oauth, undefined, "oauth-401");
+    expect(ctx.attempts).toHaveLength(1);
+    expect(active).toMatchObject({ ordinal: 1, sendCount: 1 });
+  });
   test("wire snapshots replace the current send against a pre-send baseline", () => {
     const active = beginRequestAttempt(1, "test", "model", "openai-chat");
     const ctx: RequestLogContext = { provider: "test", model: "model", activeAttempt: active, attempts: [active] };

@@ -369,11 +369,19 @@ test("older Home enrollment stores explicit initial choices and applies them aft
 test("a local-only opt-out never invents an applied Home receipt for an unsupported Home", () => {
   const result = scenario(`
     routeSupported=false;setLocalRouteIntentOff('pi',true);
+    const { spyOn } = await import('bun:test');
+    const state = await import('./src/integrations/route-intent-state');
+    const receipts = [];
+    const write = state.writeRouteIntentReceipt;
+    spyOn(state, 'writeRouteIntentReceipt').mockImplementation((receipt, ...args) => {
+      write(receipt, ...args);
+      receipts.push(receipt.catalogPending === true);
+    });
     await syncConnectedClient({},deps);
-    console.log(JSON.stringify({local:readRouteIntentReceipt().catalogPending,home:existsSync(homeRouteIntentPath()),
+    console.log(JSON.stringify({receipts,local:readRouteIntentReceipt().catalogPending,home:existsSync(homeRouteIntentPath()),
       file:JSON.parse(readFileSync(path,'utf8'))}));
   `);
-  expect(result).toEqual({ local: true, home: false, file: {} });
+  expect(result).toEqual({ receipts: [false, false, true], local: true, home: false, file: {} });
 });
 
 test("disconnect resumes after token removal without rerunning completed generic cleanup", () => {

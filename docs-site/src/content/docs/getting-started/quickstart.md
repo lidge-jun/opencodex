@@ -21,7 +21,7 @@ ocx init
 
 `ocx init` walks you through:
 
-1. **Pick a provider** — choose one of the 108 built-in registry presets or `custom` to type a base
+1. **Pick a provider** — choose one of the 112 built-in registry presets or `custom` to type a base
    URL and adapter.
 2. **API key** — paste a key, or reference an environment variable like `${ANTHROPIC_API_KEY}`.
 3. **Default model** — for key, local, and custom providers, accept the preset or enter a model id.
@@ -188,7 +188,7 @@ OpenAI-compatible base URL `http://localhost:<port>/v1` or the Anthropic base UR
 
 ## Choose sub-agent models (optional)
 
-A fresh config includes `gpt-6-astra`, `gpt-6.1-sol`, and `gpt-6-luna` in Codex's sub-agent picker. Open `ocx gui` to replace or reorder up to five native or routed models. The dashboard can also set one preferred sub-agent model and reasoning effort. See [Sub-agent Surface](/guides/sub-agent-surface/) to choose v1/base/v2 and understand when guidance, native defaults, and fallback apply.
+A fresh config includes `gpt-6.2-astra`, `gpt-6.2-sol`, and `gpt-6-luna` in Codex's sub-agent picker. Open `ocx gui` to replace or reorder up to five native or routed models. The dashboard can also set one preferred sub-agent model and reasoning effort. See [Sub-agent Surface](/guides/sub-agent-surface/) to choose v1/base/v2 and understand when guidance, native defaults, and fallback apply.
 
 ## Logging in instead of pasting a key
 

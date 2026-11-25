@@ -64,7 +64,7 @@ export const CAPABILITIES: readonly Capability[] = [
     mutates: false,
     json: "payload",
     usage: "ocx link status [--json]",
-    details: ["Reads live listener/tunnel metadata; when no proxy is found, falls back to the local link store. Always emits JSON."],
+    details: ["Reads live listener/tunnel metadata; when no proxy is found, falls back to the local link store. Always emits JSON.","Home-initiated links report recent authenticated HTTP delivery in relayHealth, with inference readiness reported as unknown."],
   },
   {
     command: ["link","diagnostics"],
@@ -432,7 +432,7 @@ export const CAPABILITIES: readonly Capability[] = [
     mutates: true,
     json: "envelope",
     details: ["A bare invocation reads and never writes.","The APPLIED value is echoed, not the requested one, so a server-side normalization stays visible.","Values are not re-validated in the CLI: the server owns the strategy names and the 1-100 sticky bound.","One route answers for every pool kind and declares which fields that kind honours in `supported`, so an unsupported field is a stated null rather than an absence. `anthropic` alone carries `quotaWindow`. Generic-provider settings steer selection only while `pool.kernel` is on. The legacy per-pool paths still work and are unchanged."],
-    usage: "ocx account strategy <provider> [quota|round-robin|fill-first|least-loaded|reset-first] [--json]",
+    usage: "ocx account strategy <provider> [quota|round-robin|fill-first|reset-near-weighted|least-loaded|reset-first] [--json]",
   },
   {
     command: ["account","sticky"],
@@ -684,11 +684,11 @@ export const CAPABILITIES: readonly Capability[] = [
     command: ["claude","config"],
     summary: "Read or update Claude Code settings, including independent CLI first-party routing.",
     routes: [{"method":"GET","path":"/api/claude-code"},{"method":"PUT","path":"/api/claude-code"}],
-    flags: [{"name":"--enabled","value":"string","summary":"on or off."},{"name":"--auth-mode","value":"string","summary":"auto, proxy or subscription."},{"name":"--system-env","value":"string","summary":"on or off."},{"name":"--fast-mode","value":"string","summary":"on or off."},{"name":"--auto-context","value":"string","summary":"on or off."},{"name":"--compact-window","value":"string","summary":"Positive token count or default to clear."},{"name":"--context-accounting","value":"string","summary":"1m (default) or 200k."},{"name":"--inject-agents","value":"string","summary":"on or off."},{"name":"--small-fast-model","value":"string","summary":"Model ID; - clears."},{"name":"--model-map","value":"string","summary":"Comma-separated from=to mappings; - clears."},{"name":"--blocked-skills","value":"string","summary":"Comma-separated names; - clears."},{"name":"--web-model","value":"string","summary":"Model ID; - clears."},{"name":"--web-backend","value":"string","summary":"openai, anthropic, xai, gemini, exa or -."},{"name":"--vision-model","value":"string","summary":"Model ID; - clears."},{"name":"--vision-backend","value":"string","summary":"openai, anthropic or -."},{"name":"--first-party","value":"string","summary":"on or off; must be the only setting."},{"name":"--json","value":"boolean","summary":"Emit the result as JSON."}],
+    flags: [{"name":"--enabled","value":"string","summary":"on or off."},{"name":"--auth-mode","value":"string","summary":"auto, proxy or subscription."},{"name":"--system-env","value":"string","summary":"on or off."},{"name":"--fast-mode","value":"string","summary":"on or off."},{"name":"--auto-context","value":"string","summary":"on or off."},{"name":"--compact-window","value":"string","summary":"Positive token count or default to clear."},{"name":"--context-accounting","value":"string","summary":"1m (default) or 200k."},{"name":"--inject-agents","value":"string","summary":"on or off."},{"name":"--native-passthrough","value":"string","summary":"on or off; off routes bare Claude models through opencodex instead of Claude Code's own login."},{"name":"--small-fast-model","value":"string","summary":"Model ID; - clears."},{"name":"--model-map","value":"string","summary":"Comma-separated from=to mappings; - clears."},{"name":"--blocked-skills","value":"string","summary":"Comma-separated names; - clears."},{"name":"--web-model","value":"string","summary":"Model ID; - clears."},{"name":"--web-backend","value":"string","summary":"openai, anthropic, xai, gemini, exa or -."},{"name":"--vision-model","value":"string","summary":"Model ID; - clears."},{"name":"--vision-backend","value":"string","summary":"openai, anthropic or -."},{"name":"--first-party","value":"string","summary":"on or off; must be the only setting."},{"name":"--json","value":"boolean","summary":"Emit the result as JSON."}],
     mutates: true,
     json: "payload",
     details: ["At least one setting is required. --first-party must be set alone and writes Claude settings immediately.","Clear both helper model and backend with - to restore inheritance. Preserve shared_proxy_retained warnings."],
-    usage: "ocx claude config status [--json]; ocx claude config set [--enabled <on|off>] [--auth-mode <auto|proxy|subscription>] [--system-env <on|off>] [--fast-mode <on|off>] [--auto-context <on|off>] [--compact-window <tokens|default>] [--context-accounting <1m|200k>] [--inject-agents <on|off>] [--small-fast-model <id|->] [--model-map <from=to,...|->] [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|xai|gemini|exa|->] [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]; or ocx claude config set --first-party <on|off> [--json]",
+    usage: "ocx claude config status [--json]; ocx claude config set [--enabled <on|off>] [--auth-mode <auto|proxy|subscription>] [--system-env <on|off>] [--fast-mode <on|off>] [--auto-context <on|off>] [--compact-window <tokens|default>] [--context-accounting <1m|200k>] [--inject-agents <on|off>] [--native-passthrough <on|off>] [--small-fast-model <id|->] [--model-map <from=to,...|->] [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|xai|gemini|exa|->] [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]; or ocx claude config set --first-party <on|off> [--json]",
   },
   {
     command: ["claude","intercept","start"],

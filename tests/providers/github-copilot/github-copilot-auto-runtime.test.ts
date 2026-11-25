@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { ADAPTER_REGISTRY } from "../../../src/adapters/registry";
+import { createAdapterTierMetadata } from "../../../src/providers/fastwire";
+import { setPassiveRouteLinker } from "../../../src/server/passive-route-linker";
+import { IMAGE_GEN_TOOL_NAME } from "../../../src/images/synthetic-tool";
+import { readInstallationSalt } from "../../../src/lab/subject/installation-salt";
+import { resolveProductionRouteSubject } from "../../../src/routing/compatibility/subject";
+import { resetCompatibilityVersionCacheForTests, setCompatibilityVersionOverrideForTests } from "../../../src/routing/compatibility/version";
+import * as requestPacing from "../../../src/providers/request-pacing";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,7 +94,7 @@ async function accounts() {
   return { a, b };
 }
 /** Return an Auto provider config and send ledger; options drive refusal, expiry, rotation, and tool events through both inference wires. */
-function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeExpiry?: boolean; nativeFirst?: boolean; native429?: boolean; onNativeCancel?: () => void; chatRefresh?: boolean; closedNativeBody?: boolean; renewedChatRefusal?: boolean; rotate?: boolean; rotateAt?: number; tool?: boolean; key?: boolean; refusal?: number; negotiationRefusal?: number; negotiationRefusalAt?: number; alwaysRefuse?: boolean; advanceAfterIntent?: () => void | Promise<void>; onSession?: (count: number) => void | Promise<void>; malformedSessionAt?: number; negotiationRetryAfter?: string; replyText?: string; onInference?: (count: number) => void | Promise<void> } = {}) {
+function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeExpiry?: boolean; nativeFirst?: boolean; renewedOrigin?: boolean; native429?: boolean; onNativeCancel?: () => void; chatRefresh?: boolean; closedNativeBody?: boolean; renewedChatRefusal?: boolean; rotate?: boolean; rotateAt?: number; tool?: boolean; key?: boolean; refusal?: number; negotiationRefusal?: number; negotiationRefusalAt?: number; alwaysRefuse?: boolean; advanceAfterIntent?: () => void | Promise<void>; onSession?: (count: number) => void | Promise<void>; malformedSessionAt?: number; negotiationRetryAfter?: string; replyText?: string; reasoningText?: string; onInference?: (count: number) => void | Promise<void> } = {}) {
   const sent: Array<{ host: string; path: string; token: string | null; body: any; signal?: AbortSignal | null }> = [];
   let inferenceCount = 0;
   let sessionCount = 0;
@@ -101,7 +109,7 @@ function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeEx
       if (destination.pathname === "/user") return Response.json({ login: refreshedAccount });
       refreshCount++;
       return Response.json({ token: `synthetic-access-${refreshedAccount}-renewed`, refresh_in: 1500,
-        endpoints: { api: `https://${refreshedAccount}.githubcopilot.com` } });
+        endpoints: { api: `https://${options.renewedOrigin ? "renewed-" : ""}${refreshedAccount}.githubcopilot.com` } });
     }
     const account = new Headers(init?.headers).get("authorization")?.includes("-b") ? "b" : "a";
     const renewed = new Headers(init?.headers).get("authorization")!.includes("-renewed");
@@ -145,15 +153,17 @@ function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeEx
     if (options.chatRefresh && inferenceCount === 1) return Response.json({ error: { message: "refresh" } }, { status: 401 });
     if (options.rotate && inferenceCount === (options.rotateAt ?? 1)) return Response.json({ error: { message: "limited" } }, { status: options.refusal ?? 429, headers: { "retry-after": "1" } });
     if (destination.pathname === "/responses") return Response.json({ id: "resp-fixture", model, object: "response", status: "completed",
-      output: [{ id: "msg-fixture", type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
+      output: [...(options.reasoningText ? [{ id: "rs-fixture", type: "reasoning", summary: [],
+        content: [{ type: "reasoning_text", text: options.reasoningText }] }] : []),
+        { id: "msg-fixture", type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
       usage: { input_tokens: 2, output_tokens: 1 } });
     if (options.renewedChatRefusal && destination.pathname === "/chat/completions")
       return Response.json({ error: { message: "must-not-echo" } }, { status: 401 });
     if ((options.chatOnly || options.nativeFirst || options.nativeExpiry) && !body.stream) return Response.json({ id: "chat-fixture", model,
-      choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      choices: [{ message: { role: "assistant", content: "ok", reasoning_content: options.reasoningText }, finish_reason: "stop" }],
       usage: { prompt_tokens: 2, completion_tokens: 1 } });
     const tool = options.tool && inferenceCount === (options.nativeFirst ? 2 : 1);
-    const delta = tool ? { tool_calls: [{ index: 0, id: "call_lookup", type: "function", function: { name: "lookup", arguments: '{"name":"file"}' } }] } : { content: options.replyText ?? "ok" };
+    const delta = tool ? { tool_calls: [{ index: 0, id: "call_lookup", type: "function", function: { name: "lookup", arguments: '{"name":"file"}' } }] } : { content: options.replyText ?? "ok", reasoning_content: options.reasoningText };
     return new Response(`data: ${JSON.stringify({ id: "chat-fixture", model, choices: [{ index: 0, delta, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ id: "chat-fixture", model, choices: [{ index: 0, delta: {}, finish_reason: tool ? "tool_calls" : "stop" }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
   }) as typeof fetch;
   const config: OcxConfig = { port: 0, defaultProvider: "github-copilot", providers: { "github-copilot": {
@@ -165,6 +175,30 @@ function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeEx
   return { config, sent, get cancelledNativeBodies() { return cancelledNativeBodies; }, get refreshCount() { return refreshCount; } };
 }
 describe("Copilot Auto through the Responses pipeline", () => {
+  test.each(["initial Chat", "initial Responses", "retry to Chat"] as const)(
+    "rawReasoningAsSummary follows the negotiated wire (%s)", async selection => {
+      const { b } = await accounts();
+      if (!selection.startsWith("retry")) await setActiveAccount("github-copilot", b);
+      const raw = "verbatim Copilot reasoning";
+      const f = fixture({
+        chatOnly: selection === "initial Chat", nativeFirst: selection === "retry to Chat",
+        reasoningText: raw,
+      });
+      f.config.providers["github-copilot"]!.rawReasoningAsSummary = true;
+      const response = await handleResponses(request("hello", false, { model: "github-copilot/gpt-5.4" }), f.config, {});
+      expect(response.status).toBe(200);
+      const { output } = await response.json() as { output: Array<{ type: string; summary: unknown; content?: unknown }> };
+      const inference = f.sent.filter(call => ["/responses", "/chat/completions"].includes(call.path));
+      const chat = selection.endsWith("Chat");
+      const finalPath = chat ? "/chat/completions" : "/responses";
+      expect(inference.map(call => call.path)).toEqual(selection.startsWith("retry")
+        ? ["/responses", finalPath] : [finalPath]);
+      if (!selection.startsWith("retry")) expect(inference[0]!.body.model).toBe("gpt-5.4");
+      const item = output.find(entry => entry.type === "reasoning");
+      expect(item?.summary).toEqual(chat ? [{ type: "summary_text", text: raw }] : []);
+      expect(item?.content).toEqual(chat ? undefined : [{ type: "reasoning_text", text: raw }]);
+    });
+
   test.each(["Chat", "Messages"])("%s retains the local mandatory-tool refusal after Copilot OAuth refresh", async wire => {
     await accounts();
     const f = fixture({ chatRefresh: true, chatOnly: true });
@@ -558,6 +592,107 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(f.cancelledNativeBodies).toBe(1);
     expect(f.sent.find(call => call.path === "/responses")!.signal!.aborted).toBe(true);
   });
+  test.each(["refused metadata", "production route subject", "media bridge"] as const)("OAuth Responses-to-Chat handoff preserves %s", async evidence => {
+    await accounts();
+    const f = fixture({ nativeFirst: true, renewedOrigin: true });
+    const media = evidence === "media bridge";
+    if (media) {
+      f.config.images = { bridgeEnabled: true };
+      f.config.providers.xai = { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "key", apiKey: "synthetic-image-key" };
+    }
+    const log: RequestLogContext = {};
+    readInstallationSalt(home);
+    setCompatibilityVersionOverrideForTests("b".repeat(64));
+    const subjects: Array<{ baseUrl?: string; adapter?: string; id?: string }> = [];
+    const linkerErrors: unknown[] = [];
+    const detach = setPassiveRouteLinker((config, providerName, model, provider, inbound, adapter) => {
+      let resolved: ReturnType<typeof resolveProductionRouteSubject>;
+      try { resolved = resolveProductionRouteSubject(config, providerName, model, provider, inbound, home, adapter); }
+      catch (error) { linkerErrors.push(error); throw error; }
+      if (providerName === "github-copilot") subjects.push({
+        baseUrl: resolved?.routeContext.baseUrl, adapter: resolved?.routeContext.effectiveAdapter, id: resolved?.subjectId,
+      });
+      return resolved?.subjectId ?? null;
+    });
+    const create = ADAPTER_REGISTRY["openai-responses"].create;
+    const factory = spyOn(ADAPTER_REGISTRY["openai-responses"], "create").mockImplementation((provider, context) => {
+      const adapter = create(provider, context);
+      const build = adapter.buildRequest.bind(adapter);
+      adapter.buildRequest = async (...args) => ({
+        ...await build(...args),
+        tierLog: createAdapterTierMetadata({ capability: true, eligibility: "eligible",
+          fastWire: { kind: "service-tier", canonicalToWire: { priority: "priority" }, foreignCallerTiers: "verbatim" },
+          demandDecision: "force-fast" }, { kind: "set", value: "priority" }, "service-tier", "priority"),
+        reasoningLog: { effectiveEffort: "high", wireField: "reasoning.effort", wireValue: "high" },
+      });
+      return adapter;
+    });
+    try {
+      const response = await handleResponses(request("hello", media, media ? { tools: [{ type: "image_generation" }] } : {}), f.config, log);
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(f.sent.filter(call => ["/responses", "/chat/completions"].includes(call.path)).map(call => [call.host, call.path]))
+        .toEqual([["a.githubcopilot.com", "/responses"], ["renewed-a.githubcopilot.com", "/chat/completions"]]);
+      expect(log.attempts?.[0]?.status).toBe(401);
+      expect(log.attempts?.[1]?.recoveryKinds).toContain("oauth-401");
+      if (media) expect(f.sent.find(call => call.path === "/chat/completions")?.body.tools)
+        .toContainEqual(expect.objectContaining({ function: expect.objectContaining({ name: IMAGE_GEN_TOOL_NAME }) }));
+      if (evidence !== "production route subject") {
+        expect(log.attempts?.map(a => [a.adapter, a.sendCount, a.tierOutcome?.wireValue, a.reasoningWireValue]))
+          .toEqual([["openai-responses", 1, "priority", "high"], ["openai-chat", 1, null, undefined]]);
+      } else {
+        expect(linkerErrors).toEqual([]);
+        expect(subjects.map(({ baseUrl, adapter }) => [baseUrl, adapter])).toEqual([
+          ["https://a.githubcopilot.com", "openai-responses"], ["https://renewed-a.githubcopilot.com", "openai-chat"],
+        ]);
+        const ids = subjects.map(subject => subject.id);
+        for (const id of ids) expect(id).toMatch(/^[a-f0-9]{64}$/);
+        expect(ids[0]).not.toBe(ids[1]);
+        expect(log.attempts?.map(a => a.labRouteSubjectId)).toEqual(ids);
+      }
+    } finally {
+      factory.mockRestore();
+      detach();
+      resetCompatibilityVersionCacheForTests();
+    }
+  });
+  test("a local negotiation 429 during continuation cannot rotate a credential", async () => {
+    const { b } = await accounts();
+    const { config, sent } = fixture({ negotiationRefusal: 429, negotiationRefusalAt: 2,
+      replyText: "I will modify the file now.",
+      onInference: async count => { if (count === 1) await setActiveAccount("github-copilot", b); },
+    });
+    config.providers["github-copilot"]!.terminalContinuationGuard = true;
+    const log: RequestLogContext = {};
+    const response = await handleResponses(request("Modify the file now."), config, log);
+    await response.text();
+    expect(sent.filter(call => call.path === "/models/session").map(call => call.host))
+      .toEqual(["a.githubcopilot.com", "b.githubcopilot.com"]);
+    expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
+    expect(getAccountSet("github-copilot")!.activeAccountId).toBe(b);
+    expect(log.attempts?.map(attempt => attempt.sendCount)).toEqual([1]);
+    expect(log.attempts?.some(attempt => attempt.status === 429)).toBe(false);
+  });
+  test("pacing refuses a deferred Chat OAuth replay without a replacement attempt", async () => {
+    await accounts();
+    const f = fixture({ chatRefresh: true, chatOnly: true });
+    const log: RequestLogContext = {};
+    const wait = requestPacing.waitForProviderRequestSlot;
+    const pacing = spyOn(requestPacing, "waitForProviderRequestSlot").mockImplementation((name, provider, ...rest) => {
+      if (name === "github-copilot" && provider.apiKey?.endsWith("-renewed")) {
+        return Promise.reject(new requestPacing.RequestPacingQueueOverloadError(name, "queue_full", 1));
+      }
+      return wait(name, provider, ...rest);
+    });
+    try {
+      const response = await handleResponses(request("hello", false), f.config, log);
+      expect(response.status).toBe(429);
+      await response.text();
+      expect(f.refreshCount).toBe(1);
+      expect(f.sent.filter(call => call.path === "/chat/completions").map(call => call.body.model)).toEqual(["gpt-4o"]);
+      expect(log.attempts?.map(attempt => [attempt.model, attempt.status, attempt.sendCount])).toEqual([["gpt-4o", 401, 1]]);
+    } finally { pacing.mockRestore(); }
+  });
   test.each([false, true])("same-account model refresh preserves each physical model (stream=%s)", async stream => {
     await accounts();
     const f = fixture({ chatRefresh: true, chatOnly: true }), log: RequestLogContext = {};
@@ -706,7 +841,8 @@ describe("Copilot Auto through the Responses pipeline", () => {
     const f = fixture({ nativeFirst: true, native429: true, negotiationRefusal: status, negotiationRefusalAt: 2, alwaysRefuse: true });
     await saveConfig(f.config);
     const budget = createRequestExecutionBudget();
-    const response = await handleResponses(request("hello", false), f.config, { model: "", provider: "" }, { sendBudget: budget });
+    const log: RequestLogContext = {};
+    const response = await handleResponses(request("hello", false), f.config, log, { sendBudget: budget });
     expect(response.status).toBe(status);
     expect(response.headers.get("retry-after")).toBe("12");
     expect(await response.text()).not.toContain("must-not-echo");
@@ -714,6 +850,7 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(f.sent.filter(call => ["/responses", "/chat/completions"].includes(call.path))).toHaveLength(1);
     expect(f.sent.find(call => call.path === "/responses")!.signal!.aborted).toBe(true);
     expect(f.cancelledNativeBodies).toBe(1);
+    expect(log.attempts?.map(attempt => [attempt.status, attempt.sendCount])).toEqual([[429, 1]]);
   });
   test.each([false, true])("native 429 replacement malformed/cancel=%s refunds the reservation", async cancel => {
     await accounts();
@@ -943,11 +1080,13 @@ describe("Copilot Auto through the Responses pipeline", () => {
     saveConfig(config);
     const req = new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "github-copilot/auto", input: "hello", stream: false, tools: [{ type: "web_search" }] }) });
-    const response = await handleResponses(req, config, { model: "", provider: "" });
+    const log: RequestLogContext = {};
+    const response = await handleResponses(req, config, log);
     expect(response.status).toBe(429);
     expect(await response.text()).toContain("limited");
     expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
     expect(sent.filter(call => call.path === "/models/session")).toHaveLength(2);
+    expect(log.attempts?.map(attempt => [attempt.status, attempt.sendCount])).toEqual([[429, 1]]);
   });
   test("web-search key rotation into a model outside the key scope ends with the scope refusal", async () => {
     const { config, sent } = fixture({ key: true, rotate: true });
@@ -1126,13 +1265,15 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(text).not.toContain("gpt-5.4");
     expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
   });
-  test("OAuth 429 during terminal continuation preserves the scope refusal", async () => {
+  test.each([false, true])("OAuth 429 during terminal continuation preserves the scope refusal (paced=%s)", async paced => {
     await accounts();
     const { config, sent } = fixture({ rotate: true, rotateAt: 2, replyText: "I will modify the file now." });
     globalThis.fetch = config.providers["github-copilot"]!.fetch as typeof fetch;
     config.providers["github-copilot"]!.terminalContinuationGuard = true;
+    if (paced) config.providers["github-copilot"]!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
     const admission = scopedAdmission(config, ["github-copilot/auto", "gpt-4o"]);
-    const response = await handleResponses(request("Modify the file now."), config, { model: "", provider: "" }, { admission });
+    const log: RequestLogContext = {};
+    const response = await handleResponses(request("Modify the file now."), config, log, { admission });
     const text = await response.text();
     const inference = sent.filter(call => ["/chat/completions", "/responses"].includes(call.path));
     expect(inference.map(call => [call.host, call.body.model])).toEqual([
@@ -1143,6 +1284,7 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(sessions.at(-1)).toBe("b.githubcopilot.com");
     expect(text).toContain("model_not_allowed_for_key");
     expect(text).not.toContain("gpt-5.4");
+    expect(log.attempts?.map(attempt => [attempt.status, attempt.sendCount])).toEqual([[429, 2]]);
   });
 });
 

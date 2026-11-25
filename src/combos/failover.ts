@@ -1,10 +1,13 @@
 import { parseResetCooldownMs } from "../codex/routing";
 import { CYBER_POLICY_FALLBACK_MESSAGE, TERMINAL_REFUSAL_FALLBACK_MESSAGE, classifyError, isCyberPolicyCode, isCyberPolicyMessage, isRateLimitOrQuotaFailureMessage, isSubscriptionGateMessage, isTerminalRefusalCode, safetyRefusalCodeFromMessage } from "../lib/errors";
 import { isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
+import { parseHttpDate } from "../lib/http-date";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure, isAnthropicExtraUsageFailure } from "../providers/anthropic-billing-refusal";
 import { hasConflictingReasoningEffortCode } from "../providers/reasoning-metadata";
 import { isKiroAccountProfileRefusal } from "../adapters/kiro-refusal";
+import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../adapters/ollama-late-attribution";
+import { M365_RESPONSE_LIMIT_MESSAGES } from "../adapters/m365-copilot/response-limits";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
 import { PersistedCooldownMap } from "./cooldown-store";
@@ -43,14 +46,6 @@ const QUOTA_LIMIT_CODES = new Set([
   "insufficient_quota",
 ]);
 const TRANSIENT_REQUEST_RATE_CODES = new Set(["1302", "1305"]);
-const IMF_FIXDATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/i;
-const RFC850_DATE_RE = /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (\d{2})-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2}) (\d{2}):(\d{2}):(\d{2}) GMT$/i;
-const ASCTIME_DATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ( \d|\d{2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/i;
-const HTTP_MONTH_INDEX: Record<string, number> = {
-  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
-  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
-};
-
 /** Map<`${comboId}\0${provider/model}`, TargetCooldown> */
 // Never reset: an in-flight reservation may still refer to an entry cleared from the map.
 let nextCooldownRevision = 0;
@@ -65,71 +60,6 @@ function cooldownMapKey(
   target: Pick<OcxComboTarget, "provider" | "model">,
 ): string {
   return `${comboId}\0${targetKey(target)}`;
-}
-
-function parseUtcDateParts(
-  year: number,
-  monthName: string,
-  day: number,
-  hour: number,
-  minute: number,
-  second: number,
-): number | undefined {
-  const month = HTTP_MONTH_INDEX[monthName.toLowerCase()];
-  if (month === undefined) return undefined;
-  const timestamp = Date.UTC(year, month, day, hour, minute, second);
-  const parsed = new Date(timestamp);
-  return parsed.getUTCFullYear() === year
-    && parsed.getUTCMonth() === month
-    && parsed.getUTCDate() === day
-    && parsed.getUTCHours() === hour
-    && parsed.getUTCMinutes() === minute
-    && parsed.getUTCSeconds() === second
-    ? timestamp
-    : undefined;
-}
-
-function parseHttpDate(value: string, now: number): number | undefined {
-  const imf = IMF_FIXDATE_RE.exec(value);
-  if (imf) {
-    return parseUtcDateParts(
-      Number(imf[3]), imf[2]!, Number(imf[1]),
-      Number(imf[4]), Number(imf[5]), Number(imf[6]),
-    );
-  }
-  const rfc850 = RFC850_DATE_RE.exec(value);
-  if (rfc850) {
-    const current = new Date(now);
-    const currentYear = current.getUTCFullYear();
-    const month = HTTP_MONTH_INDEX[rfc850[2]!.toLowerCase()];
-    if (month === undefined) return undefined;
-    let year = Math.floor(currentYear / 100) * 100 + Number(rfc850[3]);
-    const yearDelta = year - currentYear;
-    const candidateTimeOfYear = Date.UTC(
-      2000, month, Number(rfc850[1]),
-      Number(rfc850[4]), Number(rfc850[5]), Number(rfc850[6]),
-    );
-    const currentTimeOfYear = Date.UTC(
-      2000, current.getUTCMonth(), current.getUTCDate(),
-      current.getUTCHours(), current.getUTCMinutes(), current.getUTCSeconds(),
-      current.getUTCMilliseconds(),
-    );
-    if (yearDelta < -50 || (yearDelta === -50 && candidateTimeOfYear < currentTimeOfYear)) {
-      year += 100;
-    } else if (yearDelta > 50 || (yearDelta === 50 && candidateTimeOfYear > currentTimeOfYear)) {
-      year -= 100;
-    }
-    return parseUtcDateParts(
-      year, rfc850[2]!, Number(rfc850[1]),
-      Number(rfc850[4]), Number(rfc850[5]), Number(rfc850[6]),
-    );
-  }
-  const asctime = ASCTIME_DATE_RE.exec(value);
-  if (!asctime) return undefined;
-  return parseUtcDateParts(
-    Number(asctime[6]), asctime[1]!, Number(asctime[2]),
-    Number(asctime[3]), Number(asctime[4]), Number(asctime[5]),
-  );
 }
 
 /** Parse a Retry-After delay, optionally retaining an upstream delay up to one day. */
@@ -154,7 +84,7 @@ export function parseRetryAfterMs(
       return Math.min(Math.max(Math.ceil(seconds * 1000), 1), maximum);
     }
   }
-  const timestamp = parseHttpDate(text, now);
+  const timestamp = parseHttpDate(text, now, { legacy: true });
   if (timestamp === undefined) return undefined;
   const delay = timestamp - now;
   if (delay > 0) return Math.min(delay, maximum);
@@ -328,6 +258,81 @@ export function coolComboTarget(
   });
   sweepExpiredOnWrite(now);
   return true;
+}
+
+/**
+ * failureDetail codes that cool a combo target after a COMMITTED terminal.
+ * Pre-commit failures already cool through the hop path; these are the
+ * post-commit `incomplete` terminals that path never sees, so without this
+ * the next request picks the same target and burns the same budget again.
+ */
+export type CommittedIncompleteReason = "max_output_tokens" | "upstream_stall_timeout";
+
+const COMMITTED_TERMINAL_COOLDOWN_MS: Readonly<Record<CommittedIncompleteReason, number>> = {
+  // The target cannot emit more than its output ceiling; a request that
+  // exhausted it will exhaust it again, so this uses the local cooldown cap.
+  max_output_tokens: MAX_COOLDOWN_MS,
+  // Upstream went silent mid-stream after committing output — a health
+  // signal, but transient, so the standard short cooldown applies.
+  upstream_stall_timeout: DEFAULT_COOLDOWN_MS,
+};
+
+export interface CommittedTerminalServingAttempt {
+  provider: string;
+  model: string;
+  status: number;
+  locallyAnswered?: boolean;
+}
+
+export interface CommittedTerminalCooldownFacts {
+  comboId?: string;
+  terminalStatus?: string;
+  terminalReason?: CommittedIncompleteReason;
+  servingAttempt?: CommittedTerminalServingAttempt;
+  httpStatus?: number;
+  target?: Pick<OcxComboTarget, "provider" | "model">;
+  writerGeneration?: number;
+  outputTokens?: number;
+  outputCeiling?: number | null;
+  isPaused?: boolean;
+}
+
+/**
+ * Record a bounded cooldown when a combo child commits output and then ends
+ * `incomplete` for a target-capacity or upstream-silence reason. The response
+ * is already delivered — this only shapes the NEXT pick, so the caller's
+ * effort and context configuration stay untouched.
+ */
+export function coolComboTargetForCommittedTerminal(facts: CommittedTerminalCooldownFacts): void {
+  if (!facts.comboId || facts.terminalStatus !== "incomplete") return;
+  const cooldownMs = facts.terminalReason === undefined
+    ? undefined
+    : COMMITTED_TERMINAL_COOLDOWN_MS[facts.terminalReason];
+  if (cooldownMs === undefined) return;
+  if (facts.terminalReason === "max_output_tokens") {
+    // Reaching the caller's own allowance (routine for Claude Code) or an Anthropic pause_turn
+    // must not cool a healthy target. Cool only when the turn was unpaused, the target's own
+    // ceiling is known, and the output actually reached that ceiling.
+    if (facts.isPaused === true) return;
+    if (facts.outputCeiling == null || (facts.outputTokens ?? 0) < facts.outputCeiling) return;
+  }
+  const attempt = facts.servingAttempt;
+  // The incomplete terminal is itself proof the target ran: a late stall surfaces to
+  // the client as a 5xx attempt status, so gating on status < 400 would silence exactly
+  // the case this cooldown exists for.
+  if (!attempt || attempt.locallyAnswered === true) return;
+  // Combo selection evaluates cooldowns against pick.target (which preserves any alias selector
+  // the combo named); fall back to the routed physical attempt only when facts omits the target.
+  const target = facts.target ?? { provider: attempt.provider, model: attempt.model };
+  // A shorter committed-terminal cooldown must not shorten a longer live one — a
+  // server Retry-After or reset already recorded for this target stays authoritative.
+  const existing = targetCooldowns.get(cooldownMapKey(facts.comboId, target));
+  if (existing && existing.cooldownUntil > Date.now() + cooldownMs) return;
+  coolComboTarget(facts.comboId, target, {
+    cooldownMs,
+    status: facts.httpStatus,
+    writerGeneration: facts.writerGeneration,
+  });
 }
 
 export function earliestComboCooldown(
@@ -643,7 +648,7 @@ function isExactInvalidReasoningEffortRefusal(status: number, message: string, c
   if (code !== undefined && code !== null && typeof code !== "string") return false;
   const outerCode = normalizedFailureCode(code);
   if (!EXACT_EFFORT_COMPATIBLE_CODES.has(outerCode)) return false;
-  if (isHardPolicyOrOriginRefusal(message) || hasConflictingReasoningEffortCode(message)) return false;
+  if (isHardPolicyOrOriginRefusal(message) || hasConflictingReasoningEffortCode(message, 16_384)) return false;
   let text = message.trim();
   for (let depth = 0; depth < 3; depth += 1) {
     if (text.startsWith("Provider error 400: ")) text = text.slice("Provider error 400: ".length).trim();
@@ -998,6 +1003,171 @@ function isResponseFormatCapabilityRefusal(
   return false;
 }
 
+/**
+ * Codes, types and params an unoffered-tool-call refusal may carry. The reported carrier uses
+ * `type: "upstream_error"` with `code: null` -- an aggregator re-wrapping the model backend's
+ * 400 -- while request-validation spellings stay accepted because gateways disagree on which
+ * they emit. Anything outside these closed sets fails closed.
+ */
+const UNOFFERED_TOOL_CALL_CODES = new Set(["", "invalid_request_error", "invalid_argument", "upstream_error"]);
+const UNOFFERED_TOOL_CALL_TYPES = new Set(["", "invalid_request_error", "upstream_error", "ai_apicallerror"]);
+const UNOFFERED_TOOL_CALL_PARAMS = new Set(["tools", "tool_choice"]);
+/**
+ * The provider's own verdict sentences for target-local model failures, each anchored so a
+ * validation message that merely quotes or reflects one cannot impersonate the verdict -- the
+ * same failure mode moderation-refusal matching guards against. Both observed carriers arrive
+ * as `type: "upstream_error"` with `code: null` behind aggregator re-wraps.
+ */
+const UNOFFERED_TOOL_CALL_MESSAGES = [
+  /^the model called a function that was not offered in tools\.?$/i,
+  /^the model returned an unexpected parser control marker; no output was published\.?$/i,
+] as const;
+/** Sibling records that could smuggle a competing verdict this classifier does not inspect. */
+const UNOFFERED_TOOL_CALL_CARRIERS = ["response", "last_error", "details", "detail", "errors"] as const;
+
+function isUnofferedToolCallVerdict(text: string): boolean {
+  const value = text.trim().replace(/^Provider error \d{3}: /, "").trim();
+  return UNOFFERED_TOOL_CALL_MESSAGES.some(pattern => pattern.test(value));
+}
+
+/**
+ * A root message that carries its own envelope prefix is peeled and its contents must still
+ * support the verdict: `Provider error 400: Invalid value for tools` contradicts a nested
+ * refusal even though the prefix itself is recognized.
+ */
+function isUnofferedToolCallCarrierVerdict(text: string): boolean {
+  let value = text.trim();
+  for (let depth = 0; depth < 3; depth += 1) {
+    const proxyPrefix = /^Provider error \d{3}: /.exec(value);
+    if (proxyPrefix) {
+      value = value.slice(proxyPrefix[0].length).trim();
+      continue;
+    }
+    if (value.startsWith("data:") && !value.includes("\n")) {
+      value = value.slice("data:".length).trim();
+      continue;
+    }
+    break;
+  }
+  return isUnofferedToolCallVerdict(value);
+}
+
+function hasUnofferedToolCallCarrierPrefix(text: string): boolean {
+  return /^Provider error \d{3}: /.test(text) || (text.startsWith("data:") && !text.includes("\n"));
+}
+
+function unofferedToolCallRecordShape(record: Record<string, unknown>): boolean {
+  if (record.code !== undefined && record.code !== null && typeof record.code !== "string" && typeof record.code !== "number") return false;
+  if (record.type !== undefined && record.type !== null && typeof record.type !== "string") return false;
+  if (record.param !== undefined && record.param !== null) {
+    if (typeof record.param === "string") {
+      if (!UNOFFERED_TOOL_CALL_PARAMS.has(record.param.trim().toLowerCase())) return false;
+    } else if (typeof record.param === "object" && !Array.isArray(record.param)) {
+      // An AI-SDK gateway wraps the verdict in an error object under `param`; accept it only
+      // when a nested string field independently carries the same anchored verdict, so the
+      // object cannot smuggle a different claim.
+      const nested = record.param as Record<string, unknown>;
+      const diagnostics = [nested.error, nested.message].filter((v) => v !== undefined && v !== null);
+      if (diagnostics.length === 0) return false;
+      for (const diagnostic of diagnostics) {
+        if (typeof diagnostic !== "string" || !isUnofferedToolCallVerdict(diagnostic)) return false;
+      }
+      // The nested record is held to the same closed code/type sets and carrier ban as the
+      // envelope, so a policy code tucked inside `param` cannot ride the verdict into a hop.
+      if (nested.param !== undefined && nested.param !== null) return false;
+      if (nested.code !== undefined && nested.code !== null
+        && (typeof nested.code !== "string" && typeof nested.code !== "number"
+          || !UNOFFERED_TOOL_CALL_CODES.has(normalizedFailureCode(nested.code)))) return false;
+      if (nested.type !== undefined && nested.type !== null
+        && (typeof nested.type !== "string" || !UNOFFERED_TOOL_CALL_TYPES.has(normalizedFailureCode(nested.type)))) return false;
+      if (UNOFFERED_TOOL_CALL_CARRIERS.some(carrier => nested[carrier] !== undefined && nested[carrier] !== null)) return false;
+    } else {
+      return false;
+    }
+  }
+  if (!UNOFFERED_TOOL_CALL_CODES.has(normalizedFailureCode(record.code as string | number | undefined))) return false;
+  if (!UNOFFERED_TOOL_CALL_TYPES.has(normalizedFailureCode(record.type as string | undefined))) return false;
+  for (const carrier of UNOFFERED_TOOL_CALL_CARRIERS) {
+    if (record[carrier] !== undefined && record[carrier] !== null) return false;
+  }
+  return true;
+}
+
+/**
+ * A target-local model verdict -- an unoffered tool call, or output the transport could not
+ * publish -- is evidence a later combo target may not repeat: the provider answered, the
+ * request fit, and the failure arrives before any output commits, so advancing is replay-safe.
+ *
+ * The envelope is bounded like its siblings: a depth budget, one `Provider error NNN:` or
+ * single-line `data:` unwrap per level, closed code/type/param sets, and fail-closed treatment
+ * of any record carrying a competing diagnostic carrier or a contradicting root message.
+ * Bare verdict text is also a carrier: a chat gateway can surface the sentence with no JSON
+ * envelope at all.
+ */
+export function isUnofferedToolCallRefusal(
+  status: number,
+  message: string,
+  code?: string | number | null,
+): boolean {
+  if (status !== 400 || message.length > 16_384) return false;
+  if (code !== undefined && code !== null && typeof code !== "string" && typeof code !== "number") return false;
+  if (!UNOFFERED_TOOL_CALL_CODES.has(normalizedFailureCode(code))) return false;
+  let text = message.trim();
+  for (let depth = 0; depth < 4; depth += 1) {
+    const proxyPrefix = /^Provider error \d{3}: /.exec(text);
+    if (proxyPrefix) text = text.slice(proxyPrefix[0].length).trim();
+    if (text.startsWith("data:") && !text.includes("\n")) text = text.slice("data:".length).trim();
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      return isUnofferedToolCallVerdict(text);
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const root = payload as Record<string, unknown>;
+    if (!unofferedToolCallRecordShape(root)) return false;
+    const error = root.error;
+    // A nested verdict must agree with the root's own message. When the root carries no error
+    // record its message IS the payload carrier and is validated by the flat path below.
+    if (error !== undefined && error !== null
+      && typeof root.message === "string" && root.message.trim() !== ""
+      && !isUnofferedToolCallCarrierVerdict(root.message)) return false;
+    if (error === undefined || error === null) {
+      if (typeof root.message !== "string") return false;
+      if (hasUnofferedToolCallCarrierPrefix(root.message.trim())) {
+        text = root.message.trim();
+        continue;
+      }
+      return isUnofferedToolCallVerdict(root.message);
+    }
+    if (typeof error === "string") {
+      if (hasUnofferedToolCallCarrierPrefix(error.trim())) {
+        text = error.trim();
+        continue;
+      }
+      return isUnofferedToolCallVerdict(error);
+    }
+    if (typeof error !== "object" || Array.isArray(error)) return false;
+    const record = error as Record<string, unknown>;
+    if (!unofferedToolCallRecordShape(record)) return false;
+    if (record.error !== undefined && record.error !== null) {
+      if (typeof record.error !== "string") return false;
+      if (record.error.trim() !== "" && !isUnofferedToolCallVerdict(record.error)) return false;
+    }
+    if (root.param !== undefined && root.param !== null && record.param !== undefined && record.param !== null
+      && String(root.param).trim().toLowerCase() !== String(record.param).trim().toLowerCase()) return false;
+    if (typeof record.message !== "string") return false;
+    const inner = record.message.trim();
+    if (hasUnofferedToolCallCarrierPrefix(inner)) {
+      // Our own wrapper, re-wrapped by a downstream hop. Peel it and look again, within budget.
+      text = inner;
+      continue;
+    }
+    return isUnofferedToolCallVerdict(record.message);
+  }
+  return false;
+}
+
 /** The classification text the combo path bounds a body to (src/server/responses/core-errors.ts). */
 const MODERATION_EVIDENCE_LIMIT = 500;
 
@@ -1061,23 +1231,56 @@ const RESPONSE_REQUEST_ECHO_KEYS = new Set([
  * Any other wording (an account, model, parameter or billing problem, in any phrasing) does not
  * match, so the body keeps dev's decision; only known shapes are admitted.
  */
-const MODERATION_REFUSAL_PROSE = new RegExp("^(?:"
-  + "(?:content )?(?:refused|flagged|blocked|rejected|filtered)(?: by (?:the )?(?:moderation|content filter))?\\.?"
+// The anchored scan commits to the first verdict alternative that matches, so alternatives run
+// longest-first: Azure's fixed wording leads ("the response was filtered" is a strict prefix of it)
+// and the noun-phrased verdict precedes the bare one (its `by ... system` clause reaches further).
+const MODERATION_REFUSAL_VERDICT = new RegExp("^(?:"
+  + "the response was filtered due to the prompt triggering azure openai'?s content management policy\\.?"
   + "|(?:(?:the|your) )?(?:input|request|prompt|content|message|response|output)(?: (?:was|has been|is))?"
   + " (?:refused|flagged|blocked|rejected|filtered)(?: by (?:the )?(?:moderation|content filter)(?: system)?)?\\.?"
-  + "|the response was filtered due to the prompt triggering azure openai'?s content management policy\\.?"
+  + "|(?:content )?(?:refused|flagged|blocked|rejected|filtered)(?: by (?:the )?(?:moderation|content filter))?\\.?"
   + "|(?:your )?(?:input|request|prompt|content) violated (?:the )?content (?:safety|management|filtering) polic(?:y|ies)\\.?"
-  + ")(?:"
-  + " categor(?:y|ies): [a-z][a-z/_-]*(?:(?:,? and |, )[a-z][a-z/_-]*)*\\.?"
+  + ")", "i");
+const MODERATION_REFUSAL_TAIL = new RegExp("(?:"
+  + "( categor(?:y|ies): )"
   + "| please (?:modify|revise|rephrase|change|adjust|edit) (?:your|the) (?:prompt|input|request|message)(?: and (?:retry|try again))?\\.?"
   + "| (?:please )?(?:retry|try again)(?: later)?\\.?"
   + "| to learn more about our content filtering policies please read our documentation: https://[^ ]+"
-  + ")*$", "i");
+  + ")", "iy");
+const MODERATION_CATEGORY_WORD = /[a-z][a-z/_-]*/iy;
+const MODERATION_CATEGORY_AND = / and /iy;
 
-/** Whether a prose string is a known moderation refusal copy and nothing else (bounded, linear). */
+/** Whether the whole string is known moderation refusal copy. */
 function isModerationRefusalProse(text: string): boolean {
   if (text.length > 2_000) return false;
-  return MODERATION_REFUSAL_PROSE.test(text.replace(/\s+/g, " ").trim());
+  const prose = text.replace(/\s+/g, " ").trim();
+  const verdict = MODERATION_REFUSAL_VERDICT.exec(prose);
+  if (!verdict) return false;
+
+  // A comma can introduce the category "and" or the separator ", and ". Keep both
+  // interpretations until the rest of the sentence distinguishes them. Each token
+  // boundary is visited once, even when several interpretations reach it.
+  const tailStarts = new Set([verdict[0].length]);
+  const categoryStarts = new Set<number>();
+  for (let index = verdict[0].length; index < prose.length; index++) {
+    if (tailStarts.has(index)) {
+      MODERATION_REFUSAL_TAIL.lastIndex = index;
+      const tail = MODERATION_REFUSAL_TAIL.exec(prose);
+      if (tail) {
+        const next = tail[1] ? categoryStarts : tailStarts;
+        next.add(MODERATION_REFUSAL_TAIL.lastIndex);
+      }
+    }
+    if (!categoryStarts.has(index)) continue;
+    MODERATION_CATEGORY_WORD.lastIndex = index;
+    if (!MODERATION_CATEGORY_WORD.test(prose)) continue;
+    const end = MODERATION_CATEGORY_WORD.lastIndex;
+    tailStarts.add(prose[end] === "." ? end + 1 : end);
+    if (prose.startsWith(", ", end)) categoryStarts.add(end + 2);
+    MODERATION_CATEGORY_AND.lastIndex = prose[end] === "," ? end + 1 : end;
+    if (MODERATION_CATEGORY_AND.test(prose)) categoryStarts.add(MODERATION_CATEGORY_AND.lastIndex);
+  }
+  return tailStarts.has(prose.length);
 }
 
 /**
@@ -1102,8 +1305,15 @@ function isAllowedModerationParam(param: string): boolean {
  * Any hard-refusal token in any spelling. A moderation code beside one is not evidence that another
  * target may serve the request: the client must not retry these.
  */
-const HARD_STOP_TOKEN =
-  /(?<![a-z0-9])(?:cyber_policy|origin_rejected|bio_policy|misalignment_policy_violation|invalid_prompt|content_policy_violation|context_length_exceeded|client_closed_request|client_cancelled|upstream_no_response|upstream_closed_before_response|upstream_reset_replay_refused)(?![a-z0-9])/i;
+const HARD_STOP_TOKENS = [
+  "cyber_policy", "origin_rejected", "bio_policy", "misalignment_policy_violation", "invalid_prompt",
+  "content_policy_violation", "context_length_exceeded", "client_closed_request", "client_cancelled",
+  "upstream_no_response", "upstream_closed_before_response", "upstream_reset_replay_refused",
+];
+const hardStopPattern = (tokens: readonly string[]) => new RegExp(`(?<![a-z0-9])(?:${tokens.join("|")})(?![a-z0-9])`, "i");
+const HARD_STOP_TOKEN = hardStopPattern(HARD_STOP_TOKENS);
+/** A provider 413 naming a context overflow is still this target's limit, so only the others veto its hop. */
+const HARD_STOP_TOKEN_413 = hardStopPattern(HARD_STOP_TOKENS.filter(token => token !== "context_length_exceeded"));
 
 /** JSON \uXXXX escapes decoded, so an escaped code cannot slip past {@link HARD_STOP_TOKEN}. */
 function withJsonEscapesDecoded(text: string): string {
@@ -1114,8 +1324,8 @@ function withJsonEscapesDecoded(text: string): string {
  * Whether any hard-refusal token appears in any spelling: JSON escapes decoded (including \n, \t
  * and \r), camel humps split, and hyphens, dots, slashes and whitespace folded to underscores.
  */
-function namesHardStopToken(text: string): boolean {
-  return HARD_STOP_TOKEN.test(withJsonEscapesDecoded(text)
+function namesHardStopToken(text: string, pattern: RegExp = HARD_STOP_TOKEN): boolean {
+  return pattern.test(withJsonEscapesDecoded(text)
     .replace(/\\[ntr]/g, "_")
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[-.\s/]+/g, "_"));
@@ -1324,6 +1534,7 @@ export function comboFailureCooldownScope(
     code?: string | number | null;
     malformedResponseFormat?: boolean;
     openRouterOpaque400?: boolean;
+    unofferedToolCallRefusal?: boolean;
     /** Whole-body moderation verdict from a reader that saw the complete bounded body. */
     providerModerationRefusal?: boolean;
   },
@@ -1345,6 +1556,13 @@ export function comboFailureCooldownScope(
     // A capability gap says the target is healthy and the request did not fit it, which is the
     // same reason every other entry here refuses to cool a target.
     || isResponseFormatCapabilityRefusal(status, message, rawCode)
+    // The provider answered and its model simply called a function it was never offered: the
+    // request fit and the target is healthy, so this must not cool it either. A caller that
+    // classified the intact bounded body supplies the verdict directly; the display-truncated
+    // text here would fail the envelope parse on a long body.
+    || (options?.unofferedToolCallRefusal !== undefined
+      ? options.unofferedToolCallRefusal
+      : isUnofferedToolCallRefusal(status, message, rawCode))
   ) return "none";
   if (isProviderScopedQuotaCap(status, message, rawCode)) return "provider";
   // A rejected or unpaid credential is provider-wide evidence: every target that routes
@@ -1359,6 +1577,58 @@ export function comboFailureCooldownScope(
   // target health and must not quarantine the target.
   if (isUncodedUpstream400(status, message, rawCode, options)) return "none";
   return "target";
+}
+
+/** The proxy's own 413 refusals: its translation buffer and body caps, identical for every target. */
+const PROXY_OWNED_413_CODES = ["translation_buffer_limit", "inbound_body_too_large", "outbound_body_too_large"];
+/**
+ * The wording every translator-budget refusal carries ("request ..." or "upstream translation
+ * buffer exceeded the safe limit"). Several producers format that 413 with type and code
+ * `request_too_large`, which drops `translation_buffer_limit` from the body, so the wording is
+ * the one identity that always survives to the combo decision.
+ */
+const PROXY_TRANSLATION_BUFFER_WORDING = "translation buffer exceeded the safe limit";
+/** Request verdicts a 413 can still state; the status alone never outranks them. */
+const VERDICT_413_CODES = ["content_policy_violation", "client_closed_request", "client_cancelled"];
+
+/**
+ * Whether a 413 is a provider's own intake refusal rather than one this proxy produced. The proxy
+ * carries its codes in the structured code (or the type a body falls back to) and in the bounded
+ * classification text, so either one marks the refusal as ours. The Ollama late-attribution limit
+ * is proxy-owned too and is recognized only by its exact constant, as `isLateAttributionRefusal`
+ * does. A 413 that also states a terminal, safety or origin refusal keeps that verdict.
+ */
+function isProviderIntakeRefusal(message: string, rawCode: string | null | undefined, classifiedCode?: string | null): boolean {
+  const code = normalizedFailureCode(rawCode);
+  // The classifier's own reading of the text counts too: an uncoded "Request canceled by client"
+  // is client_closed_request, and a whole-body caller has no classified code to pass.
+  const inferred = normalizedFailureCode(classifiedCode ?? classifyError(413, "upstream_error", message).code);
+  if (PROXY_OWNED_413_CODES.includes(code) || VERDICT_413_CODES.includes(code) || VERDICT_413_CODES.includes(inferred)
+    || isTerminalRefusalCode(code) || isTerminalRefusalCode(inferred)) {
+    return false;
+  }
+  if (safetyRefusalCodeFromMessage(message) !== undefined || isHardPolicyOrOriginRefusal(message)
+    || SAFETY_SYSTEM_WORDING.test(message)) return false;
+  if (namesHardStopToken(message, HARD_STOP_TOKEN_413)) return false;
+  const lower = message.toLowerCase();
+  if (PROXY_OWNED_413_CODES.some(owned => lower.includes(owned)) || lower.includes(PROXY_TRANSLATION_BUFFER_WORDING)) {
+    return false;
+  }
+  // An adapter buffer that overflowed while collecting the answer: the provider already ran the
+  // turn, so this 413 is not a refusal before processing and must not reach another target.
+  if (Object.values(M365_RESPONSE_LIMIT_MESSAGES).some(limit => message.includes(limit))) return false;
+  if (message.trim() === OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE) return false;
+  const root = parseErrorEnvelope(message);
+  return (root ? envelopeErrorRecord(root) : undefined)?.message !== OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE;
+}
+
+/**
+ * The whole-body form of {@link isProviderIntakeRefusal}, for a reader that holds the complete
+ * bounded 413 body. The classification text the decision receives is cut at 500 characters, so a
+ * hard refusal or proxy marker after the cut would otherwise leave the hop open.
+ */
+export function isProviderIntakeRefusalBody(body: string): boolean {
+  return isProviderIntakeRefusal(body, undefined);
 }
 
 function isModelLifecycleGone(
@@ -1491,8 +1761,11 @@ export function comboFailureDecision(
     verifiedPlanRefusal?: boolean;
     malformedResponseFormat?: boolean;
     openRouterOpaque400?: boolean;
+    unofferedToolCallRefusal?: boolean;
     /** Whole-body moderation verdict from a reader that saw the complete bounded body. */
     providerModerationRefusal?: boolean;
+    /** Whole-body 413 intake verdict ({@link isProviderIntakeRefusalBody}); false vetoes the hop. */
+    providerIntakeRefusal?: boolean;
   },
 ): ComboFailureDecision {
   const rootRawCode = typeof options?.rootCode === "number" ? String(options.rootCode) : options?.rootCode;
@@ -1519,8 +1792,11 @@ function decideComboFailure(
     verifiedPlanRefusal?: boolean;
     malformedResponseFormat?: boolean;
     openRouterOpaque400?: boolean;
+    unofferedToolCallRefusal?: boolean;
     /** Whole-body moderation verdict from a reader that saw the complete bounded body. */
     providerModerationRefusal?: boolean;
+    /** Whole-body 413 intake verdict ({@link isProviderIntakeRefusalBody}); false vetoes the hop. */
+    providerIntakeRefusal?: boolean;
   },
 ): ComboFailureDecision {
   if (status === 499) return "stop";
@@ -1550,10 +1826,17 @@ function decideComboFailure(
   if (isModelLifecycleGone(status, message, rawCode)) return "hop";
   const error = classifyError(status, "upstream_error", message);
   if (isCyberPolicyCode(error.code)) return "stop";
+  // A 413 that is the proxy's own, or that states a terminal refusal, says nothing about another
+  // target's size limit, so every size hop below stays closed for it: the provider-target and
+  // definite overflow hops as well as the provider-413 hop. A whole-body reader's verdict covers a
+  // marker past the 500-character cut; streaming callers pass the whole event, which the message
+  // check reads directly. Hops for other reasons (a model-scoped refusal, say) still apply.
+  const sizeHopVetoed = status === 413
+    && (options?.providerIntakeRefusal === false || !isProviderIntakeRefusal(message, rawCode, error.code));
   // A provider can expose its own target hard cap with a non-semantic vendor code
   // (for example 5059 + invalid_request_prompt_too_long). That is evidence that this
   // target is too small, not that every later combo target is incapable of serving it.
-  if (isProviderTargetContextOverflow(status, message, rawCode)) return "hop";
+  if (!sizeHopVetoed && isProviderTargetContextOverflow(status, message, rawCode)) return "hop";
   // A definite context-window refusal is target-local inside a heterogeneous combo: this model
   // cannot hold the turn, but a later target may have a larger window. Two boundaries keep this
   // safe. It is reached only after cancellation, structured origin/cyber refusals and
@@ -1562,7 +1845,15 @@ function decideComboFailure(
   // commits the child on any text, tool call or unknown event, and only a zero-output terminal
   // becomes a failure response at all, so a turn whose text the client already saw is never
   // reclassified here.
-  if (isDefiniteContextOverflow(status, message)) return "hop";
+  if (!sizeHopVetoed && isDefiniteContextOverflow(status, message)) return "hop";
+  // A provider's HTTP 413 is that target's intake limit (#9017). Combo targets carry different
+  // body and token limits, and the provider refused before processing the turn, so the next
+  // untried target may accept the unchanged request: the same reasoning as the context-overflow
+  // hop above. The proxy's own 413s are identical for every target and stay terminal, as does a
+  // 413 that also states a terminal refusal. Cooldown scope stays "none". This reverses the
+  // generic-413 stop recorded in devlog/_fin/260904_bug_stack_train/040_deferrals.md
+  // (coordinator decision, 2026-11-21); generic 410 is unchanged.
+  if (status === 413 && !sizeHopVetoed) return "hop";
   // A local input-admission refusal (#1524) says "this candidate cannot fit the request",
   // not "the request is impossible": the next candidate may have a larger context window.
   //
@@ -1581,6 +1872,11 @@ function decideComboFailure(
   // tries each candidate once via `tried`, and combo excludes each attempted target. So this is
   // structured-code-only, not provably local.
   if (rawCode === "input_admission_refused" || error.code === "input_admission_refused") {
+    return "hop";
+  }
+  // A degenerate completion is target-local evidence: the child ended its turn carrying only
+  // reasoning/commentary prelude. Another target can still serve the same request.
+  if (rawCode === "degenerate_completion" || error.code === "degenerate_completion") {
     return "hop";
   }
   if (isProviderScopedQuotaCap(status, message, rawCode || error.code)) {
@@ -1610,6 +1906,14 @@ function decideComboFailure(
   // could have served the request (#4903).
   if (isResponseFormatCapabilityRefusal(status, message, rawCode)) return "hop";
   if (providerModerationHop(status, message, rawCode, options?.providerModerationRefusal, options?.malformedResponseFormat)) return "hop";
+  // A model that calls a function the request never offered hallucinated the call: target-local
+  // behavior on a healthy target, arriving as a pre-output 400. Must precede the generic
+  // invalid_request_error stop, which is where this envelope ended the chain. A caller that
+  // classified the intact bounded body supplies the verdict directly; the display-truncated
+  // text here would fail the envelope parse on a long body.
+  if (options?.unofferedToolCallRefusal !== undefined
+    ? options.unofferedToolCallRefusal
+    : isUnofferedToolCallRefusal(status, message, rawCode)) return "hop";
   if (isAnthropicBillingFailure(status, message, rawCode)) return "hop";
   if (isAnthropicExtraUsageFailure(status, message, rawCode)) return "hop";
   // Kiro's body validator rejects the request for the identity it was routed under. The account

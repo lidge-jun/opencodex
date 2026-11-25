@@ -1,5 +1,5 @@
 import type { OcxConfig } from "../../types";
-import { isEffectiveCodexDesktopAuthless } from "../loopback-target";
+import { isEffectiveCodexReserve } from "../loopback-target";
 import { CODEX_ACCOUNT_BOUND_CATALOG_KIND } from "./account-models";
 import { NATIVE_RESERVE_MODEL } from "./native-models";
 import type { RawEntry } from "./parsing";
@@ -17,12 +17,13 @@ export interface ReserveCatalogProjection {
 
 /** The caller supplies a validated actual observation and an already context-capped Luna pin. */
 export function createReserveCatalogProjection(
-  config: Pick<OcxConfig, "runtimeRole" | "hostname" | "unauthenticatedLoopbackListener" | "codexDesktopAuthless">,
+  config: Pick<OcxConfig, "runtimeRole" | "hostname" | "unauthenticatedLoopbackListener" | "codexDesktopAuthless"
+    | "codexReserveEnabled" | "codexReserveMigration">,
   mainSelectors: readonly string[],
   observedSource: RawEntry | null,
   lunaSource: RawEntry | null,
 ): ReserveCatalogProjection | undefined {
-  if (!isEffectiveCodexDesktopAuthless(config) || mainSelectors.length === 0) return undefined;
+  if (!isEffectiveCodexReserve(config) || mainSelectors.length === 0) return undefined;
   const original = observedSource ?? lunaSource;
   if (!original) return undefined;
   const source = structuredClone(original);

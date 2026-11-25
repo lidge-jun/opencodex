@@ -321,6 +321,17 @@ describe("combo target input admission", () => {
     expect(JSON.stringify(messagesToChatFormat(parsed, preserved))).toContain(asciiTokens(30_000));
   });
 
+  test("counts DeepSeek thinking replay when the preserve list is unset", () => {
+    const model = "deepseek-v4-pro";
+    const parsed = { ...replayedThinking(), modelId: model, options: { maxOutputTokens: 1_000 } };
+    const target = { ...capped, modelContextWindows: { [model]: 10_000 } };
+    expect(target.preserveReasoningContentModels).toBeUndefined();
+    expect(messagesToChatFormat(parsed, target)).toContainEqual(expect.objectContaining({
+      role: "assistant", reasoning_content: asciiTokens(30_000),
+    }));
+    expect(checkComboTargetInputAdmission(parsed, target, "custom", model).admitted).toBe(false);
+  });
+
   const withMaxOutput = (inputTokens: number, maxOutputTokens = 64_000): OcxParsedRequest => ({
     ...request([userText(asciiTokens(inputTokens))]),
     modelId: "m",
@@ -346,16 +357,32 @@ describe("combo target input admission", () => {
   test("reserves no more than the target can actually emit", () => {
     // The caller asked for 64k, but this model tops out at 32k, so reserving the caller's
     // number would skip a target that fits.
-    const result = checkComboTargetInputAdmission(withMaxOutput(90_000), capped, "custom", "m");
+    const result = checkComboTargetInputAdmission(withMaxOutput(80_000), capped, "custom", "m");
     expect(result.admitted).toBe(true);
     expect(result.requiredOutputHeadroom).toBe(32_000);
+  });
+
+  test("the estimate margin refuses input that only fits on the raw figure", () => {
+    // 110k estimates to 121k with the combo margin; +8k declared output overruns the 128k
+    // window even though the raw sum (118k) would have fit.
+    const result = checkComboTargetInputAdmission(withMaxOutput(110_000, 8_000), capped, "custom", "m");
+    expect(result.admitted).toBe(false);
+    expect(result.requiredOutputHeadroom).toBe(8_000);
+  });
+
+  test("admits an exact fit after applying the estimate margin and output reserve", () => {
+    const result = checkComboTargetInputAdmission(withMaxOutput(100_000, 18_000), capped, "custom", "m");
+    expect(result).toMatchObject({
+      estimatedTokens: 100_000, admissionEstimateTokens: 110_000,
+      requiredOutputHeadroom: 18_000, ceiling: 128_000, admitted: true,
+    });
   });
 
   test("an input-only cap is not charged the output reserve twice", () => {
     // modelMaxInputTokens tightens the admissible INPUT; the output reserve belongs against
     // the window. Charging both against the tightened number would refuse a turn that fits.
     const inputCapped: OcxProviderConfig = { ...capped, modelMaxInputTokens: { m: 90_000 } };
-    const fits = checkComboTargetInputAdmission(withMaxOutput(85_000), inputCapped, "custom", "m");
+    const fits = checkComboTargetInputAdmission(withMaxOutput(80_000), inputCapped, "custom", "m");
     expect(fits.admitted).toBe(true);
     expect(fits.ceiling).toBe(90_000);
     // The input cap itself still refuses on its own terms.
@@ -369,10 +396,15 @@ describe("combo target input admission", () => {
     expect(result.ceiling).toBeNull();
   });
 
-  test("no declared output allowance keeps the loose direct contract", () => {
-    const result = checkComboTargetInputAdmission(withoutMaxOutput(150_000), capped, "custom", "m");
-    expect(result.admitted).toBe(true); // still inside the existing 2.5x pathological gate
-    expect(result.requiredOutputHeadroom).toBeUndefined();
+  test("an undeclared output allowance still reserves default headroom", () => {
+    // 10% of the 128k window = 12.8k, capped by the target's 32k output ceiling to 12.8k.
+    // 110k clears the ceiling on the raw figure but not once the reserve is added; 100k can.
+    const refused = checkComboTargetInputAdmission(withoutMaxOutput(110_000), capped, "custom", "m");
+    expect(refused.admitted).toBe(false);
+    expect(refused.requiredOutputHeadroom).toBe(12_800);
+    const fits = checkComboTargetInputAdmission(withoutMaxOutput(100_000), capped, "custom", "m");
+    expect(fits.admitted).toBe(true);
+    expect(fits.requiredOutputHeadroom).toBe(12_800);
   });
 
   test("a canonical native slug missing from the override table resolves from generated metadata", () => {
@@ -415,4 +447,123 @@ test("output headroom compares against the shared window after the input cap", a
   const result = checkComboTargetInputAdmission(parsed, { adapter: "openai-chat", baseUrl: "https://provider.example/v1", contextWindow: 100, modelMaxInputTokens: { "test-model": 16 } }, "fixture", "test-model");
   expect(result.admitted).toBe(false); expect(result.estimatedTokens).toBeLessThanOrEqual(16);
   expect(inputAdmissionRefusalMessage(result, clientFacingModelLabel("client-model"))).toContain("context window of client-model (100 tokens; input limit: 16 tokens)");
+});
+
+test("a margin-only input-cap refusal names the cap, not the window", async () => {
+  const { inputAdmissionRefusalMessage } = await import("../../src/server/responses/input-admission");
+  const { clientFacingModelLabel } = await import("../../src/lib/error-destination");
+  // Raw estimate sits under the 90k input cap; the 1.1x margin pushes it over, so the cap --
+  // not the 128k window -- is the binding limit and the message must say so.
+  const provider: OcxProviderConfig = {
+    adapter: "openai-chat", baseUrl: "https://provider.example/v1",
+    modelContextWindows: { m: 128_000 }, modelMaxInputTokens: { m: 90_000 },
+    modelMaxOutputTokens: { m: 32_000 },
+  };
+  const parsed = { ...request([userText(asciiTokens(85_000))]), modelId: "m", options: {} };
+  const result = checkComboTargetInputAdmission(parsed, provider, "custom", "m");
+  expect(result.admitted).toBe(false);
+  expect(result.estimatedTokens).toBeLessThanOrEqual(90_000);
+  expect(result.admissionEstimateTokens).toBeGreaterThan(90_000);
+  const message = inputAdmissionRefusalMessage(result, clientFacingModelLabel("client-model"));
+  expect(message).toContain("input limit of client-model (90000 tokens");
+  expect(message).not.toContain("cannot fit the context window");
+});
+
+describe("devin adapter window fallback", () => {
+  const devin: OcxProviderConfig = { adapter: "devin", baseUrl: "https://server.codeium.com" };
+  const devinRequest = (inputTokens: number, modelId: string): OcxParsedRequest => ({
+    ...request([userText(asciiTokens(inputTokens))]),
+    modelId,
+    options: { maxOutputTokens: 64_000 },
+  });
+
+  test("resolves the adapter window when provider config declares none", () => {
+    // swe-2-flash serves ~256KiB even though the live catalog advertises 850k;
+    // observed turns terminate at totalTokens 262,140.
+    expect(resolveInputCeiling(devin, "devin", "swe-2-flash")).toBe(262_000);
+    // Effort-suffixed catalog UIDs collapse to the base row.
+    expect(resolveInputCeiling(devin, "devin", "swe-2-flash-medium")).toBe(262_000);
+    expect(resolveInputCeiling(devin, "devin", "swe-2")).toBe(850_000);
+  });
+
+  test("a turn that cannot fit is skipped before any upstream bytes", () => {
+    // 250k estimated input + 64k declared output exceeds the 262k serving window --
+    // the shape that used to answer 200, emit a few hundred tokens and stop on
+    // max_output_tokens with output already committed and no target left to try.
+    const result = checkComboTargetInputAdmission(devinRequest(250_000, "swe-2-flash"), devin, "devin", "swe-2-flash");
+    expect(result.admitted).toBe(false);
+    expect(result.ceiling).toBe(262_000);
+  });
+
+  test("explicit provider windows still win over the adapter table", () => {
+    const wider: OcxProviderConfig = { ...devin, contextWindow: 900_000 };
+    expect(checkComboTargetInputAdmission(devinRequest(250_000, "swe-2-flash"), wider, "devin", "swe-2-flash").admitted).toBe(true);
+    const narrower: OcxProviderConfig = { ...devin, modelContextWindows: { "swe-2-flash": 200_000 } };
+    expect(resolveInputCeiling(narrower, "devin", "swe-2-flash")).toBe(200_000);
+  });
+
+  test("dotted devin ids resolve the hyphenated window", () => {
+    const provider: OcxProviderConfig = { adapter: "devin", baseUrl: "https://devin.test" };
+    expect(resolveInputCeiling(provider, "devin", "swe-1.7")).toBe(262_000);
+  });
+
+  test("dotted id honors a configured window on the normalized spelling", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test",
+      modelContextWindows: { "swe-1-7-medium": 111_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1.7-medium")).toBe(111_000);
+  });
+
+  test("dotted id honors a configured input cap on the normalized spelling", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test",
+      modelMaxInputTokens: { "swe-1-7": 100_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1.7")).toBe(100_000);
+  });
+
+  test("an effort-suffixed dotted id honors an override on its dotted base", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test",
+      modelContextWindows: { "swe-1.7": 111_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1.7-medium")).toBe(111_000);
+    expect(checkComboTargetInputAdmission(devinRequest(150_000, "swe-1.7-medium"), provider, "devin", "swe-1.7-medium").admitted).toBe(false);
+  });
+
+  test("a per-model override on any devin spelling binds before the provider-wide window", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test", contextWindow: 900_000,
+      modelContextWindows: { "swe-1-7-medium": 111_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1.7-medium")).toBe(111_000);
+    expect(checkComboTargetInputAdmission(devinRequest(200_000, "swe-1.7-medium"), provider, "devin", "swe-1.7-medium").admitted).toBe(false);
+  });
+
+  test("a hyphenated id honors overrides keyed by the dotted spelling", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test", contextWindow: 900_000,
+      modelContextWindows: { "swe-1.7": 111_000 },
+      modelMaxInputTokens: { "swe-1.7": 100_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1-7-medium")).toBe(100_000);
+    expect(checkComboTargetInputAdmission(devinRequest(150_000, "swe-1-7-medium"), provider, "devin", "swe-1-7-medium").admitted).toBe(false);
+    const windowOnly: OcxProviderConfig = { ...provider, modelMaxInputTokens: undefined };
+    expect(resolveInputCeiling(windowOnly, "devin", "swe-1-7")).toBe(111_000);
+  });
+
+  test("the dotted-key fallback folds case like the exact-spelling lookup", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test", contextWindow: 900_000,
+      modelMaxInputTokens: { "SWE-1.7": 100_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1-7-medium")).toBe(100_000);
+    expect(resolveInputCeiling(provider, "devin", "SWE-1-7-MEDIUM")).toBe(100_000);
+  });
+
+  test("non-devin adapters stay unresolved", () => {
+    const other: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.test/v1" };
+    expect(resolveInputCeiling(other, "custom", "swe-2-flash")).toBeNull();
+  });
 });

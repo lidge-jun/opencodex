@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Readable } from "node:stream";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { handleLogin, loginUsageMessage } from "../../src/oauth/login-cli";
+import { KEY_LOGIN_PROVIDERS, validateApiKey } from "../../src/oauth/key-providers";
 import { handleAccountAuthCommand } from "../../src/cli/account-auth";
 import { cmdAccount } from "../../src/cli/account";
 import { noteCredentialArgv, scrubCredentialOperands } from "../../src/cli/secret-args";
@@ -99,6 +101,21 @@ describe("account argument redaction", () => {
   }
 });
 
+test("ACP login prints host sign-in guidance without opening a browser or reading a key", async () => {
+  const ask = async () => { throw new Error("Unexpected key prompt"); };
+  const openUrl = async () => { throw new Error("Unexpected browser launch"); };
+  await handleLogin("antigravity-acp", { ask, openUrl });
+  expect(log.mock.calls).toEqual([["Sign in on the proxy host with: agy acp --login"]]);
+  expect(loginUsageMessage()).not.toContain("antigravity-acp");
+  expect(KEY_LOGIN_PROVIDERS.litellm?.adapter).toBe("openai-chat");
+});
+
+test("API key validation refuses ACP by adapter or canonical provider ID without fetching", async () => {
+  const provider = { label: "ACP", baseUrl: "https://example.test/docs", dashboardUrl: "https://example.test/docs" };
+  expect(await validateApiKey("custom-agy", { ...provider, adapter: "agy-acp" }, SECRET)).toBe(false);
+  expect(await validateApiKey("antigravity-acp", { ...provider, adapter: "openai-chat" }, SECRET)).toBe(false);
+});
+
 describe("login flow-specific options", () => {
   for (const provider of ["anthropic", "kiro", "kimi", "nous", "github-copilot"]) {
     for (const add of [undefined, "on", "off"]) test(`${provider} fresh add-account ${add ?? "omitted"}`, async () => {
@@ -188,6 +205,21 @@ describe("login flow-specific options", () => {
       { flowId: "second", loggedIn: true, done: true, status: "complete" }]);
     expect(await handleAccountAuthCommand("login", ["xai", "--device"], replacement.deps)).not.toBe(0);
     expect(replacement.calls[1]?.url).toContain("provider=xai&flowId=first");
+  });
+  test("M365 account login waits for its own completion and cancel sends its flow ID", async () => {
+    const provider = "m365-copilot";
+    const handoff = { flowId: "flow-1", url: "", instructions: "Fixture instructions" };
+    const waiting = fixture([handoff,
+      { flowId: "flow-1", loggedIn: true, done: false, status: "pending" },
+      { flowId: "flow-1", loggedIn: true, done: true, status: "complete" },
+    ]);
+    expect(await handleAccountAuthCommand("login", [provider, "--json"], waiting.deps)).toBe(0);
+    expect(waiting.calls.slice(1).map(call => new URL(call.url).searchParams.get("flowId"))).toEqual(["flow-1", "flow-1"]);
+    const cancellation = fixture([{ ok: true, cancelled: true }]);
+    expect(await handleAccountAuthCommand("cancel", [provider, "--json"], cancellation.deps)).toBe(2);
+    expect(cancellation.calls).toHaveLength(0);
+    expect(await handleAccountAuthCommand("cancel", [provider, "--flow", "flow-1", "--json"], cancellation.deps)).toBe(0);
+    expect(cancellation.calls[0]?.body).toEqual({ provider, flowId: "flow-1" });
   });
   test("Codex device omission preserves its device payload and public grant", async () => {
     const f = fixture([{ flowId: "flow-1", deviceCode: "USER-CODE", url: "https://example.test/verify", accessToken: SECRET }]);

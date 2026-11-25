@@ -215,8 +215,8 @@ export const passthroughMemoryCitationEscaper: MemoryCitationEscaper = {
  *
  * A tag can straddle delta boundaries, so a per-delta regex would miss the mention that matters
  * most: the model writing the tag name one token at a time. The escaper buffers until it can tell
- * a mention from a real block. A real block is emitted verbatim, tags included, as soon as its
- * `<citation_entries>` body starts — the client keeps it, which is the whole point of the block.
+ * a mention from a real block. A real block is emitted verbatim, tags included, once its closing
+ * tag and body prove it valid — the client keeps it, which is the whole point of the block.
  * Everything else is a mention and gets `&lt;`.
  */
 export function createMemoryCitationEscaper(): MemoryCitationEscaper {
@@ -235,57 +235,60 @@ export function createMemoryCitationEscaper(): MemoryCitationEscaper {
       held = "";
       let out = "";
       let i = 0;
+      // Ordinary text stays one input span, even when it contains many literal '<' characters.
+      // Flush that span only at a rewrite or hold boundary, rather than building one rope per '<'.
+      let literalStart = 0;
       while (i < input.length) {
         const next = input.indexOf("<", i);
-        if (next === -1) {
-          out += input.slice(i);
-          break;
-        }
-        out += input.slice(i, next);
-        // Look no further than one hold limit ahead: a real block never exceeds it, and slicing the
-        // whole remainder for every tag would make one large delta of many tags quadratic.
-        const tail = input.slice(next, next + MAX_MEMORY_CITATION_HOLD + 1);
+        if (next === -1) break;
         const remaining = input.length - next;
-        if (tail.startsWith(MEMORY_CITATION_CLOSE)) {
+        if (input.startsWith(MEMORY_CITATION_CLOSE, next)) {
           // A close tag outside a claimed block is prose.
-          out += escapeClose;
+          out += input.slice(literalStart, next) + escapeClose;
           i = next + MEMORY_CITATION_CLOSE.length;
+          literalStart = i;
           continue;
         }
-        if (!tail.startsWith(MEMORY_CITATION_OPEN)) {
-          if (MEMORY_CITATION_OPEN.startsWith(tail) || MEMORY_CITATION_CLOSE.startsWith(tail)) {
-            // A tag is still arriving.
-            held = tail;
-            return out;
+        if (!input.startsWith(MEMORY_CITATION_OPEN, next)) {
+          if (remaining < MEMORY_CITATION_CLOSE.length) {
+            const tail = input.slice(next);
+            if (MEMORY_CITATION_OPEN.startsWith(tail) || MEMORY_CITATION_CLOSE.startsWith(tail)) {
+              // A tag is still arriving.
+              held = tail;
+              return out + input.slice(literalStart, next);
+            }
           }
-          out += "<";
           i = next + 1;
           continue;
         }
+        // Only an opening-tag candidate needs a bounded body lookahead. Ordinary '<' characters
+        // above use offsets in the original string, without allocating a tail for every match.
+        const tail = input.slice(next, next + MAX_MEMORY_CITATION_HOLD + 1);
         const afterOpen = tail.slice(MEMORY_CITATION_OPEN.length);
         if (!bodyCouldBeReal(afterOpen)) {
-          out += escapeOpen;
+          out += input.slice(literalStart, next) + escapeOpen;
           i = next + MEMORY_CITATION_OPEN.length;
+          literalStart = i;
           continue;
         }
         const end = opensRealBlock(tail, 0);
         if (end !== undefined) {
           // A complete real block is released verbatim, both tags included, so the delta stream
           // equals what `escapeMemoryCitationMentions` keeps in the final text.
-          out += tail.slice(0, end);
           i = next + end;
           continue;
         }
         if (!tail.includes(MEMORY_CITATION_CLOSE, MEMORY_CITATION_OPEN.length) && remaining <= MAX_MEMORY_CITATION_HOLD) {
           // The block may still close; hold it whole.
           held = tail;
-          return out;
+          return out + input.slice(literalStart, next);
         }
         // Closed without a valid body, or too large to keep holding: a mention.
-        out += escapeOpen;
+        out += input.slice(literalStart, next) + escapeOpen;
         i = next + MEMORY_CITATION_OPEN.length;
+        literalStart = i;
       }
-      return out;
+      return out + input.slice(literalStart);
     },
     pending(): string {
       return held;

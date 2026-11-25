@@ -8,16 +8,109 @@ import { baseScopedEnv, runCodingAgentTurn, type CodingAgentDeps, type CodingAge
 import { QODER_PROFILES, resolveQoderProfile, type QoderProfile } from "./profiles";
 import { QoderScaffoldFilter, QODER_SCAFFOLD_ERROR_CODE, qoderScaffoldErrorMessage } from "./scaffold-guard";
 import { ToolEnvelopeEchoFilter } from "../../lib/tool-envelope-echo-filter";
+import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { buildQoderConversationInput, qoderCnImageInputSupported } from "./image-input";
 
 export type QoderAdapterDeps = CodingAgentDeps;
 
-function classifyQoderFailure(failure: CodingAgentFailure): Extract<AdapterEvent, { type: "error" }> {
+type QoderErrorEvent = Extract<AdapterEvent, { type: "error" }>;
+export type QoderRecoverableNoticeReason = "auth" | "daily_limit" | "personal_credits" | "cn_pricing_url";
+
+function hasExplicitErrorCode(raw: unknown): boolean {
+  if (raw === undefined || raw === null) return false;
+  if (typeof raw === "string") return raw.trim().length > 0;
+  return true;
+}
+
+// qodercli 1.1.91 may serialize numeric vendor error_code values as strings (e.g. "110", "114").
+function parseQoderErrorCode(raw: unknown): number | undefined {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const parsed = Number(trimmed);
+      if (Number.isSafeInteger(parsed)) return parsed;
+    }
+  }
+  return undefined;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+const CN_REMOTE_CHAT_403_RE = /^inference\.remoteChat\.stream failed \(403\):\s*(\{[\s\S]*\})$/;
+const EMBEDDED_ERROR_CODE_KEYS = [
+  "code", "error_code", "errorCode", "err_code", "errCode", "biz_code", "bizCode", "statusCode", "status_code", "status",
+] as const;
+
+function hasEmbeddedNon403ErrorCode(record: Record<string, unknown>): boolean {
+  for (const key of EMBEDDED_ERROR_CODE_KEYS) {
+    const value = record[key];
+    if (hasExplicitErrorCode(value) && parseQoderErrorCode(value) !== 403) return true;
+  }
+  return false;
+}
+
+// Only the verified exhaustion shape is evidence: the pricing URL plus, at most, 403 codes. Any
+// explanatory text (a lock, a ban, a permission denial) is a different 403, and rotating keys for
+// it would only cool down healthy ones, so recovery is an allowlist, never a deny-word list.
+const CN_PRICING_ONLY_KEYS: ReadonlySet<string> = new Set(["pricingUrl", ...EMBEDDED_ERROR_CODE_KEYS]);
+
+function isPricingOnlyRecord(record: Record<string, unknown>): boolean {
+  return Object.keys(record).every(key => CN_PRICING_ONLY_KEYS.has(key));
+}
+
+function isCnPricingUrl(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return url.protocol === "https:"
+    && url.hostname === "qoder.com.cn"
+    && url.port === ""
+    && url.username === ""
+    && url.password === ""
+    && url.pathname === "/pricing";
+}
+
+// qoder-cn surfaces account-level resource-pack exhaustion as a 403 remoteChat stream failure
+// whose JSON response body carries the exact CN /pricing URL and no non-403 vendor error code.
+// Parse that exact 403 JSON payload so embedded business codes (e.g. 114), wrong paths
+// (/pricing-policy), or unrelated text never trigger key recovery.
+function isCnQuotaPricingFailure(message: string): boolean {
+  const match = CN_REMOTE_CHAT_403_RE.exec(message.trim());
+  if (!match) return false;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(match[1]!);
+  } catch {
+    return false;
+  }
+  if (!isPlainRecord(payload)) return false;
+  if (hasEmbeddedNon403ErrorCode(payload)) return false;
+  if (isPlainRecord(payload.error) && hasEmbeddedNon403ErrorCode(payload.error)) return false;
+  if (isPlainRecord(payload.data) && hasEmbeddedNon403ErrorCode(payload.data)) return false;
+  if (!isPricingOnlyRecord(payload)) return false;
+  return isCnPricingUrl(payload.pricingUrl);
+}
+
+function classifyQoderFailure(
+  failure: CodingAgentFailure,
+  recordReason?: (reason: QoderRecoverableNoticeReason | undefined) => void,
+): QoderErrorEvent {
+  recordReason?.(undefined);
   const { error, profile } = failure;
-  const auth = (): typeof error => ({
-    ...error, status: 401, errorType: "authentication_error", code: "invalid_api_key",
-    retryable: false, apiKeyRecovery: true,
-  });
+  const auth = (noticeReason?: QoderRecoverableNoticeReason): QoderErrorEvent => {
+    if (noticeReason) recordReason?.(noticeReason);
+    return {
+      ...error, status: 401, errorType: "authentication_error", code: "invalid_api_key",
+      retryable: false, apiKeyRecovery: true,
+    };
+  };
   if (failure.source === "process-exit") {
     return failure.exitCode === 41 || (failure.exitCode === 1
       && failure.stderr.includes("QoderAuthError")
@@ -25,28 +118,52 @@ function classifyQoderFailure(failure: CodingAgentFailure): Extract<AdapterEvent
       && /token (?:that )?was rejected/i.test(failure.stderr))
       ? auth() : error;
   }
-  const code = failure.frame.error_code;
-  if (code === 105) return auth();
+  const rawCode = failure.frame.error_code;
+  const explicitErrorCode = hasExplicitErrorCode(rawCode);
+  const code = parseQoderErrorCode(rawCode);
+  if (code === 105) return auth("auth");
   if (code === 114) return {
     ...error, status: 403, errorType: "permission_error", code: "permission_denied", retryable: false,
   };
   if (typeof code === "number" && [110, 113, 115, 116, 117, 118, 119, 122].includes(code)) {
-    return {
+    const classified: QoderErrorEvent = {
       ...error, status: 429, errorType: "insufficient_quota", code: "insufficient_quota", retryable: false,
       ...(code === 110 || code === 118 ? { apiKeyRecovery: true as const } : {}),
     };
+    if (code === 110) recordReason?.("daily_limit");
+    else if (code === 118) recordReason?.("personal_credits");
+    return classified;
   }
-  if (typeof code === "number") return error;
+  // Live qodercn 1.1.91 captures emit error_code "112" (credit usage limit) alongside the 403
+  // pricing-URL body on exhausted CN accounts, whereas older/wrapper surfaces may emit 403/"403"
+  // or no code. Any other explicit error_code (including non-numeric codes such as
+  // "PERMISSION_DENIED", oversized integer strings, and non-recoverable vendor codes such as
+  // 114/130) takes precedence over CN pricing-URL and text fallbacks.
+  if (explicitErrorCode && code !== 403 && code !== 112) return error;
+  if (profile.region === "cn" && isCnQuotaPricingFailure(error.message)) {
+    recordReason?.("cn_pricing_url");
+    return {
+      ...error, status: 429, errorType: "insufficient_quota", code: "insufficient_quota",
+      retryable: false, apiKeyRecovery: true as const,
+    };
+  }
+  if (explicitErrorCode) return error;
   if (/daily usage limit|credit usage limit/i.test(error.message)) {
-    const isAccountDaily = /^You've reached your daily usage limit for Chat\b/i.test(error.message.trim())
+    const trimmed = error.message.trim();
+    // qodercli 1.1.81 reworded the per-key daily limit; both wordings stay account-scoped.
+    const isAccountDaily = (/^You've reached your daily usage limit for Chat\b/i.test(trimmed)
+      || /^You have reached the daily usage limit\b/i.test(trimmed))
       && !/\b(?:team|model|shared)\b/i.test(error.message);
+    if (isAccountDaily) recordReason?.("daily_limit");
     return {
       ...error, status: 429, errorType: "insufficient_quota", code: "insufficient_quota",
       retryable: false,
       ...(isAccountDaily ? { apiKeyRecovery: true as const } : {}),
     };
   }
-  if (/\binvalid (?:personal access )?token\b|\btoken (?:was |that was )?rejected\b|\bqoder authentication rejected\b/i.test(error.message)) return auth();
+  if (/\binvalid (?:personal access )?token\b|\btoken (?:was |that was )?rejected\b|\bqoder authentication rejected\b/i.test(error.message)) {
+    return auth("auth");
+  }
   return error;
 }
 
@@ -54,6 +171,69 @@ const QODER_MCP_SERVER_NAME = "opencodex";
 const QODER_MCP_SERVER_PATH = fileURLToPath(new URL("../coding-agent/mcp-server.ts", import.meta.url));
 const MAX_PENDING_BOUNDARY_CHARS = 64 * 1024;
 const MAX_PENDING_BOUNDARY_EVENTS = 1024;
+
+// qodercli prints its own API-error notice as an ordinary assistant text frame just before the
+// error result. Forwarding it counts as turn output and bars preflight key recovery, so hold the
+// exact notices for key-recoverable failures (105/110/118, plus the qoder-cn 403 pricing-URL
+// exhaustion signature) downstream of the scaffolding guard and drop a complete held notice only
+// when a key-recoverable error terminal matching that same failure reason follows; once any other
+// client-visible output flows, pass everything through unchanged.
+const QODER_RECOVERABLE_ERROR_NOTICES: ReadonlyArray<{
+  readonly text: string;
+  readonly reason: QoderRecoverableNoticeReason;
+}> = [
+  { text: "Your authentication has expired. Please sign in again.", reason: "auth" },
+  { text: "You have reached the daily usage limit. Please try again later.", reason: "daily_limit" },
+  { text: "Your personal Credits have been exhausted. Please check your plan.", reason: "personal_credits" },
+  { text: 'inference.remoteChat.stream failed (403): {"pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}', reason: "cn_pricing_url" },
+];
+
+export function suppressQoderErrorPreamble(
+  emit: (event: AdapterEvent) => void,
+  getFailureReason?: () => QoderRecoverableNoticeReason | undefined,
+): (event: AdapterEvent) => void {
+  let held = "";
+  let passthrough = false;
+  const flush = (): void => {
+    passthrough = true;
+    if (held) emit({ type: "text_delta", text: held });
+    held = "";
+  };
+  return (event: AdapterEvent): void => {
+    if (passthrough) {
+      emit(event);
+      return;
+    }
+    if (event.type === "text_delta") {
+      const candidate = held + event.text;
+      if (QODER_RECOVERABLE_ERROR_NOTICES.some(notice => notice.text.startsWith(candidate))) {
+        held = candidate;
+        return;
+      }
+      flush();
+      emit(event);
+      return;
+    }
+    if (event.type === "error") {
+      const matchedNotice = QODER_RECOVERABLE_ERROR_NOTICES.find(notice => notice.text === held);
+      const errorReason = event.apiKeyRecovery === true ? getFailureReason?.() : undefined;
+      if (matchedNotice && errorReason === matchedNotice.reason) {
+        held = "";
+        passthrough = true;
+      } else {
+        flush();
+      }
+      emit(event);
+      return;
+    }
+    if (event.type === "heartbeat") {
+      emit(event);
+      return;
+    }
+    flush();
+    emit(event);
+  };
+}
 
 export function buildQoderChildEnv(profile: QoderProfile, apiKey: string, systemPrompt?: string): Record<string, string> {
   // Each build reads its own brand prefix with no fallback: qodercn ignores QODER_EXPOSE_TOKEN_USAGE.
@@ -131,8 +311,18 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
     });
   };
 
+  const filterReplay = (filter: () => string): string | undefined => {
+    try {
+      return filter();
+    } catch (error) {
+      if (!isTranslatorBudgetExceededError(error)) throw error;
+      refuse("an unresolved tool envelope exceeding its buffer limit");
+    }
+  };
+
   const forwardText = (text: string, refuseOnMatch = true): void => {
-    const safe = replayFilter.feed(text);
+    const safe = filterReplay(() => replayFilter.feed(text));
+    if (safe === undefined) return;
     // An overflowing fenced hold can release an unverified marker. Refuse it
     // before publication rather than leaking the envelope under a memory cap.
     if (replayFilter.unverifiedMarker) {
@@ -151,7 +341,8 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
    * envelope opening it is recognized even when the previous block ended mid-line.
    */
   const settleText = (refuseOnMatch = true): boolean => {
-    const tail = replayFilter.finish();
+    const tail = filterReplay(() => replayFilter.finish());
+    if (tail === undefined) return false;
     if (replayFilter.matched || replayFilter.unverifiedMarker) {
       if (refuseOnMatch) refuse("replayed tool envelope");
       return false;
@@ -252,7 +443,8 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
       const reasoning = thinkingFilter.flush();
       drainBoundaries(tail.text, false);
       if (closed) return;
-      const replayTail = replayFilter.finish();
+      const replayTail = filterReplay(() => replayFilter.finish());
+      if (replayTail === undefined) return;
       if (replayTail && !replayFilter.unverifiedMarker) emit({ type: "text_delta", text: replayTail });
       if (reasoning.text && !replayFilter.matched && !replayFilter.unverifiedMarker) {
         emit({ type: "thinking_delta", thinking: reasoning.text });
@@ -278,6 +470,7 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
 export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapterDeps = {}): ProviderAdapter {
   return {
     name: "qoder",
+    reportsPhysicalSends: true,
     buildRequest(): AdapterRequest {
       return { url: provider.baseUrl, method: "POST", headers: {}, body: "" };
     },
@@ -333,14 +526,19 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
         : undefined;
       // Keep the folded prompt out of argv and never inherit an ambient vendor prompt.
       const system = buildSystemPrompt(parsed);
+      // Keep the classified failure reason in a per-turn closure instead of attaching it to the
+      // error object: runCodingAgentTurn redacts and clones error events before emitting them.
+      let classifiedFailureReason: QoderRecoverableNoticeReason | undefined;
       await runCodingAgentTurn({
           profiles: QODER_PROFILES,
           conversationInput: buildQoderConversationInput,
-          classifyFailure: classifyQoderFailure,
+          classifyFailure: failure => classifyQoderFailure(failure, reason => {
+            classifiedFailureReason = reason;
+          }),
           provider,
           parsed,
           incoming,
-          emit: guardQoderScaffolding(emit),
+          emit: guardQoderScaffolding(suppressQoderErrorPreamble(emit, () => classifiedFailureReason)),
           buildArgs: (_profile, req, prov) => buildQoderArgs(req, prov),
           buildEnv: (profile, apiKey) => buildQoderChildEnv(profile as QoderProfile, apiKey, system),
           deps,

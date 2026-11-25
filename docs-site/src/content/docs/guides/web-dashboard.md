@@ -200,7 +200,7 @@ is visible) and never forces an upstream refresh.
 | **Windows tray** | Install a per-user login tray for one-click proxy start, stop, restart, dashboard access, and status. The tray is a controller, not a proxy restart service. |
 | **Codex autostart** | Allow an already-installed Codex launcher shim to run `ocx ensure`. This toggle does not install a shim or background service. |
 | **Telemetry** | Toggle **Share anonymous usage statistics** and inspect **Preview the JSON** under **Proxy details** (`#proxy-telemetry`). On first run or after an update while undecided, the consent popup saves a choice only when **Continue** is clicked (`PUT /api/telemetry`); dismissing it records nothing. See [Telemetry and Privacy](/guides/telemetry/). |
-| **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. Refreshing quota skips paused OAuth accounts and disabled API keys; skipped rows without a cached reading remain unavailable but do not affect the refresh result. Refreshing reports failure when an unpaused OAuth account or enabled API key that supports quota reads has an unavailable reading. The Provider Overview shown when no provider is selected carries a **Refresh all quotas** control that forces one server-side re-read of every configured provider; a provider whose upstream probe fails keeps its last-good row, so the status line reports that the check completed rather than claiming every value is fresh, and each row's own age stays the per-provider freshness signal. Unsaved Settings and JSON edits are kept in memory per logical dashboard server: switching servers parks the draft, saving writes only to the server where editing began, and a changed saved configuration asks you to keep your draft or use the saved values. Keeping a JSON draft merges only your changes into the latest config and names any field changed on both sides; Settings saves only the fields you changed. On a relay that predates target-bound saves, the dashboard checks the target immediately before sending but cannot verify it atomically, and says so once; update the proxy for the stronger guarantee. Closing or reloading the dashboard discards these drafts. |
+| **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. An account pool settings card (Claude, Claude Pool 2, and Codex usage-based switching) shows only its title and on/off switch; select the title to show its other settings, and the dashboard remembers which cards you opened. Each account's quota lists the pool name, then its 5-hour bar, then its weekly bar, each on its own line with the percentage left and the reset countdown. Refreshing quota skips paused OAuth accounts and disabled API keys; skipped rows without a cached reading remain unavailable but do not affect the refresh result. Refreshing reports failure when an unpaused OAuth account or enabled API key that supports quota reads has an unavailable reading. The Provider Overview shown when no provider is selected carries a **Refresh all quotas** control that forces one server-side re-read of every configured provider; a provider whose upstream probe fails keeps its last-good row, so the status line reports that the check completed rather than claiming every value is fresh, and each row's own age stays the per-provider freshness signal. Unsaved Settings and JSON edits are kept in memory per logical dashboard server: switching servers parks the draft, saving writes only to the server where editing began, and a changed saved configuration asks you to keep your draft or use the saved values. Keeping a JSON draft merges only your changes into the latest config and names any field changed on both sides; Settings saves only the fields you changed. On a relay that predates target-bound saves, the dashboard checks the target immediately before sending but cannot verify it atomically, and says so once; update the proxy for the stronger guarantee. Closing or reloading the dashboard discards these drafts. |
 | **Add provider** | One search above the tabs reaches all four at once — Accounts, Free, Local, Paid. While a query is live the results are grouped by tab with a count each, and the selected tab stays put rather than jumping. Press ArrowDown in the search box to focus the first available result action, skipping disabled buttons; if no action is available, focus stays in the search box. Local runtimes (Ollama, vLLM, LM Studio, LiteLLM) have their own tab, and a long provider note clamps to two lines with the full text one click away. Claude Code CLI (subscription) sits under Paid with a Subscription CLI badge, and selecting it warns that it bills the signed-in Claude subscription through `claude -p` and never uses an API key (use `anthropic-apikey` for key billing). |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
 | **Subagents** | Set the first five `spawn_agent` priorities through `subagentModels`, using bare native or namespaced routed models. This is not an allowlist: unused positions may be filled from visible catalog rows. The **Workflow limits for subagents** panel sets how many turns one task may run in parallel and how many model requests and distinct subagents it may use per 10-minute window. See [workflow limits](/reference/configuration/server/#workflow-limits). |
@@ -309,6 +309,9 @@ on. **Logs** works the same way with `#logs` and `#logs/debug`. An older `#provi
 bookmark now lands on `#providers`.
 
 Cost values in **Logs** and **Usage** are API list-price equivalents calculated from reported tokens.
+For a **Logs** Combo that mixes credit and token charges, `≥` means at least one token-priced
+attempt has a known lower bound and every other token-priced attempt is either a known lower
+bound or has a non-estimated amount with observed cache detail.
 For a custom usage interval, the server must confirm the exact requested start and end times.
 If an older running proxy does not support those bounds, the dashboard and CLI reject its report;
 upgrade and restart that proxy before retrying. Resetting a manual model price affects only that
@@ -358,17 +361,28 @@ click order. Saved feedback appears after the queue finishes and the list is rec
 server. Failed saves restore the server's state when it can be read and show an error. Wait for that
 feedback before leaving Models or changing servers: unsent queued changes are discarded on departure.
 
+The **Overall** tab (`#models/overall`) lists every model from every provider in one list, in the
+catalog's order, with a search box, an **All** / **On** / **Off** filter, and the same switch. Both
+tabs read the same state and share one save queue, so a change made on one tab shows on the other at
+once.
+
 ### Managing models in a provider workspace
 
-In a provider’s **Models** tab, **Delete** removes the stored custom definition. An underlying
-native or live-discovered model may then appear again, so the model count can stay the same.
-**Hide** changes catalog visibility only: it does not delete the definition or change direct
-routing policy. Use **Manage visibility in Models** to open the **Models** page and restore
-visibility, even when the provider tab has no rows left.
+A provider’s **Models** tab lists every model of that provider, including models that are off,
+each with the same on/off switch as the **Models** page; the two pages read and write the same
+state. A switch saves at once. Until that save and the reload after it finish, the tab’s other
+switches, **Add**, and **Delete** wait, so one change is in flight at a time; selecting another
+provider does not cancel it, but leaving the **Providers** page before it finishes can cancel the
+request; the next load shows whether it was saved. Turning a model off changes catalog visibility only: it does not
+delete the definition or change direct routing policy. **Manage visibility in Models** opens the
+**Models** page.
 
-**Add** saves a custom definition; it does not clear an existing hide or provider selection rule.
-A saved model can therefore remain hidden. If the model is already known, manage its visibility
-in **Models**. A confirmed save with a failed catalog refresh is still saved: follow the refresh
+**Delete** removes the stored custom definition. An underlying native or live-discovered model may
+then appear again, so the model count can stay the same.
+
+**Add** saves a custom definition; it does not clear an existing off state or provider selection
+rule. A saved model can therefore stay off; turn it on with its switch. A confirmed save with a
+failed catalog refresh is still saved: follow the refresh
 message instead of adding it again. If the change cannot be confirmed, refresh the model state
 before retrying.
 
@@ -376,6 +390,11 @@ The provider’s model count is the number of unique, non-disabled entries in th
 inventory returned by the server, before search or display truncation. It is not the provider
 allowlist size, a live-discovery count, or proof that an entry was discovered upstream. Selection
 badges and discovery information remain separate from that count.
+
+That count appears in the provider list. The provider's **Models** tab header instead shows how
+many models are on out of the total: the total counts every listed entry, including models that
+are off, and a model is on under the same rule as the **Models** page: it is not disabled, and it
+is a native model, its provider has no allowlist, or the allowlist includes it.
 
 ## Delegation picker vs spawn routing
 

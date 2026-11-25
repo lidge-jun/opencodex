@@ -514,15 +514,28 @@ export function windowsTaskHasSessionRecoveryTriggers(
   expectedUserId: ExpectedWindowsTaskUserId | undefined,
 ): boolean {
   const scoped = triggers.match(/<SessionStateChangeTrigger(?:\s[^>]*)?>[\s\S]*?<\/SessionStateChangeTrigger>/gi) ?? [];
-  return WINDOWS_SESSION_RECOVERY_STATE_CHANGES.every(stateChange =>
+  return !taskXmlHasPrefixedTag(triggers, "SessionStateChangeTrigger")
+    && scoped.length === taskXmlElementCount(triggers, "SessionStateChangeTrigger")
+    && scoped.every(element => windowsTaskUserIdMatches(element, expectedUserId))
+    && WINDOWS_SESSION_RECOVERY_STATE_CHANGES.every(stateChange =>
     scoped.some(element =>
       taskXmlDecodedValueEquals(element, "StateChange", stateChange)
       && taskXmlOptionalValueEquals(element, "Enabled", "true")
-      && windowsTaskTriggerScopeAcceptable(element, expectedUserId)));
+      && windowsTaskUserIdMatches(element, expectedUserId)));
+}
+
+/** Verify the exported run-as user. Trigger scopes do not identify the task principal. */
+export function windowsTaskPrincipalMatches(xml: string, expectedUserIds: readonly string[]): boolean {
+  const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
+  if (taskXmlHasPrefixedTag(scrubbed, "Principals") || taskXmlElementCount(scrubbed, "Principals") !== 1
+    || taskXmlHasPrefixedTag(scrubbed, "Principal") || taskXmlElementCount(scrubbed, "Principal") !== 1) return false;
+  const principal = taskXmlSection(taskXmlSection(scrubbed, "Principals"), "Principal");
+  return taskXmlElementCount(principal, "GroupId") === 0 && !taskXmlHasPrefixedTag(principal, "GroupId")
+    && windowsTaskUserIdMatches(principal, expectedUserIds);
 }
 
 /**
- * A trigger's scope is acceptable only when it names the expected account exactly.
+ * A principal or trigger names the expected account only when its UserId matches exactly.
  *
  * An unscoped recovery trigger is not identity proof. Production registration resolves a SID
  * before writing XML; a missing scope therefore means the fixed-name task is legacy or foreign
@@ -530,7 +543,7 @@ export function windowsTaskHasSessionRecoveryTriggers(
  * Treating an unknown expected identity as a wildcard would let a fresh status process accept a
  * task bound to another user's session and suppress the repair that should replace it.
  */
-function windowsTaskTriggerScopeAcceptable(
+function windowsTaskUserIdMatches(
   element: string,
   expectedUserId: ExpectedWindowsTaskUserId | undefined,
 ): boolean {
@@ -552,12 +565,19 @@ function windowsTaskTriggerScopeAcceptable(
   return expectedValues.some(value => taskXmlDecodedValueEquals(element, "UserId", value));
 }
 
+function windowsTaskLogonScopeMatches(triggers: string, expectedUserId: ExpectedWindowsTaskUserId | undefined, legacy = false): boolean {
+  if (taskXmlHasPrefixedTag(triggers, "LogonTrigger") || taskXmlElementCount(triggers, "LogonTrigger") !== 1) return false;
+  const logon = taskXmlSection(triggers, "LogonTrigger");
+  if (legacy && !taskXmlHasPrefixedTag(logon, "UserId") && taskXmlElementCount(logon, "UserId") === 0) return true;
+  return windowsTaskUserIdMatches(logon, expectedUserId);
+}
+
 /** Validate the stable OpenCodex action, principal, settings, and logon trigger. */
 function windowsTaskRegistrationBaseHealthy(
   xml: string,
   wscript = windowsWscript(),
   launcher = windowsLauncherVbsPath(),
-  allowLossyPaths = true,
+  { allowLossyPaths = true, allowDisabled = false }: { allowLossyPaths?: boolean; allowDisabled?: boolean } = {},
 ): boolean {
   const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
   // taskXmlSection() takes the FIRST match and the schema allows arbitrary XML under
@@ -575,7 +595,8 @@ function windowsTaskRegistrationBaseHealthy(
     && taskXmlOptionalValueEquals(trigger, "Enabled", "true")
     && /<LogonType>\s*InteractiveToken\s*<\/LogonType>/i.test(principal)
     && taskXmlRunLevelAcceptable(principal)
-    && taskXmlOptionalValueEquals(settings, "Enabled", "true")
+    && (taskXmlOptionalValueEquals(settings, "Enabled", "true")
+      || (allowDisabled && taskXmlDecodedValueEquals(settings, "Enabled", "false")))
     && /<MultipleInstancesPolicy>\s*IgnoreNew\s*<\/MultipleInstancesPolicy>/i.test(settings)
     && /<ExecutionTimeLimit>\s*PT0S\s*<\/ExecutionTimeLimit>/i.test(settings)
     // Compare decoded VALUES, not encodings: Task Scheduler canonicalizes the
@@ -599,6 +620,7 @@ export function windowsTaskRegistrationHealthy(
   const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
   const triggers = taskXmlSection(scrubbed, "Triggers");
   return windowsTaskRegistrationBaseHealthy(xml, wscript, launcher)
+    && windowsTaskLogonScopeMatches(triggers, expectedUserId ?? undefined)
     // Without these the task can only recover at the next logon, so a disconnected session
     // leaves the proxy down indefinitely. Treating their absence as unhealthy is what lets
     // an already-registered task from an older install get repaired instead of staying broken.
@@ -617,9 +639,23 @@ export function windowsTaskRegistrationRefreshableLegacy(
 ): boolean {
   const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
   const triggers = taskXmlSection(scrubbed, "Triggers");
-  return windowsTaskRegistrationBaseHealthy(xml, wscript, launcher, false)
-    && taskXmlElementCount(triggers, "SessionStateChangeTrigger") === 0
+  return windowsTaskRegistrationBaseHealthy(xml, wscript, launcher, { allowLossyPaths: false })
+    && windowsTaskHasNoSessionRecoveryTriggers(triggers);
+}
+
+function windowsTaskHasNoSessionRecoveryTriggers(triggers: string): boolean {
+  return taskXmlElementCount(triggers, "SessionStateChangeTrigger") === 0
     && !taskXmlHasPrefixedTag(triggers, "SessionStateChangeTrigger");
+}
+
+/** Stop accepts either recognized shape, including a disabled task, with exact ownership. */
+export function windowsTaskRegistrationMatchesForStop(xml: string, launcher: string, userIds: readonly string[]): boolean {
+  if (!windowsTaskRegistrationBaseHealthy(xml, windowsWscript(), launcher, { allowLossyPaths: false, allowDisabled: true })
+    || !windowsTaskPrincipalMatches(xml, userIds)) return false;
+  const triggers = taskXmlSection(taskXmlWithoutCommentsAndCdata(xml), "Triggers");
+  const legacy = windowsTaskHasNoSessionRecoveryTriggers(triggers);
+  return windowsTaskLogonScopeMatches(triggers, userIds, legacy)
+    && (legacy || windowsTaskHasSessionRecoveryTriggers(triggers, userIds));
 }
 
 export interface WindowsSchedulerXmlState {

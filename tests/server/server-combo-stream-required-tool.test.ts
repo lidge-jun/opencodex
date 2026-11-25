@@ -7,7 +7,7 @@ import { comboProviderFactory } from "../helpers/combo-provider";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
+import { clearComboSelectionState, clearComboTargetCooldowns, coolComboTarget, isComboTargetInCooldown } from "../../src/combos";
 import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
 import { clearResponseStateForTests, expandPreviousResponseInput, flushResponseState } from "../../src/responses/state";
 import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
@@ -172,6 +172,114 @@ describe("native streaming combo mandatory tools (#7456)", () => {
     expect(sent).toHaveLength(2);
     expect(text).not.toContain("held reasoning");
     expect(text).toContain("call_backup");
+  });
+  test.each(["event", "response"].flatMap(carrier => [
+    { end_turn: false },
+    { incomplete_details: { retryable: false } },
+    { incomplete_details: { reason: "content_filter" } },
+    { incomplete_details: { reason: "refusal" } },
+  ].map(veto => ({ carrier, veto }))))("required-tool rewrite preserves the $carrier replay veto $veto", async ({ carrier, veto }) => {
+    const sent: Array<Record<string, unknown>> = [];
+    const config = configFor(() => sse({
+      type: "response.completed",
+      ...(carrier === "event" ? veto : {}),
+      response: { ...completed("m1"), ...(carrier === "response" ? veto : {}) },
+    }), sent);
+    const text = await (await request(config, "required")).text();
+    expect(sent.map(body => [body.model, body.tool_choice])).toEqual([["m1", "required"]]);
+    // The Responses wire normalizes "refusal" to "content_filter".
+    const clientVeto = veto.incomplete_details?.reason === "refusal"
+      ? { incomplete_details: { reason: "content_filter" } } : veto;
+    expect(terminal(text)).toMatchObject([{
+      type: "response.failed",
+      ...(carrier === "event" ? clientVeto : {}),
+      response: {
+        model: "m1", error: { code: "required_tool_contract_unsatisfied" },
+        ...(carrier === "response" ? clientVeto : {}),
+      },
+    }]);
+  });
+  const terminalError = { code: "content_policy_violation", message: "Fixture refusal" };
+  const terminalRefusal = { type: "message", id: "msg_refusal", role: "assistant", status: "completed",
+    content: [{ type: "refusal", refusal: "Fixture refusal" }] };
+  test.each([
+    { carrier: "event error", verdict: { error: terminalError }, snapshot: {} },
+    { carrier: "nested error", verdict: {}, snapshot: { error: terminalError } },
+    { carrier: "terminal refusal content", verdict: {}, snapshot: { output: [terminalRefusal] } },
+  ])("required-tool rewrite preserves $carrier without a second send", async ({ verdict, snapshot }) => {
+    const sent: Array<Record<string, unknown>> = [];
+    const event = { type: "response.completed", ...verdict, response: { ...completed("m1"), ...snapshot } };
+    const config = configFor(() => sse(event), sent);
+    const text = await (await request(config, "required")).text();
+    expect(sent.map(body => [body.model, body.tool_choice])).toEqual([["m1", "required"]]);
+    expect(terminal(text)).toMatchObject([event]);
+  });
+  for (const platform of ["win32", "linux"] as const) {
+    for (const carrier of ["event", "response"] as const) {
+      for (const field of ["error", "last_error"] as const) {
+        test(`${platform}: required-tool completion with ${carrier}.${field} has no success effects`, async () => {
+          setRelayPlatformForTests(platform);
+          const sent: Array<Record<string, unknown>> = [];
+          const error = { [field]: { code: "rate_limit_exceeded", message: "Fixture quota failure" } };
+          const event = {
+            type: "response.completed",
+            ...(carrier === "event" ? error : {}),
+            response: { ...completed("m1"), ...(carrier === "response" ? error : {}) },
+          };
+          const config = configFor(() => sse(event), sent);
+          const combo = config.combos!.fixture!;
+          combo.cooldownReprobe = { enabled: true };
+          for (const target of combo.targets) coolComboTarget("fixture", target, { cooldownMs: 60_000 });
+          const log: RequestLogContext = { model: "", provider: "" };
+          const completedModels: string[] = [];
+          const statuses: string[] = [];
+          const text = await (await request(config, "required", log, { store: true }, {
+            onResponseComplete: (model: string) => completedModels.push(model),
+            onNativePassthroughTerminal: (status: string) => statuses.push(status),
+          })).text();
+          const followUp = { previous_response_id: "resp_m1", input: "Follow up" };
+          expect(terminal(text)).toEqual([event]);
+          expect(sent.map(body => [body.model, body.store])).toEqual([["m1", true]]);
+          expect({
+            completedModels, statuses, replay: expandPreviousResponseInput(followUp),
+            terminalStatus: log.observedTerminalStatus, logStatus: log.terminalHttpStatus,
+            stillCooled: isComboTargetInCooldown("fixture", combo.targets[0]!),
+          }).toEqual({ completedModels: [], statuses: ["failed"], replay: followUp,
+            terminalStatus: "failed", logStatus: 429, stillCooled: true });
+        });
+      }
+    }
+  }
+  test.each([
+    ["no error", {}, false],
+    ["quota error", { error: { code: "rate_limit_exceeded" } }, true],
+    ["empty error object", { error: {} }, false],
+    ["empty last_error string", { last_error: "" }, false],
+    ["null error fields", { error: { type: null, code: null, message: null } }, false],
+  ] as const)("settles a cooldown reprobe only after a clean native terminal (%s)", async (_name, placeholder, hasError) => {
+    const sent: Array<Record<string, unknown>> = [];
+    const encoder = new TextEncoder();
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const config = configFor(() => new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      stream = controller;
+      stream.enqueue(encoder.encode(frame({ type: "response.output_text.delta", delta: "visible text" })));
+    } }), { headers: { "content-type": "text/event-stream" } }), sent);
+    const combo = config.combos!.fixture!;
+    combo.cooldownReprobe = { enabled: true };
+    for (const target of combo.targets) coolComboTarget("fixture", target, { cooldownMs: 60_000 });
+    const response = await request(config, "required");
+    expect(isComboTargetInCooldown("fixture", combo.targets[0]!)).toBe(true);
+
+    const payload = completed("m1", true);
+    const event = {
+      type: "response.completed",
+      response: { ...payload, ...placeholder },
+    };
+    stream.enqueue(encoder.encode(frame(event)));
+    stream.close();
+    expect(terminal(await response.text())).toEqual([event]);
+    expect(sent.map(body => body.model)).toEqual(["m1"]);
+    expect(isComboTargetInCooldown("fixture", combo.targets[0]!)).toBe(hasError);
   });
   for (const prefix of [
     { type: "response.output_text.delta", delta: "visible text" },

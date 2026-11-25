@@ -20,17 +20,23 @@ configured, `GOOGLE_CLOUD_API_KEY` and then Application Default Credentials. If 
 credential, the same way requests refuse to start. When the listing cannot be read completely,
 OpenCodex keeps the previous or configured models rather than publishing part of the list.
 
-Reasoning levels follow the preset: Gemini 4 Hydrogen offers low, medium, high (the default) and
+Live discovery and connection tests require an HTTPS Google endpoint:
+`aiplatform.googleapis.com` or `<location>-aiplatform.googleapis.com`, with the standard HTTPS
+port and no URL username or password. Custom gateway endpoints do not receive Vertex credentials.
+Restore the Google endpoint to use live discovery; configured models remain available when
+discovery cannot verify the destination.
+
+Reasoning levels follow the preset: Gemini 4 Hydrogen and Neon offer low, medium, high (the default) and
 xhigh; Gemini 4 Carbon and Argon offer low, medium and high. A model the preset gives no levels
 to, such as `gemini-3-pro`, shows none, because requests to it carry no thinking level.
 
-## Tool images on Gemini 4
+## Tool images on Gemini 3+
 
-On Vertex AI, `gemini-4-argon`, `gemini-4-carbon` and `gemini-4-hydrogen` receive images
-returned by tools, such as screenshots, inside the matching function response. On Argon this
-avoids the upstream 400 error "Requests ending with a model turn are not supported" after an
-image-producing tool call; Carbon and Hydrogen use the same documented function-response form,
-though that error was not reproduced on them. Images from duplicate results or results
+On Vertex AI, Gemini 3 and later models (including `gemini-3.8-flash`, `gemini-4-argon`,
+`gemini-4-carbon`, `gemini-4-hydrogen`, `gemini-4-neon` and future discovered Gemini 4+ models)
+receive images returned by tools, such as screenshots, inside the matching function response. This
+avoids the upstream 400 error "Requests ending with a model turn are not supported" reproduced on
+Argon, Neon and 3.8 Flash after an image-producing tool call. Images from duplicate results or results
 without a matching call are preserved in a separate message after the tool responses, with a
 marker explaining that they could not be paired. No configuration change is needed; this handling
-is specific to these Gemini 4 models on Vertex.
+applies to Gemini 3+ models on Vertex.

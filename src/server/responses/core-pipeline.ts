@@ -11,6 +11,7 @@ import type {
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { prepareResponsesRequest } from "./request-prepare";
 import { prepareResponsesTransport } from "./request-transport";
+import { initialHostedAdvisorSpendRefusal } from "./hosted-advisor-spend";
 import { prepareResponsesSidecarAuth } from "./request-sidecar-auth";
 import { createResponsesEffects } from "./response-effects";
 import { createResponsesSendBudget } from "./request-send-budget";
@@ -27,6 +28,8 @@ import { formatErrorResponse } from "../../bridge";
 import { InvalidRetainedCompactionSummary, prepareCompactionRetention } from "./compaction-retention";
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
+import { agyAcpPreflightResponse } from "./agy-acp-preflight";
+import { commandCodeDecisionRouteRefusal } from "./command-code-decision-refusal";
 
 /** Compose request phases while retaining the original admission-finally ownership. */
 export async function handleResponsesInner(
@@ -46,8 +49,22 @@ export async function handleResponsesInner(
   try {
     const requestState = await prepareResponsesRequest(requestContext, admissionState, requestDispatchers);
     if (requestState instanceof Response) return requestState;
+    // #8997: refuse a Command Code decision model before transport preparation (OAuth credential
+    // resolution or refresh), sidecar auth or sidecar work. Nothing is sent, so the candidate is not
+    // reported as a compaction-recovery source route either.
+    const decisionRefusal = commandCodeDecisionRouteRefusal(requestState.route.provider, requestState.parsed.modelId, logCtx);
+    if (decisionRefusal) return decisionRefusal;
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
     if (transportState instanceof Response) return markProxyError(transportState);
+    const agyAcpRefusal = agyAcpPreflightResponse({
+      adapterName: transportState.runTurnAdapter.name, requestHeaders: req.headers,
+      forwardHeaders: requestState.selectedForwardHeaders, body: requestState.parsed._rawBody, comboAttempt: options.comboAttempt === true,
+      internalDecisionCall: options.internalDecisionCall === true, subagentFallback: requestState.subagentFallbackSelected,
+      inboundTransport: options.inboundTransport, unattendedHttpTurn: options.agyAcpUnattendedHttpTurn, logCtx,
+    });
+    if (agyAcpRefusal) return agyAcpRefusal;
+    const hostedAdvisorRefusal = initialHostedAdvisorSpendRefusal(requestContext, requestState, transportState);
+    if (hostedAdvisorRefusal) return hostedAdvisorRefusal;
     if (transportState.runTurnAdapter.name === "claude-cli") {
       const instructionImage = options.chatInstructionImage || options.responsesInstructionImage
         || responsesHasInstructionImage(requestState.parsed._rawBody)

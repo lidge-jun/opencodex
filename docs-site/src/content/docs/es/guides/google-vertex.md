@@ -21,19 +21,25 @@ o `$VARIABLE`, el descubrimiento se detiene en lugar de probar otra credencial, 
 solicitudes se niegan a empezar. Cuando el listado no se puede leer completo, OpenCodex conserva los
 modelos anteriores o configurados en lugar de publicar solo una parte.
 
-Los niveles de razonamiento siguen el preajuste: Gemini 4 Hydrogen ofrece low, medium, high (el
+El descubrimiento en vivo y las pruebas de conexión requieren un endpoint HTTPS de Google:
+`aiplatform.googleapis.com` o `<location>-aiplatform.googleapis.com`, con el puerto HTTPS estándar
+y sin usuario ni contraseña en la URL. Los endpoints de gateways personalizados no reciben las
+credenciales de Vertex. Restablece el endpoint de Google para usar el descubrimiento en vivo;
+los modelos configurados siguen disponibles cuando no se puede verificar el destino.
+
+Los niveles de razonamiento siguen el preajuste: Gemini 4 Hydrogen y Neon ofrecen low, medium, high (el
 predeterminado) y xhigh; Gemini 4 Carbon y Argon ofrecen low, medium y high. Un modelo al que el
 preajuste no asigna niveles, como `gemini-3-pro`, no muestra ninguno, porque sus solicitudes no
 llevan nivel de razonamiento.
 
-## Imágenes de herramientas en Gemini 4
+## Imágenes de herramientas en Gemini 3+
 
-En Vertex AI, `gemini-4-argon`, `gemini-4-carbon` y `gemini-4-hydrogen` reciben las imágenes
-que devuelven las herramientas, como capturas de pantalla, dentro de la respuesta de función
-correspondiente. En Argon esto evita el error 400 del servicio "Requests ending with a model turn
-are not supported" tras una llamada a herramienta que produce imágenes; Carbon y Hydrogen usan la
-misma forma documentada de respuesta de función, aunque ese error no se reprodujo en ellos. Las
-imágenes de resultados duplicados o sin llamada correspondiente se conservan en un mensaje aparte
-después de las respuestas de herramientas, con una marca que explica que no se pudieron emparejar.
-No hace falta cambiar la configuración; este tratamiento es específico de estos modelos Gemini 4 en
+En Vertex AI, los modelos Gemini 3 y posteriores (incluidos `gemini-3.8-flash`, `gemini-4-argon`,
+`gemini-4-carbon`, `gemini-4-hydrogen`, `gemini-4-neon` y futuros modelos Gemini 4+ descubiertos)
+reciben las imágenes que devuelven las herramientas, como capturas de pantalla, dentro de la respuesta
+de función correspondiente. Esto evita el error 400 del servicio "Requests ending with a model turn are
+not supported" reproducido en Argon, Neon y 3.8 Flash tras una llamada a herramienta que produce
+imágenes. Las imágenes de resultados duplicados o sin llamada correspondiente se conservan en un
+mensaje aparte después de las respuestas de herramientas, con una marca que explica que no se pudieron
+emparejar. No hace falta cambiar la configuración; este tratamiento aplica a los modelos Gemini 3+ en
 Vertex.

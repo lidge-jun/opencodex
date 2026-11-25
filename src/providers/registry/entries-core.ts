@@ -22,8 +22,11 @@ import {
 } from "../../adapters/cursor/discovery";
 import { cursorFastCapableBases } from "../../adapters/cursor/catalog";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "../command-code-efforts";
+import { COMMAND_CODE_DECISION_MODEL_DISCOVERY_FILTER } from "../command-code-decision-models";
 import { isCanonicalOpenRouterTarget } from "../openrouter-routing";
 import type { ProviderRegistryEntry } from "./types";
+import { M365_COPILOT_BASE_URL } from "../m365-copilot-models";
+import { M365_COPILOT_WEB_URL } from "../m365-copilot-discovery";
 import type { AnthropicInstanceId } from "../anthropic-instance-id";
 import { ANTHROPIC_FAST_MODE_BETA } from "../anthropic-fast";
 import {
@@ -128,9 +131,11 @@ const ANTHROPIC_FAST_MODELS: Readonly<Record<string, boolean>> = Object.freeze({
  * list it, and this unit has no evidence to change them. Gemini 4 Argon (GA 2026-10-13):
  * low/medium(default)/high; `minimal` and thinking_budget return HTTP 400 per
  * ai.google.dev/gemini-api/docs/models/gemini-4-argon. Gemini 4 Hydrogen: low/medium/high/xhigh,
- * default high, verified live on Vertex AI by the author of #8583 (2026-11-13).
+ * default high, verified live on Vertex AI by the author of #8583 (2026-11-13). Gemini 4 Neon
+ * (GA 2026-11-18): low/medium/high(default)/xhigh per Google Cloud Gemini thinking docs.
  */
 const GEMINI_MODEL_REASONING_EFFORTS: Readonly<Record<string, string[]>> = {
+  "gemini-4-neon": ["low", "medium", "high", "xhigh"],
   "gemini-4-hydrogen": ["low", "medium", "high", "xhigh"],
   "gemini-4-carbon": ["low", "medium", "high"],
   "gemini-4-argon": ["low", "medium", "high"],
@@ -140,7 +145,10 @@ const GEMINI_MODEL_REASONING_EFFORTS: Readonly<Record<string, string[]>> = {
   "gemini-3.5-flash": ["minimal", "low", "medium", "high"],
   "gemini-3.1-pro-preview": ["low", "medium", "high"],
 };
-const GEMINI_MODEL_DEFAULT_REASONING_EFFORTS: Readonly<Record<string, string>> = { "gemini-4-hydrogen": "high" };
+const GEMINI_MODEL_DEFAULT_REASONING_EFFORTS: Readonly<Record<string, string>> = {
+  "gemini-4-neon": "high",
+  "gemini-4-hydrogen": "high",
+};
 
 const ANTHROPIC_FAST_TIER_DESCRIPTION =
   "Claude fast mode: faster output at 2x price; needs usage credits (subscription) or fast-mode access (API)";
@@ -177,6 +185,13 @@ function anthropicOAuthEntry(id: AnthropicInstanceId, label: string): ProviderRe
 }
 
 export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
+  {
+    id: "m365-copilot", label: "Microsoft 365 Copilot", adapter: "m365-copilot", baseUrl: M365_COPILOT_BASE_URL,
+    authKind: "oauth", featured: false, dashboardPreset: true, dashboardUrl: "https://copilot.cloud.microsoft/", liveModels: true,
+    models: [], defaultModel: "Magic", inputModalities: ["text", "image"],
+    modelDiscovery: { url: M365_COPILOT_WEB_URL, maxResponseBytes: 2 * 1024 * 1024, maxModels: 256 },
+    note: "Experimental unofficial Microsoft 365 Copilot ChatHub connector. Work/school accounts only. Sign-in uses Microsoft's M365 Chat Client in an isolated Chrome, Chromium or Edge window and captures the Copilot web session locally. Models are discovered from your account's live chat picker. Tools are prompt-emulated and executed by your client. No Copilot Studio agents are created.",
+  },
   {
     id: "openai",
     label: "OpenAI (Codex login)",
@@ -218,7 +233,9 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // default on `high`, the picker would send `high` explicitly, and the request builder's
     // no-effort fallback to `kimi-k3-max` would never be reached. Mirrors the other K3
     // routes (kimi, kimi-code, opencode-go).
-    modelDefaultReasoningEfforts: { "kimi-k3": "max" },
+    // Gemini 4 Hydrogen defaults to `high` (Cursor's docs, and the google/google-vertex rows);
+    // without this the medium fallback would win. Carbon's documented default is medium.
+    modelDefaultReasoningEfforts: { "kimi-k3": "max", "gemini-4-hydrogen": "high" },
     // Blind Cursor models (Auto routers, Composer, GLM-5.2, GLM-5.3) go through the vision sidecar;
     // multimodal hosts (Claude/Gemini/GPT/Kimi/Grok) take native SelectedImage. The catalog
     // still advertises image for noVision members so Codex can attach (sidecar option B).
@@ -277,7 +294,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // only the old devin entry carried. Degraded-mode seed only either way —
     // `liveModels` discovers the account's real roster.
     // 261027 preemptive: GPT-6.1 Terra (same degraded seed policy as GPT-6.1 Sol).
-    models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "gpt-6-1-sol", "gpt-6-1-terra", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-2", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6", "grok-4-7", "swe-1-7-lightning", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "glm-5-2", "kimi-k2-7", "grok-4-5"],
+    models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "gpt-6-2-sol", "gpt-6-2-astra", "gpt-6-1-sol", "gpt-6-1-terra", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-2", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6", "grok-4-7", "swe-1-7-lightning", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "glm-5-2", "kimi-k2-7", "grok-4-5"],
     liveModels: true,
     defaultModel: "swe-2",
     modelContextWindows: DEVIN_MODEL_CONTEXT_WINDOWS,
@@ -526,6 +543,9 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
       url: "https://api.commandcode.ai/provider/v1/models",
       maxResponseBytes: 262_144,
       maxModels: 256,
+      // System One decision models (typesafe/jev*) are listed here but served only at
+      // /provider/v1/systemone (#8997).
+      filter: COMMAND_CODE_DECISION_MODEL_DISCOVERY_FILTER,
     },
     // These are capability facts from official Command Code model profiles, not seeded models.
     // Unknown/new live models deliberately do not advertise a reasoning picker.
@@ -672,8 +692,11 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // its matching result (#4726); the flag is live on this wire.
     requiresAdjacentResponsesToolResults: true,
     featured: false,
-    // Shares the kimi OAuth account: the login flow and credential store are keyed by
-    // oauthId, so adding this preset after logging into kimi needs no second login.
+    // Listed in the add-provider picker (#8087). It is not an OAUTH_PROVIDERS login, so the
+    // Accounts tab still draws Kimi once; the row signs in through src/oauth/credential-siblings.ts.
+    dashboardPreset: true,
+    // Shares the kimi OAuth account: OAUTH_CREDENTIAL_SIBLINGS maps this row to the kimi
+    // auth-store slot, so adding this preset after logging into kimi needs no second login.
     oauthId: "kimi",
     jawcodeBundle: "moonshot",
     note: "Same Kimi account login, routed over the OpenAI Responses wire. Thinking content stays encrypted server-side; tool calls and results stay visible. Chat wire remains the default preset for transparency.",
@@ -1127,6 +1150,9 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
       // Listed 2026-09-29 as an OpenAI-backed route like GPT-6 Sol.
       "openai/gpt-6.1-sol": true,
       "openai/gpt-6.1-terra": true,
+      // Listed 2026-11-18 as OpenAI-backed routes like GPT-6.1 Sol.
+      "openai/gpt-6.2-sol": true,
+      "openai/gpt-6.2-astra": true,
     },
     // Deliberately no OpenRouter route pin: it bills the endpoint actually used and reports the
     // actual service_tier. B0 confirmation therefore owns downgrade safety. Forcing `only` plus
@@ -1236,8 +1262,8 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   {
     id: "google", label: "Google Gemini", adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", authKind: "key", featured: true,
     dashboardUrl: "https://aistudio.google.com/apikey", defaultModel: "gemini-3.5-flash", models: ["gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"],
-    modelContextWindows: { "gemini-4-hydrogen": 1_048_576, "gemini-4-carbon": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_000_000, "gemini-3.5-flash-lite": 1_048_576, "gemini-3.7-flash": 1_048_576 },
-    modelInputModalities: { "gemini-4-hydrogen": ["text", "image"], "gemini-4-carbon": ["text", "image"], "gemini-4-argon": ["text", "image"], "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"], "gemini-3.7-flash": ["text", "image"] },
+    modelContextWindows: { "gemini-4-neon": 1_048_576, "gemini-4-hydrogen": 1_048_576, "gemini-4-carbon": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_000_000, "gemini-3.5-flash-lite": 1_048_576, "gemini-3.7-flash": 1_048_576 },
+    modelInputModalities: { "gemini-4-neon": ["text", "image"], "gemini-4-hydrogen": ["text", "image"], "gemini-4-carbon": ["text", "image"], "gemini-4-argon": ["text", "image"], "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"], "gemini-3.7-flash": ["text", "image"] },
     modelReasoningEfforts: { ...GEMINI_MODEL_REASONING_EFFORTS },
     modelDefaultReasoningEfforts: { ...GEMINI_MODEL_DEFAULT_REASONING_EFFORTS },
     jawcodeBundle: "google", extraMetadataAliases: ["gemini"],
@@ -1247,8 +1273,8 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   {
     id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authKind: "key", dashboardUrl: "https://console.cloud.google.com/vertex-ai", defaultModel: "gemini-3-pro", googleMode: "vertex", jawcodeBundle: "google", extraMetadataAliases: ["gemini-vertex"],
     modelDiscovery: { path: "/v1beta1/publishers/google/models", query: { pageSize: "300" } },
-    modelContextWindows: { "gemini-4-hydrogen": 1_048_576, "gemini-4-carbon": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_048_576, "gemini-3.5-flash-lite": 1_048_576 },
-    modelInputModalities: { "gemini-4-hydrogen": ["text", "image"], "gemini-4-carbon": ["text", "image"], "gemini-4-argon": ["text", "image"], "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"] },
+    modelContextWindows: { "gemini-4-neon": 1_048_576, "gemini-4-hydrogen": 1_048_576, "gemini-4-carbon": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_048_576, "gemini-3.5-flash-lite": 1_048_576 },
+    modelInputModalities: { "gemini-4-neon": ["text", "image"], "gemini-4-hydrogen": ["text", "image"], "gemini-4-carbon": ["text", "image"], "gemini-4-argon": ["text", "image"], "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"] },
     modelReasoningEfforts: { ...GEMINI_MODEL_REASONING_EFFORTS },
     modelDefaultReasoningEfforts: { ...GEMINI_MODEL_DEFAULT_REASONING_EFFORTS },
   },

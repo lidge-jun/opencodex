@@ -10,9 +10,10 @@ answers that are easy to guess wrong.
 [access/remote chapter](01_surface_access-remote.md) are offline discovery.
 `ocx connect status --json` reports the local connection. Before live management,
 run readiness and version checks on the machine serving the management API.
-A connected client's machine listener does not serve ordinary management routes;
-the CLI refuses that target rather than automatically forwarding the operation.
-Run management commands on the hub or use its dashboard (which supports relay).
+A connected Hub client can relay allowlisted account, cached quota and usage reads. The
+local admin token admits the CLI read, and the Hub verifies the enrolled relay credential.
+The relayed dashboard can sign out its own Hub GUI session. Use the Hub dashboard
+directly for other management writes and reads outside the allowlist.
 Local config and local Lab commands still refer to this machine's files.
 
 Read connection status again after an authorized connect, rotation or disconnect.

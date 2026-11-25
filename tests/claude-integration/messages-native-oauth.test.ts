@@ -327,30 +327,32 @@ describe("managed native Messages over Anthropic OAuth", () => {
     expect(serialized).not.toContain(SIGNATURE);
   });
 
-  test("genuine client identity survives credential refresh and selected account switch", async () => {
+  test.each(["cli", "local_projects"])("%s identity survives credential refresh and selected account switch", async (entrypoint) => {
     const ids = await seed(2);
     await markAccountNeedsReauth("anthropic", ids[1]!, true);
     const uuidA = "11111111-1111-4111-8111-111111111111";
     const uuidB = "22222222-2222-4222-8222-222222222222";
     await saveAccountCredential("anthropic", ids[0]!, { ...credential(0), accountId: uuidA });
     const headers = {
-      "User-Agent": "claude-cli/2.1.282 (external, cli)", "X-App": "cli",
+      "User-Agent": `claude-cli/2.1.327 (external, ${entrypoint})`, "X-App": "cli",
       "X-Claude-Code-Session-Id": "33333333-3333-4333-8333-333333333333",
       "X-Stainless-Lang": "js", "X-Stainless-Runtime": "node", "X-Stainless-Package-Version": "9.9.9",
     };
+    const perTurnBeta = "per-turn-control-2026-07-01";
+    const requestHeaders = { ...headers, "anthropic-beta": perTurnBeta };
     const metadata = { user_id: JSON.stringify({ account_uuid: uuidA, device_id: "fixture-device", session_id: "fixture-session" }) };
     const cfg = fixtureConfig();
     forgetAnthropicFailoverQuorum();
-    expect((await send(cfg, { ...BODY, stream: false, metadata }, headers)).response.status).toBe(200);
+    expect((await send(cfg, { ...BODY, stream: false, metadata }, requestHeaders)).response.status).toBe(200);
     const refreshed = "fixture-refreshed-access";
     await saveAccountCredential("anthropic", ids[0]!, { ...credential(0), accountId: uuidA, access: refreshed });
-    expect((await send(cfg, { ...BODY, stream: false, metadata }, headers)).response.status).toBe(200);
+    expect((await send(cfg, { ...BODY, stream: false, metadata }, requestHeaders)).response.status).toBe(200);
     await markAccountNeedsReauth("anthropic", ids[0]!, true);
     await saveAccountCredential("anthropic", ids[1]!, { ...credential(1), accountId: uuidB });
     await markAccountNeedsReauth("anthropic", ids[1]!, false);
     await setActiveAccount("anthropic", ids[1]!);
     forgetAnthropicFailoverQuorum();
-    expect((await send(cfg, { ...BODY, stream: false, metadata }, headers)).response.status).toBe(200);
+    expect((await send(cfg, { ...BODY, stream: false, metadata }, requestHeaders)).response.status).toBe(200);
     expect(sent.map(entry => entry.headers.get("authorization"))).toEqual([
       `Bearer ${credential(0).access}`, `Bearer ${refreshed}`, `Bearer ${credential(1).access}`,
     ]);
@@ -363,6 +365,7 @@ describe("managed native Messages over Anthropic OAuth", () => {
     for (const entry of sent) {
       for (const [name, value] of Object.entries(headers)) expect(entry.headers.get(name)).toBe(value);
       expect(entry.headers.has("x-api-key")).toBe(false);
+      expect(entry.headers.get("anthropic-beta")?.split(",")).toContain(perTurnBeta);
       expect(entry.headers.get("anthropic-beta")).not.toContain(UNKNOWN_BETA);
       expect(entry.body).not.toHaveProperty("clientIdentity");
     }
@@ -870,7 +873,7 @@ test("shared quota exhaustion is bounded and never resends an already-tried alte
   }) as typeof fetch;
   const { response } = await send(config, { ...BODY, stream: false });
   expect(response.status).toBe(429);
-  expect(sent.length).toBeLessThanOrEqual(4);
+  expect(sent).toHaveLength(5);
   expect(new Set(sent.map(entry => entry.headers.get("authorization"))).size).toBe(sent.length);
 });
 

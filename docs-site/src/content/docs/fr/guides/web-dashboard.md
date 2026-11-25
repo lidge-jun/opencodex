@@ -136,18 +136,33 @@ uniquement si la liste d'autorisation de son fournisseur l'inclut — ou si aucu
 s'il n'est pas désactivé. Activer un modèle réconcilie atomiquement les deux filtres ; **Tout activer** efface
 la liste d'autorisation du fournisseur afin que les modèles découverts ultérieurement soient eux aussi actifs.
 
+L’onglet **Tous** (`#models/overall`) affiche dans une seule liste tous les modèles de tous les
+fournisseurs, dans l’ordre du catalogue, avec un champ de recherche, un filtre **Tous** / **Activés** /
+**Désactivés** et le même commutateur. Les deux onglets lisent le même état et partagent une file
+d’enregistrement : un changement fait dans l’un apparaît aussitôt dans l’autre.
+
+Attendez la confirmation avant de quitter **Modèles** ou de changer de serveur : les modifications
+en file d’attente et non encore envoyées sont abandonnées au départ.
+
 ### Gérer les modèles dans l’espace fournisseur
 
-Dans l’onglet **Modèles** d’un fournisseur, **Supprimer** retire la définition personnalisée
-stockée. Le modèle natif ou découvert sous-jacent peut alors réapparaître ; le nombre de modèles
-peut donc rester identique. **Masquer** change uniquement la visibilité dans le catalogue, sans
-supprimer la définition ni modifier la politique de routage direct. **Gérer la visibilité dans
-Modèles** ouvre la page **Modèles** pour rétablir la visibilité, même si l’onglet du fournisseur
-ne contient plus aucune ligne.
+L’onglet **Modèles** d’un fournisseur liste tous ses modèles, y compris ceux qui sont désactivés,
+chacun avec le même commutateur que la page **Modèles** ; les deux pages lisent et écrivent le même
+état. Un commutateur enregistre immédiatement. Tant que cet enregistrement et le rechargement qui
+suit ne sont pas terminés, les autres commutateurs, **Ajouter** et **Supprimer** attendent : une
+seule modification est en cours à la fois, et choisir un autre fournisseur ne l’annule pas. Quitter
+la page **Fournisseurs** avant la fin peut en revanche annuler la requête ; le chargement suivant
+indique si elle a été enregistrée.
+Désactiver un modèle change uniquement la visibilité dans le catalogue, sans supprimer la définition
+ni modifier la politique de routage direct. **Gérer la visibilité dans Modèles** ouvre la page
+**Modèles**.
 
-**Ajouter** enregistre une définition personnalisée sans effacer un masquage existant ni les
-règles de sélection du fournisseur. Un modèle enregistré peut donc rester masqué. Si le modèle
-est déjà connu, gérez sa visibilité dans **Modèles**. Un enregistrement confirmé reste valable
+**Supprimer** retire la définition personnalisée stockée. Le modèle natif ou découvert sous-jacent
+peut alors réapparaître ; le nombre de modèles peut donc rester identique.
+
+**Ajouter** enregistre une définition personnalisée sans annuler une désactivation existante ni les
+règles de sélection du fournisseur. Un modèle enregistré peut donc rester désactivé ; activez-le avec
+son commutateur. Un enregistrement confirmé reste valable
 même si l’actualisation du catalogue échoue : suivez le message d’actualisation au lieu d’ajouter
 le modèle à nouveau. Si la modification n’est pas confirmée, actualisez l’état des modèles avant
 de réessayer.
@@ -156,6 +171,12 @@ Le compteur du fournisseur indique le nombre d’entrées uniques non désactiv�
 courant renvoyé par le serveur, avant recherche ou limitation de l’affichage. Il ne mesure ni la
 liste d’autorisation ni les résultats de découverte en direct et ne prouve pas l’origine d’une
 entrée. Les badges de sélection et les informations de découverte restent distincts.
+
+Ce compteur apparaît dans la liste des fournisseurs. L’en-tête de l’onglet **Modèles** du
+fournisseur indique plutôt combien de modèles sont activés sur le total : le total compte chaque
+entrée listée, y compris les modèles désactivés, et un modèle est activé selon la même règle que
+sur la page **Modèles** : il n’est pas désactivé, et c’est un modèle natif, son fournisseur n’a pas
+de liste d’autorisation, ou cette liste l’inclut.
 
 ## Sélecteur de délégation et routage des créations de sous-agents
 

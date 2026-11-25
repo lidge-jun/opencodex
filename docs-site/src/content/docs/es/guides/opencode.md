@@ -22,7 +22,28 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ```
 
+<a id="protocol-per-model"></a>
+
+## Protocolo por modelo
+
+Ambos bloques envían las solicitudes a `/v1/responses` de forma predeterminada: V1 mediante `@ai-sdk/openai` y V2 mediante
+`@opencode/ai/providers/openai-compatible-responses`. Un modelo enrutado directamente a un proveedor de Chat Completions
+que usa autenticación por clave o local recibe una anulación por modelo que vuelve a `/v1/chat/completions`
+(`provider.npm` en V1, `package` en V2), de modo que sus turnos conservan el protocolo propio de ese proveedor. Los modelos nativos
+de OpenAI, los combos, las políticas de enrutamiento y los modelos cuya ruta no se puede resolver usan Responses.
+Actualiza una integración administrada o vuelve a exportar una instantánea manual para aplicar un cambio de protocolo.
+
 <a id="reasoning-effort"></a>
+
+## Protocolo por modelo
+
+Ambos bloques envían solicitudes a `/v1/responses` de forma predeterminada. V1 usa `@ai-sdk/openai`
+y V2 usa `@opencode/ai/providers/openai-compatible-responses`. Si un modelo se enruta directamente a un
+proveedor de Chat Completions que usa autenticación por clave o autenticación local, su configuración
+individual cambia a `/v1/chat/completions` (`provider.npm` en V1, `package` en V2). Así sus turnos conservan
+el protocolo del proveedor. Los modelos nativos de OpenAI, los combos, las políticas de enrutamiento y
+los modelos cuya ruta no se puede resolver usan Responses. Actualiza una integración gestionada o
+vuelve a exportar una configuración manual para aplicar un cambio de protocolo.
 
 ## Esfuerzo de razonamiento
 

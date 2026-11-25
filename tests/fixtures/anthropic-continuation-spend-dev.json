@@ -1,0 +1,13 @@
+{
+  "source": "64bfd29355bae9a6dfd9726c369b7371d222852e, then #8902: each leg settles the usage its own response reported",
+  "buffered": {
+    "success": [{ "send": 1, "kind": "settle", "tokens": 33 }, { "send": 2, "kind": "settle", "tokens": 44 }],
+    "unmetered400": [{ "send": 1, "kind": "settle", "tokens": 33 }, { "send": 2, "kind": "lost" }],
+    "metered400": [{ "send": 1, "kind": "settle", "tokens": 33 }, { "send": 2, "kind": "settle", "tokens": 5004 }]
+  },
+  "streaming": {
+    "success": [{ "send": 1, "kind": "settle", "tokens": 33 }, { "send": 2, "kind": "settle", "tokens": 44 }],
+    "unmetered400": [{ "send": 1, "kind": "settle", "tokens": 33 }, { "send": 2, "kind": "lost" }],
+    "metered400": [{ "send": 1, "kind": "settle", "tokens": 33 }, { "send": 2, "kind": "settle", "tokens": 5004 }]
+  }
+}

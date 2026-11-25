@@ -1,6 +1,6 @@
 # Streaming Health And WebSocket
 
-Management provider-validation calls use the [initialization-independent relative send-path validation](../config.md#provider-relative-send-paths) before persistence.
+Optional upload reduction follows [its contract](upload-reduction.md). Management provider-validation calls use the [initialization-independent relative send-path validation](../config.md#provider-relative-send-paths) before persistence.
 
 Native and translated delivery now have separate owners in the
 [core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.
@@ -65,8 +65,8 @@ may be billable; `OCX_EMPTY_COMPLETION_RETRY=0` is a disable-only emergency over
 buffered HTTP adapters plus `runTurn` transports share the same guard, while combo attempts and
 routed compaction stay excluded. Pre-content reasoning is retained under named event-count and byte
 caps and emits liveness heartbeats while held. A second empty result or retry failure becomes typed
-502 `empty_completion_retry_failed`; usage is merged across sends, and the Logs attempt records
-recovery kind `empty-completion`. Native OpenGateway passthrough follows its [separate completion contract](../providers/opengateway.md), with destination-specific default recovery and terminal-only replay.
+502 `empty_completion_retry_failed`. HTTP adapter delivery preserves `undeclared_tool_call` from the retry. Usage is merged across sends.
+The Logs attempt records recovery kind `empty-completion`. Native OpenGateway passthrough follows its [separate completion contract](../providers/opengateway.md), with destination-specific default recovery and terminal-only replay.
 
 The fetch and runTurn web-search loops honor `streamRoutedModelOutput`: leading text and reasoning
 stream live until the first tool boundary, and final replay omits already delivered events.
@@ -139,7 +139,7 @@ same oversized turn through its reconnect budget. For a streaming Responses call
 therefore converts the final 413 (after any adapter-owned bounded image retry) into one HTTP-200 SSE
 `response.failed` event with `error.code = context_length_exceeded` and `retryable = false`. Codex
 recognizes that terminal contract, marks the context as full, and can run its own compaction policy
-on the next turn. Combo routing treats 413 as a stop condition and performs the conversion only at
+on the next turn. Combo routing hops past a provider 413 (#9017) and converts only the final 413 at
 the outer client boundary, so the failed target is never recorded as a successful combo attempt.
 
 Non-streaming Responses callers retain HTTP 413 and receive a JSON `error` with
@@ -364,7 +364,7 @@ Live sideband admission and its bounded upstream handshake follow the [runtime c
 
 ## Translated Chat inline-image budget
 
-`src/adapters/openai-chat-images.ts` reuses the shared image normalization ladder for translated Chat bodies above a 3.5 MiB base64-image budget. This is best effort, not a whole-request ceiling. Remote URLs are not fetched; unprocessable and terminal images remain attached, and retained bytes continue to count during demotion. Under-budget construction stays synchronous; delegating MiMo awaits conditional asynchronous construction. Native decoding is admitted through a process-wide four-operation gate, guarded by a 16-million-pixel ceiling confirmed from codec metadata, and request cancellation stops queued and subsequent normalization work. Native Chat passthrough and Anthropic-only 413 retry policy retain their existing behavior. A provider whose registry row declares `minImageEdge` (Venice: 64) then has every decodable inline image whose short edge is below it upscaled to that edge, keeping the aspect ratio unless the long edge would pass 4096, where it is capped (extreme strips are then stretched); this runs after budget normalization because the 320px terminal tier can floor a wide screenshot under the minimum, and an image that fails to decode keeps its original URL.
+`src/adapters/openai-chat-images.ts` reuses the shared image normalization ladder for translated Chat bodies above a 3.5 MiB base64-image budget. This is best effort, not a whole-request ceiling. Remote URLs are not fetched; unprocessable and terminal images remain attached, and retained bytes continue to count during demotion. Under-budget construction stays synchronous; delegating MiMo awaits conditional asynchronous construction. Native decoding is admitted through a process-wide four-operation gate, guarded by a 16-million-pixel ceiling confirmed from codec metadata, and request cancellation stops queued and subsequent normalization work. Native Chat passthrough and Anthropic-only 413 retry policy retain their existing behavior. A provider whose registry row declares `minImageEdge` (Venice: 64) then has every decodable inline image whose short edge is below it upscaled to that edge, keeping the aspect ratio unless the long edge would pass 4096, where it is capped (extreme strips are then stretched); this runs after budget normalization because the 320px terminal tier can floor a wide screenshot under the minimum, and the codec's source dimensions must be positive integers within the same 16-million-pixel limit before resize. Skipping or failing enlargement leaves the URL from budget normalization in place.
 
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 

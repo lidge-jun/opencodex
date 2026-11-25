@@ -17,6 +17,7 @@ import { useProviderProbeState } from "./use-provider-probe-state";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import type { ModelRow } from "../../pages/models-shared";
 import ProviderModels from "./ProviderModels";
+import type { ProviderModelVisibility } from "../../provider-workspace/use-provider-model-visibility";
 import ProviderUsage from "./ProviderUsage";
 import ProviderAuthPanel from "./ProviderAuthPanel";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
@@ -27,6 +28,7 @@ import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { AccountLoadState, ProviderModelUsageRow, ProviderUsageTotals, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers, ProviderUpdatePatch, ProviderUpdateResult, ProviderUpdateCallback } from "./types";
 import { createProviderDraftStore, providerDraftTargetLabel, type ProviderDraftStore } from "../../provider-workspace/target-drafts";
 import { useRenderTargetCapture } from "../../use-render-target-capture";
+import { oauthCredentialSlot } from "../../../../src/oauth/credential-siblings";
 
 type Tab = "overview" | "models" | "usage" | "accounts" | "settings";
 
@@ -48,6 +50,7 @@ export default function ProviderDetails({
   modelsLoading,
   modelsLoadFailed,
   onRetryModels,
+  modelVisibility,
   oauthEmail,
   onDeselect,
   apiBase,
@@ -96,6 +99,7 @@ export default function ProviderDetails({
   modelsLoading?: boolean;
   modelsLoadFailed?: boolean;
   onRetryModels?: () => void;
+  modelVisibility?: ProviderModelVisibility;
   oauthEmail?: string;
   onDeselect: () => void;
   apiBase: string;
@@ -136,6 +140,8 @@ export default function ProviderDetails({
   onRefreshQuota?: () => Promise<boolean>;
 }) {
   const t = useT();
+  // A shared-login row (Kimi (Responses)) signs in through its owner: its busy state is the owner's.
+  const loginOwner = oauthCredentialSlot(item.name);
   const settingsTargetKey = targetKey ?? "";
   const settingsTargetLabel = targetLabel ?? providerDraftTargetLabel(settingsTargetKey);
   const localDraftStore = useMemo(() => draftStore ?? createProviderDraftStore(), [draftStore]);
@@ -321,7 +327,7 @@ export default function ProviderDetails({
   const displayName = formatProviderDisplayName(item.name, t);
 
   return (
-    <div className="pws-detail">
+    <div className={`pws-detail${tab === "accounts" && authSurface === "oauth-accounts" ? " pws-detail--oauth-accounts" : ""}`}>
       <div className="pws-detail-head">
         <button type="button" className="pws-detail-back-link" onClick={requestDeselect}>
           <IconChevron className="pws-detail-back-chevron" aria-hidden="true" />
@@ -423,8 +429,8 @@ export default function ProviderDetails({
             onViewUsage={() => switchTab("usage")}
             onCreateJevAuto={onCreateJevAuto}
             onUpdateProvider={handleUpdateProvider}
-            reauthBusy={busyProvider === item.name}
-            onCancelLogin={authHandlers?.onCancelLogin ? () => void authHandlers.onCancelLogin?.(item.name) : undefined}
+            reauthBusy={busyProvider === loginOwner}
+            onCancelLogin={authHandlers?.onCancelLogin ? () => void authHandlers.onCancelLogin?.(loginOwner) : undefined}
             onReauthenticate={
               item.activeNeedsReauth
                 ? () => {
@@ -462,6 +468,7 @@ export default function ProviderDetails({
             }
             onRetryModels={onRetryModels}
             onOpenAccounts={authSurface ? () => switchTab("accounts") : undefined}
+            modelVisibility={modelVisibility}
           />
         )}
         {tab === "usage" && (
@@ -477,6 +484,7 @@ export default function ProviderDetails({
         )}
         {tab === "accounts" && (
           <ProviderAuthPanel
+            key={JSON.stringify([targetKey, apiBase, item.name])}
             item={item}
             apiBase={apiBase}
             targetKey={targetKey}
@@ -486,7 +494,7 @@ export default function ProviderDetails({
             accountLoadState={accountLoadState}
             switchingAccountId={switchingAccountId}
             pausingAccountId={pausingAccountId}
-            busy={busyProvider === item.name}
+            busy={busyProvider === loginOwner}
             loginHint={loginHint}
             loginCapture={loginCapture}
             authHandlers={wrappedAuthHandlers}

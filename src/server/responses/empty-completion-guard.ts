@@ -1,5 +1,7 @@
+import { markProxyError } from "../../lib/client-error-body";
 import type { AdapterEvent, OcxConfig, OcxUsage } from "../../types";
 import { sanitizeLogMetadataString } from "../../lib/redact";
+import { sumCreditReadings } from "../../usage/credit-billing";
 
 /**
  * Empty-completion guard for Responses turns (port of codex-router's
@@ -159,9 +161,13 @@ export function emptyCompletionRetryFailedEvent(
 export function mergeUsage(
   first: OcxUsage | undefined,
   second: OcxUsage | undefined,
+  firstIsAttempt = false,
 ): OcxUsage | undefined {
-  if (!first) return second;
-  if (!second) return first;
+  if (!first || !second) {
+    const usage = first ?? second;
+    const providerCredits = firstIsAttempt ? sumCreditReadings([first?.providerCredits, second?.providerCredits]) : usage?.providerCredits;
+    return usage && { ...usage, ...(providerCredits !== undefined ? { providerCredits } : {}) };
+  }
   const sumOptional = (key: keyof OcxUsage): number | undefined => {
     const left = first[key];
     const right = second[key];
@@ -174,7 +180,7 @@ export function mergeUsage(
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
   const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
-  const providerCredits = sumOptional("providerCredits");
+  const providerCredits = sumCreditReadings([first.providerCredits, second.providerCredits]);
   const contextTotalTokens = second.contextTotalTokens ?? first.contextTotalTokens;
   const inputTokens = first.inputTokens + second.inputTokens;
   const outputTokens = first.outputTokens + second.outputTokens;
@@ -233,10 +239,11 @@ export async function* guardEmptyCompletionEventStream(
   let sawContent = false;
   let passthrough = false;
   let retries = 0;
+  let dispatchedLegs = 1;
   let usage: OcxUsage | undefined;
 
   const withUsage = (event: AdapterEvent & { usage?: OcxUsage }): AdapterEvent => {
-    const merged = mergeUsage(usage, event.usage);
+    const merged = mergeUsage(usage, event.usage, dispatchedLegs > 1);
     return merged ? { ...event, ...(merged ? { usage: merged } : {}) } : event;
   };
   const releaseHeld = (): AdapterEvent[] => {
@@ -275,7 +282,7 @@ export async function* guardEmptyCompletionEventStream(
         continue;
       }
       if (event.type === "done") {
-        usage = mergeUsage(usage, event.usage);
+        usage = mergeUsage(usage, event.usage, dispatchedLegs > 1);
         if (event.stopReason !== undefined && VISIBLE_INCOMPLETE_STOP_REASONS.has(event.stopReason)) {
           // Rendered as response.incomplete: a stated failure, not the silent
           // empty success this guard exists to catch.
@@ -290,6 +297,7 @@ export async function* guardEmptyCompletionEventStream(
           retries += 1;
           try {
             source = await options.continuation();
+            dispatchedLegs += 1;
           } catch {
             yield emptyCompletionRetryFailedEvent(usage, true);
             return;
@@ -307,11 +315,12 @@ export async function* guardEmptyCompletionEventStream(
           // The upstream failed the turn before any text or tool call (#6876: Vertex dropped a
           // malformed function call). Nothing actionable reached the client, so this is the same
           // replay-safe shape as an empty completion: retry the identical turn once.
-          usage = mergeUsage(usage, event.usage);
+          usage = mergeUsage(usage, event.usage, dispatchedLegs > 1);
           markRetryBoundary();
           retries += 1;
           try {
             source = await options.continuation();
+            dispatchedLegs += 1;
           } catch {
             yield emptyCompletionRetryFailedEvent(usage, true);
             return;
@@ -326,7 +335,7 @@ export async function* guardEmptyCompletionEventStream(
           // the stream's own error framing — same move as the router's
           // empty_completion_retry_failed. Client cancels (499) pass through, and a
           // replay-safe failure that repeats keeps its own, more specific message.
-          yield emptyCompletionRetryFailedEvent(mergeUsage(usage, event.usage), true);
+          yield emptyCompletionRetryFailedEvent(mergeUsage(usage, event.usage, dispatchedLegs > 1), true);
           return;
         }
         yield* releaseHeld();
@@ -357,6 +366,7 @@ export async function* guardEmptyCompletionEventStream(
       if (isReasoningEvent(event)) yield { type: "heartbeat" };
     }
     if (!terminalSeen) {
+      usage = mergeUsage(usage, undefined, dispatchedLegs > 1);
       // A terminal-less EOF before text or a tool call is replay-safe: nothing
       // actionable reached the client. Retry once, then surface a stated error
       // instead of letting the bridge reduce the turn to adapter_eof.
@@ -365,6 +375,7 @@ export async function* guardEmptyCompletionEventStream(
         retries += 1;
         try {
           source = await options.continuation();
+          dispatchedLegs += 1;
         } catch {
           yield emptyCompletionRetryFailedEvent(usage, true);
           return;
@@ -378,6 +389,9 @@ export async function* guardEmptyCompletionEventStream(
       // Post-output EOF remains incomplete; replaying could duplicate text or
       // executable tool calls.
       yield* releaseHeld();
+      if (retries > 0 && usage) {
+        yield markProxyError({ type: "incomplete" as const, reason: "adapter_eof", usage });
+      }
       return;
     }
   }

@@ -7,9 +7,11 @@ This page holds section 3 of the [Providers](/guides/providers/) guide: the buil
 and the provider-specific notes that go with them. Auth modes, account logins, and local providers
 stay on that page.
 
-opencodex ships 108 built-in presets: 87 key-based, 17 OAuth, three local, and one default
+For subscription account rotation, see [`reset-near-weighted`](/reference/configuration/providers/#reset-near-weighted) for the Codex and Anthropic OAuth pools. API-key pools use their own [key selection settings](/reference/configuration/providers/).
+
+opencodex ships 112 built-in presets: 90 key-based, 18 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
-validates the key, and stores it; validation is provider-specific. Notable entries:
+validates the key where the provider can check one, and stores it. Notable entries:
 
 **ClinePass** uses a Cline API key with the [official subscription catalog](https://docs.cline.bot/getting-started/clinepass)
 and [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions), operated by Cline Bot Inc. under
@@ -101,6 +103,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Modelflare | `https://modelflare.dev/v1` |
 | AI Stupid Level | `https://aistupidlevel.info/v1` |
 | cheapaimodel | `https://api.cheapaimodel.ai/v1` |
+| AbliteratedLLM | `https://api.abliteratedllm.dev/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -234,6 +237,23 @@ preset sends every request through Chat Completions, the one interface every cat
 it does not use the gateway's Responses or Anthropic Messages endpoints. cheapaimodel's
 [terms](https://cheapaimodel.ai/terms) and [privacy policy](https://cheapaimodel.ai/privacy) apply to
 requests sent to this service.
+
+**AbliteratedLLM** is a pay-per-token API for abliterated (refusal-removed) and stock open-weight
+models, prepaid in USD by card or crypto. Create an [API key](https://abliteratedllm.dev/dashboard/keys),
+then select **AbliteratedLLM** in `ocx init` or the dashboard's **Add provider** picker, or run
+`ocx provider add abliteratedllm`, and give it the key directly or as the reference
+`${ABLITERATEDLLM_API_KEY}`. The preset sends every client through [Chat Completions](https://abliteratedllm.dev/docs/chat-completions)
+at `https://api.abliteratedllm.dev/v1`, not the service's stateless Responses or Anthropic Messages
+endpoints, and uses a seeded model list: the public [`GET /v1/models`](https://abliteratedllm.dev/docs/models)
+answers without a key and cannot validate one, so live discovery is off. `glm-5.3-flash-abliterated` is the default.
+On 2026-11-15 `GET /v1/models` listed 15 models: `glm-5.3-flash-abliterated`, the only abliterated
+model (marked `variant: "abliterated"`), and 14 with `provider_label: "Stock model"`, the vendors'
+original weights. None was labelled "Official DeepSeek API", the privacy policy's label for requests
+forwarded to DeepSeek's own API; the listed models, the DeepSeek ones included, run on Fireworks AI
+with zero data retention. `glm-5.3` and `glm-5.3-fast` are text only, so images for them go to the
+vision sidecar. `reasoning_effort` is sent as `low`, `medium` or `high`; higher levels are sent as
+`high`. AbliteratedLLM's [terms](https://abliteratedllm.dev/terms) and
+[privacy policy](https://abliteratedllm.dev/privacy) apply to requests sent to this service.
 
 The provider editor also accepts an optional `inputModalities` fallback: a nonempty array containing
 `text`, `image`, `audio`, or `video`. Exact per-model declarations take precedence. Invalid values
@@ -747,7 +767,7 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
 - **Output guard:** If the CLI echoes OpenCodex tool-call/result replay envelopes into assistant text, the turn fails with `vendor_scaffold_detected` (502) instead of returning the envelope as a successful answer, and neither reasoning nor tool calls following the envelope are forwarded. Reasoning starts a fresh replay-text block, so earlier prose or code fences cannot hide an envelope in later text. If the CLI's turn already ended with its own error, that error is reported instead, still without the envelope. The proxy does not retry that failure automatically. Ordinary prose and closed fenced examples follow the shared envelope recognizer; an unverified overflowing fenced example is refused. Assistant text preserves Unicode characters split across CLI frames; unpaired surrogates are replaced with U+FFFD.
 - **Image Input:** Global continues forwarding supported images through the shared projection without a per-model vision allowlist. CN retains its vision-sidecar defaults. Its raw-image route admits only one canonical base64 PNG of at most 1 MiB decoded, 8192 pixels per edge, and 16 million total pixels in a single user turn with `DeepSeek-Flash` or `Qwen3.8-Flash`. Use `qoderclicn 1.1.70`: [issue #7516](https://github.com/lidge-jun/opencodex/issues/7516) reports Windows 11 x64 live success for those models on both `--attachment` and inline `--input-format stream-json --output-format stream-json` stdin; OpenCodex uses only stdin. The adapter validates base64 length/padding, decoded PNG signature and basic IHDR fields before CLI discovery; it does not decompress pixels or validate every PNG chunk/CRC. These ceilings are OpenCodex resource policy, not verified vendor maxima: the reported live evidence covers a 96×96 PNG, whose RGBA raster is only 36 KiB. Larger inputs require separate verification. Other CLI versions have not been verified, and the adapter does not probe the installed version. CN refuses raw URL images, other image formats/models, multiple images, tool-result images and image-bearing history/multi-turn replay before starting the CLI with `unsupported_input_modality`; use the vision sidecar for those inputs. Injected CLI tests cover serialization and cancellation without claiming live upstream support. Qoder's supported projection keeps image blocks in conversation order and marks unsupported references as `[image omitted: unsupported reference]`. Global stateless replay can still associate historical images unreliably with their original text; CN does not enable that unverified replay surface.
 - **PAT recovery:** For both Qoder presets, a multi-key API-key pool can switch to another PAT on a supported authentication rejection or account-level quota exhaustion, but only before response content or an event that makes replay unsafe. Recovery requires Qoder-specific classification and respects credential-hop and send budgets; an HTTP 401/429 or quota message alone is not permission to replay. Single-key configurations do not rotate. Sharing the CLI runner does not enable this API-key recovery for CodeBuddy or self-authenticated Claude CLI.
-- **Quota:** No public quota API is used, so totals and reset times are unavailable. Codes 110 (account daily limit) and 118 (personal Credits exhaustion) report `insufficient_quota` and permit consideration of PAT recovery. Other supported quota codes also report `insufficient_quota` but do not authorize it. Numeric error codes take precedence: an unrecognized numeric code does not fall back to quota or authentication text. Without a numeric code, only the supported account-daily message beginning “You've reached your daily usage limit for Chat”, with no team/model/shared qualifier, grants quota recovery; generic credit-limit text does not. Only quota failures eligible for PAT recovery enter key cooldown handling. When such a failure has no reset time, the failed key uses the existing default cooldown; nonrecoverable quota classifications do not create a cooldown through this path, and no next-day reset is inferred.
+- **Quota:** No public quota API is used, so totals and reset times are unavailable. Codes 110 (account daily limit) and 118 (personal Credits exhaustion)—whether reported as numbers or pure-numeric strings—report `insufficient_quota` and permit consideration of PAT recovery. Other supported quota codes also report `insufficient_quota` but do not authorize it. On `qoder-cn`, when `error_code` is absent, outer HTTP `403`/`"403"`, or `112`/`"112"` (with no non-403 error code on the response JSON object or its top-level `error`/`data` object, and no top-level field other than `pricingUrl` and 403 codes, so explanatory text such as a lock or permission message keeps the original error), the verified `inference.remoteChat.stream failed (403)` response whose JSON body carries `pricingUrl` at `https://qoder.com.cn/pricing` also reports `insufficient_quota` and permits PAT recovery; Global and unrelated 403s do not. Other explicit vendor error codes take precedence: any other numeric or non-numeric `error_code` (such as `114`, `130`, `PERMISSION_DENIED`, or `112` without that verified CN pricing-URL response) does not fall back to quota, pricing-URL, or authentication text. Without an explicit `error_code`, only the supported account-daily messages beginning “You've reached your daily usage limit for Chat” or “You have reached the daily usage limit”, with no team/model/shared qualifier, grant quota recovery; generic credit-limit text does not. Only quota failures eligible for PAT recovery enter key cooldown handling. When such a failure has no reset time, the failed key uses the existing default cooldown; nonrecoverable quota classifications do not create a cooldown through this path, and no next-day reset is inferred.
 - **Operators:** Qoder Global is operated by BRIGHT ZENITH PRIVATE LIMITED under the [product service terms](https://qoder.com/product-service); Qoder CN by 通义云启（杭州）信息技术有限公司 with Alibaba Cloud. Verify `ocx provider test qoder` (or `qoder-cn`) after configuring.
 
 ## Claude Code CLI (subscription)
@@ -824,12 +844,18 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   only the client's selected tools (the same bridge CodeBuddy uses). The CLI captures the call and
   the turn ends there; approval, sandboxing, execution and the returned result stay with Codex,
   Pi, or another client. Built-in tools and every other MCP server remain disabled.
-- **Subscription limits:** before each launch OpenCodex asks Anthropic's usage endpoint, with the
-  CLI's own sign-in read in memory, whether the plan's 5-hour, weekly or model-specific window is
-  full. An exhausted plan is refused locally with HTTP 429 `claude_subscription_cooldown` and a
-  `Retry-After` for the reset, instead of starting a CLI that would fail. The answer is cached for
-  a minute in `claude-usage-admission.json` under the OpenCodex home (percentages, reset times and
-  a hashed account key only). If the check cannot run, the turn proceeds.
+- **Subscription limits and paid usage:** OpenCodex checks Anthropic's usage endpoint using
+  the CLI's own sign-in. Measured 5-hour, weekly and model-specific exhaustion is cached for at
+  most a minute, so a top-up or subscription reset can be detected before the old reset date.
+  When extra usage is explicitly enabled without an exhausted reported cap, the official CLI
+  decides whether the wallet and spending limit permit the request. OpenCodex does not infer a
+  funded balance or enable paid usage. Explicitly disabled/exhausted extra usage does not open
+  that path. OpenCodex treats the extra-usage cap as exhausted at 100% reported utilization,
+  when used credits reach a positive monthly cap, or when the monthly cap is explicitly zero.
+  A genuine limit returned by the CLI remains enforced until its recorded reset.
+  Otherwise an exhausted plan returns HTTP 429 `claude_subscription_cooldown` with `Retry-After`.
+  The private cache stores percentages, reset times, the closed extra-usage state and a hashed
+  account key, never credentials or wallet amounts. An unavailable check lets the CLI decide.
 - **Destination:** the canonical row names `https://api.anthropic.com` because that is where the
   subscription's traffic lands. OpenCodex never sends that request itself, and overriding the base
   URL fails closed rather than handing the turn to another environment.
@@ -838,6 +864,64 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
 > driving that harness headlessly from a proxy fits your plan's terms is a question between you and
 > Anthropic. OpenCodex does not convert the login into an API key and does not reproduce the CLI's
 > HTTP identity.
+
+## Antigravity CLI (ACP, local)
+
+OpenCodex can use a Google Antigravity subscription through Google's own CLI instead of replaying an
+Antigravity credential. The `antigravity-acp` preset starts the official Antigravity CLI as `agy acp --sandbox`
+once per turn and talks to it over the Agent Client Protocol on stdin and stdout:
+
+```json
+{
+  "providers": {
+    "antigravity-acp": {
+      "adapter": "agy-acp",
+      "baseUrl": "https://antigravity.google/docs/cli/acp"
+    }
+  }
+}
+```
+
+- **Prerequisites:** Antigravity CLI 1.5.3 or newer on `PATH` (or `OPENCODEX_AGY_BIN` set to its absolute path),
+  signed in once on the proxy host with `agy acp --login` or an interactive `agy` session. A sign-in failure returns
+  HTTP 401 with code `agy_login_required` before the response starts. If the response is already streaming,
+  it carries `agy_login_required` in the event stream.
+- **No credential stored:** the CLI owns its Google sign-in. OpenCodex never reads, stores or forwards it, and the row
+  refuses an API key, a key pool, account failover or an OAuth setting. There is one account, the CLI's, and no rotation.
+  Selecting this preset in `ocx init` skips the API key prompt. Running `ocx login antigravity-acp` prints the host sign-in command.
+- **Interactive use only:** Google's staff answers on the developer forum permit a personal app to launch the official
+  `agy acp` binary for the user's own account when use is interactive and user-directed, not an unattended worker pool
+  or automated agent loop, and point programmatic workloads to a Gemini API key or Vertex AI ([forum answer](https://discuss.ai.google.dev/t/tos-clarification-is-t3-code-official-antigravity-acp-agent-permitted-under-the-antigravity-terms-of-service/192027/2),
+  [forum answer](https://discuss.ai.google.dev/t/policy-question-omp-hosting-unmodified-antigravity-acp-for-one-user/199753)). OpenCodex enforces what it can know for certain: it refuses a Codex subagent turn
+  (`x-codex-parent-thread-id`), a turn Codex labels as a spawned thread or as its memory pipeline, a combo member, a
+  combo's internal decision call and a route chosen by subagent fallback with HTTP 403 `agy_acp_interactive_only`, and
+  configuration refuses this provider as a combo target, a combo's `decisionModel`, a subagent fallback, a
+  managed subagent default, an automatic compaction target, a `memoryModels` phase or the `shadowCallIntercept` target.
+  Manual compaction can still use ACP.
+- **Local connections on the proxy host:** OpenCodex uses the observed peer and listener to determine locality.
+  LAN connections, hub links and the hub management listener are refused with HTTP 403 `agy_acp_local_only`.
+  Recognized forwarding headers such as `Forwarded`, `X-Forwarded-For`, `X-Real-IP`, `Via`,
+  `CF-Connecting-IP` and `Tailscale-User-Login` also cause refusal. On the public listener only,
+  OpenCodex also refuses connections from addresses listed in `dashboardTrustedProxy.proxyAddresses`.
+  An undeclared loopback relay or SSH port forward can appear local when it passes no recognized forwarding headers.
+  Declare the reverse proxy for the public listener or keep this port out of the relay. Keep the other local listeners
+  out of relays, since the declared-proxy setting applies only to the public listener.
+- **Gemini models only:** the static roster is `gemini-3.8-flash`, `gemini-4-argon` and `gemini-3.7-flash`. At each
+  turn the model must also be a Gemini model the CLI offers, confirmed before the prompt is sent; anything else is
+  refused. Codex reasoning effort selects the CLI's thinking level (`xhigh` selects Extra). OpenCodex masks
+  recognized credentials in answer and reasoning text from the CLI.
+- **Workspace and permissions:** each turn runs in a new empty private directory outside the OpenCodex home. The CLI's
+  permission engine asks before every command and before file access outside that directory, and OpenCodex refuses
+  every such request. `--sandbox` asks the CLI to run its terminal commands in its OS sandbox; Google documents that it
+  has no effect where that sandbox is unavailable (for example Windows 10 or some Linux containers), so it is extra
+  hardening, not a guarantee. Allow rules you set in your own agy settings still apply without asking.
+  On Windows, OpenCodex requires a private directory ACL before launching the CLI. The version probe and each
+  turn use separate workspaces under the system temporary directory. After the CLI starts, OpenCodex waits
+  for its leader and process group on POSIX, or for tree termination and leader closure on Windows, before
+  removing the workspace. If cleanup cannot be confirmed, OpenCodex logs a warning, retains
+  the workspace and fails any affected turn. Retained workspaces can accumulate after repeated failures.
+- **Text only:** ACP prompts carry text, so client function tools and images are not offered to the model, and the
+  CLI's own tool use stays inside the CLI.
 
 ## A6API credit quota
 
@@ -1017,7 +1101,7 @@ For named selections, Copilot fronts a mixed-wire catalog: the following models 
 `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) reject
 `/chat/completions` for agent traffic, so opencodex routes those models over the
 Responses API by built-in default while every other Copilot model stays on chat
-completions. The precedence is: hard wire pin → your explicit
+completions. `gpt-6-sol`, `gpt-6-luna`, `gpt-6.2-sol`, `gpt-6.2-astra` also default to Responses as a preemptive built-in default; no rejection was observed for them and the Copilot listing of the GPT-6.2 models is unverified. The precedence is: hard wire pin → your explicit
 [`modelAdapters`](/reference/configuration/providers/) entry → registry default →
 provider-wide adapter. To opt a model without a built-in default (for example
 `gpt-5.4-nano`) into Responses, set `"modelAdapters": { "gpt-5.4-nano": "openai-responses" }`.

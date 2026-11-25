@@ -31,9 +31,12 @@ import { catalogModelEfforts } from "../codex/catalog/effort";
  * not spawned children, and must never trip subagentEffortCap.
  */
 export function isThreadSpawnRequest(headers: Headers): boolean {
-  if (headers.get("x-openai-subagent") === "collab_spawn") return true;
-  const turnMeta = headers.get("x-codex-turn-metadata");
-  if (!turnMeta) return false;
+  return headers.get("x-openai-subagent") === "collab_spawn"
+    || isThreadSpawnTurnMetadata(headers.get("x-codex-turn-metadata"));
+}
+
+export function isThreadSpawnTurnMetadata(turnMeta: unknown): boolean {
+  if (typeof turnMeta !== "string" || !turnMeta) return false;
   try {
     const parsed = JSON.parse(turnMeta) as { subagent_kind?: unknown };
     return parsed.subagent_kind === "thread_spawn";

@@ -1,4 +1,6 @@
 import { ToolEnvelopeEchoFilter, stripToolEnvelopeEcho } from "../lib/tool-envelope-echo-filter";
+import { responsesCompletionError } from "../lib/errors";
+import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -38,7 +40,9 @@ export function stripGrokUpstreamEnvelopeEchoFromResponsesJson(json: string): st
     const value = JSON.parse(json) as unknown;
     outputText(value);
     return JSON.stringify(value);
-  } catch {
+  } catch (error) {
+    // Returning the original JSON after a filter refusal would publish the held envelope.
+    if (isTranslatorBudgetExceededError(error)) throw error;
     return json;
   }
 }
@@ -55,6 +59,7 @@ export function createGrokUpstreamEnvelopeEchoBlockRewrite(
   onCompletedResponse?: (response: Record<string, unknown>) => void,
 ): SseBlockRewrite {
   const states = new Map<string, TextState>();
+  let errorCompletionSeen = false;
   const key = (output: unknown, content: unknown): string =>
     `${typeof output === "number" ? output : 0}:${typeof content === "number" ? content : 0}`;
   const flush = (state: TextState): string[] => {
@@ -70,6 +75,7 @@ export function createGrokUpstreamEnvelopeEchoBlockRewrite(
     let event: unknown;
     try { event = JSON.parse(payload); } catch { return [block]; }
     if (!record(event) || typeof event.type !== "string") return [block];
+    errorCompletionSeen ||= responsesCompletionError(event) != null;
     if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
       const id = key(event.output_index, event.content_index);
       let state = states.get(id);
@@ -112,7 +118,7 @@ export function createGrokUpstreamEnvelopeEchoBlockRewrite(
       const pending = [...states.values()].flatMap(flush);
       outputText(event.response, (index, content, text) =>
         states.get(key(index, content))?.delivered ?? stripToolEnvelopeEcho(text));
-      onCompletedResponse?.(event.response);
+      if (!errorCompletionSeen) onCompletedResponse?.(event.response);
       return [...pending, replaceSseDataPayload(block, JSON.stringify(event))];
     }
     return [block];

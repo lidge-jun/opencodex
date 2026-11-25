@@ -280,6 +280,11 @@ function observeAdcSource(markerAccount: string | undefined): { source: string; 
   return next;
 }
 
+/** Observe the local ADC source without exchanging a token. */
+export function observeVertexAdcGeneration(markerAccount?: string): number {
+  return observeAdcSource(markerAccount).generation;
+}
+
 function base64UrlEncode(bytes: Uint8Array | string): string {
   const buf = typeof bytes === "string" ? Buffer.from(bytes, "utf8") : Buffer.from(bytes);
   return buf.toString("base64url");

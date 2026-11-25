@@ -9,7 +9,7 @@ import type { VersionCache } from "../../src/update/notify";
 import { checkUpdatePackageIntegrity, latestVersion, resolveCurrentPnpmGlobalOwner, type Channel, type Installer } from "../../src/update/index";
 import { PNPM_READ_CWD, pnpmReadEnvironment } from "../../src/update/pnpm-read-policy.mjs";
 
-function fixture(installer: Installer = "npm", disabled = false, lookupFn?: RefreshDeps["lookup"]) {
+function fixture(installer: Installer = "npm", disabled = false, lookupFn?: RefreshDeps["lookup"], managed = false) {
   let now = 1_700_000_000_000;
   let nextId = 0;
   const timers = new Map<number, { at: number; run: () => void }>();
@@ -18,6 +18,7 @@ function fixture(installer: Installer = "npm", disabled = false, lookupFn?: Refr
   const replies: Array<Promise<string | null>> = [];
   const writes: VersionCache[] = [];
   const deps: RefreshDeps = {
+    managedReleaseDirectory: () => managed,
     now: () => now,
     current: () => "2.7.43",
     install: () => installer,
@@ -65,6 +66,46 @@ function fixture(installer: Installer = "npm", disabled = false, lookupFn?: Refr
 }
 
 describe("package cache refresh", () => {
+  test("a marked source install checks the npm channel on demand and never schedules checks", async () => {
+    const f = fixture("source", false, async (tag, installer) => {
+      expect(tag).toBe("preview");
+      expect(installer).toBe("npm");
+      return "2.7.44";
+    }, true);
+    f.scheduler.start();
+    try {
+      await f.advance(0);
+      expect(f.calls).toEqual([]);
+      expect(f.timers.size).toBe(0);
+      expect(await f.scheduler.check("preview")).toMatchObject({
+        installer: "source", channel: "preview", latestVersion: "2.7.44",
+        updateAvailable: true, canUpdate: false, reason: "managed_release", command: "",
+      });
+      expect(f.calls).toEqual(["preview"]);
+    } finally {
+      f.scheduler.stop();
+    }
+  });
+
+  test("an unavailable registry result can be retried for a marked source install", async () => {
+    const f = fixture("source", false, undefined, true);
+    f.replies.push(Promise.resolve(null));
+    expect(await f.scheduler.check("latest")).toMatchObject({
+      latestVersion: null, updateAvailable: false, canUpdate: false, reason: "latest_unavailable", command: "",
+    });
+    expect(await f.scheduler.check("latest")).toMatchObject({
+      latestVersion: "2.7.44", reason: "managed_release", canUpdate: false,
+    });
+    expect(f.calls).toEqual(["latest", "latest"]);
+  });
+
+  test("an unmarked source checkout skips lookup and keeps its git pull guidance", async () => {
+    const f = fixture("source");
+    const result = await f.scheduler.check("latest");
+    expect(result).toMatchObject({ latestVersion: null, reason: "source_checkout", canUpdate: false });
+    expect(result.command).toContain("git pull");
+    expect(f.calls).toEqual([]);
+  });
   test("missing cache refreshes immediately and writes through", async () => {
     const f = fixture();
     f.scheduler.start();
@@ -279,6 +320,38 @@ test("pnpm owner resolution failure is unavailable, not an unowned PATH lookup",
     spawnFn: (() => { spawned = true; throw new Error("unexpected child"); }) as never,
   })).toBeNull();
   expect(spawned).toBe(false);
+});
+
+async function registryAnswer(channel: "latest" | "preview", stdout: string): Promise<string | null> {
+  const child = fakeChild();
+  return latestVersionAsync(channel, "npm", {
+    ownerFn: async () => null,
+    spawnFn: (() => {
+      queueMicrotask(() => { child.stdout.write(`${stdout}\n`); child.emit("close", 0); });
+      return child;
+    }) as never,
+  });
+}
+
+test.each([
+  "2.100.6-preview.20261119.1", // dated preview with a publication attempt, as published since 2.100.5
+  "2.99.0-preview.20261108",
+  "2.100.6",
+])("the preview channel accepts the registry version %s", async version => {
+  expect(await registryAnswer("preview", version)).toBe(version);
+});
+
+test.each([
+  "2.100.6-preview.20261119.1.2",
+  "2.100.6-preview.20261119.",
+  "2.100.6-preview.20261119.1\n2.100.6",
+  "2.100.6-beta.1",
+])("the preview channel refuses the malformed registry answer %j", async answer => {
+  expect(await registryAnswer("preview", answer)).toBeNull();
+});
+
+test("the latest channel still refuses a preview version", async () => {
+  expect(await registryAnswer("latest", "2.100.6-preview.20261119.1")).toBeNull();
 });
 
 test("pnpm read probes ignore caller project hooks from a trusted directory", () => {

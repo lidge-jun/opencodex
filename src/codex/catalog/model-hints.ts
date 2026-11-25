@@ -94,7 +94,7 @@ import type { CatalogModel } from "./parsing";
 import { disabledNativeSlugs, hasComboTargets, hasNativeOpenAiCapabilityMetadata, NATIVE_GPT56_MAX_INPUT_TOKENS, nativeContextLimits, nativeOpenAiCapabilityDisplayName, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiAutoCompactTokenLimit, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, nativeOpenAiMaxOutputTokens, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
-import { clampObservedModelLimits, resolveModelPolicy } from "../../providers/resolved-model-policy";
+import { clampObservedModelLimits, prepareModelPolicy, resolveModelPolicy } from "../../providers/resolved-model-policy";
 import { mapFill } from "../../providers/resolved-model-policy-merge";
 import type { CatalogGatherProviderAuthEvidence } from "./filesystem-evidence";
 import type {
@@ -270,6 +270,17 @@ export function withVisionSidecarInput(
     : copyReasoningHintSource(model, { ...model, inputModalities: [...modalities, "image"] });
 }
 
+const capturedModelPolicies = new WeakMap<OcxProviderConfig, ReturnType<typeof prepareModelPolicy>>();
+
+export function captureCatalogModelPolicy(name: string, provider: OcxProviderConfig): void {
+  capturedModelPolicies.set(provider, prepareModelPolicy({
+    providerName: name,
+    provider,
+    transportMatchedRegistry: false,
+    ...(provider.authMode ? { effectiveAuth: { authMode: provider.authMode } } : {}),
+  }));
+}
+
 const reasoningHintSources = new WeakMap<CatalogModel, Partial<CatalogModel>>();
 
 /** Forward discovery provenance only across transparent clones, never custom reasoning overrides. */
@@ -290,14 +301,17 @@ export function applyProviderConfigHints(
   metadataConfigDir?: string,
   includeVisionSidecar = true,
 ): CatalogModel {
-  const staticPolicy = resolveModelPolicy({
-    providerName: name,
+  const modelInput = {
     modelId: model.id,
+    modelCapabilities: prov.modelCapabilities?.[model.id],
+    ...(effectiveAlias !== undefined ? { effectiveAlias } : {}),
+  };
+  const staticPolicy = capturedModelPolicies.get(prov)?.(modelInput) ?? resolveModelPolicy({
+    ...modelInput,
+    providerName: name,
     provider: prov,
     transportMatchedRegistry: false,
-    modelCapabilities: prov.modelCapabilities?.[model.id],
     ...(prov.authMode ? { effectiveAuth: { authMode: prov.authMode } } : {}),
-    ...(effectiveAlias !== undefined ? { effectiveAlias } : {}),
   });
   const displayName = configuredModelDisplayName(prov, model.id);
   // The alias decision is resolved once at flight admission (captureProviderGather) and threaded

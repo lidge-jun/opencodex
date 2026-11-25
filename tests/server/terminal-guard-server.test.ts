@@ -1,17 +1,24 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { handleResponses } from "../../src/server/responses";
+import { handleChatCompletions } from "../../src/server/chat-completions";
 import { httpStatusFromTerminalError } from "../../src/lib/errors";
 import { errorDetailFor } from "../../src/usage/error-detail";
 import { inspectResponseLogJson, type RequestLogContext } from "../../src/server/request-log";
-import type { OcxConfig } from "../../src/types";
+import { responseWithDeferredRequestLog } from "../../src/server/relay";
+import type { AdapterEvent, OcxConfig } from "../../src/types";
+import * as resolver from "../../src/server/adapter-resolve";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { saveCredential, setActiveAccount, getAccountSet } from "../../src/oauth/store";
+import { clearAnthropicAccountPoolState, formatAnthropicProviderForLog } from "../../src/oauth/anthropic-routing";
+import { deriveOAuthProviderConfig } from "../../src/providers/derive";
+import { readUsageEntries } from "../../src/usage/log";
+import { parseSpendJournalRecord, SPEND_LEDGER_JOURNAL_FILENAME } from "../../src/lib/spend-reservation-ledger";
 
 let releaseInheritedSpendHome: (() => void) | undefined;
 // Taken per inherited-home dispatch because one row below installs a different home.
@@ -134,6 +141,236 @@ describe("server terminal guard integration", () => {
     const messages = requestBodies[1]?.messages as Array<{ role?: string; content?: Array<{ text?: string }> }>;
     expect(messages.at(-1)?.role).toBe("user");
     expect(messages.at(-1)?.content?.[0]?.text).toContain("你刚才只描述了计划");
+  });
+
+  // #8877: both legs re-send the whole conversation. The client sizes its context window from the
+  // terminal usage, so it gets the final leg's; the request log still meters both legs (10 + 20).
+  for (const stream of [true, false]) {
+    test(`${stream ? "streamed" : "buffered"} Responses terminal reports the final leg's usage; the log meters both`, async () => {
+      takeInheritedSpendHome();
+      if (!stream) {
+        globalThis.fetch = (async () => {
+          calls += 1;
+          return Response.json(calls === 1
+            ? { type: "message", role: "assistant", content: [{ type: "text", text: "我接下来会修改相关文件。" }],
+              stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 2 } }
+            : { type: "message", role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "exec_command", input: {} }],
+              stop_reason: "tool_use", usage: { input_tokens: 20, output_tokens: 3 } });
+        }) as typeof fetch;
+      }
+      const log: RequestLogContext = { model: "", provider: "" };
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "se-claude-opus-4.8",
+          input: "请检查这个问题并修复代码",
+          stream,
+          tools: [{ type: "function", name: "exec_command", description: "run a command", parameters: { type: "object" } }],
+        }),
+      }), config, log);
+
+      const text = await response.text();
+      expect(response.status).toBe(200);
+      expect(calls).toBe(2);
+      const usage = stream
+        ? text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)))
+          .find(frame => frame.type === "response.completed")?.response?.usage
+        : JSON.parse(text).usage;
+      expect(usage).toMatchObject({ input_tokens: 20, output_tokens: 3, total_tokens: 23 });
+      expect(log.usage).toMatchObject({ inputTokens: 30, outputTokens: 5 });
+    });
+  }
+
+  test("Chat Completions usage reports the final leg's prompt tokens; the log meters both legs", async () => {
+    takeInheritedSpendHome();
+    const log: RequestLogContext = { model: "", provider: "" };
+    const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "se-claude-opus-4.8",
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: [{ role: "user", content: "请检查这个问题并修复代码" }],
+        tools: [{ type: "function", function: { name: "exec_command", description: "run a command", parameters: { type: "object" } } }],
+      }),
+    }), config, log);
+
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    expect(calls).toBe(2);
+    const usage = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)))
+      .findLast(chunk => chunk.usage)?.usage;
+    expect(usage).toMatchObject({ prompt_tokens: 20, completion_tokens: 3, total_tokens: 23 });
+    expect(log.usage).toMatchObject({ inputTokens: 30, outputTokens: 5 });
+  });
+
+  // A re-ask that fails upstream fails the turn, and the failed terminal carries the usage the
+  // request metered (the announcing leg's 10 + 2; the overloaded leg reported none). The Chat wire
+  // ends that turn in an {error} frame, so an include_usage client reads it from the usage chunk
+  // before the error, through the bridge converter and the direct Chat encoder alike.
+  const failedContinuation = [
+    'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":20,"output_tokens":1}}}\n\n',
+    'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n',
+  ].join("");
+  test.each([false, true])("a failed re-ask's metered usage precedes the Chat error frame (directEncoders=%p)", async directEncoders => {
+    takeInheritedSpendHome();
+    globalThis.fetch = (async () => { calls += 1; return anthropicSse(calls === 1 ? firstTurn : failedContinuation); }) as typeof fetch;
+    const log: RequestLogContext = { model: "", provider: "" };
+    const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "se-claude-opus-4.8", stream: true, stream_options: { include_usage: true },
+        messages: [{ role: "user", content: "请检查这个问题并修复代码" }],
+        tools: [{ type: "function", function: { name: "exec_command", description: "run a command", parameters: { type: "object" } } }],
+      }),
+    }), { ...config, ...(directEncoders ? { protocols: { rollout: { directEncoders: true } } } : {}) } as OcxConfig, log);
+
+    const frames = (await response.text()).split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+    expect(calls).toBe(2);
+    expect(frames.at(-1)?.error).toBeDefined();
+    expect(frames.at(-2)).toMatchObject({ choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } });
+    expect(log.usage).toMatchObject({ inputTokens: 10, outputTokens: 2 });
+  });
+
+  /**
+   * Account A announces work, its re-ask is rate-limited, and account B answers the re-ask. The
+   * first leg reports usage unless `firstUsageless`; `credits` adds that credit reading to every
+   * usage the parser reports, as a credit-billed provider would.
+   */
+  async function oauthRotation(opts: { reported: boolean; firstUsageless?: boolean; credits?: number }) {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-terminal-guard-oauth-usage-"));
+    process.env.OPENCODEX_HOME = home;
+    const originalResolve = resolver.resolveAdapter;
+    const withCredits = (event: AdapterEvent): AdapterEvent => opts.credits !== undefined && "usage" in event && event.usage
+      ? { ...event, usage: { ...event.usage, providerCredits: opts.credits } } as AdapterEvent : event;
+    const adapterSpy = spyOn(resolver, "resolveAdapter").mockImplementation((...args) => {
+      const adapter = originalResolve(...args);
+      const parseResponse = adapter.parseResponse?.bind(adapter);
+      return parseResponse ? { ...adapter, parseResponse: async (...params: Parameters<typeof parseResponse>) =>
+        (await parseResponse(...params)).map(withCredits) } : adapter;
+    });
+    try {
+      takeInheritedSpendHome();
+      clearAnthropicAccountPoolState();
+      for (const name of ["a", "b"]) await saveCredential("anthropic", {
+        access: `fixture-access-${name}`, refresh: `fixture-refresh-${name}`,
+        expires: Date.now() + 3_600_000, accountId: `fixture-account-${name}`, source: "oauth",
+      });
+      const [firstAccount, replacementAccount] = getAccountSet("anthropic")!.accounts.map(account => account.id);
+      await setActiveAccount("anthropic", firstAccount!);
+      const model = "claude-sonnet-4-6";
+      const oauthConfig: OcxConfig = { port: 0, defaultProvider: "anthropic", providers: {
+        anthropic: { ...deriveOAuthProviderConfig("anthropic")!, models: [model] },
+      }, anthropicAccountPool: { enabled: true } };
+      saveConfig(oauthConfig);
+      const auth: string[] = [];
+      globalThis.fetch = (async (input, init) => {
+        expect(String(input)).toBe("https://api.anthropic.com/v1/messages");
+        auth.push(new Headers(init?.headers).get("authorization") ?? "");
+        if (auth.length === 1) return Response.json({ type: "message", role: "assistant",
+          content: [{ type: "text", text: "我接下来会修改相关文件。" }], stop_reason: "end_turn",
+          ...(opts.firstUsageless ? {} : { usage: { input_tokens: 10, output_tokens: 2 } }) });
+        if (auth.length === 2) return Response.json({ type: "error", error: { type: "rate_limit_error", message: "rate limit exceeded" } },
+          { status: 429, headers: { "retry-after": "120" } });
+        return Response.json({ type: "message", role: "assistant", stop_reason: "tool_use",
+          content: [{ type: "tool_use", id: "toolu_1", name: "exec_command", input: {} }],
+          ...(opts.reported ? { usage: { input_tokens: 20, output_tokens: 3 } } : {}) });
+      }) as typeof fetch;
+
+      const log: RequestLogContext = { model: "", provider: "" };
+      const requestId = crypto.randomUUID();
+      const start = Date.now();
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: `anthropic/${model}`, input: "请检查这个问题并修复代码", stream: false,
+          tools: [{ type: "function", name: "exec_command", description: "run a command", parameters: { type: "object" } }] }),
+      }), oauthConfig, log);
+      const body = await responseWithDeferredRequestLog(response, requestId, start, log).json();
+      const row = readUsageEntries().find(entry => entry.requestId === requestId);
+      const journal = Bun.file(join(home, SPEND_LEDGER_JOURNAL_FILENAME));
+      const records = await journal.exists() ? (await journal.text()).trim().split("\n").map(parseSpendJournalRecord) : [];
+      const dispatched = records.flatMap(record => record?.kind === "dispatch" ? [record.send] : []);
+      const ledger = records.flatMap(record => record?.kind === "settle" ? [{ send: dispatched.indexOf(record.send) + 1, tokens: record.tokens }]
+        : record?.kind === "lost" ? [{ send: dispatched.indexOf(record.send) + 1, tokens: "lost" as const }] : [])
+        .sort((a, b) => a.send - b.send);
+      return { status: response.status, body, auth, row, ledger, accounts: [firstAccount, replacementAccount] };
+    } finally {
+      adapterSpy.mockRestore();
+      releaseInheritedSpendHome?.();
+      releaseInheritedSpendHome = undefined;
+      clearAnthropicAccountPoolState();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
+  }
+
+  test.each([true, false])("buffered OAuth continuation keeps usage on its issuing account (replacement reports usage: %s)", async reported => {
+    const { status, body, auth, row, ledger, accounts: [firstAccount, replacementAccount] } = await oauthRotation({ reported });
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ status: "completed", usage: reported
+      ? { input_tokens: 20, output_tokens: 3 } : { input_tokens: 10, output_tokens: 2 } });
+    expect(auth).toEqual(["Bearer fixture-access-a", "Bearer fixture-access-a", "Bearer fixture-access-b"]);
+    expect(row?.attempts?.map(attempt => ({
+      provider: attempt.provider, sends: attempt.sendCount, status: attempt.status,
+      input: attempt.usage?.inputTokens, output: attempt.usage?.outputTokens,
+    }))).toEqual([
+      { provider: formatAnthropicProviderForLog("anthropic", firstAccount), sends: 2, status: 429, input: 10, output: 2 },
+      { provider: formatAnthropicProviderForLog("anthropic", replacementAccount), sends: 1, status: 200,
+        input: reported ? 20 : undefined, output: reported ? 3 : undefined },
+    ]);
+    // #8902: account A's first send settles its own 12 tokens, the usage-less 429 stays
+    // unresolved, and account B's send settles only what it reported.
+    expect(ledger).toEqual([{ send: 1, tokens: 12 }, { send: 2, tokens: "lost" }, { send: 3, tokens: reported ? 23 : "lost" }]);
+  });
+
+  // #8452 across a rotation: the rotation reuses the live attempt object for account B, so a
+  // marker keyed by that object made A's usage-less leg mark B's own 3 credits incomplete. A's
+  // missing reading leaves the request's credit total incomplete; B's attempt keeps its reading.
+  test("a usage-less leg before an OAuth rotation leaves the request credits incomplete and keeps the replacement's own", async () => {
+    const { status, row } = await oauthRotation({ reported: true, firstUsageless: true, credits: 3 });
+    expect(status).toBe(200);
+    expect(row?.attempts?.map(attempt => attempt.usage?.providerCredits)).toEqual([undefined, 3]);
+    expect(row?.usage?.providerCredits).toBe(-1);
+  });
+
+  // #8877, empty-completion retry path: the retry runs its own terminal guard, and a re-ask
+  // there must not sum its legs into the client terminal either. The empty first attempt stays
+  // on the terminal (the empty-completion guard's documented merge); the log meters all three.
+  test("a re-ask inside the empty-completion retry reports the final leg's usage to the client", async () => {
+    takeInheritedSpendHome();
+    const emptyTurn = [
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":0}}}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ].join("");
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return anthropicSse(calls === 1 ? emptyTurn : calls === 2 ? firstTurn : continuationTurn);
+    }) as typeof fetch;
+    const log: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "se-claude-opus-4.8",
+        input: "请检查这个问题并修复代码",
+        stream: true,
+        tools: [{ type: "function", name: "exec_command", description: "run a command", parameters: { type: "object" } }],
+      }),
+    }), { ...config, emptyCompletionRetry: true } as OcxConfig, log);
+
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    expect(calls).toBe(3);
+    const usage = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)))
+      .find(frame => frame.type === "response.completed")?.response?.usage;
+    expect(usage).toMatchObject({ input_tokens: 25, output_tokens: 3 });
+    expect(log.usage).toMatchObject({ inputTokens: 35, outputTokens: 5 });
   });
 
   test("terminal-guard continuation 429 replays on the same key before surfacing", async () => {

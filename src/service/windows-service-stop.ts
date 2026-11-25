@@ -21,7 +21,7 @@ import type { PendingTeardownPartA } from "../config/pending-teardown";
 import { readRuntimePort } from "../config/process-state";
 import type { WinswStatus } from "../lib/winsw";
 import type { ServiceStopOutcome } from "./orchestration";
-import { guardedStopWindowsServiceChecked, stopWindowsServiceChecked, windowsStopClock, type WindowsCheckedStopDeps, type WindowsCheckedStopOptions, type WindowsCheckedStopResult, type WindowsStopAdmission, type WindowsStopReason } from "./windows-checked-stop";
+import { guardedStopWindowsServiceChecked, snapshotWindowsCheckedStopResult, stopWindowsServiceChecked, WindowsCheckedStopRefusedError, windowsStopClock, type WindowsCheckedStopDeps, type WindowsCheckedStopOptions, type WindowsCheckedStopResult, type WindowsStopAdmission, type WindowsStopReason } from "./windows-checked-stop";
 import { stopperUnderHomeWrapper, windowsCheckedStopLiveDeps, windowsStopConfirmLiveDeps, type WindowsCheckedStopLiveOptions } from "./windows-checked-stop-live";
 import { windowsListenPort } from "./windows-ops";
 import type { WindowsStopProcessEntry } from "./windows-process-evidence";
@@ -65,7 +65,7 @@ export interface WindowsPartARequest {
   admission?: WindowsStopAdmission;
   /** The evidence snapshot (windowsProcessSnapshot) a guarded revalidation already read. */
   bindSnapshot?: readonly WindowsStopProcessEntry[];
-  /** The updater's authorizer: throws to refuse, at entry, before each manager stop and before each terminate. */
+  /** The updater's authorizer, called at entry and at each stop or terminate boundary. */
   authorize?: () => void | Promise<void>;
   /**
    * A hard cap (the route: 6 s with a receipt, 4 s for a stray sweep). An overrun answers
@@ -123,15 +123,21 @@ export const UNDER_OWN_WRAPPER_DETAIL = "this stop runs under this home's servic
 
 /** Part A with the live dependencies (or the test hook), optionally capped. */
 export async function runWindowsServiceStopPartA(request: WindowsPartARequest = {}): Promise<WindowsCheckedStopResult> {
+  const deadline = request.capMs === undefined ? Infinity : performance.now() + request.capMs;
+  const cancellation = new AbortController();
+  const remainingMs = () => Math.max(0, deadline - performance.now());
   let expired = false;
+  const withinCap = () => !expired && !cancellation.signal.aborted && remainingMs() > 0;
+  let progress: WindowsCheckedStopResult | undefined;
   let underOwnWrapper = false;
   const options: WindowsCheckedStopOptions = {
     ...(request.admission ? { admission: request.admission } : {}),
     ...(request.bindSnapshot ? { bindSnapshot: request.bindSnapshot } : {}),
+    onProgress: result => { progress = result; },
   };
   const run = async (): Promise<WindowsCheckedStopResult> => {
     if (hooks?.partA) return hooks.partA(request);
-    const live: WindowsCheckedStopLiveOptions = { gate: () => !expired };
+    const live: WindowsCheckedStopLiveOptions = { gate: withinCap, remainingMs, signal: cancellation.signal };
     const base = (hooks?.liveDeps ?? windowsCheckedStopLiveDeps)(live);
     const selfPid = base.selfPid ?? process.pid;
     const guard = (table: readonly WindowsStopProcessEntry[] | null): boolean =>
@@ -150,8 +156,9 @@ export async function runWindowsServiceStopPartA(request: WindowsPartARequest = 
       },
     };
     const authorize = async (): Promise<void> => {
-      if (expired) throw new Error("the checked stop's cap has passed");
+      if (!withinCap()) throw new Error("the checked stop's cap has passed");
       await request.authorize?.();
+      if (!withinCap()) throw new Error("the checked stop's cap has passed");
     };
     const result = await (request.authorize || request.capMs !== undefined
       ? guardedStopWindowsServiceChecked(authorize, deps, options)
@@ -168,23 +175,28 @@ export async function runWindowsServiceStopPartA(request: WindowsPartARequest = 
     }
     return result;
   };
-  if (request.capMs === undefined) return run();
+  if (request.capMs === undefined) return run().finally(() => cancellation.abort());
   const work = run().catch(error => {
-    if (error && typeof error === "object" && "partial" in error) return (error as { partial: WindowsCheckedStopResult }).partial;
+    if (error instanceof WindowsCheckedStopRefusedError && (!request.authorize || !withinCap())) return error.partial;
     throw error;
   });
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const cap = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), request.capMs); });
+  const cap = new Promise<null>(resolve => {
+    timer = setTimeout(() => {
+      expired = true;
+      cancellation.abort();
+      resolve(null);
+    }, Math.ceil(deadline - performance.now()));
+  });
   try {
     const result = await Promise.race([work, cap]);
-    if (result === null) {
-      expired = true;
-      work.catch(() => undefined);
-      return unknownResult("the checked stop did not finish within its cap");
-    }
-    return result;
+    if (result !== null && withinCap()) return result;
+    const refusal = unknownResult("the checked stop did not finish within its cap");
+    return { ...snapshotWindowsCheckedStopResult(result ?? progress ?? refusal),
+      outcome: refusal.outcome, reason: refusal.reason, detail: refusal.detail };
   } finally {
     if (timer) clearTimeout(timer);
+    cancellation.abort();
   }
 }
 

@@ -62,6 +62,23 @@ describe("trace validation", () => {
     expect(parsed.requestPath).not.toBe(trace.requestPath);
   });
 
+  test("accepts a native Gemini trace and rejects mixed paths", () => {
+    const gemini: ProtocolTraceV1 = {
+      v: 1,
+      inbound: "gemini",
+      upstream: "gemini",
+      mode: "native",
+      requestPath: ["gemini", "gemini"],
+      responsePath: ["gemini", "gemini"],
+      reasonCodes: ["same-wire-native"],
+      contractVersion: PROTOCOL_CONTRACT_VERSION,
+    };
+    expect(parseProtocolTraceV1(gemini)).toEqual(gemini);
+    expect(parseProtocolTraceV1({ ...gemini, upstream: "chat" })).toBeUndefined();
+    expect(parseProtocolTraceV1({ ...gemini, responsePath: ["gemini", "chat"] })).toBeUndefined();
+    expect(parseProtocolTraceV1({ ...trace, upstream: "gemini" })).toBeUndefined();
+  });
+
   test("a blocked trace has empty paths", () => {
     const blocked = { ...trace, mode: "blocked", upstream: undefined, requestPath: [], responsePath: [], attempts: undefined };
     expect(isProtocolTraceV1(blocked)).toBe(true);

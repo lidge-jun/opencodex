@@ -4,8 +4,13 @@ import type { VisionSettings } from "./describe";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import type { CodexAuthPolicyConfig } from "../codex/auth-context";
 import { isCodexReserveRequestEligible } from "../codex/loopback-target";
-import type { DataPlaneAdmission } from "../server/auth-cors";
+import { resolveDataPlaneAdmissionSecret, type DataPlaneAdmission } from "../server/auth-cors";
 import type { CapturedAdmissionPolicy } from "../types/admission-policy";
+import { previewRouteModel } from "../router";
+import { resolveAdmissionModelScope, routeAllowedByScope, type AdmissionModelScope } from "../server/admission-model-scope";
+import { localChatCompletionDestination } from "../lib/local-chat-completion";
+import { selfFetchAdmissionToken } from "../lib/local-destinations";
+import { resolveWireProtocolOverride } from "../server/adapter-resolve";
 import {
   customRowInputModalities,
   isModelVisionSidecarConsumer as isModelTextOnly,
@@ -154,21 +159,28 @@ export function requiresVisionPreprocessing(
   return modelAcceptsImageInput(config, { provider: providerName, id: modelId }) === false;
 }
 
-/** Shared by auth admission and planning so a routed describer never borrows OpenAI auth. */
-function usableRoutedVisionModel(config: OcxConfig): string | undefined {
+/** Check the destination and both admission scopes used by the routed Chat self-fetch. */
+function usableRoutedVisionModel(config: OcxConfig, callerScope?: AdmissionModelScope): string | undefined {
   const cfg = config.visionSidecar;
   if (cfg?.backend !== "routed") return undefined;
   const routedModel = cfg.model;
   const sep = routedModel ? routedModel.indexOf("/") : -1;
-  if (!routedModel || sep <= 0) return undefined;
-  const targetProvider = routedModel.slice(0, sep);
-  const targetId = routedModel.slice(sep + 1);
-  // `modelAcceptsImageInput` is the one predicate here: it resolves the whole capability chain,
-  // custom row included. The provider-only `isModelTextOnly` that used to be ANDed in could only
-  // subtract — it never saw a custom row, so a describer the operator had declared image-capable
-  // was refused for a provider hint that same row overrides.
-  return modelAcceptsImageInput(config, { provider: targetProvider, id: targetId }) !== false
-    ? routedModel : undefined;
+  if (!routedModel || sep <= 0 || !routedModel.slice(sep + 1).trim()) return undefined;
+  try {
+    const route = previewRouteModel(config, routedModel);
+    if (route.routeKind !== "explicit-provider" && route.routeKind !== "explicit-account") return undefined;
+    if (!routeAllowedByScope(callerScope, route)) return undefined;
+    const provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "chat");
+    if (requiresVisionPreprocessing(config, provider, route.modelId, route.providerName)) return undefined;
+    const destination = localChatCompletionDestination(config);
+    const token = selfFetchAdmissionToken(config, destination);
+    if (!token) return destination.requiresAdmissionToken ? undefined : routedModel;
+    const hostAdmission = resolveDataPlaneAdmissionSecret(token, config);
+    return hostAdmission && routeAllowedByScope(resolveAdmissionModelScope(config, hostAdmission), route)
+      ? routedModel : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function shouldResolveOpenAiVisionSidecar(
@@ -177,11 +189,12 @@ export function shouldResolveOpenAiVisionSidecar(
   modelId: string,
   parsed: OcxParsedRequest,
   providerName?: string,
+  admissionScope?: AdmissionModelScope,
 ): boolean {
   if (!requiresVisionPreprocessing(config, provider, modelId, providerName) || !messagesHaveImage(parsed)) return false;
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return false;
-  if (usableRoutedVisionModel(config)) return false;
+  if (usableRoutedVisionModel(config, admissionScope)) return false;
   return preferredVisionBackend(config, providerName) === "openai";
 }
 
@@ -217,6 +230,7 @@ export function planVisionSidecar(
     codexAuthPolicy?: CodexAuthPolicyConfig;
     providerName?: string;
     advisorAdmissionPolicy?: CapturedAdmissionPolicy;
+    admissionScope?: AdmissionModelScope;
   } = {},
 ): VisionPlan | undefined {
   if (!requiresVisionPreprocessing(config, provider, modelId, options.providerName)) return undefined;
@@ -229,7 +243,7 @@ export function planVisionSidecar(
   // fence: the target must not be provably blind, and must not itself be a
   // model this planner would re-enter for (belt; the terminal marker on the
   // loopback request is the braces).
-  const routedModel = usableRoutedVisionModel(config);
+  const routedModel = usableRoutedVisionModel(config, options.admissionScope ?? options.advisorAdmissionPolicy?.modelScope);
   if (routedModel) {
     return {
       backend: "routed",

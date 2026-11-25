@@ -68,7 +68,7 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   a request goes upstream as `gpt-6-astra-minor`.
 
 - The flagship roster that lists unconditionally is `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`,
-  `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol` and `gpt-6.1-terra` (Sol and Luna added 2026-09-23 from a
+  `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6.2-sol` and `gpt-6.2-astra` (Sol and Luna added 2026-09-23 from a
   live roster probe; https://openai.com/index/introducing-gpt-6-sol-and-luna/; 6.1 Sol added
   2026-09-30 and 6.1 Terra on 2026-10-27 from openai/codex models.json). None is gated, and all are native-main
   drain sentinels. The confirmed-denial ordering below is still scoped to the first four
@@ -290,17 +290,17 @@ per-grant refresh file lock. Caller cancellation can stop either wait and is
 checked before the token exchange starts. Once started, the exchange observes
 only the refresh's own 30-second timeout: success rotates and retires the old
 refresh token, so cancellation cannot discard the only live grant. Both locks
-await the callback through completion, including publication; aborting their
-wait signal does not release an acquired lock while the exchange runs.
-Successful refresh publishes access and refresh tokens and advances the
-credential mutation epoch before clearing grant rejection and applicable
-reauth quarantine, then throws the caller's abort reason if cancelled.
-Snapshot and identity checks still refuse to overwrite an external auth writer,
-including when the caller also cancelled. A save refused after a successful
-exchange serves the new access token to that request only: auth.json stays as
-the other writer left it, the rotated grant is kept nowhere, and the old grant
-is not marked rejected (#2999). Same-identity device reauth obtains a new login
-grant rather than rotating the existing grant and keeps its pre-publication fence.
+await the callback through completion, including publication; aborting their wait signal does not release the acquired locks.
+Successful refresh publishes access and refresh tokens and advances the credential mutation epoch before clearing
+grant rejection and applicable reauth quarantine, then throws the caller's abort reason if cancelled.
+Snapshot and identity checks still refuse to overwrite an external auth writer, including when the caller also cancelled.
+If publication is refused after an exchange, the active request alone receives the new access token, or throws its abort reason if the caller cancelled. The other writer's auth.json stays intact, the exchanged grant is not stored, and the old grant keeps its rejection status (#2999).
+Same-identity device reauth obtains a new login grant and keeps its pre-publication fence.
+
+## Pool login policy and cancellation
+
+For ChatGPT/Codex pool logins, `codexAuthMethod` applies at proxy startup. With `"device-only"`, `src/codex/auth-api/login-flow.ts` forces a device grant and returns `authMethod: "device-only"`. `src/cli/account-auth.ts` attempts to cancel that flow when the caller supplies `--code` or requests a JSON wait without `--no-wait`. The policy covers only pool login.
+The pool poller requires success for its exact flow id and receives that flow's persisted credential through the OAuth lifecycle callback. Automatic OAuth cleanup retains that exact outcome while the pool login is starting or pending. It rechecks ownership immediately before writing. Pool cancellation remains available through identity and eligibility checks, including after OAuth settles. After publication starts, cancellation is refused while the catalog result settles.
 
 ## Native-main refresh ownership
 
@@ -390,7 +390,7 @@ materialized headers pass the proxy-credential exclusion check before owner matc
 
 The credits module beside `src/codex/quota-types.ts` retains validated WHAM credits only in process memory. Main publication uses the current credential and physical ChatGPT account identity; pool publication uses the captured writer's `quotaHistoryIdentity` and a live credential generation, including credits-only responses. Omitted credits retain the observation; null or unusable credits clear it. Identity mismatch or removal retires it, without a TTL or disk hydration.
 
-`src/codex/auth-api/account-list.ts` exposes optional `credits` only when `showCodexCredits === true` and the current identity has an observation. Decimal balances remain strings; boolean flags and approximate local/cloud message ranges are allowlisted. Credits never enter persisted quota, routing, reset-credit recovery, or `/api/provider-quotas`, and are never logged. The [config surface](../config.md#config-surface) owns the display switch.
+`src/codex/auth-api/account-list.ts` exposes optional `credits` only when `showCodexCredits === true` and the current identity has an observation. Decimal balances remain strings. Boolean flags and approximate local/cloud message ranges are allowlisted. The main and pool probes share the [WHAM group balance fallback](openai-tiers.md#spendable-codex-credits) with quota parsing. The display cache stays in process memory and serves the account DTO. The [config surface](../config.md#config-surface) owns the display switch.
 
 ## Quota history publication identity
 
@@ -422,7 +422,7 @@ The history read API reports a median effective token estimate and interval samp
 
 Live bindings obey the cache-affinity release policy: `pool.cacheAffinity` is on by default, so threshold crossing alone retains a healthy account. A bound thread that does leave may move only onto an account with genuine quota headroom and strictly lower usage. Manual preference, scoped health and shared-cursor guards remain authoritative. Set the flag false to restore threshold rebinding of bound tasks, except for a conversation carrying live uploaded-file references. Independent `spark`/`reserve` quota scopes resolve reset-first to existing quota selection because shared reset timestamps do not describe those windows. The configured value stays unchanged.
 
-The Codex parser in `src/oauth/pool-kernel.ts` is reexported by the compatibility facade and used by both `/api/pool/settings` and the legacy Codex settings route. Generic and Anthropic parsers reject reset-first. The dashboard offers it only for Codex; API, CLI and translated guides preserve the same contract.
+The Codex parser in `src/oauth/pool-kernel.ts` is reexported by the compatibility facade and used by both `/api/pool/settings` and the legacy Codex settings route. The dashboard offers reset-first only for Codex. Codex and Anthropic also support [reset-near-weighted](reset-near-weighted.md) for new assignments.
 
 The account-pool strategy control and `ocx account pool get openai strategy` summarize how the
 configured threshold applies to the active strategy. Manual-switch warnings use the routing usage

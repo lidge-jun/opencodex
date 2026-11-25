@@ -49,7 +49,7 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 自动上下文压缩阈值（默认 `829800`）；仅在启用自动上下文时注入 |
 | `ANTHROPIC_MODEL` | `claudeCode.model`（可选） |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel`（可选，也包括旧版 `ANTHROPIC_SMALL_FAST_MODEL`） |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（以订阅方式启动且未设置时为原生 `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`） |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`。使用订阅在本地启动时，如果启用了 `nativePassthrough`，且上下文计量模式为 1M（默认），符合自动标记条件的未设置槽位会填入原生 `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]`。Fable 在 Claude Code 2.1.290 或更高版本中使用 `claude-fable-5-2[1m]`，版本较低或未知时使用 `claude-fable-5-1[1m]`。将 `claudeCode.contextAccounting` 设置为 `200k` 会禁用自动添加 `[1m]` 标记，未设置的槽位保持为空。 仪表板中的手动启动命令仅在配置了 Fable 槽位时才导出该变量。槽位为空时，由粘贴命令的终端中运行的 Claude Code 选择 Fable 模型。 |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex 将层级槽位设为路由别名时对应的 `/model` 标签（例如 `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`）。launchd 系统环境和 shell 钩子中也成对写入。模型 ID 仍为别名。您自己设置的槽位或标签不会被修改 |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | 启用 `alwaysEnableEffort` 时设为 `1`（条件注入） |
 | `ENABLE_TOOL_SEARCH` | 设置了 `claudeCode.toolSearch` 时注入（条件注入；默认不注入，沿用 Claude Code 自身的默认值） |
@@ -117,8 +117,17 @@ Anthropic。若任一提供方请求头包含代理准入密钥，该密钥会�
 
 使用代理已保存 OAuth 凭据的受管理原生请求还会统一已声明自定义工具在延迟引用和内联添加或删除中的名称。参数、模式和缓存标记保持不变。系统消息中的内联工具变更需要发送 `inline-tools-2026-09-15`；存在相应类型的块时，面向 Anthropic 官方 API 的构建器会保留该请求头。
 
-可以设置 `claudeCode.nativePassthrough: false` 来禁用；也可以通过
-`claudeCode.anthropicBaseUrl` 指向其他位置。
+可以设置 `claudeCode.nativePassthrough: false`、运行 `ocx claude config set --native-passthrough off`，
+或关闭仪表盘 Providers → Anthropic Claude → Accounts 中 Claude 账户池下方的 **Claude 原生透传** 开关来禁用；也可以通过
+`claudeCode.anthropicBaseUrl` 指向其他位置。Claude 模型选择器和 Claude Desktop 传入的别名先于 `modelMap` 解析。以原始模型 ID 为键的
+`modelMap` 条目，无论透传开启还是关闭，都会将请求发送到其他提供商的目标模型。关闭透传后，没有映射的原始
+Claude 模型 ID 会交给路由器。路由器先检查路由策略别名，再检查组合别名。
+两者均不匹配时，依次检查：`defaultModel` 为该 ID 的已启用提供商、已启用的
+`anthropic` 或 `anthropic-*` 提供商、模型列表包含该 ID 的提供商、提供商侧的模型别名，最后是默认提供商。
+当路由是 Anthropic OAuth 提供商时，由 OpenCodex 中保存的 Anthropic 账户处理请求；再保存一个账户即可在
+429 时故障转移，而主动的 Claude OAuth 账户池 需要开启 `anthropicAccountPool.enabled` 才会生效。
+路由从下一个请求开始按新设置执行；已在运行的 Claude Code 会话需要重新启动，以便模型槽位和上下文窗口
+保持一致。
 
 ## Claude Desktop 模式：网关（默认）与第一方
 
@@ -158,7 +167,7 @@ unknown 表示 opencodex 无法确定设置是否仍指向自己的代理。外�
 
 ### Picker 模式：在第一方 Code 标签页中显示 opencodex 模型
 
-Picker 模式是第一方模式的一部分。在 macOS 和 Windows 上选择第一方时默认开启；设置
+Picker 模式是第一方模式的一部分。在 macOS、Windows 和 Linux 上选择第一方时默认开启；设置
 `claudeCode.intercept.picker: false` 后会保持关闭。它会修改第一方 Desktop 的 Code 标签页模型选择器，
 按名称列出可用的 opencodex 模型。首次开启时，macOS 可能会要求你在登录钥匙串中、Windows 可能会要求你在当前用户根存储中信任本地证书颁发机构。
 该颁发机构限制为 `claude.ai` 及其子域名。可导出的签名身份由 OS 凭据存储保护，普通重启会复用同一证书和密钥。
@@ -169,8 +178,7 @@ OpenCodex 配置目录中不保存明文 Picker 签名密钥。受限 CA 的完�
 
 从旧身份进行一次性迁移时，清除原有信任可能需要同意。清理未完成时，Picker 不可用，已应用的配置档案
 会使用不解密的中继。macOS 还可能单独要求解锁钥匙串或批准应用访问凭据，重启或升级时也可能出现这些提示。Windows 上显式 `on` 或 `trust` 可能显示添加根的确认。
-Linux 仍不支持 Picker，不会启动 Picker CA、凭据存储或代理工作。主要 Claude 拦截功能仍可用，
-其本地 CA 文件受到所有者、符号链接、文件权限及 Windows ACL 检查保护。
+在 Linux 上显式启用 Picker 时，`certutil` 会将受限的 Picker CA 添加到用户的 NSS 数据库并设为受信任。
 
 Picker 模式开启期间，Claude Desktop 通过 OpenCodex 访问网络。如果 OpenCodex 停止，Desktop 会处于离线状态，
 直到你完全重启 Desktop 或关闭 Picker 模式。使用 `ocx claude desktop picker status` 查看状态，使用
@@ -330,7 +338,14 @@ v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` /
 1. 启动环境槽位会在目录中的有效窗口大于 200k **且**至少达到所配置的自动压缩阈值时带上
    `[1m]` 标记。发现列表和 Desktop 选择器条目不跟随该阈值：它们使用固定的 829,800 token 下限（Anthropic 路由上的 Claude 模型必须真正达到 1M）。
 2. 系统会注入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`（默认 `829800`，范围 `100000`–`1000000`），
-   使对话在该位置自动进行摘要。
+   使对话在该位置自动进行摘要。经代理运行 `ocx claude` 时，如果模型目录中有更小的窗口，
+   启动器可以通过 `--settings` 为各模型设置压缩阈值。参数超出启动器的长度限制时，仍使用环境变量。
+
+生成的 JSON 属于 Claude Code 的命令行设置，优先级高于本地、项目及用户设置文件，低于托管设置。传入 `--settings <file>` 或 `--autocompact` 会跳过 JSON 生成。启动器原样传递显式指定的 `--settings` 参数，由 Claude Code 处理文件。
+
+使用任一选项跳过 JSON 生成时，如果自动上下文设置了 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，启动器会保留该环境变量。显式导出该变量也会跳过 JSON 生成并保留其值。在 Claude Code 中，该变量的有效值优先于 `--autocompact` 和已保存的压缩设置。要使用文件中的压缩设置，请将 `claudeCode.autoContext` 设为 `false` 以关闭自动注入，取消导出的 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，然后传入 `--settings <file>`。参见 [Claude Code 自动压缩设置的优先级](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window)。
+
+只要有一个参数（包括选项值和 `--` 后的参数）与 Remote Control 命令或别名（`remote-control`、`rc`、`bridge`、`remote` 或 `sync`）完全匹配，启动器就会跳过生成的设置，并保留原始参数和启动环境。
 
 配置有三种状态：
 
@@ -490,8 +505,8 @@ Search 和图像描述沿用仓库已有的 Claude Code OAuth fingerprint 先例
 
 | Messages 输入 | Responses 输出 |
 | --- | --- |
-| 顶层 `system` | `instructions`（文本块以 `\n\n` 连接） |
-| `messages[].role: "system"` | 同样合并到 `instructions` |
+| 顶层 `system` | `instructions`（文本块以 `\n\n` 连接）；通过 Codex 登录使用 GPT-6.2 Sol 和 Astra 时，改为作为第一条 `developer` 消息发送，以便缓存 |
+| `messages[].role: "system"` | 在原位置转换为 `developer` 消息 |
 | 用户文本 / 图像 | `input_text` / `input_image`（base64 → data URL） |
 | Assistant 文本 | `output_text` |
 | Assistant `tool_use` | `function_call`（`input` → JSON 字符串化的 `arguments`） |

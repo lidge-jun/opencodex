@@ -1191,14 +1191,15 @@ ocx system settings --stream-mode eager-relay
 ```
 
 Additional system booleans take on/off: `--show-codex-credits`, `--account-picker`,
-`--main-account-hard-lock`, `--ultra-fast-tier`, and `--fast-rows`. They write only
+`--main-account-hard-lock`, `--ultra-fast-tier`, `--fast-rows`, and `--reserve`. They write only
 explicit fields and may combine with existing system options. Showing credits is
 a display preference, not paid-credit opt-in; system Ultra Fast is separate from
-provider Fast.
+provider Fast. `--reserve` controls Luna Reserve compatibility independently of
+`--desktop-authless` and grants no upstream entitlement.
 
 Ultra Fast is an opt-in setting, default off. With `--ultra-fast-tier on`, the
-generated catalog adds the Ultrafast speed choice to native `gpt-6-astra` and
-`gpt-6.1-sol` (including account-bound rows), so the Codex picker offers it next to
+generated catalog adds the Ultrafast speed choice to native `gpt-6-astra`,
+`gpt-6.1-sol`, `gpt-6.2-astra` and `gpt-6.2-sol` (including account-bound rows), so the Codex picker offers it next to
 Fast. Ultrafast requires an eligible ChatGPT plan; the catalog cannot check that,
 so turn the setting on only if your plan includes it. Other models and the default
 speed are unchanged.

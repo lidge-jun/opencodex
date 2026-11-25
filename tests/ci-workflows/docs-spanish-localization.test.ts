@@ -8,6 +8,14 @@ import { LINK_READINESS_REASONS } from "../../src/client/link-readiness";
 
 const root = repoPath("docs-site/src/content/docs");
 const source = (path: string): string => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+
+test("Google adapter references document 429 retry evidence in English and Spanish", () => {
+  for (const locale of ["", "es/"]) {
+    const google = source(join(root, locale, "reference/adapters.md")).split("## `google`\n")[1]?.split("\n## ")[0];
+    expect(google).toMatch(/`429`[^.]*`Retry-After`/);
+  }
+});
+
 const config = source(repoPath("docs-site/astro.config.mjs"));
 // Use the configured locale directories rather than freezing today's page count.
 const localeFolders = new Set([...config.matchAll(/^\s*["']?([a-z]{2}(?:-[a-z]{2})?)["']?:\s*\{\s*label:/gm)]
@@ -21,41 +29,79 @@ function pages(directory: string, canonical = false): string[] {
       : /\.mdx?$/.test(entry.name) ? [entry.name] : [];
   }).sort();
 }
-/** Locate quoted or indented fences; a close needs the same marker and at least its opening length. */
-function fencedBlocks(markdown: string): { start: number; end: number; content: string }[] {
+type MarkdownRange = { start: number; end: number };
+
+function matchingInlineCodeEnd(markdown: string, at: number, length: number): number | undefined {
+  let slash = at;
+  while (slash > 0 && markdown[slash - 1] === "\\") slash--;
+  if ((at - slash) % 2 === 1) return undefined;
+  const closing = new RegExp("(?<!`)`{" + length + "}(?!`)", "g");
+  closing.lastIndex = at + length;
+  const match = closing.exec(markdown);
+  if (!match) return undefined;
+  // Code spans can wrap within a paragraph. They cannot cross a blank line or a fenced block.
+  const crossedBlock = /\n[ \t]*(?:\n|(?:`{3,}|~{3,})[^\n]*\n)/;
+  if (crossedBlock.test(markdown.slice(at + length, match.index + length + 1))) return undefined;
+  return match.index + length;
+}
+
+/** Locate fenced examples and HTML comments without treating code spans as comments. */
+function markdownRanges(markdown: string) {
   const lines = [...markdown.matchAll(/[^\n]*(?:\n|$)/g)].filter(line => line[0].length);
-  const blocks: { start: number; end: number; content: string }[] = [];
+  const fences: (MarkdownRange & { content: string })[] = [];
+  const comments: MarkdownRange[] = [];
+  let commentStart: number | undefined;
+  let inlineEnd = 0;
   const unquote = (line: string): string => line.replace(/^(?:[ \t]*>[ \t]?)+/, "");
   const quoteDepth = (line: string): number => (line.match(/^(?:[ \t]*>[ \t]?)+/)?.[0].match(/>/g) ?? []).length;
   for (let i = 0; i < lines.length; i++) {
-    const depth = quoteDepth(lines[i]![0]);
-    const opening = /^[ \t]*(`{3,}|~{3,})([^\n]*)\n?$/.exec(unquote(lines[i]![0]));
-    if (!opening || (opening[1]![0] === "`" && opening[2]!.includes("`"))) continue;
-    const start = lines[i]!.index!;
-    const contentStart = start + lines[i]![0].length;
+    const { 0: line, index: start = 0 } = lines[i]!;
+    const opening = commentStart === undefined ? /^[ \t]*(`{3,}|~{3,})([^\n]*)\n?$/.exec(unquote(line)) : null;
+    if (!opening || (opening[1]![0] === "`" && opening[2]!.includes("`"))) {
+      for (const marker of line.matchAll(/`+|<!--|-->/g)) {
+        const at = start + marker.index;
+        if (at < inlineEnd) continue;
+        if (marker[0][0] === "`") {
+          if (commentStart === undefined) inlineEnd = matchingInlineCodeEnd(markdown, at, marker[0].length) ?? at;
+        } else if (marker[0] === "<!--") commentStart ??= at;
+        else if (commentStart !== undefined) {
+          comments.push({ start: commentStart, end: at + marker[0].length });
+          commentStart = undefined;
+        }
+      }
+      continue;
+    }
+    const depth = quoteDepth(line);
+    const contentStart = start + line.length;
     let closing = i + 1;
     for (; closing < lines.length; closing++) {
-      if (quoteDepth(lines[closing]![0]) !== depth) continue;
-      const fence = /^[ \t]*(`+|~+)[ \t]*\n?$/.exec(unquote(lines[closing]![0]))?.[1];
+      const closeLine = lines[closing]![0];
+      if (quoteDepth(closeLine) !== depth) continue;
+      const fence = /^[ \t]*(`+|~+)[ \t]*\n?$/.exec(unquote(closeLine))?.[1];
       if (fence?.[0] === opening[1]![0] && fence.length >= opening[1]!.length) break;
     }
     const contentEnd = lines[closing]?.index ?? markdown.length;
     const end = closing < lines.length ? contentEnd + lines[closing]![0].length : markdown.length;
-    blocks.push({ start, end, content: markdown.slice(contentStart, contentEnd) });
+    fences.push({ start, end, content: markdown.slice(contentStart, contentEnd) });
     i = closing;
   }
-  return blocks;
+  if (commentStart !== undefined) comments.push({ start: commentStart, end: markdown.length });
+  return { fences, comments };
 }
+
 /** Preserve fenced example bytes so translations cannot silently change executable commands. */
 function codeBlocks(markdown: string): string[] {
-  return fencedBlocks(markdown).map(block => block.content);
+  return markdownRanges(markdown).fences.map(block => block.content);
 }
-/** Remove the same detected fence ranges before checking identifiers in translated prose. */
-function withoutFencedCode(markdown: string): string {
+
+/** Remove fenced code and optionally hide HTML comments for visible-heading checks. */
+function withoutFencedCode(markdown: string, hideComments = false): string {
+  const { fences, comments } = markdownRanges(markdown);
+  const omit = hideComments ? [...fences, ...comments].sort((a, b) => a.start - b.start) : fences;
   let prose = "", previous = 0;
-  for (const block of fencedBlocks(markdown)) {
-    prose += markdown.slice(previous, block.start) + "\n";
-    previous = block.end;
+  for (const range of omit) {
+    prose += markdown.slice(previous, range.start) + "\n";
+    previous = range.end;
   }
   return prose + markdown.slice(previous);
 }
@@ -63,23 +109,16 @@ function withoutFencedCode(markdown: string): string {
 function inlineCode(markdown: string): Set<string> {
   const prose = withoutFencedCode(markdown);
   const values = new Set<string>();
-  const escaped = (at: number): boolean => {
-    let slashes = 0;
-    for (let i = at - 1; i >= 0 && prose[i] === "\\"; i--) slashes++;
-    return slashes % 2 === 1;
-  };
-  for (let at = 0; at < prose.length; at++) {
-    if (prose[at] !== "`" || escaped(at)) continue;
-    let length = 1;
-    while (prose[at + length] === "`") length++;
-    const closing = new RegExp("(?<!`)`{" + length + "}(?!`)", "g");
-    closing.lastIndex = at + length;
-    // Backslashes are literal inside code spans, including immediately before the closing run.
-    const match = closing.exec(prose);
-    if (!match || /\n[ \t]*\n/.test(prose.slice(at + length, match.index))) { at += length - 1; continue; }
-    // Markdown code spans can cross lines; their rendered whitespace is normalized.
-    values.add(prose.slice(at + length, match.index).replace(/\s*\n\s*/g, " ").trim());
-    at = match.index + length - 1;
+  let end = 0;
+  for (const run of prose.matchAll(/`+/g)) {
+    const at = run.index;
+    if (at < end) continue;
+    const length = run[0].length;
+    const closingEnd = matchingInlineCodeEnd(prose, at, length);
+    if (closingEnd === undefined) continue;
+    // Backslashes are literal inside code spans; wrapped whitespace is normalized.
+    values.add(prose.slice(at + length, closingEnd - length).replace(/\s*\n\s*/g, " ").trim());
+    end = closingEnd;
   }
   return values;
 }
@@ -103,6 +142,19 @@ function missingInlineIdentifiers(english: string, spanish: string): string[] {
   return [...inlineCode(english)].filter(value => !translated.has(value));
 }
 
+const a6apiHeading = "## A6API credit quota";
+const spanishA6apiHeading = "## Cuota de crédito A6API";
+const a6apiAnchor = '<a id="a6api-credit-quota"></a>';
+
+function hasA6apiQuotaTargets(english: string, spanish: string): boolean {
+  const visibleLines = (markdown: string) => withoutFencedCode(markdown, true).split("\n");
+  const lines = visibleLines(spanish);
+  const anchor = lines.indexOf(a6apiAnchor);
+  return visibleLines(english).includes(a6apiHeading)
+    && anchor >= 0 && anchor === lines.lastIndexOf(a6apiAnchor)
+    && lines.slice(anchor + 1).find(line => line.trim()) === spanishA6apiHeading;
+}
+
 describe("Spanish documentation localization", () => {
   test("lists every Remote Link readiness reason next to the Child status instructions", () => {
     for (const locale of ["", "es"]) {
@@ -114,6 +166,86 @@ describe("Spanish documentation localization", () => {
       const listed = inlineCode(paragraph ?? "");
       expect(LINK_READINESS_REASONS.filter(reason => !listed.has(reason)), path).toEqual([]);
     }
+  });
+
+  test("the A6API credit quota fragment leads to the A6API section in both languages", () => {
+    const english = source(join(root, "guides/api-key-catalog.md"));
+    const spanish = source(join(root, "es/guides/api-key-catalog.md"));
+    expect(hasA6apiQuotaTargets(english, spanish)).toBe(true);
+  });
+
+  test.each([["~~~md", "~~~"], ["<!--", "-->"]])("A6API targets inside %s do not satisfy the link check", (open, close) => {
+    const spanishSection = a6apiAnchor + "\n\n" + spanishA6apiHeading;
+    const hidden = (text: string) => [open, text, close].join("\n");
+    expect(hasA6apiQuotaTargets(a6apiHeading, hidden(spanishSection))).toBe(false);
+    expect(hasA6apiQuotaTargets(hidden(a6apiHeading), spanishSection)).toBe(false);
+    expect(hasA6apiQuotaTargets(a6apiHeading, hidden(spanishSection) + "\n\n" + spanishSection)).toBe(true);
+  });
+
+  test("a marker inside a comment or fenced example cannot hide the visible A6API section", () => {
+    const spanish = a6apiAnchor + "\n\n" + spanishA6apiHeading;
+    expect(hasA6apiQuotaTargets("<!--\n~~~\n-->\n" + a6apiHeading, spanish)).toBe(true);
+    expect(hasA6apiQuotaTargets("~~~html\n<!--\n~~~\n" + a6apiHeading, spanish)).toBe(true);
+    expect(codeBlocks("<!--\n~~~\n-->\n")).toEqual([]);
+    expect(codeBlocks("~~~html\n<!--\n~~~\n")).toEqual(["<!--\n"]);
+  });
+
+  test.each(["Write `<!--` literally.", "Write ``literal\n<!-- marker`` here."])("code spans leave headings and fences visible (%j)", prefix => {
+    const spanish = a6apiAnchor + "\n\n" + spanishA6apiHeading;
+    expect(hasA6apiQuotaTargets(prefix + "\n\n" + a6apiHeading, spanish)).toBe(true);
+    expect(codeBlocks(prefix + "\n\n~~~sh\nocx status\n~~~\n")).toEqual(["ocx status\n"]);
+  });
+
+  test.each([
+    ["reference/configuration/providers.md", /only when tools are available on that iteration/, /without another send/],
+    ["es/reference/configuration/providers.md", /solo si hay herramientas disponibles en esa iteración/, /sin otro envío/],
+  ] as const)("qualifies hosted-search re-asks in %s", (page, toolsAvailable, noResend) => {
+    const row = source(join(root, page)).split("\n").find(line => line.startsWith("| `terminalContinuationGuard?` |"));
+    expect(row).toMatch(toolsAvailable);
+    expect(row).toMatch(noResend);
+  });
+
+  test.each([
+    ["reference/configuration/providers.md", /charged against the request send budget and configured spend ceilings/, /refuses it before dispatch/],
+    ["es/reference/configuration/providers.md", /se carga al presupuesto de envíos de la solicitud y a los límites de gasto configurados/, /la rechaza antes del envío/],
+  ] as const)("charges terminal re-asks to the send budget in %s", (page, charged, refused) => {
+    const row = source(join(root, page)).split("\n").find(line => line.startsWith("| `terminalContinuationGuard?` |"));
+    expect(row).toMatch(charged);
+    expect(row).toMatch(refused);
+  });
+
+  test.each([
+    ["en", /routing policy aliases.*combo aliases/],
+    ["es", /alias de políticas de enrutamiento.*alias de combos/],
+    ["fr", /alias de politique de routage.*alias de combos/],
+    ["ja", /ルーティングポリシーのエイリアス.*コンボのエイリアス/],
+    ["ko", /라우팅 정책 별칭.*콤보 별칭/],
+    ["ru", /псевдонимы политик маршрутизации.*псевдонимы комбо/],
+    ["tr", /yönlendirme politikası takma adları.*kombo takma adları/],
+    ["zh-cn", /路由策略别名.*组合别名/],
+    ["zh-tw", /路由政策別名.*組合別名/],
+  ] as const)("Claude guide %s documents router aliases before provider fallback", (locale, aliases) => {
+    const guide = source(join(root, locale === "en" ? "" : locale, "guides/claude-code.md"));
+    const paragraph = guide.split(/\n\s*\n/).find(text =>
+      text.includes("`ocx claude config set --native-passthrough off`") && text.includes("`defaultModel`"));
+    expect(paragraph).toBeDefined();
+    expect(paragraph!.split("`defaultModel`")[0]!.replace(/\s+/g, " ")).toMatch(aliases);
+  });
+
+  test("the canonical Claude passthrough guide distinguishes ingress aliases from router aliases", () => {
+    const guide = source(join(root, "guides/claude-code.md"));
+    const passthrough = guide.slice(guide.indexOf("`ocx claude config set --native-passthrough off`"),
+      guide.indexOf("**Rate limits on passthrough.**")).replace(/\s+/g, " ");
+    expect(passthrough).toMatch(/Claude picker and Desktop ingress aliases resolve before `modelMap`/);
+    expect(passthrough).toMatch(/a `modelMap` entry keyed by a raw model ID.+(?:either|both) /i);
+    expect(passthrough).toMatch(/router.+provider-model alias/);
+  });
+
+  test.each([
+    ["guides/kiro-request-credits.md", "The Combo attempt table shows the USD estimate for each attempt and the calculation for each credit-priced attempt."],
+    ["es/guides/kiro-request-credits.md", "La tabla del Combo muestra el costo estimado en USD de cada intento y el cálculo de los intentos con precio por crédito."],
+  ])("%s describes the USD estimate and credit calculation shown per Combo attempt", (path, description) => {
+    expect(source(join(root, path))).toContain(description);
   });
 
   test("code spans keep a trailing backslash literal without swallowing later identifiers", () => {
@@ -321,6 +453,16 @@ describe("Spanish documentation localization", () => {
     }
   });
 
+  test("the Spanish Grok Build manual recipe link lands at the recipe heading", () => {
+    const anchor = "manual-recipe-without-auto-registration";
+    const english = source(join(root, "guides/grok-build.md"));
+    const spanish = source(join(root, "es/guides/grok-build.md"));
+    expect(english).toContain(`](#${anchor})`);
+    expect(english).toContain("## Manual recipe (without auto-registration)");
+    expect(spanish).toContain(`](#${anchor})`);
+    expect(spanish).toContain(`<a id="${anchor}"></a>\n\n## Receta manual (sin registro automático)`);
+  });
+
   test("remote credential examples require a protected transport in every locale", () => {
     for (const locale of ["", ...localeFolders]) {
       const opencode = codeBlocks(source(join(root, locale, "guides/opencode.md")))
@@ -413,13 +555,15 @@ describe("Spanish documentation localization", () => {
     expect(resolve(" docs-secret ")).toMatchObject({ kind: "configured", keyId: "docs-key", source: "dedicated" });
   });
 
-  test("Responses admission tables match the implemented header matrix in every locale", async () => {
+  test("documented admission tables match the implemented header matrix", async () => {
     const { AUTH_MATRIX } = await import("../../src/server/auth-cors");
     const accepted = new Set(["accepted", "aceptado", "accepté", "허용", "허용됨", "受け入れられる", "受け入れ", "принимается", "kabul edilir", "接受"]);
     const rejected = new Set(["not accepted", "no aceptado", "non accepté", "허용되지 않음", "受け入れられません", "не принимается", "kabul edilmez", "不接受"]);
     for (const locale of ["", ...localeFolders]) {
       const text = source(join(root, locale, "reference/configuration/server.md"));
-      for (const endpoint of ["/v1/responses", "/v1/chat/completions"]) {
+      const endpoints = ["/v1/responses", "/v1/chat/completions"];
+      if (locale === "" || locale === "es") endpoints.push("/v1/usage/windows");
+      for (const endpoint of endpoints) {
         const row = text.split("\n").find(line => line.startsWith(`| \`${endpoint}\` |`));
         expect(row, `${locale || "en"} ${endpoint}`).toBeDefined();
         const cells = row!.split("|").slice(2, -1).map(cell => cell.replace(/\*/g, "").trim());

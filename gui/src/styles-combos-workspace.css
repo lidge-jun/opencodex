@@ -39,6 +39,12 @@
   flex-direction: column;
 }
 
+.rb-suggest + .combos-workspace-root {
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
+}
+
 .combos-workspace-rail {
   position: sticky;
   top: 0;

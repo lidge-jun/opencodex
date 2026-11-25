@@ -276,7 +276,7 @@ La instalación de la CLI requiere [Node](https://nodejs.org) 18 o posterior; De
 
 OpenCodex controla el estado que retiene el proceso en estas categorías, cada una con un límite documentado:
 
-- **14 almacenes retenidos** (registro de solicitudes, búferes de depuración, cachés de imágenes y modelos, descripciones de visión, blobs de Cursor, continuación de Responses, etc.) contabilizan bytes y liberan entradas según el presupuesto de memoria de la aplicación (256 MiB de forma predeterminada). El almacén de reproducción del control nativo permanece fijado y no libera sus entradas.
+- **15 almacenes retenidos** (registro de solicitudes, búferes de depuración, cachés de imágenes y modelos, descripciones de visión, blobs de Cursor, continuación de Responses, etc.) contabilizan bytes y liberan entradas según el presupuesto de memoria de la aplicación (256 MiB de forma predeterminada). El almacén de reproducción del control nativo permanece fijado y no libera sus entradas.
 - **4 búferes observados** (acumuladores del conversor y colas finales de imágenes, OAuth y Grok) se supervisan para medir la presión de bytes en curso, sin liberar entradas.
 - **32 registros de almacenes de estado** realizan barridos de vencimiento cada 60 segundos y reconcilian la generación de configuración para eliminar claves antiguas de proveedores y cuentas.
 - **Cachés de rutas y huellas** (metadatos de espacios de trabajo, identidades reforzadas, sales de instalación y capacidades de indicadores de modo) usan límites LRU por orden de inserción de 8 a 128 entradas.

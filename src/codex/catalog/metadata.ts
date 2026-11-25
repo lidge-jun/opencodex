@@ -53,6 +53,8 @@ import {
   NATIVE_GPT6_SOL_MODEL,
   NATIVE_GPT61_SOL_MODEL,
   NATIVE_GPT61_TERRA_MODEL,
+  NATIVE_GPT62_SOL_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL,
   NATIVE_RESERVE_MODEL,
   NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
   NATIVE_OPENAI_MODELS,
@@ -60,6 +62,7 @@ import {
   SUPPORTED_NATIVE_OPENAI_SLUGS,
   RETIRED_NATIVE_OPENAI_MODELS,
   configuredNativeOpenAiModels,
+  configuredNativeOpenAiDisplayName,
   discoveredNativeOpenAiModels,
   discoveredNativeOpenAiRow,
   hasNativeOpenAiCapabilityMetadata,
@@ -80,6 +83,8 @@ export {
   NATIVE_GPT6_SOL_MODEL,
   NATIVE_GPT61_SOL_MODEL,
   NATIVE_GPT61_TERRA_MODEL,
+  NATIVE_GPT62_SOL_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL,
   NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
   NATIVE_OPENAI_MODELS,
   SELF_DESCRIBED_NATIVE_OPENAI_MODELS,
@@ -103,6 +108,8 @@ export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
   NATIVE_GPT61_SOL_MODEL,
   // Terra's pinned row has the same client floor and backfills older installed catalogs too.
   NATIVE_GPT61_TERRA_MODEL,
+  NATIVE_GPT62_SOL_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL,
 ];
 
 export function configuredNativeAliasSlugs(
@@ -213,6 +220,8 @@ export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: n
   // raised its Codex & Work default to 500,000 on 2026-10-11; the 872,000 ceiling is unchanged.
   [NATIVE_GPT61_SOL_MODEL]: { ...NATIVE_GPT61_SOL_CONTEXT },
   [NATIVE_GPT61_TERRA_MODEL]: { ...NATIVE_GPT61_TERRA_CONTEXT },
+  [NATIVE_GPT62_SOL_MODEL]: { ...NATIVE_GPT6_CONTEXT, contextWindow: 500_000 },
+  [NATIVE_GPT62_ASTRA_MODEL]: { ...NATIVE_GPT6_CONTEXT },
   // Astra Minor borrows Astra's row, so it inherits Astra's numbers. No account we hold can reach
   // it, so this is inheritance, not a measurement.
   [NATIVE_GPT6_ASTRA_MINOR_MODEL]: { ...NATIVE_GPT6_CONTEXT },
@@ -246,6 +255,13 @@ const PINNED_NATIVE_CAPABILITY_ENTRIES: Map<string, RawEntry> = new Map(
     return entry ? [[slug, entry] as const] : [];
   }),
 );
+
+export function pinnedNativeCapabilityFlag(
+  slug: string, flag: "supports_reasoning_effort_updates" | "supports_experimental_context",
+): boolean | undefined {
+  const value = PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)?.[flag];
+  return typeof value === "boolean" ? value : undefined;
+}
 
 /**
  * The user-owned levers that set a native window, carried together.
@@ -339,14 +355,15 @@ function longWindowOptInCeiling(slug: string): number | undefined {
   return longWindow;
 }
 
-function narrowToLimits(raw: number | undefined, slug: string, input: NativeContextLimitsInput): number | undefined {
+/** Apply the same per-model opt-in policy to pinned or confirmed roster windows. */
+export function narrowNativeOpenAiContextWindow(raw: number | undefined, slug: string, input: NativeContextLimitsInput): number | undefined {
   if (raw === undefined) return undefined;
   const limit = nativeOpenAiConfiguredContextLimit(slug, input);
+  // A confirmed default is already authoritative. The shipped opt-in ceiling
+  // constrains only a user-requested increase, never that default or a lower cap.
+  if (limit === undefined || limit <= raw) return limit ?? raw;
   const optInCeiling = longWindowOptInCeiling(slug);
-  if (optInCeiling !== undefined) {
-    return Math.min(limit ?? raw, optInCeiling);
-  }
-  return applyProviderContextCap(raw, limit);
+  return optInCeiling === undefined ? raw : Math.max(raw, Math.min(limit, optInCeiling));
 }
 
 export function nativeOpenAiContextWindow(slug: string, limits?: NativeContextLimitsInput): number | undefined {
@@ -354,7 +371,7 @@ export function nativeOpenAiContextWindow(slug: string, limits?: NativeContextLi
     ?? (typeof PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)?.context_window === "number"
       ? PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)!.context_window as number
       : undefined);
-  return narrowToLimits(raw, slug, limits);
+  return narrowNativeOpenAiContextWindow(raw, slug, limits);
 }
 
 export function nativeOpenAiMaxOutputTokens(slug: string): number | undefined {
@@ -401,7 +418,7 @@ export function nativeOpenAiMaxInputTokens(slug: string, limits?: NativeContextL
   const raw = NATIVE_OPENAI_CONTEXT_OVERRIDES[slug]?.maxInputTokens;
   if (raw === undefined) return undefined;
   const window = nativeOpenAiContextWindow(slug, limits);
-  const narrowed = narrowToLimits(raw, slug, limits) ?? raw;
+  const narrowed = narrowNativeOpenAiContextWindow(raw, slug, limits) ?? raw;
   return window === undefined ? narrowed : Math.min(narrowed, window);
 }
 
@@ -606,6 +623,13 @@ function upstreamNativeEntryForSlug(slug: string): RawEntry | undefined {
   if (!presentation) return undefined; // an alias with no product identity must not ship a wrong one
   alias.display_name = presentation.displayName;
   alias.description = presentation.description;
+  neutralizeBorrowedInstructions(alias);
+  delete alias.availability_nux;
+  return alias;
+}
+
+/** A borrowed row must not claim the source model's identity in its instructions. */
+function neutralizeBorrowedInstructions(alias: RawEntry): void {
   if (typeof alias.base_instructions === "string") {
     alias.base_instructions = neutralizeIdentity(alias.base_instructions);
   }
@@ -618,8 +642,6 @@ function upstreamNativeEntryForSlug(slug: string): RawEntry | undefined {
       };
     }
   }
-  delete alias.availability_nux;
-  return alias;
 }
 
 /** Account-specific grants and prompts are projected from entitlement evidence, never a shared row. */
@@ -723,10 +745,50 @@ export function shouldUpgradeToUpstreamEntry(entry: RawEntry): boolean {
   if (typeof entry.slug !== "string" || !UPSTREAM_NATIVE_ENTRIES.has(entry.slug)) return false;
   if (discoveredNativeOpenAiRow(entry.slug)) return true;
   if (entry.display_name === entry.slug) return true;
+  if (isUnchangedHistoricalConfiguredFallback(entry)) return true;
   // A row this project authored from a guess is not evidence of upstream truth, however genuine
   // its display name looks. Replace it once, from the pin.
   return SELF_AUTHORED_NATIVE_ROWS.has(entry.slug)
     && entry.display_name !== UPSTREAM_NATIVE_ENTRIES.get(entry.slug)?.display_name;
+}
+
+// Before a model had its own pinned row (GPT-6.2 until #8893), a providers.openai.models entry for
+// it borrowed an older Sol row. Promote that fallback to the model's own pin only while every
+// field still holds what the earlier build wrote, so any user edit keeps the row: borrowed fields
+// must equal the template, and build-derived fields must hold the exact values those builds wrote
+// (checked against rows generated at c320932c19^, the commit before GPT-6.2 was pinned).
+const HISTORICAL_CONFIGURED_TEMPLATES = [NATIVE_GPT61_SOL_MODEL, NATIVE_GPT6_SOL_MODEL] as const;
+const HISTORICAL_CONFIGURED_DESCRIPTION = /^OpenAI native model added through providers\.openai\.models; uses GPT-[0-9.]+-Sol capabilities\.$/;
+const IDENTITY_FALLBACK_FIELDS: ReadonlySet<string> = new Set(["slug", "display_name", "description"]);
+// A Map, so a persisted key such as `constructor` never resolves to an inherited property.
+const HISTORICAL_DERIVED_FALLBACK_VALUES: ReadonlyMap<string, ReadonlyArray<unknown>> = new Map<string, ReadonlyArray<unknown>>([
+  ["shell_type", ["unified_exec"]],
+  ["effective_context_window_percent", [95]],
+  ["opencodex_native_source_priority", [1]],
+  // 90% of the 272,000-token window configured natives received.
+  ["auto_compact_token_limit", [244_800]],
+  // Written only when WebSockets were enabled, and then as the template's own value.
+  ["prefer_websockets", [undefined, true]],
+  // Account prompts never reach a borrowed row.
+  ["availability_nux", [undefined]],
+]);
+
+function isUnchangedHistoricalConfiguredFallback(entry: RawEntry): boolean {
+  const slug = entry.slug as string;
+  if (entry.display_name !== configuredNativeOpenAiDisplayName(slug)) return false;
+  if (typeof entry.description !== "string" || !HISTORICAL_CONFIGURED_DESCRIPTION.test(entry.description)) return false;
+  return HISTORICAL_CONFIGURED_TEMPLATES.some(template => {
+    // The projected template is what an earlier build copied, minus fields catalog rows never carry.
+    const borrowed = template === slug ? null : upstreamNativeEntry(template);
+    if (!borrowed) return false;
+    neutralizeBorrowedInstructions(borrowed);
+    const fields = new Set([...Object.keys(entry), ...Object.keys(borrowed)]);
+    return [...fields].every(field => {
+      if (IDENTITY_FALLBACK_FIELDS.has(field)) return true;
+      const derived = HISTORICAL_DERIVED_FALLBACK_VALUES.get(field);
+      return derived ? derived.includes(entry[field]) : Bun.deepEquals(entry[field], borrowed[field]);
+    });
+  });
 }
 
 export function nativeOpenAiSlugs(): string[] {

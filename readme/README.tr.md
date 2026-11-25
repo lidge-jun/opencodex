@@ -306,7 +306,7 @@ betiklerini engellediyse [kurulum belgelerine](https://opencodex.me/tr/getting-s
 
 OpenCodex, süreçte tutulan durumu aşağıdaki kategorilerde izler. Her birinin belgelenmiş bir sınırı vardır:
 
-- **14 tutulan depo** (istek günlüğü, hata ayıklama halkaları, görsel önbelleği, model önbelleği, görü
+- **15 tutulan depo** (istek günlüğü, hata ayıklama halkaları, görsel önbelleği, model önbelleği, görü
   açıklamaları, imleç blob'ları, responses devamlılığı vb.) bayt olarak hesaplanır ve uygulamanın sahip
   olduğu bellek bütçesiyle (varsayılan 256 MiB) tahliye edilir; yalnızca native control replay deposu
   sabitlenmiştir ve hiç tahliye edilmez.

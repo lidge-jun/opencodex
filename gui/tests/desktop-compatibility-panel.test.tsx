@@ -252,11 +252,11 @@ test("managed client mode never falls back to mutating the shared hub", async ()
   expect(container.textContent).toContain("unavailable in OpenCodex managed client mode");
   expect(requests).toHaveLength(0); expect(container.querySelector("button")).toBeNull();
 });
-test("a completed build assessment shows verified and last observed versions without claiming support", async () => {
+test("a newer verified build displays its observed version alongside the assessed baseline", async () => {
   server(false, "trusted", undefined, undefined,
-    { assessedVersion: "26.924.2738.0", observedVersion: "26.1007.9446.0", verified: false, completedAt: 1770000000000, privatePath: "fixture-secret" });
+    { assessedVersion: "26.924.2738.0", observedVersion: "26.1007.9446.0", verified: true, completedAt: 1770000000000, privatePath: "fixture-secret" });
   const container = await mount();
-  expect(container.textContent).toContain("Verified package version");
+  expect(container.textContent).toContain("Assessed baseline version");
   expect(container.textContent).toContain("Last observed package version");
   expect(container.textContent).not.toContain("Installed package version");
   expect(container.textContent).toContain("26.924.2738.0");

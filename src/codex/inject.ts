@@ -1,5 +1,5 @@
 import { injectApprovedCodexProvider } from "./provider-routing";
-import { beginCodexWriteSection, cleanExternalProviderJournal, publishCodexArtifact } from "./inject/config-write-section";
+import { beginCodexWriteSection, cleanExternalProviderJournal, publishCodexArtifact, publishCodexConfigIfUnchanged } from "./inject/config-write-section";
 import { closeSync, existsSync, openSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import {
@@ -42,8 +42,7 @@ import {
 import {
   JOURNAL_PATH, hasUnverifiedJournalBaseline,
   markJournalInjectedState,
-  journaledInjectedOpenaiBaseUrl,
-  journaledInjectedRealtimeWsBaseUrl,
+  journaledInjectedRootValues,
   removeJournal,
   writeJournal,
 } from "./journal";
@@ -373,14 +372,13 @@ async function injectCodexConfigImpl(
   }
 
   const journalBaselineIsNative = (nativeInput: string): boolean => {
-    // Value evidence survives an app rewrite that removes the ownership comments.
-    const journaledBaseUrl = journaledInjectedOpenaiBaseUrl({ readOnly: true });
-    const journaledRealtimeWsBaseUrl = journaledInjectedRealtimeWsBaseUrl({ readOnly: true });
-    const looksInjectedByValue =
-      (journaledBaseUrl !== null && rootTomlString(nativeInput, "openai_base_url") === journaledBaseUrl)
-      || (journaledRealtimeWsBaseUrl !== null
-        && rootTomlString(nativeInput, REALTIME_WS_BASE_URL_KEY) === journaledRealtimeWsBaseUrl);
-    return !hasInjectedCodexRouting(nativeInput) && !looksInjectedByValue;
+    // Value evidence survives an app rewrite that drops the ownership comments, including one that
+    // puts back an EARLIER injection's URL from the app's own copy of the file.
+    const ownsRoot = (key: Parameters<typeof journaledInjectedRootValues>[0]) => {
+      const value = rootTomlString(nativeInput, key);
+      return value !== null && journaledInjectedRootValues(key, { readOnly: true }).includes(value);
+    };
+    return !hasInjectedCodexRouting(nativeInput) && !ownsRoot("openai_base_url") && !ownsRoot(REALTIME_WS_BASE_URL_KEY);
   };
   const readCurrentProfile = readCodexProfileSource;
   const unverifiedJournalMessage = "Codex configuration was not written: the journal has no verified baseline for the current config/profile. Current files and the journal were preserved.";
@@ -491,7 +489,7 @@ async function injectCodexConfigImpl(
     // A native snapshot may have been refreshed above. An older hashless routed snapshot
     // must not gain the new injection's hash and later overwrite preserved user edits.
     if (hasUnverifiedJournalBaseline(plan.baselineContent, readCurrentProfile())) throw new Error(unverifiedJournalMessage);
-    publishCodexArtifact(CODEX_CONFIG_PATH, heldConfigWriteLock, (path, hooks) => atomicWriteFile(path, plan.content, undefined, hooks));
+    publishCodexConfigIfUnchanged(heldConfigWriteLock!, "inject", nativeInput, plan.content);
     historyArtifactStageForTests?.("after-config");
     assertCodexHomeOwner(getCodexHome());
     profilePublish.published = plan.profileContent;
@@ -521,6 +519,7 @@ async function injectCodexConfigImpl(
       // This is the catalog artifact selected for this injection, even when config.toml
       // already points at that path and therefore needs no textual rewrite.
       injectedCatalogPath: plan.catalogPath,
+      injectedCatalogBinding: plan.injectedCatalogBinding,
     }, hooks));
     historyArtifactStageForTests?.("after-artifacts");
     // Detect migration throughout the artifact transaction, not just at entry.

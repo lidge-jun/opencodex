@@ -643,12 +643,10 @@ describe("combo failure hop/stop verdicts", () => {
     expect(comboFailureDecision(400, "free tier prompt cap", { code: "free_rate_limited" })).toBe("hop");
   });
 
-  test("INVARIANT: generic 410 and 413 remain terminal", () => {
-    // These two are the tripwire for this change. A widened hop list must never swallow them:
-    // 410 without a structured lifecycle code is a real resource-gone verdict, and a generic
-    // 413 is a request the next target would reject identically.
+  test("INVARIANT: a generic 410 remains terminal", () => {
+    // A widened hop list must never swallow it: 410 without a structured lifecycle code is a real
+    // resource-gone verdict.
     expect(comboFailureDecision(410, "resource is gone")).toBe("stop");
-    expect(comboFailureDecision(413, "request too large")).toBe("stop");
   });
 
   test("INVARIANT: a structured model lifecycle 410 still hops", () => {
@@ -792,7 +790,10 @@ describe("request-local optional control incompatibility", () => {
       expect(comboFailureDecision(400, message, { code })).toBe("stop");
     }
     expect(comboFailureDecision(499, message)).toBe("stop");
-    expect(comboFailureDecision(413, message)).toBe("stop");
+    // A provider 413 hops on its own status (#9017); a generic 410 is still a status this
+    // compatible message cannot turn into a hop.
+    expect(comboFailureDecision(413, message)).toBe("hop");
+    expect(comboFailureDecision(410, message)).toBe("stop");
   });
 });
 
@@ -1265,6 +1266,30 @@ describe("provider moderation refusal", () => {
       },
     },
   };
+
+  test.each([
+    "content refused. category: spam, and please",
+    "refused category: a, and and b",
+    "refused categories: a, AND b, and c. please revise your input.",
+    "refused category: spam, and retry later.",
+  ])("recognizes category-list boundaries in %s", message => {
+    const withCode = JSON.stringify({ error: { code: "moderation_refusal", message } });
+    expect(isProviderModerationRefusal(400, withCode)).toBe(true);
+    expect(isProviderModerationRefusal(400, JSON.stringify({ error: { message } }))).toBe(false);
+  });
+
+  test("rejects an ambiguous category list without exponential backtracking (CodeQL js/redos)", () => {
+    // ", and retry" is both a category separator plus a word and a retry tail, so the former
+    // single regex tried every split before rejecting the trailing "!": about 4x slower per two
+    // repetitions until Bun's backtracking limit, roughly a second of CPU per error body on a fast
+    // machine. The scan visits each boundary once and finishes in well under a millisecond.
+    const message = "refused category: a" + ", and retry category: a".repeat(32) + "!";
+    const body = JSON.stringify({ error: { code: "moderation_refusal", message } });
+    const started = performance.now();
+    // A complete bounded body is what reaches the scan at this length (the body readers pass it).
+    expect(isProviderModerationRefusal(400, body, undefined, true)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
 
   test("the observed gateway refusal hops only with a structured moderation code", () => {
     // Owner decision on #8428: prose alone never hops. The observed body carries no code, so it

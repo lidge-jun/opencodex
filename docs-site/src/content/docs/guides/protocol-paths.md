@@ -151,6 +151,9 @@ These paths still use the internal Responses bridge or are not covered:
 - `previous_response_id`, `store`, `background`, and compaction stay Responses features.
 - Adapters whose wire is none of the three APIs (Gemini, Kiro, Cursor, and others) are translated
   through the IR with no feature claims.
+- Managed native Messages streams echo the requested selector in `message_start.message.model`
+  when the frame is found in the scan window. The complete event is delivered as soon as its
+  blank line ends, including when the upstream uses a bare carriage return.
 - Managed native Messages to first-party Anthropic preserve a coherent observed Claude Code CLI
   user agent, session UUID and allowlisted SDK headers across token refresh and account selection,
   for foreground (`X-App: cli`) and background (`claude --bg`, `X-App: cli-bg`) sessions alike.
@@ -163,6 +166,9 @@ These paths still use the internal Responses bridge or are not covered:
   their current behavior. Headers alone do not authorize requests or establish official support.
   The TypeScript Agent SDK's `sdk-ts` user-agent entrypoint is recognized with the same required
   identity headers, preserving its allowlisted native feature betas on first-party Anthropic requests.
+  Claude cloud project children that send the exact `local_projects` user-agent entrypoint with the
+  same required headers retain their observed identity and allowlisted native feature betas.
+  These requests follow the existing ingress routing rules.
 - Native Chat over OAuth is not planned. Native Messages over Anthropic OAuth includes pooled
   accounts under the same native eligibility and credential-binding rules.
 - The managed native Messages path forwards a caller's `anthropic-beta` values only from a short

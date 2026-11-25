@@ -7,6 +7,12 @@ Un **proveedor** es un punto final de LLM ascendente más cómo llegar a él: un
 
 La vista general del proveedor del panel separa los detalles de conexión, el uso de la cuenta y las notas editables. Las notas aparecen una vez, debajo de las secciones de conexión y autenticación. Los ajustes preestablecidos de patrocinador compatibles también muestran una breve introducción, una etiqueta de patrocinador y enlaces al sitio o consola del proveedor. Estos enlaces conservan los parámetros de referencia del preset. La información del patrocinador se muestra solo cuando el nombre del proveedor configurado, el adaptador y el punto final coinciden con el ajuste preestablecido; nunca cambia el enrutamiento, la selección de la cuenta o los valores predeterminados.
 
+<a id="reasoning-effort-rejection-diagnostics"></a>
+
+## Diagnósticos de rechazo del esfuerzo de razonamiento
+
+Los reintentos al mismo proveedor y modelo con un esfuerzo menor, y el aprendizaje de niveles no admitidos, usan un diagnóstico de error completo de hasta 1.024 unidades de código UTF-16, incluido cualquier texto envolvente. Un diagnóstico mayor no autoriza estos reintentos ni el aprendizaje a partir de su prefijo. El cuerpo original sigue disponible para el manejo habitual de errores, incluida la conmutación ordinaria de Combo; se mantienen los límites existentes de visualización de errores del cliente. Un error legítimo pero demasiado largo tampoco activa la reducción automática del esfuerzo ni actualiza los niveles aprendidos. Los diagnósticos breves como `cannot use parameter 'reasoning_effort'` siguen identificando el esfuerzo; un campo ajeno real sigue bloqueando el reintento y el aprendizaje.
+
 <a id="openai-account-modes"></a>
 
 ## Modos de cuenta OpenAI
@@ -20,7 +26,7 @@ Utilice `gpt-5.6-sol` desnudo con la opción Pool / Direct en la página de prov
 
 Si el proveedor `openai` integrado no está disponible o está desactivado, el selector de cuentas del panel de control y la página Codex Auth pueden restaurarlo: las filas ausentes se crean a partir del preajuste canónico, las filas canónicas deshabilitadas se vuelven a habilitar sin reemplazar la configuración del modelo o modo guardado, y no canónicas a las filas `openai` no se les ofrece esa ruta de recuperación.
 
-La compatibilidad con Luna Reserve es una capacidad de cuenta ChatGPT en la ruta de avance canónica OpenAI, no un derecho de clave OpenAI API. Su selector manual de almacenamiento principal requiere un modo de escritorio local efectivo y un permiso de flujo ascendente actual vinculado a credenciales; una entrada de catálogo por sí sola no autoriza una solicitud. Consulte [Luna Reserve junto a modelos enrutados](/es/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models) para ver la configuración, el orden de reinicio, los requisitos de autorización y los ayudantes no compatibles.
+La compatibilidad con Luna Reserve es una capacidad de cuenta ChatGPT en la ruta de avance canónica OpenAI, no un derecho de clave OpenAI API. Su selector manual de almacenamiento principal requiere el ajuste `codexReserveEnabled` en un proxy loopback que no es cliente y un permiso de flujo ascendente actual vinculado a credenciales; una entrada de catálogo por sí sola no autoriza una solicitud. Consulte [Luna Reserve junto a modelos enrutados](/es/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models) para ver la configuración, el orden de reinicio, los requisitos de autorización y los ayudantes no compatibles.
 
 Para añadir una cuenta con cuota agotada y finalizar su validación diferida, véase [Codex calentamiento de la cuenta](/es/guides/codex-integration/#codex-account-warmup).
 
@@ -32,7 +38,7 @@ Para el inicio de sesión Codex en el modo Pool, la descripción general de prov
 
 Cuando la información de restablecimiento está disponible, la visión general muestra el siguiente tiempo de restablecimiento y la capacidad que se espera que se recupere como `+N% pool capacity`. **Cobertura incompleta** significa que una o más cuentas del grupo no podrían contribuir de manera segura a la estimación, por ejemplo, porque su plan o cuota es desconocido, su lectura es obsoleta o la cuenta está pausada o necesita reautenticación.
 
-Las cuentas Business Premium identificadas como `self_serve_business_prolite` cuentan como cinco unidades Standard en esta estimación. Ese peso solo sirve para mostrar capacidad: no selecciona cuentas ni crea una ventana de cinco horas si el proveedor solo informa uso semanal. La calibración sigue los [límites oficiales de Business](https://help.openai.com/en/articles/12003714-chatgpt-business-models-and-limits), comprobados el 20 de octubre de 2026. Los planes desconocidos mantienen el peso base y se informa su cantidad.
+Pro 100 (`prolite`), Pro 200 (`pro`) y Pro 500 (`promax`) cuentan como 10, 20 y 50 unidades Plus, respectivamente. Las cuentas Business Premium identificadas como `self_serve_business_prolite` cuentan como cinco unidades Standard en esta estimación. Ese peso solo sirve para mostrar capacidad: no selecciona cuentas ni crea una ventana de cinco horas si el proveedor solo informa uso semanal. La calibración sigue los [límites oficiales de Business](https://help.openai.com/en/articles/12003714-chatgpt-business-models-and-limits), comprobados el 20 de octubre de 2026. Los planes desconocidos mantienen el peso base y se informa su cantidad.
 
 Una advertencia de **Cobertura de ventana parcial** significa que algunas cuentas incluidas informaron una ventana de cuota pero no otra. La descripción general mantiene esas ventanas separadas y marca cada ventana afectada incompleta en lugar de tratar la lectura faltante como uso para esa ventana.
 
@@ -154,7 +160,7 @@ La pestaña Cuentas Antigravity muestra un nivel de membresía observado como un
 
 Gemini 4 Argon (`gemini-4-argon`) aparece en el preajuste `google` con niveles de pensamiento bajos, medios (el predeterminado) y altos. Google lo ofrece solo en el nivel pagado Gemini API, no en el nivel gratuito. El `google-antigravity`, Argon aparece con los mismos tres niveles, que se asignan a los modelos del protocolo `gemini-4-argon-low`, `-medium` y `-high`. Google lo limita a las cuentas AI Ultra y Enterprise elegibles. Cloud Code Assist sirve Argon solo al cliente Antigravity CLI, por lo que OpenCodex envía todas las solicitudes de modelos Gemini 4 y el descubrimiento de modelos con el CLI User-Agent (`antigravity/cli/1.3.4` ) y mantiene el IDE User-Agent para cualquier otro modelo. Gemini 4 Hydrogen (low, medium, high por defecto y xhigh) aparece en `google-antigravity` solo cuando la lista de modelos de tu cuenta lo incluye, y cada nivel se asigna a su modelo del protocolo `gemini-4-hydrogen-*`; solicitar `max` o `ultra` también selecciona xhigh.
 
-En Vertex AI, `gemini-4-argon`, `gemini-4-carbon` y `gemini-4-hydrogen` reciben las imágenes devueltas por herramientas, como capturas de pantalla, dentro de la respuesta de función correspondiente. El descubrimiento de modelos de Vertex AI, sus reglas de credenciales y este tratamiento se describen en [Google Vertex AI](/es/guides/google-vertex/).
+En Vertex AI, los modelos Gemini 3 y posteriores (incluidos `gemini-4-argon`, `gemini-4-carbon`, `gemini-4-hydrogen` y `gemini-4-neon`) reciben las imágenes devueltas por herramientas, como capturas de pantalla, dentro de la respuesta de función correspondiente. El descubrimiento de modelos de Vertex AI, sus reglas de credenciales y este tratamiento se describen en [Google Vertex AI](/es/guides/google-vertex/).
 
 Para Gemini en Antigravity, incluyendo Argon, los resúmenes de pensamiento marcados por el proveedor se mantienen separados de la respuesta: Responses usa elementos de resumen de razonamiento, Chat Completions usa `reasoning_content` y Messages usa `thinking` bloques. Los clientes deciden cómo mostrar esos campos. Un cliente Responses puede solicitar `reasoning.summary: "none"` para suprimir resúmenes; esto no desactiva el razonamiento interno del modelo. Una firma de pensamiento es metadatos de continuación y puede acompañar al texto ordinario, por lo que su presencia por sí sola no oculta ese texto. OpenCodex conserva texto de respuesta sin marcar incluso cuando su redacción suena como planificación o análisis.
 
@@ -196,6 +202,8 @@ El catálogo ChatGPT passthrough también se superpone en las identificadores GP
 
 ## 2. Inicio de sesión de la cuenta (OAuth)
 
+Para cuentas profesionales o educativas de Microsoft, consulta la [configuración de Microsoft 365 Copilot](/es/guides/m365-copilot/).
+
 Los ajustes preestablecidos del proveedor pueden usar el inicio de sesión de la cuenta, incluido el GitHub Copilot, a través de un puente experimental no oficial de flujo de dispositivos. opencodex almacena sus credenciales en `~/.opencodex/auth.json`; los tokens actualizables se actualizan automáticamente, mientras que las claves duraderas se reutilizan hasta que el proveedor las revoca. `ocx login codex` también es aceptado, pero no es uno de estos proveedores: se dirige al grupo de cuentas Codex, el mismo flujo que `ocx account login codex`, que mantiene su propio libro de cuentas y necesita un proxy en ejecución. `chatgpt` y `openai` son alias de esa ruta.
 
 ```bash
@@ -221,7 +229,7 @@ ocx logout <provider>
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth utiliza la pasarela de suscripción separada Grok CLI. La anulación de la clave API utiliza `https://api.x.ai/v1` y puede inyectar Procesamiento Prioritario. En vivo primero Grok catálogo; `grok-4.5` es el valor predeterminado. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude modelos; lista de modelos en vivo desde `/v1/models`. |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Modelos de programación de Kimi Code Plan. Usa por defecto el alias estable `kimi-for-coding` (actualmente K2.8 Preview): contexto de 1M tokens, entrada de texto e imágenes y razonamiento `low`/`high`/`max` (`max` por defecto). También incluye `k3.1-pro` y `k3.1-pro-highspeed` (K3.1 Pro), con contexto de 1M tokens y razonamiento obligatorio en los mismos niveles (`max` por defecto). Las selecciones retiradas `kimi-k2.x` migran al alias al actualizar. |
-| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | El mismo inicio de sesión de la cuenta Kimi (reutiliza la credencial `kimi` OAuth) sobre el cable OpenAI Responses. Misma lista de modelos y capacidades que `kimi`; pensando que el contenido permanece encriptado en el lado del servidor, las llamadas a herramientas y los resultados permanecen visibles. |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | El mismo inicio de sesión de la cuenta Kimi (reutiliza la credencial `kimi` OAuth) sobre el cable OpenAI Responses. Misma lista de modelos y capacidades que `kimi`; pensando que el contenido permanece encriptado en el lado del servidor, las llamadas a herramientas y los resultados permanecen visibles. Agréguelo desde el selector **Add provider** del panel (**Kimi (Responses)**) o con `ocx provider add kimi-responses --live`. No tiene inicio de sesión propio: agregarlo con la sesión de Kimi ya iniciada no pide un segundo inicio de sesión, e iniciar sesión desde su entrada del selector crea solo esta fila, sin tocar la fila `kimi`. Cerrar la sesión desde cualquiera de las dos filas (`ocx logout kimi` o `ocx logout kimi-responses`, en local o con `--live`, o con **Logout** en cualquiera de las filas del panel) quita la cuenta de Kimi activa para ambas filas y lo indica; si hay otra cuenta de Kimi guardada, pasa a ser la activa para ambas filas; ninguna fila la usa mientras esté en pausa, y si necesita volver a iniciar sesión, vuelve a iniciar sesión con ella. Eliminar una fila desde el panel (o con `--live`) conserva el inicio de sesión mientras la otra lo siga usando, y eliminar la última lo elimina; un `ocx provider remove` local deja los inicios de sesión guardados, como con otros proveedores. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research pasarela de suscripción (el mismo backend que usa Hermes Agent). El inicio de sesión de concesión de dispositivo contra `portal.nousresearch.com`; el token de acceso es la inferencia por solicitud JWT. Pago mixto + catálogo de modelos `:free` (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`,...) descubierto en vivo desde la cuenta iniciada. Los tokens de actualización son de un solo uso y se rotan en cada actualización. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Los botones de inicio de sesión y añadir cuenta del dashboard ofrecen AWS IAM Identity Center, Builder ID, Google, inicio de sesión de dispositivo con GitHub o Kiro CLI. El inicio de sesión nativo añade una cuenta sin cerrar la sesión de `kiro-cli`. La opción Kiro CLI importa o inicia una sesión de esa CLI; al añadir una cuenta, cambia temporalmente su selección y la restaura si se cancela o falla. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth sobre el cable de Cloud Code Assist. Live discovery utiliza el punto final autenticado `v1internal:fetchAvailableModels` de CCA y publica los modelos de agente disponibles para la cuenta iniciada; el catálogo mantenido sigue siendo la reserva. |
@@ -335,6 +343,8 @@ Solo `anthropic` y `anthropic2` admiten este modo; otros proveedores responden `
 
 OAuth proveedores cuyas credenciales incluyen un ID de cuenta estable o correo electrónico pueden mantener más de un inicio de sesión. La página Proveedores muestra esas cuentas en un menú desplegable, le permite agregar otra y cambia la cuenta activa sin cerrar la sesión de las otras. Un inicio de sesión normal con una credencial sin identidad Kimi reemplaza la ranura activa, mientras que un **Añadir cuenta** explícito conserva esa ranura y activa una nueva y distinta. Las cuentas de Kiro se identifican mediante el ARN del perfil y, cuando está disponible, el correo electrónico del usuario conectado. Distintos usuarios de un perfil de organización pueden conservar credenciales separadas. `chatgpt` siempre es de una sola ranura porque las cuentas de grupo Codex tienen un libro mayor separado. Los tokens permanecen en `~/.opencodex/auth.json`; `/api/oauth/accounts` devuelve solo metadatos enmascarados.
 
+Las sesiones nuevas de Codex y del grupo OAuth de Anthropic pueden usar [`reset-near-weighted`](/es/reference/configuration/providers/#reset-near-weighted) para priorizar la cuota semanal que está a punto de renovarse. La afinidad de las sesiones activas se conserva.
+
 <a id="cockpit-tools-antigravity-import"></a>
 
 ### Importación de Antigravity desde Cockpit Tools
@@ -384,13 +394,9 @@ Para el diagnóstico de compatibilidad de cuenta-interruptor, habilitar la depur
 
 <a id="kiro-request-credits"></a>
 
-### Créditos de solicitud Kiro
+### Créditos por solicitud de Kiro
 
-En los giros habilitados para herramientas, opencodex mantiene el texto ordinario de Kiro hasta que se valide la finalización. Si Kiro termina con texto sin formato en lugar de su herramienta privada de respuesta final, todavía se ejecuta un reintento limitado y solo se muestra la respuesta final resultante. El progreso que acompaña a una llamada de herramienta real sigue siendo visible. Una respuesta final privada normal no necesita reintento de finalización.
-
-Si el filtro de seguridad de Kiro detiene un turno (`CONTENT_FILTERED`, por ejemplo el clasificador `BIO` de Claude), la solicitud termina con un rechazo que los clientes no reintentan. Los clientes Claude reciben `stop_reason: "refusal"` y Codex recibe una respuesta fallida con la categoría y explicación de Kiro. Si el filtro detiene el único reintento acotado, no se muestra una respuesta final: el progreso retenido del primer intento y el texto parcial del reintento aparecen como comentarios antes del rechazo.
-
-Cuando Kiro emite la medición de crédito, los registros de solicitudes conservan el gasto reportado como `usage.providerCredits`, incluso en el libro mayor de uso persistente. Estos son Kiro créditos; los recuentos de tokens aún pueden estimarse y el valor del crédito no reemplaza las estimaciones de costos de USD. Las solicitudes de reserva de finalización agregan sus créditos reportados. Un valor ausente significa que Kiro no reportó el uso del crédito; un cero explícito significa que no reportó ningún gasto.
+La guía [Créditos por solicitud de Kiro](/es/guides/kiro-request-credits/) describe la validación de respuestas, los rechazos del filtro de seguridad, el registro de créditos y su valoración en USD.
 
 <a id="kiro-refresh-attention"></a>
 
@@ -460,6 +466,8 @@ están en la página [Catálogo de proveedores con clave API](/es/guides/api-key
 - [CodeBuddy Code CLI oficial (Global y CN)](/es/guides/api-key-catalog/#official-codebuddy-code-cli-global--cn)
 - [Oficial Qoder CLI (Global y CN)](/es/guides/api-key-catalog/#official-qoder-cli-global--cn)
 - [Claude Code CLI (suscripción)](/es/guides/api-key-catalog/#claude-code-cli-subscription)
+- [StepCode CLI (suscripción)](/es/guides/step-cli/)
+- [Antigravity CLI (ACP, local)](/es/guides/api-key-catalog/#antigravity-cli-acp-local)
 - [Cuota de crédito A6API](/es/guides/api-key-catalog/#a6api-credit-quota)
 - [Plan de codificación BigModel sobre Responses](/es/guides/api-key-catalog/#bigmodel-coding-plan-over-responses)
 - [Múltiples claves API](/es/guides/api-key-catalog/#multiple-api-keys)
@@ -519,6 +527,14 @@ La sección **Límites de solicitudes** de la descripción general de proveedore
 
 Proveedores con una consulta activa: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi, Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax, Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code y proveedores personalizados basados en a6api o Abliteration.
 
+**Uso mensual de Anthropic.** Las cuentas con facturación por uso, como las de Enterprise,
+pueden mostrar una barra mensual cuando Anthropic indica que el uso adicional está activado
+y no informa de ventanas del plan. La barra se muestra sin fecha de restablecimiento y desaparece
+cuando Anthropic informa de ventanas del plan o confirma que el uso adicional está desactivado.
+Si la respuesta no contiene ninguna ventana de cuota utilizable, la consulta de la cuenta sigue
+indicando que la lectura no está disponible, incluso si al actualizar la cuota del proveedor se
+recibe la misma respuesta.
+
 **Cuota de Kimi Coding Plan.** Los proveedores con inicio de sesión de cuenta o clave API que usan el endpoint canónico `https://api.kimi.com/coding/v1` consultan `/usages`. Los planes que informan `usages.limit_month_total` (o `monthTotal`) muestran una barra de uso mensual; si el total no está disponible, se utiliza `limit_month_code` (o `monthCode`). La fracción `used_ratio` / `usedRatio` debe estar en `[0, 1]` antes de convertirse en porcentaje consumido; los valores inválidos se ignoran. Un contenedor `usages` vacío o inutilizable no oculta datos mensuales válidos de otro sobre compatible. Se conserva cualquier hora de restablecimiento informada. Las ventanas existentes de cinco horas, semanales y de créditos totales de suscripción siguen siendo independientes; una ventana mensual ausente no se muestra como 0%.
 
 **Créditos de Abliteration.** Un proveedor de cualquier nombre cuyo `baseUrl` sea `https://api.abliteration.ai` o `https://api.abliteration.ai/v1` consulta `GET https://api.abliteration.ai/v1/credits` con la clave activa como token bearer, sin seguir redirecciones. El saldo restante en USD es `total_credits` menos `total_usage`; la barra muestra el gasto consumido. Una cuenta sin créditos no muestra barra. Una clave rechazada elimina la fila; `503 credit_balance_unavailable`, 408 y 429 conservan la última lectura.
@@ -550,10 +566,12 @@ Un resultado denegado por acceso no prueba por sí mismo un inicio de sesión ve
 
 Las solicitudes de chat compatibles con la traducción OpenAI reducen las imágenes en línea cuando sus datos base64 combinados superan los 3,5 MiB. Las imágenes más antiguas pierden detalle primero. Este es un presupuesto de imagen de mejor esfuerzo, por lo que el texto grande, los esquemas o las imágenes que no se pueden procesar aún pueden exceder un límite de solicitud ascendente. Las URL de imágenes remotas no se descargan y las imágenes que no se pueden reducir permanecen adjuntas. El passthrough de Native Chat mantiene sus bytes de imagen originales.
 
+Tras ajustar las imágenes al límite de tamaño, las solicitudes a Venice amplían las imágenes pequeñas en línea hasta que su lado más corto mida 64 píxeles, siempre que se puedan leer sus dimensiones y el códec confirme que la imagen de origen tiene como máximo 16 millones de píxeles. Si se omite la ampliación o falla, la solicitud conserva la imagen del paso anterior, que puede haberse vuelto a codificar. Venice aún puede rechazar una imagen que no alcance su tamaño mínimo.
+
 
 ### Cambios del catálogo y cuotas
 
-Mientras un inicio de sesión esté en curso, **Cuentas** ofrece **Cancelar** al aparecer instrucciones. Las plazas Business Premium `self_serve_business_prolite` pesan cinco unidades Standard en la estimación, según los límites Business oficiales citados en la sección de capacidad, verificados el 20 de octubre de 2026. No cambia selección de cuentas ni crea ventanas que no informe el proveedor. Un grupo OAuth Anthropic activado con dos o más cuentas ofrece estimación equivalente, con igual peso por cuenta; usa últimas lecturas sin consultas extra y señala cobertura incompleta por pausa, reautenticación o datos obsoletos. Con el grupo desactivado o una sola cuenta muestra su lectura individual.
+Mientras un inicio de sesión esté en curso, **Cuentas** ofrece **Cancelar** al aparecer instrucciones. Pro 100 (`prolite`), Pro 200 (`pro`) y Pro 500 (`promax`) cuentan como 10, 20 y 50 unidades Plus, respectivamente. Las plazas Business Premium `self_serve_business_prolite` pesan cinco unidades Standard en la estimación, según los límites Business oficiales citados en la sección de capacidad, verificados el 20 de octubre de 2026. No cambia selección de cuentas ni crea ventanas que no informe el proveedor. Un grupo OAuth Anthropic activado con dos o más cuentas ofrece estimación equivalente, con igual peso por cuenta; usa últimas lecturas sin consultas extra y señala cobertura incompleta por pausa, reautenticación o datos obsoletos. Con el grupo desactivado o una sola cuenta muestra su lectura individual.
 
 Las configuraciones v1 migran al marcador 2 y una fila compatible con opciones. Se guarda una sola copia `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json` la restaura.
 

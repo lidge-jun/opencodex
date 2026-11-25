@@ -10,7 +10,7 @@ Agent 設定控制要廣告哪個 Codex 協作介面，以及 opencodex 如何�
 | 欄位 | 型別 | 預設值 | 意義 |
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2" \| "v2-plaintext"` | `"default"` | `v1` 將每個目錄模型標記為 v1；`v2` 將每個模型標記為 v2。`default` 還原上游 pin（Sol/Terra v2、Luna v1），否則遵循原生的 `multi_agent_v2` 旗標。目錄 pin 適用於新 session。`v2-plaintext` 選擇 V2、關閉全域強制並啟用實驗性明文任務傳遞；編譯器也影響既有 V2 工作階段的後續合格請求。 |
-| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | 最多五個原生 id、帳號限定的 `<selector>/<native-openai-model>` id 或路由 `provider/model` id，優先顯示在子代理選擇器中。新增選項只提供原生和路由 id；儲存時會保留已設定的精確帳號限定 id，包括目前目錄中無法使用的 id。如需新增精確帳號限定 id，請使用 `ocx agent subagents set` 或編輯設定。[Astra 一次性升級](/reference/configuration/agents/#astra-roster-upgrade)後，明確的空清單會被保留。 |
+| `subagentModels?` | `string[]` | `gpt-6.2-astra`, `gpt-6.2-sol`, `gpt-6-luna` | 最多五個原生 id、帳號限定的 `<selector>/<native-openai-model>` id 或路由 `provider/model` id，優先顯示在子代理選擇器中。新增選項只提供原生和路由 id；儲存時會保留已設定的精確帳號限定 id，包括目前目錄中無法使用的 id。如需新增精確帳號限定 id，請使用 `ocx agent subagents set` 或編輯設定。[Astra 一次性升級](/reference/configuration/agents/#astra-roster-upgrade)後，明確的空清單會被保留。 |
 | `injectionModel?` | `string` | — | 在代理撰寫的 v2 委派指引中使用的偏好原生或路由子代理模型。 |
 | `injectionEffort?` | `string` | — | 偏好 effort（`low` 到 `ultra`），僅在搭配 `injectionModel` 時有意義。 |
 | `injectionPrompt?` | `string` | — | 取代內建指引本文。支援 `{{model}}`、`{{effort}}`、`{{roster}}` 與 `{{fallback}}`。觸發閘門保持不變。 |
@@ -30,7 +30,7 @@ Agent 設定控制要廣告哪個 Codex 協作介面，以及 opencodex 如何�
 
 呼叫方必須使用 Responses，最終目的地必須是標準 ChatGPT Codex forward 傳輸：`adapter: "openai-responses"`、`authMode: "forward"`，以及確切網址 `https://chatgpt.com/backend-api/codex`。API 金鑰 provider、自訂相容閘道、其他最終 provider 及非 Responses 呼叫不會被改寫。啟用編譯也影響既有 V2 工作階段後續的合格請求；既有密文不會被解密，已儲存歷史不會改寫，停用也不會刪除歷史、provider 請求或本機回應／除錯狀態中已保留的副本。HTTPS 與驗證仍啟用。
 
-啟用任一設定時，本機重放需要相同獲准的 opencodex 呼叫方身分及請求自身非空白的 `thread-id`；否則須省略 `previous_response_id` 並重送完整對話。啟用期間保留的狀態停用後仍維持綁定。預設 `v1` 對未綁定狀態保留原有父執行緒範圍續接行為。
+啟用任一設定時，持久保存的本機重放狀態只供相同獲准的 opencodex 呼叫方身分及請求自身非空白的 `thread-id` 使用。沒有 opencodex 呼叫方身分的 loopback Responses WebSocket 可在記憶體中保留該連線及自身 `thread-id` 的歷史。新回應若超出重放預算，代理會略過該回應的保留，並保留現有的重放項目。無法重放時，請省略 `previous_response_id` 並重送完整對話。啟用期間保留的狀態停用後仍維持綁定。預設 `v1` 對未綁定狀態保留原有父執行緒範圍續接行為。
 
 管理 API 暴露 `GET`/`PUT /api/v2`、`/api/injection-model`、`/api/effort-caps`、`/api/subagent-models` 與 `/api/subagent-model-fallback`。注入模型更新為部分更新；自訂 prompt 是該 API 的 `prompt` 欄位。
 

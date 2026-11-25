@@ -4,7 +4,9 @@ export const CODEX_CONFIGURED_CAPACITY_WEIGHTS = {
   plus: 1,
   team: 1,
   business: 1,
-  prolite: 5,
+  // Pro 100 / Pro 500 doubled on 2026-10-29; 10x / 50x Plus (OpenAI staff, 2026-11-08). Display only.
+  prolite: 10,
+  promax: 50,
   // Business Premium has 5x Standard included usage; this is display calibration only (#7440).
   self_serve_business_prolite: 5,
   pro: 20,

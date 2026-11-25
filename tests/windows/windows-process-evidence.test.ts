@@ -1,8 +1,13 @@
 // Process evidence for the checked Windows stop (#7771): creation times, the Schedule
 // service PID, the checked terminate and the exit watch. Hermetic everywhere except the
-// cases gated on real Windows x64, which exercise the FFI primitive on a child of this test.
+// cases gated on real Windows, which exercise the owner snapshot and x64 FFI on our own child.
 import { afterEach, describe, expect, test } from "bun:test";
+import { join } from "node:path";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { observeClientStopOwner, readClientStopProcessStart } from "../../src/client/stop-teardown-owner";
 
+import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsSystemDirectory } from "../../src/lib/windows-elevation";
+import { windowsLauncherVbsPath } from "../../src/service/state";
 import {
   decodeServiceStatusProcess,
   fileTimeToEpochMs,
@@ -12,15 +17,14 @@ import {
   type WindowsProcessNativeApi,
 } from "../../src/service/windows-process-native";
 import {
-  WINDOWS_PROCESS_SNAPSHOT_SCRIPT,
+  SNAPSHOT_OWNER_RESERVE_MS,
+  windowsProcessSnapshotScript,
   openWindowsProcessWatch,
   overlayNativeCreationTimes,
-  parseFallbackTerminateOutput,
   parseScQueryexPid,
   parseWindowsProcessSnapshot,
   readScheduleServicePid,
   terminateWindowsProcessBound,
-  windowsFallbackTerminateScript,
   windowsProcessSnapshot,
   type WindowsEvidenceCommand,
 } from "../../src/service/windows-process-evidence";
@@ -32,10 +36,41 @@ afterEach(() => {
 
 const fakeNative = (overrides: Partial<WindowsProcessNativeApi> = {}): WindowsProcessNativeApi => ({
   creationTime: () => null,
+  sameUserIdentity: () => null,
   terminate: () => ({ status: "unavailable" }),
   openWatch: () => ({ status: "unavailable" }),
   scheduleServicePid: () => null,
   ...overrides,
+});
+
+test("Link stop reads the Windows start identity and owner argv once, and refuses unreadable evidence", async () => {
+  const ticks = 639_275_653_231_234_560n;
+  const reads: [number, boolean | undefined][] = [];
+  let identity: { ticks: bigint; commandLine?: string } | null = { ticks, commandLine: "ocx.exe stop --json" };
+  setWindowsProcessPlatformForTests("win32");
+  setWindowsProcessNativeForTests(fakeNative({ sameUserIdentity: (pid, withCommandLine) => {
+    reads.push([pid, withCommandLine]);
+    return identity;
+  } }));
+  expect(readClientStopProcessStart(process.pid)).toBe(`win32:${ticks}`);
+  expect(reads).toEqual([[process.pid, undefined]]);
+
+  const child = Bun.spawn([process.execPath, "-e", "await Bun.stdin.text()"], { stdin: "pipe" });
+  try {
+    const owner = { pid: child.pid, startTime: `win32:${ticks}`, nonce: "1".repeat(32) };
+    expect(observeClientStopOwner(owner)).toBe("active");
+    expect(reads.slice(1)).toEqual([[child.pid, true]]);
+    identity = { ticks };
+    expect(observeClientStopOwner(owner)).toBe("unverified");
+    identity = { ticks: ticks + 10n };
+    expect(observeClientStopOwner(owner)).toBe("confirmed-stale");
+    identity = null;
+    expect(observeClientStopOwner(owner)).toBe("unverified");
+    expect(readClientStopProcessStart(child.pid)).toBeUndefined();
+  } finally {
+    child.stdin.end();
+    await child.exited;
+  }
 });
 
 const SNAPSHOT_JSON = JSON.stringify([
@@ -63,13 +98,51 @@ describe("Windows process evidence: pure decoding", () => {
 
   test("the snapshot carries ISO creation times as epoch ms; malformed output is unread", () => {
     expect(parseWindowsProcessSnapshot(SNAPSHOT_JSON)).toEqual([
-      { pid: 20, parentPid: 900, name: "wscript.exe", commandLine: "wscript.exe x.vbs", startTime: Date.parse("2026-11-12T01:02:03.123Z") },
-      { pid: 4, parentPid: null, name: "System", commandLine: null, startTime: null },
+      { pid: 20, parentPid: 900, name: "wscript.exe", commandLine: "wscript.exe x.vbs", startTime: Date.parse("2026-11-12T01:02:03.123Z"), foreignOwner: null },
+      { pid: 4, parentPid: null, name: "System", commandLine: null, startTime: null, foreignOwner: null },
     ]);
     expect(parseWindowsProcessSnapshot(JSON.stringify({ ProcessId: 7, ParentProcessId: 1, Name: "a", CommandLine: "a", CreationDate: "x" })))
-      .toEqual([{ pid: 7, parentPid: 1, name: "a", commandLine: "a", startTime: null }]);
+      .toEqual([{ pid: 7, parentPid: 1, name: "a", commandLine: "a", startTime: null, foreignOwner: null }]);
     expect(parseWindowsProcessSnapshot("")).toEqual([]);
     expect(parseWindowsProcessSnapshot("{not json")).toBeNull();
+  });
+
+  test("only stable, successful SID evidence proves a foreign owner; service accounts remain unverified", () => {
+    const current = "S-1-5-21-100-200-300-1001";
+    const foreign = "S-1-5-21-100-200-300-1002";
+    const created = "2026-11-12T01:02:03.1234567Z";
+    const row = {
+      ProcessId: 20, ParentProcessId: 900, Name: "cmd.exe", CommandLine: "cmd.exe", CreationDate: created,
+      CurrentUserSid: current, Owner: { Sid: foreign, ReturnValue: 0, CreationDate: created },
+    };
+    const parse = (value: unknown) => parseWindowsProcessSnapshot(JSON.stringify(value))![0]!;
+    expect(parse(row).foreignOwner).toBe(true);
+    expect(parse({ ...row, Owner: { ...row.Owner, Sid: current.toLowerCase() } }).foreignOwner).toBe(false);
+    expect(parse({ ...row, Owner: { ...row.Owner, Sid: "S-1-12-1-100-200-300-400" } }).foreignOwner).toBe(true);
+    expect(parse({ ...row, CurrentUserSid: "S-1-12-1-100-200-300-400" }).foreignOwner).toBe(true);
+    for (const owner of ["S-1-5-18", "S-1-5-19", "S-1-5-20", "S-1-5-80-1-2-3-4-5", "S-1-5-82-1-2-3-4-5", "S-1-99-1"]) {
+      expect(parse({ ...row, Owner: { ...row.Owner, Sid: owner } }).foreignOwner).toBeNull();
+    }
+    for (const invalid of [null, "", "not-a-sid", "S-1-", "S-1-5-21-100-200-300-4294967296", "S-1-5-" + "1".repeat(257)]) {
+      expect(parse({ ...row, CurrentUserSid: invalid }).foreignOwner).toBeNull();
+      expect(parse({ ...row, Owner: { ...row.Owner, Sid: invalid } }).foreignOwner).toBeNull();
+    }
+    for (const invalid of [undefined, null, 2, "0"]) {
+      expect(parse({ ...row, Owner: { ...row.Owner, ReturnValue: invalid } }).foreignOwner).toBeNull();
+    }
+    for (const changed of [undefined, null, "2026-11-12T01:02:03.1234568Z"]) {
+      expect(parse({ ...row, Owner: { ...row.Owner, CreationDate: changed } }).foreignOwner).toBeNull();
+    }
+    expect(parse({ ...row, CreationDate: null }).foreignOwner).toBeNull();
+    expect(parse({ ...row, Owner: null, foreignOwner: true }).foreignOwner).toBeNull();
+    expect(JSON.stringify(parse(row))).not.toContain(current);
+    expect(JSON.stringify(parse(row))).not.toContain(foreign);
+
+    const known = parse(row);
+    expect(overlayNativeCreationTimes([known], () => known.startTime!)[0]!.foreignOwner).toBe(true);
+    expect(overlayNativeCreationTimes([known], () => known.startTime! + 2_000)[0])
+      .toMatchObject({ startTime: null, foreignOwner: null });
+    expect(overlayNativeCreationTimes([known], () => null)[0]!.foreignOwner).toBeNull();
   });
 
   test("a native creation time replaces CIM's only when both agree to the millisecond", () => {
@@ -91,26 +164,24 @@ describe("Windows process evidence: pure decoding", () => {
     expect(parseScQueryexPid("garbage")).toBeNull();
   });
 
-  test("the ARM64 terminate script compares StartTime and kills the same Process object", () => {
-    const script = windowsFallbackTerminateScript(4_242, 1_794_445_323_123, 1_000);
-    expect(script).toContain("Get-Process -Id 4242");
-    expect(script).toContain("FromUnixTimeMilliseconds(1794445323123)");
-    expect(script).toContain("-gt 1000) { 'reused'");
-    expect(script.indexOf("$p.Kill()")).toBeGreaterThan(script.indexOf("'reused'"));
-    expect(script).toContain("$p.WaitForExit(1000)");
-    expect(() => windowsFallbackTerminateScript(1.5, 1, 1)).toThrow();
-    expect(() => windowsFallbackTerminateScript(-1, 1, 1)).toThrow();
-    expect(parseFallbackTerminateOutput("terminated-exited\r\n")).toEqual({ status: "terminated", exited: true });
-    expect(parseFallbackTerminateOutput("terminated")).toEqual({ status: "terminated", exited: false });
-    expect(parseFallbackTerminateOutput("noise\nreused\n")).toEqual({ status: "reused" });
-    expect(parseFallbackTerminateOutput("denied")).toEqual({ status: "denied" });
-    expect(parseFallbackTerminateOutput("gone")).toEqual({ status: "gone" });
-    expect(parseFallbackTerminateOutput("")).toEqual({ status: "unavailable" });
-    expect(parseFallbackTerminateOutput("Killed")).toEqual({ status: "unavailable" });
-  });
 });
 
 describe("Windows process evidence: facades", () => {
+  test("ARM64 without a native handle cannot terminate using only a PID and timestamp", async () => {
+    setWindowsProcessPlatformForTests("win32");
+    setWindowsProcessNativeForTests(null);
+    const commands: WindowsEvidenceCommand[] = [];
+    const result = await terminateWindowsProcessBound(20, 5_000, {
+      timeoutMs: 3_000,
+      run: async command => {
+        commands.push(command);
+        return "terminated-exited";
+      },
+    });
+    expect(commands).toEqual([]);
+    expect(result).toEqual({ status: "unavailable" });
+  });
+
   test("a simulated platform reaches neither the kernel nor a spawn", async () => {
     setWindowsProcessPlatformForTests("win32");
     expect(windowsProcessNative()).toBeNull();
@@ -131,7 +202,12 @@ describe("Windows process evidence: facades", () => {
     });
     expect(commands).toHaveLength(1);
     expect(commands[0]).toMatchObject({ program: "powershell", timeoutMs: 5_000 });
-    expect(commands[0]!.args.at(-1)).toBe(WINDOWS_PROCESS_SNAPSHOT_SCRIPT);
+    const script = windowsProcessSnapshotScript(5_000);
+    expect(commands[0]!.args.at(-1)).toBe(script);
+    // Owner queries only cover potential candidates, and re-read identity AFTER the SID.
+    expect(script).toContain("-like '*opencodex-service*'");
+    expect(script.indexOf("Get-CimInstance -InputObject $process"))
+      .toBeGreaterThan(script.indexOf("-MethodName GetOwnerSid"));
     expect(snapshot?.map(row => [row.pid, row.startTime])).toEqual([[20, cim], [4, null]]);
     expect(await windowsProcessSnapshot({ timeoutMs: 5_000, run: async () => { throw new Error("timeout"); } })).toBeNull();
   });
@@ -151,41 +227,129 @@ describe("Windows process evidence: facades", () => {
     expect(await readScheduleServicePid({ timeoutMs: 2_000, run: async () => { throw new Error("1060"); } })).toBeNull();
   });
 
-  test("terminate prefers the handle primitive and otherwise runs the bounded fallback script", async () => {
+  test("terminate uses the native handle primitive when available", async () => {
     setWindowsProcessPlatformForTests("win32");
     const seen: Array<[number, number]> = [];
     setWindowsProcessNativeForTests(fakeNative({ terminate: (pid, start) => { seen.push([pid, start]); return { status: "reused" }; } }));
     expect(await terminateWindowsProcessBound(20, 5_000, { timeoutMs: 3_000 })).toEqual({ status: "reused" });
     expect(seen).toEqual([[20, 5_000]]);
-
-    setWindowsProcessNativeForTests(null);
-    const scripts: string[] = [];
-    const result = await terminateWindowsProcessBound(20, 5_000, {
-      timeoutMs: 3_000,
-      run: async command => { scripts.push(command.args.at(-1)!); return "terminated-exited\n"; },
-    });
-    expect(result).toEqual({ status: "terminated", exited: true });
-    expect(scripts[0]).toContain("Get-Process -Id 20");
-    expect(await terminateWindowsProcessBound(20, 5_000, { timeoutMs: 3_000, run: async () => { throw new Error("x"); } }))
-      .toEqual({ status: "unavailable" });
-  });
-
-  test("a fractional deadline-derived timeout reaches the fallback as whole milliseconds", async () => {
-    setWindowsProcessPlatformForTests("win32");
-    setWindowsProcessNativeForTests(null);
-    const commands: WindowsEvidenceCommand[] = [];
-    const run = async (command: WindowsEvidenceCommand) => { commands.push(command); return "terminated\n"; };
-    expect(await terminateWindowsProcessBound(20, 5_000, { timeoutMs: 1_250.5, run }))
-      .toEqual({ status: "terminated", exited: false });
-    expect(commands.map(command => command.timeoutMs)).toEqual([1_250]);
-    expect(commands[0]!.args.at(-1)).toContain("$p.WaitForExit(750)");
-    // Under 1 ms floors to 0, which execFile reads as "no timeout": nothing is spawned.
-    expect(await terminateWindowsProcessBound(20, 5_000, { timeoutMs: 0.5, run })).toEqual({ status: "unavailable" });
-    expect(commands).toHaveLength(1);
   });
 });
 
 const liveX64 = process.platform !== "win32" || process.arch !== "x64";
+
+const portablePowerShell = Bun.which("pwsh");
+
+const ownerBudgetCases = {
+  available: [32, 32],
+  expired: [0, 0],
+  "expires-during-enumeration": [0, 0],
+  "expires-during-owner": [1, 0],
+  "expires-during-refresh": [1, 1],
+  "cap-reached": [0, 0],
+  "cap-during-owner": [1, 0],
+  "cap-during-refresh": [1, 1],
+} as const;
+
+// The budgets run in one test that shares one 60 s window: a slow first PowerShell start may use
+// most of it, but a hang still fails inside the 120 s Linux batch deadline, naming the active budget.
+// "cap-reached" is the hosted-runner regression: the loop's own 1.5 s budget is fresh, but the
+// helper has already used the snapshot cap's owner window, so no owner read may start.
+// "cap-during-owner" passes the cap's owner cutoff while the first owner read is in flight, so its
+// refresh read must not start either.
+test.skipIf(process.platform !== "win32" && !portablePowerShell)("owner enrichment prioritizes this home and retains every row", async () => {
+  const deadline = Date.now() + 60_000;
+  for (const budget of Object.keys(ownerBudgetCases) as (keyof typeof ownerBudgetCases)[]) {
+    try { await ownerEnrichmentCase(budget, deadline); }
+    catch (error) { throw new Error("budget=" + budget + ": " + (error instanceof Error ? error.message : String(error)), { cause: error }); }
+  }
+}, 65_000);
+
+async function ownerEnrichmentCase(budget: keyof typeof ownerBudgetCases, deadline: number): Promise<void> {
+  const powershell = process.platform === "win32" ? resolveTrustedWindowsPowerShellExe() : portablePowerShell!;
+  const launcher = Buffer.from(windowsLauncherVbsPath(), "utf8").toString("base64");
+  // A cap equal to the reserve puts the owner cutoff at the helper's own start.
+  const script = windowsProcessSnapshotScript(budget === "cap-reached" ? SNAPSHOT_OWNER_RESERVE_MS : 60_000).replace(
+    "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value", "'S-1-5-21-100-200-300-1001'",
+  ).replace("[Diagnostics.Stopwatch]::StartNew()", "(New-FixtureClock)");
+  const prelude = [
+    "$script:ownerReads = 0; $script:refreshReads = 0;",
+    "function New-FixtureClock { $script:elapsed = " + (budget === "expired" ? 1500 : 0) + "; $clock = [pscustomobject]@{};",
+    "  $clock | Add-Member ScriptProperty ElapsedMilliseconds { $script:elapsed }; return $clock };",
+    "function Get-CimInstance { param($ClassName, $InputObject, $ErrorAction, $OperationTimeoutSec)",
+    "  if ($InputObject) { $script:refreshReads++; " + (budget === "expires-during-refresh" ? "$script:elapsed = 1500; " : "")
+      + (budget === "cap-during-refresh" ? "$ownerBudget.Until = [DateTime]::UtcNow.AddMinutes(-1); " : "") + "return $InputObject };",
+    budget === "expires-during-enumeration" ? "$script:elapsed = 1500;" : "",
+    "  1..40 | ForEach-Object { [pscustomobject]@{ ProcessId = $_; ParentProcessId = 900; Name = 'cmd.exe';",
+    "    CommandLine = if ($_ -eq 40) { 'wscript.exe \"' + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + launcher + "')) + '\"' } else { 'cmd.exe' };",
+    "    CreationDate = [datetime]'2026-11-12T01:02:03Z' } } };",
+    "function Invoke-CimMethod { param($InputObject, $MethodName, $ErrorAction, $OperationTimeoutSec)",
+    "  $script:ownerReads++; " + (budget === "expires-during-owner" ? "$script:elapsed = 1500; " : "")
+      + (budget === "cap-during-owner" ? "$ownerBudget.Until = [DateTime]::UtcNow.AddMinutes(-1); " : "")
+      + "@{ Sid = $currentSid; ReturnValue = 0 } };",
+    "$rows = & { " + script + " };",
+    "[pscustomobject]@{ Snapshot = $rows; OwnerReads = $script:ownerReads; RefreshReads = $script:refreshReads } | ConvertTo-Json -Compress",
+  ].join(" ");
+  const child = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-Command", prelude], {
+    // A cold PowerShell start is the proof here; on a loaded Linux runner it outlasted 5 s (exit 143).
+    stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+    timeout: Math.max(1_000, Math.min(SPAWN_BUDGET_MS, deadline - Date.now())),
+  });
+  const [output, errors, exitCode] = await Promise.all([
+    new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+  ]);
+  expect(errors).toBe("");
+  expect(exitCode).toBe(0);
+  const result = JSON.parse(output);
+  const rows = parseWindowsProcessSnapshot(Array.isArray(result.Snapshot) ? result.Snapshot.join("\n") : result.Snapshot)!;
+  expect(rows).toHaveLength(40);
+  expect(rows.map(row => row.pid)).toEqual(Array.from({ length: 40 }, (_, index) => index + 1));
+  const [ownerReads, refreshReads] = ownerBudgetCases[budget];
+  expect(result.OwnerReads).toBe(ownerReads);
+  expect(result.RefreshReads).toBe(refreshReads);
+  expect(rows[39]!.foreignOwner).toBe(budget === "available" ? false : null);
+  const ordinaryRefreshed = budget === "available" ? 31 : 0;
+  expect(rows.slice(0, ordinaryRefreshed).every(row => row.foreignOwner === false)).toBe(true);
+  expect(rows.slice(ordinaryRefreshed, 39).every(row => row.foreignOwner === null)).toBe(true);
+}
+
+test.skipIf(process.platform !== "win32")("the live capped snapshot reads and refreshes a wrapper child's owner", async () => {
+  // /d disables AutoRun. `rem` does no work; /k and an open stdin keep this owned child
+  // alive for the real CIM owner query, refresh, parser, and optional native overlay.
+  const marker = "opencodex-service-owner-snapshot-test";
+  const child = Bun.spawn([join(resolveTrustedWindowsSystemDirectory(), "cmd.exe"), "/d", "/q", "/k", "rem", marker], {
+    stdio: ["pipe", "ignore", "ignore"], windowsHide: true,
+  });
+  try {
+    // Scope the real CIM input to our child: enrichment is intentionally bounded, so a
+    // busy machine's unrelated wrappers may use up a full snapshot's optional budget.
+    const snapshot = await windowsProcessSnapshot({ timeoutMs: 5_000, run: async command => {
+      const args = command.args.map(arg => arg.replace("Get-CimInstance Win32_Process -ErrorAction Stop",
+        "Get-CimInstance Win32_Process -Filter 'ProcessId = " + child.pid + "' -ErrorAction Stop"));
+      const helper = Bun.spawn([resolveTrustedWindowsPowerShellExe(), ...args], {
+        stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: command.timeoutMs,
+      });
+      const [output, errors, code] = await Promise.all([
+        new Response(helper.stdout).text(), new Response(helper.stderr).text(), helper.exited,
+      ]);
+      if (code !== 0 || errors) throw new Error("child-scoped snapshot failed");
+      return output;
+    } });
+    expect(snapshot).not.toBeNull();
+    const wrapper = snapshot!.find(row => row.pid === child.pid);
+    expect(wrapper).toBeDefined();
+    expect(wrapper!.name?.toLowerCase()).toBe("cmd.exe");
+    expect(wrapper!.parentPid).toBe(process.pid);
+    expect(wrapper!.commandLine).toContain(marker);
+    expect(typeof wrapper!.startTime).toBe("number");
+    // false requires successful, matching owner/creation evidence; unknown is not enough.
+    expect(wrapper!.foreignOwner).toBe(false);
+    expect(child.exitCode).toBeNull();
+  } finally {
+    child.kill();
+    await child.exited;
+  }
+}, 10_000);
 
 describe("Windows process evidence: live x64 primitive", () => {
   test.skipIf(liveX64)("reads a child's creation time, refuses a mismatched identity and ends the bound one", async () => {
@@ -199,6 +363,11 @@ describe("Windows process evidence: live x64 primitive", () => {
       created = native!.creationTime(child.pid);
       expect(typeof created).toBe("number");
       expect(Math.abs(created! - Date.now())).toBeLessThan(60_000);
+      const identity = native!.sameUserIdentity(child.pid, true);
+      expect(identity?.commandLine).toContain("setInterval");
+      expect(readClientStopProcessStart(child.pid)).toBe(`win32:${identity!.ticks}`);
+      expect(Number((identity!.ticks - 621_355_968_000_000_000n) / 10_000n)).toBe(created!);
+      expect(native!.terminate(child.pid, identity!.ticks - 10n)).toEqual({ status: "reused" });
 
       expect(native!.terminate(child.pid, created! - 5_000)).toEqual({ status: "reused" });
       const watch = native!.openWatch(child.pid, created!);
@@ -206,9 +375,10 @@ describe("Windows process evidence: live x64 primitive", () => {
       if (watch.status !== "open") return;
       try {
         expect(watch.exited()).toBe(false);
-        expect(native!.terminate(child.pid, created!)).toEqual({ status: "terminated" });
+        expect(native!.terminate(child.pid, identity!.ticks)).toEqual({ status: "terminated" });
         await child.exited;
         expect(watch.exited()).toBe(true);
+        expect(native!.sameUserIdentity(child.pid)).toBeNull();
       } finally {
         watch.close();
       }

@@ -58,6 +58,15 @@ paths, delayed generation transitions, member/release ordering and gate-holder d
 
 ## Sandbox lifecycle
 
+`scripts/test.ts` removes inherited live credential keys, `OCX_SERVICE`, and the markers from
+`src/lib/supervisor-markers.ts` before spawning test processes. Bun 1.4.4 can pass its startup
+environment to children spawned without an explicit environment. When Bun loads `tests/preload.ts`,
+the preload refuses to run tests if any of those keys are present. Use `bun run test` or unset
+inherited keys. Remove the listed keys from any dotenv files Bun loads, including `.env.test`,
+because Bun can load those files again in the test process. Both paths match names
+case-insensitively on Windows and case-sensitively on POSIX.
+`tests/ci-workflows/test-runner.test.ts` covers the scrub, bare-run refusal, and child inheritance.
+
 The batch runner's per-process home isolation and live-home/service-manager guards remain active
 because the preload installs them before the lock boundary. `tests/preload.ts` resolves cleanup
 dependencies after home/lock admission and before test cases. Teardown awaits native-main startup
@@ -196,3 +205,32 @@ linked worktree on that host.
 
 Enforced by `tests/ci-workflows/test-git-isolation.test.ts`, whose fixture and script cases were
 red against the pre-fix helpers.
+
+## Network egress
+
+`tests/preload.ts` installs `tests/helpers/network-egress-guard.ts` right after the home guard
+arms (#8848). A full suite once sent fixture credentials to nine provider hosts through requests
+that got past a mock: native WebSocket upstreams, `node:https` behind `src/lib/pinned-http.ts`,
+and module-level quota and refresh fetches. The guard turns any such request into a local
+connection failure, the same answer an offline runner gives.
+
+- It wraps `globalThis.fetch`, `globalThis.WebSocket` and `net.Socket.prototype.connect`. Bun
+  1.4.4 routes `net.connect`, `tls.connect`, `http(s).request` and `http2.connect` through that
+  prototype method with Node's normalized `[options, callback]` array, so named imports of
+  `node:http` are covered too. A refused WebSocket is redirected to a Unix path that does not
+  exist, so it dispatches `error` and `close` without dialing.
+- Allowed: loopback and wildcard addresses, `localhost` and `*.localhost`, the reserved `.test`,
+  `.example` and `.invalid` names, Unix sockets, `data:`/`blob:`/`file:` fetches, and a fetch or
+  WebSocket whose proxy is loopback. An explicit non-loopback proxy is refused whatever the target,
+  and any other fetch scheme (`s3:`) is refused. Followed redirects are walked one hop at a time,
+  because real fetch follows them internally past both hooks; every hop must pass, the final
+  response keeps `redirected`, and `redirect: "manual"` / `"error"` callers are untouched.
+  `allowOwnInterfaceAddressesForTest()` admits this machine's own interface addresses until its
+  returned function runs; only `tests/server/loopback-listener-integration.test.ts` needs it.
+- Child processes never run the preload. Pass `NETWORK_EGRESS_GUARD_PRELOAD` as `--preload` to a
+  Bun child, or call `installNetworkEgressGuard()` first in a child entrypoint, as
+  `tests/helpers/native-profile-startup-child.ts` and the children of
+  `tests/codex-integration/codex-retained-root-serialization.test.ts` do.
+
+Enforced by `tests/ci-workflows/test-network-egress-guard.test.ts`, whose refusal cases were red
+without the preload line.

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseFullInstallCensus, remoteFullInstallCensusArgv } from "../../src/link/remote-plant";
@@ -18,9 +18,22 @@ function executable(path: string, body: string): void {
   chmodSync(path, 0o755);
 }
 
-function census(home: string, path: string): { code: number; stdout: string } {
+function census(home: string, bin: string): { code: number; stdout: string } {
   const argv = remoteFullInstallCensusArgv();
-  const result = Bun.spawnSync(["/bin/sh", ...argv.slice(1)], { env: { HOME: home, PATH: path, OPENCODEX_HOME: join(home, ".opencodex") }, stdin: "ignore" });
+  // Relocate the remote machine's absolute paths, including its appended PATH entries.
+  argv[2] = argv[2]!
+    .replaceAll("/Applications/OpenCodex.app", "$HOME/system/Applications/OpenCodex.app")
+    .replaceAll("/usr/bin/ocx", "$HOME/system/usr/bin/ocx")
+    .replaceAll("/opt/homebrew/bin", "$HOME/system/opt/homebrew/bin")
+    .replaceAll("/usr/local/bin", "$HOME/system/usr/local/bin");
+  for (const tool of ["uname", "dd", "wc", "awk"]) {
+    const systemTool = Bun.which(tool, { PATH: "/usr/bin:/bin" });
+    if (!systemTool) throw new Error(`missing POSIX census fixture tool: ${tool}`);
+    symlinkSync(systemTool, join(bin, tool));
+  }
+  const result = Bun.spawnSync(["/bin/sh", ...argv.slice(1)], {
+    cwd: home, env: { HOME: home, PATH: bin, OPENCODEX_HOME: join(home, ".opencodex") }, stdin: "ignore",
+  });
   return { code: result.exitCode ?? -1, stdout: result.stdout.toString() };
 }
 
@@ -32,7 +45,7 @@ test.skipIf(process.platform === "win32")("a Child with ocx-child state and a fu
   executable(join(home, ".local", "bin", "ocx-child"), "echo 'opencodex 2.99.0'");
   mkdirSync(bin, { recursive: true });
   executable(join(bin, "ocx"), "echo 'opencodex 2.99.0'");
-  const result = census(home, bin + ":/usr/bin:/bin");
+  const result = census(home, bin);
   expect(result.code).toBe(0);
   expect(parseFullInstallCensus(result.stdout)).toBe("present");
 });
@@ -43,7 +56,7 @@ test.skipIf(process.platform === "win32")("an ocx-child alone, or an ocx that ca
   executable(join(home, ".local", "bin", "ocx-child"), "echo 'opencodex 2.99.0'");
   mkdirSync(bin, { recursive: true });
   executable(join(bin, "ocx"), "exit 1");
-  const result = census(home, bin + ":/usr/bin:/bin");
+  const result = census(home, bin);
   expect(result.code).toBe(0);
   expect(parseFullInstallCensus(result.stdout)).toBe("none");
 });

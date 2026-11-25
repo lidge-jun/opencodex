@@ -127,6 +127,8 @@ interface ProviderAdapter {
 
 ## `anthropic`
 
+Об опциональном режиме совместимости OAuth и потере приоритета системных инструкций см. [основную документацию на английском](/reference/adapters/#anthropic).
+
 **Назначение:** Anthropic **Messages** (`/v1/messages`).
 **Аутентификация:** `key` (по умолчанию `x-api-key`, либо `Authorization: Bearer` при `apiKeyTransport: "bearer"`) или `oauth` (Bearer + `anthropic-beta`, для Claude Pro/Max).
 
@@ -185,8 +187,9 @@ Kiro (`https://runtime.{region}.kiro.dev/`).
 - Удаляет ключевые слова JSON Schema, которые отклоняет валидатор Kiro (`pattern`, `minLength`,
   `maximum`, `additionalProperties` и ещё 25), из схем инструментов и структурированного
   вывода, кроме тех, что проверка измерила на конкретной модели. `claude-opus-4.5` сохраняет все.
-  `claude-opus-5.5` и `claude-sonnet-5.5` сохраняют `pattern` и `maximum`; остальные ключевые слова у них по-прежнему удаляются,
-  потому что проверка их этим моделям не отправляла. Все прочие модели Kiro, включая остальные
+  `claude-opus-5.5` сохраняет двенадцать слов из каталогов Claude Desktop и Claude Code (`$schema`, `additionalProperties`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`, `exclusiveMinimum`, `minItems`, `maxItems`, `propertyNames`),
+  измеренных на рабочем трафике; `claude-sonnet-5.5` сохраняет `pattern` и `maximum`. Остальные ключевые слова у них по-прежнему удаляются,
+  потому что никакой запрос их этим моделям не отправлял. Все прочие модели Kiro, включая остальные
   идентификаторы Claude, сохраняют полное удаление. Исключение задаётся по модели и по ключевому
   слову: этот протокол уже разделяет модели Claude по уровню рассуждений, а отклонённое Kiro
   ключевое слово приводит к ошибке всего запроса, а не только к потере подсказки.

@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGoogleAdapter } from "../../../src/adapters/google";
 import { __resetVertexTokenCache } from "../../../src/lib/gcp-adc";
+import { providerOutboundGet } from "../../../src/lib/provider-outbound";
 import {
+  buildVertexModelsDiscoveryRequest,
   collectVertexPublisherModelPages,
   extractGoogleNativeModelItems,
   resolveObservedVertexDiscoveryAuth,
@@ -20,10 +22,12 @@ import { getProviderRegistryEntry } from "../../../src/providers/registry";
 import { routedProviderConfig } from "../../../src/providers/routed-config";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { gatherRoutedModels } from "../../../src/codex/catalog";
-import { clearModelCache } from "../../../src/codex/model-cache";
+import { gatherRoutedModelsForCatalogGather } from "../../../src/codex/catalog/routed-gather";
+import { clearModelCache, getProviderDiscoveryStatus } from "../../../src/codex/model-cache";
 import { withStubbedProviderFetch } from "../../helpers/catalog-provider-fetch";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
+const VERTEX_MODELS_URL = "https://aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=300";
 const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const ENV_KEYS = ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_API_KEY", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "CLOUDSDK_CONFIG"];
 const UNREADABLE_REFERENCES = ["keychain:missing-fixture", "${MISSING_VERTEX_TEST_KEY}", "$MISSING_VERTEX_TEST_KEY", "keychain:"];
@@ -109,6 +113,19 @@ describe("Vertex discovery credential selection", () => {
     expect(tokenCalls).toBe(1);
   });
 
+  test("a malformed ADC marker degrades the provider without aborting a refreshing gather", async () => {
+    withAmbientCredentials();
+    const name = "malformed-vertex-marker";
+    const row = vertex({ apiKey: "gcp-sa:", models: ["gemini-configured-fixture"], liveModels: true });
+    const config = withStubbedProviderFetch({ providers: { [name]: row } });
+    try {
+      expect((await gatherRoutedModels(config)).map(model => model.id)).toEqual(["gemini-configured-fixture"]);
+      expect(tokenCalls).toBe(0);
+    } finally {
+      clearModelCache(name);
+    }
+  });
+
   test("ADC resolution honours the discovery deadline", async () => {
     process.env.GOOGLE_APPLICATION_CREDENTIALS = saPath;
     process.env.CLOUDSDK_CONFIG = join(tmp, "no-gcloud");
@@ -121,6 +138,137 @@ describe("Vertex discovery credential selection", () => {
     expect(await resolveVertexDiscoveryToken(vertex(), AbortSignal.timeout(50))).toBeUndefined();
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(tokenCalls).toBeGreaterThan(0);
+  });
+});
+
+describe("Vertex discovery destination authority", () => {
+  const untrusted = [
+    "https://collector.example", "http://aiplatform.googleapis.com",
+    "https://aiplatform.googleapis.com:8443", Object.assign(new URL("https://aiplatform.googleapis.com"), { username: "fixture" }).href,
+    "https://aiplatform.googleapis.com.collector.example", "https://fakeaiplatform.googleapis.com",
+    "https://us.central1-aiplatform.googleapis.com", "https://-us-aiplatform.googleapis.com",
+    "https://aiplatform.googleapis.com/#fragment", "not a URL",
+  ];
+
+  test("untrusted destinations resolve no ambient key, host ADC or stored credential", async () => {
+    withAmbientCredentials();
+    let credentialReads = 0;
+    setProviderKeychainEntryFactoryForTests(() => ({
+      getPassword: () => { credentialReads++; return readFileSync(saPath, "utf8"); },
+      setPassword: () => {}, deletePassword: () => true,
+    }));
+    for (const baseUrl of untrusted) {
+      const provider = vertex({ baseUrl });
+      expect(resolveObservedVertexDiscoveryAuth(provider)).toBeUndefined();
+      expect(await resolveVertexDiscoveryAuth(provider)).toBeUndefined();
+      for (const apiKey of ["gcp-sa:blocked-fixture", "keychain:blocked-fixture"]) {
+        expect(await resolveVertexDiscoveryAuth(vertex({ baseUrl, apiKey }))).toBeUndefined();
+      }
+      const request = buildVertexModelsDiscoveryRequest(provider, "resolved-fixture-token", {}, url => url);
+      expect(request.headers).toEqual({});
+    }
+    delete process.env.GOOGLE_CLOUD_API_KEY;
+    expect(await resolveVertexDiscoveryAuth(vertex({ baseUrl: untrusted[0]! }))).toBeUndefined();
+    expect(credentialReads).toBe(0);
+    expect(tokenCalls).toBe(0);
+  });
+
+  test("global and regional Google destinations retain their keys and paginated sends", async () => {
+    withAmbientCredentials();
+    for (const baseUrl of [
+      "https://aiplatform.googleapis.com", "https://aiplatform.googleapis.com:443/v1",
+      "https://us-central1-aiplatform.googleapis.com/v1beta1", "https://europe-west4-aiplatform.googleapis.com",
+    ]) {
+      const provider = vertex({ baseUrl });
+      const auth = (await resolveVertexDiscoveryAuth(provider))!;
+      expect(auth.token).toBe("ambient-env-key");
+      const request = buildVertexModelsDiscoveryRequest(provider, auth.token, {}, url => url);
+      expect(request.headers["x-goog-api-key"]).toBe(auth.token);
+      expect(vertexDiscoveryAuthIsCurrent(provider, auth, request.headers, request.url)).toBe(true);
+      const nextPage = new URL(request.url);
+      nextPage.searchParams.set("pageToken", "https://collector.example/next");
+      expect(vertexDiscoveryAuthIsCurrent(provider, auth, request.headers, nextPage.href)).toBe(true);
+    }
+  });
+
+  test("the actual request and resolved discovery URL must retain the approved Google origin", async () => {
+    withAmbientCredentials();
+    const provider = vertex();
+    const auth = (await resolveVertexDiscoveryAuth(provider))!;
+    const headers = { "x-goog-api-key": auth.token };
+    for (const url of [...untrusted, "https://us-central1-aiplatform.googleapis.com/v1beta1/publishers/google/models"]) {
+      expect(vertexDiscoveryAuthIsCurrent(provider, auth, headers, url)).toBe(false);
+      expect(buildVertexModelsDiscoveryRequest(provider, auth.token, {}, () => url).headers).toEqual({});
+    }
+    provider.baseUrl = "https://us-central1-aiplatform.googleapis.com";
+    expect(vertexDiscoveryAuthIsCurrent(provider, auth, headers, `${provider.baseUrl}/v1beta1/publishers/google/models`)).toBe(false);
+  });
+
+  test("an ADC credential remains bound to the approved origin after resolution", async () => {
+    withAmbientCredentials();
+    delete process.env.GOOGLE_CLOUD_API_KEY;
+    const provider = vertex();
+    const auth = (await resolveVertexDiscoveryAuth(provider))!;
+    const headers = { Authorization: `Bearer ${auth.token}` };
+    expect(vertexDiscoveryAuthIsCurrent(provider, auth, headers, VERTEX_MODELS_URL)).toBe(true);
+    expect(vertexDiscoveryAuthIsCurrent(provider, auth, headers, "https://collector.example/models")).toBe(false);
+    provider.baseUrl = "https://us-central1-aiplatform.googleapis.com";
+    expect(vertexDiscoveryAuthIsCurrent(provider, auth, headers, `${provider.baseUrl}/models`)).toBe(false);
+  });
+
+  test("changing the request URL after credential resolution cancels the actual transport send", async () => {
+    withAmbientCredentials();
+    const provider = vertex();
+    const auth = (await resolveVertexDiscoveryAuth(provider))!;
+    const request = buildVertexModelsDiscoveryRequest(provider, auth.token, {}, url => url);
+    let sends = 0;
+    const transportProvider = { ...provider, fetch: (async () => {
+      sends++;
+      return Response.json({ publisherModels: [] });
+    }) as typeof fetch };
+    request.url = "https://collector.example/models";
+    await expect(providerOutboundGet("vertex", transportProvider, request.url, { headers: request.headers }, {
+      beforeSend: () => vertexDiscoveryAuthIsCurrent(provider, auth, request.headers, request.url),
+    })).rejects.toThrow("provider credential changed before send");
+    expect(sends).toBe(0);
+  });
+
+  test("an origin change during ADC resolution discards the minted token", async () => {
+    withAmbientCredentials();
+    delete process.env.GOOGLE_CLOUD_API_KEY;
+    const provider = vertex();
+    const tokens = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      provider.baseUrl = "https://us-central1-aiplatform.googleapis.com";
+      return tokens(input, init);
+    }) as typeof fetch;
+    expect(await resolveVertexDiscoveryAuth(provider)).toBeUndefined();
+    expect(tokenCalls).toBe(1);
+  });
+
+  test("catalog discovery keeps configured models without sending credentials to an untrusted destination", async () => {
+    withAmbientCredentials();
+    const sends: string[] = [];
+    const tokens = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === OAUTH_TOKEN_URL) return tokens(input, init);
+      sends.push(url);
+      return Response.json({ publisherModels: [{ name: "publishers/google/models/gemini-4-hydrogen" }] });
+    }) as typeof fetch;
+    try {
+      for (const ambient of [true, false]) {
+        if (!ambient) delete process.env.GOOGLE_CLOUD_API_KEY;
+        clearModelCache();
+        const config = withStubbedProviderFetch({ providers: { "blocked-vertex": vertex({
+          baseUrl: "https://collector.example", liveModels: true, models: ["configured-only"],
+        }) } } as OcxConfig);
+        const rows = await gatherRoutedModels(config);
+        expect(rows.filter(row => row.provider === "blocked-vertex").map(row => row.id)).toContain("configured-only");
+      }
+      expect(sends).toEqual([]);
+      expect(tokenCalls).toBe(0);
+    } finally { clearModelCache(); }
   });
 });
 
@@ -146,9 +294,10 @@ describe("Vertex discovery rows", () => {
   test("advertised efforts are the registry ladder the adapter serializes", async () => {
     const ladders = getProviderRegistryEntry("google-vertex")?.modelReasoningEfforts ?? {};
     const result = extractGoogleNativeModelItems("google-vertex", vertex({ apiKey: "literal-key" }),
-      { publisherModels: publisher("gemini-4-hydrogen", "gemini-4-carbon", "gemini-3-pro") }, 100);
+      { publisherModels: publisher("gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon", "gemini-3-pro") }, 100);
     const items = result?.ok ? result.items : [];
     const byId = new Map(items.map(item => [item.id, item]));
+    expect(byId.get("gemini-4-neon")?.reasoning_efforts).toEqual([...ladders["gemini-4-neon"]!]);
     expect(byId.get("gemini-4-hydrogen")?.reasoning_efforts).toEqual([...ladders["gemini-4-hydrogen"]!]);
     expect(byId.get("gemini-4-carbon")?.reasoning_efforts).toEqual([...ladders["gemini-4-carbon"]!]);
     expect(ladders["gemini-3-pro"]).toBeUndefined();
@@ -161,6 +310,7 @@ describe("Vertex discovery rows", () => {
     } as unknown as OcxParsedRequest);
     const thinking = async (modelId: string, effort: string) =>
       JSON.parse((await adapter.buildRequest(request(modelId, effort))).body).generationConfig?.thinkingConfig;
+    expect(await thinking("gemini-4-neon", "xhigh")).toEqual({ thinkingLevel: "xhigh" });
     expect(await thinking("gemini-4-hydrogen", "xhigh")).toEqual({ thinkingLevel: "xhigh" });
     expect(await thinking("gemini-3-pro", "high")).toBeUndefined();
   });
@@ -320,6 +470,49 @@ describe("Vertex discovery credential parity with inference", () => {
 });
 
 describe("Vertex discovery credential stays bound to its selection", () => {
+  test.each(["refreshing", "observed"] as const)("%s gathers do not inherit a failure across A → B → A", async mode => {
+    const name = "rotating-vertex";
+    const config: OcxConfig = withStubbedProviderFetch({ providers: { [name]: vertex({ liveModels: true }) } });
+    const firstStarted = Promise.withResolvers<void>();
+    const releaseFirst = Promise.withResolvers<void>();
+    const keys: Array<string | null> = [];
+    process.env.GOOGLE_CLOUD_API_KEY = "ambient-fixture-a";
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      keys.push(new Headers(init?.headers).get("x-goog-api-key"));
+      if (keys.length === 1) {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+        return new Response(null, { status: 429 });
+      }
+      return Response.json({ publisherModels: [{ name: "publishers/google/models/gemini-fixture-current" }] });
+    }) as typeof fetch;
+
+    const gather = () => mode === "refreshing" ? gatherRoutedModels(config)
+      : gatherRoutedModelsForCatalogGather(config, { authStoreBuffer: null });
+    const first = gather();
+    try {
+      await firstStarted.promise;
+      process.env.GOOGLE_CLOUD_API_KEY = "ambient-fixture-b";
+      expect(resolveObservedVertexDiscoveryAuth(config.providers[name]!)?.token).toBe("ambient-fixture-b");
+      process.env.GOOGLE_CLOUD_API_KEY = "ambient-fixture-a";
+      const second = gather();
+      try {
+        const rows = await Promise.race([second, Bun.sleep(100).then(() => null)]);
+        expect(rows?.map(model => model.id)).toEqual(["gemini-fixture-current"]);
+        expect(keys).toEqual(["ambient-fixture-a", "ambient-fixture-a"]);
+      } finally {
+        releaseFirst.resolve();
+        await second;
+      }
+      expect(await first).toEqual([]);
+      expect(getProviderDiscoveryStatus(name)).toEqual({ status: "ok" });
+    } finally {
+      releaseFirst.resolve();
+      await first;
+      clearModelCache(name);
+    }
+  });
+
   test("a selection that changes during the ADC exchange discards the token, and send-time checks reject a mismatched header", async () => {
     process.env.GOOGLE_APPLICATION_CREDENTIALS = saPath;
     process.env.CLOUDSDK_CONFIG = join(tmp, "no-gcloud");
@@ -343,14 +536,14 @@ describe("Vertex discovery credential stays bound to its selection", () => {
     __resetVertexTokenCache();
     delete process.env.GOOGLE_CLOUD_API_KEY;
     const adc = { token: "host-adc-token", kind: "adc" as const };
-    expect(vertexDiscoveryAuthIsCurrent(vertex(), adc, { Authorization: "Bearer host-adc-token" })).toBe(true);
-    expect(vertexDiscoveryAuthIsCurrent(vertex(), adc, { "x-goog-api-key": "host-adc-token" })).toBe(false);
+    expect(vertexDiscoveryAuthIsCurrent(vertex(), adc, { Authorization: "Bearer host-adc-token" }, VERTEX_MODELS_URL)).toBe(true);
+    expect(vertexDiscoveryAuthIsCurrent(vertex(), adc, { "x-goog-api-key": "host-adc-token" }, VERTEX_MODELS_URL)).toBe(false);
     process.env.GOOGLE_CLOUD_API_KEY = "ambient-env-key";
-    expect(vertexDiscoveryAuthIsCurrent(vertex(), adc, { Authorization: "Bearer host-adc-token" })).toBe(false);
+    expect(vertexDiscoveryAuthIsCurrent(vertex(), adc, { Authorization: "Bearer host-adc-token" }, VERTEX_MODELS_URL)).toBe(false);
     const key = { token: "ambient-env-key", kind: "api-key" as const };
-    expect(vertexDiscoveryAuthIsCurrent(vertex(), key, { "X-Goog-Api-Key": "ambient-env-key" })).toBe(true);
+    expect(vertexDiscoveryAuthIsCurrent(vertex(), key, { "X-Goog-Api-Key": "ambient-env-key" }, VERTEX_MODELS_URL)).toBe(true);
     process.env.GOOGLE_CLOUD_API_KEY = "rotated-env-key";
-    expect(vertexDiscoveryAuthIsCurrent(vertex(), key, { "x-goog-api-key": "ambient-env-key" })).toBe(false);
+    expect(vertexDiscoveryAuthIsCurrent(vertex(), key, { "x-goog-api-key": "ambient-env-key" }, VERTEX_MODELS_URL)).toBe(false);
   });
 
   test("catalog discovery never sends an ADC token after the selection moved to an API key mid-exchange", async () => {
@@ -401,9 +594,9 @@ describe("Vertex discovery ADC token stays bound to the authority that minted it
     const host = await resolveVertexDiscoveryAuth(vertex());
     expect(host?.token).toBe("token-for-host-a@example.test");
     const hostHeaders = { Authorization: `Bearer ${host!.token}` };
-    expect(vertexDiscoveryAuthIsCurrent(vertex(), host!, hostHeaders)).toBe(true);
+    expect(vertexDiscoveryAuthIsCurrent(vertex(), host!, hostHeaders, VERTEX_MODELS_URL)).toBe(true);
     writeFileSync(hostFile, serviceAccount("host-b@example.test"));
-    expect(vertexDiscoveryAuthIsCurrent(vertex(), host!, hostHeaders)).toBe(false);
+    expect(vertexDiscoveryAuthIsCurrent(vertex(), host!, hostHeaders, VERTEX_MODELS_URL)).toBe(false);
 
     const stored: Record<string, string> = { "rotating-marker": serviceAccount("marker-a@example.test") };
     setProviderKeychainEntryFactoryForTests((_service, account) => ({
@@ -413,9 +606,9 @@ describe("Vertex discovery ADC token stays bound to the authority that minted it
     const marker = await resolveVertexDiscoveryAuth(markerRow);
     expect(marker?.token).toBe("token-for-marker-a@example.test");
     const markerHeaders = { Authorization: `Bearer ${marker!.token}` };
-    expect(vertexDiscoveryAuthIsCurrent(markerRow, marker!, markerHeaders)).toBe(true);
+    expect(vertexDiscoveryAuthIsCurrent(markerRow, marker!, markerHeaders, VERTEX_MODELS_URL)).toBe(true);
     stored["rotating-marker"] = serviceAccount("marker-b@example.test");
-    expect(vertexDiscoveryAuthIsCurrent(markerRow, marker!, markerHeaders)).toBe(false);
+    expect(vertexDiscoveryAuthIsCurrent(markerRow, marker!, markerHeaders, VERTEX_MODELS_URL)).toBe(false);
   });
 
   test("an ADC file replaced between pages stops the walk before the next page is sent", async () => {
@@ -454,17 +647,17 @@ describe("Vertex discovery ambient key stays bound to the generation it was read
     const headers = { "x-goog-api-key": "ambient-a" };
     for (const auth of [resolved, passive]) {
       expect(auth).toMatchObject({ token: "ambient-a", kind: "api-key" });
-      expect(vertexDiscoveryAuthIsCurrent(vertex(), auth!, headers)).toBe(true);
+      expect(vertexDiscoveryAuthIsCurrent(vertex(), auth!, headers, VERTEX_MODELS_URL)).toBe(true);
     }
     process.env.GOOGLE_CLOUD_API_KEY = "ambient-b";
     // Inference routes a request while B is set, observing B as the current ambient authority.
     routedProviderConfig("google-vertex", vertex({ project: "p", location: "global" }));
     process.env.GOOGLE_CLOUD_API_KEY = "ambient-a";
-    for (const auth of [resolved, passive]) expect(vertexDiscoveryAuthIsCurrent(vertex(), auth!, headers)).toBe(false);
+    for (const auth of [resolved, passive]) expect(vertexDiscoveryAuthIsCurrent(vertex(), auth!, headers, VERTEX_MODELS_URL)).toBe(false);
     // A configured literal key is not ambient authority and is unaffected by the variable.
     const literal = await resolveVertexDiscoveryAuth(vertex({ apiKey: "literal-key" }));
     process.env.GOOGLE_CLOUD_API_KEY = "ambient-b";
-    expect(vertexDiscoveryAuthIsCurrent(vertex({ apiKey: "literal-key" }), literal!, { "x-goog-api-key": "literal-key" })).toBe(true);
+    expect(vertexDiscoveryAuthIsCurrent(vertex({ apiKey: "literal-key" }), literal!, { "x-goog-api-key": "literal-key" }, VERTEX_MODELS_URL)).toBe(true);
   });
 });
 
