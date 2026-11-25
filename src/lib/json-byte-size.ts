@@ -58,33 +58,50 @@ export function jsonUtf8Bytes(value: unknown, limit = TRANSLATOR_MAX_TURN_BYTES)
     }
   };
   // Iterative walk: caller-controlled data (tool schemas, request bodies) can nest deeper than
-  // the call stack allows. Tasks run in the order a recursive walk would visit them.
-  // A task is [separator bytes, object key or undefined, value, undefined counts as null].
-  const stack: [number, string | undefined, unknown, boolean][] = [[0, undefined, value, false]];
-  while (stack.length > 0) {
-    const [separator, key, item, undefinedIsNull] = stack.pop()!;
-    if (separator > 0) add(separator);
-    if (key !== undefined) { string(key); add(1); }
-    if (item === null || (item === undefined && undefinedIsNull)) { add(4); continue; }
-    if (typeof item === "string") { string(item); continue; }
-    if (typeof item === "boolean") { add(item ? 4 : 5); continue; }
-    if (typeof item === "number") { add(Number.isFinite(item) ? String(item).length : 4); continue; }
-    if (Array.isArray(item)) {
-      add(2);
-      for (let i = item.length - 1; i >= 0; i--) stack.push([i > 0 ? 1 : 0, undefined, item[i], true]);
-      continue;
-    }
+  // the call stack allows. One frame per open container keeps the recursive visit order, so
+  // the walk stops at the first element that exceeds the budget however wide the container is.
+  type Frame =
+    | { readonly array: readonly unknown[]; index: number }
+    | { readonly object: Record<string, unknown>; readonly keys: readonly string[]; index: number; first: boolean };
+  const stack: Frame[] = [];
+  const visit = (item: unknown): void => {
+    if (item === null) { add(4); return; }
+    if (typeof item === "string") { string(item); return; }
+    if (typeof item === "boolean") { add(item ? 4 : 5); return; }
+    if (typeof item === "number") { add(Number.isFinite(item) ? String(item).length : 4); return; }
+    if (Array.isArray(item)) { add(2); stack.push({ array: item, index: 0 }); return; }
     if (typeof item === "object") {
       add(2);
-      const fields: [string, unknown][] = [];
-      for (const field of Object.keys(item)) {
-        const entry = (item as Record<string, unknown>)[field];
-        if (entry !== undefined) fields.push([field, entry]);
-      }
-      for (let i = fields.length - 1; i >= 0; i--) stack.push([i > 0 ? 1 : 0, fields[i]![0], fields[i]![1], false]);
-      continue;
+      stack.push({ object: item as Record<string, unknown>, keys: Object.keys(item), index: 0, first: true });
+      return;
     }
     throw new TypeError("Expected plain JSON data for translation sizing");
+  };
+  visit(value);
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1]!;
+    if ("array" in frame) {
+      if (frame.index >= frame.array.length) { stack.pop(); continue; }
+      const index = frame.index++;
+      if (index > 0) add(1);
+      const element = frame.array[index];
+      if (element === undefined) add(4);
+      else visit(element);
+      continue;
+    }
+    let field: unknown;
+    let key: string | undefined;
+    while (frame.index < frame.keys.length) {
+      const candidate = frame.keys[frame.index++]!;
+      field = frame.object[candidate];
+      if (field !== undefined) { key = candidate; break; }
+    }
+    if (key === undefined) { stack.pop(); continue; }
+    if (!frame.first) add(1);
+    frame.first = false;
+    string(key);
+    add(1);
+    visit(field);
   }
   return bytes;
 }
