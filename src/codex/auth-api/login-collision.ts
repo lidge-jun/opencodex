@@ -1,6 +1,7 @@
 import { lstatSync } from "node:fs";
-import { extractAccountId, extractAccountIdClaims, extractEmail } from "../../oauth/chatgpt";
+import { extractAccountIdClaims, extractEmail } from "../../oauth/chatgpt";
 import { checkAccountIdCollision, readMainAuth } from "../auth-collision";
+import { sameNativeWorkspaceUser } from "../collision-identity";
 import { resolveCodexHomeDir } from "../home";
 import { tryAcquireNativeMainProfileClaim } from "../native-main-admission";
 import { withNativeMainSharedClaim } from "../native-main-claim";
@@ -35,18 +36,24 @@ export async function checkAccountIdCollisionWithNativeMain(
       }
       if (main.status !== "ok") throw new CodexCollisionReadBusyError();
       const tokens = main.tokens;
-      const nativeId = extractAccountId(tokens.id_token, tokens.access_token) ?? tokens.account_id;
       const claims = [extractAccountIdClaims(tokens.id_token), extractAccountIdClaims(tokens.access_token)];
+      // The selected workspace belongs to the current access token and explicit envelope.
+      // An older ID token may name another workspace for the exact same authenticated user.
+      const nativeId = claims[1]!.accountId ?? (tokens.account_id || claims[0]!.accountId);
+      const priorWorkspace = Boolean(claims[0]!.accountId && claims[0]!.accountId !== nativeId);
+      const nativePlan = extractChatgptPlanType(priorWorkspace ? undefined : tokens.id_token, tokens.access_token);
       const emails = [extractEmail(tokens.id_token), extractEmail(undefined, tokens.access_token)].filter(Boolean);
       if (!nativeId || typeof tokens.account_id !== "string" || typeof tokens.access_token !== "string"
         || (tokens.id_token !== undefined && typeof tokens.id_token !== "string")
-        || claims.some(claim => claim.conflict || (claim.accountId && claim.accountId !== nativeId))
-        || (tokens.account_id && tokens.account_id !== nativeId) || new Set(emails).size > 1) {
+        || claims.some(claim => claim.conflict)
+        || (tokens.account_id && tokens.account_id !== nativeId) || new Set(emails).size > 1
+        || (priorWorkspace && (!tokens.account_id.trim() || !claims[1]!.accountId || !tokens.id_token || !nativePlan
+          || !sameNativeWorkspaceUser(tokens.id_token, tokens.access_token)))) {
         throw new CodexCollisionReadBusyError();
       }
       return checkAccountIdCollision(accountId, email, plan, excludeAccountId, {
         accountId: nativeId, email: extractEmail(tokens.id_token, tokens.access_token),
-        plan: extractChatgptPlanType(tokens.id_token, tokens.access_token),
+        plan: nativePlan,
       });
     });
   } catch (error) {

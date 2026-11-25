@@ -84,6 +84,12 @@ ocx account login openai --device
 
 Consulte [Codex Integración](/es/guides/codex-integration/) para conocer qué escribe la inyección y cómo se elige el enrutamiento.
 
+### El inicio de sesión nativo está ocupado o no se puede leer
+
+Este error de registro en el pool puede aparecer después de que la autorización en el navegador o por dispositivo se complete. El proxy comprueba el inicio de sesión principal nativo antes de guardar la nueva entrada del pool. Una reclamación temporal del inicio de sesión nativo, un archivo ilegible o una evidencia de identidad incoherente detienen el registro; no se eliminan las cuentas existentes.
+
+La comprobación de colisiones del pool admite un ID token conservado que nombra un espacio de trabajo anterior solo cuando ambos tokens coinciden en el ID de usuario de ChatGPT, el sujeto y el correo, y el espacio de trabajo del access token actual coincide con el ID de cuenta explícito del archivo de inicio de sesión. Exige un plan no vacío en el access token actual y busca duplicados con ese espacio de trabajo y plan actuales sin reescribir el inicio de sesión nativo. La falta de evidencia de plan o de usuario y las reclamaciones de identidad en conflicto siguen siendo rechazos. No elimine `auth.json` para quitar este mensaje. Para que una corrección de validación del inicio de sesión surta efecto debe estar en ejecución un proxy actualizado; recargar el panel no actualiza el código del backend.
+
 <a id="oauth-refresh-capacity-reached"></a>
 
 ## Capacidad de actualización OAuth alcanzada

@@ -14,7 +14,7 @@ import { clearThreadAccountMap, clearCodexUpstreamHealth } from "../../src/codex
 import { clearAccountQuota } from "../../src/codex/quota";
 import { clearMainAccountInfoCache } from "../../src/codex/main-account-cache";
 import { setMainAccountPlan } from "../../src/codex/main-account";
-import { observeMainCodexCollisionIdentity } from "../../src/codex/collision-identity";
+import { getObservedMainCodexCollisionIdentity, observeMainCodexCollisionIdentity } from "../../src/codex/collision-identity";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -86,6 +86,49 @@ afterEach(() => {
 });
 
 describe("stored Pool duplicate of native main", () => {
+  test.each([
+    { name: "verified same-user rollover", patch: {}, accepted: true },
+    { name: "different user", patch: { accessUser: "other-user" }, accepted: false },
+    { name: "missing ID-token user", patch: { idUser: "" }, accepted: false },
+    { name: "missing access-token user", patch: { accessUser: "" }, accepted: false },
+    { name: "different subject", patch: { accessSubject: "other-subject" }, accepted: false },
+    { name: "missing subject", patch: { idSubject: " " }, accepted: false },
+    { name: "different email", patch: { accessEmail: "other@example.test" }, accepted: false },
+    { name: "missing email", patch: { idEmail: "" }, accepted: false },
+    { name: "missing current plan", patch: { accessPlan: " " }, accepted: false },
+    { name: "conflicting envelope", patch: { envelope: "other-account" }, accepted: false },
+    { name: "missing envelope", patch: { envelope: "" }, accepted: false },
+    { name: "missing access-token account", patch: { accessAccount: "" }, accepted: false },
+  ])("owned collision observation: $name", scenario => {
+    native("shared-account", "plus", email, true, "same-user");
+    expect(getObservedMainCodexCollisionIdentity()?.userId).toBe("same-user");
+    const values = { idUser: "same-user", accessUser: "same-user", idSubject: "same-subject",
+      accessSubject: "same-subject", idEmail: email, accessEmail: email, accessPlan: "team",
+      accessAccount: "current-workspace", envelope: "current-workspace", ...scenario.patch };
+    const token = (account: string, plan: string, user: string, subject: string, member: string) =>
+      `header.${Buffer.from(JSON.stringify({ sub: subject,
+        "https://api.openai.com/auth": { chatgpt_account_id: account, chatgpt_plan_type: plan, chatgpt_user_id: user },
+        "https://api.openai.com/profile": { email: member },
+      })).toString("base64url")}.fake`;
+    observeMainCodexCollisionIdentity({
+      id_token: token("shared-account", "plus", values.idUser, values.idSubject, values.idEmail),
+      access_token: token(values.accessAccount, values.accessPlan, values.accessUser, values.accessSubject, values.accessEmail),
+      account_id: values.envelope,
+    });
+    expect(getObservedMainCodexCollisionIdentity()).toMatchObject({
+      accountId: scenario.accepted ? "current-workspace" : "shared-account",
+      plan: scenario.accepted ? "team" : "plus",
+    });
+    expect(getObservedMainCodexCollisionIdentity()?.userId).toBe(scenario.accepted ? "same-user" : undefined);
+    expect(codexAccountUnusableReason(config, poolId)).toBe(scenario.accepted ? undefined : "duplicate_main");
+    if (scenario.accepted) {
+      expect(dto().selectionExcludedReason).toBeUndefined();
+      config.codexAccounts![0]!.plan = "team";
+      saveCodexAccountCredential(poolId, { accessToken: jwt("team", email, "same-user", "current-workspace"),
+        refreshToken: "fake-refresh", chatgptAccountId: "current-workspace", expiresAt: Date.now() + 3600_000 });
+      expect(codexAccountUnusableReason(config, poolId)).toBe("duplicate_main");
+    }
+  });
   test("official rows join the same upstream user without exposing identity claims", async () => {
     writeFileSync(join(process.env.OPENCODEX_HOME!, "admin-api-token"), `ocx_admin_${"x".repeat(43)}\n`);
     native("shared-account", "plus", email, true, "same-user");
@@ -385,3 +428,34 @@ test("owned API-key-only login retires the prior ChatGPT collision", () => {
   reconcileMainCodexAccountRuntimeState();
   expect(codexAccountUnusableReason(config, poolId)).toBeUndefined();
 });
+
+test("a verified same-user workspace rollover observes the current workspace, so the earlier workspace's pool entry stays usable", () => {
+  // Codex can keep an ID token for the earlier personal workspace after switching the access token
+  // to a team workspace. Pool login admits the earlier workspace for this same user, and the owned
+  // observation must resolve the native identity the same way, or that new entry is unselectable.
+  const token = (account: string, plan: string, user = "same-user", subject = "same-subject") => `header.${Buffer.from(JSON.stringify({
+    sub: subject, exp: Math.floor(Date.now() / 1000) + 3600,
+    "https://api.openai.com/auth": { chatgpt_account_id: account, chatgpt_user_id: user, user_id: user, chatgpt_plan_type: plan },
+    "https://api.openai.com/profile": { email },
+  })).toString("base64url")}.fake`;
+  const rollover = (idUser = "same-user") => writeFileSync(join(process.env.CODEX_HOME!, "auth.json"), JSON.stringify({ tokens: {
+    id_token: token("old-personal", "plus", idUser), access_token: token("current-workspace", "team"), account_id: "current-workspace",
+  } }));
+  saveCodexAccountCredential(poolId, { accessToken: token("old-personal", "plus"), refreshToken: "fake-refresh",
+    chatgptAccountId: "old-personal", expiresAt: Date.now() + 3600_000 });
+  // The running proxy first observes native signed into the personal workspace.
+  writeFileSync(join(process.env.CODEX_HOME!, "auth.json"), JSON.stringify({ tokens: {
+    id_token: token("old-personal", "plus"), access_token: token("old-personal", "plus"), account_id: "old-personal",
+  } }));
+  reconcileMainCodexAccountRuntimeState();
+  expect(codexAccountUnusableReason(config, poolId)).toBe("duplicate_main");
+  rollover();
+  reconcileMainCodexAccountRuntimeState();
+  expect(codexAccountUnusableReason(config, poolId)).not.toBe("duplicate_main");
+  // The current workspace for the same member is still the native duplicate.
+  saveCodexAccountCredential(poolId, { accessToken: token("current-workspace", "team"), refreshToken: "fake-refresh",
+    chatgptAccountId: "current-workspace", expiresAt: Date.now() + 3600_000 });
+  config.codexAccounts![0]!.plan = "team";
+  expect(codexAccountUnusableReason(config, poolId)).toBe("duplicate_main");
+});
+

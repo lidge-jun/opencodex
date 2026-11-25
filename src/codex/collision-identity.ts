@@ -21,6 +21,16 @@ function workspacePlan(plan: unknown): boolean {
   return /team|business|enterprise|workspace|edu/.test(codexPlanKey(plan) ?? "");
 }
 
+/** A workspace rollover may retain an older ID token, but never a different user or subject. */
+export function sameNativeWorkspaceUser(idToken: string, accessToken: string): boolean {
+  const id = nativeUserIdClaims(idToken), access = nativeUserIdClaims(accessToken);
+  const idSubject = decodeJwtPayload(idToken)?.sub, accessSubject = decodeJwtPayload(accessToken)?.sub;
+  const idEmail = extractEmail(idToken), accessEmail = extractEmail(undefined, accessToken);
+  return !id.conflict && !access.conflict && Boolean(id.userId?.trim()) && id.userId === access.userId
+    && typeof idSubject === "string" && idSubject.trim().length > 0 && idSubject === accessSubject
+    && Boolean(idEmail) && idEmail === accessEmail;
+}
+
 /** Missing member evidence cannot establish a distinct subscription within one plan bucket. */
 export function sameCodexCollisionIdentity(a: CodexCollisionIdentity, b: CodexCollisionIdentity): boolean {
   if (!a.accountId || a.accountId !== b.accountId || workspacePlan(a.plan) !== workspacePlan(b.plan)) return false;
@@ -52,8 +62,15 @@ export function observeMainCodexCollisionIdentity(tokens?: CodexTokens): void {
   }
   const claims = [extractAccountIdClaims(tokens.id_token), extractAccountIdClaims(tokens.access_token)];
   if (claims.some(claim => claim.conflict)) { suppressObservedUserId(); return; }
-  const accountId = tokens.account_id || claims.find(claim => claim.accountId)?.accountId;
-  if (!accountId || claims.some(claim => claim.accountId && claim.accountId !== accountId)) {
+  // The same resolution as pool-login admission (auth-api/login-collision.ts): the current access
+  // token and envelope name the workspace, and a retained ID token may name an earlier one only for
+  // the same verified user, with the plan read from the access token alone.
+  const accountId = claims[1]!.accountId ?? (tokens.account_id || claims[0]!.accountId);
+  const priorWorkspace = Boolean(accountId && claims[0]!.accountId && claims[0]!.accountId !== accountId);
+  const plan = extractChatgptPlanType(priorWorkspace ? undefined : tokens.id_token, tokens.access_token);
+  if (!accountId || (tokens.account_id && tokens.account_id !== accountId)
+    || (priorWorkspace && (!tokens.account_id.trim() || !claims[1]!.accountId || !tokens.id_token || !plan
+      || !sameNativeWorkspaceUser(tokens.id_token, tokens.access_token)))) {
     suppressObservedUserId();
     return;
   }
@@ -72,7 +89,7 @@ export function observeMainCodexCollisionIdentity(tokens?: CodexTokens): void {
     ? [...userIds][0] : undefined;
   observed = { identity: { accountId, email: [...emails][0],
     ...(userId ? { userId } : {}),
-    plan: extractChatgptPlanType(tokens.id_token, tokens.access_token) },
+    plan },
     homeScope: homeScope(), generation: captureMainAccountIdentityGeneration() };
 }
 

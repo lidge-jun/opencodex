@@ -1,11 +1,13 @@
 import { expect, spyOn, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getCodexAccountCredential } from "../../src/codex/account-store";
 import * as authCollision from "../../src/codex/auth-collision";
 import { acquireNativeMainProfileDrain } from "../../src/server/lifecycle";
 import { saveConfig } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
+import { reconcileMainCodexAccountRuntimeState } from "../../src/codex/account-lifecycle";
+import { resolveCodexAuthContext, isCodexAuthContextUsable } from "../../src/codex/auth-context";
 
 interface CollisionOAuthOptions {
   config: OcxConfig;
@@ -51,15 +53,32 @@ export function registerMainCollisionCases(
     { name: "different workspace", plan: "team", email: "main@example.test", usage: "error", blocked: false, accountId: "other-workspace" },
     { name: "different plan bucket", plan: "plus", email: "main@example.test", usage: "error", blocked: false, mainPlan: "team" },
     { name: "WHAM plan overrides JWT", plan: "plus", email: "main@example.test", usage: "team", blocked: true, mainPlan: "team" },
+    { name: "same-user workspace rollover permits an independent login", plan: "team", email: "main@example.test", usage: "error", blocked: false, accountId: "other-workspace", rolled: true },
+    { name: "same-user workspace rollover still blocks the current native duplicate", plan: "team", email: "main@example.test", usage: "error", blocked: true, rolled: true },
+    { name: "same-user workspace rollover refuses an unknown current plan", plan: "team", email: "main@example.test", usage: "error", blocked: true, rolled: true, unprovenPlan: true },
+    { name: "old personal workspace remains selectable after observed rollover", plan: "plus", email: "main@example.test", usage: "error", blocked: false, accountId: "old-personal", rolled: true, remembered: true },
   ];
   test.each(cases)("OAuth main collision: $name", async scenario => {
     const token = (plan: string) => `header.${Buffer.from(JSON.stringify({
       "https://api.openai.com/auth": { chatgpt_plan_type: plan },
       "https://api.openai.com/profile": { email: "main@example.test" },
     })).toString("base64url")}.sig`;
-    writeFileSync(join(process.env.CODEX_HOME!, "auth.json"), JSON.stringify({
-      tokens: { access_token: token(scenario.mainPlan ?? scenario.plan), account_id: "main-account" },
+    const rolledToken = (account: string, plan: string) => `header.${Buffer.from(JSON.stringify({ sub: "same-subject",
+      "https://api.openai.com/auth": { chatgpt_account_id: account, chatgpt_user_id: "same-user", chatgpt_plan_type: plan },
+      "https://api.openai.com/profile": { email: "main@example.test" },
+    })).toString("base64url")}.sig`;
+    const nativePath = join(process.env.CODEX_HOME!, "auth.json");
+    if (scenario.remembered) {
+      writeFileSync(nativePath, JSON.stringify({ tokens: {
+        access_token: rolledToken("old-personal", "plus"), account_id: "old-personal",
+      } }));
+      reconcileMainCodexAccountRuntimeState();
+    }
+    writeFileSync(nativePath, JSON.stringify({
+      tokens: { access_token: scenario.rolled ? rolledToken("main-account", scenario.unprovenPlan ? "" : "team") : token(scenario.mainPlan ?? scenario.plan),
+        ...(scenario.rolled ? { id_token: rolledToken("old-personal", "plus") } : {}), account_id: "main-account" },
     }));
+    const nativeBytes = readFileSync(nativePath, "utf8");
     const config = makeConfig();
     saveConfig(config);
     let warmups = 0;
@@ -78,14 +97,26 @@ export function registerMainCollisionCases(
     });
     expect(result.state.status).toBe(scenario.blocked ? "error" : "done");
     if (scenario.blocked) {
-      expect(result.state.error).toBe("Account is already configured as the native Codex main account.");
+      expect(result.state.error).toBe(scenario.unprovenPlan
+        ? "Native Codex login is busy or unreadable; retry login shortly."
+        : "Account is already configured as the native Codex main account.");
       expect(config.codexAccounts).toEqual([]);
       expect(getCodexAccountCredential("collision-candidate")).toBeNull();
       expect(warmups).toBe(0);
     } else {
       expect(config.codexAccounts).toHaveLength(1);
       expect(getCodexAccountCredential("collision-candidate")).not.toBeNull();
+      expect(getCodexAccountCredential("collision-candidate")?.chatgptAccountId)
+        .toBe(scenario.accountId ?? "main-account");
       expect(warmups).toBeGreaterThan(0);
+      if (scenario.remembered) {
+        const context = await resolveCodexAuthContext(new Headers(), config, "pool", {
+          accountId: "collision-candidate", primeCodexPoolQuotas: async () => {},
+        });
+        expect(context.kind).toBe("pool");
+        expect(isCodexAuthContextUsable(context, config)).toBe(true);
+        expect(readFileSync(nativePath, "utf8")).toBe(nativeBytes);
+      }
     }
   });
 }
