@@ -25,7 +25,7 @@ import { providerTlsFetch } from "../../lib/provider-tls-profile";
 import { inheritPassiveKeyProof, markPassiveKeyTransparent } from "../../lib/passive-key-fetch-proof";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { configuredOutboundFetch } from "../../lib/proxy-env";
-import { isLoopbackUrl, rewriteUpstream } from "../../plugins/upstream-hooks";
+import { hasUpstreamRewriters, isLoopbackUrl, rewriteUpstream } from "../../plugins/upstream-hooks";
 import {
   describeProviderEgressForLog,
   bindProviderSocketRoute,
@@ -407,8 +407,10 @@ export function providerFetch(
       // full decision can be made now. With an override, only the configured value is checked:
       // the override may rebuild against a different host and select a different transport, and
       // refusing on this destination would reject a request whose real route is fine.
+      // The NO_PROXY exemption is asked early only when this URL is final: a plugin rewrite may
+      // still move it, and is then decided at the physical send, before its receipt.
       if (override) egressFor(input);
-      else providerEgressSendInit(egressBinding, transport, input);
+      else providerEgressSendInit(egressBinding, transport, input, { exemption: !hasUpstreamRewriters() });
       // The hook inspects the outgoing headers and refuses the send by throwing; it is not a
       // mutator, and the copy it receives is deliberately not threaded onward. `Connection`
       // is decided inside `dispatch`, which runs after this, so the fresh-connection policy

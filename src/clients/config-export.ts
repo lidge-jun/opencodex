@@ -735,7 +735,11 @@ export function raycastConfigPath(env: OpencodeLaunchEnv = process.env, home: st
 }
 
 /** Same endpoint and credentials, with the admission header serialized by generation. */
-function opencodeProviderConnection(baseURL: string, config: OcxConfig): OpencodeProviderConnection {
+function opencodeProviderConnection(
+  baseURL: string,
+  config: OcxConfig,
+  keylessInference: boolean,
+): OpencodeProviderConnection {
   const options: OpencodeProviderConnection = { baseURL };
   // Opt-in opencode-side timeout overrides. Omitted by default so opencode keeps its native
   // header/chunk waits for every upstream routed through the proxy (current V2 defaults the
@@ -756,7 +760,10 @@ function opencodeProviderConnection(baseURL: string, config: OcxConfig): Opencod
     options.apiKey = LOOPBACK_API_KEY_PLACEHOLDER;
     return options;
   }
-  options.apiKey = OPENCODE_API_KEY_ENV_REF;
+  // OpenCode refuses an empty key before it sends anything, so an unset reference fails even
+  // against a listener that never reads one (#9069). Only a caller that selected the keyless
+  // listener may say so; everything else keeps the reference.
+  options.apiKey = keylessInference ? LOOPBACK_API_KEY_PLACEHOLDER : OPENCODE_API_KEY_ENV_REF;
   return options;
 }
 
@@ -785,6 +792,7 @@ export function opencodeProviderBlocks(
   baseURL: string,
   catalogModels: readonly OpencodeCatalogModel[],
   config: OcxConfig,
+  { keylessInference = false }: { keylessInference?: boolean } = {},
 ): OpencodeProviderBlocks {
   const v1Models: Record<string, OpencodeModelEntry> = {};
   const v2Models: Record<string, OpencodeV2ModelEntry> = {};
@@ -830,7 +838,7 @@ export function opencodeProviderBlocks(
       variants: opencodeEffortVariants(model),
     };
   }
-  const connection = opencodeProviderConnection(baseURL, config);
+  const connection = opencodeProviderConnection(baseURL, config, keylessInference);
   const { headers, ...settings } = connection;
   return {
     v1: {
@@ -892,7 +900,7 @@ export function buildOpencodeProviderBlockFromCatalog(
 function buildOpencodeClientConfig(ctx: ExportContext): OpencodeGeneratedConfig {
   const models = normalizeExportModels(ctx.models);
   const config = ctx.config ?? OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG;
-  const blocks = opencodeProviderBlocks(ctx.baseUrl, models, config);
+  const blocks = opencodeProviderBlocks(ctx.baseUrl, models, config, { keylessInference: ctx.keylessInference === true });
   return {
     $schema: OPENCODE_CONFIG_SCHEMA,
     provider: { [OPENCODE_PROVIDER_ID]: blocks.v1 },

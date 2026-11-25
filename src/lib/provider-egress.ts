@@ -26,7 +26,7 @@
  * therefore a configuration error naming both real alternatives.
  */
 import type { OcxProviderConfig } from "../types";
-import { isSocks5ProxyUrl, noProxyMatches } from "./proxy-env";
+import { explicitProxyExemptedError, isSocks5ProxyUrl, noProxyMatches, processNoProxyExempts } from "./proxy-env";
 
 export class InvalidProviderEgressError extends Error {
   override readonly name = "InvalidProviderEgressError";
@@ -277,10 +277,22 @@ export function providerEgressSendInit(
   binding: ProviderEgressBinding,
   physicalFetch: unknown,
   input: string | URL | Request,
+  /** False for an early check whose destination a plugin rewrite or an override may still change. */
+  options: { exemption?: boolean } = {},
 ): { proxy?: string | false } {
   const url = egressTargetUrl(input);
   if (url === null) return {};
   const egress = resolveProviderEgress({ providerName: binding.providerName, provider: binding.provider, url });
+  // An HTTP(S) proxy route toward a destination the process NO_PROXY exempts would leave without the
+  // proxy. Decided against the destination actually sent, before the dispatch receipt and before
+  // any byte leaves; `providerFetch` also asks early, before `beforeDispatch`, when nothing can still
+  // change the destination. `configuredOutboundFetch` keeps the check as a backstop for other callers.
+  if (options.exemption !== false && egress.kind === "proxy" && egress.transport === "http") {
+    const target = parseTargetUrl(binding.providerName, url);
+    if ((target.protocol === "http:" || target.protocol === "https:") && processNoProxyExempts(target)) {
+      throw explicitProxyExemptedError(target);
+    }
+  }
   if (providerEgressIsExplicit(egress) && !isEgressTransparentExecutor(physicalFetch)) {
     // Name the field that actually made the route explicit. A bypass-list match with no
     // `proxy` field at all would otherwise tell the operator to remove an override they

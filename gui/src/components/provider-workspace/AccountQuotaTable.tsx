@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { useT, type TKey } from "../../i18n/shared";
+import { QUOTA_WARN_THRESHOLD, quotaBarTone } from "../QuotaBars";
 import {
   buildQuotaTable, formatCountdown,
   type AccountFlag, type PoolCell, type PoolKey, type QuotaTableAccount, type QuotaTableRow,
@@ -22,14 +23,17 @@ function useMinuteClock(): number {
 
 function PoolBar({ label, cell, now }: { label: string; cell: PoolCell; now: number }) {
   const t = useT();
-  const remaining = Math.round(cell.remaining);
-  const tone = remaining <= 20 ? "bar-warn" : "bar-green";
+  // Consumed share, matching QuotaBars and the Codex account cards: the bar fills as the
+  // allowance is spent, so a fresh account reads 0% and an exhausted one reads 100%.
+  // The tone comes from the shared helpers so this cell cannot drift from the other surfaces.
+  const used = Math.round(cell.used);
+  const tone = quotaBarTone(used, QUOTA_WARN_THRESHOLD);
   const countdown = cell.resetAt === undefined ? null : formatCountdown(cell.resetAt, now);
   return (
     <div className="aqt-bar" title={cell.resetAt === undefined ? undefined : new Date(cell.resetAt).toLocaleString()}>
       <span className="aqt-bar-label">{label}</span>
-      <div className="bar"><div className={`bar-fill ${tone}`} style={{ "--bar-scale": remaining / 100 } as CSSProperties} /></div>
-      <span className="aqt-bar-value">{t("acctTable.left", { percent: remaining })}</span>
+      <div className="bar"><div className={`bar-fill ${tone}`} style={{ "--bar-scale": used / 100 } as CSSProperties} /></div>
+      <span className="aqt-bar-value">{t("quota.usedPercent", { pct: used })}</span>
       <span className="aqt-bar-reset">{countdown ? t("acctTable.resetsIn", { time: countdown }) : ""}</span>
     </div>
   );
@@ -68,8 +72,9 @@ function hasContent(node: ReactNode): boolean {
 
 /**
  * The one account list of a multi-account provider: plan, each quota pool's 5-hour and weekly
- * remaining with a reset countdown, a status flag and, when the caller passes them, the row's
- * controls and a detail line. Below a container width the rows stack instead of scrolling, so
+ * consumed share with a reset countdown, a status flag and, when the caller passes them, the
+ * row's controls and a detail line. Every other quota surface in the dashboard reports consumed
+ * share, so this table does too. Below a container width the rows stack instead of scrolling, so
  * the controls never leave the screen.
  */
 export function AccountQuotaTable({ accounts, strategy, renderRowContent }: AccountQuotaTableProps) {

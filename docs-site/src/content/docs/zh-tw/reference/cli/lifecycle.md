@@ -30,6 +30,8 @@ ocx start --socks5-off
 
 無人監督的 Link Child 處理結束訊號時，會在每次寫入前核對連線，並在關閉接聽器前還原 Codex 原生設定及受管理的 Grok。服務/Desktop、sibling、重新啟動交接和父程序 stop 收據會保留設定。結束中的重新啟動要求回傳 `409 runtime_stopping`。強制終止可能略過訊號處理，仍需父程序 `ocx stop` 的還原路徑。
 
+在 Windows x64 上，若 WMI 未傳回相符服務包裝程序的擁有者，OpenCodex 可透過執行中程序的控制代碼確認 Windows 帳戶與程序建立時間。若無法確認擁有者，該程序會繼續執行。若錯誤明確指出工作排程器的註冊問題，請用 `ocx service status` 檢查註冊狀態。
+
 停止執行中的代理（依 PID）、移除 PID 檔案，並還原原生 Codex。若已安裝受管背景服務，`ocx stop` 也會先停止它，使其無法重新生成代理。網頁儀表板側欄的代理拉桿拉到底時，在多數後端執行相同動作（`POST /api/stop`），但 Windows 工作排程器除外：工作結束後包裝程序仍可能重新啟動 Proxy，因此儀表板會以 `respawnable_service` 拒絕、不做任何變更，並請你改用 `ocx stop`。
 
 對已連線的 hub 用戶端，`ocx stop`（包括成功的 API 停止）會保留連線擁有的 Codex 路由、目錄和 Grok 設定，`ocx start` 會再次提供服務。明確停止 Remote Link Child 時，若共用設定還原成功，則會還原原生 Codex 路由、目錄與已備份的續接歷程中繼資料，並移除受管理的 Grok 設定。已儲存的 Home 連線會保留，可用 `ocx disconnect` 移除。
@@ -327,6 +329,8 @@ Unix 解除安裝後，請從 shell 啟動檔移除載入行，並重新啟動 s
 
 從 npm 自我更新 opencodex。穩定安裝使用 `@latest`；預覽安裝停留在 `@preview`，除非你傳入 `--tag latest|preview`。它偵測原始碼 checkout 並告訴你改用
 `git pull && bun install`，且若你已是該 tag 的最新版本則為 no-op。執行中的代理會在檔案被替換前停止；已安裝的服務會自動重建並啟動，而前景安裝會印出 `ocx start` 作為下一步。
+
+預覽版的命名為 `X.Y.Z-preview.<date>` 或 `X.Y.Z-preview.<date>.<attempt>`，例如 `2.100.6-preview.20261119.1`；次數是該日期的發布序號。在 preview 通道中，預覽版依序按基礎版本、日期、次數比較，沒有次數的版本視為次數 0。在任一通道中，只有當穩定版的基礎版本高於預覽版時，才會向預覽版安裝提供該穩定版；穩定通道從不提供預覽版。這些規則適用於更新檢查、通知和儀表板的更新提示。`ocx update` 本身只要所選標籤指向的版本與已安裝版本不同就會安裝它，因此在預覽版安裝上執行 `ocx update --tag latest` 會切換到目前的穩定版，即使其基礎版本並不更高。
 
 ```bash
 ocx update
