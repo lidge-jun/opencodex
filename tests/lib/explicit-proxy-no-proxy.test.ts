@@ -5,7 +5,7 @@
  * request names a proxy. These cases use a real transport (two loopback listeners) because a
  * mocked fetch only sees the option, not the route the request actually takes.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import {
   configuredOutboundFetch,
   ExplicitProxyExemptedError,
@@ -154,4 +154,74 @@ test("every entry form Bun 1.4.4 treats as a bypass is a bypass here", () => {
   }
   expect(processNoProxyExempts(new URL("https://api.example.com/x"), { NO_PROXY: "api.example.com:443" })).toBe(true);
   expect(processNoProxyExempts(new URL("http://[::1]:8080/x"), { NO_PROXY: "[::1]" })).toBe(true);
+});
+
+describe("redirects of an explicit-proxy request", () => {
+  type Seen = { method: string; path: string; body: string; authorization: string | null; apiKey: string | null };
+  const viaProxy: Seen[] = [];
+  const atExempt: Seen[] = [];
+  let redirectTo = "";
+  let redirectStatus = 307;
+  let exempt: ReturnType<typeof Bun.serve>;
+  let forwardProxy: ReturnType<typeof Bun.serve>;
+  const seen = async (req: Request): Promise<Seen> => ({ method: req.method, path: new URL(req.url).pathname, body: await req.text(),
+    authorization: req.headers.get("authorization"), apiKey: req.headers.get("x-api-key") });
+
+  beforeAll(() => {
+    exempt = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async req => { atExempt.push(await seen(req)); return new Response("exempt"); } });
+    // A forward proxy: it answers every proxied request itself, redirecting /start.
+    forwardProxy = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async req => {
+      const request = await seen(req);
+      viaProxy.push(request);
+      if (request.path === "/start") return new Response(null, { status: redirectStatus, headers: { location: redirectTo } });
+      return new Response(`landed ${request.method} ${request.body}`);
+    } });
+  });
+  afterAll(() => { exempt.stop(true); forwardProxy.stop(true); });
+  beforeEach(() => { viaProxy.length = 0; atExempt.length = 0; redirectStatus = 307; });
+
+  const post = () => configuredOutboundFetch(`http://127.0.0.1:${dest.port}/start`, {
+    method: "POST", body: "synthetic-body", proxy: `http://127.0.0.1:${forwardProxy.port}`,
+    headers: { authorization: "Bearer synthetic-test-token", "x-api-key": "synthetic-test-key" },
+  } as ProxyCapableRequestInit as RequestInit);
+
+  for (const spelling of ["NO_PROXY", "no_proxy"] as const) {
+    test(`a redirect to a destination ${spelling} exempts is refused before it is contacted`, async () => {
+      process.env[spelling] = `127.0.0.1:${exempt.port}`;
+      redirectTo = `http://127.0.0.1:${exempt.port}/landing`;
+      await expect(post()).rejects.toBeInstanceOf(ExplicitProxyExemptedError);
+      expect(viaProxy.map(request => request.path)).toEqual(["/start"]);
+      expect(atExempt).toEqual([]);
+    });
+  }
+
+  test("a redirect to a destination that is not exempt is followed through the proxy, replaying a 307", async () => {
+    process.env.NO_PROXY = "example.invalid";
+    redirectTo = `http://127.0.0.1:${dest.port}/landing`;
+    const response = await post();
+    expect(await response.text()).toBe("landed POST synthetic-body");
+    expect(viaProxy.map(request => [request.path, request.method, request.body, request.apiKey])).toEqual([
+      ["/start", "POST", "synthetic-body", "synthetic-test-key"],
+      ["/landing", "POST", "synthetic-body", "synthetic-test-key"],
+    ]);
+    expect(atExempt).toEqual([]);
+  });
+
+  test("a 303 becomes a bodiless GET and a cross-origin hop drops Authorization", async () => {
+    process.env.NO_PROXY = "example.invalid";
+    redirectStatus = 303;
+    redirectTo = `http://localhost:${dest.port}/landing`;
+    const response = await post();
+    expect(await response.text()).toBe("landed GET ");
+    expect(viaProxy[1]).toMatchObject({ path: "/landing", method: "GET", body: "", authorization: null });
+  });
+
+  test("a caller's manual redirect mode is left to the caller", async () => {
+    process.env.NO_PROXY = `127.0.0.1:${exempt.port}`;
+    redirectTo = `http://127.0.0.1:${exempt.port}/landing`;
+    const response = await configuredOutboundFetch(`http://127.0.0.1:${dest.port}/start`, {
+      redirect: "manual", proxy: `http://127.0.0.1:${forwardProxy.port}` } as ProxyCapableRequestInit as RequestInit);
+    expect(response.status).toBe(307);
+    expect(atExempt).toEqual([]);
+  });
 });

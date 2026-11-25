@@ -362,8 +362,14 @@ export function configuredOutboundFetch(
   // destination the process NO_PROXY exempts. The caller named this proxy, so the request must not
   // leave without it: refuse instead. SOCKS5 strings never reach Bun's proxy option (below).
   if (typeof explicitProxy === "string" && !isSocks5ProxyUrl(explicitProxy)
-    && (url.protocol === "http:" || url.protocol === "https:") && processNoProxyExempts(url)) {
-    return Promise.reject(explicitProxyExemptedError(url));
+    && (url.protocol === "http:" || url.protocol === "https:")) {
+    if (processNoProxyExempts(url)) return Promise.reject(explicitProxyExemptedError(url));
+    // Bun would follow a redirect itself and apply NO_PROXY to the new destination, so with any
+    // bypass list in the environment the redirects are followed here, checking every hop.
+    const redirectMode = init?.redirect ?? (input instanceof Request ? input.redirect : "follow");
+    if (redirectMode === "follow" && processNoProxyConfigured()) {
+      return followExplicitProxyRedirects(base!, input, init, explicitProxy, url);
+    }
   }
   // A mixed inherited SOCKS/HTTP ALL_PROXY environment cannot put bare "localhost" in
   // NO_PROXY: Bun would also bypass its HTTP proxy for app.localhost. Keep the name exact
@@ -376,6 +382,55 @@ export function configuredOutboundFetch(
     return socks5Fetch(input, init, proxy);
   }
   return base!(input, init);
+}
+
+function processNoProxyConfigured(env: ProxyEnvMap = process.env): boolean {
+  return [env.NO_PROXY, env.no_proxy].some(value => typeof value === "string" && value.trim() !== "");
+}
+
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_EXPLICIT_PROXY_REDIRECTS = 20;
+/** Request fields the rebuilt `Request` carries; everything else in `init` (Bun's own options) is passed on. */
+const REQUEST_FIELDS = ["method", "headers", "body", "signal", "redirect", "duplex", "referrer", "referrerPolicy", "mode", "credentials", "cache", "integrity", "window"];
+
+/**
+ * Follow redirects of an explicit HTTP(S)-proxy request here, rechecking every destination before it
+ * is contacted. Each hop is sent through the same proxy with `redirect: "manual"`. The Fetch rules
+ * apply: 303, and 301/302 after a POST, become a bodiless GET; 307 and 308 replay the method and
+ * body; a cross-origin hop drops `Authorization`; more than 20 redirects fail.
+ */
+async function followExplicitProxyRedirects(
+  base: typeof globalThis.fetch, input: RequestInfo | URL, init: RequestInit | undefined, proxyUrl: string, firstUrl: URL,
+): Promise<Response> {
+  const passthrough: Record<string, unknown> = { ...(init as Record<string, unknown> | undefined) };
+  for (const field of REQUEST_FIELDS) delete passthrough[field];
+  let request = new Request(input, { ...init, redirect: "manual" });
+  let target = firstUrl;
+  for (let hops = 0; ; hops += 1) {
+    const response = await base(request.clone(), { ...passthrough, proxy: proxyUrl, redirect: "manual" } as ProxyCapableRequestInit);
+    const location = REDIRECT_STATUSES.has(response.status) ? response.headers.get("location") : null;
+    if (location === null) return response;
+    let next: URL;
+    try {
+      next = new URL(location, target);
+    } catch {
+      return response;
+    }
+    await response.body?.cancel().catch(() => {});
+    if (hops >= MAX_EXPLICIT_PROXY_REDIRECTS) throw new TypeError(`too many redirects from ${firstUrl.origin}`);
+    if (next.protocol !== "http:" && next.protocol !== "https:") throw new TypeError(`redirect to an unsupported scheme from ${target.origin}`);
+    if (processNoProxyExempts(next)) throw explicitProxyExemptedError(next);
+    const toGet = response.status === 303 ? request.method !== "HEAD"
+      : (response.status === 301 || response.status === 302) && request.method === "POST";
+    const headers = new Headers(request.headers);
+    if (toGet) for (const name of ["content-type", "content-length", "content-encoding", "content-language", "content-location"]) headers.delete(name);
+    if (next.origin !== target.origin) headers.delete("authorization");
+    request = new Request(next, {
+      method: toGet ? "GET" : request.method, headers, body: toGet ? null : request.body,
+      redirect: "manual", signal: request.signal, duplex: "half",
+    } as RequestInit);
+    target = next;
+  }
 }
 
 type FetchWithPreconnect = typeof globalThis.fetch & {
