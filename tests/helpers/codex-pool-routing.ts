@@ -1,4 +1,4 @@
-import { restoreCodexAccountEgressBinding } from "../../src/codex/account-egress-runtime";
+import { restoreCodexAccountEgressBinding, type CodexAccountEgressConfig } from "../../src/codex/account-egress-runtime";
 import { listCodexAccountIds } from "../../src/codex/account-store";
 import { getConfigPath } from "../../src/config";
 
@@ -12,13 +12,14 @@ import { getConfigPath } from "../../src/config";
  */
 const registeredIds = new Set<string>();
 
-/** A pool account a test passes as a credential without storing it; it gets a row in every binding. */
+/** A pool account a test passes as a credential without storing it; it has a row until the next bind. */
 export function registerCodexPoolRowForTests(accountId: string): string {
   registeredIds.add(accountId);
   return accountId;
 }
 
 export function bindStoredCodexPoolRoutingForTests(extraIds: readonly string[] = []): void {
+  registeredIds.clear();
   const config = {
     providers: {},
     get codexAccounts() {
@@ -26,4 +27,12 @@ export function bindStoredCodexPoolRoutingForTests(extraIds: readonly string[] =
     },
   };
   restoreCodexAccountEgressBinding({ config: config as never, configPath: getConfigPath(), degraded: false });
+}
+
+/**
+ * Bind a test's own live config for the current config home, for cases that change account
+ * membership: a row the test removes from `config.codexAccounts` is gone from routing too.
+ */
+export function bindCodexPoolRoutingConfigForTests(config: CodexAccountEgressConfig): void {
+  restoreCodexAccountEgressBinding({ config, configPath: getConfigPath(), degraded: false });
 }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
-import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
+import { bindCodexPoolRoutingConfigForTests, bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
+import { codexAccountFetch, CodexAccountRouteUnavailableError } from "../../src/codex/account-egress-runtime";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -793,6 +794,7 @@ describe("primeCodexPoolQuotas", () => {
   test("removing an account from the pool purges its failed-prime backoff", async () => {
     const config = makeConfig();
     seedPoolAccount(config, "p1");
+    bindCodexPoolRoutingConfigForTests(config);
     const originalPool = [...(config.codexAccounts ?? [])];
     const originalFetch = globalThis.fetch;
     let calls = 0;
@@ -812,6 +814,9 @@ describe("primeCodexPoolQuotas", () => {
       config.codexAccounts = [];
       clearCodexQuotaPrimeSingleFlightForTests();
       await primeCodexPoolQuotas(config, "removed");
+      // A removed account's stored credential is refused at the routing boundary, not sent.
+      await expect(codexAccountFetch("p1")("https://chatgpt.com/backend-api/wham/usage")).rejects.toBeInstanceOf(CodexAccountRouteUnavailableError);
+      expect(calls).toBe(1);
 
       config.codexAccounts = originalPool;
       upstreamHealthy = true;
