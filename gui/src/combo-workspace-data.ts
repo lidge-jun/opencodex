@@ -532,10 +532,9 @@ export function toPutBody(
     visionSidecarTargets?: Array<{ provider: string; model: string }>;
     /**
      * The combo as stored when this edit began, or null for a new combo. The server keeps an
-     * omitted target `metered`, `allowMeteredTargets`, `quotaOnlyFallback` or
-     * `preserveFallbackModel` and clears an explicit false, so only the settings that differ
-     * from `stored` are sent. Without it none are sent, and a stale editor cannot restore a
-     * value the CLI or API changed in the meantime.
+     * omitted `allowMeteredTargets`, `quotaOnlyFallback` and `preserveFallbackModel` are
+     * preserved unless changed. Target metering is always sent when true, while false is
+     * sent only when explicitly cleared from the stored baseline.
      */
     stored?: ComboItem | null;
   } = {},
@@ -578,7 +577,7 @@ export function toPutBody(
       targets: item.targets.map((target) => ({
         provider: target.provider.trim(),
         model: target.model.trim(),
-        ...(changed(target.metered, storedMetered.get(`${target.provider.trim()}/${target.model.trim()}`))
+        ...(target.metered || changed(target.metered, storedMetered.get(`${target.provider.trim()}/${target.model.trim()}`))
           ? { metered: Boolean(target.metered) }
           : {}),
         ...(weighted ? { weight: target.weight ?? 1 } : {}),
