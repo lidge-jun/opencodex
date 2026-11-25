@@ -68,8 +68,8 @@ export interface WindowsProcessNativeApi {
   captureChildExitCode?(pid: number): (() => number | null) | null;
   /** Creation time in epoch ms (FILETIME truncated to ms), or null when unreadable. */
   creationTime(pid: number): number | null;
-  /** Creation in .NET ticks at CIM precision from a live process with the same token user. */
-  sameUserIdentity(pid: number, withCommandLine?: boolean): { ticks: bigint; commandLine?: string; sid?: string } | null;
+  /** Creation in .NET ticks at CIM precision. A supplied SID must also match both process tokens. */
+  sameUserIdentity(pid: number, withCommandLine?: boolean, expectedUserSid?: string): { ticks: bigint; commandLine?: string } | null;
   terminate(pid: number, boundStartTime: number | bigint): WindowsTerminateResult;
   openWatch(pid: number, boundStartTime: number): WindowsProcessWatch;
   /** PID of the running Task Scheduler service host, or null when it cannot be read. */
@@ -223,16 +223,17 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
         k.CloseHandle(handle);
       }
     },
-    sameUserIdentity(pid, withCommandLine) {
+    sameUserIdentity(pid, withCommandLine, expectedUserSid) {
       const handle = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid);
       if (!handle) return null;
       try {
         const fileTime = handleFileTime(handle);
-        const sid = handleUserSid(handle);
-        if (fileTime === null || sid !== handleUserSid(k.GetCurrentProcess())) return null;
+        if (fileTime === null) return null;
+        const userSid = handleUserSid(handle);
+        if (userSid !== handleUserSid(k.GetCurrentProcess()) || (expectedUserSid !== undefined && userSid !== expectedUserSid)) return null;
         const commandLine = withCommandLine ? readWindowsProcessCommandLineFromHandle(handle) : undefined;
         if (handleExited(handle) !== false) return null;
-        return { ticks: fileTimeToCimTicks(fileTime), commandLine, sid };
+        return { ticks: fileTimeToCimTicks(fileTime), commandLine };
       } catch {
         return null;
       } finally {

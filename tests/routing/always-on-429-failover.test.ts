@@ -17,7 +17,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearComboTargetCooldowns, coolComboTarget, isComboTargetInCooldown } from "../../src/combos/failover";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
-import { executeComboResponses, isAnthropicPoolLocalRefusal } from "../../src/server/responses/core-combo";
+import { executeComboResponses } from "../../src/server/responses/core-combo";
+import { isAnthropicPoolLocalRefusal } from "../../src/server/responses/core-combo-failure";
 import type { ResponsesDispatchers } from "../../src/server/responses/core-options";
 import {
   clearAnthropicAccountPoolState,

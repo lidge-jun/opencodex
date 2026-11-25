@@ -158,17 +158,31 @@ export function restoreApprovedCodexProviders(revokeId?: string): boolean {
   if (revokeId !== undefined && !ids.includes(revokeId)) throw new Error("Provider has no routing consent to revoke.");
   if (!ids.length) return false;
   return inWriteSection((held, content, record) => {
-    let next = content;
-    for (const id of revokeId === undefined ? Object.keys(record.providers) : [revokeId]) {
-      const saved = record.providers[id]!;
-      const parsed = Bun.TOML.parse(next) as Record<string, unknown>;
-      const table = (parsed.model_providers as Record<string, Record<string, unknown>> | undefined)?.[id];
-      if (!table || !saved.managedUrls.includes(table.base_url as string)) continue;
-      const field = providerUrl(next, id, false);
-      if (saved.managedUrls.includes(field.url)) next = field.replace(saved.original);
-    }
+    const next = restoredApprovedProviderContent(content, record, revokeId);
     if (next !== content) publish(CODEX_CONFIG_PATH, next, held);
     if (revokeId !== undefined) { delete record.providers[revokeId]; save(record, held); }
     return next !== content;
   });
+}
+
+function restoredApprovedProviderContent(content: string, record: RoutingRecord, revokeId?: string): string {
+  let next = content;
+  for (const id of revokeId === undefined ? Object.keys(record.providers) : [revokeId]) {
+    const saved = record.providers[id]!;
+    const parsed = Bun.TOML.parse(next) as Record<string, unknown>;
+    const table = (parsed.model_providers as Record<string, Record<string, unknown>> | undefined)?.[id];
+    if (!table || !saved.managedUrls.includes(table.base_url as string)) continue;
+    const field = providerUrl(next, id, false);
+    if (saved.managedUrls.includes(field.url)) next = field.replace(saved.original);
+  }
+  return next;
+}
+
+/**
+ * Read-only: `content` after the approved-provider URL restore a native restore finishes with.
+ * Throws exactly where that restore would fail (invalid or foreign recovery evidence).
+ */
+export function previewApprovedCodexProviderRestore(content: string): string {
+  const record = readRecord();
+  return Object.keys(record.providers).length === 0 ? content : restoredApprovedProviderContent(content, record);
 }

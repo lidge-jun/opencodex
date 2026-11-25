@@ -364,7 +364,7 @@ describe("409 refusal reporting", () => {
     expect(selfUnload).not.toContain("ocx stop");
 
     const unknownState = await refusalFor("service_state_unknown");
-    expect(unknownState).toContain("could not be read");
+    expect(unknownState).toContain("service or process state could not be verified");
     expect(unknownState).not.toContain("ocx stop");
 
     const noBody = await refusalFor(null);
@@ -507,6 +507,7 @@ describe("409 refusal reporting", () => {
     // server's message printed just above them recommends exactly that.
     expect(refusalNextStep("respawnable_service")).toContain("already asked the service manager");
     expect(refusalNextStep("self_unload_service")).toContain("already asked the service manager");
+    expect(refusalNextStep("service_state_unknown")).not.toContain("repair the service manager access");
   });
 
   test("concurrent refusals each keep their own cause", async () => {

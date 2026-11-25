@@ -519,7 +519,8 @@ export function exportContextOf(input: {
   port: number;
   droidReasoningDefaults?: Record<string, string>;
   document?: unknown;
-}): { baseUrl: string; models: readonly ExportModel[]; config: OcxConfig; droidReasoningDefaults?: Record<string, string>; document?: unknown } {
+}): { baseUrl: string; models: readonly ExportModel[]; config: OcxConfig; keylessInference?: boolean; droidReasoningDefaults?: Record<string, string>; document?: unknown } {
+  const keylessListener = input.config.unauthenticatedLoopbackListener?.enabled === true;
   return {
     /*
      * Composed through the SAME helper `ocx export` uses. Interpolating the
@@ -533,6 +534,8 @@ export function exportContextOf(input: {
     baseUrl: opencodeProxyBaseUrl(input.port, input.config.hostname, input.config),
     models: input.models,
     config: input.config,
+    // `opencodeProxyBaseUrl` above dials the keyless listener whenever it is enabled.
+    ...(keylessListener ? { keylessInference: true } : {}),
     ...(input.droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: input.droidReasoningDefaults }),
     // Forwarded only when the caller parsed a target: a client that resolves
     // between two document roots (Command Code) needs the bytes on disk.

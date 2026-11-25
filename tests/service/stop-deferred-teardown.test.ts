@@ -251,10 +251,7 @@ describe("parent CLI shared teardown completion", () => {
     expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: true, service: "stopped", sharedTeardown: "restored" });
   });
 
-  test.each([
-    ["legacy", ["wrong-home", "wrong-port"]],
-    ["current", ["stale", "client-role"]],
-  ] as const)("only a matching %s standalone record permits the ordinary stop after a discovery miss", async (standaloneRecord, mismatches) => {
+  test.each(["legacy", "current"] as const)("a matching %s standalone record permits the ordinary stop after a discovery miss", async standaloneRecord => {
     const outcome = await runParentStop({ receipt: true, standaloneRecord, discoveryMiss: true, deadPidReadsNull: true,
       json: true, response: { success: true }, restore: restoreResult(true) });
     expect(outcome.exitCode, outcome.stderr).toBe(0);
@@ -262,16 +259,21 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.urls).toHaveLength(1);
     expect(outcome.signals).toEqual(standaloneRecord === "legacy" ? [] : [process.platform === "win32" ? "taskkill /F" : "SIGTERM"]);
     expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: true, proxy: "stopped", sharedTeardown: "restored" });
-    for (const mismatch of mismatches) {
-      if (mismatch === "wrong-home" && process.platform === "win32") continue;
+    expect(outcome.receiptExists).toBe(false);
+  });
+
+  for (const mismatch of ["wrong-home", "wrong-port", "stale", "client-role"] as const) {
+    test.skipIf(mismatch === "wrong-home" && process.platform === "win32")(`a ${mismatch} standalone record refuses the ordinary stop after a discovery miss`, async () => {
       const refusal = await runParentStop({ receipt: true, standaloneRecord: mismatch, discoveryMiss: true, managerCascades: true,
         json: true, response: null, restore: restoreResult(true) });
       expect(refusal.exitCode, `${mismatch}: ${refusal.stderr}`).toBe(1);
       expect(refusal.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0 });
+      expect(refusal.signals).toEqual([]);
       expect(refusal.urls).toEqual([]);
+      expect(refusal.nonce).toBeUndefined();
       expect(JSON.parse(refusal.stdout)).toMatchObject({ runtimeDown: false, proxy: "ownership-refused", sharedTeardown: "skipped" });
-    }
-  });
+    });
+  }
 
   test.each([false, true])("a discovery miss refuses to stop an unclassified live ocx start PID (cascading manager=%s)", async managerCascades => {
     const outcome = await runParentStop({ receipt: true, noRuntimeRecord: true, discoveryMiss: true, managerCascades,

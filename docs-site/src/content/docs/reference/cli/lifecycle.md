@@ -88,6 +88,8 @@ ocx start --socks5-off
 
 An unsupervised Link Child handling a shutdown signal removes file integrations created by the Link, then restores native Codex and managed Grok before releasing its listener, rechecking the served connection before each write. Pre-existing standalone file integrations and user edits are preserved. During that unsupervised signal cleanup, if file cleanup or native Codex/Grok restoration is refused, including unverified ownership, the listener stays bound with synchronization paused; repair the reported configuration or ownership evidence and retry `ocx stop`. To leave Home after a refused stop, `ocx disconnect --recover-config --yes` completes configuration recovery and restarts the retained Child as standalone OpenCodex. A stop or recovery still in progress continues to refuse restart. Service/Desktop supervision, sibling ownership and restart/recycle handoff preserve integrations. The Child defers native Codex and Grok restoration only when a verified running parent stop owns the matching receipt. File cleanup and its synchronization fence still run before the listener is released. A stale or unreadable receipt alone keeps the listener bound and the recovery evidence intact. Shutdown rejects bound restart with `409 runtime_stopping`.
 
+On Windows x64, when WMI returns no owner for a matching service wrapper, OpenCodex can verify the Windows account and process creation time through a live handle. A wrapper whose ownership remains unknown is left running. If the error specifically names Task Scheduler registration, use `ocx service status` to inspect that registration.
+
 An explicit `ocx stop` verifies that the running Child still serves the saved Link connection and supports the stop fence, then removes Link-created file integrations before stopping the process or service. If the saved connection is invalid, has changed owners, or file cleanup is refused, the command stops before terminating anything. Repair the saved connection or the reported ownership evidence and retry. The command also refuses before termination if an older recovery record would prevent native restoration; repair the reported evidence and retry. Native Codex/Grok restoration is then attempted by the stopping command after the Child exits. A refusal at that stage reports incomplete restoration and preserves recovery evidence; the listener is already stopped. Forced termination can bypass signal handlers; parent `ocx stop` restoration remains necessary. To route Codex through Home again after such a stop, start the Child (`ocx start`, or `ocx service start` for an installed service) and then run `ocx sync --restart-codex`. Starting alone does not reapply routing. With Home available, sync also reapplies its enabled file integrations. A sync run while the Child is stopped still reapplies routing, which points Codex at a listener that is not running, so start the Child first.
 
 The stopping command must record its recovery receipt before asking a service manager or process to stop. Linux requires kernel pidfd support for direct termination. On macOS, the direct path sends a single SIGTERM. If the direct stop fails, check the Child’s terminal or supervisor for the reason, repair the reported evidence, and retry `ocx stop`.
@@ -904,6 +906,9 @@ to refresh its XML before it can hand off to a newer install.
 
 ### `ocx service [install|repair|restart|start|stop|status|uninstall|remove]`
 
+If `ocx service start` reports that the Windows Task Scheduler service is not installed,
+run `ocx service install` to register it. `start` exits with status 1 when the registration is missing.
+
 On Windows Task Scheduler, the service wrapper restarts the proxy after five seconds
 even when an external tool terminates it with exit code 0. If another opencodex proxy
 already owns the port, the wrapper exits deliberately. Use `ocx stop` or
@@ -1509,6 +1514,8 @@ When a stopped listener's literal IP address drops the liveness dial instead of 
 (for example on a tailnet), the updater briefly tries binding that same address and port.
 A successful bind confirms absence at that instant; a failed bind or an inconclusive hostname
 probe still prevents the update.
+
+Preview versions are named `X.Y.Z-preview.<date>` or `X.Y.Z-preview.<date>.<attempt>`, for example `2.100.6-preview.20261119.1`; the attempt numbers the publications of that date. On the preview channel, previews are ordered by base version, then date, then attempt, and a version without an attempt counts as attempt 0. On either channel a stable release is offered to a preview install only when its base version is higher than the preview's, and the stable channel never offers a preview. These rules govern update checks, notifications and the dashboard's update offer. `ocx update` itself installs the version its selected tag points to whenever that differs from the installed version, so `ocx update --tag latest` on a preview install moves to the current stable release even when its base version is not higher.
 
 On Windows, Scoop's default `nodejs` and `nodejs-lts` `npm` installations can be used
 from the user home directory when their `current` junction stays inside the Node app
