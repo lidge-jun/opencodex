@@ -819,7 +819,11 @@ are on the [API-key catalog](/guides/api-key-catalog/) page. Its sections:
 
 [RunAPI](https://runapi.co) is a Standard sponsor. Select **RunAPI** in **Add provider** or
 run `ocx provider add runapi` and enter a RunAPI API key. The preset uses OpenAI Chat
-Completions with the base URL `https://runapi.co/v1`. Select a model available to your key.
+Completions with the base URL `https://runapi.co/v1`, and live discovery lists the models your
+key can use. RunAPI is a unified gateway to 200+ models from OpenAI, Anthropic, Google, xAI,
+DeepSeek, Alibaba, Moonshot and others, billed pay-as-you-go. RunAPI also serves the same API at
+`https://runapi.host`, a mirror for networks that cannot reach `runapi.co`; to use it, change the
+provider's base URL to `https://runapi.host/v1`.
 
 ## 4. Local providers
 

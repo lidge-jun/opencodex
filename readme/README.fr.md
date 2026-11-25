@@ -160,8 +160,8 @@ Voir [SPONSORS.md](../SPONSORS.md).
 <td>Merci à <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a> pour son soutien à ce projet ! TokenLab donne aux agents de code une seule clé API pour les principaux modèles, avec les formats OpenAI Responses et Chat Completions, Anthropic Messages et l'API native de Gemini, streaming et appel d'outils compris. Il fournit aussi un serveur MCP et des Skills pour agents afin de faciliter l'intégration. Choisissez votre mode de livraison et payez à l'usage. Choisissez <code>TokenLab</code> dans le sélecteur Add provider ou exécutez <code>ocx provider add tokenlab</code>.<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
 </tr>
 <tr>
-<td width="180"><a href="https://runapi.co">RunAPI</a><!-- RunAPI light and dark logos pending --></td>
-<td>Thanks to <a href="https://runapi.co">RunAPI</a> for sponsoring this project! <!-- RunAPI sponsor blurb pending --></td>
+<td width="180"><a href="https://runapi.co"><img src="../assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
+<td>Merci à <a href="https://runapi.co">RunAPI</a> de sponsoriser ce projet ! RunAPI est une passerelle d'API d'IA unifiée : une seule clé d'API donne accès à plus de 200 modèles d'OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot et d'autres, via les formats OpenAI Chat Completions et Responses, Anthropic Messages et l'API native de Gemini. Le routage intelligent envoie chaque requête vers un nœud fournisseur rapide et stable, avec basculement automatique, et la facturation se fait à l'usage, généralement bien en dessous des tarifs standard. Choisissez <code>RunAPI</code> dans le sélecteur Add provider ou exécutez <code>ocx provider add runapi</code>.</td>
 </tr>
 </tbody>
 </table>

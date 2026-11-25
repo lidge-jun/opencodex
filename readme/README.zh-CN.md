@@ -157,8 +157,8 @@ WidgetKit 扩展，可显示代理状态、今日用量和提供商配额；它�
 <td>感谢 <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a> 赞助本项目！TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。在添加提供商选择器中选择 <code>TokenLab</code>，或运行 <code>ocx provider add tokenlab</code>。</td>
 </tr>
 <tr>
-<td width="180"><a href="https://runapi.co">RunAPI</a><!-- RunAPI light and dark logos pending --></td>
-<td>Thanks to <a href="https://runapi.co">RunAPI</a> for sponsoring this project! <!-- RunAPI sponsor blurb pending --></td>
+<td width="180"><a href="https://runapi.co"><img src="../assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
+<td>感谢 <a href="https://runapi.co">RunAPI</a> 赞助本项目！RunAPI 是统一的 AI API 网关，一个 API Key 即可通过 OpenAI Chat Completions 与 Responses、Anthropic Messages 以及 Gemini 原生 API 格式，访问来自 OpenAI、Anthropic、Google、xAI、DeepSeek、阿里巴巴、Moonshot 等厂商的 200 多个模型。智能路由会为每个请求选择快速稳定的供应商节点，并在故障时自动切换；按量付费，价格通常远低于官方标准价。在添加提供商选择器中选择 <code>RunAPI</code>，或运行 <code>ocx provider add runapi</code>。</td>
 </tr>
 </tbody>
 </table>
