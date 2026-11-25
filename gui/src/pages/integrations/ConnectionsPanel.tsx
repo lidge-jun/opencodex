@@ -57,7 +57,19 @@ function stateClass(desired: ConnectionDesired, observed: ConnectionObserved): s
   return matches ? "badge badge-green" : "badge badge-amber";
 }
 
-export function ConnectionCard({ view }: { view: ConnectionView }) {
+/** Masked keys can repeat (two user tables become `projects.….trust_level`); show each once with a count. */
+function groupedChanges(changes: readonly ConnectionKeyChange[]): Array<ConnectionKeyChange & { id: string; count: number }> {
+  const groups = new Map<string, ConnectionKeyChange & { id: string; count: number }>();
+  for (const change of changes) {
+    const id = `${change.file}:${change.key}:${change.change}`;
+    const existing = groups.get(id);
+    if (existing) existing.count += 1;
+    else groups.set(id, { ...change, id, count: 1 });
+  }
+  return [...groups.values()];
+}
+
+function ConnectionCard({ view }: { view: ConnectionView }) {
   const t = useT();
   const drift = view.driftReasons.length > 0;
   const preview = view.restorePreview;
@@ -101,9 +113,10 @@ export function ConnectionCard({ view }: { view: ConnectionView }) {
           )}
           {preview.changes.length > 0 && (
             <ul className="connection-restore-list">
-              {preview.changes.map((change, index) => (
-                <li key={`${index}:${change.file}:${change.key}`} data-change={change.change}>
+              {groupedChanges(preview.changes).map(change => (
+                <li key={change.id} data-change={change.change}>
                   <code>{change.file}</code> <code>{change.key}</code> <span className="chip">{t(CHANGE_KEYS[change.change])}</span>
+                  {change.count > 1 && <> <span className="chip">×{change.count}</span></>}
                 </li>
               ))}
             </ul>
