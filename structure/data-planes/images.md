@@ -49,8 +49,9 @@ remains independent. Edits through `callXaiImages` and the `/v1/images/edits` re
 source URLs in caller order; both drop duplicate URLs first and then apply the limit, and the relay
 checks it before resolving credentials or sending a request. The relay refuses the request when any
 supplied source, an explicit `null` included, is not an https URL or a canonical base64 PNG/JPEG/WebP
-data URL (for example a `file_id` or plain text) instead of dropping it; every URL-bearing property of
-an `images[]` entry (`image_url`, `image_url.url`, `url`) counts as a source. The `image_gen` bridge tool sends one
+data URL (for example a `file_id` or plain text) instead of dropping it. It checks the base64 alphabet
+and padding directly in the supplied text. Every URL-bearing property of an `images[]` entry
+(`image_url`, `image_url.url`, `url`) counts as a source. The `image_gen` bridge tool sends one
 source. Safe upstream validation details are reconstructed from a
 closed vocabulary of quality, field, resolution and bounded keyframe tokens;
 unknown bodies and arbitrary upstream text never reach the caller.
