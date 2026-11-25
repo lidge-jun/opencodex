@@ -83,7 +83,8 @@ function derive(config: OcxConfig, name: string, row: OcxProviderConfig, model: 
   const wireProvider = resolveWireProtocolOverride(name, native, resolved);
   const wire = wireProvider.adapter;
   if (wire !== "openai-chat" && wire !== "openai-responses") throw new Error("unsupported adapter");
-  const routed = resolveOpenCodeGoTransport(wireProvider, `provider-completion-test:${name}:${model}`, resolved);
+  const destination = resolved.adapter === "openai-responses" ? { ...resolved, adapter: "openai-chat" as const } : resolved;
+  const routed = resolveOpenCodeGoTransport(wireProvider, `provider-completion-test:${name}:${model}`, destination);
   const transport = wire === "openai-chat" ? openAIChatTransport(routed)
     : buildResponsesTransport(routed, { headers: new Headers() });
   const headers = new Headers(transport.headers);
