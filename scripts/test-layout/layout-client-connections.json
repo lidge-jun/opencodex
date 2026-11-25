@@ -1,0 +1,4 @@
+{
+  "claude-first-party-preview.test.ts": "claude-integration",
+  "connection-status-routes.test.ts": "server"
+}
