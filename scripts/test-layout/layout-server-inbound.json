@@ -1,4 +1,5 @@
 {
+  "audio-live-sessions.test.ts": "server",
   "video-openai-client.test.ts": "videos",
   "video-openai-wire-bridge.test.ts": "videos",
   "server-videos.test.ts": "server",

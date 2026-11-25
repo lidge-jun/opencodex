@@ -953,6 +953,23 @@ directly over WebRTC and is not proxied. The proxy never executes delegation
 requests. OpenAI account availability is established by the actual upstream
 response, not by the presence of a model name in the dashboard.
 
+### GPT-Live sessions
+
+OpenCodex also relays OpenAI's public GPT-Live session API for external keys, through
+an enabled OpenAI API-key provider only. A ChatGPT account is never used for it, and a
+request without that provider receives 400.
+
+- `POST /v1/live/sessions` takes JSON `{ "session": { "model": ... }, "transport": { "type": "webrtc", "sdp": ... } }`
+  (at most 1 MiB) and answers like the API, `201 { "session": { "id" }, "transport": { "type", "sdp" } }`.
+  `session.model` is required, and a key scoped to models is judged on it. SIP transport is refused.
+- The returned `session.id` is an OpenCodex alias bound to the creating key. Only that key can open
+  `WS /v1/live/sessions/{id}/attach`, which reaches the session's server-side control connection.
+- `WS /v1/live/sessions` opens a session whose model arrives later in `session.start`, so a key
+  restricted to a model list cannot open it.
+
+`OpenAI-Safety-Identifier` is forwarded when the client sends it. OpenCodex does not carry the
+WebRTC media; the client connects to OpenAI with the returned SDP answer.
+
 ### Native Codex compatibility
 
 Native API-key-mode callers on the trusted local listener may use the exact

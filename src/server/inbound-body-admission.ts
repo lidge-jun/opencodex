@@ -43,6 +43,7 @@ export const UNGATED_LOOPBACK_ROUTES: ReadonlySet<string> = new Set([
   "/v1/realtime",
   "/v1/realtime/calls",
   "/v1/live",
+  "/v1/live/sessions",
 ]);
 
 export class InboundBodyCapacityError extends Error {

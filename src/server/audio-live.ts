@@ -18,6 +18,7 @@ import {
   type LiveSidebandTarget,
 } from "./live";
 import { LIVE_CALL_TTL_MS, LiveCallBindings, upstreamLiveCallId } from "./live-call-bindings";
+import { liveSessionHeaders, liveSessionProviderName } from "./audio-live-sessions";
 import type { RequestLogContext } from "./request-log";
 
 function protocolHeaders(client: AudioClient, relay: AudioUpstream, frameless: boolean): Headers {
@@ -159,6 +160,11 @@ export async function resolveExternalLiveSocket(
 ): Promise<AudioSocketTarget | Response> {
   const binding = "callId" in target ? options.bindings.get(target.callId, client.owner) : undefined;
   if ("callId" in target && !binding) return formatErrorResponse(404, "not_found", "Live call is unavailable for this key");
+  // A GPT-Live session alias opens only on the session attach route, and that route opens only session
+  // aliases: each binding keeps the destination rules of the endpoint that created it.
+  if (binding && (target.style === "live-session") !== (binding.joinStyle === "live-session")) {
+    return formatErrorResponse(404, "not_found", "Live call is unavailable for this key");
+  }
   if (binding?.callerOwned && !captureExplicitOpenAiCallerAuth(client.headers, config)) {
     return formatErrorResponse(401, "authentication_error", "Live call requires its original caller account");
   }
@@ -174,13 +180,27 @@ export async function resolveExternalLiveSocket(
   // own query. When neither names one, the destination is unnamed and judged as
   // such, never as the default.
   const model = binding ? binding.model : liveSidebandModel(upstreamTarget);
+  // A GPT-Live session socket names its model in session.start, so a fresh one is unnamed here,
+  // and it is served only by the configured API-key provider.
+  const liveSession = upstreamTarget.style === "live-session" || upstreamTarget.style === "live-session-start";
+  let sessionProvider: string | undefined;
+  if (liveSession && !binding) {
+    const provider = liveSessionProviderName(config);
+    if (provider instanceof Response) return provider;
+    sessionProvider = provider;
+  }
   const relay = await resolveAudioUpstream(client.headers, config, log, {
     admission: client.admission, model, lease: options.lease,
     signal: options.signal,
-    ...(binding ? { exactAccountId: binding.accountId, providerName: binding.providerName } : {}),
+    ...(binding ? { exactAccountId: binding.accountId, providerName: binding.providerName }
+      : sessionProvider ? { providerName: sessionProvider } : {}),
   });
   if (relay instanceof Response) return relay;
   try {
+    if (liveSession && !relay.keyed) {
+      relay.release();
+      return formatErrorResponse(400, "invalid_request_error", "GPT-Live sessions require an OpenAI API-key provider");
+    }
     if (binding && (relay.providerName !== binding.providerName
       || (new Headers(relay.headers).get("chatgpt-account-id") ?? undefined) !== binding.chatgptAccountId
       || (binding.keyedCredentialDigest !== undefined
@@ -190,8 +210,11 @@ export async function resolveExternalLiveSocket(
     }
     return {
       authContext: relay.authContext,
-      headers: Object.fromEntries(protocolHeaders(client, relay, frameless)),
-      upstreamWsUrl: buildLiveSidebandUpstreamWsUrl(upstreamTarget, binding ? binding.sidebandBaseUrl : config.experimentalRealtimeWsBaseUrl),
+      headers: Object.fromEntries(liveSession ? liveSessionHeaders(client, relay) : protocolHeaders(client, relay, frameless)),
+      // A session socket carries the API-key credential, so it goes where session creation posts:
+      // the selected provider's own base, never the Codex sideband override.
+      upstreamWsUrl: buildLiveSidebandUpstreamWsUrl(upstreamTarget, liveSession ? relay.providerBaseUrl
+        : binding ? binding.sidebandBaseUrl : config.experimentalRealtimeWsBaseUrl),
       maxSessionMs: LIVE_CALL_TTL_MS,
       finish: finishAudioUpstream(relay),
     };

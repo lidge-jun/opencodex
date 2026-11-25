@@ -142,6 +142,7 @@ import {
   resolveLiveSidebandUpgrade,
 } from "../live";
 import { handleAudioTranscriptions } from "../audio-transcriptions";
+import { handleLiveSessionCreate } from "../audio-live-sessions";
 import {
   resolveAudioAdmission,
   TRANSCRIPTION_MODEL,
@@ -1635,6 +1636,32 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       }
 
       // ChatGPT / Codex App voice (GPT‑Live / Frameless Bidi) + OpenAI Realtime call-create.
+      // Public GPT-Live session creation: an external audio key on an API-key provider only.
+      if (req.method === "POST" && url.pathname === "/v1/live/sessions") {
+        disableResponsesRequestTimeout(req, requestServer);
+        if (isDraining()) return drainingResponse(req, policy);
+        const audioClient = resolveAudioClient(req, config, true, admissionOptions);
+        if (!audioClient || audioClient instanceof Response) {
+          return withCors(audioClient ?? formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        }
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
+        }
+        const start = Date.now();
+        const requestId = nextRequestLogId(start);
+        const logCtx: RequestLogContext = {
+          model: "gpt-live",
+          provider: "unknown",
+          ...requestMetricsLogContext, client: classifyUsageClient(req.headers),
+          ...admissionFields(audioClient.admission),
+        };
+        return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
+          const response = await handleLiveSessionCreate(req, config, logCtx, { client: audioClient, lease: turnAdmissionLease, bindings: liveCallBindings });
+          addFinalRequestLog(requestId, start, logCtx, response.status, response.status === 499 ? { closeReason: "client_cancel" } : undefined);
+          return withCors(response, req, policy);
+        }, { requestId, start, logCtx });
+      }
+
       // Clients hit either /v1/live (Frameless App) or /v1/realtime/calls (codex RealtimeCallClient /
       // public Realtime API). Sideband WS joins are handled just below.
       if (
@@ -1694,6 +1721,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (!audioClient && liveSidebandTarget && "callId" in liveSidebandTarget
           && liveSidebandTarget.callId.startsWith(EXTERNAL_CALL_PREFIX)) {
           return withCors(formatErrorResponse(401, "authentication_error", "Live call requires its creator API key"), req, policy);
+        }
+        if (!audioClient && (liveSidebandTarget?.style === "live-session-start" || liveSidebandTarget?.style === "live-session")) {
+          return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
         }
         const admission = audioClient?.admission ?? resolveApiAuth(req, policy);
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
