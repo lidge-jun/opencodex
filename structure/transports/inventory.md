@@ -202,11 +202,9 @@ WebSocket connect directly there: `configuredOutboundFetch` refuses the send wit
 the Microsoft 365 Copilot ChatHub dial refuses before creating its socket. `processNoProxyExempts`
 matches at least as broadly as Bun: `bunNoProxyMatches` ports the `NO_PROXY` matcher of Bun 1.4.4
 (comma and whitespace separators, subdomains, CIDR blocks, numeric ports, canonical addresses), unioned
-with `noProxyMatches`, for either spelling. While a bypass list is set, an explicit-proxy request in
-`follow` mode has its redirects followed by `configuredOutboundFetch` itself (`redirect: "manual"` per hop,
-with Bun's own redirect rules: method and body changes, no replay of a streamed body, the credential
-headers and Host dropped cross-origin, `redirected: true` on the result), so every destination is
-checked before it is contacted. `tests/lib/explicit-proxy-no-proxy.test.ts` checks the route on real loopback sockets.
+with `noProxyMatches`, for either spelling. While a bypass list is set, an explicit-proxy request in `follow` mode is sent with `redirect: "manual"`
+and a redirect answer is refused (`ExplicitProxyRedirectRefusedError`) instead of being followed, because
+Bun would apply the bypass list to the next hop; callers that handle redirects pass `manual` themselves. `tests/lib/explicit-proxy-no-proxy.test.ts` checks the route on real loopback sockets.
 
 | Request path | Per-provider route | Current contract |
 | --- | --- | --- |

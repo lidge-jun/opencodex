@@ -203,8 +203,8 @@ export type ProxyCapableRequestInit = RequestInit & { proxy?: string | false };
 
 /** A request named an HTTP(S) proxy for a destination the process `NO_PROXY` exempts. */
 export class ExplicitProxyExemptedError extends Error {
-  override readonly name = "ExplicitProxyExemptedError";
-  readonly code = "explicit_proxy_exempted";
+  override readonly name: string = "ExplicitProxyExemptedError";
+  readonly code: string = "explicit_proxy_exempted";
 }
 
 /**
@@ -327,6 +327,12 @@ export function processNoProxyExempts(url: URL, env: ProxyEnvMap = process.env):
     && (bunNoProxyMatches(value, url) || noProxyMatches(url, { NO_PROXY: value })));
 }
 
+/** A redirect answer to an explicit-proxy request that Bun would have followed around the proxy. */
+export class ExplicitProxyRedirectRefusedError extends ExplicitProxyExemptedError {
+  override readonly name = "ExplicitProxyRedirectRefusedError";
+  override readonly code = "explicit_proxy_redirect_refused";
+}
+
 /** The refusal for an explicit HTTP(S) proxy that the process environment would make Bun skip. */
 export function explicitProxyExemptedError(url: URL): ExplicitProxyExemptedError {
   return new ExplicitProxyExemptedError(
@@ -365,10 +371,10 @@ export function configuredOutboundFetch(
     && (url.protocol === "http:" || url.protocol === "https:")) {
     if (processNoProxyExempts(url)) return Promise.reject(explicitProxyExemptedError(url));
     // Bun would follow a redirect itself and apply NO_PROXY to the new destination, so with any
-    // bypass list in the environment the redirects are followed here, checking every hop.
+    // bypass list in the environment a redirect is refused instead of followed.
     const redirectMode = init?.redirect ?? (input instanceof Request ? input.redirect : "follow");
     if (redirectMode === "follow" && processNoProxyConfigured()) {
-      return followExplicitProxyRedirects(base!, input, init, explicitProxy, url);
+      return refuseExplicitProxyRedirects(base!, input, init, url);
     }
   }
   // A mixed inherited SOCKS/HTTP ALL_PROXY environment cannot put bare "localhost" in
@@ -389,60 +395,24 @@ function processNoProxyConfigured(env: ProxyEnvMap = process.env): boolean {
 }
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
-const MAX_EXPLICIT_PROXY_REDIRECTS = 20;
-/** Request fields the rebuilt `Request` carries; everything else in `init` (Bun's own options) is passed on. */
-const REQUEST_FIELDS = ["method", "headers", "body", "signal", "redirect", "duplex", "referrer", "referrerPolicy", "mode", "credentials", "cache", "integrity", "window"];
-
-/** Removed on a cross-origin hop, as Bun's own follower removes them (`CROSS_ORIGIN_STRIPPED_REQUEST_HEADERS`). */
-const CROSS_ORIGIN_STRIPPED_HEADERS = ["authorization", "proxy-authorization", "cookie", "host"];
-/** Request-body header names, dropped with the body when a redirect turns the request into a GET. */
-const REQUEST_BODY_HEADERS = ["content-type", "content-length", "content-encoding", "content-language", "content-location"];
 
 /**
- * Follow redirects of an explicit HTTP(S)-proxy request here, rechecking every destination before it
- * is contacted. Each hop is sent through the same proxy with `redirect: "manual"`. The rules are the
- * ones Bun 1.4.4's own follower applies: 303 (unless GET or HEAD), and 301/302 after a POST, become a
- * bodiless GET; 307 and 308 replay the method and body, but a ReadableStream body cannot be replayed
- * and fails; a cross-origin hop (scheme, host or port differ) drops the credential headers and Host;
- * more than 20 redirects fail; a followed response reports `redirected: true`.
+ * Send an explicit HTTP(S)-proxy request whose caller asked Bun to follow redirects, without letting
+ * Bun follow them: Bun would apply the process NO_PROXY to each new destination and could send the
+ * request, credentials and body included, around the proxy. The single hop goes out with
+ * `redirect: "manual"`; a redirect answer is refused before any second hop is contacted. Callers
+ * that handle redirects themselves pass `redirect: "manual"` and never reach this.
  */
-async function followExplicitProxyRedirects(
-  base: typeof globalThis.fetch, input: RequestInfo | URL, init: RequestInit | undefined, proxyUrl: string, firstUrl: URL,
+async function refuseExplicitProxyRedirects(
+  base: typeof globalThis.fetch, input: RequestInfo | URL, init: RequestInit | undefined, firstUrl: URL,
 ): Promise<Response> {
-  const passthrough: Record<string, unknown> = { ...(init as Record<string, unknown> | undefined) };
-  for (const field of REQUEST_FIELDS) delete passthrough[field];
-  let request = new Request(input, { ...init, redirect: "manual" });
-  const streamedBody = typeof ReadableStream !== "undefined" && init?.body instanceof ReadableStream;
-  let target = firstUrl;
-  for (let hops = 0; ; hops += 1) {
-    const response = await base(request.clone(), { ...passthrough, proxy: proxyUrl, redirect: "manual" } as ProxyCapableRequestInit);
-    const location = REDIRECT_STATUSES.has(response.status) ? response.headers.get("location") : null;
-    if (location === null) {
-      if (hops > 0) Object.defineProperty(response, "redirected", { value: true });
-      return response;
-    }
-    let next: URL;
-    try {
-      next = new URL(location, target);
-    } catch {
-      return response;
-    }
-    await response.body?.cancel().catch(() => {});
-    if (hops >= MAX_EXPLICIT_PROXY_REDIRECTS) throw new TypeError(`too many redirects from ${firstUrl.origin}`);
-    if (next.protocol !== "http:" && next.protocol !== "https:") throw new TypeError(`redirect to an unsupported scheme from ${target.origin}`);
-    if (processNoProxyExempts(next)) throw explicitProxyExemptedError(next);
-    const toGet = response.status === 303 ? request.method !== "GET" && request.method !== "HEAD"
-      : (response.status === 301 || response.status === 302) && request.method === "POST";
-    if (!toGet && response.status !== 303 && streamedBody) throw new TypeError(`request body from ${firstUrl.origin} is not reusable for a redirect`);
-    const headers = new Headers(request.headers);
-    if (toGet) for (const name of REQUEST_BODY_HEADERS) headers.delete(name);
-    if (next.origin !== target.origin) for (const name of CROSS_ORIGIN_STRIPPED_HEADERS) headers.delete(name);
-    request = new Request(next, {
-      method: toGet ? "GET" : request.method, headers, body: toGet ? null : request.body,
-      redirect: "manual", signal: request.signal, duplex: "half",
-    } as RequestInit);
-    target = next;
-  }
+  const response = await base(input, { ...init, redirect: "manual" } as RequestInit);
+  if (!REDIRECT_STATUSES.has(response.status) || !response.headers.has("location")) return response;
+  await response.body?.cancel().catch(() => {});
+  throw new ExplicitProxyRedirectRefusedError(
+    `a redirect from ${firstUrl.origin} was not followed through the configured proxy because NO_PROXY is set in the `
+    + 'process environment and could route the next hop around it; handle redirects with redirect: "manual"',
+  );
 }
 
 type FetchWithPreconnect = typeof globalThis.fetch & {
