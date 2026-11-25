@@ -41,8 +41,8 @@ afterEach(() => {
   }
 });
 
-const send = (init: ProxyCapableRequestInit) =>
-  configuredOutboundFetch(destUrl, { ...init, headers: { authorization: "Bearer synthetic-test-token" } } as RequestInit);
+const send = (init: ProxyCapableRequestInit, target = destUrl) =>
+  configuredOutboundFetch(target, { ...init, headers: { authorization: "Bearer synthetic-test-token" } } as RequestInit);
 
 test("without NO_PROXY the explicit proxy carries the request", async () => {
   const response = await send({ proxy: proxyUrl });
@@ -94,4 +94,34 @@ test("exemption matching covers both spellings, wildcards, domains and WebSocket
   expect(processNoProxyExempts(url, { no_proxy: "chatgpt.com" })).toBe(true);
   expect(processNoProxyExempts(url, { NO_PROXY: "example.com", no_proxy: "*" })).toBe(true);
   expect(processNoProxyExempts(url, { NO_PROXY: " " })).toBe(false);
+});
+
+// Bun's own matcher splits on whitespace and lets a bare entry cover subdomains; the guard must too.
+for (const spelling of ["NO_PROXY", "no_proxy"] as const) {
+  test(`a whitespace-separated ${spelling} entry is honored like Bun honors it`, async () => {
+    process.env[spelling] = "example.com localhost";
+    await expect(send({ proxy: proxyUrl }, `http://localhost:${dest.port}/v1/models`)).rejects.toBeInstanceOf(ExplicitProxyExemptedError);
+    expect(hits).toEqual({ dest: 0, proxy: 0 });
+  });
+  test(`a bare ${spelling} entry also exempts its subdomains, like Bun`, async () => {
+    process.env[spelling] = "localhost";
+    await expect(send({ proxy: proxyUrl }, `http://app.localhost:${dest.port}/v1/models`)).rejects.toBeInstanceOf(ExplicitProxyExemptedError);
+    expect(hits).toEqual({ dest: 0, proxy: 0 });
+  });
+}
+
+test("every entry form Bun 1.4.4 treats as a bypass is a bypass here", () => {
+  const url = new URL("http://api.example.com/x");
+  // Each of these made Bun connect directly to api.example.com despite an explicit proxy.
+  for (const entry of ["example.com", ".example.com", "*.example.com", "api.example.com", "api.example.com:80", "EXAMPLE.COM",
+    "other.org example.com", "other.org\texample.com", " example.com ", "*", "com", ".com", "example.com.", "other.org,,example.com"]) {
+    expect(processNoProxyExempts(url, { NO_PROXY: entry }), entry).toBe(true);
+    expect(processNoProxyExempts(url, { no_proxy: entry }), entry).toBe(true);
+  }
+  // Bun kept the proxy for these, and so does the guard.
+  for (const entry of ["ample.com", "xample.com", "api.example", "api.example.com:8080", "[::1]", "example.*"]) {
+    expect(processNoProxyExempts(url, { NO_PROXY: entry }), entry).toBe(false);
+  }
+  expect(processNoProxyExempts(new URL("https://api.example.com/x"), { NO_PROXY: "api.example.com:443" })).toBe(true);
+  expect(processNoProxyExempts(new URL("http://[::1]:8080/x"), { NO_PROXY: "[::1]" })).toBe(true);
 });

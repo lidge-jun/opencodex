@@ -198,8 +198,10 @@ A reset-triggered rebuild may retarget the request to another region's canonical
 by transports that can preserve that request-local decision. An explicit HTTP(S) proxy is never sent
 toward a destination that the process `NO_PROXY` or `no_proxy` exempts, because Bun's fetch and
 WebSocket connect directly there: `configuredOutboundFetch` refuses the send with
-`ExplicitProxyExemptedError`, and the Responses WebSocket upstream leaves such a turn to that HTTP path.
-`tests/lib/explicit-proxy-no-proxy.test.ts` checks the route on real loopback sockets.
+`ExplicitProxyExemptedError`, the Responses WebSocket upstream leaves such a turn to that HTTP path, and
+the Microsoft 365 Copilot ChatHub dial refuses before creating its socket. `processNoProxyExempts`
+matches at least as broadly as Bun (comma and whitespace separators, subdomains of a bare entry, either
+spelling). `tests/lib/explicit-proxy-no-proxy.test.ts` checks the route on real loopback sockets.
 
 | Request path | Per-provider route | Current contract |
 | --- | --- | --- |

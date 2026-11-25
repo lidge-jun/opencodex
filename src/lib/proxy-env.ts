@@ -208,15 +208,48 @@ export class ExplicitProxyExemptedError extends Error {
 }
 
 /**
- * Whether the process `NO_PROXY` or `no_proxy` exempts `url`.
+ * One bypass entry as Bun's own matcher reads it (observed on Bun 1.4.4): case-insensitive; a
+ * leading `*.` or `.` and a trailing `.` are dropped; `*` matches everything; a bare entry
+ * matches that host and every subdomain of it (`localhost` matches `app.localhost`, `com` matches
+ * `api.example.com`); an entry port must equal the destination port.
+ */
+function bunNoProxyEntryMatches(hostname: string, port: string, rawEntry: string): boolean {
+  const entry = rawEntry.trim().toLowerCase();
+  if (!entry) return false;
+  if (entry === "*") return true;
+  let entryHost = entry;
+  let entryPort = "";
+  const bracketed = /^\[([^\]]*)\](?::(\d+))?$/.exec(entry);
+  if (bracketed) {
+    entryHost = bracketed[1]!;
+    entryPort = bracketed[2] ?? "";
+  } else if ((entry.match(/:/g) ?? []).length === 1) {
+    const separator = entry.lastIndexOf(":");
+    entryHost = entry.slice(0, separator);
+    entryPort = entry.slice(separator + 1);
+  }
+  if (entryPort && entryPort !== port) return false;
+  entryHost = entryHost.replace(/^\*?\./, "").replace(/\.+$/, "");
+  if (!entryHost) return false;
+  return hostname === entryHost || hostname.endsWith(`.${entryHost}`);
+}
+
+/**
+ * Whether the process `NO_PROXY` or `no_proxy` exempts `url`, as broadly as Bun reads it.
  *
  * Bun's fetch and WebSocket connect directly to such a destination even when the request names a
- * proxy, as a string or as `{ url }`; only `proxy: false` outranks the environment. Each spelling
- * is checked on its own because either one is enough for Bun to skip the proxy.
+ * proxy, as a string or as `{ url }`; only `proxy: false` outranks the environment. This guard
+ * therefore has to match at least everything Bun matches: entries split on commas AND whitespace,
+ * bare entries match subdomains, and either spelling is enough. It also accepts anything
+ * `noProxyMatches` accepts, so it never answers narrower than the routing decisions elsewhere.
+ * Over-matching only refuses a request; under-matching would send it around the proxy.
  */
 export function processNoProxyExempts(url: URL, env: ProxyEnvMap = process.env): boolean {
-  return [env.NO_PROXY, env.no_proxy].some(value =>
-    typeof value === "string" && value.trim() !== "" && noProxyMatches(url, { NO_PROXY: value }));
+  const hostname = normalizeProxyHostname(url.hostname);
+  const port = url.port || (url.protocol === "https:" || url.protocol === "wss:" ? "443" : "80");
+  return [env.NO_PROXY, env.no_proxy].some(value => typeof value === "string" && value.trim() !== ""
+    && (value.split(/[\s,]+/).some(entry => bunNoProxyEntryMatches(hostname, port, entry))
+      || noProxyMatches(url, { NO_PROXY: value })));
 }
 
 /** The refusal for an explicit HTTP(S) proxy that the process environment would make Bun skip. */
