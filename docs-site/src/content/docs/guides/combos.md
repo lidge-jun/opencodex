@@ -15,6 +15,29 @@ This is useful when you want either:
 Combos sit in front of normal provider routing. Read [Model Routing](/guides/model-routing/) first
 if `provider/model` selectors are new to you.
 
+## Fallback when quota runs out
+
+**Switch only when quota runs out** (`quotaOnlyFallback`) follows the declared order after confirmed
+quota or billing exhaustion. When the attempted target fails with a temporary limit, an
+unknown quota state, an invalid credential or an incompatible request, the chain stops there. A target
+without a quota reading is still tried in declared order. Scoped fallback rules, account rotation, send limits and paid-call consent
+continue to apply. A target backed by several API keys advances once every enabled key reports a
+spent quota or credit. In quota-only mode, every destination outside a recognized subscription or an
+explicit local loopback route requires consent. The policy covers custom API keys, unknown billing,
+and redirects. An unauthorized step stops with `combo_metered_consent_required`. The client may
+have its own admission key settings. A tool continuation with an unavailable or unrecognized serving
+target stops with `409 combo_tool_target_unavailable`. Reaching a model's output ceiling leaves it
+available for the next turn.
+
+**Keep the same model on fallback** (`preserveFallbackModel`) requires the same resolved model ID
+across a hop, including between providers. A model change returns `409 combo_model_change_refused`.
+Leave the setting off for a route that changes model families.
+
+```bash
+ocx combo set openai-first --quota-only-fallback on
+ocx combo set exact-model --preserve-fallback-model on
+```
+
 ## Metered fallback consent
 
 Mark a pay-per-use combo target with `"metered": true` when it follows subscription targets. Omitted or false consent denies metered dispatch. Choose consent for your deployment:
@@ -22,17 +45,20 @@ Mark a pay-per-use combo target with `"metered": true` when it follows subscript
 - **Local Claude Code or Codex:** on a loopback-only proxy, set `"allowMeteredTargets": true` on the combo, or run `ocx combo set <id> --allow-metered-targets on`. This explicitly permits local callers to use its marked targets. The default is false; `off` clears consent. Loopback authentication does not read API keys.
 - **Network or linked callers:** the caller's configured `apiKeys[]` entry must have `"allowMeteredComboTargets": true`. A proxy with a non-loopback listener ignores the combo flag, including on its secondary loopback listener. Linked callers also retain their configured-key consent requirement when the primary listener is loopback. The environment token never qualifies.
 
-Request headers cannot grant consent. Model/provider scopes still apply. This covers initial selection, failover and recovery across combo strategies, compaction, Messages, Chat Completions and WebSocket requests, and a subagent model fallback naming a combo alias. A collapsed fallback tries a usable unmetered target before refusing. Unmarked targets retain existing behavior; metering is declared by the operator rather than detected automatically.
+Request headers cannot grant consent. Model/provider scopes still apply. This covers initial selection, failover and recovery across combo strategies, compaction, Messages, Chat Completions and WebSocket requests, and a subagent model fallback naming a combo alias. Outside quota-only mode, a collapsed fallback tries a usable unmetered target before refusing. A collapsed quota-only Combo stops at the first paid target without consent with `combo_metered_consent_required`. Outside quota-only mode, only the operator's `metered` flag makes a target need consent. In quota-only mode, an unmarked target also needs consent when its destination is outside a recognized subscription or an explicit local loopback route.
 
 A request rechecks consent and its key's model scope immediately before each paid send: the JEV
 decision call and every target attempt, including failover, retries and pinned sends. Revoking
 consent or narrowing a key's scope therefore stops sends the request has not made yet. A target that
 no longer qualifies is skipped and another eligible target may serve the request; when none remains,
-the request ends with the usual `combo_unavailable` or scope refusal. Other combo edits, such as
+the request ends with the usual `combo_unavailable` or scope refusal. A quota-only Combo does not
+skip a target that lost consent. It returns `403 combo_metered_consent_required`, and so does a
+quota-only tool continuation whose pinned target lost consent. Other combo edits, such as
 capabilities, the Vision Sidecar, protocol settings or the target list, apply from the next request.
-A request already in progress keeps the settings it started with.
+A request already in progress keeps the settings it started with. A pinned quota-only tool continuation
+still rechecks its target's Combo membership and route before it sends.
 
-For example, a failover chain can target Anthropic OAuth, then Cursor, then `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. Without consent, exhaustion returns the last unmetered error, with exceptions for [confirmed context overflow](#context-window-refusals) and quota refusals: an earlier 429 or 402 quota refusal takes precedence over a later 400, 401 or 403. If the subscription target returns 429 and Cursor then refuses with 401 or 403, the caller receives the subscription's 429, because the spent subscription explains the failure and Cursor's credential refusal does not. Dashboard saves retain omitted target metering and combo consent; explicitly setting either to false clears it. These consent fields are configured through the config file or API; the combo flag is also available through the CLI, while the dashboard does not expose it.
+For example, a failover chain can target Anthropic OAuth, then Cursor, then `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. In an ordinary failover Combo without consent, exhaustion returns the last unmetered error, with exceptions for [confirmed context overflow](#context-window-refusals) and quota refusals: an earlier 429 or 402 quota refusal from a dispatched target takes precedence over a later 400, 401 or 403. A quota-only Combo that reaches a paid target without consent returns `403 combo_metered_consent_required` instead. If the subscription target returns 429 and Cursor then refuses with 401 or 403, the caller receives the subscription's 429, because the spent subscription explains the failure and Cursor's credential refusal does not. Dashboard saves retain omitted target metering and combo consent; explicitly setting either to false clears it. These consent fields are configured through the config file or API; the combo flag is also available through the CLI, while the dashboard does not expose it.
 
 ## 60-second quickstart
 
@@ -803,7 +829,8 @@ After a Responses combo stream commits output, an incomplete terminal can cool t
 next request. The reason can appear on the terminal event or its `response` snapshot. A refusal on
 either carrier takes precedence. `upstream_stall_timeout` cools for 60 seconds. `max_output_tokens`
 cools for 10 minutes when the serving attempt reaches the routed model's known output ceiling and
-the turn is unpaused.
+the turn is unpaused. A Combo with `quotaOnlyFallback` skips this output-limit cooldown, so the target
+stays available for the next turn.
 Devin's preset has no output ceiling, so this output-limit cooldown requires an explicit ceiling
 in the provider configuration. An existing longer cooldown keeps its expiry.
 
@@ -943,8 +970,16 @@ strategy, including JEV, which skips its decision for that request. The next use
 target normally.
 
 Tracking uses the client's thread or session id, so a client that sends neither gets a normal pick.
-If the original target is unavailable or fails, the combo fails over as usual, and the new target
-receives the earlier tool calls in a form it accepts. DeepSeek thinking models get a one-space
+With `quotaOnlyFallback`, such a client cannot be pinned, and its tool continuation answers
+`409 combo_tool_target_unavailable`.
+Without `quotaOnlyFallback`, if the original target is unavailable or fails, the combo fails over as
+usual, and the new target receives the earlier tool calls in a form it accepts. With
+`quotaOnlyFallback`, the continuation of a Combo you request directly stays on the original serving
+target and never fails over. A failure returns to the client, and a target that cannot serve the continuation answers
+`409 combo_tool_target_unavailable`, or `429 combo_tool_target_quota_exhausted` once its quota is
+spent. A target that lost paid-call consent answers `403 combo_metered_consent_required`. A Combo
+reached through another route, such as a subagent fallback alias, keeps its serving
+target the same way. DeepSeek thinking models get a one-space
 reasoning placeholder for a tool call that another model issued without reasoning. Gemini gets
 Google's documented signature placeholder. Anthropic gets a plain tool call and result. Earlier
 versions could send DeepSeek a bare tool call here and fail with `The reasoning_text in the
