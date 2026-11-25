@@ -28,7 +28,8 @@ import type { DataPlaneAdmission } from "./auth-cors";
 import type { RequestLogContext } from "./request-log";
 import { readBoundedRequestBodyBytes, readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import { decodeRequestErrorResponse } from "./responses";
-import { openVideoHandle, sealVideoHandle, videoHandlePrincipal } from "./video-handle";
+import { ensureVideoHandleKey, isVideoHandleKeyError, openVideoHandle, sealVideoHandle, videoHandleClaimsError, videoHandlePrincipal } from "./video-handle";
+import { safeXaiErrorDetail } from "../images/xai-upstream-error";
 import type { VideoRoute } from "./video-routes";
 
 let outboundDependencies: VideoOutboundDependencies = {};
@@ -68,9 +69,16 @@ function videoRow(config: OcxConfig, providerName: string): { auth: VideoProvide
 function resolveCreateTarget(config: OcxConfig, model: string | undefined): Target | Response {
   let providerName: string | undefined;
   let modelId = model;
+  // A model with a slash always names its provider first: `<provider>/<model>`, where the model part may
+  // contain more slashes. An unknown prefix is refused rather than sent whole to images.videoProvider,
+  // so a typo never reaches a different paid backend.
   const slash = model?.indexOf("/") ?? -1;
-  if (model !== undefined && slash > 0 && Object.prototype.hasOwnProperty.call(config.providers, model.slice(0, slash))) {
-    providerName = model.slice(0, slash);
+  if (model !== undefined && slash >= 0) {
+    const prefix = model.slice(0, slash);
+    if (!prefix || !Object.prototype.hasOwnProperty.call(config.providers, prefix)) {
+      return invalid(`model "${model.slice(0, 80)}" names no configured provider; write <provider>/<model>`);
+    }
+    providerName = prefix;
     modelId = model.slice(slash + 1) || undefined;
   }
   if (providerName === undefined) {
@@ -140,8 +148,12 @@ async function handleCreate(req: Request, config: OcxConfig, logCtx: RequestLogC
   const requested = fields.model as string | undefined;
   if (requested) logCtx.model = requested;
 
+  const principal = videoHandlePrincipal(admission, req.headers);
+  if (principal === undefined) return formatErrorResponse(401, "authentication_error", "opencodex API key required");
   const target = resolveCreateTarget(config, requested);
   if (target instanceof Response) return target;
+  const claimsError = videoHandleClaimsError(target.providerName, target.modelId);
+  if (claimsError) return invalid(claimsError);
   const denial = admissionScopeDenial(config, admission, requested, { providerName: target.providerName, modelId: target.modelId });
   if (denial) return denial;
   logCtx.provider = target.providerName;
@@ -150,6 +162,8 @@ async function handleCreate(req: Request, config: OcxConfig, logCtx: RequestLogC
   const upstreamBody: Record<string, unknown> = { ...fields };
   if (target.modelId === undefined) delete upstreamBody.model;
   else upstreamBody.model = target.modelId;
+  // The handle must be sealable before anything is paid for: a key failure here sends nothing.
+  ensureVideoHandleKey();
   let job: Record<string, unknown>;
   try {
     // Video creation is paid, non-idempotent work: one attempt, no retry.
@@ -159,29 +173,54 @@ async function handleCreate(req: Request, config: OcxConfig, logCtx: RequestLogC
   }
   const handle = sealVideoHandle({
     provider: target.providerName, upstreamId: job.id as string, ...(target.modelId !== undefined ? { model: target.modelId } : {}),
-  }, videoHandlePrincipal(admission));
-  return Response.json(sanitizedJob(job, handle));
+  }, principal);
+  return Response.json(publicVideoJob(job, handle, target.modelId));
 }
 
-/** The upstream job with the OCX handle as its id and an upstream error message redacted. */
-function sanitizedJob(job: Record<string, unknown>, handle: string): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...job, id: handle };
+const SAFE_STATUS = /^[a-z_]{1,32}$/;
+const SAFE_SECONDS = /^\d{1,4}$/;
+const SAFE_SIZE = /^\d{2,5}x\d{2,5}$/;
+const SAFE_CODE = /^[a-z0-9_]{1,64}$/;
+
+/**
+ * The public job object: an allowlist of the OpenAI Videos fields, each held to a closed shape, with
+ * the OCX handle as `id` and the model OCX sent. No upstream free text passes through: an error keeps
+ * a token-shaped code and an allowlisted detail, or a generic message, so an upstream that echoes a
+ * credential or arbitrary text in any field cannot hand it to the caller.
+ */
+function publicVideoJob(job: Record<string, unknown>, handle: string, model: string | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = { id: handle, object: "video" };
+  if (model !== undefined) out.model = model;
+  for (const field of ["created_at", "completed_at", "expires_at"] as const) {
+    const value = job[field];
+    if (value === null || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)) out[field] = value;
+  }
+  if (typeof job.progress === "number" && Number.isFinite(job.progress)) out.progress = Math.max(0, Math.min(100, Math.round(job.progress)));
+  if (typeof job.status === "string" && SAFE_STATUS.test(job.status)) out.status = job.status;
+  if (typeof job.seconds === "string" && SAFE_SECONDS.test(job.seconds)) out.seconds = job.seconds;
+  else if (typeof job.seconds === "number" && Number.isInteger(job.seconds) && job.seconds >= 0 && job.seconds < 10_000) out.seconds = String(job.seconds);
+  if (typeof job.size === "string" && SAFE_SIZE.test(job.size)) out.size = job.size;
   const error = job.error;
-  if (error && typeof error === "object" && !Array.isArray(error)) {
-    const copy = { ...(error as Record<string, unknown>) };
-    if (typeof copy.message === "string") copy.message = sanitizeUpstreamErrorText(copy.message).slice(0, 1000);
-    out.error = copy;
+  if (error === null) out.error = null;
+  else if (error && typeof error === "object" && !Array.isArray(error)) {
+    const e = error as { code?: unknown; message?: unknown };
+    out.error = {
+      ...(typeof e.code === "string" && SAFE_CODE.test(e.code) ? { code: e.code } : {}),
+      message: safeXaiErrorDetail(e.message) ?? "video generation failed",
+    };
   }
   return out;
 }
 
 async function openHandle(
+  req: Request,
   config: OcxConfig,
   handle: string,
   logCtx: RequestLogContext,
   admission: DataPlaneAdmission,
 ): Promise<{ claims: { provider: string; upstreamId: string; model?: string }; auth: VideoProviderAuth } | Response> {
-  const claims = openVideoHandle(handle, videoHandlePrincipal(admission));
+  const principal = videoHandlePrincipal(admission, req.headers);
+  const claims = principal === undefined ? undefined : openVideoHandle(handle, principal);
   if (!claims) return formatErrorResponse(404, "not_found", "video not found");
   logCtx.provider = claims.provider;
   logCtx.model = claims.model ?? "video";
@@ -194,11 +233,11 @@ async function openHandle(
 }
 
 async function handleRetrieve(req: Request, config: OcxConfig, handle: string, logCtx: RequestLogContext, admission: DataPlaneAdmission): Promise<Response> {
-  const opened = await openHandle(config, handle, logCtx, admission);
+  const opened = await openHandle(req, config, handle, logCtx, admission);
   if (opened instanceof Response) return opened;
   try {
     const job = await retrieveOpenAiVideo(opened.claims.upstreamId, opened.auth, req.signal, outboundDependencies);
-    return Response.json(sanitizedJob(job, handle));
+    return Response.json(publicVideoJob(job, handle, opened.claims.model));
   } catch (error) {
     return failureResponse(error, req, "video retrieve");
   }
@@ -221,7 +260,7 @@ function cappedBody(body: ReadableStream<Uint8Array>, maxBytes: number): Readabl
 async function handleContent(req: Request, url: URL, config: OcxConfig, handle: string, logCtx: RequestLogContext, admission: DataPlaneAdmission): Promise<Response> {
   const variant = url.searchParams.get("variant") ?? undefined;
   if (variant !== undefined && !OPENAI_VIDEO_CONTENT_VARIANTS.has(variant)) return invalid("variant must be video, thumbnail or spritesheet");
-  const opened = await openHandle(config, handle, logCtx, admission);
+  const opened = await openHandle(req, config, handle, logCtx, admission);
   if (opened instanceof Response) return opened;
   let upstream: Response;
   try {
@@ -260,8 +299,8 @@ export async function handleVideos(
     return await handleContent(req, url, config, route.handle, logCtx, admission);
   } catch (error) {
     // The handle key file is the one local failure left; it names no secret.
-    if (error instanceof Error && error.message.startsWith("video handle key is unavailable")) {
-      console.error("[videos] " + error.message);
+    if (isVideoHandleKeyError(error)) {
+      console.error("[videos] " + (error as Error).message);
       return formatErrorResponse(500, "server_error", "video handle key is unavailable");
     }
     throw error;

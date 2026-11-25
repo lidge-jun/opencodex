@@ -1,22 +1,30 @@
 /**
  * OCX-scoped handles for public `/v1/videos` jobs (#9110).
  *
- * `POST /v1/videos` answers with the upstream job object, but its `id` is replaced by a handle that
- * names the provider row, the upstream job id and the model it ran. `GET /v1/videos/{handle}` and
- * `/content` read the provider from the handle, so they return to the destination that created the
- * job and never re-route.
+ * `POST /v1/videos` answers with the upstream job, but its `id` is replaced by a handle that names the
+ * provider row, the upstream job id and the model it ran. `GET /v1/videos/{handle}` and `/content` read
+ * the provider from the handle, so they return to the destination that created the job and never
+ * re-route.
  *
  * The handle is HMAC-SHA256 sealed with a per-install key kept in the config directory
- * (`video-handle-key`, mode 0600) so it survives restarts while a job renders. The MAC also covers
- * the admission principal that created the job — a configured key id, the environment key, or the
- * loopback listener — without carrying it: a handle presented by another principal, or edited in any
- * byte, does not open, and the caller sees the same 404 as for an unknown id. The payload is
- * readable (base64url JSON); it holds no credential.
+ * (`video-handle-key`, 32 random bytes, mode 0600) so it survives restarts while a job renders. The key
+ * is published atomically (written to a private temporary file, then hard-linked into place, which
+ * fails rather than replaces when another process won the race) and read through a no-follow
+ * descriptor whose type, size, owner and mode are checked on that same descriptor; anything unsafe
+ * fails closed. Handlers load it before the paid create, so a key failure sends nothing.
+ *
+ * The MAC also covers the admission principal without carrying it: the admission kind, the configured
+ * key id and a SHA-256 of the exact secret the caller presented. A handle presented under another key,
+ * a replacement secret on the same key id (including a pending rotation), a changed environment token,
+ * or after any edit does not open, and the caller sees the same 404 as for an unknown id. Loopback
+ * admission carries no secret and is its own principal. The payload is readable base64url JSON and
+ * holds no credential.
  */
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { closeSync, constants, fstatSync, linkSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
+import { authorizationCredential } from "../lib/authorization-scheme";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { isUsableUpstreamVideoId } from "../images/openai-video-client";
@@ -24,7 +32,10 @@ import type { DataPlaneAdmission } from "./auth-cors";
 
 export const VIDEO_HANDLE_PREFIX = "video_ocx_";
 export const VIDEO_HANDLE_KEY_FILE = "video-handle-key";
-const MAX_HANDLE_LENGTH = 2048;
+/** Bounds that keep every sealable handle under {@link MAX_HANDLE_LENGTH}, checked before the create. */
+export const MAX_HANDLE_PROVIDER_BYTES = 128;
+export const MAX_HANDLE_MODEL_BYTES = 256;
+const MAX_HANDLE_LENGTH = 8192;
 
 export interface VideoHandleClaims {
   /** Provider row that created the job. */
@@ -44,42 +55,97 @@ export function setVideoHandleKeyForTests(key: Buffer | undefined): void {
   cachedKey = undefined;
 }
 
+class VideoHandleKeyError extends Error {
+  constructor(reason: string) {
+    super("video handle key is unavailable: " + reason);
+    this.name = "VideoHandleKeyError";
+  }
+}
+
+export function isVideoHandleKeyError(error: unknown): boolean {
+  return error instanceof VideoHandleKeyError;
+}
+
+/** Read an existing key through a no-follow descriptor; undefined when there is no file. */
+function readKeyFile(file: string): Buffer | undefined {
+  let fd: number;
+  try {
+    fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return undefined;
+    throw new VideoHandleKeyError(code === "ELOOP" ? "key file is a symbolic link" : `cannot open key file (${code ?? "error"})`);
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > 256) throw new VideoHandleKeyError("key file is not a small regular file");
+    if (process.platform !== "win32") {
+      if ((stat.mode & 0o077) !== 0) throw new VideoHandleKeyError("key file is readable by other users; expected mode 0600");
+      const uid = process.getuid?.();
+      if (uid !== undefined && stat.uid !== uid) throw new VideoHandleKeyError("key file is owned by another user");
+    }
+    const text = readFileSync(fd, "utf8").trim();
+    if (!/^[0-9a-f]{64}$/.test(text)) throw new VideoHandleKeyError("key file is not a 32-byte hex key");
+    return Buffer.from(text, "hex");
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function loadOrCreateKey(): Buffer {
   if (testKey) return testKey;
   if (cachedKey) return cachedKey;
   const dir = getConfigDir();
   const file = join(dir, VIDEO_HANDLE_KEY_FILE);
+  const existing = readKeyFile(file);
+  if (existing) return (cachedKey = existing);
+  assertNotRealHomeUnderTest(dir);
+  const temp = join(dir, `.${VIDEO_HANDLE_KEY_FILE}.${randomBytes(8).toString("hex")}.tmp`);
   try {
-    if (existsSync(file)) {
-      const stat = lstatSync(file);
-      const text = stat.isFile() && !stat.isSymbolicLink() && stat.size <= 256 ? readFileSync(file, "utf8").trim() : "";
-      if (/^[0-9a-f]{64}$/.test(text)) {
-        cachedKey = Buffer.from(text, "hex");
-        return cachedKey;
-      }
-      throw new Error("video handle key file is not a 32-byte hex key");
-    }
-    const fresh = randomBytes(32);
-    assertNotRealHomeUnderTest(dir);
     recordOwnedConfigPath(dir, file);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    writeFileSync(file, fresh.toString("hex") + "\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
-    cachedKey = fresh;
-    return fresh;
+    writeFileSync(temp, randomBytes(32).toString("hex") + "\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
+    try {
+      // A hard link publishes the complete file or fails with EEXIST; it never replaces a key.
+      linkSync(temp, file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
   } catch (error) {
-    // A lost race on first use: another request minted the file between the check and the write.
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") return loadOrCreateKey();
-    // An unreadable or unwritable key is not replaced by a process-local one: a silent per-process
-    // key would make every handle issued before a restart unopenable, and that job's paid output
-    // unreachable, with no error naming why.
-    throw new Error("video handle key is unavailable: " + (error instanceof Error ? error.message : String(error)));
+    if (error instanceof VideoHandleKeyError) throw error;
+    throw new VideoHandleKeyError(`cannot create key file (${(error as NodeJS.ErrnoException).code ?? "error"})`);
+  } finally {
+    try { unlinkSync(temp); } catch { /* already gone */ }
   }
+  // Read back whatever won: this process's key or a concurrent one, through the same checks.
+  const published = readKeyFile(file);
+  if (!published) throw new VideoHandleKeyError("key file disappeared after creation");
+  return (cachedKey = published);
 }
 
-/** Stable identity of the admission secret that made the request, for the MAC only. */
-export function videoHandlePrincipal(admission: DataPlaneAdmission): string {
-  if (admission.kind === "configured") return "key:" + admission.keyId;
-  return admission.kind;
+/** Load (or create) the signing key now, so a failure surfaces before any paid request. */
+export function ensureVideoHandleKey(): void {
+  loadOrCreateKey();
+}
+
+/**
+ * The principal a request's handles are bound to, or undefined when a non-loopback admission
+ * presented no secret (which `resolveApiAuth` would not have admitted). The secret is read with the
+ * same header precedence as `resolveApiAuth`.
+ */
+export function videoHandlePrincipal(admission: DataPlaneAdmission, headers: Pick<Headers, "get">): string | undefined {
+  if (admission.kind === "loopback") return "loopback";
+  const secret = headers.get("x-opencodex-api-key")?.trim() || authorizationCredential(headers) || headers.get("x-api-key")?.trim();
+  if (!secret) return undefined;
+  const digest = createHash("sha256").update(secret).digest("hex");
+  return `${admission.kind}:${admission.kind === "configured" ? admission.keyId : ""}:${digest}`;
+}
+
+/** Why these claims could not be sealed into an openable handle, checked before the paid create. */
+export function videoHandleClaimsError(provider: string, model: string | undefined): string | undefined {
+  if (Buffer.byteLength(provider) > MAX_HANDLE_PROVIDER_BYTES) return "provider name is too long";
+  if (model !== undefined && Buffer.byteLength(model) > MAX_HANDLE_MODEL_BYTES) return `model must be at most ${MAX_HANDLE_MODEL_BYTES} bytes`;
+  return undefined;
 }
 
 function mac(key: Buffer, principal: string, payload: string): Buffer {
@@ -90,7 +156,9 @@ export function sealVideoHandle(claims: VideoHandleClaims, principal: string): s
   const payload = Buffer.from(JSON.stringify({
     v: 1, p: claims.provider, u: claims.upstreamId, ...(claims.model !== undefined ? { m: claims.model } : {}),
   })).toString("base64url");
-  return `${VIDEO_HANDLE_PREFIX}${payload}.${mac(loadOrCreateKey(), principal, payload).toString("base64url")}`;
+  const handle = `${VIDEO_HANDLE_PREFIX}${payload}.${mac(loadOrCreateKey(), principal, payload).toString("base64url")}`;
+  if (handle.length > MAX_HANDLE_LENGTH) throw new Error("video handle exceeds its length bound");
+  return handle;
 }
 
 /** The claims of a handle this install sealed for `principal`, or undefined for anything else. */

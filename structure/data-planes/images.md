@@ -131,24 +131,33 @@ request-log row (`usage.jsonl`); only the paid create takes an admitted turn slo
 gate (`/v1/videos` is in `CONFIGURABLE_JSON_BODY_ROUTES`). The loopback listener and Remote Link admit
 the same three shapes.
 
-`model` of `<provider>/<model>` names a configured row and sends the bare model; any other model goes to
-`images.videoProvider`. A prefix that names a configured row is final even when that row is refused.
+`model` of `<provider>/<model>` names a configured row and sends the bare model; a model without a slash goes
+to `images.videoProvider`. A slash always means a provider prefix: an unknown prefix is refused before any
+send, and a backend model id containing a slash is written behind its provider. A named row is final even
+when it is refused.
 The row must pass `resolveVideoProviderRow` and set `videoApi: "openai"`; nothing else serves these
 routes and nothing falls back. A configured key's scope is checked with `admissionScopeDenial` against
 that row and model before the create, and again before each poll and content request.
 
 The returned job `id` is an HMAC-SHA256 handle (`src/server/video-handle.ts`) over the provider, the
 upstream id and the model, keyed by `video-handle-key` in the config directory (32 random bytes, mode
-0600, recorded as owned, created exclusively). The MAC also covers the admission principal (configured
-key id, environment key or loopback) without carrying it, so a handle presented by another principal,
-edited, or minted under another key reads as `404` before any credential is used. An unreadable or
-malformed key file fails closed instead of minting a process-local key. Poll and content re-resolve the
+0600, recorded as owned, created exclusively). The MAC also covers the admission principal (admission kind,
+configured key id and a SHA-256 of the exact presented secret, read with `resolveApiAuth`'s header precedence;
+loopback is its own principal) without carrying it, so a handle presented by another key, under a replaced
+or rotated secret on the same key id, edited, or minted under another signing key reads as `404` before any
+credential is used. The key is read through an `O_NOFOLLOW` descriptor and refused unless it is a small
+regular file owned by this user with no group/other bits; it is created in a private temporary file and
+hard-linked into place, so a concurrent first use reads a complete key. Create loads the key and checks
+that the provider (128 bytes) and model (256 bytes) fit a handle before the paid POST, so a key failure or
+an unsealable handle sends nothing; nothing mints a process-local key. Poll and content re-resolve the
 row from the handle and refuse it if it has since become unusable.
 
 Create accepts JSON or multipart; a multipart `input_reference` PNG/JPEG/WebP file becomes the JSON
 `input_reference.image_url` data URL, and other files are refused. One upstream attempt per create.
 Upstream errors keep a 4xx status and only allowlisted detail; transport errors are redacted. Job
-objects pass through with the handle as `id` and a redacted `error.message`. Content is streamed with a
+objects are rebuilt from an allowlist of closed-shape fields (status, progress, seconds, size, timestamps,
+an error code and allowlisted detail or a generic message) with the handle as `id` and the model OCX sent;
+upstream free text never passes through. Content is streamed with a
 fixed media-type allowlist (anything else is `application/octet-stream`), `nosniff`, `no-store`, a
 200 MiB cap, and only the `video`, `thumbnail` and `spritesheet` variants. List, delete, remix, edit
 and extension are not served. Neither xAI nor OpenAI publishes a Responses-API video tool (xAI Responses

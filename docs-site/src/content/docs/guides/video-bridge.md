@@ -161,13 +161,16 @@ Clients that speak the OpenAI Videos API can point at OpenCodex. Three routes ar
 | `GET /v1/videos/{id}/content` | The rendered file; `variant` may be `video`, `thumbnail` or `spritesheet`. |
 
 `model` picks the backend: `"aistudio/gemini-omni-1.1-flash"` sends `gemini-omni-1.1-flash` to the
-`aistudio` provider, and a model without a provider prefix goes to `images.videoProvider`. Only a
+`aistudio` provider, and a model without a slash goes to `images.videoProvider`. A model with a slash must start with a configured provider name (write `"<videoProvider>/google/veo"` for a backend model id that contains a slash); an unknown prefix is refused, never sent to another backend. Only a
 provider with `"videoApi": "openai"` serves these routes; any other, and every refusal listed above,
 returns an error and sends nothing. The `id` in each answer is an OpenCodex handle: status and content
-calls return to the provider that created the job, and a handle works only with the same OpenCodex
-API key (or the same loopback or environment admission) that created it. Other keys get `404`. The
+calls return to the provider that created the job, and a handle works only with the exact OpenCodex API key
+secret (or the same loopback or environment admission) that created it. Other keys, and a rotated or
+replaced secret under the same key id, get `404`, so fetch results before rotating a key. The
 handles are signed with a key stored as `video-handle-key` in the OpenCodex home, so they survive a
-restart.
+restart. If that key file cannot be read or created safely, `POST /v1/videos` fails before the job is
+submitted. Job objects carry only the documented fields (`status`, `progress`, `seconds`, `size`, timestamps and a
+short `error`), with `model` set to the model OpenCodex sent; other upstream fields and free text are dropped.
 
 The routes take the same authentication and origin checks as `/v1/images/generations`, a scoped key
 is held to its providers and models on all three, and each call is recorded in `usage.jsonl`. List,

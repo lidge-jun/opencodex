@@ -4,7 +4,7 @@
  * fetch fails the test.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { VideoOutboundDependencies } from "../../src/images/xai-video-client";
@@ -23,6 +23,9 @@ const KEY = "synthetic-video-row-key";
 const MP4 = new Uint8Array([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32, 9, 9, 9, 9]);
 const ALICE: DataPlaneAdmission = { kind: "configured", keyId: "alice", source: "bearer" };
 const BOB: DataPlaneAdmission = { kind: "configured", keyId: "bob", source: "bearer" };
+const ALICE_SECRET = "ocx_data_" + "a".repeat(40);
+const BOB_SECRET = "ocx_data_" + "b".repeat(40);
+const secretFor = (admission: DataPlaneAdmission) => admission === BOB ? BOB_SECRET : ALICE_SECRET;
 
 type Sent = { method: string; url: string; address: string; authorization: string | null; body?: Record<string, unknown> };
 let sent: Sent[] = [];
@@ -81,8 +84,8 @@ function config(overrides: Partial<OcxConfig> = {}, rows: Record<string, OcxProv
     port: 0, hostname: "127.0.0.1", defaultProvider: "aistudio",
     providers: { aistudio: videoRow(), plain: videoRow({ videoApi: undefined }), ...rows },
     apiKeys: [
-      { id: "alice", name: "a", key: "ocx_data_" + "a".repeat(40), createdAt: "2026-01-01T00:00:00.000Z" },
-      { id: "bob", name: "b", key: "ocx_data_" + "b".repeat(40), createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "alice", name: "a", key: ALICE_SECRET, createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "bob", name: "b", key: BOB_SECRET, createdAt: "2026-01-01T00:00:00.000Z" },
     ],
     ...overrides,
   } as OcxConfig;
@@ -90,8 +93,9 @@ function config(overrides: Partial<OcxConfig> = {}, rows: Record<string, OcxProv
 
 const logContext = (): RequestLogContext => ({ model: "video", provider: "unknown" } as RequestLogContext);
 
-async function call(cfg: OcxConfig, method: string, path: string, body?: BodyInit, admission = ALICE, headers: Record<string, string> = { "content-type": "application/json" }) {
+async function call(cfg: OcxConfig, method: string, path: string, body?: BodyInit, admission = ALICE, headers: Record<string, string> = { "content-type": "application/json" }, secret = secretFor(admission)) {
   const url = new URL("http://localhost" + path);
+  headers = { ...headers, authorization: "Bearer " + secret };
   const route = matchVideoRoute(method, url.pathname);
   if (!route) throw new Error("no video route for " + method + " " + path);
   const logCtx = logContext();
@@ -130,6 +134,8 @@ describe("POST /v1/videos", () => {
   test("refusals are final and send nothing: no provider, a row without videoApi openai, a registry row, a disabled row", async () => {
     const cases: Array<[OcxConfig, Record<string, unknown>, string]> = [
       [config(), { model: "unprefixed", prompt: "p" }, "no video provider"],
+      [config({ images: { videoProvider: "aistudio" } }), { model: "aistudoi/m", prompt: "p" }, "names no configured provider"],
+      [config(), { model: "aistudio/" + "m".repeat(300), prompt: "p" }, "at most 256 bytes"],
       [config(), { model: "plain/m", prompt: "p" }, 'set "videoApi": "openai"'],
       [config({}, { xai: videoRow({ baseUrl: "https://api.x.ai/v1" }) }), { model: "xai/grok-imagine-video-1.5", prompt: "p" }, "OpenAI Videos API"],
       [config({}, { aistudio: videoRow({ disabled: true }) }), { model: "aistudio/m", prompt: "p" }, "is disabled"],
@@ -243,6 +249,49 @@ describe("GET /v1/videos/{id} and /content", () => {
     answer = () => new Response(MP4, { headers: { "content-type": "video/mp4", "content-length": String(500 * 1024 * 1024) } });
     const { response } = await call(config(), "GET", "/v1/videos/" + handle + "/content");
     expect(response.status).toBe(502);
+  });
+});
+
+describe("review regressions", () => {
+  test("a slash-containing model reaches images.videoProvider only when written behind its provider", async () => {
+    const { response } = await create(config({ images: { videoProvider: "aistudio" } }), { model: "aistudio/google/veo-like", prompt: "p" });
+    expect(response.status).toBe(200);
+    expect(sent[0]!.body).toEqual({ model: "google/veo-like", prompt: "p" });
+  });
+
+  test("an unusable handle key refuses the create before the paid request", async () => {
+    setVideoHandleKeyForTests(undefined);
+    writeFileSync(join(home, "video-handle-key"), "not-a-key\n", { mode: 0o600 });
+    const { response } = await create(config(), { model: "aistudio/m", prompt: "p" });
+    expect(response.status).toBe(500);
+    expect(sent).toEqual([]);
+  });
+
+  test("an upstream that echoes the row key or free text in any job field hands none of it to the caller", async () => {
+    answer = () => Response.json({
+      id: "video_up_1", object: KEY, status: KEY, model: KEY, seconds: KEY, size: KEY, prompt: KEY, debug: { auth: "Bearer " + KEY },
+      remixed_from_video_id: KEY, progress: 10, created_at: 1700000000,
+      error: { code: KEY, message: "upstream said " + KEY, param: KEY, type: KEY },
+    });
+    const { response } = await call(config(), "POST", "/v1/videos", JSON.stringify({ model: "aistudio/m", prompt: "p" }));
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).not.toContain(KEY);
+    const job = JSON.parse(text) as Record<string, unknown>;
+    expect(Object.keys(job).sort()).toEqual(["created_at", "error", "id", "model", "object", "progress"]);
+    expect(job).toMatchObject({ object: "video", model: "m", progress: 10, error: { message: "video generation failed" } });
+  });
+
+  test("a replacement secret on the same key id does not open the previous holder's handle", async () => {
+    const { response } = await create(config(), { model: "aistudio/m", prompt: "p" });
+    const handle = (await response.json() as { id: string }).id;
+    sent = [];
+    const replaced = config();
+    replaced.apiKeys![0] = { ...replaced.apiKeys![0]!, key: "ocx_data_" + "z".repeat(40) };
+    const poll = await call(replaced, "GET", "/v1/videos/" + handle, undefined, ALICE, {}, "ocx_data_" + "z".repeat(40));
+    expect(poll.response.status).toBe(404);
+    expect(sent).toEqual([]);
+    expect((await call(config(), "GET", "/v1/videos/" + handle, undefined, ALICE, {})).response.status).not.toBe(404);
   });
 });
 

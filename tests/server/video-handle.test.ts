@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -54,14 +54,49 @@ test("another principal, an edited payload, a foreign key and malformed input do
   expect(openVideoHandle(handle, "key:alice")).toBeUndefined();
 });
 
-test("principals separate configured keys, the environment key and loopback", () => {
-  expect(videoHandlePrincipal({ kind: "configured", keyId: "k1", source: "bearer" })).toBe("key:k1");
-  expect(videoHandlePrincipal({ kind: "configured", keyId: "k1", source: "x-api-key" })).toBe("key:k1");
-  expect(videoHandlePrincipal({ kind: "environment", source: "dedicated" })).toBe("environment");
-  expect(videoHandlePrincipal({ kind: "loopback", source: "loopback" })).toBe("loopback");
+test("principals bind the admission kind, key id and the exact presented secret", () => {
+  const bearer = (secret: string) => new Headers({ authorization: "Bearer " + secret });
+  const k1 = videoHandlePrincipal({ kind: "configured", keyId: "k1", source: "bearer" }, bearer("secret-one"));
+  // The same secret in the dedicated header or x-api-key is the same principal.
+  expect(videoHandlePrincipal({ kind: "configured", keyId: "k1", source: "dedicated" }, new Headers({ "x-opencodex-api-key": "secret-one" }))).toBe(k1);
+  expect(videoHandlePrincipal({ kind: "configured", keyId: "k1", source: "x-api-key" }, new Headers({ "x-api-key": "secret-one" }))).toBe(k1);
+  expect(videoHandlePrincipal({ kind: "configured", keyId: "k1", source: "bearer" }, bearer("secret-two"))).not.toBe(k1);
+  expect(videoHandlePrincipal({ kind: "configured", keyId: "k2", source: "bearer" }, bearer("secret-one"))).not.toBe(k1);
+  expect(videoHandlePrincipal({ kind: "environment", source: "bearer" }, bearer("secret-one"))).not.toBe(k1);
+  expect(k1).not.toContain("secret-one");
+  expect(videoHandlePrincipal({ kind: "loopback", source: "loopback" }, new Headers())).toBe("loopback");
+  expect(videoHandlePrincipal({ kind: "configured", keyId: "k1", source: "bearer" }, new Headers())).toBeUndefined();
+});
+
+test("the largest claims the create admits still seal into an openable handle", () => {
+  setVideoHandleKeyForTests(Buffer.alloc(32, 3));
+  const big = { provider: "p".repeat(128), upstreamId: "\u00e9".repeat(256), model: "m".repeat(256) };
+  const handle = sealVideoHandle(big, "key:alice");
+  expect(openVideoHandle(handle, "key:alice")).toEqual(big);
+});
+
+test("an existing key readable by other users, or a symlinked key, fails closed", () => {
+  if (process.platform === "win32") return;
+  const file = join(home, VIDEO_HANDLE_KEY_FILE);
+  writeFileSync(file, "ab".repeat(32) + "\n", { mode: 0o644 });
+  chmodSync(file, 0o644);
+  expect(() => sealVideoHandle(claims, "key:alice")).toThrow("readable by other users");
+  unlinkSync(file);
+  const target = join(home, "elsewhere");
+  writeFileSync(target, "ab".repeat(32) + "\n", { mode: 0o600 });
+  symlinkSync(target, file);
+  expect(() => sealVideoHandle(claims, "key:alice")).toThrow("symbolic link");
+});
+
+test("a later load reads the published key back and creation leaves no temporary file", () => {
+  const first = sealVideoHandle(claims, "key:alice");
+  setVideoHandleKeyForTests(undefined);
+  const second = sealVideoHandle(claims, "key:alice");
+  expect(second).toBe(first);
+  expect(readdirSync(home).filter(name => name.endsWith(".tmp"))).toEqual([]);
 });
 
 test("an unusable key file fails closed instead of minting a process-local key", () => {
-  writeFileSync(join(home, VIDEO_HANDLE_KEY_FILE), "not-a-key\n");
+  writeFileSync(join(home, VIDEO_HANDLE_KEY_FILE), "not-a-key\n", { mode: 0o600 });
   expect(() => sealVideoHandle(claims, "key:alice")).toThrow("video handle key is unavailable");
 });
