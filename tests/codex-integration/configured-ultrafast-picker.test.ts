@@ -8,6 +8,7 @@ import { captureFastPolicyAuthority, fastPolicyForModel } from "../../src/provid
 import { decideTier } from "../../src/providers/fastwire";
 import { applyProviderConfigHints } from "../../src/codex/catalog/model-hints";
 import { configuredUltraFastSlugs, retainedFlexPolicyBySlug } from "../../src/codex/catalog/configured-tiers";
+import { NATIVE_ULTRAFAST_SERVICE_TIER } from "../../src/codex/catalog/native-ultrafast";
 import { buildCatalogEntriesFromObservedState, mergeCatalogEntriesFromObservedState, type ObservedCatalogMergeInput } from "../../src/codex/catalog/build-entries";
 import type { CatalogModel, RawEntry } from "../../src/codex/catalog/parsing";
 import { repoRoot } from "../helpers/repo-root";
@@ -61,6 +62,14 @@ describe("configured Ultra Fast in the native Codex speed picker", () => {
     expect(merge([], { ultraFastTier: false })[0]!.service_tiers).toEqual(row.service_tiers);
     expect(decideTier(fastPolicyForModel(provider(), "task-model", "gateway"), undefined, "ultrafast"))
       .toEqual({ kind: "set", value: "ultrafast" });
+  });
+
+  // Codex CLI turns a tier name into a slash command and T3 Code matches the label "Ultrafast":
+  // "Ultra Fast" became `/ultra fast`, which Codex splits on the space and cannot run (#9100).
+  test("a configured tier carries the native Ultrafast name", () => {
+    const tier = merge()[0]!.service_tiers.find((t: { id: string }) => t.id === "ultrafast");
+    expect(tier.name).toBe(NATIVE_ULTRAFAST_SERVICE_TIER.name);
+    expect(tier.name).not.toMatch(/\s/);
   });
 
   test.each([
