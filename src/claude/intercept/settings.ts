@@ -95,6 +95,18 @@ function envRecord(doc: SettingsDoc): Record<string, unknown> {
   return doc.env && typeof doc.env === "object" && !Array.isArray(doc.env) ? doc.env : {};
 }
 
+export type ClaudeSettingsEnvRead =
+  | { kind: "missing" }
+  | { kind: "unreadable" }
+  | { kind: "env"; env: Readonly<Record<string, unknown>> };
+
+/** Read-only: the settings.json env block the writers below start from. Never writes. */
+export function readClaudeSettingsEnv(configDir = claudeConfigDir()): ClaudeSettingsEnvRead {
+  const read = readSettings(settingsPath(configDir));
+  if ("error" in read) return { kind: read.error };
+  return { kind: "env", env: { ...envRecord(read.doc) } };
+}
+
 /** Loopback proxy URLs are the only shape opencodex ever writes. */
 export function isClaudeInterceptProxyUrl(value: unknown): value is string {
   return typeof value === "string" && /^http:\/\/(?:opencodex:[^@/]+@)?127\.0\.0\.1:\d{1,5}\/?$/.test(value.trim());

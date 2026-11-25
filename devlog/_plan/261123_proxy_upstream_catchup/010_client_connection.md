@@ -113,3 +113,15 @@ const toggleFirstParty = async () => {
 
 - magpie식 자동 provider 전환.
 - 다른 클라이언트(Gemini CLI, Zed)는 030. 계정 자격 증명 이동은 020(G-004).
+
+## Implementation (lane R1, 2026-11-25)
+
+Delivered in one PR. Departures from the sketch, each with its reason:
+
+- Drift reasons are `external_owner | account_mode | hub_gated | intercept_disabled | file_edited | pending_restart`. `hub_gated` and `intercept_disabled` were added because those gates are the real cause of drift there; `quota_block` is not produced because no read-only signal exists for the desktop quota gate (#6196 is still a design proposal). `observed` and `owner` also carry `unknown` for unreadable evidence.
+- The Codex `restorePreview` follows `restoreNativeCodexAsync` through shared read-only halves (journal comparison, removal transform, provider-table retention, approved-provider URLs) and is checked against the real restore; it reports refusals (`refused_owner`, `refused_history`, …) as outcomes.
+- The first-party preview shares `claudeFirstPartyTransition`, extracted from `PUT /api/claude-code`, and runs it on the persisted config like the PUT does. The dashboard skips the confirmation when no key would change.
+- Every returned path goes through `displayPath` (home to `~`, `@` segments elided).
+- `GET /api/connections` has no CLI verb yet; it is a `deferred-verb` owned by 020.
+
+Contract record: `structure/clients/connections.md`.
