@@ -1510,7 +1510,7 @@ When a stopped listener's literal IP address drops the liveness dial instead of 
 A successful bind confirms absence at that instant; a failed bind or an inconclusive hostname
 probe still prevents the update.
 
-Preview versions are named `X.Y.Z-preview.<date>` or `X.Y.Z-preview.<date>.<attempt>`, for example `2.100.6-preview.20261119.1`; the attempt numbers the publications of that date. On the preview channel, previews are ordered by base version, then date, then attempt, and a version without an attempt counts as attempt 0. On either channel a stable release is offered to a preview install only when its base version is higher than the preview's, and the stable channel never offers a preview.
+Preview versions are named `X.Y.Z-preview.<date>` or `X.Y.Z-preview.<date>.<attempt>`, for example `2.100.6-preview.20261119.1`; the attempt numbers the publications of that date. On the preview channel, previews are ordered by base version, then date, then attempt, and a version without an attempt counts as attempt 0. On either channel a stable release is offered to a preview install only when its base version is higher than the preview's, and the stable channel never offers a preview. These rules govern update checks, notifications and the dashboard's update offer. `ocx update` itself installs the version its selected tag points to whenever that differs from the installed version, so `ocx update --tag latest` on a preview install moves to the current stable release even when its base version is not higher.
 
 On Windows, Scoop's default `nodejs` and `nodejs-lts` `npm` installations can be used
 from the user home directory when their `current` junction stays inside the Node app

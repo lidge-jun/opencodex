@@ -582,7 +582,7 @@ başlatılır, ön plan kurulumu ise sonraki adım olarak `ocx start` yazdırır
 Kontrol paneli güncelleme kayıtları kalıcı hale getirilmeden önce
 profil/önbellek yollarını ve UID/GID değerlerini maskeler.
 
-Önizleme sürümleri `X.Y.Z-preview.<date>` veya `X.Y.Z-preview.<date>.<attempt>` biçiminde adlandırılır, örneğin `2.100.6-preview.20261119.1`; deneme, o tarihteki yayınları numaralandırır. preview kanalında önizlemeler önce temel sürüme, sonra tarihe, sonra denemeye göre sıralanır ve denemesi olmayan bir sürüm deneme 0 sayılır. Her iki kanalda da kararlı bir sürüm, bir önizleme kurulumuna yalnızca temel sürümü önizlemeninkinden yüksekse önerilir ve kararlı kanal hiçbir zaman önizleme önermez.
+Önizleme sürümleri `X.Y.Z-preview.<date>` veya `X.Y.Z-preview.<date>.<attempt>` biçiminde adlandırılır, örneğin `2.100.6-preview.20261119.1`; deneme, o tarihteki yayınları numaralandırır. preview kanalında önizlemeler önce temel sürüme, sonra tarihe, sonra denemeye göre sıralanır ve denemesi olmayan bir sürüm deneme 0 sayılır. Her iki kanalda da kararlı bir sürüm, bir önizleme kurulumuna yalnızca temel sürümü önizlemeninkinden yüksekse önerilir ve kararlı kanal hiçbir zaman önizleme önermez. Bu kurallar güncelleme denetimleri, bildirimler ve panodaki güncelleme önerisi için geçerlidir. `ocx update` ise seçilen etiketin gösterdiği sürüm kurulu sürümden farklı olduğunda onu kurar; bu yüzden bir önizleme kurulumunda `ocx update --tag latest`, temel sürümü daha yüksek olmasa bile güncel kararlı sürüme geçer.
 
 ```bash
 ocx update
