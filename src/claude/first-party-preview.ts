@@ -23,7 +23,7 @@ import { claudeFirstPartyTransition } from "./first-party-transition";
 import { claudeInterceptCaCertPath } from "./intercept/local-ca";
 import { readClaudeInterceptProxyToken } from "./intercept/proxy-auth";
 import { claudeInterceptEnabled } from "./intercept/runtime";
-import { claudeInterceptProxyUrl, isClaudeInterceptProxyUrl, readClaudeSettingsEnv } from "./intercept/settings";
+import { claudeInterceptProxyUrl, claudeSettingsFileState, isClaudeInterceptProxyUrl, readClaudeSettingsEnv } from "./intercept/settings";
 import { mergeClaudeInterceptNoProxy, noProxyMergeable, readNoProxyReceipt } from "./intercept/settings-no-proxy";
 
 export type SettingsChangeKind = "add" | "update" | "remove";
@@ -74,6 +74,8 @@ export function previewClaudeFirstPartySettings(input: FirstPartyPreviewInput): 
   const accept = (changes: FirstPartySettingsChange[]): FirstPartyPreview => ({
     ok: true, enabled, path, changes, applyChecks: enabled ? FIRST_PARTY_APPLY_CHECKS : [],
   });
+  // A special or oversized settings.json would block or balloon the reads below.
+  if (claudeSettingsFileState(dir) === "unsafe") return refuse("unreadable");
 
   // The switch's own pre-checks for turning CLI first-party on, in its order.
   if (enabled) {

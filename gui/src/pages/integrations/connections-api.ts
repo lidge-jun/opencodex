@@ -20,6 +20,7 @@ export interface ConnectionView {
   client: ConnectionClient;
   home?: string;
   homeSource?: "default" | "extra";
+  homeOrdinal?: number;
   configPath: string;
   desired: ConnectionDesired;
   observed: ConnectionObserved;

@@ -6,7 +6,6 @@
  * first-party switch acts on the default home only, so only that row carries an intent, drift
  * and a switch-off preview; extra homes report what their settings.json routes to.
  */
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { claudeDesktopIntegrationEnabled } from "../codex/desired-state";
 import type { ConnectionDriftReason, ConnectionObserved, ConnectionOwner, ConnectionView } from "../integrations/connection-view";
@@ -18,6 +17,7 @@ import { inspectDesktopFirstParty, observeClaudeDesktopMode, resolveClaudeDeskto
 import { previewClaudeFirstPartySettings } from "./first-party-preview";
 import { firstPartyDesired, firstPartyProxyStatus } from "./first-party-settings";
 import { claudeInterceptEnabled } from "./intercept/runtime";
+import { claudeSettingsFileState } from "./intercept/settings";
 
 export interface ClaudeConnectionInput {
   live: OcxConfig;
@@ -29,21 +29,31 @@ export interface ClaudeConnectionInput {
   opencodexConfigDir?: string;
 }
 
-function claudeCodeRow(input: ClaudeConnectionInput, dir: string, source: "default" | "extra"): ConnectionView {
+function claudeCodeRow(input: ClaudeConnectionInput, dir: string, source: "default" | "extra", ordinal?: number): ConnectionView {
   const { live } = input;
   const options = { claudeConfigDir: dir, ...(input.opencodexConfigDir ? { opencodexConfigDir: input.opencodexConfigDir } : {}) };
   const settingsPath = join(dir, "settings.json");
+  const fileState = claudeSettingsFileState(dir);
+  if (fileState === "unsafe") {
+    // A FIFO, device or oversized file is not read at all; its state is unknown.
+    return {
+      client: "claude-code", home: displayPath(dir), homeSource: source, ...(ordinal ? { homeOrdinal: ordinal } : {}),
+      configPath: displayPath(settingsPath), desired: source === "extra" ? "unset" : live.claudeCode?.cliFirstParty === true ? "proxy" : "native",
+      observed: "unknown", owner: "unknown", driftReasons: [],
+    };
+  }
   const settings = inspectDesktopFirstParty(live, options).settings;
   const observed: ConnectionObserved = settings.kind === "unreadable" ? "unknown"
     : settings.kind === "foreign" ? "foreign"
       : settings.kind === "applied" || settings.kind === "stale" ? "proxy"
-        : existsSync(settingsPath) ? "native" : "missing";
+        : fileState === "regular" ? "native" : "missing";
   const owner: ConnectionOwner = observed === "foreign" ? "external"
     : observed === "proxy" ? "opencodex" : observed === "unknown" ? "unknown" : "none";
   const base = {
     client: "claude-code" as const,
     home: displayPath(dir),
     homeSource: source,
+    ...(ordinal ? { homeOrdinal: ordinal } : {}),
     configPath: displayPath(settingsPath),
     observed,
     owner,
@@ -117,5 +127,9 @@ function claudeDesktopRow(input: ClaudeConnectionInput): ConnectionView {
 
 export function projectClaudeConnections(input: ClaudeConnectionInput): ConnectionView[] {
   const homes = registeredClaudeConfigDirs(input.live, input.env);
-  return [...homes.map(home => claudeCodeRow(input, home.dir, home.source)), claudeDesktopRow(input)];
+  let extra = 0;
+  return [
+    ...homes.map(home => claudeCodeRow(input, home.dir, home.source, home.source === "extra" ? ++extra : undefined)),
+    claudeDesktopRow(input),
+  ];
 }

@@ -108,6 +108,9 @@ export interface RegisteredClaudeConfigDir {
   source: "default" | "extra";
 }
 
+/** Read-only status work is bounded: at most this many extra homes are reported. */
+export const MAX_EXTRA_CLAUDE_CONFIG_DIRS = 16;
+
 /**
  * The default Claude home followed by the extra homes the operator listed in
  * `claudeCode.extraConfigDirs`. Nothing is discovered on disk: an unregistered home never
@@ -123,6 +126,7 @@ export function registeredClaudeConfigDirs(
   const extras = config.claudeCode?.extraConfigDirs;
   if (!Array.isArray(extras)) return homes;
   for (const entry of extras) {
+    if (homes.length > MAX_EXTRA_CLAUDE_CONFIG_DIRS) break;
     if (typeof entry !== "string") continue;
     const trimmed = entry.trim();
     const expanded = trimmed === "~" ? homeDir(env)

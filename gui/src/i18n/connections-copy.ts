@@ -14,7 +14,7 @@ const rows = {
   "loadFail": ["Could not read the connection status.","연결 상태를 읽지 못했어요.","Der Verbindungsstatus konnte nicht gelesen werden.","Impossible de lire l’état des connexions.","无法读取连接状态。","無法讀取連線狀態。","Не удалось прочитать состояние подключений.","接続状態を読み取れませんでした。","Bağlantı durumu okunamadı.","Không đọc được trạng thái kết nối.","Não foi possível ler o status das conexões."],
   "refresh": ["Refresh","새로고침","Aktualisieren","Actualiser","刷新","重新整理","Обновить","更新","Yenile","Làm mới","Atualizar"],
   "homeDefault": ["Default home","기본 home","Standard-Home","Dossier par défaut","默认主目录","預設主目錄","Домашний каталог по умолчанию","既定のホーム","Varsayılan ana dizin","Thư mục mặc định","Pasta padrão"],
-  "homeExtra": ["Registered home","등록한 home","Registriertes Home","Dossier enregistré","已登记的主目录","已登記的主目錄","Зарегистрированный каталог","登録したホーム","Kayıtlı ana dizin","Thư mục đã đăng ký","Pasta registrada"],
+  "homeExtra": ["Registered home {n}","등록한 home {n}","Registriertes Home {n}","Dossier enregistré {n}","已登记的主目录 {n}","已登記的主目錄 {n}","Зарегистрированный каталог {n}","登録したホーム {n}","Kayıtlı ana dizin {n}","Thư mục đã đăng ký {n}","Pasta registrada {n}"],
   "desired": ["Wanted","원하는 상태","Gewünscht","Souhaité","期望","期望","Нужно","希望","İstenen","Mong muốn","Desejado"],
   "observed": ["Now","현재","Aktuell","Actuel","当前","目前","Сейчас","現在","Şu an","Hiện tại","Agora"],
   "owner": ["Owner","소유자","Eigentümer","Propriétaire","所有者","擁有者","Владелец","所有者","Sahip","Chủ sở hữu","Dono"],

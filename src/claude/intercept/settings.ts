@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { atomicWriteFile } from "../../config/atomic-write";
 import { assertNotRealClaudeConfigUnderTest } from "../../lib/test-home-guard";
@@ -99,6 +99,23 @@ export type ClaudeSettingsEnvRead =
   | { kind: "missing" }
   | { kind: "unreadable" }
   | { kind: "env"; env: Readonly<Record<string, unknown>> };
+
+const MAX_STATUS_SETTINGS_BYTES = 1024 * 1024;
+
+/**
+ * Read-only status guard for a settings.json a status GET is about to read: `unsafe` for a
+ * FIFO, device, directory or oversized file, which the synchronous read would block on or
+ * buffer without bound. `stat` follows a symlink, as Claude Code does, and never opens the file.
+ */
+export function claudeSettingsFileState(configDir = claudeConfigDir()): "missing" | "regular" | "unsafe" {
+  try {
+    const stats = statSync(settingsPath(configDir));
+    return stats.isFile() && stats.size <= MAX_STATUS_SETTINGS_BYTES ? "regular" : "unsafe";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "missing" : "unsafe";
+  }
+}
 
 /** Read-only: the settings.json env block the writers below start from. Never writes. */
 export function readClaudeSettingsEnv(configDir = claudeConfigDir()): ClaudeSettingsEnvRead {

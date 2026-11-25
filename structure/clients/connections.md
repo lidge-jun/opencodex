@@ -54,9 +54,15 @@ intent, drift and the switch-off preview, because the switch writes only that ho
 reports `desired: "unset"` and what its settings.json routes to. One Claude Desktop row maps the
 config-library inspection the native status row uses.
 
-Privacy: every returned path goes through `displayPath` (`src/lib/display-path.ts`: the user's home
-prefix becomes `~`, any path segment containing `@` becomes `…`). No setting value, token or
-email is returned; an unexpected failure answers a fixed `connections_failed` body. The Codex
+Privacy: every returned path goes through `displayPath` (`src/lib/display-path.ts`): the user's home
+prefix becomes `~`, a drive letter stays, and only the fixed directory and file names OpenCodex, Codex
+and Claude use are shown; any other segment (a user name, account id or token used as a folder name)
+becomes `…`, and an extra home is identified by `homeOrdinal` instead of its path. No setting value,
+token or email is returned; an unexpected failure answers a fixed `connections_failed` body. Reads are
+bounded: at most 16 extra homes (`MAX_EXTRA_CLAUDE_CONFIG_DIRS`), a `settings.json` that is not a
+regular file of at most 1 MiB is never opened (`claudeSettingsFileState`; the row reads `unknown` and
+the preview refuses `unreadable`), and the Codex profile goes through the same bounded reader as
+config.toml. The Codex
 toggle envelopes in `native-integration-routes.ts` carry `connections: "/api/connections"`.
 
 CLI verb: owed. The route registry declares it `deferred-verb` with owner "proxy catch-up 020

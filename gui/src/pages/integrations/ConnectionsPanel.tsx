@@ -66,7 +66,9 @@ export function ConnectionCard({ view }: { view: ConnectionView }) {
       <div className="integration-card-head">
         <h4>{t(CLIENT_LABEL[view.client])}</h4>
         {view.homeSource && (
-          <span className="badge badge-muted">{t(view.homeSource === "default" ? "connections.homeDefault" : "connections.homeExtra")}</span>
+          <span className="badge badge-muted">{view.homeSource === "default"
+            ? t("connections.homeDefault")
+            : t("connections.homeExtra", { n: String(view.homeOrdinal ?? "") })}</span>
         )}
       </div>
       {view.home && <p className="integration-path"><code>{view.home}</code></p>}

@@ -32,7 +32,9 @@ export default function ClaudeHomesStatus({ apiBase }: { apiBase: string }) {
           {homes.map(view => (
             <li key={view.home ?? view.configPath} data-claude-home={view.homeSource}>
               <code>{view.home}</code>{" "}
-              <span className="badge badge-muted">{t(view.homeSource === "extra" ? "connections.homeExtra" : "connections.homeDefault")}</span>{" "}
+              <span className="badge badge-muted">{view.homeSource === "extra"
+                ? t("connections.homeExtra", { n: String(view.homeOrdinal ?? "") })
+                : t("connections.homeDefault")}</span>{" "}
               <span className={view.driftReasons.length > 0 ? "badge badge-amber" : "badge badge-green"} data-claude-home-observed={view.observed}>
                 {t(OBSERVED_KEYS[view.observed])}
               </span>

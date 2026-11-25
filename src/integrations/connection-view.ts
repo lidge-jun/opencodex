@@ -41,6 +41,8 @@ export interface ConnectionView {
   /** Claude Code only: the config dir this row describes. */
   home?: string;
   homeSource?: "default" | "extra";
+  /** Extra homes only: 1-based position in `claudeCode.extraConfigDirs`, since the path is masked. */
+  homeOrdinal?: number;
   configPath: string;
   desired: ConnectionDesired;
   observed: ConnectionObserved;

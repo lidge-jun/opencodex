@@ -13,7 +13,7 @@
  * The catalog rows and conversation-history relabel a restore also performs are not config
  * keys and are not listed.
  */
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { basename } from "node:path";
 import { inspectRecordedServiceOwnership, type OwnershipDeps } from "../integrations/native/ownership-preflight";
 import { codexHomeIsAbsent, inspectCodexHomeOwner } from "./codex-home-owner";
@@ -60,8 +60,9 @@ export interface CodexRestorePreviewDeps {
   historyDisposition?: () => ReturnType<typeof resolveRestoreHistoryDisposition>;
 }
 
+/** Bounded like config.toml: a special or oversized profile throws instead of blocking. */
 function readProfile(): string | null {
-  return existsSync(CODEX_PROFILE_PATH) ? readFileSync(CODEX_PROFILE_PATH, "utf8") : null;
+  return readBoundedCodexConfig(CODEX_PROFILE_PATH);
 }
 
 function flatten(content: string | null): Map<string, string> {
@@ -148,8 +149,11 @@ export function previewCodexNativeRestore(deps: CodexRestorePreviewDeps = {}): C
   if (owner.kind === "foreign" || owner.kind === "unknown") return none("refused_owner");
 
   let config: string | null;
-  try { config = readBoundedCodexConfig(CODEX_CONFIG_PATH); } catch { return none("unreadable"); }
-  const profile = readProfile();
+  let profile: string | null;
+  try {
+    config = readBoundedCodexConfig(CODEX_CONFIG_PATH);
+    profile = readProfile();
+  } catch { return none("unreadable"); }
   const finish = (afterConfig: string | null, afterProfile: string | null, retained: boolean): CodexRestorePreview => {
     let restored = afterConfig;
     let outcome: CodexRestoreOutcome = "restore";

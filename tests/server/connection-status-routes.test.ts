@@ -14,9 +14,9 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import type { ManagementApiDeps } from "../../src/server/management/context";
 import type { ConnectionView } from "../../src/integrations/connection-view";
 import { displayPath } from "../../src/lib/display-path";
-import { codexConfigKeyChanges, displayCodexConfigKey } from "../../src/codex/restore-preview";
+import { codexConfigKeyChanges, displayCodexConfigKey, previewCodexNativeRestore } from "../../src/codex/restore-preview";
 import { inspectNativeCodexOwnership, inspectRecordedServiceOwnership } from "../../src/integrations/native/ownership-preflight";
-import { CODEX_CONFIG_PATH } from "../../src/codex/paths";
+import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "../../src/codex/paths";
 import * as serviceManagerProbe from "../../src/service-manager-probe";
 import type { OcxConfig } from "../../src/types";
 import { fixturePath, repoRoot } from "../helpers/repo-root";
@@ -241,13 +241,16 @@ describe("Codex restore preview matches the real restore", () => {
   }
 });
 
+// Built at runtime so the source carries no token-looking literal (privacy:scan).
+const LONG_TOKEN = ["tok", "x".repeat(48)].join("-");
+
 describe("restore preview privacy and ownership evidence", () => {
   test("table names that can carry identity are masked; managed keys stay readable", () => {
     const before = [
       'sk_token = "x"',
       'openai_base_url = "http://127.0.0.1:10100/v1"',
       '[projects."/Users/person@example.com/repo"]', 'trust_level = "trusted"',
-      "[model_providers.sk-live-0123456789abcdefghijklmnopqrstuvwxyz0123]", 'base_url = "https://x.test"',
+      `[model_providers.${LONG_TOKEN}]`, 'base_url = "https://x.test"',
       "[model_providers.sk-secret-123]", 'base_url = "https://y.test"',
       "[profiles.alice]", 'model = "gpt-5.5"',
       "[mcp_servers.tools.env]", 'sk_live_abc = "x"',
@@ -255,7 +258,7 @@ describe("restore preview privacy and ownership evidence", () => {
     ].join("\n");
     const changes = codexConfigKeyChanges(before, "");
     const serialized = JSON.stringify(changes);
-    for (const planted of ["person@example.com", "sk-live", "/Users/", "sk-secret-123", "alice", "sk_live_abc", "sk_token"]) {
+    for (const planted of ["person@example.com", LONG_TOKEN, "/Users/", "sk-secret-123", "alice", "sk_live_abc", "sk_token"]) {
       expect(serialized).not.toContain(planted);
     }
     expect(changes.map(change => change.key)).toEqual(expect.arrayContaining([
@@ -282,6 +285,57 @@ describe("restore preview privacy and ownership evidence", () => {
       expect(inspectRecordedServiceOwnership({ statePaths: [stateFile], currentHomes: { codexHome, opencodexHome: root } })).toBeNull();
     } finally {
       probe.mockRestore();
+    }
+  });
+});
+
+describe("security bounds", () => {
+  test("arbitrary path segments are masked; only fixed names and the home prefix show", async () => {
+    const extra = join(root, "profiles", "account-123", "token-value");
+    mkdirSync(extra, { recursive: true });
+    const config = baseConfig({ claudeCode: { extraConfigDirs: [extra] } } as Partial<OcxConfig>);
+    const rows = (await connections(config)).filter(row => row.client === "claude-code");
+    const serialized = JSON.stringify(rows);
+    expect(serialized).not.toContain("account-123");
+    expect(serialized).not.toContain("token-value");
+    expect(rows[1]).toMatchObject({ homeSource: "extra", homeOrdinal: 1 });
+    expect(displayPath("/home-fixture/someone/.claude/settings.json", "/home-fixture/someone")).toBe("~/.claude/settings.json");
+    expect(displayPath("/srv/acct-9/secret/config.toml", "/home-fixture/someone")).toBe("/…/config.toml");
+  });
+
+  test.skipIf(process.platform === "win32")("a FIFO settings.json in a registered home is not read and does not block", async () => {
+    const extra = join(root, "fifo-home");
+    mkdirSync(extra, { recursive: true });
+    const made = spawnSync("mkfifo", [join(extra, "settings.json")]);
+    expect(made.status).toBe(0);
+    const config = baseConfig({ claudeCode: { extraConfigDirs: [extra] } } as Partial<OcxConfig>);
+    const row = (await connections(config)).find(view => view.homeSource === "extra")!;
+    expect(row).toMatchObject({ observed: "unknown", owner: "unknown", driftReasons: [] });
+  });
+
+  test("an oversized default settings.json makes the preview refuse instead of reading it", async () => {
+    mkdirSync(claudeHome, { recursive: true });
+    writeFileSync(join(claudeHome, "settings.json"), `{"pad":"${"x".repeat(1024 * 1024 + 16)}"}`);
+    const response = await dispatch(baseConfig(), "/api/claude-code/first-party/preview?enabled=true");
+    expect(response!.status).toBe(500);
+    expect(await response!.json()).toMatchObject({ code: "unreadable" });
+  });
+
+  test("registered homes are capped", async () => {
+    const extras = Array.from({ length: 20 }, (_, index) => join(root, `home-${index}`));
+    const config = baseConfig({ claudeCode: { extraConfigDirs: extras } } as Partial<OcxConfig>);
+    const rows = (await connections(config)).filter(row => row.homeSource === "extra");
+    expect(rows).toHaveLength(16);
+    expect(rows.at(-1)?.homeOrdinal).toBe(16);
+  });
+
+  test("an oversized Codex profile makes the restore preview unreadable instead of reading it", () => {
+    mkdirSync(dirname(CODEX_PROFILE_PATH), { recursive: true });
+    writeFileSync(CODEX_PROFILE_PATH, "#".repeat(1024 * 1024 + 16));
+    try {
+      expect(previewCodexNativeRestore({ historyDisposition: () => ({ kind: "proceed" }) }).outcome).toBe("unreadable");
+    } finally {
+      removeTreeWithRetry(CODEX_PROFILE_PATH);
     }
   });
 });
