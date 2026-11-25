@@ -282,6 +282,7 @@ export default function Combos({
       initialData: cached ?? undefined,
       initialDataCachedAt: seedCombosCachedAt(cacheKey),
       staleAfterMs: 60_000,
+      pollMs: 60_000,
       enabled: active,
     },
   );
