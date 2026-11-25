@@ -1,4 +1,5 @@
 {
+  "account-diagnostics-routes.test.ts": "server",
   "gemini-native.test.ts": "server",
   "gemini-native-wire.test.ts": "server",
   "gemini-native-routes.test.ts": "server",

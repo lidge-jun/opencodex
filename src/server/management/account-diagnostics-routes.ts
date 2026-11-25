@@ -104,7 +104,7 @@ export function buildAccountDiagnostics(
 
 export function handleAccountDiagnosticsRoutes(ctx: Pick<ManagementContext, "req" | "url" | "config">): Response | null {
   const { req, url, config } = ctx;
-  if (url.pathname !== ACCOUNT_DIAGNOSTICS_PATH || req.method !== "GET") return null;
+  if (url.pathname !== "/api/oauth/accounts/diagnostics" || req.method !== "GET") return null;
   const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
   if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
   const response = jsonResponse(buildAccountDiagnostics(provider, config), 200, req, config);
