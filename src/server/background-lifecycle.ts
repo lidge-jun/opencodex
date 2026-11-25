@@ -53,6 +53,8 @@ type LeaseOwner = {
   applyPolicy: PolicyApply;
   resources: ServerResourceOwnerLease;
   lowQuota: LowQuotaRegistration;
+  /** This server's config, whose pool account routes background calls use while it is the newest owner. */
+  egressConfig: OcxConfig;
 };
 
 export type ServerBackgroundLifecycleLease = {
@@ -257,6 +259,7 @@ function releaseOwnerSynchronously(owner: LeaseOwner): "inactive" | "shared" | "
   const nextOwner = owners.at(-1);
   if (nextOwner) {
     setLivePolicyOwner(nextOwner.applyPolicy);
+    bindCodexAccountEgressConfig(nextOwner.egressConfig);
     return "shared";
   }
   stopProcessLoops();
@@ -282,7 +285,8 @@ export function acquireServerBackgroundLifecycle(
   // the request path, so GET /api/quota-pool only ever reads it.
   try { ensureQuotaPoolIdentity(); } catch { /* the read reports quota_pool_identity_unavailable */ }
   // Pool accounts' background calls (refresh, usage, warmup, reset credits) read this server's
-  // account routes while a lease is held; the final release (stopProcessLoops) detaches them.
+  // account routes while it is the newest owner; a release restores the surviving owner's and the
+  // final release (stopProcessLoops) detaches them.
   bindCodexAccountEgressConfig(config);
 
   const owner: LeaseOwner = {
@@ -291,6 +295,7 @@ export function acquireServerBackgroundLifecycle(
     applyPolicy,
     resources: acquireServerResourceOwner(),
     lowQuota: registerCodexLowQuotaProtection(config, { desktopSink: () => resolveLowQuotaDesktopSink() }),
+    egressConfig: config,
   };
   try {
     if (!processLoops) {
@@ -302,7 +307,9 @@ export function acquireServerBackgroundLifecycle(
   } catch (error) {
     owner.lowQuota();
     owner.resources.release();
-    if (owners.length === 0) unbindCodexAccountEgressConfig(config);
+    const survivor = owners.at(-1);
+    if (survivor) bindCodexAccountEgressConfig(survivor.egressConfig);
+    else unbindCodexAccountEgressConfig(config);
     throw error;
   }
 

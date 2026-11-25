@@ -95,8 +95,9 @@ test("a pool account inherits the openai provider's route unless it names its ow
   expect(codexAccountRouting("bypass", { config })).toMatchObject({ provider: { proxy: PROVIDER_PROXY }, account: { egress: { noProxy: "example.invalid" } } });
   expect(codexAccountRouting("plain", { config })).toEqual({ provider: { proxy: PROVIDER_PROXY, noProxy: undefined } });
   expect(codexAccountRouting("__main__", { config })).toBeUndefined();
-  // A stored credential the config does not list (not removed) takes the provider's route.
-  expect(codexAccountRouting("unknown", { config })).toEqual({ provider: { proxy: PROVIDER_PROXY, noProxy: undefined } });
+  // A stored credential the config does not list is refused; a new login takes the provider's route.
+  expect(() => codexAccountRouting("unknown", { config })).toThrow(CodexAccountRouteUnavailableError);
+  expect(codexAccountRouting("unknown", { config, newLogin: true })).toEqual({ provider: { proxy: PROVIDER_PROXY, noProxy: undefined } });
   delete config.providers.openai!.proxy;
   expect(codexAccountRouting("plain", { config })).toBeUndefined(); // nothing configured: the process-wide route, unchanged
 });

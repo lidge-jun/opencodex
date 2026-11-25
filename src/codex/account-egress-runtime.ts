@@ -16,12 +16,12 @@ import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
  * the account pool), over the global proxy. An account that names no proxy keeps the provider's.
  *
  * The route is resolved at each send, and every failure to establish it refuses the send rather
- * than letting a pool credential leave by the process-wide route:
- * - a pool account that was removed (its row is gone and its stored credential tombstoned) while
- *   its credential was in hand;
+ * than letting a pool credential leave by another route:
+ * - a stored pool credential whose row the config no longer lists (removed while the credential was
+ *   in hand, even if credential cleanup failed, or an orphan whose former route is unknown);
  * - a config that could not be read, so the load fell back to defaults while `config.json` exists.
- * An account with a live stored credential but no row (a login not saved yet, or a credential the
- * config no longer lists) takes the provider's route.
+ * Only a new login, whose row does not exist yet, takes the provider's route without a row. A
+ * process with no binding and no `config.json` has no route configured anywhere and sends unchanged.
  *
  * The running server binds its live config here for the lifetime of its background lifecycle
  * (`src/server/background-lifecycle.ts`), together with the config path it was loaded from. A call
@@ -57,26 +57,21 @@ export class CodexAccountRouteUnavailableError extends Error {
   override readonly name = "CodexAccountRouteUnavailableError";
 }
 
-/** Whether the account's stored credential is tombstoned; registered by the account store. */
-let removedAccountProbe: ((accountId: string) => boolean) | undefined;
-
-export function registerRemovedCodexAccountProbe(probe: (accountId: string) => boolean): void {
-  removedAccountProbe = probe;
-}
-
 /** The provider whose route a pool account inherits. */
 export const CODEX_POOL_PROVIDER = "openai";
 
 const UNREADABLE = "Codex account routing configuration could not be loaded; refusing to send without it";
 
-function routingConfig(): CodexAccountEgressConfig {
+/** The config whose routes apply now, or undefined when none exists (no binding, no `config.json`). */
+function routingConfig(): CodexAccountEgressConfig | undefined {
   const configPath = getConfigPath();
   if (live && live.configPath === configPath) {
     if (live.degraded) throw new CodexAccountRouteUnavailableError(UNREADABLE);
     return live.config;
   }
+  if (!existsSync(configPath)) return undefined;
   const config = loadConfig();
-  if ((fileBackedConfigPath(config) === undefined || configLoadFellBack(configPath)) && existsSync(configPath)) {
+  if (fileBackedConfigPath(config) === undefined || configLoadFellBack(configPath)) {
     throw new CodexAccountRouteUnavailableError(UNREADABLE);
   }
   return config;
@@ -89,24 +84,25 @@ interface CodexAccountRouting {
 
 export interface CodexAccountRoutingOptions {
   config?: CodexAccountEgressConfig;
-  /** A new login: an id reused after an earlier deletion is not refused for that old tombstone. */
+  /** A new login, whose pool row does not exist yet: it takes the provider's route. */
   newLogin?: boolean;
 }
 
 /**
  * The routing inputs for one account's call, or undefined when the call keeps the process-wide
- * route unchanged: no account (a direct or main-login caller), the main login, or a pool account for
- * which neither the account nor the provider configures `proxy`/`noProxy`.
+ * route unchanged: no account (a direct or main-login caller), the main login, no config at all, or
+ * a pool account for which neither the account nor the provider configures `proxy`/`noProxy`.
  */
 export function codexAccountRouting(
   accountId: string | null | undefined, options: CodexAccountRoutingOptions = {},
 ): CodexAccountRouting | undefined {
   if (!accountId || accountId === MAIN_CODEX_ACCOUNT_ID) return undefined;
   const source = options.config ?? routingConfig();
+  if (!source) return undefined;
   const row = source.codexAccounts?.find(candidate => candidate.id === accountId);
   if (row?.isMain === true) return undefined;
-  if (!row && options.newLogin !== true && removedAccountProbe?.(accountId) === true) {
-    throw new CodexAccountRouteUnavailableError("this Codex pool account was removed; refusing to send its credential");
+  if (!row && options.newLogin !== true) {
+    throw new CodexAccountRouteUnavailableError("this Codex pool account is not configured; refusing to send its credential");
   }
   const account = codexAccountEgressRoute(source, accountId);
   const providerConfig = source.providers?.[CODEX_POOL_PROVIDER];

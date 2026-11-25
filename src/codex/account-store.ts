@@ -1,5 +1,5 @@
 import { publishCredentialSync } from "../local-credentials/generation";
-import { codexAccountFetch, registerRemovedCodexAccountProbe } from "./account-egress-runtime";
+import { codexAccountFetch } from "./account-egress-runtime";
 import { classifyChatgptRefreshFailure, noteChatgptRefreshFailure, type ChatgptRefreshDiagnosticCode } from "./chatgpt-refresh-failure";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 export { classifyChatgptRefreshFailure } from "./chatgpt-refresh-failure";
@@ -356,8 +356,6 @@ export function listCodexAccountIds(): string[] {
 export function readCodexAccountRecord(id: string): CodexAccountCredentialRecord | null {
   return loadCodexAccountRecordStore()[id] ?? null;
 }
-// A removed account's credential must not leave by a fallback route (account-egress-runtime.ts).
-registerRemovedCodexAccountProbe(id => readCodexAccountRecord(id)?.deletedAt != null);
 
 /**
  * One store load, every record, for a caller that resolves MANY ids in a single synchronous pass.

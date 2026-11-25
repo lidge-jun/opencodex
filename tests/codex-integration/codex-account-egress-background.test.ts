@@ -25,6 +25,9 @@ import { getConfigPath, loadConfig, saveConfig } from "../../src/config";
 import { flushConfigDirHardening } from "../../src/config/paths";
 import { clearLoginState, OAUTH_PROVIDERS, waitForLoginSettled } from "../../src/oauth";
 import { __resetGuardianState, guardianSweep } from "../../src/oauth/token-guardian";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../src/codex/catalog/native-models";
+import { isDirectCallerEntitledToCodexModel, resetCodexModelEntitlementCacheForTests } from "../../src/codex/model-entitlements";
+import { acquireServerBackgroundLifecycle } from "../../src/server/background-lifecycle";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -163,22 +166,22 @@ test("a new login, which has no pool row yet, takes the provider's route", async
   expect(proxiesFor("/codex/responses")).toEqual([PROVIDER_PROXY]);
 });
 
-test("a stored credential the config does not list takes the provider's route", async () => {
+test("a stored credential the config does not list is refused; only a new login takes the provider's route", async () => {
   const cfg = config();
   bindCodexAccountEgressConfig(cfg);
   cfg.codexAccounts = [];
-  await codexAccountFetch("routed")("https://chatgpt.com/backend-api/wham/usage");
+  await expect(codexAccountFetch("routed")("https://chatgpt.com/backend-api/wham/usage")).rejects.toBeInstanceOf(CodexAccountRouteUnavailableError);
+  expect(calls).toEqual([]);
+  await codexAccountFetch("routed", { newLogin: true })("https://chatgpt.com/backend-api/wham/usage");
   expect(proxiesFor("/wham/usage")).toEqual([PROVIDER_PROXY]);
 });
 
-test("a pool account removed while its credential is in hand is refused, never sent by another route", async () => {
+test("a pool account removed while its credential is in hand is refused, even when credential cleanup failed", async () => {
   const cfg = config();
   bindCodexAccountEgressConfig(cfg);
-  cfg.codexAccounts = [];
-  removeCodexAccountCredential("routed"); // deletion: the row is gone and the credential tombstoned
+  cfg.codexAccounts = []; // the row removal committed; the credential was not tombstoned
   await expect(codexAccountFetch("routed")("https://chatgpt.com/backend-api/wham/usage")).rejects.toBeInstanceOf(CodexAccountRouteUnavailableError);
   expect(calls).toEqual([]);
-  saveCodexAccountCredential("routed", { accessToken: "routed-access", refreshToken: "routed-grant", expiresAt: Date.now() + 3_600_000, chatgptAccountId: "acc-routed" });
   const live = config();
   bindCodexAccountEgressConfig(live);
   // An expired token makes the reset-credit call refresh first; the account is removed while that
@@ -226,4 +229,36 @@ test("a server that started on an unreadable config refuses pool sends, and its 
     await flushConfigDirHardening(otherHome);
     removeTreeWithRetry(otherHome);
   }
+});
+
+test("overlapping server lifecycles: the newest owner's routes apply, and its release restores the survivor's", async () => {
+  const first = config({ clientIntegrations: { codex: false } } as Partial<OcxConfig>);
+  first.codexAccounts![0]!.egress = { proxy: "http://127.0.0.1:21/" };
+  const second = config({ clientIntegrations: { codex: false } } as Partial<OcxConfig>);
+  second.codexAccounts![0]!.egress = { proxy: "http://127.0.0.1:23/" };
+  saveConfig(first);
+  const firstLease = acquireServerBackgroundLifecycle(() => {}, first);
+  try {
+    const secondLease = acquireServerBackgroundLifecycle(() => {}, second);
+    await codexAccountFetch("routed")("https://chatgpt.com/backend-api/wham/usage");
+    await secondLease.release();
+    await codexAccountFetch("routed")("https://chatgpt.com/backend-api/wham/usage");
+  } finally {
+    await firstLease.release();
+  }
+  expect(proxiesFor("/wham/usage")).toEqual(["http://127.0.0.1:23/", "http://127.0.0.1:21/"]);
+});
+
+test("a direct caller's own bearer keeps the process-wide route under a provider proxy", async () => {
+  resetCodexModelEntitlementCacheForTests();
+  bindCodexAccountEgressConfig(config());
+  const model = [...ACCOUNT_GATED_NATIVE_OPENAI_MODELS][0]!;
+  const seen: unknown[] = [];
+  const fetcher = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    seen.push((init as { proxy?: unknown } | undefined)?.proxy);
+    return Response.json({ models: [{ slug: model }] });
+  }) as typeof fetch;
+  await isDirectCallerEntitledToCodexModel(new Headers({ authorization: "Bearer direct-token", "chatgpt-account-id": "acc-direct" }), model, { fetcher });
+  resetCodexModelEntitlementCacheForTests();
+  expect(seen).toEqual([undefined]);
 });
