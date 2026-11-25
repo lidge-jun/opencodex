@@ -1,7 +1,7 @@
 import { m365CopilotClaims } from "../../oauth/m365-copilot";
 import { getToneForModel, m365CopilotScenario, M365_COPILOT_BASE_URL } from "../../providers/m365-copilot-models";
 import { resolveProviderEgress, providerSocketRoute } from "../../lib/provider-egress";
-import { effectiveProxyFor, noProxyMatches } from "../../lib/proxy-env";
+import { effectiveProxyFor, explicitProxyExemptedError, isSocks5ProxyUrl, noProxyMatches, processNoProxyExempts } from "../../lib/proxy-env";
 import type { OcxProviderConfig } from "../../types";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
@@ -98,7 +98,14 @@ export function m365SocketDialOptions(route: M365TurnOptions["route"], url: stri
   route = m365RequestSocketRoute(route);
   if (typeof route.fetch === "function") throw new M365CopilotTurnError("Microsoft 365 Copilot ChatHub cannot use a custom fetch executor; remove providers.m365-copilot.fetch", 400);
   const egress = resolveProviderEgress({ providerName: "m365-copilot", provider: route, url });
-  if (egress.kind === "proxy") return proxyDialOptions(egress.proxyUrl, headers);
+  if (egress.kind === "proxy") {
+    // Bun's WebSocket skips an explicit proxy for a destination the process NO_PROXY exempts and
+    // would connect directly; this socket's URL carries the access token, so refuse instead.
+    if (!isSocks5ProxyUrl(egress.proxyUrl) && processNoProxyExempts(new URL(url))) {
+      throw new M365CopilotTurnError(explicitProxyExemptedError(new URL(url)).message, 400);
+    }
+    return proxyDialOptions(egress.proxyUrl, headers);
+  }
   if (egress.kind === "direct") return { headers };
   const https = new URL(url);
   https.protocol = "https:";

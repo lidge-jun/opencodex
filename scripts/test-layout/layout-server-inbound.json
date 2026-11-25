@@ -1,4 +1,5 @@
 {
+  "explicit-proxy-no-proxy.test.ts": "lib",
   "gemini-native.test.ts": "server",
   "gemini-native-wire.test.ts": "server",
   "gemini-native-routes.test.ts": "server",
