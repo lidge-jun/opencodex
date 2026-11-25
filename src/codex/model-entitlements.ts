@@ -504,6 +504,9 @@ export interface CodexEntitlementFreshnessOptions extends Pick<
 
 const accountModelsCache = new Map<string, CachedAccountModels>();
 const accountModelsFlights = new Map<string, Promise<CachedAccountModels>>();
+// Weak ownership follows callers' snapshot lifetimes without retaining account history.
+let retiredAccountModels = new WeakSet<CachedAccountModels>();
+let snapshotAccountModels = new WeakMap<CodexModelEntitlementSnapshot, readonly CachedAccountModels[]>();
 
 interface AccountModelsFlightFence {
   invalidationGeneration: number;
@@ -546,6 +549,26 @@ function accountIdOfCacheKey(key: string): string {
   return separator === -1 ? key : key.slice(0, separator);
 }
 
+/** Retire the exact evidence object, including snapshots that already captured it. */
+function deleteCachedAccountModels(key: string): void {
+  const entry = accountModelsCache.get(key);
+  if (entry) retiredAccountModels.add(entry);
+  accountModelsCache.delete(key);
+}
+
+/** An invalidated fetch is unknown to every consumer, not just absent from the cache. */
+function retiredAccountModelsResult(result: CachedAccountModels): CachedAccountModels {
+  const unknown: CachedAccountModels = {
+    credentialIdentity: result.credentialIdentity,
+    clientVersion: result.clientVersion,
+    expiresAt: 0,
+    models: new Set(),
+    confirmed: false,
+  };
+  retiredAccountModels.add(unknown);
+  return unknown;
+}
+
 /**
  * Direct-caller entries are evicted separately from main/Pool entries.
  *
@@ -558,7 +581,7 @@ function accountIdOfCacheKey(key: string): string {
  */
 function boundedCacheSet(accountId: string, value: CachedAccountModels): void {
   const key = cacheKeyFor(accountId, value.clientVersion);
-  accountModelsCache.delete(key);
+  if (accountModelsCache.get(key) !== value) deleteCachedAccountModels(key);
   accountModelsCache.set(key, value);
   const isDirect = (candidate: string): boolean =>
     accountIdOfCacheKey(candidate).startsWith(DIRECT_CALLER_ACCOUNT_PREFIX);
@@ -567,7 +590,7 @@ function boundedCacheSet(accountId: string, value: CachedAccountModels): void {
   // own older entries and never reaches another account's evidence.
   const ownKeys = [...accountModelsCache.keys()].filter(k => accountIdOfCacheKey(k) === accountId);
   for (const stale of ownKeys.slice(0, Math.max(0, ownKeys.length - MODEL_ROSTER_VERSIONS_PER_ACCOUNT_MAX))) {
-    accountModelsCache.delete(stale);
+    deleteCachedAccountModels(stale);
   }
 
   // Then bound the class by DISTINCT ACCOUNTS. Counting keys would let one account's versions
@@ -584,7 +607,7 @@ function boundedCacheSet(accountId: string, value: CachedAccountModels): void {
     for (const victim of accountsInOrder.slice(0, Math.max(0, accountsInOrder.length - MODEL_ROSTER_CACHE_MAX))) {
       if (victim === accountId) continue;
       for (const key of [...accountModelsCache.keys()]) {
-        if (accountIdOfCacheKey(key) === victim) accountModelsCache.delete(key);
+        if (accountIdOfCacheKey(key) === victim) deleteCachedAccountModels(key);
       }
     }
   };
@@ -1025,10 +1048,12 @@ async function modelsForCredential(
   fence.pending += 1;
   const flight = fetchAccountModels(credential, fetcher, now, clientVersion)
     .then(result => {
+      if (accountModelsFlightFences.get(credential.accountId) !== fence
+        || fence.invalidationGeneration !== invalidationGeneration) {
+        return retiredAccountModelsResult(result);
+      }
       if (
-        accountModelsFlightFences.get(credential.accountId) === fence
-        && fence.invalidationGeneration === invalidationGeneration
-        && currentCredentialIdentity(credential.accountId) === credential.credentialIdentity
+        currentCredentialIdentity(credential.accountId) === credential.credentialIdentity
         && (credentialMutationEpoch === undefined
           || codexCredentialMutationEpoch() === credentialMutationEpoch)
       ) {
@@ -1374,7 +1399,7 @@ export async function resolveCodexModelEntitlements(
   // real snapshot releases it as soon as the main token settles; this boundary
   // release keeps the guarantee when a seam snapshot never invokes it.
   options.releaseNativeMainCredentialLease?.();
-  const results = await Promise.all(credentials.map(async credential => ({
+  const capturedResults = await Promise.all(credentials.map(async credential => ({
     credential,
     result: await modelsForCredential(
       credential,
@@ -1388,7 +1413,12 @@ export async function resolveCodexModelEntitlements(
       options.credentialMutationEpoch,
     ),
   })));
-  return {
+  // A sibling fetch may have kept this snapshot pending after another account was invalidated.
+  const results = capturedResults.map(({ credential, result }) => ({
+    credential,
+    result: retiredAccountModels.has(result) ? retiredAccountModelsResult(result) : result,
+  }));
+  const snapshot: CodexModelEntitlementSnapshot = {
     modelsByAccount: new Map(results.map(({ credential, result }) => [credential.accountId, result.models])),
     capabilitiesByAccount: new Map(results.flatMap(({ credential, result }) => (
       result.confirmed && result.capabilitiesByModel
@@ -1408,6 +1438,8 @@ export async function resolveCodexModelEntitlements(
     confirmedAccountIds: new Set(results.flatMap(({ credential, result }) => result.confirmed ? [credential.accountId] : [])),
     credentialIdentities: new Map(results.map(({ credential }) => [credential.accountId, credential.credentialIdentity])),
   };
+  snapshotAccountModels.set(snapshot, capturedResults.map(({ result }) => result));
+  return snapshot;
 }
 
 function codexModelEntitlementStateForRoster(
@@ -1679,6 +1711,7 @@ export function cachedAvailableAccountGatedNativeModels(
 }
 
 export function isCodexModelEntitlementSnapshotCurrent(snapshot: CodexModelEntitlementSnapshot): boolean {
+  if (snapshotAccountModels.get(snapshot)?.some(result => retiredAccountModels.has(result))) return false;
   for (const [accountId, identity] of snapshot.credentialIdentities) {
     // Deliberately per-id, unlike the passes above. This is a fail-closed publication gate asking
     // whether a snapshot is STILL current, so the freshest possible answer per account is the
@@ -1697,7 +1730,7 @@ export function invalidateCodexModelEntitlementsForAccount(accountId: string | n
   // Every version's entry for this account, since a credential change invalidates the
   // account's entitlement evidence regardless of which client version asked for it.
   for (const key of [...accountModelsCache.keys()]) {
-    if (accountIdOfCacheKey(key) === accountId) accountModelsCache.delete(key);
+    if (accountIdOfCacheKey(key) === accountId) deleteCachedAccountModels(key);
   }
   accountModelsMisses.delete(accountId);
 }
@@ -1706,6 +1739,8 @@ export function resetCodexModelEntitlementCacheForTests(): void {
   accountModelsCache.clear();
   accountModelsFlights.clear();
   accountModelsFlightFences.clear();
+  retiredAccountModels = new WeakSet();
+  snapshotAccountModels = new WeakMap();
   accountModelsMisses.clear();
   negativeCredentialMemo.clear();
   entitlementEnsureFlights.clear();

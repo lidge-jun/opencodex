@@ -3,6 +3,8 @@ import {
   cachedDeniedCodexAccountIdsForModel,
   cachedAvailableAccountGatedNativeModels,
   clearCodexModelDenialEvidence,
+  codexModelEntitlementStateForAccount,
+  isCodexModelEntitlementSnapshotCurrent,
   recordCodexModelDenialEvidence,
   resolveCodexModelEntitlements,
   resetCodexModelEntitlementCacheForTests,
@@ -51,7 +53,10 @@ describe("a refusal fences roster fetches that started before it", () => {
   const now = 1_800_000_000_000;
 
   function roster(...models: string[]): Response {
-    return Response.json({ models: models.map(slug => ({ slug, supported_in_api: true, visibility: "list" })) });
+    return Response.json({ models: models.map(slug => ({ slug, supported_in_api: true, visibility: "list",
+      supports_reasoning_effort_updates: true, context_window: 500_000,
+      available_access_programs: { cyber: ["standard"] }, availability_nux: { message: "fixture grant" },
+    })) });
   }
 
   function deferredRoster(): { promise: Promise<Response>; resolve: (response: Response) => void } {
@@ -95,15 +100,26 @@ describe("a refusal fences roster fetches that started before it", () => {
         expect(calls).toBe(2);
         if (order === "old-first") {
           old.resolve(roster(model, DAYBREAK));
-          await earlier;
+          const stale = await earlier;
+          expect(stale.confirmedAccountIds.has("a")).toBe(false);
+          expect(codexModelEntitlementStateForAccount(stale, "a", DAYBREAK)).toBe("unknown");
+          expect(isCodexModelEntitlementSnapshotCurrent(stale)).toBe(false);
           expect(cachedDeniedCodexAccountIdsForModel(model, now)).toEqual(new Set(["a"]));
           expect(cachedAvailableAccountGatedNativeModels(now).has(DAYBREAK)).toBe(false);
         }
         fresh.resolve(roster(model));
-        expect((await later).confirmedAccountIds.has("a")).toBe(true);
+        const current = await later;
+        expect(current.confirmedAccountIds.has("a")).toBe(true);
+        expect(isCodexModelEntitlementSnapshotCurrent(current)).toBe(true);
         expect(cachedDeniedCodexAccountIdsForModel(model, now)).toBeUndefined();
         old.resolve(roster(model, DAYBREAK));
-        await earlier;
+        const stale = await earlier;
+        expect(stale.confirmedAccountIds.has("a")).toBe(false);
+        expect(stale.modelsByAccount.get("a")?.size).toBe(0);
+        expect(stale.capabilitiesByAccount?.has("a")).toBe(false);
+        expect(stale.accessProgramsByAccount?.has("a")).toBe(false);
+        expect(stale.availabilityNuxByAccount?.has("a")).toBe(false);
+        expect(isCodexModelEntitlementSnapshotCurrent(stale)).toBe(false);
         const cached = await resolveCodexModelEntitlements(config, options);
         expect([...cached.modelsByAccount.get("a")!]).toEqual([model]);
         expect(cachedAvailableAccountGatedNativeModels(now).has(DAYBREAK)).toBe(false);
@@ -115,6 +131,67 @@ describe("a refusal fences roster fetches that started before it", () => {
       }
     },
   );
+
+  test("a completed cached snapshot stops being current after refusal, but another account's stays current", async () => {
+    const model = "gpt-6.2-sol";
+    const options = { now, clientVersion: TEST_CLIENT_VERSION,
+      fetcher: (async () => roster(model, DAYBREAK)) as typeof fetch };
+    const original = await resolveCodexModelEntitlements(config, { ...options, credentials: [credentials[0]!] });
+    const cached = await resolveCodexModelEntitlements(config, { ...options, credentials: [credentials[0]!] });
+    const other = await resolveCodexModelEntitlements(config, { ...options, credentials: [credentials[1]!] });
+    expect(isCodexModelEntitlementSnapshotCurrent(original)).toBe(true);
+    expect(isCodexModelEntitlementSnapshotCurrent(cached)).toBe(true);
+    recordCodexModelDenialEvidence("a", model, readCodexAccountRecord("a")!.generation, now);
+    expect(isCodexModelEntitlementSnapshotCurrent(original)).toBe(false);
+    expect(isCodexModelEntitlementSnapshotCurrent(cached)).toBe(false);
+    expect(isCodexModelEntitlementSnapshotCurrent(other)).toBe(true);
+    const restored = await resolveCodexModelEntitlements(config, { ...options, credentials: [credentials[0]!] });
+    expect(restored.confirmedAccountIds.has("a")).toBe(true);
+    expect(isCodexModelEntitlementSnapshotCurrent(restored)).toBe(true);
+    expect(isCodexModelEntitlementSnapshotCurrent(original)).toBe(false);
+  });
+
+  test("an account invalidated while a sibling is pending cannot contribute a confirmed snapshot grant", async () => {
+    const model = "gpt-6.2-sol";
+    const gate = deferredRoster();
+    const options = { credentials, now, clientVersion: TEST_CLIENT_VERSION,
+      fetcher: (async (_input, init) => new Headers(init?.headers).get("chatgpt-account-id") === "chatgpt-b"
+        ? gate.promise : roster(model, DAYBREAK)) as typeof fetch };
+    const pending = resolveCodexModelEntitlements(config, options);
+    try {
+      for (let i = 0; i < 100 && !cachedAvailableAccountGatedNativeModels(now, new Set(["a"])).has(DAYBREAK); i++) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      expect(cachedAvailableAccountGatedNativeModels(now, new Set(["a"])).has(DAYBREAK)).toBe(true);
+      recordCodexModelDenialEvidence("a", model, readCodexAccountRecord("a")!.generation, now);
+      gate.resolve(roster(model, DAYBREAK));
+      const snapshot = await pending;
+      expect(snapshot.confirmedAccountIds).toEqual(new Set(["b"]));
+      expect(codexModelEntitlementStateForAccount(snapshot, "a", DAYBREAK)).toBe("unknown");
+      expect(codexModelEntitlementStateForAccount(snapshot, "b", DAYBREAK)).toBe("granted");
+      expect(isCodexModelEntitlementSnapshotCurrent(snapshot)).toBe(false);
+    } finally {
+      gate.resolve(roster());
+      await pending;
+    }
+  });
+
+  test("cache replacement retires an older snapshot without rejecting its replacement", async () => {
+    const options = { credentials: [credentials[0]!], now, clientVersion: TEST_CLIENT_VERSION,
+      fetcher: (async () => roster(SOL, DAYBREAK)) as typeof fetch };
+    const original = await resolveCodexModelEntitlements(config, options);
+    const replacement = await resolveCodexModelEntitlements(config, { ...options, now: now + 5 * 60_000 + 1 });
+    expect(isCodexModelEntitlementSnapshotCurrent(original)).toBe(false);
+    expect(isCodexModelEntitlementSnapshotCurrent(replacement)).toBe(true);
+  });
+
+  test("evicting a roster does not leave an untracked snapshot able to pass later validation", async () => {
+    const original = await resolveCodexModelEntitlements(config, { credentials: [credentials[0]!], now,
+      clientVersion: TEST_CLIENT_VERSION, fetcher: (async () => roster(SOL, DAYBREAK)) as typeof fetch });
+    for (let i = 0; i < 64; i++) seedCodexModelEntitlementsForTests(`evict-${i}`, [SOL], now);
+    recordCodexModelDenialEvidence("a", SOL, readCodexAccountRecord("a")!.generation, now);
+    expect(isCodexModelEntitlementSnapshotCurrent(original)).toBe(false);
+  });
 
   test("invalidating pending rosters preserves the four-flight account budget", async () => {
     const gate = deferredRoster();
