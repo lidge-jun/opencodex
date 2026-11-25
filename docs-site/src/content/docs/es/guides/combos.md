@@ -14,6 +14,12 @@ Los combos se evalúan antes del enrutamiento normal de proveedores. Consulta pr
 
 ## Fallback al agotarse la cuota
 
+En **Modelos → Combos**, elija **OpenAI primero** o **Claude primero** para ordenar una suscripción
+y su clave de API, seguidas de la otra suscripción y su clave. Arrastre los destinos o utilice sus
+flechas para reordenarlos. La vista previa muestra el primer paso bloqueado. Al crear un preajuste,
+**Solo suscripciones** retira las dos claves. Solicite `combo/openai-first` o `combo/claude-first`
+para usar la ruta guardada.
+
 **Cambiar solo cuando se agote la cuota** (`quotaOnlyFallback`) avanza tras confirmar que se agotó
 la cuota o el saldo. Un destino con varias claves de API avanza cuando cada clave activa informa
 una cuota o un saldo agotados. Los destinos fuera de una suscripción reconocida o una ruta local explícita de
@@ -54,7 +60,7 @@ partir de la siguiente solicitud. Una solicitud en curso conserva la configuraci
 fijada de un combo con cambio solo por cuota vuelve a comprobar antes del envío que su destino sigue en el
 combo y que su ruta no cambió.
 
-Por ejemplo, una cadena de fallback puede probar Anthropic OAuth, después Cursor y finalmente `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. En un combo de conmutación ordinario sin consentimiento, al agotar los destinos se devuelve el último error de un objetivo no medido, con las excepciones de [desbordamiento de contexto confirmado](#context-window-refusals) y de cuota: un rechazo anterior 429 o 402 de un destino enviado tiene prioridad sobre un 400, 401 o 403 posterior. Un combo con cambio solo por cuota que llega a un destino de pago sin consentimiento devuelve `403 combo_metered_consent_required`. Si la suscripción devuelve 429 y Cursor luego rechaza con 401 o 403, se devuelve el 429 porque explica el agotamiento de la suscripción. Los guardados del dashboard conservan la medición de objetivos y el consentimiento del combo cuando se omiten; `false` explícito los elimina. Estos ajustes se configuran en el archivo o la API; la bandera del combo también está disponible en la CLI, pero el dashboard no la expone.
+Por ejemplo, una cadena de fallback puede probar Anthropic OAuth, después Cursor y finalmente `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. En un combo de conmutación ordinario sin consentimiento, al agotar los destinos se devuelve el último error de un objetivo no medido, con las excepciones de [desbordamiento de contexto confirmado](#context-window-refusals) y de cuota: un rechazo anterior 429 o 402 de un destino enviado tiene prioridad sobre un 400, 401 o 403 posterior. Un combo con cambio solo por cuota que llega a un destino de pago sin consentimiento devuelve `403 combo_metered_consent_required`. Si la suscripción devuelve 429 y Cursor luego rechaza con 401 o 403, se devuelve el 429 porque explica el agotamiento de la suscripción. Los guardados del dashboard conservan la medición de objetivos y el consentimiento del combo cuando se omiten; `false` explícito los elimina. Edite estos ajustes en el dashboard actual, el archivo de configuración o la API. La bandera del combo también está disponible en la CLI.
 
 <a id="60-second-quickstart"></a>
 
