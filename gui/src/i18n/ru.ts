@@ -3849,6 +3849,7 @@ export const ru: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "Этот уровень не входит в общую лестницу целей — при запросе он будет проигнорирован или снижен.",
   "cws.field.defaultEffortUnsupportedOption": "нет в пересечении",
   "cws.targets": "Цели",
+  "cws.targets.order": "Порядок целей",
   "cws.targets.failoverHint": "Порядок важен — первая цель основная.",
   "cws.targets.roundRobinHint": "Веса задают детерминированный относительный выбор; при равных весах порядок определяет очерёдность в кольце ротации.",
   "cws.targets.randomHint": "Веса задают вероятности каждого выбора; порядок не важен.",

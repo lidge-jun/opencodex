@@ -5,7 +5,9 @@ function comparable(value: unknown, key: string): string | undefined {
   return JSON.stringify(value);
 }
 
-const identity = (target: ComboTarget) => JSON.stringify([target.provider.trim(), target.model.trim()]);
+const identity = (target: ComboTarget) => !target.provider.trim() || !target.model.trim()
+  ? JSON.stringify(["draft", target.clientKey, null])
+  : JSON.stringify([target.provider.trim(), target.model.trim()]);
 const targetValue = (target: ComboTarget) => {
   const { clientKey: _clientKey, ...rest } = target;
   return JSON.stringify({ ...rest, metered: Boolean(target.metered) });
@@ -53,14 +55,22 @@ function mergeTargets(previous: ComboTarget[], draft: ComboTarget[], remote: Com
   const oldOrder = previous.map(identity).filter(key => local.has(key));
   const localOrder = draft.map(identity).filter(key => old.has(key));
   const reordered = JSON.stringify(oldOrder) !== JSON.stringify(localOrder);
-  const order = reordered ? [...draft, ...remote] : [...remote, ...draft];
+  const common = new Set([...old.keys()].filter(key => local.has(key) && incoming.has(key)));
+  const baselineOrder = previous.map(identity).filter(key => common.has(key));
+  const myOrder = draft.map(identity).filter(key => common.has(key));
+  const theirOrder = remote.map(identity).filter(key => common.has(key));
+  const sameOrder = (a: string[], b: string[]) => JSON.stringify(a) === JSON.stringify(b);
+  const remoteReordered = !sameOrder(baselineOrder, theirOrder);
+  const orderConflict = !sameOrder(baselineOrder, myOrder) && remoteReordered && !sameOrder(myOrder, theirOrder);
+  const hasIncomplete = draft.some(target => !target.provider.trim() || !target.model.trim());
+  const order = reordered || (hasIncomplete && !remoteReordered) ? [...draft, ...remote] : [...remote, ...draft];
   const targets: ComboTarget[] = [];
   for (const item of order) {
     const key = identity(item);
     const target = merged.get(key);
     if (target) { targets.push(target); merged.delete(key); }
   }
-  return { targets, conflict };
+  return { targets, conflict, orderConflict };
 }
 
 export function mergeComboDraft(previous: ComboItem, draft: ComboItem, remote: ComboItem) {
@@ -69,6 +79,7 @@ export function mergeComboDraft(previous: ComboItem, draft: ComboItem, remote: C
   const targets = mergeTargets(previous.targets, draft.targets, remote.targets);
   merged.targets = targets.targets;
   if (targets.conflict) conflicts.push("targets");
+  if (targets.orderConflict) conflicts.push("targets order");
   for (const key of Object.keys({ ...previous, ...draft, ...remote }) as (keyof ComboItem)[]) {
     if (key === "targets") continue;
     const oldValue = comparable(previous[key], key);

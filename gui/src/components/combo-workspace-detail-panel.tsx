@@ -258,11 +258,14 @@ export function DetailPanel({
 
       {msg && <Notice tone={msg.ok ? "ok" : "err"}>{msg.text}</Notice>}
       {conflicts.length > 0 && <Notice tone="err">
-        {t("pws.draftConflictFields")} {conflicts.join(", ")} {t("pws.draftConflictResolveFirst")}
+        {t("pws.draftConflictFields")} {conflicts.map(key => key === "targets order" ? t("cws.targets.order") : key).join(", ")} {t("pws.draftConflictResolveFirst")}
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => {
           updateDraft(current => {
             const next = { ...current };
-            for (const key of conflicts as (keyof ComboItem)[]) Object.assign(next, { [key]: draftBaseline.current[key] });
+            for (const conflict of conflicts) {
+              const key = (conflict === "targets order" ? "targets" : conflict) as keyof ComboItem;
+              Object.assign(next, { [key]: draftBaseline.current[key] });
+            }
             return next;
           });
           setConflicts([]);

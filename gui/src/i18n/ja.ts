@@ -3758,6 +3758,7 @@ export const ja: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "この負荷はターゲット共通の階段にありません — リクエスト時に無視またはスナップされます。",
   "cws.field.defaultEffortUnsupportedOption": "交差に含まれない",
   "cws.targets": "ターゲット",
+  "cws.targets.order": "ターゲットの順序",
   "cws.targets.failoverHint": "順序が重要 — 最初がプライマリです。",
   "cws.targets.roundRobinHint": "重みが決定論的な相対選択を制御し、順序がローテーションリングの同点を解消します。",
   "cws.targets.randomHint": "重みが各抽選の確率を制御します。順序は影響しません。",

@@ -3671,6 +3671,7 @@ export const vi: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "Mức độ (effort) này không nằm trong thang dùng chung của các mục tiêu — nó sẽ bị bỏ qua hoặc tự điều chỉnh vào thời điểm gửi yêu cầu.",
   "cws.field.defaultEffortUnsupportedOption": "không nằm trong giao điểm",
   "cws.targets": "Mục tiêu (Targets)",
+  "cws.targets.order": "Thứ tự đích",
   "cws.targets.failoverHint": "Thứ tự rất quan trọng — mục tiêu đầu tiên là ưu tiên chính (primary).",
   "cws.targets.roundRobinHint": "Trọng số kiểm soát việc lựa chọn tương đối một cách tất định; thứ tự sẽ phá vỡ thế cân bằng (tie-breaker) trong vòng xoay (rotation ring).",
   "cws.targets.randomHint": "Trọng số kiểm soát tỷ lệ cược của mỗi lần rút (draw); thứ tự không quan trọng.",

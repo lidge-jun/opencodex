@@ -3660,6 +3660,7 @@ export const fr: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "Cet effort ne figure pas dans l’échelle commune des cibles — il sera ignoré ou ajusté lors de la requête.",
   "cws.field.defaultEffortUnsupportedOption": "absent de l’intersection",
   "cws.targets": "Cibles",
+  "cws.targets.order": "Ordre des cibles",
   "cws.targets.failoverHint": "L’ordre est important — la première est la cible principale.",
   "cws.targets.roundRobinHint": "Les pondérations contrôlent la sélection relative déterministe; l’ordre départage les égalités dans l’anneau de rotation.",
   "cws.targets.randomHint": "Les pondérations contrôlent les chances de chaque tirage ; l’ordre n’a pas d’importance.",

@@ -2825,6 +2825,7 @@ export const zhTW: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "此 effort 不在目標的共同階梯中 — 請求時會被忽略或就近對應。",
   "cws.field.defaultEffortUnsupportedOption": "不在交集中",
   "cws.targets": "目標",
+  "cws.targets.order": "目標順序",
   "cws.targets.failoverHint": "順序很重要 — 第一個為主。",
   "cws.targets.roundRobinHint": "權重控制確定性的相對選擇；順序用於打破輪換環中的平局。",
   "cws.targets.randomHint": "權重控制每次抽取的機率，順序無關緊要。",

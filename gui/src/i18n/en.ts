@@ -3747,6 +3747,7 @@ export const en = {
   "cws.field.defaultEffortUnsupported": "This effort is not in the targets' common ladder — it will be ignored or snapped at request time.",
   "cws.field.defaultEffortUnsupportedOption": "not in intersection",
   "cws.targets": "Targets",
+  "cws.targets.order": "Target order",
   "cws.targets.failoverHint": "Order matters — first is primary.",
   "cws.targets.roundRobinHint": "Weights control deterministic relative selection; order breaks ties in the rotation ring.",
   "cws.targets.randomHint": "Weights control each draw's odds; order does not matter.",

@@ -3680,6 +3680,7 @@ export const ko: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "이 수준은 대상의 공통 사다리에 없습니다 — 요청 시 무시되거나 스냅됩니다.",
   "cws.field.defaultEffortUnsupportedOption": "교집합에 없음",
   "cws.targets": "대상",
+  "cws.targets.order": "대상 순서",
   "cws.targets.failoverHint": "순서가 중요합니다 — 첫 번째가 기본입니다.",
   "cws.targets.roundRobinHint": "가중치는 결정적 상대 선택을 제어하고, 순서는 회전 고리의 동률을 결정합니다.",
   "cws.targets.randomHint": "가중치가 각 추첨의 확률을 제어하며, 순서는 무관합니다.",

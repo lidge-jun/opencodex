@@ -3683,6 +3683,7 @@ export const tr: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "Bu çaba hedeflerin ortak merdiveninde yok — istek anında yok sayılacak veya uydurulacaktır.",
   "cws.field.defaultEffortUnsupportedOption": "kesişimde değil",
   "cws.targets": "Hedefler",
+  "cws.targets.order": "Hedef sırası",
   "cws.targets.failoverHint": "Sıralama önemlidir — birincil olan ilktir.",
   "cws.targets.roundRobinHint": "Ağırlıklar kararlı bağıntılı seçimi kontrol eder; sıralama rotasyon halkasındaki eşitlikleri bozar.",
   "cws.targets.randomHint": "Ağırlıklar her çekilişin olasılığını kontrol eder; sıralamanın önemi yoktur.",

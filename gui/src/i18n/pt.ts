@@ -3703,6 +3703,7 @@ export const pt: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "Este esforço não está na escala comum dos destinos — será ignorado ou ajustado no momento da requisição.",
   "cws.field.defaultEffortUnsupportedOption": "fora da interseção",
   "cws.targets": "Destinos",
+  "cws.targets.order": "Ordem dos destinos",
   "cws.targets.failoverHint": "A ordem importa — o primeiro é o principal.",
   "cws.targets.roundRobinHint": "Os pesos controlam a seleção relativa determinística; a ordem desempata no anel de rotação.",
   "cws.targets.randomHint": "Os pesos controlam a probabilidade de cada sorteio; a ordem não importa.",

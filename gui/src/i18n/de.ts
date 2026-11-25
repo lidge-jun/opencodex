@@ -3633,6 +3633,7 @@ export const de: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "Dieser Aufwand liegt nicht in der gemeinsamen Leiter der Ziele — er wird zur Anfragezeit ignoriert oder angepasst.",
   "cws.field.defaultEffortUnsupportedOption": "nicht in der Schnittmenge",
   "cws.targets": "Ziele",
+  "cws.targets.order": "Reihenfolge der Ziele",
   "cws.targets.failoverHint": "Reihenfolge zählt — das erste ist primär.",
   "cws.targets.roundRobinHint": "Gewichte steuern die deterministische relative Auswahl; die Reihenfolge löst Gleichstände im Rotationsring.",
   "cws.targets.randomHint": "Gewichte steuern die Wahrscheinlichkeit jeder Ziehung; die Reihenfolge spielt keine Rolle.",

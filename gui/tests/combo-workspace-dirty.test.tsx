@@ -536,6 +536,62 @@ test("reordered targets preserve remote metering and roster changes in the PUT",
   expect(toPutBody(result.merged, { stored: remote }).combo.targets[0]!.metered).not.toBe(false);
 });
 
+test("divergent target reorders conflict while one-sided reorders merge", () => {
+  const [a, b, c] = ["a", "b", "c"].map(model => ({ provider: "openai", model }));
+  const previous = { ...combos[0]!, targets: [a!, b!, c!] };
+  const local = { ...previous, targets: [b!, a!, c!] };
+  const remote = { ...previous, targets: [a!, c!, b!] };
+  expect(mergeComboDraft(previous, local, remote).conflicts).toContain("targets order");
+  const localOnly = mergeComboDraft(previous, local, previous);
+  expect(localOnly.conflicts).toEqual([]);
+  expect(localOnly.merged.targets.map(t => t.model)).toEqual(["b", "a", "c"]);
+  const remoteOnly = mergeComboDraft(previous, previous, remote);
+  expect(remoteOnly.conflicts).toEqual([]);
+  expect(remoteOnly.merged.targets.map(t => t.model)).toEqual(["a", "c", "b"]);
+});
+
+test("reconciliation preserves multiple unsaved blank target rows in place", () => {
+  const configured = { provider: "openai", model: "a", clientKey: "saved" };
+  const blank1 = { provider: "", model: "", clientKey: "new-1" };
+  const blank2 = { provider: "", model: "", clientKey: "new-2" };
+  const previous = { ...combos[0]!, targets: [configured] };
+  const draft = { ...previous, targets: [configured, blank1, blank2] };
+  const result = mergeComboDraft(previous, draft, { ...previous, displayName: "Remote" });
+  expect(result.conflicts).toEqual([]);
+  expect(result.merged.targets).toEqual([configured, blank1, blank2]);
+});
+
+test("order conflict blocks save and saved values resolve the target order", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const [a, b, c] = ["a", "b", "c"].map(model => ({ provider: "openai", model, clientKey: model }));
+  const loaded = { ...combos[0]!, targets: [a!, b!, c!] };
+  const render = (item: ComboItem) => root.render(<LanguageProvider><ComboWorkspace
+    combos={[item]} providerQuotaStates={{ openai: "available" }} providers={[{ name: "openai" }]}
+    models={["a", "b", "c"].map(id => ({ provider: "openai", id }))} loading={false} onRefresh={() => {}}
+    onSave={async () => ({ ok: true })} onRemove={async () => ({ ok: true })}
+    onAdd={() => {}} adding={false} onCloseAdd={() => {}} onCreated={() => {}} />
+  </LanguageProvider>);
+  try {
+    await act(async () => { render(loaded); });
+    await act(async () => { railButton(container, "combo/alpha").click(); });
+    await act(async () => { container.querySelectorAll<HTMLButtonElement>('[aria-label="Move down"]')[0]!.click(); });
+    await act(async () => { render({ ...loaded, targets: [a!, c!, b!] }); });
+    await flushTimers();
+    expect(container.textContent).toContain("Target order");
+    expect(container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.disabled).toBe(true);
+    const useSaved = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Use saved values")!;
+    await act(async () => { useSaved.click(); });
+    expect(container.textContent).not.toContain("Target order");
+    expect(container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.disabled).toBe(true);
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
+
 test("save adopts the server combo when refresh does not arrive", async () => {
   const { createRoot } = await import("react-dom/client");
   const container = document.createElement("div");

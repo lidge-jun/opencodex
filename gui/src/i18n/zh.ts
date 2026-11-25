@@ -3653,6 +3653,7 @@ export const zh: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "该级别不在目标的公共阶梯中 — 请求时会被忽略或就近映射。",
   "cws.field.defaultEffortUnsupportedOption": "不在交集中",
   "cws.targets": "目标",
+  "cws.targets.order": "目标顺序",
   "cws.targets.failoverHint": "顺序很重要 — 第一个为主。",
   "cws.targets.roundRobinHint": "权重控制确定性的相对选择；顺序用于打破轮换环中的平局。",
   "cws.targets.randomHint": "权重控制每次抽取的概率，顺序无关紧要。",
