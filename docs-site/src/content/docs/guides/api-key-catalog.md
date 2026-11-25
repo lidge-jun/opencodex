@@ -986,6 +986,7 @@ The preset uses a **static roster** (`liveModels: false`) taken from the publish
 
 | Model | Context tokens | Upstream selectable effort | Default effort | Reasoning summaries |
 | --- | ---: | --- | --- | --- |
+| `glm-5.4` | 1,048,576 | `low`, `high`, `max` | `max` | Supported |
 | `glm-5.3` | 1,048,576 | `low`, `high`, `max` | `max` | Supported |
 | `glm-5.3-flash` | 1,048,576 | `low`, `high`, `max` | `max` | Supported |
 | `glm-5-turbo` | 204,800 | None (empty list) | `max` | Supported |
@@ -998,6 +999,11 @@ sidecar and does not claim native BigModel image support.
 `glm-5.3-flash` is the exception: it declares native `text` and `image` input, because
 upstream documents it as a natively multimodal model. It therefore reads pictures
 directly instead of being routed through the describe-it-first sidecar detour.
+
+`glm-5.4` also reads images natively: upstream lists video, image, text and file input for it. The
+GLM Coding Plan offers it on every tier
+([how to switch models](https://docs.bigmodel.cn/cn/coding-plan/latest-model.md), checked 2026-11-26);
+the `zai` and `zhipu-bigmodel-coding` presets list it too, with the local `glm-5.4[1m]` alias.
 
 The default model is `glm-5.3`; Responses reasoning content is preserved on replay.
 The existing Codex export adds its compatibility

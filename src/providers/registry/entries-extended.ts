@@ -30,6 +30,7 @@ import type { ProviderRegistryEntry } from "./types";
 import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "./agy-acp-models";
 import {
   ZAI_GLM_53_MODELS,
+  ZAI_GLM_53_CONTRACT_MODELS,
   ZAI_GLM_5X_MODELS,
   ZAI_GLM_5X_SIDECAR_VISION_MODELS,
   ZAI_GLM_5X_INPUT_MODALITIES,
@@ -599,17 +600,18 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     destinationAliases: [{ baseUrl: "https://api.z.ai/api/coding/paas/v4", adapter: "openai-chat" }],
     dashboardUrl: "https://z.ai/manage-apikey/apikey-list", defaultModel: "glm-5.3",
     note: "GLM-5.3 coding subscription",
-    models: ["glm-5.3", "glm-5.3[1m]", "glm-5.3-flash", "glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5", "glm-4.6"],
+    models: ["glm-5.4", "glm-5.4[1m]", "glm-5.3", "glm-5.3[1m]", "glm-5.3-flash", "glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5", "glm-4.6"],
     // The upstream catalog reports 1_048_576 for the 5.3 family, which is what the domestic
-    // Responses row already carries. Both are documented as "1M"; this is that number.
-    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5.3[1m]": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
+    // Responses row already carries. Both are documented as "1M"; this is that number. GLM-5.4 is
+    // documented as "1M" too and follows the same convention.
+    modelContextWindows: { "glm-5.4": 1_048_576, "glm-5.4[1m]": 1_048_576, "glm-5.3": 1_048_576, "glm-5.3[1m]": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
     // Z.AI returns 400 for bracketed model ids on both wires; the aliases are local.
     modelSuffixBracketStrip: true,
     noVisionModels: ZAI_GLM_5X_SIDECAR_VISION_MODELS,
     modelInputModalities: ZAI_GLM_5X_INPUT_MODALITIES,
     modelReasoningEfforts: ZAI_GLM_5X_REASONING_EFFORTS,
-    modelDefaultReasoningEfforts: Object.fromEntries(ZAI_GLM_53_MODELS.map(id => [id, "max"])),
-    modelMaxOutputTokens: Object.fromEntries(ZAI_GLM_53_MODELS.map(id => [id, 131_072])),
+    modelDefaultReasoningEfforts: Object.fromEntries(ZAI_GLM_53_CONTRACT_MODELS.map(id => [id, "max"])),
+    modelMaxOutputTokens: Object.fromEntries(ZAI_GLM_53_CONTRACT_MODELS.map(id => [id, 131_072])),
     modelSupportsReasoningSummaries: Object.fromEntries(ZAI_GLM_5X_MODELS.map(id => [id, true])),
     preserveReasoningContentModels: ZAI_GLM_5X_MODELS,
     // Responses replay uses this provider-level flag; the model list above still covers a
@@ -686,9 +688,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://bigmodel.cn/console/usercenter/apikeys",
     defaultModel: "glm-5.3",
-    models: ["glm-5.3", "glm-5.3[1m]", "glm-5.3-flash", "glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5", "glm-4.6"],
+    models: ["glm-5.4", "glm-5.4[1m]", "glm-5.3", "glm-5.3[1m]", "glm-5.3-flash", "glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5", "glm-4.6"],
     jawcodeBundle: "zai",
-    modelContextWindows: { "glm-5.3": 1_000_000, "glm-5.3[1m]": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
+    modelContextWindows: { "glm-5.4": 1_000_000, "glm-5.4[1m]": 1_000_000, "glm-5.3": 1_000_000, "glm-5.3[1m]": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
     modelSuffixBracketStrip: true,
     noVisionModels: ZAI_GLM_5X_SIDECAR_VISION_MODELS,
     modelInputModalities: ZAI_GLM_5X_INPUT_MODALITIES,
@@ -727,7 +729,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://bigmodel.cn/console/usercenter/apikeys",
     defaultModel: "glm-5.3",
-    models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"],
+    // GLM-5.4 joined every Coding Plan tier on the same Codex base URL (2026-11-26,
+    // docs.bigmodel.cn/cn/coding-plan/latest-model.md).
+    models: ["glm-5.4", "glm-5.3", "glm-5.3-flash", "glm-5-turbo"],
     liveModels: false,
     // The local Codex catalog does not establish an authenticated HTTP /models contract.
     apiKeyValidation: "unknown",
@@ -738,14 +742,16 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // models are documented as "1M", and this preset expresses that family's 1M the way
     // BigModel's own Codex declaration does. Splitting the two would leave one preset
     // claiming two different sizes for one documented window.
-    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5-turbo": 204_800 },
+    modelContextWindows: { "glm-5.4": 1_048_576, "glm-5.3": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5-turbo": 204_800 },
     // Flash is the only row here that can actually see an image. Its siblings are declared
     // text-only and get `image` back from the vision sidecar at catalog-build time; declaring
     // Flash text-only would route a native VLM's pictures through a describe-it-first detour
     // and hand the model prose about an image it could have read (same defect
     // ZAI_GLM_5X_SIDECAR_VISION_MODELS exists to prevent on the Chat rows).
-    modelInputModalities: { "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"], "glm-5-turbo": ["text"] },
+    modelInputModalities: { "glm-5.4": ["text", "image"], "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"], "glm-5-turbo": ["text"] },
     modelReasoningEfforts: {
+      // GLM-5.4 documents the same low/high/max fold as GLM-5.3 (docs.z.ai/devpack/latest-model.md).
+      "glm-5.4": ZAI_GLM_53_REASONING_EFFORTS,
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
       // Same three effective tiers: upstream documents Flash's text parameters as identical
       // to GLM-5.3, and the Codex effort table folds every inbound value into low/high/max.
@@ -753,8 +759,8 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       // Explicitly empty: Turbo must not inherit the generic selectable effort ladder.
       "glm-5-turbo": [],
     },
-    modelDefaultReasoningEfforts: { "glm-5.3": "max", "glm-5.3-flash": "max", "glm-5-turbo": "max" },
-    modelSupportsReasoningSummaries: { "glm-5.3": true, "glm-5.3-flash": true, "glm-5-turbo": true },
+    modelDefaultReasoningEfforts: { "glm-5.4": "max", "glm-5.3": "max", "glm-5.3-flash": "max", "glm-5-turbo": "max" },
+    modelSupportsReasoningSummaries: { "glm-5.4": true, "glm-5.3": true, "glm-5.3-flash": true, "glm-5-turbo": true },
     // Responses replay uses this provider-level flag, not the Chat-path model list.
     preserveResponsesReasoningContent: true,
     note: "Domestic BigModel Coding Plan Responses endpoint; static model roster",

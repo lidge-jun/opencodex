@@ -63,3 +63,36 @@ describe("GitHub Copilot cold-start seed (docs.github.com supported-models, 2026
     }
   });
 });
+
+describe("GLM-5.4 on the Z.ai / BigModel Coding Plan (docs.z.ai glm-5.4 + devpack latest-model, docs.bigmodel.cn latest-model, 2026-11-26)", () => {
+  const rows = {
+    zai: { ids: ["glm-5.4", "glm-5.4[1m]"], context: 1_048_576 },
+    "zhipu-bigmodel-coding": { ids: ["glm-5.4", "glm-5.4[1m]"], context: 1_000_000 },
+    "zhipu-bigmodel-responses": { ids: ["glm-5.4"], context: 1_048_576 },
+  } as const;
+
+  test.each(Object.entries(rows))("%s seeds GLM-5.4 with 1M context, native vision and the low/high/max fold", (id, { ids, context }) => {
+    const row = getProviderRegistryEntry(id)!;
+    expect(row.defaultModel).toBe("glm-5.3");
+    for (const model of ids) {
+      expect(row.models).toContain(model);
+      expect(row.modelContextWindows?.[model]).toBe(context);
+      // Upstream input modality: video / image / text / file. Never through the vision sidecar.
+      expect(row.modelInputModalities?.[model]).toEqual(["text", "image"]);
+      expect(row.noVisionModels ?? []).not.toContain(model);
+      expect(row.modelReasoningEfforts?.[model]).toEqual(["low", "high", "max"]);
+      // Same default as the row's GLM-5.3 entry (the upstream default is max for both).
+      expect(row.modelDefaultReasoningEfforts?.[model]).toBe(row.modelDefaultReasoningEfforts?.["glm-5.3"]);
+    }
+  });
+
+  test("the Z.ai row caps GLM-5.4 output at the documented 128K", () => {
+    const zai = getProviderRegistryEntry("zai")!;
+    expect(zai.modelMaxOutputTokens?.["glm-5.4"]).toBe(131_072);
+    expect(zai.modelMaxOutputTokens?.["glm-5.4[1m]"]).toBe(131_072);
+  });
+
+  test("pay-as-you-go BigModel stays without GLM-5.4 until the Model API ships", () => {
+    expect(getProviderRegistryEntry("zhipu-bigmodel")!.models).not.toContain("glm-5.4");
+  });
+});

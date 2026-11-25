@@ -452,6 +452,7 @@ El preajuste utiliza un **Lista estática** (`liveModels: false`) tomado del [Do
 
 | Modelo | Tokens de contexto | Esfuerzo seleccionable ascendente | Esfuerzo predeterminado | Resúmenes de razonamiento |
 | --- | ---: | --- | --- | --- |
+| `glm-5.4` | 1,048,576 | `low`, `high`, `max` | `max` | Apoyado |
 | `glm-5.3` | 1,048,576 | `low`, `high`, `max` | `max` | Apoyado |
 | `glm-5.3-flash` | 1,048,576 | `low`, `high`, `max` | `max` | Apoyado |
 | `glm-5-turbo` | 204,800 | Ninguno (lista vacía) | `max` | Apoyado |
@@ -459,6 +460,8 @@ El preajuste utiliza un **Lista estática** (`liveModels: false`) tomado del [Do
 `glm-5.3` y `glm-5-turbo` declaran entrada de solo texto aguas arriba. El catálogo Codex anuncia texto e imagen para ellos porque el sidecar de visión existente opencodex puede describir imágenes para modelos solo de texto; esa ruta requiere un sidecar de visión disponible y habilitado y no reclama soporte de imagen BigModel nativo.
 
 `glm-5.3-flash` es la excepción: declara la entrada nativa `text` y `image`, porque upstream lo documenta como un modelo multimodal nativo. Por lo tanto, lee imágenes directamente en lugar de ser enrutado a través del desvío del primer sidecar descrito.
+
+`glm-5.4` también lee imágenes de forma nativa: upstream declara entrada de vídeo, imagen, texto y archivo. El GLM Coding Plan lo ofrece en todos los niveles ([cómo cambiar de modelo](https://docs.bigmodel.cn/cn/coding-plan/latest-model.md), consultado el 2026-11-26); los preajustes `zai` y `zhipu-bigmodel-coding` también lo incluyen, con el alias local `glm-5.4[1m]`.
 
 El modelo predeterminado es `glm-5.3`; Responses El contenido de razonamiento se conserva en la repetición. La exportación Codex existente agrega su nivel de compatibilidad `ultra` a GLM-5.3 y omite el campo de esfuerzo predeterminado de Turbo porque Turbo no tiene una escalera seleccionable; los metadatos del proveedor aún registran `max` para ambos modelos. Para Turbo, las solicitudes salientes Responses omiten `reasoning.effort`, incluyendo `max` o `ultra` de la persona que llama, mientras se conservan los resúmenes de razonamiento solicitados. Esto deja la selección de esfuerzo en el valor por defecto ascendente; opencodex no inyecta un protocolo seleccionable o `max`.
 

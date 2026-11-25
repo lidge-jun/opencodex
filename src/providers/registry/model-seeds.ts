@@ -102,7 +102,16 @@ export const ANTHROPIC_MODEL_REASONING_EFFORTS: Record<string, string[]> = Objec
 // disappears.
 export const ZAI_GLM_53_MODELS = ["glm-5.3", "glm-5.3[1m]", "glm-5.3-flash"];
 export const ZAI_GLM_52_MODELS = ["glm-5.2", "glm-5.2[1m]"];
-export const ZAI_GLM_5X_MODELS = [...ZAI_GLM_53_MODELS, ...ZAI_GLM_52_MODELS];
+// 261126 GLM-5.4: on every GLM Coding Plan tier (docs.z.ai/devpack/latest-model.md,
+// docs.bigmodel.cn/cn/coding-plan/latest-model.md); the pay-as-you-go Model API is still pending.
+// docs.z.ai/guides/llm/glm-5.4.md: 1M context, 128K output, video/image/text/file input, and the
+// same low/high/max effort fold (default max) as GLM-5.3.
+export const ZAI_GLM_54_MODELS = ["glm-5.4", "glm-5.4[1m]"];
+export const ZAI_GLM_5X_MODELS = [...ZAI_GLM_54_MODELS, ...ZAI_GLM_53_MODELS, ...ZAI_GLM_52_MODELS];
+/** 5.x members whose effort ladder, default effort and output cap follow the 5.3 contract. */
+export const ZAI_GLM_53_CONTRACT_MODELS = [...ZAI_GLM_54_MODELS, ...ZAI_GLM_53_MODELS];
+/** Native VLMs in the 5.x family: images go straight to the model, never through the sidecar. */
+export const ZAI_GLM_5X_NATIVE_VISION_MODELS = ["glm-5.3-flash", ...ZAI_GLM_54_MODELS];
 /**
  * The 5.x rows whose images the PROXY has to describe, which is NOT the same set as
  * the 5.x rows themselves.
@@ -117,7 +126,7 @@ export const ZAI_GLM_5X_MODELS = [...ZAI_GLM_53_MODELS, ...ZAI_GLM_52_MODELS];
  * constant also drives `modelSupportsReasoningSummaries` and
  * `preserveReasoningContentModels`, where flash DOES belong.
  */
-export const ZAI_GLM_5X_SIDECAR_VISION_MODELS = ZAI_GLM_5X_MODELS.filter(id => id !== "glm-5.3-flash");
+export const ZAI_GLM_5X_SIDECAR_VISION_MODELS = ZAI_GLM_5X_MODELS.filter(id => !ZAI_GLM_5X_NATIVE_VISION_MODELS.includes(id));
 /**
  * Positive input-modality declaration for the Chat-path GLM rows.
  *
@@ -140,7 +149,7 @@ export const ZAI_GLM_5X_SIDECAR_VISION_MODELS = ZAI_GLM_5X_MODELS.filter(id => i
  */
 export const ZAI_GLM_5X_INPUT_MODALITIES: Record<string, string[]> = {
   ...Object.fromEntries(ZAI_GLM_5X_SIDECAR_VISION_MODELS.map(id => [id, ["text"]])),
-  "glm-5.3-flash": ["text", "image"],
+  ...Object.fromEntries(ZAI_GLM_5X_NATIVE_VISION_MODELS.map(id => [id, ["text", "image"]])),
 };
 export const ZAI_GLM_52_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 /**
@@ -153,7 +162,7 @@ export const ZAI_GLM_52_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "
 export const ZAI_GLM_53_REASONING_EFFORTS = ["low", "high", "max"];
 /** Per-model ladders for the Coding Plan rows: 5.3 gets its three effective tiers, 5.2 keeps five. */
 export const ZAI_GLM_5X_REASONING_EFFORTS: Record<string, string[]> = {
-  ...Object.fromEntries(ZAI_GLM_53_MODELS.map(id => [id, ZAI_GLM_53_REASONING_EFFORTS])),
+  ...Object.fromEntries(ZAI_GLM_53_CONTRACT_MODELS.map(id => [id, ZAI_GLM_53_REASONING_EFFORTS])),
   ...Object.fromEntries(ZAI_GLM_52_MODELS.map(id => [id, ZAI_GLM_52_REASONING_EFFORTS])),
 };
 // 260710 MiniMax models and context windows: Tier-2 evidence in
