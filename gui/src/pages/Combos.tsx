@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WorkspaceSuggestions } from "../components/route-board/WorkspaceSuggestions";
 import ComboWorkspace from "../components/ComboWorkspace";
 import { comboVisionSidecarTargets } from "../combo-capabilities";
@@ -66,6 +66,7 @@ type CachedCombosPage = {
   capabilityModels?: ModelOption[];
   cataloguedComboIds: string[];
   hiddenModels?: string[];
+  routingRevision?: string;
 };
 type ProviderQuotasDto = { reports?: unknown };
 
@@ -120,6 +121,7 @@ export default function Combos({
    * on the load success path, never during render and never from an effect.
    */
   const [retainedData, setRetainedData] = useState<CachedCombosPage | null>(cached ?? null);
+  const routingGeneration = useRef(Number(cached?.routingRevision) || 0);
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(false);
   const [addIntent, setAddIntent] = useState<ComboAddIntent | null>(() => (
@@ -256,7 +258,8 @@ export default function Combos({
       }
     }
 
-    const next = { combos, providers, models, capabilityModels, hiddenModels, cataloguedComboIds: [...catalogued] } satisfies CachedCombosPage;
+    // /api/config omits redirects, so each successful poll invalidates the route snapshot.
+    const next = { combos, providers, models, capabilityModels, hiddenModels, cataloguedComboIds: [...catalogued], routingRevision: String(++routingGeneration.current) } satisfies CachedCombosPage;
     writeSessionListCacheEntry(cacheKey, next);
     // Retain the coherent payload here — one place, on the success path, never during
     // render. See the `retainedData` note below.
@@ -385,6 +388,15 @@ export default function Combos({
         notify(err, false);
         return { ok: false as const, error: err };
       }
+      const savedResponse = data as { id?: unknown; model?: unknown; combo?: unknown };
+      const saved = savedResponse.combo && typeof savedResponse.combo === "object"
+        ? parseComboList({ combos: [{ ...savedResponse.combo, id: savedResponse.id, model: savedResponse.model }] })[0]
+        : undefined;
+      if (!saved) {
+        const err = t("cws.saveFailed");
+        notify(err, false);
+        return { ok: false as const, error: err };
+      }
       resource.refresh();
       notify(
         renameFrom
@@ -392,7 +404,7 @@ export default function Combos({
           : isCreate ? t("cws.created", { model: item.model }) : t("cws.saved"),
         true,
       );
-      return { ok: true as const };
+      return { ok: true as const, item: saved };
     } catch {
       const err = t("cws.saveFailed");
       notify(err, false);
@@ -464,6 +476,7 @@ export default function Combos({
         </span>
         <ComboWorkspace
           apiBase={apiBase}
+          routingRevision={data?.routingRevision}
           combos={combos}
           providerQuotaStates={providerQuotaStates}
           providers={providers}

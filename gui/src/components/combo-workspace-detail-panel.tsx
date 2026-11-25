@@ -16,6 +16,7 @@ import { Notice, Switch } from "../ui";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
 import { ComboCapabilities, EffortSelect } from "./combo-workspace-controls";
 import { ComboRoutingEditor } from "./combo-workspace-fallback";
+import { mergeComboDraft } from "./combo-workspace-merge";
 import { ComboJevDecisionSection } from "./combo-workspace-jev-decision";
 import { clampedNumberInput, comboDraftErrorText } from "./combo-workspace-utils";
 import type { JevDecisionRow } from "../jev-decision-service";
@@ -39,6 +40,7 @@ const NO_COMBOS: readonly ComboItem[] = [];
 
 export function DetailPanel({
   apiBase,
+  routingRevision,
   baseline,
   combos = NO_COMBOS,
   isCreate = false,
@@ -58,6 +60,7 @@ export function DetailPanel({
 }: {
   /** Management API target; without it the candidate path preview is not offered and JEV stats use same-origin paths. */
   apiBase?: string;
+  routingRevision?: string;
   baseline: ComboItem;
   /** All OTHER combos; a JEV decision model may not name this combo or any JEV combo. */
   combos?: readonly ComboItem[];
@@ -76,7 +79,7 @@ export function DetailPanel({
   onBack?: () => void;
   onSaved: (item: ComboItem) => void;
   onRequestRemove?: () => void;
-  onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null) => Promise<{ ok: boolean; error?: string }>;
+  onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null) => Promise<{ ok: boolean; error?: string; item?: ComboItem }>;
   onDirtyChange: (dirty: boolean) => void;
 }) {
   const t = useT();
@@ -101,9 +104,11 @@ export function DetailPanel({
       ?.focus();
   }, [detailTabs]);
   const [draft, setDraft] = useState<ComboItem>(baseline);
+  const draftRef = useRef(draft);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [conflicts, setConflicts] = useState<string[]>([]);
   const dirty = !draftEquals(draft, baseline);
   const allTargetsExhausted = comboQuotaState(draft.targets, providerQuotaStates, providerMap) === "exhausted";
   const baselineSyncKey = JSON.stringify([baseline.id, baseline.alias, baseline.nativeAlias, baseline.displayName, baseline.strategy, baseline.stickyLimit, baseline.defaultEffort, baseline.imageInput, baseline.reasoningEffortMode, baseline.decisionProvider, baseline.decisionModel, baseline.decisionTimeoutMs, baseline.sessionPin === undefined, baseline.sessionPin, Boolean(baseline.allowMeteredTargets), Boolean(baseline.quotaOnlyFallback), Boolean(baseline.preserveFallbackModel), baseline.targets.map(t => [t.provider, t.model, t.weight, t.reasoningEfforts, t.modelProfile, Boolean(t.metered)])]);
@@ -121,6 +126,7 @@ export function DetailPanel({
 
   const updateDraft = useCallback((updater: (prev: ComboItem) => ComboItem) => {
     const next = updater(draft);
+    draftRef.current = next;
     setDraft(next);
     onDirtyChange(!draftEquals(next, baseline));
   }, [draft, baseline, onDirtyChange]);
@@ -134,11 +140,13 @@ export function DetailPanel({
     if (syncedBaselineKey.current === baselineSyncKey) return;
     syncedBaselineKey.current = baselineSyncKey;
     const timer = window.setTimeout(() => {
+      const result = mergeComboDraft(draftBaseline.current, draftRef.current, baseline);
       draftBaseline.current = baseline;
-      setDraft(baseline);
+      draftRef.current = result.merged;
+      setDraft(result.merged);
+      setConflicts(current => [...new Set([...current, ...result.conflicts])]);
       setMsg(null);
-      setTab("config");
-      onDirtyChange(false);
+      onDirtyChange(!draftEquals(result.merged, baseline));
     }, 0);
     return () => window.clearTimeout(timer);
     // oxlint-disable-next-line react/react-compiler -- existing exhaustive-deps exception is intentional
@@ -191,7 +199,12 @@ export function DetailPanel({
         ok: true,
         text: isCreate ? t("cws.created", { model: item.model }) : t("cws.saved"),
       });
-      onSaved(item);
+      const saved = res.item ?? item;
+      draftBaseline.current = saved;
+      draftRef.current = saved;
+      setDraft(saved);
+      setConflicts([]);
+      onSaved(saved);
     } finally {
       setBusy(false);
     }
@@ -229,6 +242,7 @@ export function DetailPanel({
       </div>
 
       {msg && <Notice tone={msg.ok ? "ok" : "err"}>{msg.text}</Notice>}
+      {conflicts.length > 0 && <Notice tone="err">{t("pws.draftConflictFields")} {conflicts.join(", ")}</Notice>}
       {allTargetsExhausted && (
         <div className="cwi-quota-banner" role="status" aria-live="polite">
           {t("cws.quota.allExhausted")}
@@ -285,6 +299,7 @@ export function DetailPanel({
           <div className="cwi-form-grid">
             <ComboRoutingEditor
               apiBase={apiBase}
+              routingRevision={routingRevision}
               draft={draft}
               providers={providers}
               models={models}

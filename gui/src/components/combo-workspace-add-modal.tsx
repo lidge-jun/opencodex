@@ -23,6 +23,7 @@ const NO_COMBOS: readonly ComboItem[] = [];
 
 export function AddComboModal({
   apiBase,
+  routingRevision,
   combos = NO_COMBOS,
   existingIds,
   existingAliases,
@@ -36,6 +37,7 @@ export function AddComboModal({
   onSubmit,
 }: {
   apiBase?: string;
+  routingRevision?: string;
   /** Existing combos; a JEV decision model may not name the new combo or any JEV combo. */
   combos?: readonly ComboItem[];
   existingIds: string[];
@@ -161,6 +163,7 @@ export function AddComboModal({
           </div>
           <ComboRoutingEditor
             apiBase={apiBase}
+            routingRevision={routingRevision}
             draft={draft}
             providers={providers}
             models={models}

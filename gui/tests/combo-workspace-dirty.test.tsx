@@ -347,6 +347,39 @@ test("the route preview asks again when a provider's configuration changes", asy
   }
 });
 
+test("the route preview refreshes when the redirect configuration changes", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const previousFetch = globalThis.fetch;
+  let destination = "old";
+  let requests = 0;
+  globalThis.fetch = (async () => {
+    requests++;
+    return Response.json({ routes: { "backup/m": { provider: "backup", model: destination, requiresConsent: false } } });
+  }) as typeof fetch;
+  const draft: ComboItem = { ...combos[0]!, targets: [{ provider: "backup", model: "m", clientKey: "ct-backup" }] };
+  const root = createRoot(container);
+  const render = (routingRevision: string) => root.render(<LanguageProvider>
+    <ComboRoutingEditor apiBase="http://api.test" draft={draft} providers={[{ name: "backup" }]}
+      models={[]} capabilityModels={[]} providerQuotaStates={{}} disabled={false} onChange={() => {}} routingRevision={routingRevision} />
+  </LanguageProvider>);
+  try {
+    await act(async () => { render("old"); });
+    await flushTimers();
+    expect(container.querySelector(".cwi-preview")?.textContent).toContain("old");
+    destination = "new";
+    await act(async () => { render("new"); });
+    await flushTimers();
+    expect(requests).toBe(2);
+    expect(container.querySelector(".cwi-preview")?.textContent).toContain("new");
+  } finally {
+    globalThis.fetch = previousFetch;
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
+
 test("the route preview says when it shows configured targets because routes are not checked", async () => {
   const { createRoot } = await import("react-dom/client");
   const container = document.createElement("div");
@@ -442,4 +475,62 @@ test("a refreshed editor never restores paid-call settings the CLI cleared", asy
 
   await act(async () => { root.unmount(); });
   container.remove();
+});
+
+test("remote changes merge untouched fields and retain conflicting draft edits", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const loaded = { ...combos[0]!, displayName: "original", allowMeteredTargets: true };
+  const root = createRoot(container);
+  const render = (item: ComboItem) => root.render(<LanguageProvider><ComboWorkspace
+    combos={[item, combos[1]!]} providerQuotaStates={{ openai: "available" }}
+    providers={[{ name: "openai" }]} models={[{ provider: "openai", id: "gpt-5" }]}
+    loading={false} onRefresh={() => {}} onSave={async () => ({ ok: true })}
+    onRemove={async () => ({ ok: true })} onAdd={() => {}} adding={false}
+    onCloseAdd={() => {}} onCreated={() => {}} /></LanguageProvider>);
+  try {
+    await act(async () => { render(loaded); });
+    await act(async () => { railButton(container, "combo/alpha").click(); });
+    await act(async () => { setInputValue(container.querySelector<HTMLInputElement>("#cwi-edit-display-name")!, "my edit"); });
+    await act(async () => { render({ ...loaded, allowMeteredTargets: undefined }); });
+    await flushTimers();
+    expect(container.querySelector<HTMLInputElement>("#cwi-edit-display-name")!.value).toBe("my edit");
+    expect(container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.disabled).toBe(false);
+    await act(async () => { render({ ...loaded, allowMeteredTargets: undefined, displayName: "remote edit" }); });
+    await flushTimers();
+    expect(container.querySelector<HTMLInputElement>("#cwi-edit-display-name")!.value).toBe("my edit");
+    expect(container.textContent).toContain("These fields changed on both sides");
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
+
+test("save adopts the server combo when refresh does not arrive", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const loaded = { ...combos[0]!, allowMeteredTargets: true };
+  const root = createRoot(container);
+  try {
+    await act(async () => { root.render(<LanguageProvider><ComboWorkspace
+      combos={[loaded]} providerQuotaStates={{ openai: "available" }} providers={[{ name: "openai" }]}
+      models={[{ provider: "openai", id: "gpt-5" }]} loading={false} onRefresh={() => {}}
+      onSave={async (item) => ({ ok: true, item: { ...item, allowMeteredTargets: undefined } })}
+      onRemove={async () => ({ ok: true })} onAdd={() => {}} adding={false} onCloseAdd={() => {}} onCreated={() => {}} />
+    </LanguageProvider>); });
+    await act(async () => { railButton(container, "combo/alpha").click(); });
+    await act(async () => { setInputValue(container.querySelector<HTMLInputElement>("#cwi-edit-display-name")!, "saved"); });
+    await act(async () => { container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.click(); });
+    await flushTimers();
+    const paidSwitch = [...container.querySelectorAll<HTMLButtonElement>('[role="switch"]')]
+      .find(button => button.textContent?.includes("Allow paid"));
+    expect(paidSwitch?.getAttribute("aria-checked") ?? "false").toBe("false");
+    expect(container.querySelector<HTMLInputElement>("#cwi-edit-display-name")!.value).toBe("saved");
+    expect(container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.disabled).toBe(true);
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
 });

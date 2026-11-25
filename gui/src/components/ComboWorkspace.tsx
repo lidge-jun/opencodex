@@ -21,6 +21,7 @@ export type { ModelOption, ProviderOption, ComboWorkspaceProps } from "./combo-w
 
 export default function ComboWorkspace({
   apiBase,
+  routingRevision,
   combos,
   providerQuotaStates,
   providers,
@@ -257,6 +258,7 @@ export default function ComboWorkspace({
           <DetailPanel
             key={baseline.id}
             apiBase={apiBase}
+            routingRevision={routingRevision}
             baseline={baseline}
             combos={combos.filter((c) => c.id !== baseline.id)}
             otherIds={otherComboIds}
@@ -288,6 +290,7 @@ export default function ComboWorkspace({
           <DetailPanel
             key="first-combo"
             apiBase={apiBase}
+            routingRevision={routingRevision}
             baseline={firstComboDraft}
             isCreate
             otherIds={[]}
@@ -324,6 +327,7 @@ export default function ComboWorkspace({
         <AddComboModal
           key={`${addIntent ?? "blank"}:${addDraft?.decisionProvider ?? ""}`}
           apiBase={apiBase}
+          routingRevision={routingRevision}
           combos={combos}
           existingIds={combos.map((c) => c.id)}
           existingAliases={existingComboAliases}
