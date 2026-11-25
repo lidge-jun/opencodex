@@ -14,7 +14,8 @@ import { captureSendAdmission } from "./send-admission";
 import { UPGRADE_DEADLINE_MS, CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS,
   CODEX_WS_COMMITTED_SILENT_INTERVALS, MAX_CODEX_WS_FRAME_BYTES,
   MAX_CODEX_WS_QUEUE_BYTES, markCodexWsResponse, markCodexWsPreludeProjection, normalizeResponsesWsRelayEvent, closedBeforeTerminalMessage,
-  codexWsCreateFrameExceedsLimit, codexWsFailureDetail, codexWsPreResponseFailure, markCodexWsStage, codexWsOcxVersion,
+  codexWsCreateFrameExceedsLimit, codexWsFrameExceedsAdvertisedLimit, codexWsFailureDetail, codexWsPreResponseFailure,
+  markCodexWsStage, codexWsOcxVersion,
   markCodexWsSocketDeath, codexWsWrapperStatus, isCodexWsTerminalEvent, type CodexWsFailureStage, type CodexWsStageRecord,
   type CodexWsTerminalEvent, codexWsPreOutputRefusalStatus, isEmptyCodexWsLifecycleEvent, codexWsFrameResponseIds,
   markCodexWsPreOutputRefusal, responsesFrameIsReplayUnsafe, type CodexWsPreOutputRefusalHold } from "./codex-ws-wire";
@@ -489,6 +490,19 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       if (settledPreOpen) return;
       clearTimeout(upgradeTimer);
       opened = true;
+      // openai/codex ed7ca22bb6: a frame larger than this connection's advertised ceiling never
+      // leaves. Nothing was sent, so the SSE resend cannot double-generate. Native control has no
+      // SSE equivalent and is refused rather than quietly losing its channel.
+      if (!signal?.aborted && codexWsFrameExceedsAdvertisedLimit(frameText, session.advertisedMessageLimit())) {
+        settledPreOpen = true;
+        terminal = true;
+        cleanup();
+        session.dispose();
+        if (nativeControl) {
+          reject(new Error("Codex WebSocket request exceeds the upstream's advertised message limit; native control requires the WebSocket transport"));
+        } else resolve(sseFallback(url, init));
+        return;
+      }
       try {
         beforeDispatch?.(new Headers(headers));
       } catch (error) {
@@ -534,7 +548,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
               }
               const text = JSON.stringify(outgoing);
               nativeControl.assertOutboundFrame?.(text);
-              if (codexWsCreateFrameExceedsLimit(text)) {
+              if (codexWsCreateFrameExceedsLimit(text) || codexWsFrameExceedsAdvertisedLimit(text, session.advertisedMessageLimit())) {
                 throw new Error("Native steering frame exceeds the transport byte limit");
               }
               return { outgoing, text };
@@ -715,7 +729,8 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
             if (terminal || responseCommitted) return;
             if (signal?.aborted) { onAbort(); return; }
             const send = async () => {
-              if (codexWsCreateFrameExceedsLimit(frameText)) {
+              if (codexWsCreateFrameExceedsLimit(frameText)
+                || codexWsFrameExceedsAdvertisedLimit(frameText, session.advertisedMessageLimit())) {
                 terminal = true;
                 cleanup();
                 session.dispose();

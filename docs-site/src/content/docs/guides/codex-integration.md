@@ -162,6 +162,15 @@ is a `POST` to the canonical Responses URL or a configured WebSocket route, and 
 falls back to it when the request cannot be prepared, the `response.create` frame exceeds its size
 limit, or the proxy route cannot carry the socket.
 
+The size limit follows the ChatGPT backend's own advertisement. When the socket's handshake carries
+`x-codex-websocket-max-message-bytes`, a frame larger than that value never leaves the proxy: the
+turn falls back to SSE before anything is sent, as Codex itself does. A turn that needs native
+steering or injection has no SSE equivalent, so it fails visibly instead. Without an advertisement,
+the fixed 16 MiB ceiling applies. On this route the proxy also forwards Codex's
+`x-codex-exclude` and `x-codex-exclude-stream-fields` requests, so the backend leaves out the
+echoed tool catalog, per-item usage attribution, delta sequence numbers and preliminary reasoning
+ciphertext. Other destinations never receive these headers.
+
 To keep the built-in ChatGPT provider on HTTP/SSE, set `providers.openai.upstreamWebsocket`
 to `false` in `~/.opencodex/config.json` and restart the proxy. Merge this field into the
 existing `openai` provider; preserve its account mode and other settings. Omit the field
