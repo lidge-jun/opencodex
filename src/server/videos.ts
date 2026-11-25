@@ -177,15 +177,20 @@ async function handleCreate(req: Request, config: OcxConfig, logCtx: RequestLogC
   return Response.json(publicVideoJob(job, handle, target.modelId));
 }
 
-const SAFE_STATUS = /^[a-z_]{1,32}$/;
+/** Job states the OpenAI Videos API documents; anything else is not relayed. */
+const PUBLIC_STATUSES: ReadonlySet<string> = new Set(["queued", "in_progress", "completed", "failed", "cancelled", "expired"]);
 const SAFE_SECONDS = /^\d{1,4}$/;
 const SAFE_SIZE = /^\d{2,5}x\d{2,5}$/;
-const SAFE_CODE = /^[a-z0-9_]{1,64}$/;
+/** Failure codes relayed by value; any other upstream code is dropped, never echoed. */
+const PUBLIC_ERROR_CODES: ReadonlySet<string> = new Set([
+  "invalid_argument", "invalid_request", "permission_denied", "failed_precondition", "moderation_blocked",
+  "content_policy_violation", "rate_limit_exceeded", "service_unavailable", "internal_error", "server_error", "timeout",
+]);
 
 /**
  * The public job object: an allowlist of the OpenAI Videos fields, each held to a closed shape, with
  * the OCX handle as `id` and the model OCX sent. No upstream free text passes through: an error keeps
- * a token-shaped code and an allowlisted detail, or a generic message, so an upstream that echoes a
+ * a code from a closed list and an allowlisted detail, or a generic message, so an upstream that echoes a
  * credential or arbitrary text in any field cannot hand it to the caller.
  */
 function publicVideoJob(job: Record<string, unknown>, handle: string, model: string | undefined): Record<string, unknown> {
@@ -196,7 +201,7 @@ function publicVideoJob(job: Record<string, unknown>, handle: string, model: str
     if (value === null || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)) out[field] = value;
   }
   if (typeof job.progress === "number" && Number.isFinite(job.progress)) out.progress = Math.max(0, Math.min(100, Math.round(job.progress)));
-  if (typeof job.status === "string" && SAFE_STATUS.test(job.status)) out.status = job.status;
+  if (typeof job.status === "string" && PUBLIC_STATUSES.has(job.status)) out.status = job.status;
   if (typeof job.seconds === "string" && SAFE_SECONDS.test(job.seconds)) out.seconds = job.seconds;
   else if (typeof job.seconds === "number" && Number.isInteger(job.seconds) && job.seconds >= 0 && job.seconds < 10_000) out.seconds = String(job.seconds);
   if (typeof job.size === "string" && SAFE_SIZE.test(job.size)) out.size = job.size;
@@ -205,7 +210,7 @@ function publicVideoJob(job: Record<string, unknown>, handle: string, model: str
   else if (error && typeof error === "object" && !Array.isArray(error)) {
     const e = error as { code?: unknown; message?: unknown };
     out.error = {
-      ...(typeof e.code === "string" && SAFE_CODE.test(e.code) ? { code: e.code } : {}),
+      ...(typeof e.code === "string" && PUBLIC_ERROR_CODES.has(e.code) ? { code: e.code } : {}),
       message: safeXaiErrorDetail(e.message) ?? "video generation failed",
     };
   }

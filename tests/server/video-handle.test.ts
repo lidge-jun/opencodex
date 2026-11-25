@@ -40,18 +40,33 @@ test("a handle opens for the principal that sealed it, under a key persisted wit
   expect(openVideoHandle(handle, "key:alice")).toEqual(claims);
 });
 
-test("another principal, an edited payload, a foreign key and malformed input do not open", () => {
+test("another principal, any edited byte, a foreign key and malformed input do not open", () => {
   const handle = sealVideoHandle(claims, "key:alice");
   expect(openVideoHandle(handle, "key:bob")).toBeUndefined();
   expect(openVideoHandle(handle, "loopback")).toBeUndefined();
-  const [payload, tag] = handle.slice("video_ocx_".length).split(".");
-  const forged = Buffer.from(JSON.stringify({ v: 1, p: "other-row", u: "video_68d7" })).toString("base64url");
-  expect(openVideoHandle(`video_ocx_${forged}.${tag}`, "key:alice")).toBeUndefined();
-  for (const bad of ["", "video_68d7", `video_ocx_${payload}`, `video_ocx_${payload}.${tag}.x`, "video_ocx_" + "a".repeat(5000)]) {
+  const body = handle.slice("video_ocx_".length);
+  for (const at of [0, Math.floor(body.length / 2), body.length - 1]) {
+    const flipped = body.slice(0, at) + (body[at] === "A" ? "B" : "A") + body.slice(at + 1);
+    expect(openVideoHandle("video_ocx_" + flipped, "key:alice")).toBeUndefined();
+  }
+  for (const bad of ["", "video_68d7", "video_ocx_", "video_ocx_abc", "video_ocx_" + body + ".x", "video_ocx_" + "a".repeat(9000)]) {
     expect(openVideoHandle(bad, "key:alice")).toBeUndefined();
   }
   setVideoHandleKeyForTests(Buffer.alloc(32, 1));
   expect(openVideoHandle(handle, "key:alice")).toBeUndefined();
+});
+
+test("the handle reveals neither the upstream id nor the model", () => {
+  setVideoHandleKeyForTests(Buffer.alloc(32, 9));
+  const secretish = { provider: "aistudio", upstreamId: "synthetic_secret_123abc", model: "synthetic_model_secret" };
+  const handle = sealVideoHandle(secretish, "key:alice");
+  const decoded = Buffer.from(handle.slice("video_ocx_".length), "base64url").toString("latin1");
+  for (const value of [secretish.upstreamId, secretish.model, secretish.provider]) {
+    expect(handle).not.toContain(value);
+    expect(decoded).not.toContain(value);
+  }
+  expect(sealVideoHandle(secretish, "key:alice")).not.toBe(handle);
+  expect(openVideoHandle(handle, "key:alice")).toEqual(secretish);
 });
 
 test("principals bind the admission kind, key id and the exact presented secret", () => {
@@ -91,8 +106,7 @@ test("an existing key readable by other users, or a symlinked key, fails closed"
 test("a later load reads the published key back and creation leaves no temporary file", () => {
   const first = sealVideoHandle(claims, "key:alice");
   setVideoHandleKeyForTests(undefined);
-  const second = sealVideoHandle(claims, "key:alice");
-  expect(second).toBe(first);
+  expect(openVideoHandle(first, "key:alice")).toEqual(claims);
   expect(readdirSync(home).filter(name => name.endsWith(".tmp"))).toEqual([]);
 });
 

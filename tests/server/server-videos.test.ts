@@ -282,6 +282,20 @@ describe("review regressions", () => {
     expect(job).toMatchObject({ object: "video", model: "m", progress: 10, error: { message: "video generation failed" } });
   });
 
+  test("a secret shaped like a status, error code or job id is never reflected, not even inside the handle", async () => {
+    const secret = "synthetic_secret_123abc";
+    answer = () => Response.json({ id: secret, status: "synthetic_secret", error: { code: secret, message: secret } });
+    const { response } = await call(config(), "POST", "/v1/videos", JSON.stringify({ model: "aistudio/m", prompt: "p" }));
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).not.toContain(secret);
+    expect(text).not.toContain("synthetic_secret");
+    const job = JSON.parse(text) as { id: string; status?: string; error?: { code?: string } };
+    expect(job.status).toBeUndefined();
+    expect(job.error?.code).toBeUndefined();
+    expect(Buffer.from(job.id.slice("video_ocx_".length), "base64url").toString("latin1")).not.toContain(secret);
+  });
+
   test("a replacement secret on the same key id does not open the previous holder's handle", async () => {
     const { response } = await create(config(), { model: "aistudio/m", prompt: "p" });
     const handle = (await response.json() as { id: string }).id;

@@ -6,21 +6,21 @@
  * the provider from the handle, so they return to the destination that created the job and never
  * re-route.
  *
- * The handle is HMAC-SHA256 sealed with a per-install key kept in the config directory
+ * The handle is AES-256-GCM encrypted and authenticated with a key derived from a per-install secret kept in the config directory
  * (`video-handle-key`, 32 random bytes, mode 0600) so it survives restarts while a job renders. The key
  * is published atomically (written to a private temporary file, then hard-linked into place, which
  * fails rather than replaces when another process won the race) and read through a no-follow
  * descriptor whose type, size, owner and mode are checked on that same descriptor; anything unsafe
  * fails closed. Handlers load it before the paid create, so a key failure sends nothing.
  *
- * The MAC also covers the admission principal without carrying it: the admission kind, the configured
+ * The authentication tag also covers the admission principal (as associated data) without carrying it: the admission kind, the configured
  * key id and a SHA-256 of the exact secret the caller presented. A handle presented under another key,
  * a replacement secret on the same key id (including a pending rotation), a changed environment token,
  * or after any edit does not open, and the caller sees the same 404 as for an unknown id. Loopback
- * admission carries no secret and is its own principal. The payload is readable base64url JSON and
- * holds no credential.
+ * admission carries no secret and is its own principal. The claims are encrypted, so nothing an upstream
+ * returned as its job id (or a long model name) can be read back out of the handle by the caller.
  */
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 import { closeSync, constants, fstatSync, linkSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
@@ -148,15 +148,26 @@ export function videoHandleClaimsError(provider: string, model: string | undefin
   return undefined;
 }
 
-function mac(key: Buffer, principal: string, payload: string): Buffer {
-  return createHmac("sha256", key).update("ocx-video-handle:v1\n").update(principal).update("\n").update(payload).digest();
+const NONCE_BYTES = 12;
+const TAG_BYTES = 16;
+
+function encryptionKey(secret: Buffer): Buffer {
+  return createHmac("sha256", secret).update("ocx-video-handle:v2:aes-256-gcm").digest();
+}
+
+function associatedData(principal: string): Buffer {
+  return Buffer.from("ocx-video-handle:v2\n" + principal, "utf8");
 }
 
 export function sealVideoHandle(claims: VideoHandleClaims, principal: string): string {
-  const payload = Buffer.from(JSON.stringify({
-    v: 1, p: claims.provider, u: claims.upstreamId, ...(claims.model !== undefined ? { m: claims.model } : {}),
-  })).toString("base64url");
-  const handle = `${VIDEO_HANDLE_PREFIX}${payload}.${mac(loadOrCreateKey(), principal, payload).toString("base64url")}`;
+  const plaintext = Buffer.from(JSON.stringify({
+    v: 2, p: claims.provider, u: claims.upstreamId, ...(claims.model !== undefined ? { m: claims.model } : {}),
+  }), "utf8");
+  const nonce = randomBytes(NONCE_BYTES);
+  const cipher = createCipheriv("aes-256-gcm", encryptionKey(loadOrCreateKey()), nonce);
+  cipher.setAAD(associatedData(principal));
+  const sealed = Buffer.concat([nonce, cipher.update(plaintext), cipher.final(), cipher.getAuthTag()]);
+  const handle = VIDEO_HANDLE_PREFIX + sealed.toString("base64url");
   if (handle.length > MAX_HANDLE_LENGTH) throw new Error("video handle exceeds its length bound");
   return handle;
 }
@@ -164,19 +175,24 @@ export function sealVideoHandle(claims: VideoHandleClaims, principal: string): s
 /** The claims of a handle this install sealed for `principal`, or undefined for anything else. */
 export function openVideoHandle(handle: string, principal: string): VideoHandleClaims | undefined {
   if (handle.length > MAX_HANDLE_LENGTH || !handle.startsWith(VIDEO_HANDLE_PREFIX)) return undefined;
-  const body = handle.slice(VIDEO_HANDLE_PREFIX.length);
-  const dot = body.indexOf(".");
-  if (dot <= 0 || dot !== body.lastIndexOf(".")) return undefined;
-  const payload = body.slice(0, dot);
-  const tag = body.slice(dot + 1);
-  if (!/^[A-Za-z0-9_-]+$/.test(payload) || !/^[A-Za-z0-9_-]{43}$/.test(tag)) return undefined;
-  const expected = mac(loadOrCreateKey(), principal, payload);
-  const presented = Buffer.from(tag, "base64url");
-  if (presented.length !== expected.length || !timingSafeEqual(presented, expected)) return undefined;
+  const encoded = handle.slice(VIDEO_HANDLE_PREFIX.length);
+  if (!/^[A-Za-z0-9_-]+$/.test(encoded)) return undefined;
+  const sealed = Buffer.from(encoded, "base64url");
+  if (sealed.length <= NONCE_BYTES + TAG_BYTES) return undefined;
+  let plaintext: string;
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", encryptionKey(loadOrCreateKey()), sealed.subarray(0, NONCE_BYTES));
+    decipher.setAAD(associatedData(principal));
+    decipher.setAuthTag(sealed.subarray(sealed.length - TAG_BYTES));
+    plaintext = Buffer.concat([decipher.update(sealed.subarray(NONCE_BYTES, sealed.length - TAG_BYTES)), decipher.final()]).toString("utf8");
+  } catch (error) {
+    if (isVideoHandleKeyError(error)) throw error;
+    return undefined;
+  }
   let claims: unknown;
-  try { claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")); } catch { return undefined; }
+  try { claims = JSON.parse(plaintext); } catch { return undefined; }
   const c = claims as { v?: unknown; p?: unknown; u?: unknown; m?: unknown } | null;
-  if (!c || c.v !== 1 || typeof c.p !== "string" || !c.p || !isUsableUpstreamVideoId(c.u)) return undefined;
+  if (!c || c.v !== 2 || typeof c.p !== "string" || !c.p || !isUsableUpstreamVideoId(c.u)) return undefined;
   if (c.m !== undefined && typeof c.m !== "string") return undefined;
   return { provider: c.p, upstreamId: c.u, ...(typeof c.m === "string" ? { model: c.m } : {}) };
 }

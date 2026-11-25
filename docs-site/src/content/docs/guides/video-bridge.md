@@ -167,7 +167,7 @@ returns an error and sends nothing. The `id` in each answer is an OpenCodex hand
 calls return to the provider that created the job, and a handle works only with the exact OpenCodex API key
 secret (or the same loopback or environment admission) that created it. Other keys, and a rotated or
 replaced secret under the same key id, get `404`, so fetch results before rotating a key. The
-handles are signed with a key stored as `video-handle-key` in the OpenCodex home, so they survive a
+handles are encrypted and signed with a key stored as `video-handle-key` in the OpenCodex home, so they survive a
 restart. If that key file cannot be read or created safely, `POST /v1/videos` fails before the job is
 submitted. Job objects carry only the documented fields (`status`, `progress`, `seconds`, `size`, timestamps and a
 short `error`), with `model` set to the model OpenCodex sent; other upstream fields and free text are dropped.

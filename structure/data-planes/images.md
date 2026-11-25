@@ -139,9 +139,9 @@ The row must pass `resolveVideoProviderRow` and set `videoApi: "openai"`; nothin
 routes and nothing falls back. A configured key's scope is checked with `admissionScopeDenial` against
 that row and model before the create, and again before each poll and content request.
 
-The returned job `id` is an HMAC-SHA256 handle (`src/server/video-handle.ts`) over the provider, the
+The returned job `id` is an AES-256-GCM handle (`src/server/video-handle.ts`, random nonce) that encrypts the provider, the
 upstream id and the model, keyed by `video-handle-key` in the config directory (32 random bytes, mode
-0600, recorded as owned, created exclusively). The MAC also covers the admission principal (admission kind,
+0600, recorded as owned, created exclusively). The authentication tag also covers, as associated data, the admission principal (admission kind,
 configured key id and a SHA-256 of the exact presented secret, read with `resolveApiAuth`'s header precedence;
 loopback is its own principal) without carrying it, so a handle presented by another key, under a replaced
 or rotated secret on the same key id, edited, or minted under another signing key reads as `404` before any
@@ -157,7 +157,8 @@ Create accepts JSON or multipart; a multipart `input_reference` PNG/JPEG/WebP fi
 Upstream errors keep a 4xx status and only allowlisted detail; transport errors are redacted. Job
 objects are rebuilt from an allowlist of closed-shape fields (status, progress, seconds, size, timestamps,
 an error code and allowlisted detail or a generic message) with the handle as `id` and the model OCX sent;
-upstream free text never passes through. Content is streamed with a
+upstream free text never passes through. Status and error code are relayed only from closed value lists, and
+the handle is encrypted, so an upstream that echoes a credential as its job id, status or code cannot reflect it. Content is streamed with a
 fixed media-type allowlist (anything else is `application/octet-stream`), `nosniff`, `no-store`, a
 200 MiB cap, and only the `video`, `thumbnail` and `spritesheet` variants. List, delete, remix, edit
 and extension are not served. Neither xAI nor OpenAI publishes a Responses-API video tool (xAI Responses
