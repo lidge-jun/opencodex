@@ -61,7 +61,7 @@ let clientStopping = false;
 let explicitClientStopRequested: boolean | undefined;
 let explicitClientStopOwner: ClientStopOwner | undefined;
 let standaloneRecycleAllowed = () => !clientStopping;
-let activeLinkForRecycle: OcxClientConnectionConfig | undefined;
+let activeLinkForRecycle: { connection: OcxClientConnectionConfig; isServingGeneration: () => boolean } | undefined;
 
 /**
  * When this runtime's process started (OCX-6, P5): what `/healthz` reports as `startedAt` and the
@@ -170,12 +170,22 @@ export function standaloneRecycleEnv(
 }
 
 export function scheduleStandaloneRecycle(disconnectedTokenFingerprint: string): void {
-  if (recycleScheduled || !standaloneRecycleAllowed()) return;
+  const listener = activeServer;
+  const served = activeLinkForRecycle;
+  if (recycleScheduled || recycleFlight) return;
+  if (served) {
+    if (!listener || served.connection.tokenFingerprint !== disconnectedTokenFingerprint || !served.isServingGeneration()) return;
+  } else if (!standaloneRecycleAllowed()) return;
   recycleScheduled = true;
+  const current = () => recycleScheduled && activeServer === listener && activeLinkForRecycle === served
+    && (!served || served.isServingGeneration());
   recycleTimer = setTimeout(() => {
     recycleTimer = undefined;
-    if (!standaloneRecycleAllowed()) { recycleScheduled = false; return; }
-    recycleFlight = recycleStandalone(disconnectedTokenFingerprint).finally(() => { recycleFlight = null; });
+    if (!current() || (!served && !standaloneRecycleAllowed())) { recycleScheduled = false; return; }
+    recycleFlight = recycleStandalone(disconnectedTokenFingerprint, {}, current).finally(() => {
+      recycleScheduled = false;
+      recycleFlight = null;
+    });
     void recycleFlight.catch(error => { if (!clientStopping) throw error; });
   }, 50);
   if (typeof recycleTimer === "object" && "unref" in recycleTimer) recycleTimer.unref();
@@ -198,6 +208,7 @@ function errorCode(error: unknown): string {
 export async function recycleStandalone(
   disconnectedTokenFingerprint: string,
   io: StandaloneRecycleIo = {},
+  scheduledCurrent?: () => boolean,
 ): Promise<void> {
   // The configured port when the listener never recorded one: the recycle still owes a proxy.
   const port = activePort ?? (io.configuredPort ?? configuredTcpPort)();
@@ -229,10 +240,8 @@ export async function recycleStandalone(
     await flushLinkDiagnostics();
   };
   if (activeLinkForRecycle) {
-    if (!(await runClientRecycleWithAdmission(activeLinkForRecycle, standaloneRecycleAllowed, teardown))) {
-      recycleScheduled = false;
-      return;
-    }
+    const scheduled = scheduledCurrent ? { current: scheduledCurrent } : undefined;
+    if (!(await runClientRecycleWithAdmission(activeLinkForRecycle.connection, standaloneRecycleAllowed, teardown, scheduled))) return;
   } else await teardown();
   // Recycling back to standalone after `ocx disconnect` must actually bring a standalone
   // proxy back, under every launch shape.
@@ -443,7 +452,10 @@ export async function startClientRuntime(
         clientLinkOwner });
     };
     const activate = (): void => {
-      activeLinkForRecycle = linkMode ? state.value : undefined;
+      activeLinkForRecycle = linkMode ? {
+        connection: state.value,
+        isServingGeneration: () => !shuttingDown && readRuntimePort(process.pid)?.servingGeneration === servingGeneration,
+      } : undefined;
       activeServer = server;
       activePort = boundPort;
       servedPort = boundPort;
@@ -520,14 +532,10 @@ export async function startClientRuntime(
   };
 
   let shuttingDown = false;
-  standaloneRecycleAllowed = () => {
+  const ownsCompletedDisconnect = () => {
     try {
-      if (shuttingDown || observeExplicitStop()) return false;
-      if (!clientStopping) return true;
-      // A retained sync fence is not an active exit. Only a completed disconnect of this exact
-      // served owner permits recovery; partial cleanup, a new connect or uncertain state cannot.
       return withConfigMutationLockSync(() => {
-        if (observeExplicitStop()) return false;
+        if (shuttingDown || observeExplicitStop()) return false;
         const receipt = readDesktopDisconnectReceipt();
         return ownerProven() && !pendingClientConnectMayOwnToken()
           && readClientConnectionStateWithEvidence().kind === "disconnected"
@@ -536,6 +544,12 @@ export async function startClientRuntime(
           && receipt.value.tokenFingerprint === state.value.tokenFingerprint;
       });
     } catch { return false; }
+  };
+  standaloneRecycleAllowed = () => {
+    // A retained sync fence is not an active exit. Only this owner's completed disconnect
+    // permits recovery after that fence.
+    try { return !shuttingDown && !observeExplicitStop() && (!clientStopping || ownsCompletedDisconnect()); }
+    catch { return false; }
   };
   const restartController: ClientRestartController = createClientRestartController({
     stopping: () => !standaloneRecycleAllowed(),
@@ -567,8 +581,14 @@ export async function startClientRuntime(
       );
     },
     resume: async () => {
-      const recycleAfterRollback = () => {
-        if (standaloneRecycleAllowed()) return recycleStandalone(state.value.tokenFingerprint);
+      const recycleAfterRollback = async () => {
+        if (standaloneRecycleAllowed()) await recycleStandalone(state.value.tokenFingerprint);
+        // An admitted recycle exits this process. A refused one may return after the original
+        // listener stopped. Fail only while this generation still owns the completed disconnect.
+        if (!activeServer && activeLinkForRecycle?.connection === state.value && activeLinkForRecycle.isServingGeneration()
+          && ownsCompletedDisconnect()) {
+          throw Object.assign(new Error("Could not hand off the disconnected Link listener"), { code: "client_recycle_unpublished" });
+        }
       };
       // The connection may have changed while the replacement was starting (`ocx disconnect`, a
       // new connect). Serving the old one again would be a stale runtime nothing recycles; hand
@@ -582,6 +602,12 @@ export async function startClientRuntime(
         if (clientRestartRollbackAction(state.value, readClientConnectionState()) === "recycle") return "refused";
         return serve({ port: servedPort, portWaitMs: remainingMs });
       }))) {
+        // A recycle cannot take over an unchanged Link. Its last unpublished listener has
+        // already closed; let the restart controller report failure unless a stop owns exit.
+        if (linkMode && clientRestartRollbackAction(state.value, readClientConnectionStateWithEvidence()) === "resume") {
+          if (shuttingDown || observeExplicitStop()) return;
+          throw Object.assign(new Error("Could not republish the Link listener"), { code: "client_rollback_unpublished" });
+        }
         await recycleAfterRollback();
       }
     },
@@ -603,8 +629,8 @@ export async function startClientRuntime(
     if (recycleTimer) {
       clearTimeout(recycleTimer);
       recycleTimer = undefined;
-      recycleScheduled = false;
     }
+    recycleScheduled = false;
     const fenceSync = () => {
       if (!linkMode) return true;
       try { markClientRuntimeStopping({ pid: process.pid, port: servedPort, attestationSecret }); return true; }
