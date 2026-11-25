@@ -261,23 +261,19 @@ export function rowsMatchingCurrentKeys<T extends ApiKeyCooldownHold>(rows: read
 }
 
 let installed: { store: ApiKeyCooldownStore; detach: () => void; detachShutdown: () => void } | undefined;
-/** The config home the in-memory holds were last restored for; it outlives an uninstall. */
-let localHome: string | undefined;
 
 /**
  * Bind persistence to the running server's config dir and restore holds that are unexpired and
  * still belong to the configured key. The server background lifecycle calls this when a server
  * starts and `uninstallApiKeyCooldownPersistence` when the last one stops; repeat calls for the
- * same dir are no-ops. Installing for another dir than the last one first drops the in-memory
- * holds, which belong to the previous home, even when its server has already stopped. A failed read leaves the server running with in-memory cooldowns.
+ * same dir are no-ops. Installing for another dir first drops the in-memory holds, which belong
+ * to the previous home. A failed read leaves the server running with in-memory cooldowns.
  */
 export function installApiKeyCooldownPersistence(config: Pick<OcxConfig, "providers">, now = Date.now()): ApiKeyCooldownStore {
   const dir = getConfigDir();
   if (installed?.store.dir === dir) return installed.store;
-  uninstallApiKeyCooldownPersistence();
-  // Holds restored or recorded for another home, even one whose server already stopped, are not this home's.
-  if (localHome !== undefined && localHome !== dir) resetLocalApiKeyCooldowns();
-  localHome = dir;
+  // Holds restored or recorded for another home are not this home's.
+  if (installed) uninstallApiKeyCooldownPersistence({ dropLocalHolds: true });
   const store = new ApiKeyCooldownStore(dir);
   try {
     restoreApiKeyCooldowns(rowsMatchingCurrentKeys(store.load(now), config), now);
@@ -292,12 +288,18 @@ export function installApiKeyCooldownPersistence(config: Pick<OcxConfig, "provid
   return store;
 }
 
-/** Flush and detach the installed store: the last server stopped, the process exits, or the home changed. */
-export function uninstallApiKeyCooldownPersistence(): void {
+/**
+ * Flush and detach the installed store. The final server release and a home change also drop the
+ * in-memory holds that home owned, so a server started later for another home inherits none;
+ * holds recorded after that belong to whichever home installs next. The process-exit hook keeps
+ * them, because turns still draining keep consulting them.
+ */
+export function uninstallApiKeyCooldownPersistence(options: { dropLocalHolds?: boolean } = {}): void {
   if (!installed) return;
   const current = installed;
   installed = undefined;
   current.detach();
   current.detachShutdown();
   current.store.flushForShutdown();
+  if (options.dropLocalHolds === true) resetLocalApiKeyCooldowns();
 }

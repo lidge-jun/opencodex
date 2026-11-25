@@ -272,6 +272,7 @@ test("only a live server binds the file, and its final release detaches it", asy
   const lease = acquireServerBackgroundLifecycle(() => {}, cfg);
   expect(getKeyCooldownUntil("p", "a")).toBe(until);
   await lease.release();
+  expect(isKeyInCooldown("p", "a")).toBe(false);
 
   // After the last server stops, a cooldown and a clear stay in memory and leave the file alone.
   const before = readFileSync(file(), "utf8");
@@ -308,7 +309,8 @@ test("a server for another home started after the last one stopped inherits no h
   const now = Date.now();
   installApiKeyCooldownPersistence(config({ a: "sk-one" }), now);
   setKeyCooldown("p", "a", now + 600_000, "sk-one");
-  uninstallApiKeyCooldownPersistence();
+  // The final server release.
+  uninstallApiKeyCooldownPersistence({ dropLocalHolds: true });
   const other = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-other-"));
   try {
     process.env.OPENCODEX_HOME = other;

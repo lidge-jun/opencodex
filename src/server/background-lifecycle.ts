@@ -219,7 +219,7 @@ function stopProcessLoops(): void {
   stopCatalogAutoRefresh();
   setCatalogAutoRefreshClientFanout(null);
   setLivePolicyOwner(null);
-  uninstallApiKeyCooldownPersistence();
+  uninstallApiKeyCooldownPersistence({ dropLocalHolds: true });
 }
 
 async function stopStoragePolicyWorker(): Promise<void> {
@@ -302,7 +302,7 @@ export function acquireServerBackgroundLifecycle(
   } catch (error) {
     owner.lowQuota();
     owner.resources.release();
-    if (owners.length === 0) uninstallApiKeyCooldownPersistence();
+    if (owners.length === 0) uninstallApiKeyCooldownPersistence({ dropLocalHolds: true });
     throw error;
   }
 
