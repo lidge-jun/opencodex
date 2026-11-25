@@ -277,14 +277,17 @@ export function providerEgressSendInit(
   binding: ProviderEgressBinding,
   physicalFetch: unknown,
   input: string | URL | Request,
+  /** False for an early check whose destination a plugin rewrite or an override may still change. */
+  options: { exemption?: boolean } = {},
 ): { proxy?: string | false } {
   const url = egressTargetUrl(input);
   if (url === null) return {};
   const egress = resolveProviderEgress({ providerName: binding.providerName, provider: binding.provider, url });
-  // Decided here, before any dispatch side effect (attempt accounting, dispatch receipts): an HTTP(S)
-  // proxy route toward a destination the process NO_PROXY exempts would leave without the proxy.
-  // `configuredOutboundFetch` keeps the same check as a backstop for callers outside this boundary.
-  if (egress.kind === "proxy" && egress.transport === "http") {
+  // An HTTP(S) proxy route toward a destination the process NO_PROXY exempts would leave without the
+  // proxy. Decided against the destination actually sent, before the dispatch receipt and before
+  // any byte leaves; `providerFetch` also asks early, before `beforeDispatch`, when nothing can still
+  // change the destination. `configuredOutboundFetch` keeps the check as a backstop for other callers.
+  if (options.exemption !== false && egress.kind === "proxy" && egress.transport === "http") {
     const target = parseTargetUrl(binding.providerName, url);
     if ((target.protocol === "http:" || target.protocol === "https:") && processNoProxyExempts(target)) {
       throw explicitProxyExemptedError(target);

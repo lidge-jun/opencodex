@@ -15,6 +15,7 @@ import {
 } from "../../src/lib/proxy-env";
 import { providerEgressFetchInit, resolveProviderEgress } from "../../src/lib/provider-egress";
 import { providerFetch } from "../../src/server/responses/fetch-helpers";
+import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
 import type { OcxProviderConfig } from "../../src/types";
 
 const ENV_KEYS = ["NO_PROXY", "no_proxy", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] as const;
@@ -185,6 +186,22 @@ describe("the provider send boundary", () => {
     await expect(send(destUrl, { method: "POST", body: "synthetic-body" })).rejects.toBeInstanceOf(ExplicitProxyExemptedError);
     expect(receipts).toBe(0);
     expect(hits).toEqual({ dest: 0, proxy: 0 });
+  });
+
+  test("an exempted original URL that a plugin rewrites to a local sidecar is not refused early", async () => {
+    process.env.NO_PROXY = "example.com";
+    const unregister = registerUpstreamRewriter("test-sidecar", target => {
+      if (target.url.startsWith("https://example.com/")) target.url = `http://127.0.0.1:${dest.port}/v1/models`;
+    });
+    try {
+      const send = providerFetch({ adapter: "openai-chat", baseUrl: "https://example.com/v1", proxy: proxyUrl } as unknown as OcxProviderConfig,
+        undefined, { providerName: "p" });
+      expect(await (await send("https://example.com/v1/models")).text()).toBe("dest");
+      // A rewrite onto this machine's loopback dials directly, as before.
+      expect(hits).toEqual({ dest: 1, proxy: 0 });
+    } finally {
+      unregister();
+    }
   });
 
   test("a route that is not exempted still dispatches once through the proxy", async () => {
