@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { chmodSync, mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OAUTH_PROVIDERS, getValidAccessTokenForAccount } from "../../src/oauth";
 import { clearGenericFailoverHealth, rotateGenericOAuthAccountOn429 } from "../../src/oauth/generic-account-failover";
-import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../../src/oauth/store";
+import { getAccountSet, markAccountNeedsReauth, saveAccountCredential, saveCredential } from "../../src/oauth/store";
 import {
   classifyOAuthRefreshFailure,
   clearOAuthRefreshOutcomes,
@@ -16,8 +16,9 @@ import {
 } from "../../src/oauth/refresh-outcomes";
 import { AnthropicTokenError } from "../../src/oauth/anthropic";
 import { KiroTokenRefreshError } from "../../src/oauth/kiro";
-import { acquireAccountLease } from "../../src/oauth/kiro-account-load";
-import { clearAntigravityAccountRosters, recordAntigravityAccountRoster } from "../../src/providers/antigravity-account-roster";
+import { acquireAccountLease, accountInFlightSnapshot, KIRO_LEASE_MAX_MS } from "../../src/oauth/kiro-account-load";
+import { antigravityAccountModelSupport, antigravityAccountSupportsModel, clearAntigravityAccountRosters, recordAntigravityAccountRoster } from "../../src/providers/antigravity-account-roster";
+import * as store from "../../src/oauth/store";
 import { join as joinPath } from "node:path";
 import { clearModelCache, setCached } from "../../src/codex/model-cache";
 import {
@@ -153,28 +154,74 @@ test("provider token errors keep their HTTP status", () => {
   expect(classifyOAuthRefreshFailure(new KiroTokenRefreshError(503))).toEqual({ reason: "upstream_error", status: 503 });
 });
 
-test("refresh results are scoped to the config home, the account's lifetime and a bounded size", async () => {
+test("refresh results are fenced to the login, the config home and a bounded size", async () => {
   const cfg = config({ xai: oauthProvider("openai-chat", "https://api.x.ai/v1", ["grok-a"]) });
   const [id] = await seed("xai", 1);
-  const addedAt = getAccountSet("xai")!.accounts[0]!.addedAt ?? 0;
-  recordOAuthRefreshOutcome("xai", id!, { at: addedAt - 1, ok: false, reason: "rejected" });
-  // A result older than the account (a removed and re-added login) is not this account's.
-  expect(buildAccountDiagnostics("xai", cfg).accounts[0]!.lastRefresh).toBeNull();
-  recordOAuthRefreshOutcome("xai", id!, { at: addedAt + 1, ok: true });
+  recordOAuthRefreshOutcome("xai", id!, { at: Date.now(), ok: true });
   expect(buildAccountDiagnostics("xai", cfg).accounts[0]!.lastRefresh).toMatchObject({ ok: true });
+
+  // An in-place login mints a new loginId: the previous login's result is not this login's.
+  const credential = getAccountSet("xai")!.accounts[0]!.credential;
+  await saveAccountCredential("xai", id!, credential, { rotateLoginId: true });
+  expect(buildAccountDiagnostics("xai", cfg).accounts[0]!.lastRefresh).toBeNull();
 
   const other = mkdtempSync(joinPath(tmpdir(), "ocx-account-diagnostics-other-"));
   try {
     process.env.OPENCODEX_HOME = other;
-    expect(lastOAuthRefreshOutcome("xai", id!)).toBeNull();
+    expect(lastOAuthRefreshOutcome("xai", id!, "login:any")).toBeNull();
   } finally {
     process.env.OPENCODEX_HOME = home;
     removeTreeWithRetry(other);
   }
 
-  for (let i = 0; i < MAX_OAUTH_REFRESH_OUTCOMES + 10; i += 1) recordOAuthRefreshOutcome("xai", `churn-${i}`, { at: i, ok: true });
+  for (let i = 0; i < MAX_OAUTH_REFRESH_OUTCOMES + 10; i += 1) recordOAuthRefreshOutcome("xai", `churn-${i}`, { at: i, ok: true }, "");
   expect(oauthRefreshOutcomeCountForTests()).toBe(MAX_OAUTH_REFRESH_OUTCOMES);
-  expect(lastOAuthRefreshOutcome("xai", "churn-0")).toBeNull();
+  expect(lastOAuthRefreshOutcome("xai", "churn-0", "")).toBeNull();
+});
+
+test("a refresh that finishes after its login was replaced does not report on the new login", async () => {
+  const cfg = config({ xai: oauthProvider("openai-chat", "https://api.x.ai/v1", ["grok-a"]) });
+  const [id] = await seed("xai", 1);
+  let finish!: (value: string) => void;
+  const inFlight = observeOAuthRefresh("xai", id!, () => new Promise<string>(resolve => { finish = resolve; }));
+  const credential = getAccountSet("xai")!.accounts[0]!.credential;
+  await saveAccountCredential("xai", id!, credential, { rotateLoginId: true });
+  finish("token");
+  await inFlight;
+  expect(buildAccountDiagnostics("xai", cfg).accounts[0]!.lastRefresh).toBeNull();
+});
+
+test("an expired lease with a queued waiter is counted out without admitting the waiter", async () => {
+  const [id] = await seed("kiro", 1);
+  const lease = await acquireAccountLease("kiro", id!, { maxConcurrentPerAccount: 1 });
+  let admitted = false;
+  const waiter = acquireAccountLease("kiro", id!, { maxConcurrentPerAccount: 1, waitMs: 5_000 }).then(next => { admitted = true; return next; });
+  const later = Date.now() + KIRO_LEASE_MAX_MS + 1;
+  expect(accountInFlightSnapshot("kiro", id!, later)).toBe(0);
+  const kiro = { ...oauthProvider("kiro", "https://q.us-east-1.amazonaws.com", ["claude-sonnet-4-6"]),
+    oauthAccountFailover: { enabled: true, maxConcurrentPerAccount: 1 } } as unknown as OcxProviderConfig;
+  expect(buildAccountDiagnostics("kiro", config({ kiro }), later).accounts[0]!.inFlight).toBe(0);
+  await Bun.sleep(20);
+  expect(admitted).toBe(false);
+  lease?.release();
+  (await waiter)?.release();
+  expect(admitted).toBe(true);
+});
+
+test("an Antigravity account without roster or denial evidence costs no credential read", async () => {
+  const [id] = await seed("google-antigravity", 1);
+  const loads = spyOn(store, "getAccountCredentialWithStatus");
+  try {
+    expect(antigravityAccountSupportsModel("google-antigravity", id!, "gemini-3-pro")).toBeUndefined();
+    expect([...antigravityAccountModelSupport("google-antigravity", id!, ["gemini-3-pro", "claude-sonnet-4-6"]).values()]).toEqual([undefined, undefined]);
+    expect(loads).toHaveBeenCalledTimes(0);
+    recordAntigravityAccountRoster("google-antigravity", id!, [{ id: "gemini-3-pro", wireModelId: "gemini-3-pro" }]);
+    loads.mockClear();
+    expect([...antigravityAccountModelSupport("google-antigravity", id!, ["gemini-3-pro", "claude-sonnet-4-6"]).values()]).toEqual([true, false]);
+    expect(loads).toHaveBeenCalledTimes(1);
+  } finally {
+    loads.mockRestore();
+  }
 });
 
 test("an Antigravity account whose roster omits every known model is not eligible", async () => {
