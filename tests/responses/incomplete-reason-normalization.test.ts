@@ -10,7 +10,7 @@ import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 
 const aliases = [
   ["length", "max_output_tokens"], [" MAX_TOKENS ", "max_output_tokens"],
@@ -20,9 +20,9 @@ const aliases = [
   ["max_messages", "max_messages"], ["steered", "steered"],
   ["adapter_eof", "adapter_eof"], ["vendor-limit", "vendor-limit"],
 ] as const;
-const snapshot = (reason: string) => ({
+const snapshot = (reason: string, retryable = true) => ({
   id: "resp_incomplete", object: "response", model: "test-model", status: "incomplete",
-  incomplete_details: { reason, message: "partial turn", retryable: false, vendor: 7 },
+  incomplete_details: { reason, message: "partial turn", retryable, vendor: 7 },
   output: [{ id: "msg_partial", type: "message", role: "assistant", status: "incomplete",
     content: [{ type: "output_text", text: "partial answer", annotations: [] }] }],
   usage: { input_tokens: 3, output_tokens: 4, total_tokens: 7 },
@@ -39,7 +39,7 @@ describe("Responses incomplete reasons at transport boundaries", () => {
     expect(rewriteResponsesIncompleteReasonJson(json)).toBe(json);
   });
   test("nested user output stays opaque and the input object stays unchanged", () => {
-    const response = { ...snapshot("length"), output: [{ incomplete_details: { reason: "length" } }] };
+    const response = { ...snapshot("length", false), output: [{ incomplete_details: { reason: "length" } }] };
     const json = JSON.stringify(response);
     expect(JSON.parse(rewriteResponsesIncompleteReasonJson(json))).toEqual({ ...response,
       incomplete_details: { ...response.incomplete_details, reason: "max_output_tokens" } });
@@ -81,44 +81,59 @@ beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-incomplete-reason-"));
   process.env.OPENCODEX_HOME = testDir;
 });
-afterEach(() => {
+afterEach(async () => {
   resetProviderRequestPacingForTest();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  codexHome?.restore();
-  removeTreeWithRetry(testDir);
-});
+  try {
+    await removeTreeAfterBackgroundWork(testDir);
+  } finally {
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    codexHome?.restore();
+  }
+}, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
+
+async function deliverNativeSnapshot(response: ReturnType<typeof snapshot>, stream: boolean) {
+  let sends = 0;
+  const upstream = Bun.serve({ port: 0, fetch() {
+    sends++;
+    return stream ? new Response(frame(response), { headers: { "content-type": "text/event-stream" } })
+      : Response.json(response);
+  } });
+  saveConfig({ port: 0, defaultProvider: "mock", providers: { mock: {
+    adapter: "openai-responses", apiKey: "mock-key", authMode: "key", allowPrivateNetwork: true,
+    baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`,
+  } } });
+  const proxy = startServer(0);
+  try {
+    const result = await fetch(new URL("/v1/responses", proxy.url), {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", input: "hello", stream }),
+    });
+    expect(result.status).toBe(200);
+    const text = await result.text();
+    expect(sends).toBe(1);
+    if (!stream) return JSON.parse(text);
+    const terminals = text.split("\n").filter(line => line.startsWith("data: {"))
+      .map(line => JSON.parse(line.slice(6))).filter(event => event.type === "response.incomplete");
+    expect(terminals).toHaveLength(1);
+    return terminals[0].response;
+  } finally { await proxy.stop(true); await upstream.stop(true); }
+}
 
 describe("Responses native passthrough delivery", () => {
   for (const [reason, canonical] of aliases) {
     for (const stream of [false, true]) {
       test(`${stream ? "SSE" : "JSON"}: ${reason}`, async () => {
         const response = snapshot(reason);
-        let sends = 0;
-        const upstream = Bun.serve({ port: 0, fetch() {
-          sends++;
-          return stream ? new Response(frame(response), { headers: { "content-type": "text/event-stream" } })
-            : Response.json(response);
-        } });
-        saveConfig({ port: 0, defaultProvider: "mock", providers: { mock: {
-          adapter: "openai-responses", apiKey: "mock-key", authMode: "key", allowPrivateNetwork: true,
-          baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`,
-        } } });
-        const proxy = startServer(0);
-        try {
-          const result = await fetch(new URL("/v1/responses", proxy.url), {
-            method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ model: "mock/test-model", input: "hello", stream }),
-          });
-          expect(result.status).toBe(200);
-          const text = await result.text();
-          const terminal = stream ? text.split("\n").filter(line => line.startsWith("data: {"))
-            .map(line => JSON.parse(line.slice(6))).find(event => event.type === "response.incomplete").response
-            : JSON.parse(text);
-          expect(terminal).toEqual({ ...response, incomplete_details: { ...response.incomplete_details, reason: canonical } });
-          expect(sends).toBe(1);
-        } finally { await proxy.stop(true); await upstream.stop(true); }
+        const terminal = await deliverNativeSnapshot(response, stream);
+        expect(terminal).toEqual({ ...response, incomplete_details: { ...response.incomplete_details, reason: canonical } });
       });
     }
   }
+  test("SSE: an explicit replay veto preserves the partial output and withholds diagnostic details", async () => {
+    const response = snapshot("length", false);
+    const terminal = await deliverNativeSnapshot(response, true);
+    const error = { type: "server_error", code: null, message: "Upstream reported a non-replayable failed completion." };
+    expect(terminal).toEqual({ ...response, incomplete_details: { reason: "max_output_tokens" }, retryable: false, error, last_error: error });
+  });
 });
