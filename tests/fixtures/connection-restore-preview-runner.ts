@@ -5,7 +5,7 @@
  * the real native restore on the same home and prints one JSON line with both key-level diffs.
  * Config values never appear in the output.
  */
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 
@@ -42,6 +42,13 @@ switch (scenario) {
     break;
   }
   case "native": break;
+  case "profile-symlink": {
+    writeFileSync(configPath, 'model_provider = "opencodex"\n\n[model_providers.opencodex]\nname = "opencodex"\nbase_url = "http://127.0.0.1:10100/v1"\n');
+    const target = join(process.env.HOME!, "profile-target.toml");
+    writeFileSync(target, "# not ours\n");
+    symlinkSync(target, profilePath);
+    break;
+  }
   case "external-provider":
     writeFileSync(configPath, 'model_provider = "corp"\n\n[model_providers.corp]\nname = "corp"\nbase_url = "https://gateway.example.test/v1"\n');
     break;

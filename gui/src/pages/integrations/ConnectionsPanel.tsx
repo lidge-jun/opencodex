@@ -99,8 +99,8 @@ export function ConnectionCard({ view }: { view: ConnectionView }) {
           )}
           {preview.changes.length > 0 && (
             <ul className="connection-restore-list">
-              {preview.changes.map(change => (
-                <li key={`${change.file}:${change.key}`} data-change={change.change}>
+              {preview.changes.map((change, index) => (
+                <li key={`${index}:${change.file}:${change.key}`} data-change={change.change}>
                   <code>{change.file}</code> <code>{change.key}</code> <span className="chip">{t(CHANGE_KEYS[change.change])}</span>
                 </li>
               ))}

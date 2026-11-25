@@ -13,7 +13,7 @@
  * The catalog rows and conversation-history relabel a restore also performs are not config
  * keys and are not listed.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { inspectRecordedServiceOwnership, type OwnershipDeps } from "../integrations/native/ownership-preflight";
 import { codexHomeIsAbsent, inspectCodexHomeOwner } from "./codex-home-owner";
@@ -75,6 +75,22 @@ function flatten(content: string | null): Map<string, string> {
   return keys;
 }
 
+/**
+ * A config key as a response may show it. Root keys and generated table names are identifiers;
+ * a quoted segment (a project path, a hook or plugin name), a segment with `@`, or a long bare
+ * segment can carry a user name, an email or a secret, so it becomes `…`.
+ */
+export function displayCodexConfigKey(key: string): string {
+  const segments = key.match(/"(?:[^"\\]|\\.)*"|'[^']*'|[^.]+/g) ?? [key];
+  return segments.map(segment => segment.startsWith("\"") || segment.startsWith("'") || segment.includes("@")
+    || segment.length > 40 || !/^[A-Za-z0-9_-]+$/.test(segment) ? "…" : segment).join(".");
+}
+
+function profileIsSymlink(): boolean {
+  try { return lstatSync(CODEX_PROFILE_PATH).isSymbolicLink(); }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== "ENOENT"; }
+}
+
 /** Key-level difference between two config.toml texts; values are compared, never returned. */
 export function codexConfigKeyChanges(before: string | null, after: string | null): CodexRestoreChange[] {
   const a = flatten(before);
@@ -85,7 +101,9 @@ export function codexConfigKeyChanges(before: string | null, after: string | nul
     else if (b.get(key) !== value) changes.push({ file: "config.toml", key, change: "update" });
   }
   for (const key of b.keys()) if (!a.has(key)) changes.push({ file: "config.toml", key, change: "add" });
-  return changes.sort((x, y) => x.key.localeCompare(y.key));
+  return changes
+    .map(change => ({ ...change, key: displayCodexConfigKey(change.key) }))
+    .sort((x, y) => x.key.localeCompare(y.key) || x.change.localeCompare(y.change));
 }
 
 function profileChange(before: string | null, after: string | null): CodexRestoreChange[] {
@@ -140,6 +158,8 @@ export function previewCodexNativeRestore(deps: CodexRestorePreviewDeps = {}): C
   } else {
     // removeCodexConfig: the profile goes unless the journal step restored or kept it.
     const preserveProfile = planned !== null && (planned.profileRestored || planned.profileChanged);
+    // ...and it refuses a profile that is a symbolic link before touching config.toml.
+    if (!preserveProfile && profileIsSymlink()) return none("refused_profile");
     if (config === null) {
       afterConfig = null;
     } else {

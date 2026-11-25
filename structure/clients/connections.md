@@ -36,7 +36,12 @@ hub gate, unknown evidence. `restorePreview` comes from `src/codex/restore-previ
 table retention, and `previewApprovedCodexProviderRestore` (sharing the URL transform with
 `restoreApprovedCodexProviders`). Changes are root keys or `section.key` in config.toml plus a
 whole-file entry for `opencodex.config.toml`; catalog rows and the history relabel are not keys and
-are not listed. `tests/server/connection-status-routes.test.ts` runs
+are not listed. Key segments that can carry identity — quoted table names (project paths, hook and plugin
+names), segments with `@`, long bare segments — are shown as `…` (`displayCodexConfigKey`). A profile
+that is a symbolic link is refused before config.toml is touched, as `removeCodexConfig` does. The
+service manager is not probed: restore refuses only a `foreign` verdict, which only the recorded
+service state yields (a manager definition naming other homes reads `unknown`), so the recorded state
+alone decides the preview's refusal. `tests/server/connection-status-routes.test.ts` runs
 `tests/fixtures/connection-restore-preview-runner.ts` in temporary homes and compares the preview
 with the real restore for injected, edited, native, external-provider and foreign-owner homes.
 

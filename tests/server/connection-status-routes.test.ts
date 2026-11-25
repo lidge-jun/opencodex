@@ -14,6 +14,8 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import type { ManagementApiDeps } from "../../src/server/management/context";
 import type { ConnectionView } from "../../src/integrations/connection-view";
 import { displayPath } from "../../src/lib/display-path";
+import { codexConfigKeyChanges, displayCodexConfigKey } from "../../src/codex/restore-preview";
+import { inspectNativeCodexOwnership, inspectRecordedServiceOwnership } from "../../src/integrations/native/ownership-preflight";
 import { CODEX_CONFIG_PATH } from "../../src/codex/paths";
 import * as serviceManagerProbe from "../../src/service-manager-probe";
 import type { OcxConfig } from "../../src/types";
@@ -211,6 +213,7 @@ describe("Codex restore preview matches the real restore", () => {
   for (const [scenario, outcome] of [
     ["injected", "restore"], ["edited", "restore"], ["native", "restore"],
     ["external-provider", "restore"], ["foreign-owner", "refused_owner"],
+    ["profile-symlink", "refused_profile"],
   ] as const) {
     test(scenario, () => {
       const homes = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-restore-preview-")));
@@ -236,4 +239,43 @@ describe("Codex restore preview matches the real restore", () => {
       }
     }, SPAWN_BUDGET_MS);
   }
+});
+
+describe("restore preview privacy and ownership evidence", () => {
+  test("table names that can carry identity are masked; managed keys stay readable", () => {
+    const before = [
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      '[projects."/Users/person@example.com/repo"]', 'trust_level = "trusted"',
+      "[model_providers.sk-live-0123456789abcdefghijklmnopqrstuvwxyz0123]", 'base_url = "https://x.test"',
+      "[model_providers.opencodex]", 'name = "opencodex"',
+    ].join("\n");
+    const changes = codexConfigKeyChanges(before, "");
+    const serialized = JSON.stringify(changes);
+    expect(serialized).not.toContain("person@example.com");
+    expect(serialized).not.toContain("sk-live");
+    expect(serialized).not.toContain("/Users/");
+    expect(changes.map(change => change.key)).toEqual(expect.arrayContaining([
+      "openai_base_url", "model_providers.opencodex.name", "projects.….trust_level", "model_providers.….base_url",
+    ]));
+    expect(displayCodexConfigKey('hooks.state."plugin:demo:hook".trusted_hash')).toBe("hooks.state.….trusted_hash");
+  });
+
+  test("a service manager claim alone never makes restore refuse, so the GET need not probe it", () => {
+    // Restore refuses only on ownership "foreign" (restore.ts), and only the recorded service
+    // state yields it; a manager definition naming other homes is "unknown". The preview reads
+    // the recorded state and therefore agrees with restore without spawning the probe.
+    const stateFile = join(root, "service-state.json");
+    restoreProbe();
+    const probe = spyOn(serviceManagerProbe, "inspectServiceManagerInstallation").mockReturnValue({
+      kind: "present",
+      claims: [{ backend: "launchd", definitionPath: join(root, "agent.plist"), homes: { codexHome: join(root, "elsewhere"), opencodexHome: join(root, "elsewhere-ocx") } }],
+    } as never);
+    try {
+      const full = inspectNativeCodexOwnership({ statePaths: [stateFile], currentHomes: { codexHome, opencodexHome: root } });
+      expect(full.ownership).not.toBe("foreign");
+      expect(inspectRecordedServiceOwnership({ statePaths: [stateFile], currentHomes: { codexHome, opencodexHome: root } })).toBeNull();
+    } finally {
+      probe.mockRestore();
+    }
+  });
 });
