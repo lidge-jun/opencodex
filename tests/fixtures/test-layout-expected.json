@@ -556,6 +556,7 @@
   "claude-estimate-projection.test.ts": "claude-integration",
   "claude-first-party-agent-sync.test.ts": "claude-integration",
   "claude-first-party-union.test.ts": "claude-integration", "claude-desktop-system-proxy.test.ts": "claude-integration",
+  "claude-first-party-preview.test.ts": "claude-integration", "connection-status-routes.test.ts": "server",
   "claude-gateway-cache.test.ts": "claude-integration", "claude-config-home-isolation.test.ts": "claude-integration", "claude-inbound-cache-stabilize.test.ts": "claude-integration", "claude-inbound-token-footer.test.ts": "claude-integration",
   "claude-inbound-debug.test.ts": "claude-integration", "claude-inbound.test.ts": "claude-integration",
   "claude-inbound-tool-loading.test.ts": "claude-integration", "claude-chat-tool-dispatch.test.ts": "claude-integration",
