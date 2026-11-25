@@ -351,8 +351,17 @@ describe("Home enrollment of a standalone Child", () => {
     const timeouts = new Map(h.calls.map(call => [call.step, call.options?.timeoutMs]));
     for (const step of ["port", "config", "curl", "connect"] as const) expect(timeouts.get(step)).toBe(28_600);
     expect(timeouts.get("restart")).toBe(158_600);
-    expect(h.calls.at(-2)?.options?.timeoutMs).toBe(15_000);
-    expect(timeouts.get("catalog")).toBe(15_000);
+    expect(h.calls.at(-2)?.options?.timeoutMs).toBe(42_200);
+    expect(timeouts.get("catalog")).toBe(42_200);
+  });
+
+  test.each(["posix", "windows"] as const)("relay deadline pays SSH setup for both probes, so a slow health check leaves time for the catalog (%s)", async platform => {
+    const h = harness(platform); h.confirmed("child", 3600);
+    h.overrides.health = () => { h.advance(10_800); return health("client"); };
+    h.overrides.catalog = () => { h.emit("catalog"); h.advance(4500); return http({ models: [] }); };
+    expect((await h.call("apply", { alias: "child" })).status).toBe(202);
+    expect(h.calls.find(call => call.step === "health")?.options?.timeoutMs).toBe(43_800);
+    expect(h.calls.find(call => call.step === "catalog")?.options?.timeoutMs).toBe(33_000);
   });
 
   test("a Child whose config show exceeds the ordinary SSH output cap still passes preflight", async () => {
@@ -406,12 +415,12 @@ describe("Home enrollment of a standalone Child", () => {
     expect(payload.residual).toBeUndefined(); noEnrollmentEffects(h);
   });
 
-  test("huge measured latency caps ordinary work at 60s and restart at 190s", async () => {
+  test("huge measured latency caps ordinary work and the relay check at 60s, and restart at 190s", async () => {
     const h = harness(); h.confirmed("child", Number.MAX_VALUE);
     expect((await h.call("apply", { alias: "child" })).status).toBe(202);
     expect(h.calls.find(call => call.step === "connect")?.options?.timeoutMs).toBe(60_000);
     expect(h.calls.find(call => call.step === "restart")?.options?.timeoutMs).toBe(190_000);
-    expect(h.calls.find(call => call.step === "catalog")?.options?.timeoutMs).toBe(15_000);
+    expect(h.calls.find(call => call.step === "catalog")?.options?.timeoutMs).toBe(60_000);
   });
 
   test("health and catalog share a fresh relay deadline after restart", async () => {

@@ -86,7 +86,9 @@ try {
   if (![string]::Equals($xml, [string]$current.Xml, [StringComparison]::Ordinal)) { 'unverified-registration'; return }
   if ($count -eq 0) {
     # Ready or disabled; an empty collection can also mean instances were hidden by ACLs.
-    if ($current.State -in @(1, 3)) { 'not-running' } else { 'unverified-registration' }
+    $state = $current.State
+    if ($stopClock.ElapsedMilliseconds -ge $stopBeforeMs) { 'failed'; return }
+    if ($state -in @(1, 3)) { 'not-running' } else { 'unverified-registration' }
     return
   }
   foreach ($target in $verified) {

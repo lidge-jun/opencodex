@@ -165,9 +165,10 @@ The helper requires a successful same-account SID check for every `EnginePID`, w
 creation time re-read after the owner lookup. After approval it re-reads the registration XML and
 refreshes every captured instance to verify that its GUID, engine PID and running state still agree.
 It stops each captured `IRunningTask` by instance GUID. An empty collection counts as idle only if
-the task is ready or disabled. Failed proof returns `evidence-unreadable` with instructions to
-verify the task in Task Scheduler and repair an owned registration or contact its owner or
-administrator. Ending a running instance alone does not repair an unverifiable registration.
+the final task state shows ready or disabled before the stop deadline. Failed proof returns
+`evidence-unreadable` with instructions to verify the task in Task Scheduler and repair an owned
+registration or contact its owner or administrator. Ending a running instance alone does not repair
+an unverifiable registration.
 
 The Scheduler exposes current registration XML separately from instance identity. An instance
 already running under the same account from an earlier definition can still be visible under that
