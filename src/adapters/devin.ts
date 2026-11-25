@@ -348,8 +348,10 @@ async function resolveWireModelUid(
   if (entry) {
     if (entry.byUid.has(modelId)) {
       // A bare SWE-2.1 row is the Low lane; naming the family still means its default.
+      // A catalog without that row is sent the default anyway, so the request fails with
+      // the Medium row's own error instead of quietly running the Low lane.
       const familyDefault = sweFamilyDefaultUid(modelId);
-      return familyDefault && entry.byUid.has(familyDefault) ? familyDefault : modelId;
+      return familyDefault ?? modelId;
     }
     const suffixed = `${modelId}-${effort}`;
     if (entry.byUid.has(suffixed)) return suffixed;

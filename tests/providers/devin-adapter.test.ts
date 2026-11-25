@@ -932,6 +932,14 @@ describe("SWE-2.1 wire effort selection without a catalog", () => {
     expect(await resolveWireModelUidForTests("swe-2-1", "unused", "unused", undefined, catalog)).toBe("swe-2-1-medium");
     expect(await resolveWireModelUidForTests("swe-2-1", "unused", "unused", "xhigh", catalog)).toBe("swe-2-1-xhigh");
   });
+
+  test("a metadata-free catalog missing the Medium row still names Medium instead of quietly running Low", async () => {
+    const catalog: CacheEntry = {
+      byUid: new Map(["swe-2-1", "swe-2-1-high"].map((modelUid) => [modelUid, { modelUid, disabled: false } as ModelCatalogEntry])),
+      fetchedAt: Date.now(), apiKey: "unused", host: "unused",
+    };
+    expect(await resolveWireModelUidForTests("swe-2-1", "unused", "unused", undefined, catalog)).toBe("swe-2-1-medium");
+  });
 });
 
 describe("effort suffix detection and caller effort values are different sets", () => {
