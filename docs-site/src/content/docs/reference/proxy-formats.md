@@ -923,6 +923,8 @@ from the URL and headers before the request is logged or forwarded. Errors use G
   `contents`, `systemInstruction`, inline images, function declarations and calls, and
   `generationConfig`. Thought signatures on `functionCall` parts are carried in both directions. With
   `alt=sse` the stream is SSE; without it the answer is one JSON array, as Google's REST API sends it.
+  For streaming responses, the Chat bridge buffers up to 2 MiB of arguments per tool call and 32 MiB of pending tool data
+  per turn. Exceeding either limit ends the translated stream with an error.
   Hosted Gemini tools are ignored. A `candidateCount` other than 1, non-image inline data and file parts
   are refused with 400.
 - `:countTokens` returns `{ "totalTokens": n }` from a local estimate and sends nothing upstream.

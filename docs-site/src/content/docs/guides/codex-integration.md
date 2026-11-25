@@ -1227,6 +1227,8 @@ Certificates are restricted to TLS server authentication. If status shows `renew
 stop the service and close Codex, then renew the older certificate before starting again.
 The native API URL must match the proxy's actual listener address and port. IPv4 and IPv6
 loopback addresses are not interchangeable here; ambiguous `localhost` aliases are refused.
+When experimental context management is enabled, the managed `/backend-api/codex` base path
+also qualifies on that listener.
 Codex's automatic MCP connection refresh and configuration formatting do not invalidate
 observation. Model, authentication, profile and routing changes still require a fresh
 observation context; the service does not silently adopt those changes during a trial.

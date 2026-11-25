@@ -291,7 +291,7 @@ interface FenceBlock {
     start: number;
     end: number;
 }
-function scanFences(text: string): FenceBlock[] {
+function scanFences(text: string, includeBare = false): FenceBlock[] {
     const blocks: FenceBlock[] = [];
     let depth = 0;
     let open: {
@@ -299,15 +299,16 @@ function scanFences(text: string): FenceBlock[] {
         start: number;
         bodyStart: number;
     } | null = null;
-    let offset = 0;
-    for (const raw of text.split("\n")) {
+    for (let offset = 0; offset <= text.length;) {
+        const newline = text.indexOf("\n", offset);
+        const lineEnd = newline < 0 ? text.length : newline;
+        const raw = text.slice(offset, lineEnd);
         const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
-        const lineEnd = offset + raw.length;
         const opener = FENCE_OPEN.exec(line)?.[1];
         if (depth === 0) {
             const midline = opener ? null : FENCE_OPEN_MIDLINE.exec(line);
-            if (opener || midline) {
-                open = { info: opener || midline![1], start: offset + (midline?.index ?? 0), bodyStart: lineEnd + 1 };
+            if (opener || midline || (includeBare && opener === "")) {
+                open = { info: opener || midline?.[1] || "", start: offset + (midline?.index ?? 0), bodyStart: lineEnd + 1 };
                 depth = 1;
             }
         }
@@ -669,6 +670,37 @@ function parseFencedInner(spec: FencedToolSpec, inner: string): Record<string, u
 export interface FencedParseResult {
     calls: ParsedToolCall[];
     leftover: string;
+    firstStart?: number;
+    documentRanges?: FenceRange[];
+}
+export interface FenceRange { start: number; end: number }
+function proseOutsideFences(text: string, fences: FenceRange[]): string {
+    if (!fences.length) return text;
+    const prose: string[] = [];
+    let cursor = 0;
+    for (const fence of fences) {
+        prose.push(text.slice(cursor, fence.start));
+        cursor = fence.end;
+    }
+    prose.push(text.slice(cursor));
+    return prose.join("");
+}
+
+/** Strip tool-call delimiters but keep prose left between accepted calls. */
+export function unwrapToolReplyFences(text: string): string {
+    if (!text.includes("```")) return text;
+    const delimiters: FenceRange[] = [];
+    for (const block of scanFences(text, true)) {
+        if (block.info !== "tool_call" && block.info !== "json" && block.info !== "") continue;
+        if (!block.inner.trim()) {
+            delimiters.push(block);
+        } else if (block.info === "tool_call") {
+            const opening = text.indexOf("```tool_call", block.start);
+            const closing = text.lastIndexOf("```", block.end - 1);
+            delimiters.push({ start: opening, end: opening + "```tool_call".length }, { start: closing, end: closing + 3 });
+        }
+    }
+    return proseOutsideFences(text, delimiters);
 }
 const RESTATED_SIMILARITY = 0.85;
 const RESTATEMENT_GAP_CHARS = 300;
@@ -712,34 +744,26 @@ function toolFences(text: string, specs: Map<string, FencedToolSpec>): ToolFence
         }
         fences.push(fence);
     }
+    if (!fences.length) {
+        const open = findUnclosedToolFence(text, specs);
+        const args = open && parseFencedInner(open.spec, open.inner);
+        if (open && args) fences.push({ start: open.start, end: open.end, name: open.spec.name, args, hadNativeCloser: true });
+    }
     return fences;
 }
 export function parseFencedToolCalls(text: string, specs: Map<string, FencedToolSpec>): FencedParseResult {
-    const calls: ParsedToolCall[] = [];
-    let leftover = text;
-    for (const fence of toolFences(text, specs)) {
-        calls.push(makeCall(fence.name, fence.args));
-        leftover = leftover.replace(text.slice(fence.start, fence.end), "");
-    }
-    if (calls.length === 0) {
-        const open = findUnclosedToolFence(text, specs);
-        const args = open && parseFencedInner(open.spec, open.inner);
-        if (open && args) {
-            calls.push(makeCall(open.spec.name, args));
-            leftover = text.slice(0, open.start);
-        }
-    }
-    return { calls, leftover };
+    const fences = toolFences(text, specs);
+    const calls = fences.map(fence => makeCall(fence.name, fence.args));
+    const documentRanges = fences.length === 2 || fences.length === 3 ? fences.map(({ start, end }) => ({ start, end })) : undefined;
+    return { calls, leftover: proseOutsideFences(text, fences), firstStart: fences[0]?.start, documentRanges };
+}
+export function findToolFenceRanges(text: string, specs: Map<string, FencedToolSpec>): FenceRange[] {
+    return toolFences(text, specs).map(({ start, end }) => ({ start, end }));
 }
 export function findFirstToolFence(text: string, specs: Map<string, FencedToolSpec>): {
     start: number;
     end: number;
 } | null {
     const first = toolFences(text, specs)[0];
-    if (first)
-        return { start: first.start, end: first.end };
-    const open = findUnclosedToolFence(text, specs);
-    if (open && parseFencedInner(open.spec, open.inner))
-        return { start: open.start, end: open.end };
-    return null;
+    return first ? { start: first.start, end: first.end } : null;
 }

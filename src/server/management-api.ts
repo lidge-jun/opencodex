@@ -176,6 +176,13 @@ async function handleFallbackRoutesOnDemand(ctx: ManagementContext): Promise<Res
   return handleFallbackRoutes(ctx);
 }
 
+/** Lazy: per-account OAuth diagnostics read routing state the account list does not need. */
+async function handleAccountDiagnosticsRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/oauth/accounts/diagnostics", false)) return null;
+  const { handleAccountDiagnosticsRoutes } = await import("./management/account-diagnostics-routes");
+  return handleAccountDiagnosticsRoutes(ctx);
+}
+
 async function handleRouteToRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/route-to")) return null;
   const { handleRouteToRoutes } = await import("./management/route-to-routes");
@@ -389,6 +396,7 @@ export async function handleManagementAPI(
     ??     (await handleLowQuotaRoutesOnDemand(ctx))
     ??     (await handleQuotaPoolRoutesOnDemand(ctx))
     ??     (await handleFallbackRoutesOnDemand(ctx))
+    ??     (await handleAccountDiagnosticsRoutesOnDemand(ctx))
     ??     (await handleRouteToRoutesOnDemand(ctx))
     ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleCodexAgentRoleRoutesOnDemand(ctx))
