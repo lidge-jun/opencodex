@@ -47,13 +47,22 @@ export const OVERSIZED_INLINE_VIDEO_MESSAGE = "OpenCodex refuses inline video la
  * terminal `;base64` in any case. The media type is returned without its parameters, which is
  * the form Gemini's `inline_data.mime_type` takes. The guard and the Gemini builder share this
  * parser so a URL the guard admits is always one the builder can send.
+ *
+ * The payload must already be plain standard base64. A URL-escaped payload (`QQ%3D%3D`), embedded
+ * whitespace or the URL-safe alphabet is valid in a `data:` URL but is not what `inline_data.data`
+ * takes, and unescaping would copy a request-sized string, so those forms return null and the
+ * guard refuses them with the typed modality refusal.
  */
 export function parseInlineVideoDataUrl(url: string): { mediaType: string; base64: string } | null {
   const match = /^data:([^;,]+)(?:;[^;,]*)*;base64,(.*)$/is.exec(url);
   if (!match) return null;
   const mediaType = match[1]!.trim().toLowerCase();
-  return mediaType ? { mediaType, base64: match[2]! } : null;
+  const base64 = match[2]!;
+  return mediaType && STANDARD_BASE64.test(base64) ? { mediaType, base64 } : null;
 }
+
+/** Standard-alphabet base64 with at most two trailing pad characters; nothing else. */
+const STANDARD_BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /**
  * Whether a Chat Completions body carries a `video_url` part over the inline cap, in any message.

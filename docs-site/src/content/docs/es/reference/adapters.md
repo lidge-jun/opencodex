@@ -271,7 +271,7 @@ Consulta [Gemini nativo con Antigravity](/es/reference/proxy-formats/#native-gem
 
   | `url` | enviado como |
   | --- | --- |
-  | URL `data:` en base64 (se admiten parámetros de cabecera y `;base64` en cualquier caja; una URL `data:` sin base64 se rechaza) | `inline_data` con el tipo de medio propio de la URL de datos, sin parámetros |
+  | URL `data:` en base64 (se admiten parámetros de cabecera y `;base64` en cualquier caja; una URL `data:` sin base64, o una carga con escapes de URL o que no sea base64 estándar, se rechaza) | `inline_data` con el tipo de medio propio de la URL de datos, sin parámetros |
   | YouTube ver URL (`youtube.com`, `youtu.be`, `m.`/`music.`/`-nocookie` variantes) | `file_data.file_uri` |
   | `https://generativelanguage.googleapis.com/<version>/files/<id>` - el formulario de recursos de Archivos API, donde `<version>` es `v1`, `v1beta` o `v1alpha` | `file_data.file_uri` |
 

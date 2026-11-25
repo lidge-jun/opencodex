@@ -644,7 +644,7 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
 
   | `url` | sent as |
   | --- | --- |
-  | base64 `data:` URL (header parameters and any-case `;base64` allowed; a plain `data:` URL is refused) | `inline_data` with the data URL's own media type, without parameters |
+  | base64 `data:` URL (header parameters and any-case `;base64` allowed; a plain `data:` URL, or a payload that is URL-escaped or not standard base64, is refused) | `inline_data` with the data URL's own media type, without parameters |
   | YouTube watch URL (`youtube.com`, `youtu.be`, `m.`/`music.`/`-nocookie` variants) | `file_data.file_uri` |
   | `https://generativelanguage.googleapis.com/<version>/files/<id>` — the Files API resource form, where `<version>` is `v1`, `v1beta` or `v1alpha` | `file_data.file_uri` |
 

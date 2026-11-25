@@ -242,6 +242,19 @@ describe("video input on a published carrier", () => {
     expect((failure as Error).message).toContain("base64 data URL");
   });
 
+  test("Gemini never receives a URL-escaped or non-standard base64 payload as inline_data", async () => {
+    // A data URL may percent-escape its payload, but inline_data.data takes plain base64:
+    // "QQ%3D%3D" would reach Gemini as a string that is not base64 at all.
+    for (const url of ["data:video/mp4;base64,QQ%3D%3D", "data:video/mp4;base64,QQ%3", "data:video/mp4;base64,QQ== ", "data:video/mp4;base64,-_8="]) {
+      let failure: unknown;
+      try { await createRegisteredAdapter(GOOGLE).buildRequest(videoRequest("gemini-3.8-flash", url), { headers: new Headers() } as never); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(UnsupportedInputModalityError);
+      expect((failure as Error).message).toContain("base64 data URL");
+    }
+    const sent = await body(GOOGLE, videoRequest("gemini-3.8-flash", "data:video/mp4;base64,QQ=="));
+    expect(JSON.stringify(sent.contents)).toContain(JSON.stringify({ inline_data: { mime_type: "video/mp4", data: "QQ==" } }));
+  });
+
   test("the Moonshot preset declares video for the Kimi K3 series its docs list", () => {
     const modalities = getProviderRegistryEntry("moonshot")?.modelInputModalities ?? {};
     for (const model of ["kimi-k3", "kimi-k3.1-pro"]) expect(modalities[model]).toContain("video");
