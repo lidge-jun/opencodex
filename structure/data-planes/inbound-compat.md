@@ -49,11 +49,9 @@ socket names in its own query, or the model a bound call settled on when the sam
 and a refused forward request releases its probe lease. `LiveCallBinding` records that model for
 exactly this reason, so a reconnect is judged on the call it rejoins rather than on a default.
 
-The native voice path in `src/server/live.ts` applies the same predicate but can name less. It
-records only which call ids it created (`src/server/live-native-calls.ts`), never their model or
-account, so a join, and a call-create that sends no session
-model, name no destination at all; a key carrying a model list is refused there rather than
-admitted against an assumed default, while a provider-only scope and an unscoped key are
+Both live paths treat a request that names no model the same way. The native path in `src/server/live.ts` records only which call ids it created (`src/server/live-native-calls.ts`), never their model or account, so a join, and a call-create that sends no session
+model, name no destination at all. On the external path a call-create session without a model, `/v1/realtime/calls` without a session and a Realtime standalone socket without a query model are unnamed too, and a binding stores no model for them.
+A key carrying a model list is refused for every unnamed destination rather than admitted against an assumed default, while a provider-only scope and an unscoped key are
 unchanged, on both join credentials described under streaming audio. Coverage lives in
 `tests/server/api-key-scope-audio.test.ts`, `tests/server/api-key-scope-live.test.ts` and
 `tests/server/server-live-existing-call.test.ts`.

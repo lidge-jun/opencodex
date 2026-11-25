@@ -318,6 +318,51 @@ test("a scoped call-create forwards, binds and rejoins on the model it was judge
   } finally { joined.finish(); }
 });
 
+
+test.each([
+  ["a Realtime standalone socket", "intent=transcription"],
+  ["a Realtime standalone socket with an empty model", "intent=quicksilver&model="],
+] as const)("%s that names no model is refused for a model-scoped key, as on the native path", async (_label, query) => {
+  const cfg = config({ allowedModels: [LIVE_AUDIO_MODEL] });
+  const resolved = await resolveExternalLiveSocket(
+    client(cfg), cfg, logContext(), { style: "realtime-standalone", query }, { lease: lease(), bindings: new LiveCallBindings() },
+  );
+  expect(resolved).toBeInstanceOf(Response);
+  expect((resolved as Response).status).toBe(403);
+  expect((await denial(resolved as Response)).type).toBe(MODEL_NOT_ALLOWED_FOR_KEY);
+});
+
+test.each([
+  ["/v1/realtime/calls with no session", "http://localhost/v1/realtime/calls", { sdp: "v=0" }],
+  ["/v1/live with a session that names no model", "http://localhost/v1/live", { sdp: "v=0", session: { instructions: "client" } }],
+] as const)("call-create %s is refused for a model-scoped key, as on the native path", async (_label, url, payload) => {
+  const cfg = config({ allowedModels: [LIVE_AUDIO_MODEL] });
+  const response = await handleExternalLive(
+    new Request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-opencodex-api-key": SCOPED_KEY },
+      body: JSON.stringify(payload),
+    }),
+    cfg, logContext(), { client: client(cfg), lease: lease(), bindings: new LiveCallBindings() },
+  );
+  expect(response.status).toBe(403);
+  expect((await denial(response)).type).toBe(MODEL_NOT_ALLOWED_FOR_KEY);
+  expect(upstreamCalls).toEqual([]);
+});
+
+test("an unnamed live destination stays open to a key without a model list", async () => {
+  const cfg = config({ allowedModels: [LIVE_AUDIO_MODEL] });
+  const resolved = await resolveExternalLiveSocket(
+    client(cfg, OPEN_KEY), cfg, logContext(), { style: "realtime-standalone", query: "intent=transcription" },
+    { lease: lease(), bindings: new LiveCallBindings() },
+  );
+  expect(resolved).not.toBeInstanceOf(Response);
+  if (resolved instanceof Response) return;
+  try {
+    expect(resolved.upstreamWsUrl).toBe("wss://api.openai.com/v1/realtime?intent=transcription");
+  } finally { resolved.finish(); }
+});
+
 test("a key with no scope keeps every audio destination", async () => {
   const cfg = config({ allowedProviders: ["some-other-provider"] });
   const response = await handleAudioTranscriptions(
