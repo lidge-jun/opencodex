@@ -367,7 +367,7 @@ the menu nor a request alone proves which tier was billed.
 ### Selecting Ultra Fast in Codex Desktop
 
 For a provider that supports `service_tier: "ultrafast"`, declare that wire mapping once.
-opencodex then publishes **Ultra Fast** in the routed model's native Codex speed menu;
+opencodex then publishes **Ultrafast** in the routed model's native Codex speed menu;
 there is no need to edit `opencodex-catalog.json` after every sync.
 For example, merge these fields into an API provider configured for GPT-6.1 Sol:
 
@@ -387,7 +387,7 @@ The mapping applies to every Fast-eligible model on that provider. Use a separat
 entry if only some of its models support Ultra Fast. Keep opencodex's Fast mode on **Auto**
 (omit `fastMode`) so the app's speed selection reaches the provider; forced Fast sends
 `priority`, and forced Default drops the tier. Refresh the model catalog, restart Codex
-Desktop if it still has the old list, select the routed model, then choose **Ultra Fast**
+Desktop if it still has the old list, select the routed model, then choose **Ultrafast**
 in its speed menu. Standard remains the default.
 
 Only an eligible `service-tier` wire with an explicit `ultrafast → ultrafast` mapping adds
