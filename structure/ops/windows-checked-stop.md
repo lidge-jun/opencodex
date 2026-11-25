@@ -156,9 +156,10 @@ The helper requires a successful same-account SID check for every `EnginePID`, w
 creation time re-read after the owner lookup. After approval it re-reads the registration XML and
 refreshes every captured instance to verify that its GUID, engine PID and running state still agree.
 It stops each captured `IRunningTask` by instance GUID. An empty collection counts as idle only if
-the task is ready or disabled. Failed proof returns `evidence-unreadable` with instructions to
-verify the task in Task Scheduler and repair an owned registration or contact its owner or
-administrator. Ending a running instance alone does not repair an unverifiable registration.
+the final task state shows ready or disabled before the stop deadline. Failed proof returns
+`evidence-unreadable` with instructions to verify the task in Task Scheduler and repair an owned
+registration or contact its owner or administrator. Ending a running instance alone does not repair
+an unverifiable registration.
 
 The Scheduler exposes current registration XML separately from instance identity. An instance
 already running under the same account from an earlier definition can still be visible under that
@@ -210,9 +211,16 @@ stop instead of sliding forward.
 - `stopServiceIfInstalledReport` / `stopServiceIfInstalledDetailed` (`src/service/orchestration.ts`)
   are async and run Part A on Windows. On Windows Task Scheduler never yields `stopped-respawnable`.
 - Plain `ocx stop` (`src/cli/stop-windows-checked.ts`) admits against the deadline with orphan
-  discovery and the inherited receipts counted. A Part A other than stopped or absent holds the
-  child: no `/api/stop` POST, the shared teardown skipped, `service` failed or state-unknown,
-  `proxy` unknown. A thrown Part A also holds the child and reports a service error. After a stopped Part A, the POST skips `stopProxy`'s legacy 15 s
+  discovery and the inherited receipts counted as the probes their recovery runs: one per
+  distinct exact endpoint (`inheritedTeardownProbeCount`, `src/cli/stop-restore.ts`), since an
+  invalid, unscannable or guessed-endpoint receipt blocks without probing and the recovery pass
+  asks each endpoint once (`abandonedTeardownProbeOncePerEndpoint`). Counting receipts let
+  repeated failed stops against one proxy raise the budget past any deadline (#8960). A Part A
+  other than stopped or absent holds the child: no `/api/stop` POST, the shared teardown
+  skipped, `service` failed or state-unknown, `proxy` unknown. When that held Part A changed
+  nothing (`windowsPartAHeldUnchanged`: no manager stop, no terminate), the receipt this run
+  claimed before it (an update handover claims first) is removed: it describes a stop that never
+  happened, and kept it would be inherited by the next stop's admission. A thrown Part A also holds the child and reports a service error. After a stopped Part A, the POST skips `stopProxy`'s legacy 15 s
   `waitForStoppedPort`, orphan discovery is capped at 3 s, and Part B replaces the respawn re-poll:
   our identity back on the port is `proxy: respawned`, an unconfirmed port is
   `evidence-unreadable`, and another program on the port sets `portHeldByForeign` without failing

@@ -150,6 +150,8 @@ failures after response headers have started are delivered as `response.failed` 
 
 ## Vision sidecar
 
+A scoped API key must allow the provider and model that will describe the image, including a fallback helper. If the routed helper is denied, a text-only request that can continue proceeds with the image omitted.
+
 Mistral's `zai-glm-5-3` is enrolled by the provider preset as text-only. With the
 vision sidecar enabled and available, OpenCodex describes attached images and
 sends their text descriptions to GLM. The Codex catalog advertises image

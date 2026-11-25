@@ -19,6 +19,7 @@ import {
   ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
   BUILT_IN_NATIVE_OPENAI_MODELS,
   NATIVE_GPT6_ASTRA_MODEL,
+  SUPPORTED_NATIVE_OPENAI_SLUGS,
 } from "./catalog/native-models";
 import { loadPersistedCodexRuntime } from "./runtime";
 import { codexRuntimeStateEpoch } from "./runtime";
@@ -504,6 +505,17 @@ export interface CodexEntitlementFreshnessOptions extends Pick<
 
 const accountModelsCache = new Map<string, CachedAccountModels>();
 const accountModelsFlights = new Map<string, Promise<CachedAccountModels>>();
+// Weak ownership follows callers' snapshot lifetimes without retaining account history.
+let retiredAccountModels = new WeakSet<CachedAccountModels>();
+let snapshotAccountModels = new WeakMap<CodexModelEntitlementSnapshot, readonly CachedAccountModels[]>();
+
+interface AccountModelsFlightFence {
+  invalidationGeneration: number;
+  pending: number;
+}
+
+// Retained only while an account has pending flights, never as an unbounded invalidation history.
+const accountModelsFlightFences = new Map<string, AccountModelsFlightFence>();
 
 interface NegativeCredentialMemo {
   readonly credentialIdentity: string | null;
@@ -538,6 +550,26 @@ function accountIdOfCacheKey(key: string): string {
   return separator === -1 ? key : key.slice(0, separator);
 }
 
+/** Retire the exact evidence object, including snapshots that already captured it. */
+function deleteCachedAccountModels(key: string): void {
+  const entry = accountModelsCache.get(key);
+  if (entry) retiredAccountModels.add(entry);
+  accountModelsCache.delete(key);
+}
+
+/** An invalidated fetch is unknown to every consumer, not just absent from the cache. */
+function retiredAccountModelsResult(result: CachedAccountModels): CachedAccountModels {
+  const unknown: CachedAccountModels = {
+    credentialIdentity: result.credentialIdentity,
+    clientVersion: result.clientVersion,
+    expiresAt: 0,
+    models: new Set(),
+    confirmed: false,
+  };
+  retiredAccountModels.add(unknown);
+  return unknown;
+}
+
 /**
  * Direct-caller entries are evicted separately from main/Pool entries.
  *
@@ -550,7 +582,7 @@ function accountIdOfCacheKey(key: string): string {
  */
 function boundedCacheSet(accountId: string, value: CachedAccountModels): void {
   const key = cacheKeyFor(accountId, value.clientVersion);
-  accountModelsCache.delete(key);
+  if (accountModelsCache.get(key) !== value) deleteCachedAccountModels(key);
   accountModelsCache.set(key, value);
   const isDirect = (candidate: string): boolean =>
     accountIdOfCacheKey(candidate).startsWith(DIRECT_CALLER_ACCOUNT_PREFIX);
@@ -559,7 +591,7 @@ function boundedCacheSet(accountId: string, value: CachedAccountModels): void {
   // own older entries and never reaches another account's evidence.
   const ownKeys = [...accountModelsCache.keys()].filter(k => accountIdOfCacheKey(k) === accountId);
   for (const stale of ownKeys.slice(0, Math.max(0, ownKeys.length - MODEL_ROSTER_VERSIONS_PER_ACCOUNT_MAX))) {
-    accountModelsCache.delete(stale);
+    deleteCachedAccountModels(stale);
   }
 
   // Then bound the class by DISTINCT ACCOUNTS. Counting keys would let one account's versions
@@ -576,7 +608,7 @@ function boundedCacheSet(accountId: string, value: CachedAccountModels): void {
     for (const victim of accountsInOrder.slice(0, Math.max(0, accountsInOrder.length - MODEL_ROSTER_CACHE_MAX))) {
       if (victim === accountId) continue;
       for (const key of [...accountModelsCache.keys()]) {
-        if (accountIdOfCacheKey(key) === victim) accountModelsCache.delete(key);
+        if (accountIdOfCacheKey(key) === victim) deleteCachedAccountModels(key);
       }
     }
   };
@@ -976,8 +1008,12 @@ async function modelsForCredential(
     && cached.expiresAt > now
   ) return cached;
 
+  const fence = accountModelsFlightFences.get(credential.accountId)
+    ?? { invalidationGeneration: 0, pending: 0 };
+  const invalidationGeneration = fence.invalidationGeneration;
   const flightKey = `${credential.accountId}\u0000${credential.credentialIdentity}\u0000${clientVersion}`
-    + (credentialMutationEpoch === undefined ? "" : `\u0000${credentialMutationEpoch}`);
+    + (credentialMutationEpoch === undefined ? "" : `\u0000${credentialMutationEpoch}`)
+    + `\u0000${invalidationGeneration}`;
   const existing = accountModelsFlights.get(flightKey);
   if (existing) return existing;
 
@@ -1010,8 +1046,14 @@ async function modelsForCredential(
       confirmed: false,
     };
   }
+  accountModelsFlightFences.set(credential.accountId, fence);
+  fence.pending += 1;
   const flight = fetchAccountModels(credential, fetcher, now, clientVersion)
     .then(result => {
+      if (accountModelsFlightFences.get(credential.accountId) !== fence
+        || fence.invalidationGeneration !== invalidationGeneration) {
+        return retiredAccountModelsResult(result);
+      }
       if (
         currentCredentialIdentity(credential.accountId) === credential.credentialIdentity
         && (credentialMutationEpoch === undefined
@@ -1023,6 +1065,12 @@ async function modelsForCredential(
     })
     .finally(() => {
       if (accountModelsFlights.get(flightKey) === flight) accountModelsFlights.delete(flightKey);
+      fence.pending -= 1;
+      // Keep old flights in the concurrency budget until they settle. Retire their fence only
+      // when none remain, so a post-invalidation flight cannot reuse an earlier generation.
+      if (fence.pending === 0 && accountModelsFlightFences.get(credential.accountId) === fence) {
+        accountModelsFlightFences.delete(credential.accountId);
+      }
     });
   accountModelsFlights.set(flightKey, flight);
   return flight;
@@ -1353,7 +1401,7 @@ export async function resolveCodexModelEntitlements(
   // real snapshot releases it as soon as the main token settles; this boundary
   // release keeps the guarantee when a seam snapshot never invokes it.
   options.releaseNativeMainCredentialLease?.();
-  const results = await Promise.all(credentials.map(async credential => ({
+  const capturedResults = await Promise.all(credentials.map(async credential => ({
     credential,
     result: await modelsForCredential(
       credential,
@@ -1367,7 +1415,12 @@ export async function resolveCodexModelEntitlements(
       options.credentialMutationEpoch,
     ),
   })));
-  return {
+  // A sibling fetch may have kept this snapshot pending after another account was invalidated.
+  const results = capturedResults.map(({ credential, result }) => ({
+    credential,
+    result: retiredAccountModels.has(result) ? retiredAccountModelsResult(result) : result,
+  }));
+  const snapshot: CodexModelEntitlementSnapshot = {
     modelsByAccount: new Map(results.map(({ credential, result }) => [credential.accountId, result.models])),
     capabilitiesByAccount: new Map(results.flatMap(({ credential, result }) => (
       result.confirmed && result.capabilitiesByModel
@@ -1387,6 +1440,8 @@ export async function resolveCodexModelEntitlements(
     confirmedAccountIds: new Set(results.flatMap(({ credential, result }) => result.confirmed ? [credential.accountId] : [])),
     credentialIdentities: new Map(results.map(({ credential }) => [credential.accountId, credential.credentialIdentity])),
   };
+  snapshotAccountModels.set(snapshot, capturedResults.map(({ result }) => result));
+  return snapshot;
 }
 
 function codexModelEntitlementStateForRoster(
@@ -1507,7 +1562,8 @@ export const ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = n
  * "no account is denied" with "no evidence exists" — both mean the same thing here, which is that
  * selection must be left exactly as it was.
  *
- * Only `denied` counts. `unknown` covers an unconfirmed account, a roster fetched under a client
+ * Roster absence counts only for the legacy preferred set; all registered ungated natives also
+ * read exact upstream refusals. `unknown` covers an unconfirmed account or a roster under a client
  * version too old to return the model, and an expired or credential-stale entry; none of those is
  * proof that the account lacks the model, and treating them as proof is how 2.36.0 removed
  * sol/terra/luna from accounts that owned them (#3022).
@@ -1517,7 +1573,7 @@ export function cachedDeniedCodexAccountIdsForModel(
   now = Date.now(),
   options: { excludeAccountIds?: ReadonlySet<string> } = {},
 ): ReadonlySet<string> | undefined {
-  if (!modelId || !ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS.has(modelId)) return undefined;
+  if (!modelId || !SUPPORTED_NATIVE_OPENAI_SLUGS.has(modelId) || ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(modelId)) return undefined;
   const denied = new Set<string>();
   const granted = new Set<string>();
   // One resolver for the whole pass: the loop below runs once per cached (account, client version)
@@ -1550,7 +1606,7 @@ export function cachedDeniedCodexAccountIdsForModel(
       modelId,
     );
     if (state === "granted") granted.add(accountId);
-    else if (state === "denied") denied.add(accountId);
+    else if (state === "denied" && ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS.has(modelId)) denied.add(accountId);
   }
   // The roster is not the only evidence, and on this path it is usually the weaker one. A cached
   // roster expires in five minutes and nothing on the flagship request path refetches it, so
@@ -1581,11 +1637,9 @@ export function cachedDeniedCodexAccountIdsForModel(
 /**
  * Record an authenticated upstream refusal as this account's own evidence about `modelId`.
  *
- * Scoped to {@link ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS} because that is the set whose
- * availability varies per account while the row stays visible, and it is the set
- * {@link cachedDeniedCodexAccountIdsForModel} will read back. A model outside it either has no
- * per-account variance or is gated by the fail-closed roster path, where an ordering preference
- * would change nothing.
+ * Every registered ungated native can learn this exact refusal, including configured and
+ * discovered models. Roster-absence ordering stays scoped to the legacy preferred set;
+ * newer models need an actual refusal, so a lagging roster cannot shrink their pool.
  *
  * The caller must have matched the exact allow-listed refusal body first. A status alone is not
  * admissible here: 400 covers every malformed request too, and remembering one of those as an
@@ -1602,13 +1656,17 @@ export function recordCodexModelDenialEvidence(
   now = Date.now(),
 ): void {
   if (!accountId || !modelId) return;
-  if (!ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS.has(modelId)) return;
+  if (!SUPPORTED_NATIVE_OPENAI_SLUGS.has(modelId) || ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(modelId)) return;
   // A caller that cannot name a credential generation records ACCOUNT-scoped evidence rather
   // than none. The one production context in that position is `main-pool`, whose credential
   // lives in `auth.json` and has no pool generation; discarding its refusals would revert
   // #4906 for the stored main login (#4952). Request-owned `main` never reaches here — its
   // `accountId` is null and the guard above returns.
-  recordObservedCodexModelDenial(accountId, modelId, typeof generation === "number" ? generation : undefined, now);
+  if (recordObservedCodexModelDenial(accountId, modelId, typeof generation === "number" ? generation : undefined, now)) {
+    // A cached grant predates this accepted refusal, on both initial and alternate sends.
+    // Keep later roster grants authoritative without letting a stale credential erase them.
+    invalidateCodexModelEntitlementsForAccount(accountId);
+  }
 }
 
 /** Drop the refusal evidence for a pair the account has just served successfully. */
@@ -1655,6 +1713,7 @@ export function cachedAvailableAccountGatedNativeModels(
 }
 
 export function isCodexModelEntitlementSnapshotCurrent(snapshot: CodexModelEntitlementSnapshot): boolean {
+  if (snapshotAccountModels.get(snapshot)?.some(result => retiredAccountModels.has(result))) return false;
   for (const [accountId, identity] of snapshot.credentialIdentities) {
     // Deliberately per-id, unlike the passes above. This is a fail-closed publication gate asking
     // whether a snapshot is STILL current, so the freshest possible answer per account is the
@@ -1668,10 +1727,12 @@ export function isCodexModelEntitlementSnapshotCurrent(snapshot: CodexModelEntit
 
 export function invalidateCodexModelEntitlementsForAccount(accountId: string | null | undefined): void {
   if (!accountId) return;
+  const fence = accountModelsFlightFences.get(accountId);
+  if (fence) fence.invalidationGeneration += 1;
   // Every version's entry for this account, since a credential change invalidates the
   // account's entitlement evidence regardless of which client version asked for it.
   for (const key of [...accountModelsCache.keys()]) {
-    if (accountIdOfCacheKey(key) === accountId) accountModelsCache.delete(key);
+    if (accountIdOfCacheKey(key) === accountId) deleteCachedAccountModels(key);
   }
   accountModelsMisses.delete(accountId);
 }
@@ -1679,6 +1740,9 @@ export function invalidateCodexModelEntitlementsForAccount(accountId: string | n
 export function resetCodexModelEntitlementCacheForTests(): void {
   accountModelsCache.clear();
   accountModelsFlights.clear();
+  accountModelsFlightFences.clear();
+  retiredAccountModels = new WeakSet();
+  snapshotAccountModels = new WeakMap();
   accountModelsMisses.clear();
   negativeCredentialMemo.clear();
   entitlementEnsureFlights.clear();

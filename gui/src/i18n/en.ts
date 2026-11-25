@@ -5,6 +5,7 @@ import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
+import { connectionsCopy } from "./connections-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
@@ -145,6 +146,7 @@ export const en = {
   ...remoteLinkDiagnosticsCopy("en"),
   ...remoteLinkChildCopy("en"),
   ...gatewayClientsCopy("en"),
+  ...connectionsCopy("en"),
   ...modelsV2Copy("en"),
   ...modelsOverallCopy("en"),
   ...accountsV2Copy("en"),
