@@ -7,6 +7,7 @@
   "claude-translated-hosted-advisor-choice.test.ts": "claude-integration",
   "management-provider-forward-advisor-tool.test.ts": "server",
   "local-control-socket.test.ts": "server",
+  "local-control-socket-windows.test.ts": "server",
   "config-concurrent-inbound-body.test.ts": "config",
   "inbound-body-admission.test.ts": "server",
   "inbound-body-budget.test.ts": "server",
