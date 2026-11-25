@@ -358,7 +358,7 @@
   "active-turn-disconnect.test.ts": "codex-integration", "adapter-buffered-tool-conformance.test.ts": "adapters",
   "adapter-error-inline.test.ts": "adapters", "adapter-event-oauth-failover.test.ts": "oauth",
   "adapter-inner-send-budget-wiring.test.ts": "adapters", "adapter-inner-send-budget.test.ts": "adapters",
-  "adapter-input-media-guard.test.ts": "adapters", "adapter-registry-authority.test.ts": "adapters",
+  "adapter-input-media-guard.test.ts": "adapters", "video-input-guard.test.ts": "adapters", "adapter-registry-authority.test.ts": "adapters",
   "adapter-resolve.test.ts": "server", "inference-client-wire.test.ts": "server",
   "inference-attempt.test.ts": "server", "inference-final-log.test.ts": "server",
   "inference-send-budget.test.ts": "server", "inference-client-encoder-delivery.test.ts": "server",

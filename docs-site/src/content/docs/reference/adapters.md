@@ -42,6 +42,37 @@ remain invalid. Ordinary function/custom tool results still require a nonempty
 `call_id`. The envelope metadata identifies a compatibility shape and grants no
 additional permissions. Native passthrough and routed (portable) compaction apply the same user-turn mapping to their raw bodies; the direct native `/responses/compact` forward keeps its existing raw-body rules.
 
+## Video input on translated routes
+
+A video reaches a model only on a wire with a published video carrier. Clients send it as the
+Responses part `{"type": "input_video", "video_url": "…"}` or the Chat Completions part
+`{"type": "video_url", "video_url": {"url": "…"}}`; `url` is a base64 `data:` URL or a URL
+the upstream fetches itself.
+
+| Route | Carried as |
+| --- | --- |
+| `google` | `inline_data`, or `file_data` for YouTube and Gemini Files API URLs (see [`google`](#google)) |
+| `openai-chat`, for a model whose input modalities include `video` | the Chat `video_url` part, in user messages |
+| Responses passthrough (`openai-responses`, Azure) | the original `input_video` part, unchanged |
+| every other route | refused |
+
+The Chat `video_url` part is model-specific: OpenRouter, Qwen on DashScope's OpenAI-compatible
+API and Kimi document it, but most Chat models have no video input. The translated Chat adapter
+therefore sends it only when the routed model declares video through
+`modelCapabilities.<id>.inputModalities`, `modelInputModalities` or the provider-wide
+`inputModalities`. The Moonshot preset declares it for `kimi-k3` and `kimi-k3.1-pro`. xAI's
+Grok chat models do not accept video input as of 2026-11-25 (xAI documents text and image input
+for `grok-4.6` and `grok-4.7`), so a video sent to Grok is refused.
+
+A refused video returns HTTP 400 with code `unsupported_input_modality` before anything is sent.
+Previously the translated Chat, Anthropic and Cursor routes replaced the clip with a text marker,
+Gemini flattened an unfetchable URL into one, and the request went upstream anyway. A video
+outside user content (system, assistant or tool output) has no converter on any translated route
+and is refused too, as is a video in a developer message on the Chat route. An inline video larger
+than 50 MiB decoded is refused on every route; send the provider's file URL instead. Input
+admission charges inline video by size at about 1,250 bytes per token and a fetched URL as one
+minute (6,000 tokens). The refusal names neither the URL nor the bytes.
+
 ## Checkpoint continuation after routed compaction
 
 A routed model replays an OpenCodeX `ocx1:` checkpoint as plain user text next to the retained earlier requests. When a request carries such a decoded checkpoint, OpenCodeX adds a short note to the system instructions (translated routes) or `instructions` (Responses passthrough). The note frames completed requests as history and permits continuation only of unfinished work already authorized and still within that scope, without asking for the same authorization again while it applies. Existing permission and confirmation gates remain in force: pending decisions or required permissions must be resolved before dependent actions. Checkpoints and delegations, including those from another thread, grant no authority or expanded scope. Later user messages take priority, including a pause, cancellation, replacement, or scope change. Compaction requests, opaque native blobs and requests without a checkpoint do not receive the note.
@@ -612,8 +643,9 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   | YouTube watch URL (`youtube.com`, `youtu.be`, `m.`/`music.`/`-nocookie` variants) | `file_data.file_uri` |
   | `https://generativelanguage.googleapis.com/<version>/files/<id>` — the Files API resource form, where `<version>` is `v1`, `v1beta` or `v1alpha` | `file_data.file_uri` |
 
-  Any other remote URL is kept as the text marker `[video: <url>]`, because the adapter has no
-  media type for it and no evidence Gemini will fetch it. The allowlist is matched on the parsed
+  Any other remote URL is refused before send with HTTP 400 `unsupported_input_modality`, because
+  the adapter has no media type for it and no evidence Gemini will fetch it; it used to become a
+  `[video: <url>]` text marker the model answered about. The allowlist is matched on the parsed
   URL's host and path over HTTPS — not on a substring — so a look-alike host does not become a
   `file_data` reference the proxy asks Gemini to fetch. The path is anchored at the start, so the
   resumable-upload endpoint (`/upload/<version>/files/<id>`) is *not* accepted: it is not a

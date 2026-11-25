@@ -2,7 +2,7 @@ import { isInlineDocumentDataUrl } from "./inline-document";
 import { audioContentFromRaw } from "./audio";
 
 /** Input kinds for which the normalized request has no lossless content carrier. */
-export type UntranslatedInputMedia = "audio" | "file";
+export type UntranslatedInputMedia = "audio" | "file" | "video";
 
 type RecordValue = Record<string, unknown>;
 
@@ -51,6 +51,12 @@ function mediaKind(value: unknown, position: CarrierPosition, allowAudio: boolea
   // A file-id-only image is not pixels: translated adapters cannot dereference it.
   if (value.type === "input_image" && typeof value.file_id === "string" && value.file_id.length > 0
       && !(typeof value.image_url === "string" && value.image_url.length > 0)) return "file";
+  // Only user and developer content builds a video part; every other converter reduces its
+  // content to text and dropped the clip in silence. Whether the routed wire can carry a video
+  // that did become a part is decided on the normalized request (`src/adapters/video-input-carrier.ts`).
+  if (value.type === "input_video") {
+    return position === "user-content" || position === "developer-content" ? undefined : "video";
+  }
   return undefined;
 }
 

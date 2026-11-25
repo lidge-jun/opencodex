@@ -370,6 +370,19 @@ and exempting them would restore the silent drop the scanner exists to prevent. 
 the decoder share one predicate so a request cannot be exempted here and reduced to a marker
 there.
 
+Video is the one kind whose carrier depends on the model. `src/adapters/video-input-carrier.ts`
+checks the normalized request's `video` parts (`src/responses/video-input.ts`) after the typed
+scan, which refuses an `input_video` block outside user or developer content because no
+converter there builds a part. The `google` wire carries inline bytes and the YouTube and Files
+API URIs that `src/adapters/google-video-uri.ts` allowlists; any other remote URL is refused.
+The translated Chat builder (`provider.adapter === "openai-chat"`, not merely the inherited
+wire) emits the Chat `video_url` part only in user messages and only for a model whose
+`modelCapabilities`, `modelInputModalities` or provider `inputModalities` declares `video`;
+absent evidence is a refusal. Every other wire refuses. An inline video over
+`MAX_INLINE_VIDEO_BYTES` (50 MiB decoded, measured from the string length) is refused on every
+wire. Each refusal is fixed vocabulary and names no URL or byte. The Gemini and Chat builders
+no longer write a video text marker: Gemini throws for an unfetchable URL if reached directly.
+
 `src/adapters/input-media-guard.ts` guards adapters created by the registry after effective
 wire selection. It enables the audio exemption only for `openai-chat`. A translated
 `buildRequest` refuses unsupported inputs through the existing 400 error path; `runTurn` emits
@@ -391,7 +404,8 @@ upstream token formula; base64 inflation is not charged, and the scanner and gua
 the payload.
 
 `tests/adapters/openai/openai-chat-audio.test.ts` covers user and tool-result audio mapping;
-`tests/adapters/adapter-input-media-guard.test.ts` covers hook ordering, refusal positions and
+`tests/adapters/video-input-guard.test.ts` covers each video carrier and refusal through registered
+adapters. `tests/adapters/adapter-input-media-guard.test.ts` covers hook ordering, refusal positions and
 raw passthrough; `tests/responses/chat-media-translation.test.ts` reaches the real HTTP
 translation boundary and verifies that supported audio is forwarded while unsupported media
 sends no upstream request; `tests/server/input-admission.test.ts` covers decoded-byte charging.

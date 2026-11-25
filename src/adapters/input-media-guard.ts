@@ -1,8 +1,9 @@
 import type { ProviderAdapter } from "./base";
 import { untranslatedInputMediaMessage, untranslatedResponsesInputMedia } from "../responses/input-media";
 import { unrepresentableDeclaration } from "./declaration-carrier";
+import { unrepresentableVideo } from "./video-input-carrier";
 import type { AdapterWire } from "./registry";
-import type { OcxParsedRequest } from "../types";
+import type { OcxParsedRequest, OcxProviderConfig } from "../types";
 
 /**
  * Refuse unrepresentable input at the final translated-adapter boundary. The registry
@@ -16,13 +17,17 @@ import type { OcxParsedRequest } from "../types";
  * learned about the carrier rebuilds without it and answers normally, so the allowlist in
  * `declaration-carrier.ts` is default-deny and this is the one place every registered adapter
  * passes through.
+ *
+ * Video is checked on the normalized request because its carrier is model-specific on the
+ * translated Chat wire: `provider` supplies the routed model's declared input modalities.
  */
-export function withInputMediaGuard<T extends ProviderAdapter>(adapter: T, wire: AdapterWire): T {
+export function withInputMediaGuard<T extends ProviderAdapter>(adapter: T, wire: AdapterWire, provider?: OcxProviderConfig): T {
   const refusal = (parsed: OcxParsedRequest): string | undefined => {
     // Chat Completions has a native input_audio user-content part. The adapter promotes
     // tool-result audio into a follow-up user message, so these blocks no longer lose bytes.
     const kind = untranslatedResponsesInputMedia(parsed._rawBody, { allowAudio: wire === "openai-chat" });
-    return kind ? untranslatedInputMediaMessage(kind) : unrepresentableDeclaration(parsed, wire);
+    return kind ? untranslatedInputMediaMessage(kind)
+      : unrepresentableDeclaration(parsed, wire) ?? unrepresentableVideo(parsed, wire, provider);
   };
   const build = adapter.buildRequest.bind(adapter);
   adapter.buildRequest = (parsed, incoming) => {

@@ -16,17 +16,6 @@ import type { OcxAssistantMessage, OcxContentPart, OcxParsedRequest, OcxProvider
 import { modelInList, namespacedToolName } from "../../types";
 
 /**
- * The translated Chat route has no video mapping: this adapter does not implement one,
- * and the marker records that fact so the payload is not dropped in silence.
- *
- * The wording is deliberately about opencodex's own translation, not the provider or
- * model. An earlier revision said "unsupported by this provider", which attributed an
- * opencodex mapping limit to upstream capability the proxy has not established. Native
- * Chat passthrough and Google inline video are unaffected by this route.
- */
-const VIDEO_UNSUPPORTED_MARKER = "[video omitted: the translated Chat route has no video mapping]";
-
-/**
  * Chat-completions image_url parts for images carried inside a tool result (issue #888). role:"tool"
  * content is text-only on every chat provider, so these ride in a follow-up user message instead of
  * being flattened to the "[image]" marker the model can't actually see. The same follow-up carries
@@ -232,16 +221,19 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
         const parts = typeof msg.content === "string" ? undefined : msg.content as OcxContentPart[];
         const hasImages = parts?.some(p => p.type === "image") ?? false;
         const hasAudio = parts?.some(p => p.type === "audio") ?? false;
-        // A document has a structured counterpart on this wire, so it needs the parts array for
-        // the same reason an image does: flattening it to a string would drop the bytes.
-        const hasStructured = hasImages || hasAudio || (parts?.some(p => p.type === "document") ?? false);
+        // Video is user content only on this wire (the input media guard refuses it elsewhere),
+        // so a developer message never switches to the structured branch for it.
+        const hasVideo = msg.role === "user" && (parts?.some(p => p.type === "video") ?? false);
+        // A document and a video have structured counterparts on this wire, so they need the
+        // parts array for the same reason an image does: flattening would drop the bytes.
+        const hasStructured = hasImages || hasAudio || hasVideo || (parts?.some(p => p.type === "document") ?? false);
         let chatMsg: Record<string, unknown>;
         if (msg.role === "developer" && !hasStructured) {
           const text = typeof msg.content === "string"
             ? msg.content
             : parts!.map(p => (p as OcxTextContent).text).join("");
-          // A non-text timeline part (video, for example) serializes to nothing here. The
-          // generic user path drops such a message, and emitting a content-free system
+          // A message whose parts carry no text serializes to nothing here. The generic
+          // user path drops such a message, and emitting a content-free system
           // message instead is rejected by some upstreams. Native OpenAI keeps its existing
           // empty-developer wire, which is a separate question from placement.
           if (!nativeOpenAI && text.length === 0) break;
@@ -249,18 +241,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
         } else if (typeof msg.content === "string") {
           chatMsg = { role: "user", content: msg.content };
         } else if (!hasStructured) {
-          // A video part has no `text`, so joining it produced "" and the whole message
-          // was dropped: a video-only or text-plus-video turn vanished silently. OpenAI's
-          // Chat Completions wire has no video content part, so state the omission
-          // instead of losing it. Scoped to this adapter's wire, not a claim about video
-          // support in general — native Chat passthrough and Google inline video are
-          // unaffected.
-          chatMsg = {
-            role: "user",
-            content: parts!.map(p => (p.type === "video"
-              ? VIDEO_UNSUPPORTED_MARKER
-              : (p as OcxTextContent).text)).join(""),
-          };
+          chatMsg = { role: "user", content: parts!.map(p => (p as OcxTextContent).text).join("") };
         } else {
           const chatParts = parts!.map(p => {
             if (p.type === "image") {
@@ -280,17 +261,20 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
                 },
               };
             }
-            // Previously this produced { type: "text", text: undefined } for a video
-            // part — a malformed part, worse than a drop because it can fail upstream
-            // schema validation.
-            if (p.type === "video") return { type: "text", text: VIDEO_UNSUPPORTED_MARKER };
+            // The Chat Completions video part OpenRouter, Qwen (DashScope) and Kimi document.
+            // The input media guard admits it only for a model that declares video input, so a
+            // Chat upstream without the part never receives it. `processing` is the caller's
+            // Gemini mode (OpenRouter forwards it) and is sent only when the caller sent it.
+            if (p.type === "video") {
+              return { type: "video_url", video_url: { url: p.videoUrl, ...(p.processing ? { processing: p.processing } : {}) } };
+            }
             return { type: "text", text: (p as OcxTextContent).text };
           });
           // A developer message with images keeps the user-compatible shape it has always had on
           // this wire. One carrying only a document has no such precedent, and demoting it would
-          // undo the role this adapter just finished preserving.
+          // undo the role this adapter just finished preserving. Video is user content only.
           chatMsg = {
-            role: msg.role === "developer" && !hasImages && !hasAudio ? developerWireRole : "user",
+            role: msg.role === "developer" && !hasImages && !hasAudio && !hasVideo ? developerWireRole : "user",
             content: chatParts,
           };
           if (provider.singleLeadingSystemMessage === true && chatMsg.role !== "user") {

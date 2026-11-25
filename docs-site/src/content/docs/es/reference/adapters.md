@@ -34,6 +34,38 @@ El contenido vacío, las partes mal formadas u opacas, las imágenes identificad
 
 <a id="checkpoint-continuation-after-routed-compaction"></a>
 
+## Entrada de video en rutas traducidas
+
+Un video llega a un modelo solo por un cable con un portador de video publicado. Los clientes lo
+envían como la parte de Responses `{"type": "input_video", "video_url": "…"}` o la parte de Chat
+Completions `{"type": "video_url", "video_url": {"url": "…"}}`; `url` es una URL `data:` en
+base64 o una URL que el proveedor descarga por sí mismo.
+
+| Ruta | Se envía como |
+| --- | --- |
+| `google` | `inline_data`, o `file_data` para URL de YouTube y de la Files API de Gemini (véase [`google`](#google)) |
+| `openai-chat`, para un modelo cuyas modalidades de entrada incluyen `video` | la parte de Chat `video_url`, en mensajes de usuario |
+| Responses de paso directo (`openai-responses`, Azure) | la parte `input_video` original, sin cambios |
+| cualquier otra ruta | rechazado |
+
+La parte de Chat `video_url` depende del modelo: OpenRouter, Qwen en la API compatible con OpenAI
+de DashScope y Kimi la documentan, pero la mayoría de los modelos de Chat no aceptan video. Por eso
+el adaptador de Chat traducido la envía solo cuando el modelo enrutado declara video mediante
+`modelCapabilities.<id>.inputModalities`, `modelInputModalities` o el `inputModalities` de todo
+el proveedor. El preset de Moonshot lo declara para `kimi-k3` y `kimi-k3.1-pro`. Los modelos de
+chat Grok de xAI no aceptan entrada de video a fecha de 2026-11-25 (xAI documenta entrada de texto e
+imagen para `grok-4.6` y `grok-4.7`), así que un video enviado a Grok se rechaza.
+
+Un video rechazado devuelve HTTP 400 con el código `unsupported_input_modality` antes de enviar
+nada. Antes, las rutas de Chat traducido, Anthropic y Cursor sustituían el clip por un marcador de
+texto, Gemini convertía en marcador una URL que no puede descargar, y la solicitud se enviaba de
+todos modos. Un video fuera del contenido de usuario (sistema, asistente o salida de herramienta) no
+tiene conversor en ninguna ruta traducida y también se rechaza, igual que un video en un mensaje de
+desarrollador en la ruta de Chat. Un video en línea de más de 50 MiB decodificados se rechaza en
+todas las rutas; envíe en su lugar la URL del archivo del proveedor. La admisión de entrada cobra el
+video en línea por tamaño, a unos 1.250 bytes por token, y una URL descargada como un minuto (6.000
+tokens). El rechazo no nombra la URL ni los bytes.
+
 ## Continuación del punto de control después de la compactación enrutada
 
 Un modelo enrutado reproduce un punto de control OpenCodex `ocx1:` como texto de usuario junto con las solicitudes anteriores conservadas. Cuando una solicitud contiene uno de esos puntos de control decodificados, OpenCodex añade una nota breve a las instrucciones del sistema en las rutas traducidas, o a `instructions` en el passthrough de Responses. La nota presenta las solicitudes completadas como historial y solo permite continuar el trabajo pendiente ya autorizado que siga dentro de ese alcance, sin volver a pedir la misma autorización mientras sea válida. Los permisos y las confirmaciones existentes siguen vigentes: las decisiones o autorizaciones pendientes deben resolverse antes de realizar acciones que dependan de ellas. Los puntos de control y las delegaciones, incluidos los de otro hilo, no amplían la autoridad ni el alcance. Los mensajes posteriores del usuario tienen prioridad, incluso si pausan, cancelan, sustituyen o cambian el alcance del trabajo. Las solicitudes de compactación, los blobs nativos opacos y las solicitudes sin punto de control no reciben esa nota.
@@ -238,7 +270,7 @@ Consulta [Gemini nativo con Antigravity](/es/reference/proxy-formats/#native-gem
   | YouTube ver URL (`youtube.com`, `youtu.be`, `m.`/`music.`/`-nocookie` variantes) | `file_data.file_uri` |
   | `https://generativelanguage.googleapis.com/<version>/files/<id>` - el formulario de recursos de Archivos API, donde `<version>` es `v1`, `v1beta` o `v1alpha` | `file_data.file_uri` |
 
-  Cualquier otra URL remota se mantiene como el marcador de texto `[video: <url>]`, porque el adaptador no tiene ningún tipo de medio para él y no hay evidencia de que Gemini lo buscará. La lista de permisos se hace coincidir en el host de la URL analizada y la ruta sobre HTTPS, no en una subcadena, para que un host similar no se convierta en una referencia `file_data` que el proxy pida a Gemini que busque. La ruta está anclada en el inicio, por lo que el punto final de carga reanudable (`/upload/<version>/files/<id>`) es *no* aceptado: no es un recurso legible, y `file_data.file_uri` pide a Gemini que acceda al recurso indicado a lo que se da. `file_data` lleva `file_uri` solamente; no se adjunta `mime_type` adivinado.
+  Cualquier otra URL remota se rechaza antes de enviar con HTTP 400 `unsupported_input_modality`, porque el adaptador no tiene ningún tipo de medio para ella y no hay evidencia de que Gemini la descargue; antes se convertía en un marcador de texto `[video: <url>]` sobre el que respondía el modelo. La lista de permisos se hace coincidir en el host de la URL analizada y la ruta sobre HTTPS, no en una subcadena, para que un host similar no se convierta en una referencia `file_data` que el proxy pida a Gemini que busque. La ruta está anclada en el inicio, por lo que el punto final de carga reanudable (`/upload/<version>/files/<id>`) es *no* aceptado: no es un recurso legible, y `file_data.file_uri` pide a Gemini que acceda al recurso indicado a lo que se da. `file_data` lleva `file_uri` solamente; no se adjunta `mime_type` adivinado.
 
 - **Salida de imagen en línea:** cuando el modelo es uno de los ID de chat explícitos con capacidad de imagen (`gemini-3.1-flash-image`, `gemini-2.0-flash-preview-image-generation` o `gemini-3-pro-image-preview`), el adaptador envía `responseModalities: ["TEXT", "IMAGE"]`. No se incluyen los ID de generación de medios independientes, como `gemini-3-pro-image`. Las partes `inlineData` devueltas se materializan bajo el directorio OpenCodex `artifacts/` configurado y aparecen como enlaces de imagen de marcado descendente a la ruta opaca autenticada `/v1/opencodex/artifacts/<id>` (no `file:` URI o rutas del sistema de archivos host). Cada imagen se limita a 50 MB y cada respuesta a 100 MB de datos decodificados; se rechazan las cargas útiles base64 mal formadas. Los artefactos se podan automáticamente cuando el recuento supera los 200 archivos.
 

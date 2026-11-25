@@ -23,6 +23,7 @@ import { getModelMetadata } from "../../generated/model-metadata";
 import { estimateTokens } from "../../lib/token-estimate";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { modelRecordValue } from "../../reasoning-effort";
+import { inlineVideoDecodedBytes } from "../../responses/video-input";
 import type { OcxContentPart, OcxParsedRequest, OcxProviderConfig } from "../../types";
 
 /**
@@ -61,6 +62,21 @@ const IMAGE_BYTES_PER_TOKEN = 750;
 /** Compressed-audio bytes per token. More conservative than the image proxy. */
 const AUDIO_BYTES_PER_TOKEN = 256;
 
+/**
+ * Decoded video bytes per token. Gemini bills static video at about 100 tokens per second at
+ * its default media resolution (Gemini video-understanding guide), and a compressed clip runs at
+ * roughly 1 Mbit/s, so a second is about 125,000 bytes. A duration-free proxy like the image
+ * one, sized for video rather than borrowed from image tiles.
+ */
+const VIDEO_BYTES_PER_TOKEN = 1_250;
+
+/**
+ * Token cost charged for a video the provider fetches itself (a YouTube or Files API URL). Its
+ * length is unknown here, so this charges one minute at the rate above and otherwise admits:
+ * the provider bills the real duration and refuses what does not fit.
+ */
+const REMOTE_VIDEO_TOKENS = 6_000;
+
 export interface InputAdmissionResult {
   admitted: boolean;
   estimatedTokens: number;
@@ -98,7 +114,7 @@ function imageTokens(imageUrl: string): number {
 
 function contentPartTokens(part: OcxContentPart, modelId: string): number {
   if (part.type === "image") return imageTokens(part.imageUrl);
-  if (part.type === "video") return imageTokens(part.videoUrl);
+  if (part.type === "video") return videoTokens(part.videoUrl);
   if (part.type === "audio") return base64PayloadTokens(part.data, AUDIO_BYTES_PER_TOKEN);
   // An inline document is a base64 payload, not a sentence: estimating it from its marker would
   // admit a request whose real input is orders of magnitude larger. Counted arithmetically —
@@ -111,6 +127,13 @@ function base64PayloadTokens(base64: string, bytesPerToken = IMAGE_BYTES_PER_TOK
   if (base64.length === 0) return 0;
   const decoded = Math.floor((base64.length * 3) / 4);
   return Math.max(1, Math.ceil(decoded / bytesPerToken));
+}
+
+/** Inline video by decoded size at the video rate; a fetched URL at the flat remote charge. */
+function videoTokens(videoUrl: string): number {
+  const decoded = inlineVideoDecodedBytes(videoUrl);
+  if (decoded === undefined) return REMOTE_VIDEO_TOKENS;
+  return decoded === 0 ? 0 : Math.max(1, Math.ceil(decoded / VIDEO_BYTES_PER_TOKEN));
 }
 
 function contentTokens(content: string | readonly OcxContentPart[], modelId: string): number {
