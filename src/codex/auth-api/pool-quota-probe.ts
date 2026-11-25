@@ -17,6 +17,7 @@ import { claimQuotaRecovery, fencePropagatedQuotaRecovery, quotaRecoveryTerminal
 import { seedLoginRowsForTests } from "./login-state";
 import { nonEmptyPlan } from "./runtime-config";
 import { CODEX_TERMINAL_AUTH_CODES } from "../quota-refresh-outcome";
+import { withWorkspaceCreditBalance } from "../workspace-credit-balance";
 
 export const POOL_CACHE_TTL = 5 * 60_000;
 export const POOL_QUOTA_REFRESH_CONCURRENCY = 4;
@@ -265,12 +266,13 @@ export async function recoverPoolQuotaFrom401(ctx: {
 
   const writerGeneration = captureConfigGeneration();
   const poolWriter = capturePoolQuotaWriter(accountId, refreshed);
+  const signal = AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS);
   const replayRead = await fetchCodexUsage<PoolQuotaResult>(`pool:${accountId}:${writerGeneration}:${refreshed.generation}`, {
     headers: {
       Authorization: `Bearer ${refreshed.accessToken}`,
       "ChatGPT-Account-Id": refreshed.chatgptAccountId,
     },
-    signal: AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS),
+    signal,
   }, () => markQuotaProbeAttempted(ctx.quotaProbeEvidence, refreshed.generation),
   ctx.recoveryProbeNow === undefined ? { poolAccountId: accountId, transport: codexAccountFetch(accountId) }
     : { poolAccountId: accountId, recoveryProbe: true, now: () => ctx.recoveryProbeNow!, transport: codexAccountFetch(accountId) });
@@ -305,6 +307,7 @@ export async function recoverPoolQuotaFrom401(ctx: {
     const result = await commitPoolQuotaResponse(replay, {
       accountId, existing, configuredPlan, generation: refreshed.generation, writerGeneration, poolWriter,
       mayPublish: ctx.quotaProbeEvidence.mayPublish,
+      resolveWorkspaceBalance: usage => withWorkspaceCreditBalance(usage, refreshed, codexAccountFetch(accountId), signal),
     });
     usableReplay = result.freshQuota !== undefined;
     return result.freshCredentialGeneration === refreshed.generation ? {
@@ -352,6 +355,7 @@ export async function commitPoolQuotaResponse(
     writerGeneration: number;
     poolWriter?: PoolQuotaWriter;
     mayPublish?: () => boolean;
+    resolveWorkspaceBalance?: (usage: WhamUsageResponse) => Promise<WhamUsageResponse>;
   },
 ): Promise<PoolQuotaResult> {
   const { accountId, existing, configuredPlan, generation, writerGeneration } = ctx;
@@ -361,7 +365,15 @@ export async function commitPoolQuotaResponse(
     return { quota: getAccountQuota(accountId), needsReauth: false, credentialGeneration: generation };
   }
   const freshPlan = nonEmptyPlan(data.plan_type) ?? undefined;
-  const usage = { ...data, plan_type: freshPlan ?? configuredPlan };
+  let usage: WhamUsageResponse = { ...data, plan_type: freshPlan ?? configuredPlan };
+  if (ctx.resolveWorkspaceBalance && ctx.poolWriter && writerGeneration === captureConfigGeneration()
+    && isCodexAccountGenerationLive(accountId, generation)) {
+    usage = await ctx.resolveWorkspaceBalance(usage);
+    if (ctx.mayPublish?.() === false || writerGeneration !== captureConfigGeneration()
+      || !isCodexAccountGenerationLive(accountId, generation)) {
+      return { quota: getAccountQuota(accountId), needsReauth: false, credentialGeneration: generation };
+    }
+  }
   if (ctx.poolWriter && isCodexAccountGenerationLive(accountId, generation)) {
     rememberCodexCredits(accountId, ctx.poolWriter.historyIdentity, parseWhamCredits(usage));
   }
@@ -415,10 +427,11 @@ export async function fetchFreshPoolAccountQuota(
       if (quotaProbeEvidence.mayDispatch?.(generation) === false) {
         return { quota: getAccountQuota(accountId), needsReauth: false, credentialGeneration: generation, quotaProbeSkipped: true };
       }
+      const signal = AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS);
       const admission = await fetchCodexUsage<PoolQuotaResult>(
         `pool:${accountId}:${writerGeneration}:${generation}${afterDispatchSequence === undefined ? "" : `:post-reset:${afterDispatchSequence}`}`, {
         headers: { Authorization: `Bearer ${accessToken}`, "ChatGPT-Account-Id": chatgptAccountId },
-        signal: AbortSignal.timeout(8000),
+        signal,
       }, () => markQuotaProbeAttempted(quotaProbeEvidence, generation),
       recoveryProbeNow === undefined ? { poolAccountId: accountId, transport: codexAccountFetch(accountId) }
         : { poolAccountId: accountId, recoveryProbe: true, now: () => recoveryProbeNow, transport: codexAccountFetch(accountId) });
@@ -455,6 +468,7 @@ export async function fetchFreshPoolAccountQuota(
       const committed = await commitPoolQuotaResponse(resp, {
         accountId, existing, configuredPlan, generation, writerGeneration, poolWriter,
         mayPublish: quotaProbeEvidence.mayPublish,
+        resolveWorkspaceBalance: usage => withWorkspaceCreditBalance(usage, { accessToken, chatgptAccountId }, codexAccountFetch(accountId), signal),
       });
       readState.usable = committed.freshQuota !== undefined;
       return withQuotaProbeEvidence(committed, quotaProbeEvidence);

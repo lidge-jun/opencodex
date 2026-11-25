@@ -300,7 +300,7 @@ refusal, so the two predicates can never both hold.
 
 WHAM `credits` is spendable usage capacity, separate from manually redeemed
 `rate_limit_reset_credits`. The quota store keeps normalized flags, a finite nonnegative balance,
-and a separate observation clock. When a Business or Enterprise workspace is reported as `business` without `rate_limit`, a usable credit summary without a usable balance can take its balance from finite, nonnegative `spend_control.individual_limit.remaining` with source `group_based_spend_controls`. Explicit zero/null replaces earlier evidence. Partial usage
+and a separate observation clock. When a Business or Enterprise workspace is reported as `business` without `rate_limit`, a usable credit summary without a usable balance can take its balance from finite, nonnegative `spend_control.individual_limit.remaining` with source `group_based_spend_controls`. A stored Team account that reports `has_credits: true` without a balance can fill the missing value from `GET /backend-api/accounts/{account_id}/remaining_balance`. The fallback uses the same credential, account egress and deadline as its WHAM probe. It preserves WHAM's spend-control and overage decisions. A failed or unusable balance read leaves the original WHAM observation intact and does not affect credential health. Explicit zero/null replaces earlier evidence. Partial usage
 headers retain its original clock. A positive balance with `has_credits`, or unlimited credits,
 can keep an account selectable at 100% included usage for five minutes only when its id is in
 `creditCodexAccountIds`. Balance evidence never grants permission: unlisted accounts retain the
