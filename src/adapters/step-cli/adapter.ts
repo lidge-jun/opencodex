@@ -10,6 +10,7 @@ import {
   abortSignal,
   composePrompt,
   hasImageInput,
+  hasStartingUserText,
   latestToolResult,
   pendingUserText,
   stepModelId,
@@ -160,7 +161,12 @@ export function createStepCliAdapter(
 
       let session!: StepConversationSession;
       try {
-        session = await sessions.open(ref);
+        const acquired = await sessions.open(ref, { existingOnly: !hasStartingUserText(parsed) });
+        if (!acquired) {
+          emit(noUserText());
+          return;
+        }
+        session = acquired;
         await session.handshake();
       } catch (error) {
         await session?.close();
@@ -229,6 +235,14 @@ async function startQueryWithBusyRetry(
   }
 }
 
+function noUserText(): AdapterEvent {
+  return refusal(
+    "StepCode carries conversation history inside its own process, so a turn must end with either user text or a tool result.",
+    400,
+    "step_cli_no_user_text",
+  );
+}
+
 function emitPreDispatchAbort(emit: (event: AdapterEvent) => void): void {
   emit({ type: "error", message: "StepCode turn was aborted before start.", retryable: false });
 }
@@ -277,13 +291,7 @@ async function driveTurn(
       // abandoned the call still carries the user's message and must keep it.
       const userText = continuedQuery ? undefined : pendingUserText(parsed);
       if (!continuedQuery && !userText) {
-        emit(
-          refusal(
-            "StepCode carries conversation history inside its own process, so a turn must end with either user text or a tool result.",
-            400,
-            "step_cli_no_user_text",
-          ),
-        );
+        emit(noUserText());
         return;
       }
 

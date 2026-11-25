@@ -58,7 +58,8 @@ StepCode:
 - **Conversation capacity:** A proxy can keep eight StepCode sessions per OpenCodex home. When all
   slots are occupied, existing conversations can continue. A new one receives `step_cli_pool_full`
   and can retry after a slot frees up. Idle sessions still count until
-  cleanup after the ten-minute idle timeout completes.
+  cleanup after the ten-minute idle timeout completes. Send user text to start a conversation.
+  A tool result on its own can resume its matching call in an existing conversation.
 - **Two documented limits:** a tool that takes longer than two minutes to come back exceeds the
   CLI's own tool-result window and the turn reports `step_cli_tool_result_too_late`; and the CLI's
   session system prompt cannot be replaced through this protocol, so your instructions are prepended

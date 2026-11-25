@@ -190,7 +190,23 @@ export function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-/** Translate a transport failure into the actionable error an operator can act on. */
+/** A fresh StepCode process can consume text from the turn ending this transcript. */
+export function hasStartingUserText(parsed: OcxParsedRequest): boolean {
+  const messages = parsed.context.messages;
+  // The replay prefix counts wire items. The parser records the corresponding message boundary
+  // only when the continuation has a new conversational item.
+  const start = parsed._continuationConversationMessageIndex
+    ?? ((parsed._replayPrefixLen ?? 0) > 0 ? messages.length : 0);
+  for (let index = messages.length - 1; index >= start; index--) {
+    const message = messages[index];
+    if (!message || message.role === "developer") continue;
+    if (message.role !== "user") return false;
+    return typeof message.content === "string"
+      ? /\S/.test(message.content)
+      : message.content.some(part => part.type === "text" && /\S/.test(part.text));
+  }
+  return false;
+}
 
 /**
  * The text StepCode should be asked for on this turn.

@@ -7,12 +7,13 @@ import { clearStepCliSessions, createStepCliAdapter } from "../../src/adapters/s
 import { withConversationLock } from "../../src/adapters/step-cli/conversation";
 import { handleReverseRequest, handleRuntimeEvent } from "../../src/adapters/step-cli/events";
 import { classifyStepChildError } from "../../src/adapters/step-cli/errors";
-import { latestToolResult, projectToolResultContent } from "../../src/adapters/step-cli/projection";
-import type {
-  StepConversationHost,
-  StepConversationRef,
-  StepConversationSession,
-  StepHeldTool,
+import { hasStartingUserText, latestToolResult, projectToolResultContent } from "../../src/adapters/step-cli/projection";
+import {
+  StepSessionPool,
+  type StepConversationHost,
+  type StepConversationRef,
+  type StepConversationSession,
+  type StepHeldTool,
 } from "../../src/adapters/step-cli/session-pool";
 import {
   encodeStepFrame,
@@ -200,6 +201,41 @@ function parsed(messages: unknown[]): OcxParsedRequest {
 
 const USER_ASK = [{ role: "user", content: "run it", timestamp: 0 }];
 
+test("starting a conversation without user text refuses before preparing a StepCode session", async () => {
+  let preparations = 0;
+  const pool = new StepSessionPool({
+    openCodexHome: "unused", idleTimeoutMs: 60_000,
+    buildOptions() { preparations++; throw new Error("unexpected session preparation"); },
+  }, { onEvent() {} });
+  const adapter = createStepCliAdapter(provider(), { openSession: pool });
+  try {
+    const noInput = [
+      [],
+      [...USER_ASK, { role: "assistant", content: "Earlier reply" }],
+      [...USER_ASK, { role: "toolResult", toolCallId: "call-9", toolName: "shell", content: "done" }],
+      [...USER_ASK, { role: "user", content: "  " }],
+      [...USER_ASK, { role: "user", content: [{ type: "text", text: "\n" }] }],
+    ];
+    const replayOnly = { ...parsed(USER_ASK), previousResponseId: "prev", _replayPrefixLen: 3 };
+    for (const turn of [...noInput.map(parsed), replayOnly]) {
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn!(turn, THREAD_META, event => events.push(event));
+      expect(events).toMatchObject([{ type: "error", status: 400, code: "step_cli_no_user_text",
+        errorType: "invalid_request_error", retryable: false }]);
+    }
+    expect(preparations).toBe(0);
+  } finally { await pool.closeAll(); }
+});
+
+test("fresh text after restored history can start a session even when developer guidance follows", () => {
+  const turn = parsed([...USER_ASK,
+    { role: "user", content: [{ type: "text", text: "  " }, { type: "text", text: "Next question" }] },
+    { role: "developer", content: "Answer briefly" },
+  ]);
+  // Three wire items produced one historical message.
+  expect(hasStartingUserText({ ...turn, _replayPrefixLen: 3, _continuationConversationMessageIndex: 1 })).toBe(true);
+});
+
 describe("StepCode reverse requests are always answered", () => {
   test("a permission request with no turn is denied", () => {
     const session = new FakeSession();
@@ -268,7 +304,7 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     expect(session.delivered).toHaveLength(0);
   });
 
-  test("turn 2 with the matching result continues the same query", async () => {
+  test.each([true, false])("a matching tool result continues the same query (user history: %s)", async includeHistory => {
     const session = new FakeSession();
     const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
 
@@ -293,7 +329,7 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     ];
     await adapter.runTurn!(
       parsed([
-        ...USER_ASK,
+        ...(includeHistory ? USER_ASK : []),
         { role: "toolResult", toolCallId: "call-9", toolName: "shell", content: "LIVE_BRIDGE_OK", isError: false, timestamp: 1 },
       ]),
       THREAD_META,

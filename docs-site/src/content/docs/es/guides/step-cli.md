@@ -60,6 +60,8 @@ aprobarlas y ejecutarlas:
   Si las ocho plazas están ocupadas, las conversaciones existentes pueden continuar. Una nueva
   recibe el error `step_cli_pool_full` y puede reintentarse cuando se libere una plaza.
   Las sesiones inactivas siguen contando hasta que termina su cierre tras diez minutos de inactividad.
+  Para iniciar una conversación, envía texto de usuario. Un resultado de herramienta por sí solo
+  puede reanudar la llamada correspondiente en una conversación existente.
 - **Límites de sesión.** Si una herramienta tarda más de dos minutos en devolver un resultado,
   el turno informa del error `step_cli_tool_result_too_late`. El protocolo no permite reemplazar
   el mensaje de sistema de la sesión. OpenCodex antepone las instrucciones del cliente al turno.
