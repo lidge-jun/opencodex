@@ -249,6 +249,10 @@ export function usableLocalControlSocket(port: number, configDir?: string): stri
   if (!localControlSocketSupported() || !Number.isInteger(port) || port <= 0 || port > 65535) return null;
   const path = localControlSocketPath(port, configDir);
   if (process.platform === "win32") {
+    // Trust boundary: the current user and administrators are trusted, as for every file in the
+    // config home. Windows cannot report an AF_UNIX file's owner, so endpoint ownership is not
+    // verified here; what is verified is that the run directory is private. The runtime creates
+    // it only under a write-private config home and refuses one that already existed loose.
     // The cheap observation first: no listed socket means no PowerShell at all.
     if (!localControlSocketPathFits(path) || !windowsSocketEntry(path)) return null;
     return isPrivateSocketDir(localControlSocketDir(configDir)) && windowsSocketEntry(path) ? path : null;

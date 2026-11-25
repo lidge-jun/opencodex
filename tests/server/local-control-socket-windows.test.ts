@@ -15,7 +15,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
@@ -432,6 +432,45 @@ describe.skipIf(!windows || ROOT === null)("Windows hub with a non-loopback publ
     expect(listener.socketPath()).toBe(localControlSocketPath(publicPort));
     await listener.stop();
     expect(portEntries(publicPort)).toEqual([]);
+  }, SERVER_BUDGET_MS);
+
+  test("a config home whose inheritable grants would let another account write gets no run directory", async () => {
+    // A new directory inherits its parent's grants before hardening runs, so the parent check
+    // has to refuse first: the run directory is never created where it could start out writable.
+    const grant = spawnSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe"),
+      [process.env.OPENCODEX_HOME!, "/grant", "*S-1-1-0:(OI)(CI)(IO)M"], { encoding: "utf8" });
+    expect(grant.status).toBe(0);
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    const listener = createLocalControlListener();
+    listener.start({ config: { hostname: "0.0.0.0" } as OcxConfig, publicPort, dispatch: async () => Response.json({ ok: true }) });
+    try {
+      expect(listener.socketPath()).toBeNull();
+      expect(existsSync(localControlSocketDir())).toBe(false);
+      expect(usableLocalControlSocket(publicPort)).toBeNull();
+    } finally {
+      await listener.stop();
+    }
+  }, SERVER_BUDGET_MS);
+
+  test("a run directory loosened after a runtime created it is refused at the next start and left loose", async () => {
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    const ctx = { config: { hostname: "0.0.0.0" } as OcxConfig, publicPort, dispatch: async () => Response.json({ ok: true }) };
+    const first = createLocalControlListener();
+    first.start(ctx);
+    expect(first.socketPath()).toBe(localControlSocketPath(publicPort));
+    expect(windowsTrustedPath(localControlSocketDir())).toBe(true);
+    await first.stop();
+    loosen(localControlSocketDir());
+    const next = createLocalControlListener();
+    next.start(ctx);
+    try {
+      expect(next.socketPath()).toBeNull();
+      expect(windowsTrustedPath(localControlSocketDir())).toBe(false);
+      expect(portEntries(publicPort)).toEqual([]);
+      expect(usableLocalControlSocket(publicPort)).toBeNull();
+    } finally {
+      await next.stop();
+    }
   }, SERVER_BUDGET_MS);
 });
 
