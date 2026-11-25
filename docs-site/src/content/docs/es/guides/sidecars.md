@@ -30,10 +30,26 @@ Estos backends requieren **selección explícita**. Si falta una credencial nece
 | `exa` | Exa Search API (resumen de resultados no LLM) | `webSearchSidecar.exaApiKey` | La clave es solo escritura a través de la administración API (nunca se hizo eco, se redactó desde los registros). No se aplica ningún modelo de sidecar. |
 | `parallel` | `web_search` de Parallel por MCP (fragmentos y enlaces a las fuentes) | Ninguna | No usa un modelo de sidecar. |
 
-Para usar Parallel, configura `webSearchSidecar.backend` como `"parallel"` en `config.json` o ejecuta
-`ocx agent sidecar web --backend parallel`. OpenCodex envía la consulta a
-`https://mcp.parallel.ai/mcp` junto con el User-Agent del proyecto, que permite a Parallel
-medir el uso agregado de su servicio MCP gratuito.
+<a id="use-parallel-search"></a>
+
+### Usar Parallel Search
+
+Configura `webSearchSidecar.backend` como `"parallel"` en `config.json` o ejecuta lo siguiente
+contra tu gateway en ejecución.
+
+```sh
+ocx agent sidecar web --backend parallel
+```
+
+El backend sirve la búsqueda alojada en modelos enrutados, incluidos los adaptadores RunTurn. También
+sirve `/v1/alpha/search` cuando no aplican ni la ruta de búsqueda nativa del modelo ni el relé directo
+de ChatGPT. El `webSearchBridge` por proveedor usa su propia configuración de backend.
+
+Cada búsqueda envía su consulta a `https://mcp.parallel.ai/mcp` y devuelve fragmentos con sus enlaces
+de origen. OpenCodex envía el User-Agent del proyecto para que Parallel pueda medir el uso agregado de
+su servicio MCP gratuito. No se requiere ninguna cuenta ni clave API de Parallel. Se aplican los
+[términos de Parallel](https://parallel.ai/customer-terms) y la
+[política de privacidad](https://parallel.ai/privacy-policy).
 
 <a id="web-search-sidecar"></a>
 
