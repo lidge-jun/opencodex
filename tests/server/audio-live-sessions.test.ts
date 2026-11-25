@@ -11,7 +11,11 @@ import { clearAccountQuota } from "../../src/codex/auth-api";
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex/routing";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
-import { resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
+import { resetLifecycleDrainStateForTests, tryAdmitTurn } from "../../src/server/lifecycle";
+import { resolveAudioClient } from "../../src/server/audio-client";
+import { handleLiveSessionCreate } from "../../src/server/audio-live-sessions";
+import { LIVE_RESPONSE_MAX_BYTES } from "../../src/server/live";
+import { LiveCallBindings } from "../../src/server/live-call-bindings";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -43,7 +47,9 @@ function keyedConfig(): OcxConfig {
   } as OcxConfig;
 }
 
-function createFixture() {
+const sessionAnswer = () => Response.json({ session: { id: "live_fixture_1" }, transport: { type: "webrtc", sdp: "v=0 answer\r\n" } }, { status: 201 });
+
+function createFixture(options: { answer?: (req: Request) => Response | Promise<Response> } = {}) {
   const creates: Request[] = [];
   const handshakes: Array<{ url: string; headers: Headers }> = [];
   const upstream = Bun.serve({
@@ -59,7 +65,11 @@ function createFixture() {
     if (["api.openai.com", "chatgpt.com"].includes(new URL(req.url).hostname)) {
       if (new URL(req.url).pathname === "/v1/live/sessions") {
         creates.push(req.clone());
-        return Response.json({ session: { id: "live_fixture_1" }, transport: { type: "webrtc", sdp: "v=0 answer\r\n" } }, { status: 201 });
+        return (options.answer ?? sessionAnswer)(req);
+      }
+      // Frameless call-create on either upstream, so a call alias exists beside the session aliases.
+      if (new URL(req.url).pathname === "/v1/live" || new URL(req.url).pathname.endsWith("/realtime/calls")) {
+        return new Response("v=0\r\n", { status: 201, headers: { "content-type": "application/sdp", location: "https://api.openai.com/v1/live/rtc_frameless_fixture" } });
       }
       return Response.json({});
     }
@@ -215,6 +225,88 @@ describe("GPT-Live session sockets", () => {
     expect(fixture.handshakes).toHaveLength(0);
     expect(await echo(socket(`/v1/live/sessions/${alias}/attach`), "attach-echo")).toBe("attach-echo");
     expect(fixture.handshakes[0]!.url).toBe("wss://api.openai.com/v1/live/sessions/live_fixture_1/attach");
+  });
+});
+
+
+describe("GPT-Live session boundaries", () => {
+  test("a ChatGPT call alias never opens the session attach route, nor a session alias the call route", async () => {
+    saveConfig({
+      ...keyedConfig(), defaultProvider: "openai",
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool" },
+        ...keyedConfig().providers,
+      },
+      codexAccounts: [{ id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "acct-a" }],
+    } as OcxConfig);
+    saveCodexAccountCredential("pool-a", { accessToken: fakeChatGptJwt({ chatgpt_account_id: "acct-a" }), refreshToken: "fixture-refresh", expiresAt: Date.now() + 3600000, chatgptAccountId: "acct-a" });
+    fixture = createFixture();
+    const call = await fetchOriginal(new URL("/v1/live", fixture.server.url), {
+      method: "POST", headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" }, body: JSON.stringify({ sdp: "v=0\r\n" }),
+    });
+    expect(call.status).toBe(201);
+    await call.text();
+    const callAlias = call.headers.get("location")!.split("/").at(-1)!;
+    expect(await upgradeStatus(`/v1/live/sessions/${callAlias}/attach`, KEY)).toBe(404);
+    const created = await create();
+    const sessionAlias = (await created.json() as { session: { id: string } }).session.id;
+    expect(await upgradeStatus(`/v1/live/${sessionAlias}`, KEY)).toBe(404);
+    expect(fixture.handshakes).toHaveLength(0);
+  });
+
+  test("session sockets reach the API-key provider even when a sideband override is configured", async () => {
+    saveConfig({ ...keyedConfig(), experimentalRealtimeWsBaseUrl: "wss://sideband.example.test/v1" } as OcxConfig);
+    fixture = createFixture();
+    await echo(socket("/v1/live/sessions"), "start-echo");
+    const alias = (await (await create()).json() as { session: { id: string } }).session.id;
+    await echo(socket(`/v1/live/sessions/${alias}/attach`), "attach-echo");
+    expect(fixture.handshakes.map(handshake => handshake.url)).toEqual([
+      "wss://api.openai.com/v1/live/sessions",
+      "wss://api.openai.com/v1/live/sessions/live_fixture_1/attach",
+    ]);
+  });
+
+  test.each([
+    ["an empty transport", () => Response.json({ session: { id: "live_fixture_1" }, transport: {} }, { status: 201 })],
+    ["an empty SDP answer", () => Response.json({ session: { id: "live_fixture_1" }, transport: { type: "webrtc", sdp: " " } }, { status: 201 })],
+    ["a SIP transport", () => Response.json({ session: { id: "live_fixture_1" }, transport: { type: "sip" } }, { status: 201 })],
+    ["an invalid session id", () => Response.json({ session: { id: "live 1/../x" }, transport: { type: "webrtc", sdp: "v=0" } }, { status: 201 })],
+    ["a non-JSON body", () => new Response("v=0", { status: 201 })],
+    ["a redirect", () => new Response(null, { status: 307, headers: { location: "https://elsewhere.example.test/v1/live/sessions" } })],
+    ["an oversized answer", () => new Response("x".repeat(LIVE_RESPONSE_MAX_BYTES + 1), { status: 201 })],
+  ] as const)("%s from upstream is a 502 and binds nothing", async (_label, answer) => {
+    fixture = createFixture({ answer });
+    const response = await create();
+    expect(response.status).toBe(502);
+    await response.text();
+    expect(fixture.creates[0]!.redirect).toBe("manual");
+  });
+
+  test("a client cancel aborts the upstream request", async () => {
+    const config = keyedConfig();
+    saveConfig(config);
+    const started = Promise.withResolvers<void>();
+    let aborted = false;
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      started.resolve();
+      init?.signal?.addEventListener("abort", () => { aborted = true; reject(init.signal!.reason); }, { once: true });
+    })) as typeof fetch;
+    const controller = new AbortController();
+    const req = new Request("http://localhost/v1/live/sessions", {
+      method: "POST", signal: controller.signal,
+      headers: { "content-type": "application/json", "x-opencodex-api-key": KEY }, body: JSON.stringify(offer),
+    });
+    const audio = resolveAudioClient(req, config, true);
+    if (!audio || audio instanceof Response) throw new Error("audio key was not admitted");
+    const lease = tryAdmitTurn();
+    if (!lease) throw new Error("turn gate refused an idle lease");
+    try {
+      const pending = handleLiveSessionCreate(req, config, { model: "unknown", provider: "unknown" }, { client: audio, lease, bindings: new LiveCallBindings() });
+      await started.promise;
+      controller.abort();
+      expect((await pending).status).toBe(499);
+      expect(aborted).toBe(true);
+    } finally { lease.release(); }
   });
 });
 

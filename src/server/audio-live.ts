@@ -160,6 +160,11 @@ export async function resolveExternalLiveSocket(
 ): Promise<AudioSocketTarget | Response> {
   const binding = "callId" in target ? options.bindings.get(target.callId, client.owner) : undefined;
   if ("callId" in target && !binding) return formatErrorResponse(404, "not_found", "Live call is unavailable for this key");
+  // A GPT-Live session alias opens only on the session attach route, and that route opens only session
+  // aliases: each binding keeps the destination rules of the endpoint that created it.
+  if (binding && (target.style === "live-session") !== (binding.joinStyle === "live-session")) {
+    return formatErrorResponse(404, "not_found", "Live call is unavailable for this key");
+  }
   if (binding?.callerOwned && !captureExplicitOpenAiCallerAuth(client.headers, config)) {
     return formatErrorResponse(401, "authentication_error", "Live call requires its original caller account");
   }
@@ -206,7 +211,10 @@ export async function resolveExternalLiveSocket(
     return {
       authContext: relay.authContext,
       headers: Object.fromEntries(liveSession ? liveSessionHeaders(client, relay) : protocolHeaders(client, relay, frameless)),
-      upstreamWsUrl: buildLiveSidebandUpstreamWsUrl(upstreamTarget, binding ? binding.sidebandBaseUrl : config.experimentalRealtimeWsBaseUrl),
+      // A session socket carries the API-key credential, so it goes where session creation posts:
+      // the selected provider's own base, never the Codex sideband override.
+      upstreamWsUrl: buildLiveSidebandUpstreamWsUrl(upstreamTarget, liveSession ? relay.providerBaseUrl
+        : binding ? binding.sidebandBaseUrl : config.experimentalRealtimeWsBaseUrl),
       maxSessionMs: LIVE_CALL_TTL_MS,
       finish: finishAudioUpstream(relay),
     };

@@ -113,14 +113,16 @@ export async function handleLiveSessionCreate(
     let answer: unknown;
     try { answer = JSON.parse(new TextDecoder().decode(raw)); } catch { answer = undefined; }
     const sessionId = isObject(answer) && isObject(answer.session) ? answer.session.id : undefined;
-    if (typeof sessionId !== "string" || !SESSION_ID.test(sessionId) || !isObject((answer as JsonObject).transport)) {
+    const transport = isObject(answer) ? answer.transport : undefined;
+    if (typeof sessionId !== "string" || !SESSION_ID.test(sessionId) || !isObject(transport)
+      || transport.type !== "webrtc" || typeof transport.sdp !== "string" || !transport.sdp.trim()) {
       return formatErrorResponse(502, "upstream_error", "GPT-Live upstream returned an invalid session answer");
     }
     const alias = options.bindings.create({
       owner: options.client.owner, upstreamCallId: sessionId, joinStyle: "live-session",
       providerName: relay.providerName, model,
       keyedCredentialDigest: createHash("sha256").update(new Headers(relay.headers).get("authorization") ?? "").digest("hex"),
-      callerOwned: false, sidebandBaseUrl: config.experimentalRealtimeWsBaseUrl,
+      callerOwned: false,
     });
     if (!alias) return formatErrorResponse(503, "server_busy", "Live call could not be registered");
     return Response.json({ ...(answer as JsonObject), session: { ...((answer as JsonObject).session as JsonObject), id: alias } }, { status: upstream.status });
