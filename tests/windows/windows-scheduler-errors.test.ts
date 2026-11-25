@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { WindowsSchtasksError, WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER } from "../../src/lib/windows-elevation";
-import { schtasks, schtasksErrorDetail, type WindowsSchedulerTaskProbe } from "../../src/service/windows-scheduler";
+import { schtasks, schtasksErrorDetail, startWindowsSchedulerService, windowsSchedulerStartRecovery, type WindowsSchedulerTaskProbe } from "../../src/service/windows-scheduler";
 import { isWindowsSchedulerEndBenign } from "../../src/service/windows-ops";
 
 const task = "opencodex-proxy";
@@ -87,5 +87,42 @@ describe("Task Scheduler failure diagnostics (#7772)", () => {
 
   test("presence-probe diagnostics also suppress raw child stderr", () => {
     expect(schtasksErrorDetail(failure())).toBe("Task Scheduler command failed (exit code 1): schtasks /query");
+  });
+});
+
+describe("Windows Scheduler start recovery (#9038)", () => {
+  const runFailure = () => failedCommand(["/run", "/tn", task], failure(1, Buffer.from("ERROR: The system cannot find the file specified.")));
+
+  test("proven absence returns install guidance after the start attempt fails", () => {
+    expect(windowsSchedulerStartRecovery(runFailure(), () => ({ status: "absent" })))
+      .toBe("Service is not installed (Task Scheduler). Run 'ocx service install' first.");
+  });
+
+  for (const state of [{ status: "present" }, { status: "unknown", detail: "query failed" }] as const) {
+    test(`gives no install advice when the registration is ${state.status}`, () => {
+      expect(windowsSchedulerStartRecovery(runFailure(), () => state)).toBeNull();
+    });
+  }
+
+  test("explicit permission and other command failures do not query registration", () => {
+    const probe = () => { throw new Error("unexpected registration probe"); };
+    const denied = failedCommand(["/run", "/tn", task], failure(1, Buffer.from("ERROR: Access is denied.")));
+    expect(windowsSchedulerStartRecovery(denied, probe)).toBeNull();
+    expect(windowsSchedulerStartRecovery(failedCommand(["/end", "/tn", task], failure()), probe)).toBeNull();
+  });
+
+  test("the start runs once and only a confirmed missing registration becomes advice", () => {
+    let starts = 0;
+    const missing = runFailure();
+    const advice = startWindowsSchedulerService(() => { starts++; throw missing; }, error => windowsSchedulerStartRecovery(error, () => ({ status: "absent" })));
+    expect(advice).toBe("Service is not installed (Task Scheduler). Run 'ocx service install' first.");
+    expect(starts).toBe(1);
+    expect(startWindowsSchedulerService(() => { starts++; })).toBeNull();
+    expect(starts).toBe(2);
+    // A present or unreadable registration rethrows the original Scheduler error, unchanged.
+    for (const state of [{ status: "present" }, { status: "unknown", detail: "query failed" }] as const) {
+      expect(() => startWindowsSchedulerService(() => { throw missing; }, error => windowsSchedulerStartRecovery(error, () => state)))
+        .toThrow(missing);
+    }
   });
 });

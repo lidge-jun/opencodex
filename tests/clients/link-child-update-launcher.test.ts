@@ -34,11 +34,13 @@ function stubNode(path: string): void {
 function install(root: string, options: { version?: string; launcherFile?: boolean } = {}) {
   const home = mkdtempSync(join(tmpdir(), "ocx-launcher-")); dirs.push(home);
   const bin = join(home, "bin"); mkdirSync(bin);
-  for (const command of ["sh", "uname", "mktemp", "sleep", "cat", "awk", "dd", "wc", "rm", "date"]) {
+  for (const command of ["sh", "mktemp", "sleep", "cat", "awk", "dd", "wc", "rm", "date", "stat", "id", "readlink"]) {
     const executable = Bun.which(command);
     if (!executable) throw new Error("Required test tool not found on PATH: " + command);
     symlinkSync(executable, join(bin, command));
   }
+  // Recorded runtime fixtures exercise Linux policy on either POSIX test host.
+  writeFileSync(join(bin, "uname"), "#!/bin/sh\nprintf 'Linux\\n'\n", { mode: 0o755 });
   const pkg = join(home, root);
   const entry = join(pkg, "src", "cli", "index.ts");
   mkdirSync(join(pkg, "src", "cli"), { recursive: true });

@@ -164,7 +164,7 @@ so they cannot hide a definite overflow in another sentence. A throttle worded o
 Body inspection time does not count toward the upstream slow-attempt budget, and empty chunks cannot
 starve the deadline or cancellation. `tests/lib/upstream-retry.test.ts` covers retry and cancellation.
 Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader.
-The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status.
+The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status. The shared detector handles negation asides in bounded time; `tests/lib/definite-overflow-verdict.test.ts` covers its classification and abort-timer responsiveness.
 
 Buffered Responses delivery treats an error-bearing `response.completed` as a failed turn.
 A recognized refusal code on the event, snapshot, or one of their error carriers establishes failure on completion.

@@ -500,8 +500,9 @@
       "path": "transports/responses-combo-boundaries.md",
       "tier": 3,
       "title": "Combo Streaming Boundaries",
-      "scope": "Combo preflight output commitment, turn lease lifetime, and bounded hop warnings. Original client labels on terminal envelopes and failed-turn request identities.",
+      "scope": "Combo preflight output commitment, turn lease lifetime, and bounded hop warnings. Reasoning-effort diagnostic limits for repair and fallback. Original client labels on terminal envelopes and failed-turn request identities.",
       "documents": [
+        "src/providers/reasoning-metadata.ts",
         "src/server/"
       ]
     },
@@ -807,6 +808,15 @@
       ]
     },
     {
+      "path": "providers/step-cli-transport.md",
+      "tier": 4,
+      "title": "StepCode CLI Transport",
+      "scope": "StepCode as a Step Plan transport: its own framed stdio wire, one process per conversation, inline SDK tools instead of an MCP catalog, and the bounded tool-result window.",
+      "documents": [
+        "src/adapters/step-cli/"
+      ]
+    },
+    {
       "path": "providers/opengateway.md",
       "tier": 4,
       "title": "OpenGateway",
@@ -818,6 +828,19 @@
         "src/server/responses/passthrough-completion.ts",
         "src/server/responses/passthrough-dispatch.ts",
         "src/codex/catalog/routed-gather.ts"
+      ]
+    },
+    {
+      "path": "providers/aimlapi.md",
+      "tier": 4,
+      "title": "AI/ML API",
+      "scope": "Type-filtered Chat discovery, seeded models and attribution headers bound to the preset destination.",
+      "documents": [
+        "src/providers/registry/entries-extended.ts",
+        "src/providers/registry.ts",
+        "src/providers/registry-static-headers.ts",
+        "src/providers/routed-config.ts",
+        "src/oauth/index.ts"
       ]
     },
     {
@@ -1383,6 +1406,20 @@
       ]
     },
     {
+      "path": "clients/connections.md",
+      "tier": 5,
+      "title": "Client Connections",
+      "scope": "Read-only Connections view (desired, observed, owner, drift, restore preview) and the Claude Code first-party preview.",
+      "documents": [
+        "gui/",
+        "src/claude/",
+        "src/codex/",
+        "src/integrations/",
+        "src/lib/",
+        "src/server/"
+      ]
+    },
+    {
       "path": "clients/claude-desktop-config-reads.md",
       "tier": 5,
       "title": "Claude Desktop Configuration Reads",
@@ -1817,6 +1854,16 @@
   "contracts": {
     "version": 1,
     "entries": [
+      {
+        "id": "reasoning-effort-diagnostic-limits",
+        "owner": {
+          "document": "transports/responses-combo-boundaries.md",
+          "anchor": "reasoning-effort-diagnostics"
+        },
+        "dependents": [
+          "providers-and-adapters.md"
+        ]
+      },
       {
         "id": "paginated-history-writer",
         "owner": {

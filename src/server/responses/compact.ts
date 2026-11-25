@@ -217,7 +217,7 @@ import {
   usageFromResponsesPayload,
   type RequestLogContext,
 } from "../request-log";
-import { noteCompactAttemptSend, sealCredentialRefusal } from "../credential-recovery-attempt";
+import { noteCredentialAttemptSend, sealCredentialRefusal } from "../credential-recovery-attempt";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import {
   consumeForInspection,
@@ -1224,7 +1224,7 @@ export async function handleResponsesCompact(
                 { ...init, headers: sendHeaders, body: JSON.stringify({ ...buildCompactSendBody() as typeof compactBody, model: route.modelId }) },
                 init.signal ?? req.signal, connectMs(), false, physicalFetch);
             } : undefined,
-          onPhysicalDispatch: () => { noteCompactAttemptSend(logCtx, route, sendProvider, receipt?.recovery ?? upstreamRecovery); receipt?.onDispatch?.(); },
+          onPhysicalDispatch: () => { noteCredentialAttemptSend(logCtx, route, sendProvider, receipt?.recovery ?? upstreamRecovery); receipt?.onDispatch?.(); },
         }),
         // Every credential-bearing forward send gets manual redirects, not only
         // pool sends: direct mode carries the caller's credential too (#914).

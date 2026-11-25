@@ -169,6 +169,15 @@ El adaptador OAuth `command-code` deriva un `x-session-id` opaco de la identidad
 
 El proveedor con clave API `commandcode` usa Chat Completions para la mayoría de los modelos y el adaptador Anthropic Messages (`x-api-key`) para los identificadores `claude-*`, que Command Code solo sirve en `/provider/v1/messages`. La selección fija del adaptador solo se aplica mientras el proveedor apunte a ese endpoint. `tokenlab` aplica la misma regla a `claude-*` en `https://api.tokenlab.sh/v1/messages`, el endpoint que TokenLab anuncia para Chat y Messages. Command Code permite reenviar `prompt_cache_key`; esto es independiente del encabezado de sesión del adaptador OAuth y no garantiza un acierto de caché. El preset OAuth `command-code` recibe `/alpha/generate` como NDJSON. Si la pasarela repite como texto el marcado de una llamada MiMo real, se elimina ese duplicado. El marcado que aparece después de prosa normal, incluso si su marcador llega dividido entre deltas posteriores del mismo bloque, se retiene y solo se elimina si una llamada nativa contiene el mismo contenido. Si no coincide, se emite como texto y nunca se convierte en una llamada. La espera solo dura mientras siga abierta una llamada nativa que pudiera ser su duplicado, incluida la primera llamada a esa misma herramienta que empiece después del marcado. Si esas llamadas terminan sin coincidencia, el texto se libera de inmediato; la llegada intermedia de razonamiento u otros eventos no lo libera. Tras una finalización correcta o el cierre de una llamada a herramienta, un bloque completo que contenga únicamente una llamada a una herramienta declarada y no tenga contraparte nativa se restaura como llamada real. Si el turno se interrumpe o falla, queda como texto. Si el analizador no puede interpretar una llamada aislada, pero esta abre, cierra y nombra una herramienta declarada, se descarta en lugar de imprimirse cuando llega la llamada real a esa herramienta o el turno termina correctamente. Una llamada de formato libre repetida sin el cierre `</function>` se considera completa al llegar `</tool_call>`. Esto se aplica a todos los modelos MiMo servidos por Command Code.
 
+Command Code también incluye sus modelos de decisión System One (`typesafe/jev`,
+`typesafe/jev-1.14.0`) en su catálogo de modelos, pero solo los sirve en
+`POST https://api.commandcode.ai/provider/v1/systemone`. Ningún preset de Command Code los ofrece
+como modelos de chat, y una solicitud de chat que aún nombre uno (por ejemplo, una selección guardada)
+recibe un 404 `model_not_found` que indica ese endpoint, sin llegar a Command Code; un combo o una
+política de enrutamiento que lo incluya pasa a su siguiente destino. Para usar JEV en decisiones de
+enrutamiento, añada un proveedor `jev-decision` cuyo `baseUrl` sea ese endpoint e indíquelo como
+`decisionProvider` de un combo JEV (consulte [Combos](/es/guides/combos/)).
+
 ## `anthropic`
 
 **Objetivos:** Anthropic **Messages** ( `/v1/messages` ). **Auth:** `key` (`x-api-key` por defecto, o `Authorization: Bearer` con `apiKeyTransport: "bearer"`) o `oauth` (Portador + `anthropic-beta`, para Claude Pro/Max).

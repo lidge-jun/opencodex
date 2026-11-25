@@ -1,3 +1,5 @@
+import { videoModelCapabilities } from "./video-capabilities";
+import { safeVideoFailureCode, safeXaiErrorDetail } from "./xai-upstream-error";
 import { pathToFileURL } from "node:url";
 import type { VideoBridgePlan, VideoCallResult } from "./types";
 import { submitVideoJob, pollVideoJob, type VideoProviderAuth } from "./xai-video-client";
@@ -10,9 +12,15 @@ export interface ParsedVideoArgs {
   duration?: number;
   resolution?: string;
   aspectRatio?: string;
+  image?: string;
+  lastFrame?: string;
+  keyframes?: { image: string; timestampS: number }[];
+  referenceImages?: string[];
 }
 
 const INITIAL_POLL_INTERVAL_MS = 5_000;
+/** xAI's clip length when a request names no duration. */
+const XAI_DEFAULT_VIDEO_SECONDS = 8;
 const MAX_POLL_INTERVAL_MS = 15_000;
 const POLL_BACKOFF = 1.5;
 const DEFAULT_VIDEO_TIMEOUT_MS = 300_000; // 5 min
@@ -37,7 +45,7 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * Parse the JSON arguments string from a video_gen tool call. Mirrors fulfillImageCall's
  * defensive parsing: invalid JSON or missing prompt returns an error result.
  */
-export function parseVideoCallArgs(raw: string):
+export function parseVideoCallArgs(raw: string, model?: string):
   | ParsedVideoArgs
   | { ok: false; error: string } {
   let args: unknown;
@@ -51,26 +59,75 @@ export function parseVideoCallArgs(raw: string):
   }
   const obj = args as Record<string, unknown>;
 
-  const prompt =
-    typeof obj.prompt === "string" ? obj.prompt : typeof obj.input === "string" ? obj.input : "";
-  if (!prompt) {
-    return { ok: false, error: "missing prompt" };
-  }
-
+  const caps = videoModelCapabilities(model);
+  const prompt = typeof obj.prompt === "string" ? obj.prompt : typeof obj.input === "string" ? obj.input : "";
   const result: ParsedVideoArgs = { ok: true, prompt };
-
-  // duration: clamp to 1-15
-  if (typeof obj.duration === "number") {
-    result.duration = Math.max(1, Math.min(15, Math.floor(obj.duration)));
+  if (obj.duration !== undefined) {
+    // xAI also accepts the seconds as a string ("8"). Anything else is refused rather than
+    // clamped or dropped, which would buy a clip of a length the caller did not ask for.
+    const seconds = typeof obj.duration === "string" && /^\d{1,2}$/.test(obj.duration) ? Number(obj.duration) : obj.duration;
+    if (typeof seconds !== "number" || !Number.isInteger(seconds) || seconds < 1 || seconds > 15) {
+      return { ok: false, error: "duration must be a whole number of seconds from 1 to 15" };
+    }
+    result.duration = seconds;
   }
-
-  if (typeof obj.resolution === "string" && (obj.resolution === "480p" || obj.resolution === "720p")) {
-    result.resolution = obj.resolution;
+  // An explicit value the model cannot honour is refused: dropping it would buy a video at the
+  // upstream default instead of the one the caller asked for.
+  for (const [field, allowed] of [["resolution", caps.resolutions], ["aspect_ratio", caps.aspectRatios]] as const) {
+    const value = obj[field];
+    if (value === undefined) continue;
+    if (typeof value !== "string" || !allowed.includes(value)) {
+      return { ok: false, error: `${field} ${typeof value === "string" ? value.slice(0, 16) : typeof value} is not supported by ${model ?? "unknown"}` };
+    }
+    if (field === "resolution") result.resolution = value;
+    else result.aspectRatio = value;
   }
-  if (typeof obj.aspect_ratio === "string") {
-    const VALID_RATIOS = ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"];
-    if (VALID_RATIOS.includes(obj.aspect_ratio)) result.aspectRatio = obj.aspect_ratio;
+  for (const [field, supported] of [["image", caps.firstFrame], ["last_frame", caps.lastFrame], ["keyframes", caps.maxKeyframes > 0], ["reference_images", caps.maxReferenceImages > 0]] as const) {
+    if (obj[field] !== undefined && !supported) return { ok: false, error: `${field} is not supported by ${model ?? "unknown"}` };
   }
+  if (obj.image !== undefined) {
+    if (typeof obj.image !== "string" || !obj.image) return { ok: false, error: "invalid image" };
+    result.image = obj.image;
+  }
+  if (obj.last_frame !== undefined) {
+    if (typeof obj.last_frame !== "string" || !obj.last_frame) return { ok: false, error: "invalid last_frame" };
+    result.lastFrame = obj.last_frame;
+  }
+  if (obj.keyframes !== undefined) {
+    if (!Array.isArray(obj.keyframes) || obj.keyframes.length > caps.maxKeyframes) return { ok: false, error: "invalid keyframes" };
+    result.keyframes = [];
+    // xAI snaps keyframes to a 1/3-second grid and rejects two in the same slot.
+    const slots = new Set<number>();
+    for (const frame of obj.keyframes) {
+      // Strictly inside the clip that will be generated: xAI uses 8 s when duration is omitted.
+      const clip = result.duration ?? XAI_DEFAULT_VIDEO_SECONDS;
+      if (!frame || typeof frame !== "object" || typeof frame.image !== "string" || !frame.image || typeof frame.timestamp_s !== "number" || !Number.isFinite(frame.timestamp_s) || frame.timestamp_s <= 0 || frame.timestamp_s >= clip) return { ok: false, error: `invalid keyframe: timestamp_s must be inside the ${clip}s clip` };
+      const slot = Math.round(frame.timestamp_s * 3);
+      if (slots.has(slot)) return { ok: false, error: "invalid keyframe: two keyframes snap to the same 1/3-second slot" };
+      slots.add(slot);
+      result.keyframes.push({ image: frame.image, timestampS: frame.timestamp_s });
+    }
+  }
+  if (obj.reference_images !== undefined) {
+    if (!Array.isArray(obj.reference_images) || obj.reference_images.length > caps.maxReferenceImages || obj.reference_images.some(value => typeof value !== "string" || !value)) return { ok: false, error: "invalid reference_images" };
+    result.referenceImages = obj.reference_images;
+  }
+  const references = (result.referenceImages?.length ?? 0) > 0;
+  if (references && result.duration !== undefined && result.duration > caps.referenceMaxSeconds) {
+    return { ok: false, error: `reference_images allow at most ${caps.referenceMaxSeconds}s on ${model ?? "unknown"}` };
+  }
+  // Pinned last/key frames and references all make it reference-to-video, which stops at 720p.
+  if ((references || result.lastFrame || result.keyframes?.length) && result.resolution === "1080p" && caps.referenceMaxResolution === "720p") {
+    return { ok: false, error: "reference_images, last_frame and keyframes are limited to 720p" };
+  }
+  if (result.image && references && !caps.firstFrameWithReferences) {
+    return { ok: false, error: `image and reference_images cannot be combined on ${model ?? "unknown"}` };
+  }
+  // Image-to-video keeps the input image's aspect ratio; an explicit one would be ignored.
+  if (result.image && result.aspectRatio && !references && !result.lastFrame && !result.keyframes?.length) {
+    return { ok: false, error: "aspect_ratio is ignored when animating an image: the video keeps the image's aspect ratio" };
+  }
+  if (!prompt && !result.image && !result.lastFrame && !result.keyframes?.length && !result.referenceImages?.length) return { ok: false, error: "missing prompt" };
 
   return result;
 }
@@ -110,7 +167,8 @@ export async function* pollVideoWithHeartbeats(
         return { ok: false, error: "video generation completed but no video URL was returned" };
       }
       if (poll.status === "failed") {
-        return { ok: false, error: "video generation failed" };
+        const details = [safeVideoFailureCode(poll.error?.code), safeXaiErrorDetail(poll.error?.message)].filter(Boolean);
+        return { ok: false, error: ["video generation failed", ...details].join(": ") };
       }
       if (poll.status === "expired") {
         return { ok: false, error: "video generation expired" };
@@ -124,9 +182,11 @@ export async function* pollVideoWithHeartbeats(
       if (signal.aborted) return { ok: false, error: "client closed request during video generation" };
       const status = (e as Error & { status?: number }).status;
       if (status && status >= 400 && status < 500 && status !== 429) {
-        return { ok: false, error: `video poll failed permanently: HTTP ${status}` };
+        // Only the allowlisted detail the client attached; never the raw message.
+        const detail = (e as { detail?: unknown }).detail;
+        return { ok: false, error: `video poll failed permanently: HTTP ${status}${typeof detail === "string" && detail ? `: ${detail}` : ""}` };
       }
-      console.warn(`[videos] poll error (will retry): ${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`[videos] poll error (will retry): ${status ? `HTTP ${status}` : "unknown status"}`);
     }
 
     const elapsed = Math.floor((Date.now() - start) / 1000);

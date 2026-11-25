@@ -49,7 +49,7 @@ through the disk reader. A row keeps:
   names a rate limit stays `rate_limited` even when it also mentions quota, a 5xx stays a server failure
   whatever its text says, and a bare status maps to a fixed condition. It is presentation-only; routing,
   retry and recovery keep their own classifiers in `src/lib/errors.ts`. `upstreamConditionMessage` holds the
-  proxy-written sentence for each member and names only a well-formed configured provider id.
+  proxy-written sentence for each member and names only a well-formed configured provider id. Claude’s exact verification notice on HTTP 403 maps to `account_verification_required`; Messages serves a fixed Anthropic portal link, without upstream URL parameters or account IDs.
 - `rateLimitResetAt`, finite epoch milliseconds after the request and at most eight days later, derived
   server-side from the exact Meta Muse quota sentence on a Muse 429; the dashboard quota observation in
   `gui/src/muse-limit-observation.ts` reads only this number. Legacy rows that stored the sentence recover
@@ -520,6 +520,8 @@ limit are relayed unchanged, regardless of upstream chunk boundaries. The echo j
 data fields with LF before parsing JSON. It writes the rewritten payload to the first data
 field and leaves later data fields empty, preserving control lines and all line endings.
 Starts whose last event field is `error` retain their canonical form.
+The empty-tool guard relays a late LF as part of the preceding CR delimiter without buffering
+it as part of the next frame. Complete-frame origin tracking stays attached to that next frame.
 The native Messages tap
 refreshes its pending-read stall deadline on each nonempty raw chunk before frame buffering.
 The single pre-echo flag authorizes owned data under the

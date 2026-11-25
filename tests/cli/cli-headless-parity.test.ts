@@ -133,6 +133,29 @@ describe("ocx system settings desktop switches", () => {
     }
   });
 
+  test("reports a saved client-compaction switch whose history preflight refused application", async () => {
+    const { deps } = fakeRuntime(() => ({
+      ok: true,
+      codexDesktopSwitches: {
+        codexClientCompaction: { stored: true, effective: true },
+        apply: { applied: false, reason: "injection_refused", retryable: false,
+          detail: "history_paginated_openai_provider_locked" },
+        authSource: { summary: "Codex sign-in is required." },
+      },
+    }));
+    const output = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await handleSystemCommand(["settings", "--client-compaction", "on"], deps);
+      const text = output.mock.calls.flat().join("\n");
+      expect(text).toContain("Codex client compaction: stored on.");
+      expect(text).toContain("history_paginated_openai_provider_locked");
+      expect(text).not.toContain("effective on.");
+      expect(text).not.toContain("Run 'ocx sync'");
+    } finally {
+      output.mockRestore();
+    }
+  });
+
   test("prints a completed inline apply and the authless identity consequence", async () => {
     const { deps } = fakeRuntime(() => ({
       ok: true,
@@ -623,6 +646,8 @@ describe("headless GUI parity CLI", () => {
       ["/api/routing-profiles", "ocx route policy"],
       ["/api/fallback", "ocx fallback"],
       ["/api/routing-analytics", "(none — GUI analytics surface; history via ocx observe/logs)"],
+      // Catch-up 010: the read-only Connections view; its CLI verb is a deferred-verb owned by 020.
+      ["/api/connections", "(none — read-only Connections view; CLI verb deferred in clients/connections.md)"],
       // Remote Workspace is one product family in both surfaces. The current CLI owns
       // executor pairing, presence, and local status; Hub/device/session inspection is
       // intentionally dashboard-only until the deferred Hub-status verbs documented in

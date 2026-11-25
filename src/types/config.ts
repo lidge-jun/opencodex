@@ -24,6 +24,8 @@ export interface OcxApiSurfacesConfig {
    * `claudeCode.enabled !== false`"; a present non-boolean value disables the surface.
    */
   messages?: { enabled?: boolean };
+  /** Gemini-compatible routes. The surface is open by default. */
+  gemini?: { enabled?: boolean };
 }
 
 /** Protocol delivery policy (devlog/_plan/260924_protocol_first_class). */
@@ -64,6 +66,13 @@ export interface OcxClaudeCodeConfig extends OcxClaudeCodeToolLoadingConfig {
   /** Route the standalone Claude Code CLI through the first-party intercept (settings.json env).
    * Independent of Desktop's first-party mode. Absent/false = off. */
   cliFirstParty?: boolean;
+  /**
+   * Extra Claude Code config directories (`CLAUDE_CONFIG_DIR` homes) the operator registered so
+   * the Connections view reports each one. Read-only: OpenCodex never writes them and never
+   * discovers homes on disk; the first-party toggle keeps acting on the default home only.
+   * Absolute paths or `~/`-relative paths; anything else is ignored.
+   */
+  extraConfigDirs?: string[];
   /**
    * Opt-in relocation of supported trailing Claude harness notices from system instructions
    * to a user input message on translated routes. Changes the Desktop cache-key prefix.
@@ -1635,7 +1644,7 @@ export interface OcxImagesConfig {
   timeoutMs?: number;
   /** Master switch for the image bridge. Default false — set true to enable paid xAI Grok Imagine generation. */
   bridgeEnabled?: boolean;
-  /** xAI image model id. Default "grok-imagine-image-quality" (see DEFAULT_MODEL in images/plan.ts). */
+  /** xAI image model id. Default "grok-imagine-image-2.0". */
   bridgeModel?: string;
   /** Max image-generation loop iterations before forced-final. Default 3; clamped to [0, 10]. */
   maxRounds?: number;
@@ -1645,7 +1654,8 @@ export interface OcxImagesConfig {
   videoBridgeEnabled?: boolean;
   /** Optional API-key provider that serves `video_gen` (its own baseUrl and key). Unset keeps xAI; an unusable value fails closed. */
   videoProvider?: string;
-  /** Model for xAI video generation. Default "grok-imagine-video". */
+  /** Model for xAI video generation. Default "grok-imagine-video-1.5-lite" (see src/images/video-capabilities.ts). */
+  /** Defaults to grok-imagine-video-1.5-lite. */
   videoBridgeModel?: string;
   /** Max video-gen rounds before forced-final. Default 2 (video is slower than image). */
   videoMaxRounds?: number;

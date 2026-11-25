@@ -17,7 +17,9 @@ import { modelLabel } from "../model-display";
 import { formatProviderDisplayName, providerDisplaySlug } from "../provider-icons";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { ownRecordValue } from "../own-record-value";
-import { describeIntegrationRefusalParts } from "./integrations/refusal-copy";
+import { IntegrationRefreshWarning } from "../components/integration-refresh-warning";
+import { rowVisibilityTarget, savedRowVisible } from "../model-visibility-rows";
+import { ModelsOverallPanel } from "./models-overall/ModelsOverallPanel";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { setClientResourceData } from "../client-resource";
 import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
@@ -115,6 +117,7 @@ type CachedModelsPage = {
 /** One plain lead line per tab; a longer description (if any) opens from the "?" beside it. */
 const SUBTITLE_TKEY: Record<ModelsTab, [lede: TKey, about?: TKey]> = {
   catalog: ["modelsV2.ledeCatalog", "models.subtitle"],
+  overall: ["modelsOverall.lede"],
   combos: ["modelsV2.ledeCombos", "models.subtitle.combos"],
   routing: ["models.subtitle.routing"],
   compatibility: ["models.subtitle.compatibility"],
@@ -228,6 +231,8 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   }, [activateTab]);
 
   const catalogActive = tab === "catalog";
+  // Overall reads the same catalog rows; only the catalog resource follows it there.
+  const catalogDataActive = catalogActive || tab === "overall";
 
   /** Counts reported up by the panels that own the underlying lists. */
   const [comboCount, setComboCount] = useState<number | null>(null);
@@ -570,7 +575,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     // reads Combos or Routing is exactly the hidden work this workspace avoids.
     // Live model discovery is slow; the catalog gets a raised deadline so a slow
     // response is never misread as a hung one.
-    { isEmpty: () => false, pollMs: 10_000, initialData: cached ?? undefined, enabled: catalogActive, deadlineMs: 60_000 },
+    { isEmpty: () => false, pollMs: 10_000, initialData: cached ?? undefined, enabled: catalogDataActive, deadlineMs: 60_000 },
   );
   const catalogState = catalogResource.state;
 
@@ -2514,6 +2519,14 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     </>
   );
 
+  // Fixed-position apply feedback, shown by both tabs that toggle models (catalog and Overall).
+  const actionToast = status ? (
+    <div className={`action-toast notice ${ok ? "notice-ok" : "notice-err"}`} role="status" aria-live="polite">
+      {ok ? <IconCheck /> : <IconAlert />}
+      <span>{status}</span>
+    </div>
+  ) : null;
+
   /*
    * The catalog tab body: everything this page rendered before it grew tabs. It keeps
    * `.models-workspace-shell`, so the wider-column rule and every workspace style below
@@ -2521,25 +2534,10 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
    */
   const catalogPanel = (
     <div className="models-workspace-shell">
-      {status && (
-        <div className={`action-toast notice ${ok ? "notice-ok" : "notice-err"}`} role="status" aria-live="polite">
-          {ok ? <IconCheck /> : <IconAlert />}
-          <span>{status}</span>
-        </div>
-      )}
+      {actionToast}
       {/* Keep the last-good catalog interactive but make a failed revalidation explicit. */}
       {catalogState.showError && <Notice tone="err">{t("models.loadFail")}</Notice>}
-      {integrationFailures.length > 0 && <div className="models-integration-warning">
-        <Notice tone="warn">
-          {t("models.integrationRefreshWarning")}
-          <ul>{integrationFailures.map(row => <li key={`${row.client}:${row.profileId ?? "all"}`}>
-            {row.client}{row.profileId === undefined ? "" : `:${row.profileId}`}: {describeIntegrationRefusalParts(t, {
-              clientId: row.client, message: row.reason === "integration_mutation_busy" ? t("integrations.error.busy") : row.reason,
-              reason: row.refusalReason, snapshotPath: row.snapshotPath, residual: row.residual,
-            })}
-          </li>)}</ul>
-        </Notice>
-      </div>}
+      <IntegrationRefreshWarning failures={integrationFailures} />
       <ModelsSettingsPanel title={t("models.settingsPanel.title")} attentionLabel={t("models.settingsPanel.attention")}
         warn={!!(v2?.enabled && v2.agentsMaxThreadsConflict) || v2Note !== "" || pickerResource.state.showError}
         summary={modelsSettingsSummary(t, { multiAgentMode: v2?.multiAgentMode, v2Threads: v2ThreadsChildren, keepNativeOnV1: v2?.keepNativeChatGptOnV1 === true,
@@ -2631,6 +2629,21 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
               )
               : catalogPanel}
         </ErrorBoundary>
+      </div>
+
+      <div className="models-tab-panel" role="tabpanel" id={modelsPanelDomId("overall")} aria-labelledby={modelsTabDomId("overall")} hidden={tab !== "overall"}>
+        {mounted.has("overall") && actionToast}
+        {mounted.has("overall") && (
+          <ErrorBoundary pageName={t("models.tab.overall")} title={t("errorBoundary.title")} message={t("errorBoundary.message")}
+            detailsLabel={t("errorBoundary.details")} reloadLabel={t("errorBoundary.reload")}>
+            {/* Same rows, same visibility rule, same queue and switch gate as the catalog rows. */}
+            <ModelsOverallPanel rows={groups.flatMap(group => group.rows)} failures={integrationFailures}
+              loading={catalogCold} error={catalogColdFailure} stale={catalogState.showError} onRetry={() => catalogResource.refresh()}
+              isOn={row => visibility.visible(row.provider, row.id, row.native === true, savedRowVisible(selectedModelMap, disabled, row))}
+              switchDisabled={row => (busy && !visibility.pending) || row.initialSelectionPending === true}
+              onToggle={(row, enable) => void applyVisibility("models", row.provider, [rowVisibilityTarget(row)], enable)} />
+          </ErrorBoundary>
+        )}
       </div>
 
       {/*

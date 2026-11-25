@@ -367,7 +367,7 @@ the menu nor a request alone proves which tier was billed.
 ### Selecting Ultra Fast in Codex Desktop
 
 For a provider that supports `service_tier: "ultrafast"`, declare that wire mapping once.
-opencodex then publishes **Ultra Fast** in the routed model's native Codex speed menu;
+opencodex then publishes **Ultrafast** in the routed model's native Codex speed menu;
 there is no need to edit `opencodex-catalog.json` after every sync.
 For example, merge these fields into an API provider configured for GPT-6.1 Sol:
 
@@ -387,7 +387,7 @@ The mapping applies to every Fast-eligible model on that provider. Use a separat
 entry if only some of its models support Ultra Fast. Keep opencodex's Fast mode on **Auto**
 (omit `fastMode`) so the app's speed selection reaches the provider; forced Fast sends
 `priority`, and forced Default drops the tier. Refresh the model catalog, restart Codex
-Desktop if it still has the old list, select the routed model, then choose **Ultra Fast**
+Desktop if it still has the old list, select the routed model, then choose **Ultrafast**
 in its speed menu. Standard remains the default.
 
 Only an eligible `service-tier` wire with an explicit `ultrafast → ultrafast` mapping adds
@@ -399,13 +399,13 @@ The active declaration also controls the Ultra Fast choice when Codex loads its 
 
 For routed rows, `ultraFastTier` retains independently supplied Ultra Fast tiers from the
 same exact persisted row; generated routed tiers are not treated as operator-supplied.
-For bare native `gpt-6-astra` / `gpt-6.1-sol` rows and their trusted account-bound clones,
+For bare native `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.2-astra` and `gpt-6.2-sol` rows and their trusted account-bound clones,
 enabling `ultraFastTier` also generates a missing Ultrafast choice without changing the
 native default tier. Disabling it withdraws only native tier metadata tracked as generated;
 independently supplied or edited native tier descriptors are preserved.
 
-[OpenAI's API guide](https://developers.openai.com/api/docs/guides/ultrafast-mode) documents
-Ultrafast for GPT-6 Astra and GPT-6.1 Sol. API access and
+[OpenAI's speed guide](https://learn.chatgpt.com/docs/agent-configuration/speed#ultrafast-mode) documents
+Ultrafast for GPT-6.2 Astra and Sol alongside GPT-6 Astra and GPT-6.1 Sol. API access and
 [Codex plan/workspace access](https://learn.chatgpt.com/docs/agent-configuration/speed)
 are separate. A menu choice does not grant provider access or guarantee measured speed;
 Ultra Fast increases usage/cost, and Codex's own feature requirements still apply.

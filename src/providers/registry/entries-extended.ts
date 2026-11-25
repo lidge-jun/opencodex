@@ -9,6 +9,7 @@ import {
   MOONSHOT_INTL_BASE_URL,
 } from "../base-url-choices";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "../command-code-efforts";
+import { COMMAND_CODE_DECISION_MODEL_DISCOVERY_FILTER } from "../command-code-decision-models";
 import { MIMO_THINKING_CAPABILITIES, MIMO_THINKING_MODELS } from "../mimo-thinking";
 import {
   CODEBUDDY_CN_MODELS,
@@ -112,6 +113,10 @@ import {
   OPPER_MODEL_CONTEXT_WINDOWS,
   OPPER_MODEL_MAX_OUTPUT_TOKENS,
   OPPER_MODEL_INPUT_MODALITIES,
+  STEP_CLI_MODELS,
+  STEP_CLI_MODEL_CONTEXT_WINDOWS,
+  STEP_CLI_NO_VISION_MODELS,
+  STEP_CLI_REASONING_EFFORTS,
   AISTUPIDLEVEL_ROUTING_MODES,
   AISTUPIDLEVEL_MODEL_CONTEXT_WINDOWS,
   AISTUPIDLEVEL_MODEL_MAX_OUTPUT_TOKENS,
@@ -220,6 +225,8 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       path: "models",
       maxResponseBytes: 256 * 1024,
       maxModels: 256,
+      // Decision models are not chat rows (#8997); see command-code-decision-models.ts.
+      filter: COMMAND_CODE_DECISION_MODEL_DISCOVERY_FILTER,
     },
     // Verified 2026-08-03: public /provider/v1/models returns 51 rows; /chat/completions returns
     // 401 UNAUTHORIZED without a Bearer key. Primary source: https://commandcode.ai/docs/provider.
@@ -1392,6 +1399,71 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     note: "Smart Router that sends each request to a model chosen from AI Stupid Level's benchmarks, using the provider keys saved on your AI Stupid Level account (OpenAI, Anthropic, Google, DeepSeek, Kimi, GLM), so each provider bills you directly with no markup. Routing modes: auto-coding (the default), auto-tooling, auto-reasoning, auto-best, plus value and speed modes. A real model id from the live list, such as claude-opus-5-5, pins one model. The X-AISM-Model response header names the model that answered. Text only.",
   },
   {
+    // AI/ML API: OpenAI-compatible gateway at https://api.aimlapi.com/v1. Contract checked
+    // 2026-10-27: https://docs.aimlapi.com/api-references/model-database. GET /v1/models is
+    // public and answers 200 for any Bearer value, so it cannot validate a key. It lists ~950
+    // rows, and only the row `type` separates chat models from image, video, audio, embedding
+    // and Anthropic-batch rows; one id can appear in several rows. Discovery admits only
+    // `openai/chat-completions` rows. The seven seeds answered chat, streaming and tool calls
+    // through the proxy on 2026-10-27; context and output limits are the /v1/models `info`
+    // values. The env reference derived from the id is ${AIMLAPI_API_KEY}.
+    id: "aimlapi",
+    label: "AI/ML API",
+    adapter: "openai-chat",
+    baseUrl: "https://api.aimlapi.com/v1",
+    authKind: "key",
+    dashboardUrl: "https://aimlapi.com/app/keys",
+    // Client attribution requested by AI/ML API. Registry static headers reach the upstream only
+    // while the row still targets this host (withoutRegistryStaticHeaderCopies). The partner id
+    // AI/ML API asked for is deliberately absent: a default third-party partner identifier in an
+    // MIT client needs a commercial arrangement behind it, and there is none (owner decision,
+    // 2026-11-19).
+    staticHeaders: {
+      "X-AIMLAPI-Source": "agent/opencodex",
+    },
+    liveModels: true,
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    defaultModel: "openai/gpt-5.6-terra",
+    models: [
+      "openai/gpt-5.6-terra", "openai/gpt-6.1-terra", "anthropic/claude-sonnet-5-5", "google/gemini-3.5-flash",
+      "deepseek/deepseek-v4-flash", "z-ai/glm-5.3-flash", "moonshot/kimi-k3",
+    ],
+    modelContextWindows: {
+      "openai/gpt-5.6-terra": 1_050_000,
+      "openai/gpt-6.1-terra": 1_050_000,
+      "anthropic/claude-sonnet-5-5": 1_000_000,
+      "google/gemini-3.5-flash": 1_048_576,
+      "deepseek/deepseek-v4-flash": 1_000_000,
+      "z-ai/glm-5.3-flash": 1_048_576,
+      "moonshot/kimi-k3": 1_048_576,
+    },
+    // moonshot/kimi-k3 has no output cap here: /v1/models gives it no `outputMax` and its
+    // docs-json sets no maximum for max_tokens, so there is no published value to seed.
+    modelMaxOutputTokens: {
+      "openai/gpt-5.6-terra": 128_000,
+      "openai/gpt-6.1-terra": 128_000,
+      "anthropic/claude-sonnet-5-5": 128_000,
+      "google/gemini-3.5-flash": 65_536,
+      "deepseek/deepseek-v4-flash": 384_000,
+      "z-ai/glm-5.3-flash": 131_072,
+    },
+    modelInputModalities: {
+      "openai/gpt-5.6-terra": ["text", "image"],
+      "openai/gpt-6.1-terra": ["text", "image"],
+      "anthropic/claude-sonnet-5-5": ["text", "image"],
+      "google/gemini-3.5-flash": ["text", "image"],
+      "deepseek/deepseek-v4-flash": ["text"],
+      "z-ai/glm-5.3-flash": ["text", "image"],
+      "moonshot/kimi-k3": ["text", "image"],
+    },
+    modelDiscovery: {
+      path: "models",
+      filter: { allOf: [{ path: ["type"], equalsAny: ["openai/chat-completions"] }] },
+    },
+    note: "OpenAI-compatible gateway with one key for OpenAI, Anthropic, Google, DeepSeek, GLM, Kimi and other chat models. Model ids carry the vendor prefix (openai/gpt-5.6-terra). Live discovery lists only the Chat Completions models from the public catalog; image, video, audio and embedding models are left out. The public catalog cannot validate keys. Requests to api.aimlapi.com carry an X-AIMLAPI-Source attribution header.",
+  },
+  {
     // cheapaimodel, operated by LINKOVA PTE. LTD. (Singapore). Contract checked 2026-10-28:
     // https://cheapaimodel.ai/docs/api/create-chat-completion and
     // https://cheapaimodel.ai/docs/api/list-models. GET /v1/models answers 401 without a valid key,
@@ -1741,6 +1813,40 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noVisionModels: STEPFUN_NO_VISION_MODELS,
     reasoningEfforts: STEPFUN_REASONING_EFFORTS,
     note: "StepFun (阶跃星辰) official OpenAI-compatible API.",
+  },
+  {
+    // StepCode (阶跃星辰) CLI as the transport for a Step Plan subscription (§三十一). The CLI owns the
+    // account: this row stores no Step token, reads none and injects none, so the only credential in
+    // play is the operator's own `step login`, which the CLI resolves itself.
+    //
+    // GOVERNANCE: routing a Step Plan subscription through a third-party agent harness is Step
+    // 星辰's call, not OpenCodex's — flagged for maintainer review alongside the CodeBuddy and Claude
+    // Code rows above. The Step Plan terms document `step_plan` endpoints for third-party coding
+    // tools, and `--sdk-stdio` is StepCode's own published, MIT-licensed external-client surface; that
+    // is the strongest authorization evidence available without a written permission, and it is not
+    // the same thing as one.
+    id: "step-cli",
+    label: "StepCode CLI (subscription)",
+    adapter: "step-cli",
+    // The destination the subscription's traffic reaches. OpenCodex never sends this host: the CLI
+    // performs every request, so the value exists so the adapter can fail closed when a row is
+    // repointed somewhere this route cannot speak to.
+    baseUrl: "https://api.stepfun.com/step_plan",
+    // `key` + `keyOptional` for the same reason as `claude-cli`: the traffic leaves the machine, so
+    // `local` would misreport the row, but the route is keyless, which is what `keyOptional` states.
+    authKind: "key",
+    keyOptional: true,
+    dashboardUrl: "https://platform.stepfun.com/docs/zh/step-plan/quick-start",
+    defaultModel: "step-5-preview",
+    models: [...STEP_CLI_MODELS],
+    // Static roster, exactly like the Claude Code and CodeBuddy rows. The CLI serves its catalog over
+    // the SDK stdio protocol rather than at an HTTP path the adapter polls, and a live-discovery
+    // attempt against this row would 404 and then fall back to these ids anyway.
+    liveModels: false,
+    modelContextWindows: { ...STEP_CLI_MODEL_CONTEXT_WINDOWS },
+    noVisionModels: [...STEP_CLI_NO_VISION_MODELS],
+    reasoningEfforts: [...STEP_CLI_REASONING_EFFORTS],
+    note: "Runs Step Plan subscription traffic through StepCode's own harness: the official `step` CLI over its length-prefixed SDK stdio protocol, one long-lived process per conversation. OpenCodex stores no Step token, reads none and injects none — the CLI signs in with `step login` and bills the Step Plan account itself. The sign-in is the one of the user this proxy runs as, so every request served through this row spends that same account. Tool ownership stays with the client: the adapter declares the request's tools as StepCode SDK tools and lets the CLI call back over stdio, so no tool ever executes inside Step and approval never leaves the client. Requires the StepCode CLI (`~/.stepcode/bin/step`) and a signed-in Step Plan session. This route shares the CLI family's 128-tool / 2 MiB catalog ceiling, which a real Codex client can exceed because it flattens every MCP server's tools into the function catalog (measured on Codex 0.162.0: 1749 tools, 2.5 MB); the refusal names both counts so the cause is visible, and the fix is to disable or narrow MCP servers for this provider. LIMITATIONS: StepCode carries conversation history only inside its own process, so one conversation needs one process and a process that dies cannot be reconstructed; a tool that takes longer than two minutes to come back exceeds the CLI's own tool-result window; and the CLI's session system prompt cannot be replaced, so a client instruction is prepended to the turn rather than installed as the system prompt. Routing authorization flagged for maintainer security review.",
   },
   {
     // Official Claude Code CLI as the transport for a Claude subscription (§三十一). The CLI owns

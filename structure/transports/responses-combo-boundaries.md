@@ -11,7 +11,7 @@ options. Service diagnostics follow the [producer bounds](../ops/service-logging
 ## Context-window refusals
 
 `isDefiniteContextOverflow` in `src/lib/context-overflow-verdict.ts` (re-exported by
-`src/combos/failover.ts`) reads bounded innermost provider messages.
+`src/combos/failover.ts`) reads bounded innermost provider messages. Negation-aside matching starts at words or commas; a separate pass consumes surrounding whitespace once within each 120-character lookbehind, preserving newline and clause-boundary behavior.
 OpenAI context-length wording keeps its substring match; Anthropic `prompt is too long: N tokens > M maximum`,
 Bedrock `input is too long for requested model`, provider messages confirming the conversation/input has reached or passed its model context limit, a prompt that is too long for the model's context window, a window/length/limit that is full, exhausted, at its limit or has been exceeded, and `Please reduce the length of the messages or completion`
 count only in the innermost provider message (the anchored verdicts need the provider message to start with them, while the explicit too-long/context-window wording may appear inside it), so a validation error or SDK wrapper that echoes them is not
@@ -41,6 +41,21 @@ and passes the verdict through `unofferedToolCallRefusal`, because the 500-chara
 would leave a long envelope unparseable. Like the other pre-output 400 hops it advances the combo
 without cooling the target: the model hallucinated the call or control marker on this target, the
 request itself fit, and the refusal arrives before any output commits. Coverage: `tests/routing/combo-unoffered-tool-refusal.test.ts`.
+
+## Reasoning-effort diagnostics
+
+`src/providers/reasoning-metadata.ts` checks the complete diagnostic before it parses fields or
+scans prose. Both automatic effort repair and its default conflict check accept at most 1,024
+UTF-16 code units. Effort repair rejects longer diagnostics in full, without truncating them
+or using a prefix to downgrade the request or learn a rejected effort.
+
+Exact-refusal Combo and policy fallback allow up to 16,384 UTF-16 code units for the complete
+envelope, which can include unrelated metadata. Each diagnostic prose scan still has a
+1,024-unit limit. A conflicting diagnostic field anywhere in the accepted envelope vetoes fallback.
+
+Field-separator patterns avoid overlapping whitespace runs. Optional field labels match whole words.
+An unquoted verb phrase such as "cannot use parameter" stays prose. Quoted or separately named
+fields still participate in the conflict check. The input limit bounds the remaining heuristics.
 
 ## Buffered required-tool contract
 

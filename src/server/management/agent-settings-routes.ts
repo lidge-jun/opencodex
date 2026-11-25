@@ -55,7 +55,7 @@ import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
-import { routedSlug, slugEquals } from "../../providers/slug-codec";
+import { hasRoutedSlug, routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
@@ -1535,37 +1535,11 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       return jsonResponse({ error: code, code }, code === "settings_changed" ? 409 : 500);
     }
   }
+  if (url.pathname.startsWith("/api/claude-code/first-party/")) return (await import("./claude-first-party-preview-routes")).handleClaudeFirstPartyPreviewRoute(ctx);
   if (url.pathname === "/api/claude-code" && req.method === "GET") {
     const models = await fetchAllModels(config);
-    const { listCatalogNativeSlugs } = await import("../../codex/catalog");
-    const { claudeCodeAlias, claudeCodeNativeAlias } = await import("../../claude/alias");
     const { buildClaudeContextWindows, effectiveModelEnv, nativeClaudePassthroughFor, probeClaudeCodeVersionForTierFill } = await import("../../claude/context-windows");
     const { visibleNativeSlugs } = await import("../../codex/catalog");
-    const disabled = new Set(config.disabledModels ?? []);
-    const isDisabled = (provider: string, id: string) =>
-      [...disabled].some(stored => slugEquals(stored, provider, id));
-    const available = [
-      ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
-      // Claude-facing values stay RAW native selectors (resolved inbound via routeModel,
-      // which accepts the raw full-slash form); only the disabled check goes tolerant.
-      ...models.filter(m => !isDisabled(m.provider, m.id)).map(m => `${m.provider}/${m.id}`),
-    ];
-    const aliases: { id: string; display_name: string }[] = [];
-    // Resolved once, not per model: with the global fast switch on, Claude Code discovers the
-    // fast identity, so the dashboard must list the same id rather than the umbrella one.
-    const cursorFastIdFor = config.fastMode === true
-      ? (await import("../../adapters/cursor/catalog")).cursorFastIdFor
-      : undefined;
-    for (const slug of listCatalogNativeSlugs()) {
-      // Readable CLI-surface alias with hash fallback (devlog 050 / audit 051 #2) —
-      // the same shared helper the /v1/models ?ids=cli path uses.
-      if (!disabled.has(slug)) aliases.push({ id: claudeCodeNativeAlias(slug), display_name: `${slug} (native)` });
-    }
-    for (const m of models) {
-      if (isDisabled(m.provider, m.id)) continue;
-      const listedId = (m.provider === "cursor" ? cursorFastIdFor?.(m.id) : undefined) ?? m.id;
-      aliases.push({ id: claudeCodeAlias(m.provider, listedId), display_name: `${listedId} (${m.provider})` });
-    }
     // Auto is a RESOLUTION, recomputed per request — never stored state. Detection is
     // daemon-side, so it cannot see a key exported only in the user's terminal; the
     // GUI labels the badge with detectionScope for exactly that reason.
@@ -1588,6 +1562,31 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     };
     // The launcher probes its own CLI. Only the dashboard snapshot needs the daemon's version.
     if (url.searchParams.get("view") === "launch") return jsonResponse(launchState);
+    const { listCatalogNativeSlugs } = await import("../../codex/catalog");
+    const { claudeCodeAlias, claudeCodeNativeAlias } = await import("../../claude/alias");
+    const disabled = new Set(config.disabledModels ?? []);
+    const availableRouted = models.filter(m => !hasRoutedSlug(disabled, m.provider, m.id));
+    const available = [
+      ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
+      // Claude-facing values stay RAW native selectors (resolved inbound via routeModel,
+      // which accepts the raw full-slash form); only the disabled check goes tolerant.
+      ...availableRouted.map(m => `${m.provider}/${m.id}`),
+    ];
+    const aliases: { id: string; display_name: string }[] = [];
+    // Resolved once, not per model: with the global fast switch on, Claude Code discovers the
+    // fast identity, so the dashboard must list the same id rather than the umbrella one.
+    const cursorFastIdFor = config.fastMode === true
+      ? (await import("../../adapters/cursor/catalog")).cursorFastIdFor
+      : undefined;
+    for (const slug of listCatalogNativeSlugs()) {
+      // Readable CLI-surface alias with hash fallback (devlog 050 / audit 051 #2) —
+      // the same shared helper the /v1/models ?ids=cli path uses.
+      if (!disabled.has(slug)) aliases.push({ id: claudeCodeNativeAlias(slug), display_name: `${slug} (native)` });
+    }
+    for (const m of availableRouted) {
+      const listedId = (m.provider === "cursor" ? cursorFastIdFor?.(m.id) : undefined) ?? m.id;
+      aliases.push({ id: claudeCodeAlias(m.provider, listedId), display_name: `${listedId} (${m.provider})` });
+    }
     const claudeCodeVersion = await probeClaudeCodeVersionForTierFill(config.claudeCode, contextWindows);
     const webSearchOverride = config.claudeCode?.webSearchSidecar;
     const visionOverride = config.claudeCode?.visionSidecar;
@@ -1681,7 +1680,8 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       return jsonResponse({ error: "cliFirstParty must be sent alone", code: "cli_first_party_not_alone" }, 400);
     if (body.cliFirstParty !== undefined) {
       const { claudeInterceptEnabled, claudeInterceptProxyPort, getClaudeInterceptState } = await import("../../claude/intercept/runtime");
-      const { captureDesktopFirstPartyRollback, inspectDesktopFirstParty, observeClaudeDesktopMode, resolveClaudeDesktopMode, withFirstPartySecretsSettled } = await import("../../claude/desktop-first-party");
+      const { captureDesktopFirstPartyRollback, inspectDesktopFirstParty, observeClaudeDesktopMode, withFirstPartySecretsSettled } = await import("../../claude/desktop-first-party");
+      const { claudeFirstPartyTransition } = await import("../../claude/first-party-transition");
       const { firstPartyDesired, readFirstPartyProxyStatus, reconcileClaudeFirstPartySettings } = await import("../../claude/first-party-settings");
       const { commitClaudeCodeBlock } = await import("../../claude/claude-code-block");
       let bound = (deps.getClaudeInterceptState ?? getClaudeInterceptState)();
@@ -1721,25 +1721,9 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
             refusal: { error: `Claude intercept port mismatch (configured ${persistedPort}, bound ${bound?.proxyPort ?? "none"})`,
               code: "port_mismatch" as const, bound: bound?.proxyPort, configured: persistedPort } } };
         }
-        const before = structuredClone(persisted);
-        const previous = { present: Object.hasOwn(persisted.claudeCode ?? {}, "cliFirstParty"),
-          value: persisted.claudeCode?.cliFirstParty === true };
-        // Pin the mode Desktop resolves to *after* this mutation: while cliFirstParty is set the
-        // shared env is suppressed as Desktop evidence, so an opt-out observed with the flag still
-        // on would pin gateway and disconnect a Desktop install that predates the marker.
-        const observedBefore = structuredClone(before);
-        if (!body.cliFirstParty) delete observedBefore.claudeCode?.cliFirstParty;
-        const pinnedMode = persisted.claudeCode?.desktopMode === undefined
-          ? resolveClaudeDesktopMode(before, observeClaudeDesktopMode(observedBefore)) : undefined;
-        const nextBlock = { ...(persisted.claudeCode ?? {}) };
-        if (body.cliFirstParty) nextBlock.cliFirstParty = true;
-        else delete nextBlock.cliFirstParty;
-        if (pinnedMode) nextBlock.desktopMode = pinnedMode;
+        // Shared with GET /api/claude-code/first-party/preview, so the preview shows this transition.
+        const { nextBlock, previous, pinnedMode, retainedAmbiguous } = claudeFirstPartyTransition(persisted, body.cliFirstParty === true);
         commitClaudeCodeBlock(persisted, nextBlock);
-        // An opt-out that pins first-party from the shared env cannot tell whether that env was
-        // Desktop's or a hand-configured CLI-only one; the env is retained (Desktop keeps its
-        // route) and the caller is warned so it can pin gateway explicitly to release it.
-        const retainedAmbiguous = !body.cliFirstParty && previous.value && pinnedMode === "first-party";
         return { changed: true, value: { claudeCode: structuredClone(persisted.claudeCode), previous, pinnedMode, retainedAmbiguous } };
         });
         if (outcome.status !== "unavailable" && !("refusal" in outcome.value)) {

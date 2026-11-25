@@ -945,7 +945,8 @@ describe("combo failure policy and advancement", () => {
     }
     expect(comboFailureDecision(400, "context_length_exceeded")).toBe("hop");
     expect(comboFailureDecision(403, '{"code":"origin_rejected"}')).toBe("stop");
-    expect(comboFailureDecision(413, "request too large")).toBe("stop");
+    // A provider 413 is that target's intake limit (#9017): the next target may accept it.
+    expect(comboFailureDecision(413, "request too large")).toBe("hop");
     expect(comboFailureDecision(409, "conflict")).toBe("stop");
     expect(comboFailureDecision(410, "resource is gone")).toBe("stop");
     expect(comboFailureDecision(410, "The model has reached its end of life and is no longer available.")).toBe("hop");
@@ -964,7 +965,7 @@ describe("combo failure policy and advancement", () => {
     expect(comboFailureDecision(400, 'upstream mentions input_admission_refused in prose')).toBe('stop');
     // An UPSTREAM context verdict is target-local in a heterogeneous combo: this model cannot
     // hold the turn, but a later one may have a larger window. The whole message being the bare
-    // token is unambiguous evidence; a generic 413 with no context signal stays conservative.
+    // token is unambiguous evidence. A provider 413 hops on its status alone (#9017).
     expect(comboFailureDecision(400, "context_length_exceeded")).toBe("hop");
     // Evidence has to come from the MESSAGE. A context code beside an unrelated refusal is a
     // contradictory envelope, and a hard structured refusal outranks the context verdict.
@@ -978,7 +979,7 @@ describe("combo failure policy and advancement", () => {
     }});
     expect(comboFailureDecision(400, providerHardCap, { code: "5059" })).toBe("hop");
     expect(comboFailureDecision(400, "ordinary invalid request", { code: "5059" })).toBe("stop");
-    expect(comboFailureDecision(413, "request too large")).toBe("stop");
+    expect(comboFailureDecision(410, "resource is gone")).toBe("stop");
   });
 
   test("free-tier and monthly quota failures hop with the right scope, without weakening generic 400 handling", () => {

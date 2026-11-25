@@ -4,6 +4,7 @@ import { RemoteReplyGrants, REPLY_GRANT_LIMIT, REPLY_GRANT_MS } from "../../src/
 import { parseRemoteState } from "../../src/messaging/remote-store";
 import { LOCAL_OTHER, LOCAL_TARGET } from "../helpers/messaging-local";
 import { remoteMessagingPair } from "../helpers/messaging-remote";
+import { STORE_BUDGET_MS } from "../helpers/test-budget";
 
 test.skipIf(process.platform === "win32")("reply grants bind peer, generation, local target, kind and correlation before await", async () => {
   const pair = remoteMessagingPair();
@@ -84,4 +85,4 @@ test.skipIf(process.platform === "win32")("reply routes have fixed capacity and 
     for (let i = 0; i < REPLY_GRANT_LIMIT; i++) grants.control({ ...request, messageId: crypto.randomUUID() });
     expect(() => grants.control({ ...request, messageId: crypto.randomUUID() })).toThrow("capacity");
   } finally { await pair.close(); }
-});
+}, STORE_BUDGET_MS);

@@ -82,18 +82,7 @@ import { requestStartComboConfig, snapshotComboAdmission, snapshotComboAdmission
 import { canDescribeComboImages } from "./request-sidecar-auth";
 import { captureRouteStaticPolicy, routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
-import { baseProviderLabel, poolAccountProviderLabel } from "../../providers/label";
-import { getAccountSet } from "../../oauth/store";
-import { anthropicRefusalCredentialIsCurrent } from "../../oauth/anthropic-account-refusal";
-import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
-import { isAnthropicBillingFailure } from "../../providers/anthropic-billing-refusal";
-import {
-  anthropicRoutingFor,
-  formatAnthropicProviderForLog,
-} from "../../oauth/anthropic-routing";
-import { codexAccountLogLabel, oauthAccountLogLabel } from "../../codex/account-label";
-import { isGenericFailoverProvider, rotateGenericOAuthAccountOn429 } from "../../oauth/generic-account-failover";
-import { codexQuotaScopeForModel, getCodexQuotaHealthSnapshot } from "../../codex/routing";
+import { poolAccountProviderLabel } from "../../providers/label";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import type { AgentTaskRecoveryFailureReason } from "./agent-task-recovery";
 import {
@@ -114,6 +103,10 @@ import {
 } from "./core-errors";
 import {
   buildComboChildHeaders,
+  cooledGenericOAuthAccountLabel,
+  cooledPoolAccountLabel,
+  creditRefusedAnthropicAccountLabel,
+  isAnthropicPoolLocalRefusal,
   createChildPassthroughCallbackGate,
   consumeComboFailure,
   isLateAttributionRefusal,
@@ -176,95 +169,6 @@ function resolvedComboDestination(config: OcxConfig, target: { provider: string;
   } catch {
     return { provider: target.provider, model: target.model };
   }
-}
-
-function cooledPoolAccountLabel(config: OcxConfig, providerName: string, modelId: string, label: string | undefined): string | undefined {
-  if (!label) return undefined;
-  const instance = configuredAnthropicInstance(config, providerName);
-  if (instance && config.providers[providerName]?.authMode === "oauth") {
-    const matches = getAccountSet(instance)?.accounts.filter(account =>
-      formatAnthropicProviderForLog(instance, account.id) === label) ?? [];
-    return matches.length === 1 && anthropicRoutingFor(instance).getAnthropicAccountHealthSnapshot(matches[0]!.id) ? label : undefined;
-  }
-  const provider = config.providers[providerName];
-  if (!provider || !isCanonicalOpenAiForwardProvider(provider)) return undefined;
-  const matches = (config.codexAccounts ?? []).filter(account =>
-    `${providerName}-${codexAccountLogLabel(account)}` === label);
-  return matches.length === 1
-    && getCodexQuotaHealthSnapshot(matches[0]!.id, codexQuotaScopeForModel(modelId))
-    ? label : undefined;
-}
-
-/**
- * The generic OAuth pool's counterpart of `cooledPoolAccountLabel`. Its 429 names one account
- * through `accountLogLabel`, but the per-request account budget can end the pool's own rotation
- * before the last refused account is recorded. Hand that account to the pool's rotator, which
- * cools it under the pool's own Retry-After policy, and spare the target only when the pool still
- * has an eligible sibling. The rotator only peeks round-robin here: nothing is sent to that sibling.
- * A lone account or an all-cooled pool returns null and cools the target.
- */
-function cooledGenericOAuthAccountLabel(
-  config: OcxConfig, providerName: string, modelId: string, label: string | undefined, retryAfter: string | undefined,
-): string | undefined {
-  const provider = config.providers[providerName];
-  if (!label || !provider || !isGenericFailoverProvider(providerName, provider)) return undefined;
-  const base = baseProviderLabel(providerName);
-  const matches = getAccountSet(providerName)?.accounts.filter(account =>
-    oauthAccountLogLabel(account.id, base) === label) ?? [];
-  return matches.length === 1
-    && rotateGenericOAuthAccountOn429(config, providerName, matches[0]!.id, retryAfter, Date.now(), modelId, false)
-    ? label : undefined;
-}
-
-/**
- * A 402 credit-balance refusal names one Anthropic OAuth account -- the evidence the pool already
- * accepts on a 403 -- but the pool rotates only on 401/403/429, so the 402 reaches the combo with
- * that account still selectable. Cool it under the pool's entitlement backoff and spare the target
- * only while a sibling is eligible; a lone account or an exhausted pool still cools the target.
- */
-function creditRefusedAnthropicAccountLabel(
-  config: OcxConfig, providerName: string, modelId: string, label: string | undefined,
-  message: string, code: string | null | undefined, response: Response,
-): string | undefined {
-  const instance = configuredAnthropicInstance(config, providerName);
-  if (!label || !instance || config.providers[providerName]?.authMode !== "oauth"
-    || !isAnthropicBillingFailure(402, message, code)) return undefined;
-  const routing = anthropicRoutingFor(instance);
-  const matches = getAccountSet(instance)?.accounts.filter(account =>
-    formatAnthropicProviderForLog(instance, account.id) === label) ?? [];
-  return matches.length === 1
-    && anthropicRefusalCredentialIsCurrent(response, instance, matches[0]!.id)
-    && routing.recordAnthropicAccountRefusal(config, matches[0]!.id, 403, null)
-    && routing.getEligibleAnthropicAccounts(Date.now(), modelId).length > 0
-    ? label : undefined;
-}
-
-/**
- * True only for the Anthropic OAuth pool's OWN "all accounts cooled" 429. Its Retry-After is the
- * earliest per-account cooldown restated (`getAnthropicPoolRetryAfterSeconds`), which the pool
- * keeps enforcing locally, so it must not also park the combo target: an account added, resumed or
- * cleared a minute later would otherwise sit ignored until the target expired, up to the 24h
- * server-delay ceiling.
- *
- * Provenance, not just current state: the target must be the OAuth pool, no account may have been
- * identified for the failure, and the pool must be holding the wait right now. An upstream 429 on
- * a pool account always cools and names that account, and an API-key provider never qualifies, so
- * a genuine upstream Retry-After still parks the target in full.
- */
-export function isAnthropicPoolLocalRefusal(
-  config: OcxConfig,
-  providerName: string,
-  status: number,
-  failedAccount: string | undefined,
-  now = Date.now(),
-): boolean {
-  const instance = configuredAnthropicInstance(config, providerName);
-  return instance !== undefined
-    && config.providers[providerName]?.authMode === "oauth"
-    && status === 429
-    && failedAccount === undefined
-    && anthropicRoutingFor(instance).getEligibleAnthropicAccounts(now).length === 0
-    && anthropicRoutingFor(instance).getAnthropicPoolRetryAfterSeconds(now) !== null;
 }
 
 /**
@@ -1728,6 +1632,7 @@ export async function executeComboResponses(
         openRouterOpaque400: failure.openRouterOpaque400,
         unofferedToolCallRefusal: failure.unofferedToolCallRefusal,
         providerModerationRefusal: failure.providerModerationRefusal,
+        providerIntakeRefusal: failure.providerIntakeRefusal,
         // The adapter the failed leg actually resolved: a configured `kiro` provider can route a
         // model through another wire via `modelAdapters`, and an unresolved leg grants no hop.
         failedAdapter: childLog.providerAdapter,
@@ -1815,7 +1720,10 @@ export async function executeComboResponses(
     const failedTargetKey = targetKey(pick.target);
     let failedTargetCooldownRecorded = false;
     // The dispatch rewrote this to name the pool account that actually served the turn.
-    const poolAccountLabel = poolAccountProviderLabel(childLog.provider, pick.target.provider);
+    // The pool logs its main account under the bare provider name and carries "main" only as the
+    // account label, which is stamped for pool and main-pool contexts alone (#8880).
+    const poolAccountLabel = poolAccountProviderLabel(childLog.provider, pick.target.provider)
+      ?? (childLog.accountLogLabel === "main" ? `${pick.target.provider}-main` : undefined);
     const failedAccount = failure.response.status === 402
       ? creditRefusedAnthropicAccountLabel(
         config, pick.target.provider, pick.target.model, poolAccountLabel, failure.classificationText, failure.upstreamCode,

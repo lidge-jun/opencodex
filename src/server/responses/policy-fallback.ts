@@ -144,6 +144,10 @@ async function shouldHopPolicyCandidate(response: Response, signal?: AbortSignal
       // The text is the whole bounded body, judged as the combo reader judges it.
       ...(text && (response.status === 400 || response.status === 422)
         ? { providerModerationRefusal: isProviderModerationRefusal(response.status, text, undefined, true) } : {}),
+      // A 413 keeps dev's stop on a routing-profile route. Core delivery has already replaced the
+      // provider's 413 with the proxy's own context-overflow envelope, so the original body (a
+      // terminal code, or an unreadable one) is gone and cannot clear the provider-413 hop (#9017).
+      ...(response.status === 413 ? { providerIntakeRefusal: false } : {}),
     }) === "hop";
   } catch {
     return false;

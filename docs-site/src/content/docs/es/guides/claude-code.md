@@ -281,6 +281,14 @@ Encienda el interruptor CLI en Conecte → Claude, o ejecute `ocx claude config 
 
 <a id="model-picker-in-the-cli"></a>
 
+#### Vista previa antes de activarlo y homes de Claude
+
+Al activar el interruptor en el panel, OpenCodex primero muestra las claves que añadiría o cambiaría en el `settings.json` del home predeterminado (por ejemplo `env.HTTPS_PROXY`, `env.NODE_EXTRA_CA_CERTS`, `env.NO_PROXY`) y espera tu confirmación. Nunca muestra valores y la vista previa no escribe nada; si cancelas o la vista previa falla, el interruptor queda apagado y no se envía ningún cambio. El interruptor aún puede rechazar el cambio después, al iniciar la intercepción o preparar su certificado y su token. Los scripts pueden leer la misma vista previa con `GET /api/claude-code/first-party/preview?enabled=true`.
+
+El interruptor solo escribe en el home predeterminado de Claude (`CLAUDE_CONFIG_DIR`, o si no `~/.claude`). Si usas otros homes de Claude, añádelos en `claudeCode.extraConfigDirs` (por ejemplo `ocx config set claudeCode.extraConfigDirs '["~/.claude-work"]' --json`) y la página de Claude Code y **Connect → Client connections** mostrarán adónde se dirige cada uno. OpenCodex solo lee esos homes y nunca busca otros en el disco.
+
+**Client connections** en la vista general de Connect muestra, para Codex, Claude Code (por home) y Claude Desktop, adónde debería ir el cliente, adónde apuntan ahora sus archivos, quién los controla, por qué difieren y qué claves cambiaría volver atrás.
+
 #### Selector de modelos en el CLI
 
 Con el interruptor de primera parte CLI encendido y el enrutamiento Claude habilitado, inicie un nuevo `claude` y abra `/model`. Sus modelos opencodex aparecen junto a los modelos Claude de su cuenta, etiquetados como " Grok 4.7 (xai)" y descritos con su ruta ( `opencodex · xai/grok-4.7` ). Escoger uno dirige esa sesión al modelo, al igual que un enlace.
@@ -587,8 +595,8 @@ El proxy traduce cada solicitud Anthropic Messages API al formato Codex Response
 
 | Messages entrada | Responses salida |
 | --- | --- |
-| Nivel superior `system` | `instructions` (bloques de texto unidos con `\n\n`) |
-| `messages[].role: "system"` | También doblado en `instructions` |
+| Nivel superior `system` | `instructions` (bloques de texto unidos con `\n\n`). Para GPT-6.2 Sol y Astra con inicio de sesión de Codex, se envía como el primer mensaje `developer` para poder almacenarse en caché |
+| `messages[].role: "system"` | Se traducen a mensajes `developer` en su posición original |
 | Texto / imagen del usuario | `input_text` / `input_image` (base64 → URL de datos) |
 | Texto del asistente | `output_text` |
 | Asistente `tool_use` | `function_call` ( `input` → `arguments` serializado como JSON ) |
@@ -692,6 +700,10 @@ La barra de guardado pegajosa muestra **Sin cambios** cuando la configuración g
 <a id="troubleshooting"></a>
 
 ## Solución de problemas
+
+**Claude Code indica que Anthropic exige verificar la cuenta** — Abra el
+[Portal de verificación de Anthropic](https://portal.anthropic.com/verify) e inicie sesión con la cuenta afectada.
+OpenCodex conserva el HTTP 403 y registra `account_verification_required` en sus registros de solicitudes para este aviso.
 
 ### Desktop en Windows informa de `client_lifecycle_lock_failed` al aplicar
 

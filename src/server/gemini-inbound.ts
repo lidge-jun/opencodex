@@ -3,8 +3,8 @@
  * /v1beta|v1/models/{model}:generateContent|streamGenerateContent (countTokens and the embed
  * methods answer 501).
  *
- * Same shape as the Ollama inbound (./ollama-inbound): the model list describes configured
- * provider routes, generation is translated into an internal Chat Completions request handled by
+ * Like the Ollama inbound (./ollama-inbound), the catalog starts with configured
+ * provider routes. Unless the native leg applies, generation is translated into an internal Chat Completions request handled by
  * the ordinary Chat path, and this handler owns the final request-log row. Errors use the Gemini
  * `{ error: { code, message, status } }` body with a fixed message chosen by HTTP status.
  */
@@ -21,7 +21,7 @@ import { estimateInputTokens } from "./responses/input-admission";
 import type { DataPlaneAdmission } from "./auth-cors";
 import { resolveAdmissionModelScope, routeAllowedByScope } from "./admission-model-scope";
 import type { GeminiMethod } from "./gemini-native-paths";
-import { geminiNativeCatalogAliases, geminiNativeCatalogLookup } from "./gemini-native-catalog";
+import { geminiNativeCatalogAliases, geminiNativeCatalogLookup, geminiNativeDiscoveredRoutes } from "./gemini-native-catalog";
 import {
   applyLocalRefusalCode,
   commitCancelled,
@@ -66,10 +66,11 @@ export function toGeminiRefusal(response: Response): Response {
   return applyLocalRefusalCode(geminiError(parts.status, parts.message, parts.retryAfter), parts.localRefusalCode);
 }
 
-function eligibleRoutes(config: OcxConfig, req: Request, admission: DataPlaneAdmission) {
-  const scope = resolveAdmissionModelScope(config, admission);
-  return listOllamaRoutes(config, req)
-    .filter(row => routeAllowedByScope(scope, { providerName: row.route.providerName, modelId: row.route.modelId }));
+function geminiCatalogRoutes(config: OcxConfig, req: Request) {
+  const configured = listOllamaRoutes(config, req);
+  const selectors = new Set(configured.map(row => row.selector));
+  const discovered = geminiNativeDiscoveredRoutes(config, req).filter(row => !selectors.has(row.selector));
+  return [...configured, ...discovered];
 }
 
 /** Token limits from configuration first, then generated model metadata; omitted when unknown. */
@@ -96,16 +97,19 @@ const modelResource = (config: OcxConfig, row: { selector: string; route: RouteR
 });
 
 export function handleGeminiModels(config: OcxConfig, req: Request, admission: DataPlaneAdmission): Response {
-  const rows = eligibleRoutes(config, req, admission);
-  const aliases = geminiNativeCatalogAliases(config, req, rows, resolveAdmissionModelScope(config, admission));
+  const scope = resolveAdmissionModelScope(config, admission);
+  const candidates = geminiCatalogRoutes(config, req);
+  const rows = candidates.filter(row => routeAllowedByScope(scope, row.route));
+  // A key can allow a concrete effort tier while excluding its source family.
+  const aliases = geminiNativeCatalogAliases(config, req, candidates, scope);
   return Response.json({ models: [...rows, ...aliases].map(row => modelResource(config, row)) });
 }
 
 function findGeminiCatalogRow(config: OcxConfig, req: Request, admission: DataPlaneAdmission, model: string) {
-  const row = findOllamaRoute(config, model, req);
+  const row = findOllamaRoute(config, model, req) ?? geminiNativeDiscoveredRoutes(config, req, model)[0];
   const scope = resolveAdmissionModelScope(config, admission);
   if (row && routeAllowedByScope(scope, row.route)) return row;
-  return geminiNativeCatalogLookup(config, req, model, () => eligibleRoutes(config, req, admission), scope);
+  return geminiNativeCatalogLookup(config, req, model, () => geminiCatalogRoutes(config, req), scope);
 }
 
 export function handleGeminiModel(config: OcxConfig, req: Request, admission: DataPlaneAdmission, model: string): Response {

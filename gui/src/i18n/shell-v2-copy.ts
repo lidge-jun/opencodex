@@ -1,3 +1,5 @@
+import { gettingStartedCopy, type GettingStartedKey } from "./getting-started-copy";
+
 /*
  * Copy for the v2 shell: the three-tier sidebar, Home, the Set up hub and the Advanced hub.
  * One row per key, columns in the order of `locales`. Kept apart from the per-locale files
@@ -109,9 +111,11 @@ const rows = {
 
 export type ShellV2Key = `shellV2.${keyof typeof rows}`;
 
-export function shellV2Copy(locale: Locale): Record<ShellV2Key, string> {
+export function shellV2Copy(locale: Locale): Record<ShellV2Key | GettingStartedKey, string> {
   const index = locales.indexOf(locale);
-  return Object.fromEntries(
+  const own = Object.fromEntries(
     Object.entries(rows).map(([key, row]) => [`shellV2.${key}`, row[index]!]),
   ) as Record<ShellV2Key, string>;
+  // Home's hide and restore copy rides along, so the eleven catalogs stay untouched.
+  return { ...own, ...gettingStartedCopy(locale) };
 }

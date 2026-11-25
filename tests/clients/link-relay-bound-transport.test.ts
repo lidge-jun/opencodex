@@ -171,6 +171,7 @@ describe("connection-bound link relay", () => {
   });
 
   test("a silent actual peer expires only the credential-free auth deadline without touching the body", async () => {
+    const authTimeoutMs = 20;
     const seen: Array<{ url: string; authorization: string | undefined; body: string }> = [];
     let bodyRead = false, bodyCancelled = false;
     const body = new ReadableStream({
@@ -180,10 +181,17 @@ describe("connection-bound link relay", () => {
       const record = { url: req.url!, authorization: req.headers.authorization, body: "" };
       seen.push(record);
       req.on("data", chunk => { record.body += chunk.toString(); });
+      // Keep the peer silent and expire the caller's clock after the real probe arrives.
+      req.once("end", () => jest.advanceTimersByTime(authTimeoutMs));
     }, async port => {
-      await expect(fetchBoundLinkRelay(target(port), `http://127.0.0.1:${port}/v1/responses`, {
-        method: "POST", headers: { authorization: `Bearer ${key}` }, body,
-      }, { authTimeoutMs: 20 })).rejects.toBeInstanceOf(LinkRelayAuthTimeoutError);
+      // A missing probe still releases the socket and restores real timers.
+      const signal = AbortSignal.timeout(2_000); // well inside the 5 s test timeout
+      jest.useFakeTimers();
+      try {
+        await expect(fetchBoundLinkRelay(target(port), `http://127.0.0.1:${port}/v1/responses`, {
+          method: "POST", headers: { authorization: `Bearer ${key}` }, body, signal,
+        }, { authTimeoutMs })).rejects.toBeInstanceOf(LinkRelayAuthTimeoutError);
+      } finally { jest.useRealTimers(); }
       expect(seen).toHaveLength(1);
       expect(new URL(seen[0]!.url, "http://peer").pathname).toBe(LINK_RELAY_AUTH_PATH);
       expect(seen[0]!.authorization).toBeUndefined(); expect(seen[0]!.body).toBe("");
