@@ -23,6 +23,8 @@ The transport validates and bounds SignalR frames, assembles text per bot messag
 
 `src/adapters/m365-copilot/fenced.ts` and `src/adapters/m365-copilot/tools.ts` retain only the selected MIT tool grammar and baseline/relay/relay-batch framing. Tool names must belong to the declared catalog, custom/namespace identities are restored, and client results continue the same eligible conversation. Request history that is not an extension starts a fresh conversation. Copilot-generated speculative tool output is not treated as a real client result. The client retains execution ownership. The source notice is in `src/adapters/m365-copilot/LICENSE`.
 
+The adapter classifies tool calls after the ChatHub turn completes. Document classification and client delivery share the accepted parse. The display removes recognized calls by their source ranges. A `tool_call` wrapper can contain multiple inline calls and prose; the prose remains in the response.
+
 `tests/providers/m365-copilot-security.test.ts` checks retargeted OAuth rows and runtime wire pins, and exercises Bun's real WebSocket constructor against a refusing loopback proxy while asserting that the loopback destination receives no direct connection. Both plain and TLS WebSocket attempts use HTTP CONNECT. Explicit and inherited SOCKS routes fail with a configuration error before dialing; the ChatHub socket supports HTTP(S) proxies only.
 
 `tests/providers/m365-copilot-executor.test.ts` checks adapter-level request-executor refusal with zero destination connections and zero upload-admission calls. It also exercises successful native turns with no executor and with the built-in request executor, rejects HTTP-only or mismatched authority, and checks the captured route and bypass list.
