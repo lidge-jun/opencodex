@@ -17,7 +17,7 @@ export interface RegisteredAdvisorPlan {
   tool: OcxTool;
   consult?: AdvisorPlan["consult"];
   formatUnavailable?: AdvisorPlan["formatUnavailable"];
-  injectWorkerNotice?(parsed: OcxParsedRequest): boolean;
+  injectWorkerNotice?(parsed: OcxParsedRequest, toolName?: string): boolean;
   hasExternalMcpTool?(parsed: OcxParsedRequest): boolean;
   preflightInject(parsed: OcxParsedRequest): Promise<boolean>;
   attachGuard(parsed: OcxParsedRequest): void;

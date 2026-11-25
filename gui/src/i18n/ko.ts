@@ -364,7 +364,7 @@ export const ko: Record<TKey, string> = {
   "advisor.mcp.note.qoder": "Qoder settings.json(MCP + UserPromptSubmit 훅)과 SKILL.md를 기록했습니다. 설정 -> MCP에서 활성화 여부를 확인하세요(업데이트 후에는 MCP를 껐다 켜는 것을 권장합니다).",
   "advisor.mcp.note.qoder-cn": "Qoder CN settings.json(MCP + UserPromptSubmit 훅)과 SKILL.md를 기록했습니다. 설정 -> MCP에서 활성화 여부를 확인하세요(업데이트 후에는 MCP를 껐다 켜는 것을 권장합니다).",
   "advisor.mcp.note.commandcode": "Command Code mcp.json에 기록했습니다. 첫 호출 시 도구 승인을 물으면 opencodex-advisor를 허용하세요.",
-  "advisor.mcp.note.cline": "cline_mcp_settings.json에 기록했습니다(timeout: 900초, consult_advisor 자동 승인).",
+  "advisor.mcp.note.cline": "cline_mcp_settings.json에 기록했습니다(timeout: 900초). Cline에서 첫 호출 시 consult_advisor를 승인해 주세요(자동 승인이 필요하면 Cline 설정에서 켤 수 있습니다).",
   "advisor.mcp.note.opencode": "opencode.json의 mcp.opencodex-advisor(enabled: true, timeout: 900000ms)와 알림 Skill을 함께 설치했습니다.",
   "advisor.mcp.note.claude": "Claude Code가 OpenCodex 프록시를 거칠 때는 기본 어드바이저 도구가 자동 제공됩니다. 외부 MCP를 추가로 켜려면 다음 CLI 실행 시 신뢰를 승인하세요.",
   // routing intelligence

@@ -480,10 +480,12 @@ Translated union combos check the selected hosted Advisor against each candidate
 native wire fidelity) decline direct native Chat / Messages forwarding when `config.advisor.enabled`
 is true with a non-self advisor model so worker turns enter the Responses sidecar pipeline.
 `advisorPlan.injectWorkerNotice` places a runtime-marked `developer` worker notice (`ADVISOR_RUNTIME_NOTICE_START` / `ADVISOR_RUNTIME_NOTICE_END`) ahead of the latest user
-turn only on paths where an advisor tool is actually callable (external `consult_advisor` MCP tool,
-`webSearchAdvisor`, or normal translated exchange after attaching the synthetic `advisor` tool —
-excluding run-turn and image/video paths without an external advisor tool, and skipping duplicate
-synthetic attachment on both normal and web-search paths when `advisorPlan.hasExternalMcpTool` is true).
+turn only on paths where an advisor tool is actually callable (external `consult_advisor` MCP tool
+when permitted by `tool_choice` and `explicitClientToolChoices`, `webSearchAdvisor`, or normal
+translated exchange after attaching the synthetic `advisor` tool — excluding run-turn and
+image/video paths without an allowed external advisor tool, and skipping duplicate synthetic
+attachment on both normal and web-search paths only when `advisorPlan.hasExternalMcpTool` is true
+for the effective `tool_choice`).
 When long tool loops or repeated errors push an older runtime notice beyond `ADVISOR_TAIL_NOTICE_WINDOW`,
 only validated runtime-marked copies are stripped and re-anchored at the tail (`urgentRepair` wording
 after `>= 2` errors or long loops) without touching application-owned `## Advisor` developer messages
@@ -504,29 +506,40 @@ comments; default `timeoutMs` is `600_000` ms / 10 min, max `1_800_000` ms / 30 
 
 For harnesses whose built-in models bypass the OpenCodex proxy,
 `src/advisor/external-consult.ts` backs `POST /api/advisor/consult` with uniform consent checks
-(matching routed paths, including `question-only`), adaptive optional task-budget reservation,
+(matching routed paths, including `question-only`), fail-closed adaptive task-budget enforcement
+(deriving `external:<taskId|sessionId>` or canonical `external:transcript:<path>` and rejecting
+adaptive requests without a stable identity with `400 advisor_budget_identity_required`),
 content-hashed request dedup (including `taskId` and transcript digest), explicit-ID/path local
 `.jsonl` session transcript attachment in `contextMode: "full"` across `~/.workbuddy`,
 `~/.workbuddy-ai`, `~/.qoder`, `~/.qoder-cn`, `~/.commandcode`, and `~/.claude/projects`
 (`loadWorkBuddySessionMessages`), and a bounded 32-entry 30-minute consultation store that never
 evicts pending entries (returning `429 advisor_capacity_exceeded` when saturated) and separates
 TTL expiry pruning from insertion eviction. Long-poll `waitMs` is capped at `240_000` ms across
-API, CLI (`ocx advisor consult`), and stdio MCP (`src/advisor/mcp-server.ts`, `ocx advisor mcp`)
+API, CLI (`ocx advisor consult`), and stdio MCP (`src/advisor/mcp-server.ts`, `ocx advisor mcp`,
+annotated `readOnlyHint: true, openWorldHint: true`)
 to stay below the 255s HTTP listener idle timeout; `nextCallArguments` (`{ consultationId, afterElapsedMs }`)
 accepts any nonnegative integer cursor alongside `notifications/progress` heartbeats.
 `contextMode: "full"` expands bounded per-message/transcript caps (128k/512k chars) and strips
 `<system-reminder>` wrappers before clipping.
 
-`src/advisor/client-mcp.ts` manages per-client `opencodex-advisor` MCP registration, hooks
-(stripping only Advisor commands while preserving sibling commands in shared hook groups), and
-skills across compatible clients (`workbuddy`, `workbuddy-ai`, `qoder`, `qoder-cn`, `commandcode`,
-`cline` with 900s timeout, `opencode` with 900_000ms timeout and `skills/`, optional `claude`) with
-per-client error isolation, one-time file backups, live `mcp-approvals.json` trust detection, and
-clean `OwnershipRecord.fileFingerprint` + append-only journal `JournalResultUpdate` synchronization
-on shared JSON config files so Routing Undo remains available without masking later external edits.
-Bidirectional sync links `PUT /api/advisor/settings` (`autoMountMcp` / `mcpClients`) with client
-route toggles in `src/server/management/integration-routes.ts` (loaded dynamically and wrapped so
-optional MCP failures degrade via `advisorMcp` without interrupting committed Routing mutations or
-Home route-intent recording). `gui/src/pages/Advisor.tsx`, `gui/src/pages/advisor/AdvisorClientMcpPanel.tsx`,
-and `gui/src/pages/integrations/FileIntegrationPage.tsx` surface draft-derived auto selection,
-partial MCP sync errors with retry, mounted config paths, and client-specific trust steps.
+`src/advisor/client-mcp.ts` manages per-client `opencodex-advisor` MCP registration (`selfLaunchArgv`
+for both source-entrypoint and standalone executable installs plus explicit `OPENCODEX_HOME` and `BUN_BE_BUN=1`
+propagation), hooks (stripping only Advisor commands while preserving sibling commands in shared hook
+groups), and skills across compatible clients (`workbuddy`, `workbuddy-ai`, `qoder`, `qoder-cn`,
+`commandcode`, `cline` with 900s timeout and explicit user confirmation, `opencode` with 900_000ms
+timeout and `skills/`, optional `claude`). Skill files (`ADVISOR_SKILL_MARKER`) and hook scripts
+(`ADVISOR_HOOK_MARKER`) carry explicit ownership markers: unowned files and symlinks are never
+overwritten or counted as mounted, and unmounting deletes only verified OpenCodex files (never recursive
+directory removal, preserving sibling user files). Sync targets are gated on `advisorRunnable` (so
+missing or revoked consent unmounts existing MCP registrations, hooks, and owned skills), reconciled
+by resolved filesystem path (`collectProtectedPaths`) so shared custom directories (e.g. `WORKBUDDY_CONFIG_DIR`)
+are never unmounted by an unselected sibling client, isolated per client for errors, backed up once
+before edits, and synchronized via `OwnershipRecord.fileFingerprint` + append-only journal
+`JournalResultUpdate` on shared JSON configs so Routing Undo stays intact without masking external
+edits. Bidirectional sync links `PUT /api/advisor/settings` (`autoMountMcp` / `mcpClients`) with
+client route toggles in `src/server/management/integration-routes.ts` (`reconcileAdvisorMcpForRoutedClient`,
+wrapped so optional MCP failures degrade via `advisorMcp` without interrupting committed Routing
+mutations or Home route-intent recording). `gui/src/pages/Advisor.tsx`,
+`gui/src/pages/advisor/AdvisorClientMcpPanel.tsx`, and `gui/src/pages/integrations/FileIntegrationPage.tsx`
+surface draft-derived auto selection, `runnable`-gated mount notices, partial MCP sync errors with
+retry, mounted config paths, and client-specific trust steps.

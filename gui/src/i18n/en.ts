@@ -365,7 +365,7 @@ export const en = {
   "advisor.mcp.note.qoder": "Written to Qoder settings.json (MCP + UserPromptSubmit hook) and SKILL.md; verify it is enabled in Qoder Settings -> MCP (restart/toggle MCP after upgrades).",
   "advisor.mcp.note.qoder-cn": "Written to Qoder CN settings.json (MCP + UserPromptSubmit hook) and SKILL.md; verify it is enabled in Qoder CN Settings -> MCP (restart/toggle MCP after upgrades).",
   "advisor.mcp.note.commandcode": "Written to Command Code mcp.json; approve opencodex-advisor if prompted on first call.",
-  "advisor.mcp.note.cline": "Written to cline_mcp_settings.json (timeout: 900s, autoApprove: [\"consult_advisor\"]).",
+  "advisor.mcp.note.cline": "Written to cline_mcp_settings.json (timeout: 900s); approve consult_advisor when prompted in Cline (or opt into auto-approve in Cline settings).",
   "advisor.mcp.note.opencode": "Written to opencode.json under mcp.opencodex-advisor (enabled: true, timeout: 900000ms) with the reminder Skill.",
   "advisor.mcp.note.claude": "Claude Code already receives the built-in proxy advisor when routed through OpenCodex; enabling external MCP requires trusting it on next launch.",
   "nav.logs": "Logs & Debug",

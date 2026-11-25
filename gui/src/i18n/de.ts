@@ -364,7 +364,7 @@ export const de: Record<TKey, string> = {
   "advisor.mcp.note.qoder": "In Qoder settings.json (MCP + UserPromptSubmit-Hook) und SKILL.md eingetragen; unter Einstellungen -> MCP prüfen (nach Updates MCP neu starten).",
   "advisor.mcp.note.qoder-cn": "In Qoder CN settings.json (MCP + UserPromptSubmit-Hook) und SKILL.md eingetragen; unter Einstellungen -> MCP prüfen (nach Updates MCP neu starten).",
   "advisor.mcp.note.commandcode": "In Command Code mcp.json eingetragen; bei Rückfrage beim ersten Aufruf opencodex-advisor erlauben.",
-  "advisor.mcp.note.cline": "In cline_mcp_settings.json eingetragen (timeout: 900s, autoApprove: [\"consult_advisor\"]).",
+  "advisor.mcp.note.cline": "In cline_mcp_settings.json eingetragen (timeout: 900s); bestätige consult_advisor bei der Nachfrage in Cline (oder aktiviere Auto-Approve in den Cline-Einstellungen).",
   "advisor.mcp.note.opencode": "In opencode.json unter mcp.opencodex-advisor (enabled: true, timeout: 900000ms) inklusive Erinnerungs-Skill eingetragen.",
   "advisor.mcp.note.claude": "Claude Code nutzt über den OpenCodex-Proxy bereits das integrierte Berater-Tool; externes MCP muss beim nächsten Start bestätigt werden.",
   // routing intelligence

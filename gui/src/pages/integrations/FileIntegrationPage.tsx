@@ -185,6 +185,7 @@ function FileIntegrationControls({
   const visibleAdvisorMcpInfo: {
     client: FileIntegrationClientId;
     enabled: boolean;
+    runnable: boolean;
     autoMountMcp: boolean;
     mcpClients?: readonly string[] | null;
     entry?: AdvisorMcpClientStatusDto;
@@ -192,6 +193,7 @@ function FileIntegrationControls({
     ? {
         client,
         enabled: advisorDto.settings.enabled,
+        runnable: advisorDto.runnable,
         autoMountMcp: advisorDto.settings.autoMountMcp ?? true,
         mcpClients: advisorDto.settings.mcpClients,
         entry: advisorDto.mcpClients?.find(item => item.clientId === client),
@@ -495,7 +497,8 @@ function FileIntegrationControls({
         if (manualList && !manualList.includes(client)) {
           return <Notice tone="warn">{t("advisor.mcp.routeNoticeManual")}</Notice>;
         }
-        if (visibleAdvisorMcpInfo.autoMountMcp && (entry?.defaultAutoMount !== false || manualList?.includes(client))) {
+        if (visibleAdvisorMcpInfo.runnable && visibleAdvisorMcpInfo.autoMountMcp
+          && (entry?.defaultAutoMount !== false || manualList?.includes(client))) {
           return (
             <Notice tone="warn">
               {t("advisor.mcp.routeNoticeWillMount", { path })}{note ? ` ${note}` : ""}

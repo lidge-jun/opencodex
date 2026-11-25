@@ -364,7 +364,7 @@ export const ru: Record<TKey, string> = {
   "advisor.mcp.note.qoder": "Записано в Qoder settings.json (MCP + хук UserPromptSubmit) и SKILL.md; проверьте Настройки -> MCP (после обновления перезапустите MCP).",
   "advisor.mcp.note.qoder-cn": "Записано в Qoder CN settings.json (MCP + хук UserPromptSubmit) и SKILL.md; проверьте Настройки -> MCP (после обновления перезапустите MCP).",
   "advisor.mcp.note.commandcode": "Записано в Command Code mcp.json; при первом запросе разрешите opencodex-advisor.",
-  "advisor.mcp.note.cline": "Записано в cline_mcp_settings.json (timeout: 900 сек., autoApprove: [\"consult_advisor\"]).",
+  "advisor.mcp.note.cline": "Записано в cline_mcp_settings.json (timeout: 900 сек.); подтвердите вызов consult_advisor при запросе в Cline (или включите автоподтверждение в настройках Cline).",
   "advisor.mcp.note.opencode": "Записано в opencode.json -> mcp.opencodex-advisor (enabled: true, timeout: 900000ms) вместе со Skill-напоминанием.",
   "advisor.mcp.note.claude": "Claude Code через прокси OpenCodex уже получает встроенного советника; внешний MCP потребует доверия при следующем запуске.",
   // routing intelligence

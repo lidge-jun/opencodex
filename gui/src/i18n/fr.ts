@@ -362,7 +362,7 @@ export const fr: Record<TKey, string> = {
   "advisor.mcp.note.qoder": "Enregistré dans Qoder settings.json (MCP + hook UserPromptSubmit) et SKILL.md ; vérifiez Paramètres -> MCP (relancez le MCP après mise à jour).",
   "advisor.mcp.note.qoder-cn": "Enregistré dans Qoder CN settings.json (MCP + hook UserPromptSubmit) et SKILL.md ; vérifiez Paramètres -> MCP (relancez le MCP après mise à jour).",
   "advisor.mcp.note.commandcode": "Écrit dans Command Code mcp.json ; approuvez opencodex-advisor au premier appel si demandé.",
-  "advisor.mcp.note.cline": "Écrit dans cline_mcp_settings.json (timeout : 900s, autoApprove : [\"consult_advisor\"]).",
+  "advisor.mcp.note.cline": "Écrit dans cline_mcp_settings.json (timeout : 900s) ; approuvez consult_advisor lorsque Cline le demande (ou activez l'approbation automatique dans les paramètres Cline).",
   "advisor.mcp.note.opencode": "Écrit dans opencode.json sous mcp.opencodex-advisor (enabled: true, timeout: 900000ms) avec la Skill de rappel.",
   "advisor.mcp.note.claude": "Claude Code via le proxy OpenCodex dispose déjà de l'outil intégré ; activer le MCP externe demande une confirmation au prochain lancement.",
   "nav.logs": "Journaux et débogage",

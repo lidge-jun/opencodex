@@ -727,9 +727,11 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
         .toBe(fingerprint(readFileSync(qoderPath, "utf8")));
 
       const clineMcp = JSON.parse(readFileSync(join(fakeHome, ".cline", "data", "settings", "cline_mcp_settings.json"), "utf8"));
-      expect(clineMcp.mcpServers["opencodex-advisor"].autoApprove).toEqual(["consult_advisor"]);
+      expect(clineMcp.mcpServers["opencodex-advisor"].autoApprove).toBeUndefined();
       expect(clineMcp.mcpServers["opencodex-advisor"].timeout).toBe(900);
       expect(clineMcp.mcpServers["opencodex-advisor"].env.OCX_ADVISOR_MCP_WAIT_MS).toBe("240000");
+      const clineStatus = manualRes.statuses.find(s => s.clientId === "cline")!;
+      expect(clineStatus.trustStatus).toBe("needs_confirmation");
       const claudeJson = JSON.parse(readFileSync(join(fakeHome, ".claude.json"), "utf8"));
       expect(claudeJson.mcpServers["opencodex-advisor"].type).toBe("stdio");
 
@@ -1039,6 +1041,22 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
       expect(rA.status).toBe(202);
       expect(rB.status).toBe(202);
       expect(rA.body.consultationId).not.toBe(rB.body.consultationId);
+
+      // Same taskId + unchanged transcript reuses the pending consultationId.
+      const rARepeat = await makePending("sess-a");
+      expect(rARepeat.status).toBe(202);
+      expect(rARepeat.body.consultationId).toBe(rA.body.consultationId);
+
+      // Changing transcript text without changing message count produces a distinct consultationId.
+      writeFileSync(join(projDir, "sess-a.jsonl"), `${JSON.stringify({
+        type: "user",
+        timestamp: 2000,
+        message: { role: "user", content: "Modified transcript A content" },
+      })}\n`);
+      const rAModified = await makePending("sess-a");
+      expect(rAModified.status).toBe(202);
+      expect(rAModified.body.consultationId).not.toBe(rA.body.consultationId);
+
       for (const done of resolvers) done("done");
     } finally {
       rmSync(rootDir, { recursive: true, force: true });
@@ -1165,6 +1183,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
       (syncCfg as { advisor?: unknown }).advisor = {
         enabled: true,
         model: "expert/gpt-6-astra",
+        contextSharingConsent: "v1",
         mcpClients: ["workbuddy", "qoder"],
       };
       const syncRes = syncAdvisorMcpClients(syncCfg, { homeDir, configDir });
@@ -1172,6 +1191,180 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
       expect(syncRes.mounted).toContain("qoder");
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  test("client-mcp enforces verified ownership markers, never deletes user skill files, respects consent revocation, handles standalone & OPENCODEX_HOME, and preserves shared WORKBUDDY_CONFIG_DIR", async () => {
+    const { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const { writeRecord, integrationsDir } = await import("../../src/integrations/ownership");
+    const {
+      ADVISOR_HOOK_MARKER,
+      ADVISOR_SKILL_MARKER,
+      advisorCommandArgs,
+      buildNoticeHookScript,
+      listAdvisorMcpClientStatuses,
+      reconcileAdvisorMcpForRoutedClient,
+      syncAdvisorMcpClients,
+    } = await import("../../src/advisor/client-mcp");
+
+    const fakeHome = mkdtempSync(join(tmpdir(), "ocx-mcp-security-"));
+    const customConfigDir = join(fakeHome, "custom-ocx-home");
+    try {
+      // 1. User-owned files in skills/opencodex-advisor survive disabled sync AND unowned overwrite attempts.
+      const userSkillDir = join(fakeHome, ".workbuddy", "skills", "opencodex-advisor");
+      mkdirSync(userSkillDir, { recursive: true });
+      writeFileSync(join(userSkillDir, "my-notes.md"), "# User personal notes\n");
+      writeFileSync(join(userSkillDir, "SKILL.md"), "# Custom user skill without marker\n");
+
+      writeRecord({
+        clientId: "workbuddy",
+        configPath: join(fakeHome, ".workbuddy", "models.json"),
+        fileFingerprint: "fp-wb",
+        blockFingerprint: "bfp-wb",
+        fragmentPaths: [["models"]],
+        appliedAt: new Date().toISOString(),
+        opId: "op-wb",
+      }, integrationsDir(customConfigDir));
+
+      const disabledCfg = baseConfig();
+      (disabledCfg as { advisor?: unknown }).advisor = { enabled: false, model: "expert/gpt-6-astra", contextSharingConsent: "v1" };
+      const disabledSync = syncAdvisorMcpClients(disabledCfg, { homeDir: fakeHome, configDir: customConfigDir, env: {} });
+      expect(disabledSync.errors).toEqual([]);
+      expect(disabledSync.unmounted).toEqual([]);
+      expect(existsSync(join(userSkillDir, "my-notes.md"))).toBe(true);
+      expect(readFileSync(join(userSkillDir, "SKILL.md"), "utf8")).toBe("# Custom user skill without marker\n");
+      expect(disabledSync.statuses.find(s => s.clientId === "workbuddy")?.skillMounted).toBe(false);
+
+      // Refusal when attempting to mount over an unowned SKILL.md
+      const enabledCfg = baseConfig();
+      (enabledCfg as { advisor?: unknown }).advisor = { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1" };
+      const unownedMountSync = syncAdvisorMcpClients(enabledCfg, { homeDir: fakeHome, configDir: customConfigDir, env: {} });
+      expect(unownedMountSync.errors.some(e => e.clientId === "workbuddy" && e.message.includes("unowned skill file"))).toBe(true);
+      expect(readFileSync(join(userSkillDir, "SKILL.md"), "utf8")).toBe("# Custom user skill without marker\n");
+      expect(existsSync(join(userSkillDir, "my-notes.md"))).toBe(true);
+
+      // Remove unowned SKILL.md only -> mounting writes owned SKILL.md + keeps my-notes.md;
+      // revoking consent then removes ONLY SKILL.md while preserving my-notes.md; re-granting re-mounts!
+      rmSync(join(userSkillDir, "SKILL.md"));
+      const cleanMount = syncAdvisorMcpClients(enabledCfg, { homeDir: fakeHome, configDir: customConfigDir, env: {} });
+      expect(cleanMount.errors).toEqual([]);
+      expect(cleanMount.mounted).toContain("workbuddy");
+      expect(readFileSync(join(userSkillDir, "SKILL.md"), "utf8")).toContain(ADVISOR_SKILL_MARKER);
+      expect(readFileSync(join(fakeHome, ".workbuddy", "hooks", "opencodex-advisor-notice.sh"), "utf8")).toContain(ADVISOR_HOOK_MARKER);
+
+      const revokedCfg = baseConfig();
+      (revokedCfg as { advisor?: unknown }).advisor = { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: null };
+      const revokeSync = syncAdvisorMcpClients(revokedCfg, { homeDir: fakeHome, configDir: customConfigDir, env: {} });
+      expect(revokeSync.unmounted).toContain("workbuddy");
+      expect(existsSync(join(userSkillDir, "SKILL.md"))).toBe(false);
+      expect(existsSync(join(userSkillDir, "my-notes.md"))).toBe(true);
+      const wbAfterRevoke = listAdvisorMcpClientStatuses(revokedCfg, { homeDir: fakeHome, configDir: customConfigDir, env: {} })
+        .find(s => s.clientId === "workbuddy")!;
+      expect(wbAfterRevoke.mounted).toBe(false);
+      expect(wbAfterRevoke.hooksMounted).toBe(false);
+      expect(wbAfterRevoke.skillMounted).toBe(false);
+
+      // Route toggle reconciliation when consent is missing/revoked must NOT mount MCP.
+      const routeNoConsent = reconcileAdvisorMcpForRoutedClient("workbuddy", true, revokedCfg, { homeDir: fakeHome, configDir: customConfigDir, env: {} });
+      expect(routeNoConsent.changed).toBe(false);
+      expect(listAdvisorMcpClientStatuses(revokedCfg, { homeDir: fakeHome, configDir: customConfigDir, env: {} })
+        .find(s => s.clientId === "workbuddy")?.mounted).toBe(false);
+
+      // Re-granting consent re-mounts cleanly.
+      const regrantSync = syncAdvisorMcpClients(enabledCfg, { homeDir: fakeHome, configDir: customConfigDir, env: {} });
+      expect(regrantSync.mounted).toContain("workbuddy");
+
+      // 2. Standalone binary argv + custom OPENCODEX_HOME propagation.
+      const srcCmd = advisorCommandArgs(customConfigDir, { isStandaloneExecutable: false, execPath: "/usr/local/bin/bun" });
+      expect(srcCmd.command).toBe("/usr/local/bin/bun");
+      expect(srcCmd.args.slice(-2)).toEqual(["advisor", "mcp"]);
+      expect(srcCmd.args.length).toBe(3);
+      expect(srcCmd.env.OPENCODEX_HOME).toBe(customConfigDir);
+
+      const binCmd = advisorCommandArgs(customConfigDir, { isStandaloneExecutable: true, execPath: "/usr/local/bin/ocx" });
+      expect(binCmd.command).toBe("/usr/local/bin/ocx");
+      expect(binCmd.args).toEqual(["advisor", "mcp"]);
+      expect(binCmd.env.OPENCODEX_HOME).toBe(customConfigDir);
+      const standaloneHook = buildNoticeHookScript(customConfigDir, "/usr/local/bin/ocx");
+      expect(standaloneHook).toContain('BUN_BIN="/usr/local/bin/ocx"');
+      expect(standaloneHook).toContain("BUN_BE_BUN=1");
+      expect(standaloneHook).toContain('adv?.contextSharingConsent === "v1"');
+
+      // 3. Shared WORKBUDDY_CONFIG_DIR: selecting only workbuddy keeps workbuddy-ai from unmounting it.
+      const sharedDir = join(fakeHome, "shared-wb");
+      const sharedEnv = { WORKBUDDY_CONFIG_DIR: sharedDir };
+      const sharedCfg = baseConfig();
+      (sharedCfg as { advisor?: unknown }).advisor = {
+        enabled: true,
+        model: "expert/gpt-6-astra",
+        contextSharingConsent: "v1",
+        mcpClients: ["workbuddy"],
+      };
+      const sharedSync = syncAdvisorMcpClients(sharedCfg, { homeDir: fakeHome, configDir: customConfigDir, env: sharedEnv });
+      expect(sharedSync.mounted).toEqual(["workbuddy"]);
+      expect(sharedSync.unmounted).toEqual([]);
+      expect(existsSync(join(sharedDir, "mcp.json"))).toBe(true);
+      expect(existsSync(join(sharedDir, "skills", "opencodex-advisor", "SKILL.md"))).toBe(true);
+      const sharedMcp = JSON.parse(readFileSync(join(sharedDir, "mcp.json"), "utf8"));
+      expect(sharedMcp.mcpServers["opencodex-advisor"].env.OPENCODEX_HOME).toBe(customConfigDir);
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  test("external adaptive consult requires a stable budget identity and scopes reservations across sessionId and taskId", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const { createAdvisorTaskBudget } = await import("../../src/advisor/budget");
+    const { runExternalAdvisorConsult } = await import("../../src/advisor/external-consult");
+    const { CONSULT_ADVISOR_TOOL_ANNOTATIONS } = await import("../../src/advisor/mcp-server");
+
+    expect(CONSULT_ADVISOR_TOOL_ANNOTATIONS.readOnlyHint).toBe(true);
+    expect(CONSULT_ADVISOR_TOOL_ANNOTATIONS.openWorldHint).toBe(true);
+
+    const budgetDir = mkdtempSync(join(tmpdir(), "ocx-ext-adaptive-"));
+    try {
+      const budget = createAdvisorTaskBudget(join(budgetDir, "budget.sqlite"));
+      const adaptiveCfg = baseConfig();
+      (adaptiveCfg as { advisor?: unknown }).advisor = {
+        enabled: true,
+        model: "expert/gpt-6-astra",
+        policy: "adaptive",
+        maxConsultationsPerTask: 1,
+        contextSharingConsent: "v1",
+      };
+
+      let calls = 0;
+      const consultFn = async () => {
+        calls += 1;
+        return { ok: true, advice: "Advised once.", advisorModel: "expert/gpt-6-astra", durationMs: 4 };
+      };
+
+      // Missing taskId, sessionId, and transcriptPath -> fails closed before dispatch.
+      const missingId = await runExternalAdvisorConsult(adaptiveCfg, { question: "No identity?" }, { budget, consultFn });
+      expect(missingId.status).toBe(400);
+      expect((missingId.body.error as { code: string }).code).toBe("advisor_budget_identity_required");
+      expect(calls).toBe(0);
+
+      // Session ID without taskId reserves budget and blocks 2nd consultation (via sessionId or same taskId).
+      const first = await runExternalAdvisorConsult(adaptiveCfg, { question: "Q1", sessionId: "qoder-sess-1" }, { budget, consultFn });
+      expect(first.status).toBe(200);
+      expect(calls).toBe(1);
+
+      const second = await runExternalAdvisorConsult(adaptiveCfg, { question: "Q2", sessionId: "qoder-sess-1" }, { budget, consultFn });
+      expect(second.status).toBe(429);
+      expect((second.body.error as { code: string }).code).toBe("advisor_budget_exhausted");
+      expect(calls).toBe(1);
+
+      const thirdViaTaskId = await runExternalAdvisorConsult(adaptiveCfg, { question: "Q3", taskId: "qoder-sess-1" }, { budget, consultFn });
+      expect(thirdViaTaskId.status).toBe(429);
+      expect((thirdViaTaskId.body.error as { code: string }).code).toBe("advisor_budget_exhausted");
+      expect(calls).toBe(1);
+    } finally {
+      rmSync(budgetDir, { recursive: true, force: true });
     }
   });
 });

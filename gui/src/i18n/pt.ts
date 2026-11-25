@@ -246,7 +246,7 @@ export const pt: Record<TKey, string> = {
   "advisor.mcp.note.qoder": "Gravado em Qoder settings.json (MCP + hook UserPromptSubmit) e SKILL.md; confirme em Configurações -> MCP (reinicie/reative o MCP após atualizar).",
   "advisor.mcp.note.qoder-cn": "Gravado em Qoder CN settings.json (MCP + hook UserPromptSubmit) e SKILL.md; confirme em Configurações -> MCP (reinicie/reative o MCP após atualizar).",
   "advisor.mcp.note.commandcode": "Gravado em Command Code mcp.json; aprove opencodex-advisor na primeira chamada se solicitado.",
-  "advisor.mcp.note.cline": "Gravado em cline_mcp_settings.json (timeout: 900s, autoApprove: [\"consult_advisor\"]).",
+  "advisor.mcp.note.cline": "Gravado em cline_mcp_settings.json (timeout: 900s); aprove consult_advisor quando o Cline solicitar (ou ative a aprovação automática nas configurações do Cline).",
   "advisor.mcp.note.opencode": "Gravado em opencode.json em mcp.opencodex-advisor (enabled: true, timeout: 900000ms) com a Skill de lembrete.",
   "advisor.mcp.note.claude": "O Claude Code via proxy OpenCodex já recebe a ferramenta integrada; habilitar MCP externo exige confiar na próxima inicialização.",
   "compactionRouting.sources": "Origens",

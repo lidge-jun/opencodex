@@ -31,11 +31,16 @@ export const consultAdvisorInput = {
   question: z.string().max(32_000).optional().describe("Focused engineering question for the advisor model. Required when starting a new consultation."),
   context: z.string().max(400_000).optional().describe("Optional task background, failing commands/errors, file snippets, or draft notes."),
   workerModel: z.string().max(200).optional().describe("Optional caller/worker model identifier (auto-detected from the local session transcript when available)."),
-  taskId: z.string().max(256).optional().describe("Optional task or session identifier used when adaptive task budget is active."),
-  sessionId: z.string().max(128).optional().describe("Optional client session UUID so OpenCodex can attach the raw local session transcript."),
+  taskId: z.string().max(256).optional().describe("Task or session identifier. Under adaptive policy, taskId or sessionId is required to enforce the per-task consultation limit."),
+  sessionId: z.string().max(128).optional().describe("Client session UUID so OpenCodex can attach the raw local session transcript and scope adaptive task budgets."),
   consultationId: z.string().max(128).optional().describe("Resume/poll an in-progress consultation returned by a prior consult_advisor call."),
   afterElapsedMs: z.number().int().min(0).optional().describe("Elapsed milliseconds from the previous in_progress result when polling so repeated poll calls stay distinct."),
 };
+
+export const CONSULT_ADVISOR_TOOL_ANNOTATIONS = {
+  readOnlyHint: true,
+  openWorldHint: true,
+} as const;
 
 export interface AdvisorMcpOptions extends RuntimeApiDeps {
   waitMs?: number;
@@ -168,7 +173,7 @@ export async function serveAdvisorMcp(options: AdvisorMcpOptions = {}): Promise<
       description:
         "Consult OpenCodex's configured stronger advisor model for architecture review, root-cause debugging, or stuck repair analysis. It cannot execute commands or edit files. If status='in_progress' is returned, immediately call consult_advisor with nextCallArguments ({ consultationId, afterElapsedMs }) to receive the finished advice.",
       inputSchema: consultAdvisorInput,
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      annotations: CONSULT_ADVISOR_TOOL_ANNOTATIONS,
     },
     async (input, extra) => {
       if (controller.signal.aborted) {

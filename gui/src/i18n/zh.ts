@@ -364,7 +364,7 @@ export const zh: Record<TKey, string> = {
   "advisor.mcp.note.qoder": "已写入 Qoder settings.json（MCP 与防遗忘 Hook）及 SKILL.md；首次使用请在 Qoder 设置 -> MCP 页确认已开启（升级后可重开一下 MCP 刷新进程）。",
   "advisor.mcp.note.qoder-cn": "已写入 Qoder CN settings.json（MCP 与防遗忘 Hook）及 SKILL.md；首次使用请在 Qoder CN 设置 -> MCP 页确认已开启（升级后可重开一下 MCP 刷新进程）。",
   "advisor.mcp.note.commandcode": "已写入 Command Code mcp.json；若客户端弹出工具确认提示，允许 opencodex-advisor 即可。",
-  "advisor.mcp.note.cline": "已写入 cline_mcp_settings.json（超时 900 秒，已开启自动允许 consult_advisor）。",
+  "advisor.mcp.note.cline": "已写入 cline_mcp_settings.json（超时 900 秒）；首次调用时请在 Cline 中确认允许 consult_advisor（如需自动放行可在 Cline 设置中自行开启）。",
   "advisor.mcp.note.opencode": "已写入 opencode.json 的 mcp.opencodex-advisor（enabled: true，超时 900000ms），并同步安装防遗忘 Skill。",
   "advisor.mcp.note.claude": "Claude Code 走 OpenCodex 代理时已内置顾问工具；如需额外接入外部 MCP，下次启动 CLI 时确认信任即可。",
   // routing intelligence

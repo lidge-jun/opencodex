@@ -363,7 +363,7 @@ export const vi: Record<TKey, string> = {
   "advisor.mcp.note.qoder": "Đã ghi vào Qoder settings.json (MCP + hook UserPromptSubmit) và SKILL.md; kiểm tra Cài đặt -> MCP (tắt rồi bật lại MCP sau khi nâng cấp).",
   "advisor.mcp.note.qoder-cn": "Đã ghi vào Qoder CN settings.json (MCP + hook UserPromptSubmit) và SKILL.md; kiểm tra Cài đặt -> MCP (tắt rồi bật lại MCP sau khi nâng cấp).",
   "advisor.mcp.note.commandcode": "Đã ghi vào Command Code mcp.json; nếu hỏi xác nhận ở lần đầu gọi, hãy cho phép opencodex-advisor.",
-  "advisor.mcp.note.cline": "Đã ghi vào cline_mcp_settings.json (timeout: 900s, autoApprove: [\"consult_advisor\"]).",
+  "advisor.mcp.note.cline": "Đã ghi vào cline_mcp_settings.json (timeout: 900s); hãy chấp thuận consult_advisor khi Cline hỏi lần đầu (hoặc tự bật autoApprove trong cài đặt Cline).",
   "advisor.mcp.note.opencode": "Đã ghi vào opencode.json mục mcp.opencodex-advisor (enabled: true, timeout: 900000ms) kèm Skill nhắc nhở.",
   "advisor.mcp.note.claude": "Claude Code qua proxy OpenCodex đã có sẵn công cụ cố vấn; bật thêm MCP ngoài cần xác nhận tin cậy ở lần chạy tới.",
   "nav.logs": "Logs & Gỡ lỗi",

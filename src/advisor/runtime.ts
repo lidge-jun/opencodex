@@ -83,7 +83,7 @@ export interface AdvisorRuntimePlan extends AdvisorPlan {
   readonly policy: AdvisorPolicy;
   readonly toolEnabled: boolean;
   readonly tool: import("../types").OcxTool;
-  injectWorkerNotice(parsed: OcxParsedRequest): boolean;
+  injectWorkerNotice(parsed: OcxParsedRequest, toolName?: string): boolean;
   hasExternalMcpTool(parsed: OcxParsedRequest): boolean;
   /**
    * The automatic preflight pass. Returns true when advice was injected. A cancelled
@@ -406,7 +406,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
     shouldCountManualConsultation: plan.shouldCountManualConsultation,
     consult: plan.consult,
     formatUnavailable: plan.formatUnavailable,
-    injectWorkerNotice: (parsed: OcxParsedRequest) => injectAdvisorWorkerNotice(parsed),
+    injectWorkerNotice: (parsed: OcxParsedRequest, toolName?: string) => injectAdvisorWorkerNotice(parsed, toolName),
     hasExternalMcpTool: (parsed: OcxParsedRequest) => hasExternalAdvisorMcpTool(parsed),
     preflightInject,
     attachGuard: parsed => {

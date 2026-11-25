@@ -2,7 +2,7 @@
  * Manage per-client `opencodex-advisor` MCP registration, anti-forgetting hooks/skills, and
  * bidirectional Advisor <-> Routing synchronization for compatible external coding clients.
  */
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,10 +16,12 @@ import {
   writeRecord,
   type OwnershipRecord,
 } from "../integrations/ownership";
+import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { isBunTestFileProcess } from "../lib/test-home-guard";
 import type { OcxConfig } from "../types";
 import {
   ADVISOR_MCP_CLIENT_IDS,
+  advisorRunnable,
   isAdvisorMcpClientId,
   normalizeAdvisorMcpClients,
   resolveAdvisorSettings,
@@ -29,6 +31,8 @@ import {
 export const ADVISOR_MCP_SERVER_NAME = "opencodex-advisor";
 export const ADVISOR_MCP_TIMEOUT_MS = 900_000;
 export const CLINE_ADVISOR_MCP_TIMEOUT_SECONDS = 900;
+export const ADVISOR_SKILL_MARKER = "<!-- ocx-managed:opencodex-advisor-skill:v1 -->";
+export const ADVISOR_HOOK_MARKER = "# ocx-managed:opencodex-advisor-hook:v1";
 const LONG_MCP_CONSULT_WAIT_MS = "240000";
 
 export { ADVISOR_MCP_CLIENT_IDS, isAdvisorMcpClientId, normalizeAdvisorMcpClients, type AdvisorMcpClientId };
@@ -64,6 +68,9 @@ export interface AdvisorMcpSyncOptions {
   homeDir?: string;
   configDir?: string;
   env?: NodeJS.ProcessEnv;
+  isStandaloneExecutable?: boolean;
+  execPath?: string;
+  sourceEntrypoint?: string;
 }
 
 export interface AdvisorMcpSyncResult {
@@ -254,8 +261,8 @@ const CLIENT_SPECS: Record<AdvisorMcpClientId, ClientSpec> = {
         sharedWithRouting: false,
       };
     },
-    trustNoteZh: "已写入 cline_mcp_settings.json（timeout: 900 秒，autoApprove: [\"consult_advisor\"]）。",
-    trustNoteEn: "Written to cline_mcp_settings.json (timeout: 900s, autoApprove: [\"consult_advisor\"]).",
+    trustNoteZh: "已写入 cline_mcp_settings.json（timeout: 900 秒）；首次调用时请在 Cline 中确认允许 consult_advisor（如需自动放行请在 Cline 设置中自行开启）。",
+    trustNoteEn: "Written to cline_mcp_settings.json (timeout: 900s); approve consult_advisor when prompted in Cline (or opt into auto-approve in Cline settings).",
   },
   opencode: {
     id: "opencode",
@@ -307,25 +314,42 @@ function resolveSafeHome(options?: AdvisorMcpSyncOptions): string | undefined {
 }
 
 function resolveOpencodeConfigDir(options?: AdvisorMcpSyncOptions): string {
-  if (options?.configDir) return options.configDir;
-  if (options?.homeDir) return join(options.homeDir, ".opencodex");
-  return getConfigDir();
+  if (options?.configDir) return resolve(options.configDir);
+  const envHome = options?.env?.OPENCODEX_HOME?.trim();
+  if (envHome) {
+    const baseHome = options?.homeDir ?? homedir();
+    if (envHome === "~") return resolve(baseHome);
+    if (envHome.startsWith("~/") || envHome.startsWith("~\\")) {
+      return resolve(baseHome, envHome.slice(2));
+    }
+    return resolve(envHome);
+  }
+  if (options?.homeDir) return resolve(options.homeDir, ".opencodex");
+  return resolve(getConfigDir());
 }
 
-function advisorCommandArgs(): { command: string; args: string[]; env: Record<string, string> } {
-  const cliEntry = resolve(dirname(fileURLToPath(import.meta.url)), "..", "cli", "index.ts");
+export function advisorCommandArgs(
+  configDir: string,
+  options?: AdvisorMcpSyncOptions,
+): { command: string; args: string[]; env: Record<string, string> } {
+  const cliEntry = options?.sourceEntrypoint ?? resolve(dirname(fileURLToPath(import.meta.url)), "..", "cli", "index.ts");
+  const args = selfLaunchArgv(["advisor", "mcp"], {
+    ...(options?.isStandaloneExecutable !== undefined ? { isStandaloneExecutable: options.isStandaloneExecutable } : {}),
+    sourceEntrypoint: cliEntry,
+  });
   return {
-    command: process.execPath,
-    args: [cliEntry, "advisor", "mcp"],
+    command: options?.execPath ?? process.execPath,
+    args,
     env: {
+      OPENCODEX_HOME: configDir,
       NO_PROXY: "localhost,127.0.0.1,::1,*.local",
       no_proxy: "localhost,127.0.0.1,::1,*.local",
     },
   };
 }
 
-function buildMcpEntry(spec: ClientSpec): JsonObj {
-  const { command, args, env } = advisorCommandArgs();
+function buildMcpEntry(spec: ClientSpec, configDir: string, options?: AdvisorMcpSyncOptions): JsonObj {
+  const { command, args, env } = advisorCommandArgs(configDir, options);
   switch (spec.entryFormat) {
     case "workbuddy":
       return {
@@ -351,7 +375,6 @@ function buildMcpEntry(spec: ClientSpec): JsonObj {
         env: { ...env, OCX_ADVISOR_MCP_WAIT_MS: LONG_MCP_CONSULT_WAIT_MS },
         timeout: CLINE_ADVISOR_MCP_TIMEOUT_SECONDS,
         disabled: false,
-        autoApprove: ["consult_advisor"],
       };
     case "opencode":
       return {
@@ -420,11 +443,11 @@ function syncOwnershipFingerprintIfClean(
   }
 }
 
-function buildNoticeHookScript(configDir: string): string {
-  const bunBin = process.execPath;
+export function buildNoticeHookScript(configDir: string, execPath = process.execPath): string {
   const configFileLiteral = JSON.stringify(join(configDir, "config.json"));
-  const bunLiteral = JSON.stringify(bunBin);
+  const bunLiteral = JSON.stringify(execPath);
   return `#!/bin/sh
+${ADVISOR_HOOK_MARKER}
 # Remind external client models that OpenCodex Advisor MCP (\`consult_advisor\`) is active.
 set -eu
 
@@ -439,7 +462,7 @@ SESSION_ID=""
 PROXY_PORT="10100"
 
 if [ -f "$CFG_PATH" ] && [ -x "$BUN_BIN" ]; then
-  META=$(HOOK_STDIN="$STDIN_PAYLOAD" OCX_CFG="$CFG_PATH" "$BUN_BIN" -e '
+  META=$(BUN_BE_BUN=1 HOOK_STDIN="$STDIN_PAYLOAD" OCX_CFG="$CFG_PATH" "$BUN_BIN" -e '
     import { readFileSync } from "node:fs";
     let ok = "0";
     let port = "10100";
@@ -447,7 +470,7 @@ if [ -f "$CFG_PATH" ] && [ -x "$BUN_BIN" ]; then
       const cfg = JSON.parse(readFileSync(process.env.OCX_CFG || "", "utf8"));
       if (typeof cfg?.port === "number" && cfg.port > 0) port = String(cfg.port);
       const adv = cfg?.advisor;
-      if (adv?.enabled === true && typeof adv?.model === "string" && adv.model.trim() !== "") ok = "1";
+      if (adv?.enabled === true && typeof adv?.model === "string" && adv.model.trim() !== "" && adv?.contextSharingConsent === "v1") ok = "1";
     } catch { /* ignore unreadable config */ }
     let sid = "";
     try {
@@ -485,6 +508,7 @@ const ADVISOR_SKILL_CONTENT = `---
 name: opencodex-advisor
 description: Consult the stronger OpenCodex Advisor expert model proactively when making tricky architectural decisions, after 2 failed repair attempts, or before concluding high-risk tasks.
 ---
+${ADVISOR_SKILL_MARKER}
 
 # OpenCodex Advisor (\`consult_advisor\`)
 
@@ -541,10 +565,48 @@ function stripAdvisorHooksFromEntries(
   return { next, changed };
 }
 
-function mountHooksAndSkill(spec: ClientSpec, paths: ResolvedClientPaths, configDir: string): void {
+interface ProtectedClientPaths {
+  mcpPaths: Set<string>;
+  hookConfigPaths: Set<string>;
+  hookScriptPaths: Set<string>;
+  skillPaths: Set<string>;
+}
+
+function inspectManagedTextFile(filePath: string, marker: string): "owned" | "unowned" | "missing" {
+  try {
+    const stat = lstatSync(filePath);
+    if (!stat.isFile() || stat.isSymbolicLink()) return "unowned";
+    return readFileSync(filePath, "utf8").includes(marker) ? "owned" : "unowned";
+  } catch (error) {
+    if ((error as { code?: string }).code === "ENOENT") return "missing";
+    return "unowned";
+  }
+}
+
+function isSafeTargetDir(dirPath: string): boolean {
+  try {
+    const stat = lstatSync(dirPath);
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch (error) {
+    return (error as { code?: string }).code === "ENOENT";
+  }
+}
+
+function mountHooksAndSkill(
+  spec: ClientSpec,
+  paths: ResolvedClientPaths,
+  configDir: string,
+  options?: AdvisorMcpSyncOptions,
+): { changed: boolean } {
+  let changed = false;
   if (spec.supportsHooks && paths.hookConfigPath && paths.hookScriptPath) {
     mkdirSync(dirname(paths.hookScriptPath), { recursive: true, mode: 0o700 });
-    atomicWriteFile(paths.hookScriptPath, buildNoticeHookScript(configDir));
+    const desiredHookScript = buildNoticeHookScript(configDir, options?.execPath ?? process.execPath);
+    const existingHookScript = existsSync(paths.hookScriptPath) ? readFileSync(paths.hookScriptPath, "utf8") : null;
+    if (existingHookScript !== desiredHookScript) {
+      atomicWriteFile(paths.hookScriptPath, desiredHookScript);
+      changed = true;
+    }
     chmodSync(paths.hookScriptPath, 0o755);
 
     const read = readJsonObject(paths.hookConfigPath);
@@ -573,46 +635,82 @@ function mountHooksAndSkill(spec: ClientSpec, paths: ResolvedClientPaths, config
         if (paths.sharedWithRouting && paths.hookConfigPath === paths.mcpConfigPath) {
           syncOwnershipFingerprintIfClean(configDir, spec.id, paths.hookConfigPath, read.text, nextText);
         }
+        changed = true;
       }
     }
   }
   if (spec.supportsSkills && paths.skillPath) {
     mkdirSync(dirname(paths.skillPath), { recursive: true, mode: 0o700 });
-    atomicWriteFile(paths.skillPath, ADVISOR_SKILL_CONTENT);
+    const existingSkill = existsSync(paths.skillPath) ? readFileSync(paths.skillPath, "utf8") : null;
+    if (existingSkill !== ADVISOR_SKILL_CONTENT) {
+      atomicWriteFile(paths.skillPath, ADVISOR_SKILL_CONTENT);
+      changed = true;
+    }
   }
+  return { changed };
 }
 
-function unmountHooksAndSkill(spec: ClientSpec, paths: ResolvedClientPaths, configDir: string): void {
+function unmountHooksAndSkill(
+  spec: ClientSpec,
+  paths: ResolvedClientPaths,
+  configDir: string,
+  protectedPaths?: ProtectedClientPaths,
+): { changed: boolean } {
+  let changed = false;
   if (spec.supportsHooks && paths.hookConfigPath && paths.hookScriptPath) {
-    const read = readJsonObject(paths.hookConfigPath);
-    if (!read.parseError && read.doc && isPlainObject(read.doc.hooks)) {
-      const hooks = { ...read.doc.hooks };
-      if (Array.isArray(hooks.UserPromptSubmit)) {
-        const { next: nextArr, changed } = stripAdvisorHooksFromEntries(hooks.UserPromptSubmit, paths.hookScriptPath);
-        if (changed) {
-          backupOnceBeforeEdit(configDir, spec.id, paths.hookConfigPath, read.text);
-          if (nextArr.length === 0) delete hooks.UserPromptSubmit;
-          else hooks.UserPromptSubmit = nextArr;
-          const nextDoc = { ...read.doc };
-          if (Object.keys(hooks).length === 0) delete nextDoc.hooks;
-          else nextDoc.hooks = hooks;
-          const nextText = `${JSON.stringify(nextDoc, null, 2)}\n`;
-          atomicWriteFile(paths.hookConfigPath, nextText);
-          if (paths.sharedWithRouting && paths.hookConfigPath === paths.mcpConfigPath) {
-            syncOwnershipFingerprintIfClean(configDir, spec.id, paths.hookConfigPath, read.text, nextText);
+    if (!protectedPaths?.hookConfigPaths.has(resolve(paths.hookConfigPath))) {
+      const read = readJsonObject(paths.hookConfigPath);
+      if (!read.parseError && read.doc && isPlainObject(read.doc.hooks)) {
+        const hooks = { ...read.doc.hooks };
+        if (Array.isArray(hooks.UserPromptSubmit)) {
+          const { next: nextArr, changed: hooksChanged } = stripAdvisorHooksFromEntries(hooks.UserPromptSubmit, paths.hookScriptPath);
+          if (hooksChanged) {
+            backupOnceBeforeEdit(configDir, spec.id, paths.hookConfigPath, read.text);
+            if (nextArr.length === 0) delete hooks.UserPromptSubmit;
+            else hooks.UserPromptSubmit = nextArr;
+            const nextDoc = { ...read.doc };
+            if (Object.keys(hooks).length === 0) delete nextDoc.hooks;
+            else nextDoc.hooks = hooks;
+            const nextText = `${JSON.stringify(nextDoc, null, 2)}\n`;
+            atomicWriteFile(paths.hookConfigPath, nextText);
+            if (paths.sharedWithRouting && paths.hookConfigPath === paths.mcpConfigPath) {
+              syncOwnershipFingerprintIfClean(configDir, spec.id, paths.hookConfigPath, read.text, nextText);
+            }
+            changed = true;
           }
         }
       }
     }
-    try {
-      rmSync(paths.hookScriptPath, { force: true });
-    } catch { /* ignore */ }
+    if (!protectedPaths?.hookScriptPaths.has(resolve(paths.hookScriptPath))
+      && inspectManagedTextFile(paths.hookScriptPath, ADVISOR_HOOK_MARKER) === "owned") {
+      try {
+        unlinkSync(paths.hookScriptPath);
+        changed = true;
+      } catch (error) {
+        if ((error as { code?: string }).code !== "ENOENT") throw error;
+      }
+    }
   }
-  if (spec.supportsSkills && paths.skillPath) {
+  if (spec.supportsSkills && paths.skillPath
+    && !protectedPaths?.skillPaths.has(resolve(paths.skillPath))
+    && inspectManagedTextFile(paths.skillPath, ADVISOR_SKILL_MARKER) === "owned") {
     try {
-      rmSync(dirname(paths.skillPath), { recursive: true, force: true });
-    } catch { /* ignore */ }
+      unlinkSync(paths.skillPath);
+      changed = true;
+    } catch (error) {
+      if ((error as { code?: string }).code !== "ENOENT") throw error;
+    }
+    const skillDir = dirname(paths.skillPath);
+    try {
+      const dirStat = lstatSync(skillDir);
+      if (dirStat.isDirectory() && !dirStat.isSymbolicLink() && readdirSync(skillDir).length === 0) {
+        rmdirSync(skillDir);
+      }
+    } catch {
+      // Leave directory untouched when non-empty or concurrently modified.
+    }
   }
+  return { changed };
 }
 
 function readTrustStatus(spec: ClientSpec, paths: ResolvedClientPaths, mcpEntry: unknown): AdvisorMcpTrustStatus {
@@ -687,7 +785,11 @@ export function inspectAdvisorMcpClientStatus(
       : [];
     hooksMounted = submitArr.some(entry => entryMatchesAdvisorHook(entry, paths.hookScriptPath!));
   }
-  const skillMounted = Boolean(spec.supportsSkills && paths.skillPath && existsSync(paths.skillPath));
+  const skillMounted = Boolean(
+    spec.supportsSkills
+    && paths.skillPath
+    && inspectManagedTextFile(paths.skillPath, ADVISOR_SKILL_MARKER) === "owned",
+  );
 
   const settings = resolveAdvisorSettings(config);
   const selected = settings.mcpClients
@@ -739,9 +841,31 @@ export function mountAdvisorMcpForClient(
   if (read.parseError || !read.doc) {
     return { ok: false, changed: false, error: `Refused to overwrite invalid JSON in ${paths.mcpConfigPath}` };
   }
+  if (spec.supportsHooks && paths.hookConfigPath && paths.hookScriptPath) {
+    if (!isSafeTargetDir(dirname(paths.hookScriptPath))) {
+      return { ok: false, changed: false, error: `Refused to write hook into unsafe directory ${dirname(paths.hookScriptPath)}` };
+    }
+    if (inspectManagedTextFile(paths.hookScriptPath, ADVISOR_HOOK_MARKER) === "unowned") {
+      return { ok: false, changed: false, error: `Refused to overwrite unowned hook script in ${paths.hookScriptPath}` };
+    }
+    if (paths.hookConfigPath !== paths.mcpConfigPath) {
+      const hooksRead = readJsonObject(paths.hookConfigPath);
+      if (hooksRead.parseError || !hooksRead.doc) {
+        return { ok: false, changed: false, error: `Refused to overwrite invalid JSON in ${paths.hookConfigPath}` };
+      }
+    }
+  }
+  if (spec.supportsSkills && paths.skillPath) {
+    if (!isSafeTargetDir(dirname(paths.skillPath))) {
+      return { ok: false, changed: false, error: `Refused to write skill into unsafe directory ${dirname(paths.skillPath)}` };
+    }
+    if (inspectManagedTextFile(paths.skillPath, ADVISOR_SKILL_MARKER) === "unowned") {
+      return { ok: false, changed: false, error: `Refused to overwrite unowned skill file in ${paths.skillPath}` };
+    }
+  }
 
   const container = isPlainObject(read.doc[spec.mcpContainer]) ? { ...(read.doc[spec.mcpContainer] as JsonObj) } : {};
-  const desired = buildMcpEntry(spec);
+  const desired = buildMcpEntry(spec, configDir, options);
   const currentText = JSON.stringify(container[ADVISOR_MCP_SERVER_NAME] ?? null);
   const desiredText = JSON.stringify(desired);
   let changed = false;
@@ -759,13 +883,15 @@ export function mountAdvisorMcpForClient(
     changed = true;
   }
 
-  mountHooksAndSkill(spec, paths, configDir);
+  const hookSkillRes = mountHooksAndSkill(spec, paths, configDir, options);
+  changed = changed || hookSkillRes.changed;
   return { ok: true, changed, status: inspectAdvisorMcpClientStatus(clientId, {}, options) };
 }
 
 export function unmountAdvisorMcpForClient(
   clientId: AdvisorMcpClientId,
   options?: AdvisorMcpSyncOptions,
+  protectedPaths?: ProtectedClientPaths,
 ): { ok: boolean; changed: boolean; error?: string } {
   const home = resolveSafeHome(options);
   if (!home) return { ok: true, changed: false };
@@ -775,7 +901,7 @@ export function unmountAdvisorMcpForClient(
   const paths = spec.resolvePaths(home, env);
 
   let changed = false;
-  if (existsSync(paths.mcpConfigPath)) {
+  if (!protectedPaths?.mcpPaths.has(resolve(paths.mcpConfigPath)) && existsSync(paths.mcpConfigPath)) {
     const read = readJsonObject(paths.mcpConfigPath);
     if (read.parseError || !read.doc) {
       return { ok: false, changed: false, error: `Refused to edit invalid JSON in ${paths.mcpConfigPath}` };
@@ -796,8 +922,82 @@ export function unmountAdvisorMcpForClient(
     }
   }
 
-  unmountHooksAndSkill(spec, paths, configDir);
+  const hookSkillRes = unmountHooksAndSkill(spec, paths, configDir, protectedPaths);
+  changed = changed || hookSkillRes.changed;
   return { ok: true, changed };
+}
+
+function computeDesiredAdvisorMcpTargets(
+  config: Pick<OcxConfig, "advisor">,
+  routedSet: Set<string>,
+): Set<AdvisorMcpClientId> {
+  const settings = resolveAdvisorSettings(config);
+  const desiredTargets = new Set<AdvisorMcpClientId>();
+  if (!advisorRunnable(settings)) return desiredTargets;
+  if (settings.mcpClients) {
+    for (const id of settings.mcpClients) desiredTargets.add(id);
+  } else if (settings.autoMountMcp) {
+    for (const id of ADVISOR_MCP_CLIENT_IDS) {
+      if (CLIENT_SPECS[id].defaultAutoMount && routedSet.has(id)) {
+        desiredTargets.add(id);
+      }
+    }
+  }
+  return desiredTargets;
+}
+
+function collectProtectedPaths(
+  targets: Iterable<AdvisorMcpClientId>,
+  home: string,
+  env: NodeJS.ProcessEnv,
+): ProtectedClientPaths {
+  const protectedPaths: ProtectedClientPaths = {
+    mcpPaths: new Set(),
+    hookConfigPaths: new Set(),
+    hookScriptPaths: new Set(),
+    skillPaths: new Set(),
+  };
+  for (const id of targets) {
+    const paths = CLIENT_SPECS[id].resolvePaths(home, env);
+    protectedPaths.mcpPaths.add(resolve(paths.mcpConfigPath));
+    if (paths.hookConfigPath) protectedPaths.hookConfigPaths.add(resolve(paths.hookConfigPath));
+    if (paths.hookScriptPath) protectedPaths.hookScriptPaths.add(resolve(paths.hookScriptPath));
+    if (paths.skillPath) protectedPaths.skillPaths.add(resolve(paths.skillPath));
+  }
+  return protectedPaths;
+}
+
+/**
+ * Reconcile Advisor MCP + hooks/skills for one client when its Routing toggle changes,
+ * gating mounts on `advisorRunnable` (including current consent) and preserving any shared
+ * custom config paths still owned by another active client.
+ */
+export function reconcileAdvisorMcpForRoutedClient(
+  clientId: AdvisorMcpClientId,
+  routedEnabled: boolean,
+  config: Pick<OcxConfig, "advisor">,
+  options?: AdvisorMcpSyncOptions,
+): { ok: boolean; changed: boolean; error?: string; status?: AdvisorMcpClientStatus } {
+  const home = resolveSafeHome(options);
+  if (!home) return { ok: true, changed: false };
+  const settings = resolveAdvisorSettings(config);
+  if (routedEnabled) {
+    if (!advisorRunnable(settings)) return { ok: true, changed: false };
+    const shouldMount = settings.mcpClients
+      ? settings.mcpClients.includes(clientId)
+      : settings.autoMountMcp && CLIENT_SPECS[clientId].defaultAutoMount;
+    return shouldMount ? mountAdvisorMcpForClient(clientId, options) : { ok: true, changed: false };
+  }
+  if (!settings.autoMountMcp || settings.mcpClients !== undefined) {
+    return { ok: true, changed: false };
+  }
+  const env = options?.env ?? process.env;
+  const configDir = resolveOpencodeConfigDir(options);
+  const routedSet = readRoutedClientSet(configDir);
+  routedSet.delete(clientId);
+  const remainingTargets = computeDesiredAdvisorMcpTargets(config, routedSet);
+  const protectedPaths = collectProtectedPaths(remainingTargets, home, env);
+  return unmountAdvisorMcpForClient(clientId, options, protectedPaths);
 }
 
 /**
@@ -817,40 +1017,43 @@ export function syncAdvisorMcpClients(
       statuses: listAdvisorMcpClientStatuses(config, options),
     };
   }
-  const settings = resolveAdvisorSettings(config);
+  const env = options?.env ?? process.env;
   const configDir = resolveOpencodeConfigDir(options);
   const routedSet = readRoutedClientSet(configDir);
-
-  const desiredTargets = new Set<AdvisorMcpClientId>();
-  if (settings.enabled) {
-    if (settings.mcpClients) {
-      for (const id of settings.mcpClients) desiredTargets.add(id);
-    } else if (settings.autoMountMcp) {
-      for (const id of ADVISOR_MCP_CLIENT_IDS) {
-        if (CLIENT_SPECS[id].defaultAutoMount && routedSet.has(id)) {
-          desiredTargets.add(id);
-        }
-      }
-    }
-  }
+  const desiredTargets = computeDesiredAdvisorMcpTargets(config, routedSet);
+  const protectedPaths = collectProtectedPaths(desiredTargets, home, env);
 
   const mounted: AdvisorMcpClientId[] = [];
   const unmounted: AdvisorMcpClientId[] = [];
   const errors: Array<{ clientId: AdvisorMcpClientId; message: string }> = [];
 
   for (const id of ADVISOR_MCP_CLIENT_IDS) {
+    if (!desiredTargets.has(id)) continue;
     try {
-      if (desiredTargets.has(id)) {
-        const res = mountAdvisorMcpForClient(id, options);
+      const res = mountAdvisorMcpForClient(id, options);
+      if (!res.ok && res.error) errors.push({ clientId: id, message: res.error });
+      else if (res.changed) mounted.push(id);
+    } catch (error) {
+      errors.push({
+        clientId: id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  for (const id of ADVISOR_MCP_CLIENT_IDS) {
+    if (desiredTargets.has(id)) continue;
+    try {
+      const paths = CLIENT_SPECS[id].resolvePaths(home, env);
+      const status = inspectAdvisorMcpClientStatus(id, config, options, routedSet);
+      const hasUnprotectedMounted =
+        (status.mounted && !protectedPaths.mcpPaths.has(resolve(paths.mcpConfigPath)))
+        || (status.hooksMounted && (!paths.hookConfigPath || !protectedPaths.hookConfigPaths.has(resolve(paths.hookConfigPath))))
+        || (status.skillMounted && (!paths.skillPath || !protectedPaths.skillPaths.has(resolve(paths.skillPath))));
+      if (hasUnprotectedMounted) {
+        const res = unmountAdvisorMcpForClient(id, options, protectedPaths);
         if (!res.ok && res.error) errors.push({ clientId: id, message: res.error });
-        else if (res.changed) mounted.push(id);
-      } else {
-        const status = inspectAdvisorMcpClientStatus(id, config, options, routedSet);
-        if (status.mounted || status.hooksMounted || status.skillMounted) {
-          const res = unmountAdvisorMcpForClient(id, options);
-          if (!res.ok && res.error) errors.push({ clientId: id, message: res.error });
-          else if (res.changed) unmounted.push(id);
-        }
+        else if (res.changed) unmounted.push(id);
       }
     } catch (error) {
       errors.push({

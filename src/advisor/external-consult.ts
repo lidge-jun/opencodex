@@ -727,11 +727,40 @@ export async function runExternalAdvisorConsult(
     );
   }
 
+  const explicitBudgetId = taskId || sessionId;
+  let budgetIdentity: string | undefined;
+  if (explicitBudgetId) {
+    budgetIdentity = `external:${explicitBudgetId}`;
+  } else if (transcriptPath) {
+    const resolvedTranscript = findTranscriptFile({
+      transcriptPath,
+      workbuddyProjectsDir: deps.workbuddyProjectsDir,
+      nowMs: now(),
+    });
+    const canonicalTranscript = resolvedTranscript ? canonicalExistingPath(resolvedTranscript) : undefined;
+    if (canonicalTranscript) budgetIdentity = `external:transcript:${canonicalTranscript}`;
+  }
+
   const activities = advisorActivityStore(advisorPlanRootConfig(config));
   const startedAt = now();
-  if (settings.policy === "adaptive" && taskId.length > 0) {
+  if (settings.policy === "adaptive") {
+    if (!budgetIdentity) {
+      const blockId = activities.start({
+        trigger: "manual",
+        workerModel,
+        advisorModel: safeAdvisorModel,
+        requestedEffort: settings.effort,
+      }, startedAt);
+      activities.finish(blockId, { status: "blocked", durationMs: 0, blockReason: "budget" });
+      return errorResponse(
+        400,
+        "advisor_budget_identity_required",
+        "Adaptive advisor policy requires a stable taskId, sessionId, or validated transcriptPath to enforce the per-task consultation limit.",
+        formatAdvisorUnavailable("budget", "adaptive policy requires a stable taskId or sessionId; no consultation sent"),
+      );
+    }
     const budget = deps.budget ?? createAdvisorTaskBudget();
-    const reservation = budget.reserve(`external:${taskId}`, settings.maxConsultationsPerTask, startedAt);
+    const reservation = budget.reserve(budgetIdentity, settings.maxConsultationsPerTask, startedAt);
     if (!reservation.ok) {
       const blockId = activities.start({
         trigger: "manual",

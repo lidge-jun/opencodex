@@ -7,6 +7,7 @@
  * parts are deliberately skipped — hidden reasoning never leaves the worker conversation.
  */
 import type { OcxMessage, OcxParsedRequest } from "../types";
+import { createToolChoiceResolver, toolChoiceToolPredicate } from "../types";
 import type { AdvisorTrigger } from "./activity";
 import type { AdvisorRepairEvidence } from "./evidence";
 import type { AdvisorContextMode } from "./settings";
@@ -224,19 +225,31 @@ const EXTERNAL_ADVISOR_TOOL_SUFFIXES = ["__consult_advisor", ":consult_advisor",
 
 /**
  * Returns the external MCP advisor tool name when the caller already carries one (for example
- * WorkBuddy's `mcp__opencodex-advisor__consult_advisor`), so the proxy does not stack a
- * duplicate synthetic `advisor` tool on top of it.
+ * WorkBuddy's `mcp__opencodex-advisor__consult_advisor`) and the request's effective `tool_choice`
+ * permits calling it, so the proxy neither skips synthetic `advisor` when explicitly chosen nor
+ * injects a worker notice when the external tool is excluded by `tool_choice`.
  */
 export function findExternalAdvisorMcpToolName(parsed: OcxParsedRequest): string | undefined {
-  for (const tool of parsed.context.tools ?? []) {
+  const tools = parsed.context.tools ?? [];
+  if (tools.length === 0) return undefined;
+  const choiceAllows = toolChoiceToolPredicate(parsed.options.toolChoice, tools);
+  const explicitClientChoices = parsed.options.explicitClientToolChoices;
+  const selectedNames = explicitClientChoices?.length ? createToolChoiceResolver(tools) : undefined;
+  for (const tool of tools) {
     const name = tool.name;
-    if (
-      name === "consult_advisor"
+    const isExternalAdvisor = name === "consult_advisor"
       || name === "opencodex_advisor"
-      || EXTERNAL_ADVISOR_TOOL_SUFFIXES.some(suffix => name.endsWith(suffix))
-    ) {
-      return name;
+      || EXTERNAL_ADVISOR_TOOL_SUFFIXES.some(suffix => name.endsWith(suffix));
+    if (!isExternalAdvisor) continue;
+    if (!choiceAllows(tool)) continue;
+    if (explicitClientChoices !== undefined) {
+      const matchedExplicit = explicitClientChoices.some(choice =>
+        choice.type === (tool.freeform ? "custom" : "function") && (choice.namespace === undefined
+          ? selectedNames?.selects(tool, choice.name)
+          : choice.namespace === (tool.namespace ?? "") && choice.name === tool.name));
+      if (!matchedExplicit) continue;
     }
+    return name;
   }
   return undefined;
 }

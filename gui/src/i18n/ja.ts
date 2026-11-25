@@ -364,7 +364,7 @@ export const ja: Record<TKey, string> = {
   "advisor.mcp.note.qoder": "Qoder の settings.json（MCP と忘却防止 Hook）および SKILL.md に書き込み済みです。初回は設定 -> MCP で有効化を確認してください（更新後は MCP のオン／オフ切替推奨）。",
   "advisor.mcp.note.qoder-cn": "Qoder CN の settings.json（MCP と忘却防止 Hook）および SKILL.md に書き込み済みです。初回は設定 -> MCP で有効化を確認してください（更新後は MCP のオン／オフ切替推奨）。",
   "advisor.mcp.note.commandcode": "Command Code の mcp.json に書き込みました。初回実行時に確認が出たら opencodex-advisor を許可してください。",
-  "advisor.mcp.note.cline": "cline_mcp_settings.json に書き込み済みです（timeout: 900 秒、consult_advisor 自動許可）。",
+  "advisor.mcp.note.cline": "cline_mcp_settings.json に書き込み済みです（timeout: 900 秒）。初回呼び出し時に Cline で consult_advisor を許可してください（自動許可が必要な場合は Cline 設定で有効にできます）。",
   "advisor.mcp.note.opencode": "opencode.json の mcp.opencodex-advisor（enabled: true、timeout: 900000ms）とリマインダー Skill を設定済みです。",
   "advisor.mcp.note.claude": "Claude Code が OpenCodex 経由のときは内蔵ツールが使えます。外部 MCP も併用する場合は次回 CLI 起動時に信頼を承認してください。",
   // routing intelligence

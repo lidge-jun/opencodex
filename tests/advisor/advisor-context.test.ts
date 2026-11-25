@@ -379,4 +379,38 @@ describe("full contextMode and system-reminder stripping", () => {
     expect(devTexts).toContain(appNotice);
     expect(devTexts.length).toBe(2);
   });
+
+  test("findExternalAdvisorMcpToolName and hasExternalAdvisorMcpTool respect tool_choice", () => {
+    const makeParsed = (toolChoice?: Record<string, unknown> | string) => parseRequest({
+      model: "deepseek-chat",
+      stream: false,
+      input: [{ role: "user", content: "Check advisor choice filtering" }],
+      tools: [
+        {
+          type: "function",
+          name: "mcp__opencodex-advisor__consult_advisor",
+          description: "External MCP advisor",
+          parameters: { type: "object", properties: { question: { type: "string" } } },
+        },
+      ],
+      ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
+    });
+
+    const autoReq = makeParsed();
+    expect(hasExternalAdvisorMcpTool(autoReq)).toBe(true);
+    expect(findExternalAdvisorMcpToolName(autoReq)).toBe("mcp__opencodex-advisor__consult_advisor");
+
+    expect(hasExternalAdvisorMcpTool(makeParsed("none"))).toBe(false);
+    expect(hasExternalAdvisorMcpTool(makeParsed({ type: "function", name: "advisor" }))).toBe(false);
+    expect(hasExternalAdvisorMcpTool(makeParsed({
+      type: "allowed_tools",
+      mode: "required",
+      tools: [{ type: "function", name: "advisor" }],
+    }))).toBe(false);
+    expect(hasExternalAdvisorMcpTool(makeParsed({
+      type: "allowed_tools",
+      mode: "auto",
+      tools: [{ type: "function", name: "mcp__opencodex-advisor__consult_advisor" }],
+    }))).toBe(true);
+  });
 });

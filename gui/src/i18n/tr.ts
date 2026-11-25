@@ -364,7 +364,7 @@ export const tr: Record<TKey, string> = {
   "advisor.mcp.note.qoder": "Qoder settings.json (MCP + UserPromptSubmit hook) ve SKILL.md yazıldı; Ayarlar -> MCP altından etkinleştirin (güncelleme sonrası MCP'yi kapatıp açın).",
   "advisor.mcp.note.qoder-cn": "Qoder CN settings.json (MCP + UserPromptSubmit hook) ve SKILL.md yazıldı; Ayarlar -> MCP altından etkinleştirin (güncelleme sonrası MCP'yi kapatıp açın).",
   "advisor.mcp.note.commandcode": "Command Code mcp.json yazıldı; ilk çağrıda araç izni sorulursa opencodex-advisor'ı onaylayın.",
-  "advisor.mcp.note.cline": "cline_mcp_settings.json yazıldı (timeout: 900 sn, autoApprove: [\"consult_advisor\"]).",
+  "advisor.mcp.note.cline": "cline_mcp_settings.json dosyasına yazıldı (timeout: 900 sn); Cline ilk çağrıda sorduğunda consult_advisor aracını onaylayın (veya Cline ayarlarından otomatik onayı açın).",
   "advisor.mcp.note.opencode": "opencode.json altında mcp.opencodex-advisor (enabled: true, timeout: 900000ms) ve hatırlatıcı Skill kuruldu.",
   "advisor.mcp.note.claude": "Claude Code, OpenCodex üzerinden yönlendirildiğinde yerleşik danışman aracını zaten alır; harici MCP için sonraki başlatmada güven onayı gerekir.",
   "nav.logs": "Günlükler & Hata Ayıklama",

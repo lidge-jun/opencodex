@@ -836,7 +836,7 @@ export async function executeResponsesSidecars(
       ...(webSearchAdvisor ? [webSearchAdvisor.tool] : []),
     ];
     if (webSearchAdvisor) {
-      webSearchAdvisor.injectWorkerNotice?.(parsed);
+      webSearchAdvisor.injectWorkerNotice?.(parsed, ADVISOR_TOOL_NAME);
       withholdShadowedAdvisorTool();
       requestState.toolBridgeMaps = buildToolBridgeMaps(parsed);
       translatorBudget.chargeRetained(new TextEncoder().encode(ADVISOR_TOOL_NAME).byteLength * 2, {
@@ -977,7 +977,7 @@ export async function executeResponsesSidecars(
       return undefined;
     }
     if (!options.anthropicHostedAdvisorSelection) {
-      advisorPlan.injectWorkerNotice?.(parsed);
+      advisorPlan.injectWorkerNotice?.(parsed, ADVISOR_TOOL_NAME);
     }
     // A client-declared tool named "advisor" would collide with the synthetic injection (one
     // wire name, two schemas); the synthetic runtime owns the name for this turn.

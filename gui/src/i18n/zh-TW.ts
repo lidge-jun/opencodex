@@ -356,7 +356,7 @@ export const zhTW: Record<TKey, string> = {
   "advisor.mcp.note.qoder": "已寫入 Qoder settings.json（MCP 與防遺忘 Hook）及 SKILL.md；首次使用請至 Qoder 設定 -> MCP 頁確認已啟用（升級後建議重開一次 MCP）。",
   "advisor.mcp.note.qoder-cn": "已寫入 Qoder CN settings.json（MCP 與防遺忘 Hook）及 SKILL.md；首次使用請至 Qoder CN 設定 -> MCP 頁確認已啟用（升級後建議重開一次 MCP）。",
   "advisor.mcp.note.commandcode": "已寫入 Command Code mcp.json；若用戶端跳出工具確認視窗，允許 opencodex-advisor 即可。",
-  "advisor.mcp.note.cline": "已寫入 cline_mcp_settings.json（逾時 900 秒，已開啟自動允許 consult_advisor）。",
+  "advisor.mcp.note.cline": "已寫入 cline_mcp_settings.json（逾時 900 秒）；首次呼叫時請在 Cline 中確認允許 consult_advisor（如需自動放行可在 Cline 設定中自行開啟）。",
   "advisor.mcp.note.opencode": "已寫入 opencode.json 的 mcp.opencodex-advisor（enabled: true，逾時 900000ms），並同步安裝防遺忘 Skill。",
   "advisor.mcp.note.claude": "Claude Code 走 OpenCodex 代理時已內建顧問工具；如需額外接入外部 MCP，下次啟動 CLI 時確認信任即可。",
   "nav.logs": "日誌與除錯",

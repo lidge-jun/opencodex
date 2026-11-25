@@ -1305,11 +1305,8 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
           if (!result.ok) return writerFailureResponse(requestedClient, result, ctx);
           let advisorMcp: unknown;
           if (!integrationMutationTestHooks?.io && !hermesRequestScope(req)) {
-            const advisor = ctx.config.advisor;
-            const autoMount = advisor?.autoMountMcp !== false;
-            const explicitList = Array.isArray(advisor?.mcpClients) ? advisor.mcpClients : null;
             try {
-              const { isAdvisorMcpClientId, mountAdvisorMcpForClient, unmountAdvisorMcpForClient } =
+              const { isAdvisorMcpClientId, reconcileAdvisorMcpForRoutedClient } =
                 await import("../../advisor/client-mcp");
               if (isAdvisorMcpClientId(requestedClient)) {
                 const overrides = pathOverrides();
@@ -1319,12 +1316,12 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
                   ...(overrides.env ? { env: overrides.env } : {}),
                   ...(customStore ? { configDir: dirname(customStore.root) } : {}),
                 };
-                if (parsed.enabled === true && advisor?.enabled === true && autoMount
-                  && (explicitList === null || explicitList.includes(requestedClient))) {
-                  advisorMcp = mountAdvisorMcpForClient(requestedClient, mcpOptions);
-                } else if (!parsed.enabled && autoMount && explicitList === null) {
-                  advisorMcp = unmountAdvisorMcpForClient(requestedClient, mcpOptions);
-                }
+                advisorMcp = reconcileAdvisorMcpForRoutedClient(
+                  requestedClient,
+                  parsed.enabled === true,
+                  ctx.config,
+                  mcpOptions,
+                );
               }
             } catch (error) {
               // Optional Advisor MCP reconciliation must degrade without interrupting a committed

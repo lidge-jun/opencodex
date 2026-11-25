@@ -238,7 +238,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--question` | string | With consult: focused question for the advisor model. |
 | `--context` | string | With consult: optional background summary or failing evidence. |
 | `--worker-model` | string | With consult: caller model label for activity attribution. |
-| `--task-id` | string | With consult: optional task id used by adaptive budget. |
+| `--task-id` | string | With consult: stable task id used by adaptive budget (adaptive policy requires --task-id). |
 | `--consultation-id` | string | With consult: poll an in-progress consultation. |
 | `--wait-ms` | number | With consult: bound each long-poll round trip (0-240000 ms). |
 | `--context-mode` | string | With set: context (default), full (expanded bounded caps and explicit-ID client session transcripts), or question-only. |

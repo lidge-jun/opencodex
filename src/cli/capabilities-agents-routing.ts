@@ -62,7 +62,7 @@ export const AGENT_ROUTING_CAPABILITIES: readonly Capability[] = [
       { name: "--question", value: "string", summary: "With consult: focused question for the advisor model." },
       { name: "--context", value: "string", summary: "With consult: optional background summary or failing evidence." },
       { name: "--worker-model", value: "string", summary: "With consult: caller model label for activity attribution." },
-      { name: "--task-id", value: "string", summary: "With consult: optional task id used by adaptive budget." },
+      { name: "--task-id", value: "string", summary: "With consult: stable task id used by adaptive budget (adaptive policy requires --task-id)." },
       { name: "--consultation-id", value: "string", summary: "With consult: poll an in-progress consultation." },
       { name: "--wait-ms", value: "number", summary: "With consult: bound each long-poll round trip (0-240000 ms)." },
       { name: "--context-mode", value: "string", summary: "With set: context (default), full (expanded bounded caps and explicit-ID client session transcripts), or question-only." },
