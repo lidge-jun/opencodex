@@ -3,8 +3,8 @@ import { IconTicket } from "../icons";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import { daysUntil, formatCreditDate, formatCreditDateTime } from "./codex-account-pool-utils";
 
-export function CodexCreditItem({ index, grantedAt, expiresAt, isNext, locale, t }: {
-  index: number; grantedAt: string; expiresAt: string | null; isNext: boolean; locale: Locale; t: TFn;
+export function CodexCreditItem({ index, resetTitle, grantedAt, expiresAt, isNext, locale, t }: {
+  index: number; resetTitle?: string; grantedAt: string; expiresAt: string | null; isNext: boolean; locale: Locale; t: TFn;
 }) {
   const days = expiresAt === null ? null : daysUntil(expiresAt);
   const urgent = days !== null && days <= 7;
@@ -13,7 +13,7 @@ export function CodexCreditItem({ index, grantedAt, expiresAt, isNext, locale, t
       <div className="credit-item-head">
         <IconTicket width={13} />
         <span className="credit-item-label">
-          {isNext ? t("codexAuth.creditNext") : t("codexAuth.creditLabel", { n: String(index + 1) })}
+          {resetTitle || (isNext ? t("codexAuth.creditNext") : t("codexAuth.creditLabel", { n: String(index + 1) }))}
         </span>
         {isNext && <span className="badge badge-amber text-micro" style={{ padding: "1px 6px" }}>{t("codexAuth.creditNextBadge")}</span>}
       </div>
@@ -60,10 +60,11 @@ export function CodexTicketBadge({ account, onClick, t }: { account: CodexAccoun
     <button type="button"
       className={`badge ${hasCredits ? "badge-amber" : "badge-muted"} badge-clickable`}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
-      aria-label={t("codexAuth.resetCreditsAria", { count: String(credits) })}
+      aria-haspopup="dialog"
+      title={t("codexAuth.resetCreditsDesc")}
     >
       <IconTicket width={12} />
-      {credits}
+      {t("codexAuth.resetCreditsAria", { count: String(credits) })}
     </button>
   );
 }

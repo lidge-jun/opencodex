@@ -97,7 +97,7 @@ export function CodexAccountPoolMainCard({
   } | undefined;
 }) {
   const { locale } = useI18n();
-  const showCredits = creditsVisible === true && main?.credits !== undefined;
+  const showCredits = creditsVisible === true && main?.hasCredential === true;
   const mainFallbackLabel = t("codexAuth.codexApp");
   const mainId = main?.id ?? "__main__";
   const mainSwitchEntry: CodexAccountEntry = {
@@ -360,7 +360,7 @@ export function CodexAccountPoolPageHead({
       style={embedded ? { justifyContent: "flex-end", marginBottom: 8 } : undefined}
     >
       {!embedded && <h2 className="page-title">{t("nav.codexAuth")}</h2>}
-      <div className={embedded ? "row" : "codex-auth-page-head__actions"}>
+      <div className="codex-auth-page-head__actions">
         <span
           className={`codex-auth-page-head__feedback${actionFeedbackTone === "ok" ? " is-ok" : ""}${actionFeedbackTone === "warn" ? " is-warn" : ""}${actionFeedbackTone === "err" ? " is-err" : ""}`}
           role="status"

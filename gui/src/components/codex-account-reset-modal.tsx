@@ -5,6 +5,13 @@ import type { CodexAccountEntry } from "./codex-account-pool-types";
 import { CodexCreditItem } from "./codex-account-pool-helpers";
 import { formatCreditDate } from "./codex-account-pool-utils";
 
+export type CodexResetDetail = {
+  granted_at: string;
+  expires_at: string | null;
+  title?: string;
+  status?: string;
+};
+
 export function CodexAccountResetModal({
   resetPopup,
   resetConfirm,
@@ -18,7 +25,7 @@ export function CodexAccountResetModal({
 }: {
   resetPopup: CodexAccountEntry;
   resetConfirm: boolean;
-  creditDetails: { granted_at: string; expires_at: string | null }[] | null;
+  creditDetails: CodexResetDetail[] | null;
   creditDetailsLoading: boolean;
   redeeming: boolean;
   onClose: () => void;
@@ -54,6 +61,7 @@ export function CodexAccountResetModal({
             <h3 id="codex-reset-title"><IconTicket width={16} /> {t("codexAuth.resetCreditsTitle")}</h3>
             <div className="card-sub">{resetPopup.email}{resetPopup.plan ? ` · ${resetPopup.plan}` : ""}</div>
             <div style={{ margin: "16px 0" }}>
+              <p className="modal-desc">{t("codexAuth.resetCreditsDesc")}</p>
               {(resetPopup.quota?.resetCredits ?? 0) > 0 ? (
                 <>
                   <p style={{ marginBottom: 12 }}>{t("codexAuth.resetCreditsAvailable", { count: String(resetPopup.quota?.resetCredits ?? 0) })}</p>
@@ -61,7 +69,7 @@ export function CodexAccountResetModal({
                   {creditDetails && creditDetails.length > 0 && (
                     <div className="credit-list">
                       {creditDetails.map((c, i) => (
-                        <CodexCreditItem key={`${c.granted_at}:${c.expires_at ?? "none"}`} index={i} grantedAt={c.granted_at} expiresAt={c.expires_at} isNext={i === 0} locale={locale} t={t} />
+                        <CodexCreditItem key={`${c.granted_at}:${c.expires_at ?? "none"}`} index={i} resetTitle={c.title} grantedAt={c.granted_at} expiresAt={c.expires_at} isNext={i === 0} locale={locale} t={t} />
                       ))}
                     </div>
                   )}
@@ -86,9 +94,12 @@ export function CodexAccountResetModal({
               <h3 id="codex-reset-title">{t("codexAuth.confirmResetTitle")}</h3>
               <p className="modal-desc">{t("codexAuth.confirmResetDesc", { count: String(resetPopup.quota?.resetCredits ?? 0) })}</p>
               {creditDetails && creditDetails[0] && (
-                <p className="faint text-label">
-                  {t("codexAuth.confirmWhichCredit", { date: formatCreditDate(creditDetails[0].granted_at, locale) })}
-                </p>
+                <>
+                  {creditDetails[0].title && <p className="text-label">{creditDetails[0].title}</p>}
+                  <p className="faint text-label">
+                    {t("codexAuth.confirmWhichCredit", { date: formatCreditDate(creditDetails[0].granted_at, locale) })}
+                  </p>
+                </>
               )}
               <p className="faint text-label">{t("codexAuth.irreversible")}</p>
             </div>

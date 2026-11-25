@@ -1053,9 +1053,9 @@ a.btn, a.btn:hover { text-decoration: none; }
 .credit-list { display: flex; flex-direction: column; gap: 6px; }
 .credit-item { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); transition: border-color var(--motion-fast); }
 .credit-next { border-color: var(--amber); background: var(--amber-soft); }
-.credit-item-head { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: var(--text-label); font-weight: var(--weight-semibold); margin-bottom: 3px; }
+.credit-item-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--text); font-size: var(--text-label); font-weight: var(--weight-semibold); margin-bottom: 3px; }
 .credit-item-head svg { color: var(--amber); flex-shrink: 0; }
-.credit-item-dates { display: flex; justify-content: space-between; font-size: var(--text-caption); font-family: var(--font-code); color: var(--muted); }
+.credit-item-dates { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); justify-content: space-between; font-size: var(--text-caption); font-family: var(--font-code); color: var(--muted); }
 .credit-urgent { color: var(--red); font-weight: var(--weight-semibold); }
 .dot { width: 7px; height: 7px; border-radius: var(--radius-round); flex-shrink: 0; }
 .dot-green { background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }

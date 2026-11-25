@@ -16,25 +16,25 @@ function row(credits?: CodexCredits, locale: "en" | "de" = "en") {
   return render(<CodexCreditsRow credits={credits} t={t} locale={locale} />);
 }
 test.each([
-  [{ balance: "62500" }, "62,500", "1"],
-  [{ balance: "62498.725" }, "62,498.73", "1"],
-  [{ balance: "0" }, "0", "0"],
-  [{ balance: "0.001" }, "0", "1"],
-  [{ unlimited: true }, "Unlimited", "1"],
-  [{ unlimited: true, balance: "10" }, "Unlimited", "1"],
-  [{ overageLimitReached: true }, "Overage limit reached", "0"],
-  [{ overageLimitReached: true, unlimited: true, balance: "62500" }, "62,500 · Overage limit reached", "0"],
-] satisfies [CodexCredits, string, string][])("credits status %j", (credits, value, scale) => {
+  [{ balance: "62500" }, "62,500"],
+  [{ balance: "62498.725" }, "62,498.73"],
+  [{ balance: "0" }, "0"],
+  [{ balance: "0.001" }, "0"],
+  [{ unlimited: true }, "Unlimited"],
+  [{ unlimited: true, balance: "10" }, "Unlimited"],
+  [{ overageLimitReached: true }, "Overage limit reached"],
+  [{ overageLimitReached: true, unlimited: true, balance: "62500" }, "62,500 · Overage limit reached"],
+] satisfies [CodexCredits, string][])("credits status %j", (credits, value) => {
   const html = row(credits);
-  expect(html).toContain(`class="quota-val">${value}</span>`);
-  expect(html).toContain(`--bar-scale:${scale}`);
-  expect(html).toContain('class="quota-reset-label">remaining</span>');
+  expect(html).toContain(`>${value}</span>`);
+  expect(html).toContain("Credit balance");
+  expect(html).not.toContain("bar-fill");
   expect(html).not.toContain("%");
   expect(html).not.toContain("progressbar");
   expect(html).not.toContain("codex-account-quota-slot");
 });
-test.each([undefined, {}, { hasCredits: true }, { unlimited: false }, { balance: "invalid" }])("unusable credits render nothing: %j", credits => {
-  expect(row(credits)).toBe("");
+test.each([undefined, {}, { hasCredits: true }, { unlimited: false }, { balance: "invalid" }])("missing balance is not shown as zero: %j", credits => {
+  expect(row(credits)).toContain(">Not reported</span>");
 });
 test("balance uses the current locale and two fractional digits", () => {
   expect(row({ balance: "62498.725" }, "de")).toContain("62.498,73");
@@ -52,13 +52,18 @@ function quotaHtml(overrides: Partial<Parameters<typeof QuotaBars>[0]> = {}) {
 }
 test("compact order is Week → Credits → Monthly/custom in a single slot", () => {
   const html = quotaHtml();
-  const labels = [...html.matchAll(/class="quota-label"[^>]*>(.*?)<\/span>/g)].map(match => match[1]);
-  expect(labels).toEqual([en["codexAuth.fiveHour"], en["codexAuth.weekly"], "Credits", en["codexAuth.monthly"], "Custom"]);
+  const labels = [en["codexAuth.fiveHour"], en["codexAuth.weekly"], "Credit balance", en["codexAuth.monthly"], "Custom"];
+  let previous = -1;
+  for (const label of labels) {
+    const position = html.indexOf(`>${label}<`);
+    expect(position).toBeGreaterThan(previous);
+    previous = position;
+  }
   expect(html.match(/codex-account-quota-slot/g)?.length).toBe(1);
 });
 test("no Week appends credits after the last quota row", () => {
   const html = quotaHtml({ quota: { monthlyPercent: 30, updatedAt: 1 } });
-  expect(html.indexOf(en["codexAuth.monthly"])).toBeLessThan(html.indexOf("Credits"));
+  expect(html.indexOf(en["codexAuth.monthly"])).toBeLessThan(html.indexOf("Credit balance"));
 });
 test("no quota renders credits alone when ready", () => {
   const html = quotaHtml({ quota: null });
@@ -66,7 +71,7 @@ test("no quota renders credits alone when ready", () => {
   expect(html).not.toContain("skeleton");
 });
 test("stacked layout ignores the slot, including empty quota", () => {
-  expect(quotaHtml({ layout: "stacked" })).not.toContain("Credits");
+  expect(quotaHtml({ layout: "stacked" })).not.toContain("Credit balance");
   expect(quotaHtml({ layout: "stacked", quota: null })).toBe("");
 });
 const account: CodexAccountEntry = {
@@ -92,6 +97,6 @@ test.each(["main", "pool"])("%s card gates the DTO on visibility and handles cre
   const html = kind === "main"
     ? render(<CodexAccountPoolMainCard {...common} t={t} main={absent} isMainActive creditsVisible />)
     : render(<CodexAccountPoolCards {...common} pool={[absent]} activeId={null} onReauth={() => {}} onEditAlias={() => {}} onRemove={() => {}} creditsVisible />);
-  expect(html).not.toContain("quota-row--codex-credits");
-  expect(html).toContain("quota-compact--pending");
+  expect(html).toContain("Not reported");
+  expect(html).not.toContain("quota-compact--pending");
 });

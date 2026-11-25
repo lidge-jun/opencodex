@@ -102,7 +102,7 @@ export function CodexAccountPoolCards({
   return (
     <>
       {pool.map(a => {
-        const showCredits = creditsVisible === true && a.credits !== undefined;
+        const showCredits = creditsVisible === true && a.hasCredential === true;
         const healthStatus = a.health?.status;
         const planExcluded = a.selectionExcludedReason === "plan_excluded";
         const showReauth = Boolean(a.needsReauth) || oauthHealthShowsReauth(healthStatus);

@@ -19,7 +19,7 @@ import { useCodexAutoSwitch } from "../hooks/useCodexAutoSwitch";
 import { readJsonIfOk } from "../fetch-json";
 import { CodexAccountPoolCards, CodexAccountPoolReauthBanner } from "./codex-account-pool-cards";
 import { CodexAccountSwitchModal } from "./codex-account-switch-modal";
-import { CodexAccountResetModal } from "./codex-account-reset-modal";
+import { CodexAccountResetModal, type CodexResetDetail } from "./codex-account-reset-modal";
 import { CodexAccountPoolActions, CodexAccountPoolAddButton, CodexAccountPoolLoadStates, CodexAccountPoolMainCard, CodexAccountPoolPageHead } from "./codex-account-pool-main-card";
 import { redeemResetCredit } from "./codex-account-pool-handlers";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
@@ -149,7 +149,7 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
   const [resetPopup, setResetPopup] = useState<CodexAccountEntry | null>(null);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [redeeming, setRedeeming] = useState(false);
-  const [creditDetails, setCreditDetails] = useState<{ granted_at: string; expires_at: string | null }[] | null>(null);
+  const [creditDetails, setCreditDetails] = useState<CodexResetDetail[] | null>(null);
   const [creditDetailsLoading, setCreditDetailsLoading] = useState(false);
   const doctorCopy = useCopyFeedback<string>();
   // A modal, a reauth, a confirmation or a catalog notice belongs to the target that
@@ -498,11 +498,11 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
     setCreditDetailsLoading(true);
     try {
       const resp = await fetch(`${apiBase}/api/codex-auth/reset-credits?accountId=${encodeURIComponent(account.id)}`);
-      const data = await readJsonIfOk<{ credits?: { granted_at: string; expires_at: string | null }[] }>(resp);
+      const data = await readJsonIfOk<{ credits?: CodexResetDetail[] }>(resp);
       if (data) {
-        const sorted = (data.credits ?? []).sort((a, b) =>
-          new Date(a.granted_at).getTime() - new Date(b.granted_at).getTime()
-        );
+        const sorted = (data.credits ?? [])
+          .filter(credit => credit.status === undefined || credit.status === "available")
+          .sort((a, b) => Date.parse(a.granted_at) - Date.parse(b.granted_at));
         setCreditDetails(sorted);
       }
     } catch { /* detail fetch is non-blocking */ }
