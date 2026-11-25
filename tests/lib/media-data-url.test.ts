@@ -67,6 +67,16 @@ describe("refused forms", () => {
 });
 
 describe("size cap, applied from the payload length before any scan", () => {
+  test("every refused data URL with a payload still reports a conservative size bound", () => {
+    // Translated routes refuse these, but native Responses passthrough forwards them, so input
+    // admission needs a size for each one (review round 8).
+    expect(parseMediaDataUrl(`data:video/mp4;base64,${"A".repeat(4003)}`).decodedBytes).toBe(3002);
+    expect(parseMediaDataUrl(`data:video/mp4;base64,${"%".repeat(4000)}`).decodedBytes).toBe(3000);
+    expect(parseMediaDataUrl(`data:video/mp4,${"é".repeat(1000)}`).decodedBytes).toBe(2000);
+    expect(parseMediaDataUrl(`data:video/mp4;base64;x=y,${"A".repeat(1000)}`).decodedBytes).toBe(1000);
+    expect(parseMediaDataUrl("data:video/mp4;base64").decodedBytes).toBeUndefined();
+  });
+
   // 9 decoded bytes = 12 characters; 8 = "...=" ; 10 = 16 characters with "==".
   const url = (bytes: number) => `data:video/mp4;base64,${Buffer.alloc(bytes, 7).toString("base64")}`;
   test.each([[8, true], [9, true], [10, false]])("%i bytes against a 9-byte cap", (bytes, ok) => {

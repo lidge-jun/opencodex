@@ -25,7 +25,7 @@ import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { untranslatedResponsesInputMedia } from "../../src/responses/input-media";
 import { parseRequest } from "../../src/responses/parser";
 import { MAX_INLINE_VIDEO_BYTES, parseInlineVideo } from "../../src/responses/video-input";
-import { estimateInputTokens } from "../../src/server/responses/input-admission";
+import { checkInputAdmission, estimateInputTokens } from "../../src/server/responses/input-admission";
 import { adapterBuildRefusal } from "../../src/server/responses/passthrough-build-error";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 
@@ -337,5 +337,22 @@ describe("input admission charges video by its own rate", () => {
 
   test("a fetched URL is charged a flat minute, not the 850-token image tile", () => {
     expect(estimateInputTokens(videoOnly(YOUTUBE), "m")).toBe(6_000);
+  });
+
+  test("a clip translated routes refuse is still charged on Responses passthrough, which forwards it", () => {
+    // A valid but unpadded base64 video: the strict decoder refuses it, the guard refuses it on
+    // translated wires, and native Responses passthrough (no guard) forwards the original body.
+    // 3,750,002 characters bound 2,812,501 decoded bytes -> 2,251 tokens, never zero.
+    const unpadded = `data:video/mp4;base64,${"A".repeat(3_750_002)}`;
+    // An 800-token window admits up to 2,000 with the 2.5x tolerance, so 2,251 is refused.
+    const passthrough: OcxProviderConfig = { adapter: "openai-responses", baseUrl: "https://gateway.example/v1", authMode: "key", apiKey: "k", contextWindow: 800 };
+    expect(estimateInputTokens(videoOnly(unpadded), "m", passthrough)).toBe(2_251);
+    const verdict = checkInputAdmission(videoOnly(unpadded), passthrough, "gateway", "m");
+    expect(verdict.admitted).toBe(false);
+    expect(verdict.estimatedTokens).toBe(2_251);
+  });
+
+  test("the same unpadded clip is refused before send on a translated route", async () => {
+    expect(await refusal(KIMI, videoRequest("kimi-k3.1-pro", `data:video/mp4;base64,${"A".repeat(4_002)}`))).toContain("standard padded base64");
   });
 });

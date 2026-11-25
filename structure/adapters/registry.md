@@ -381,7 +381,8 @@ exactly `data:<type>/<subtype>[;<attribute>=<value>]...;base64,<payload>` with c
 base64 (length a multiple of four, at most two trailing `=`, zero unused bits), which is the set
 of payloads that decode and re-encode to themselves; the size verdict comes from the payload
 length before any scan, and nothing is decoded on the request path. Input admission charges its
-`decodedBytes`, the guard refuses on its refusal, both Chat conversions (`chatBodyVideoRefusal`)
+`decodedBytes` (for a URL it refuses, a conservative upper bound: native Responses passthrough
+skips the guard and forwards the original body), the guard refuses on its refusal, both Chat conversions (`chatBodyVideoRefusal`)
 refuse before they build or serialize anything, and the Gemini `inline_data` and translated-Chat
 `video_url` builders send its `mime` and canonical `base64`. Rounds 4–6 of the review on #9131
 each found a different consumer reading a data URL its own way; `tests/lib/media-data-url.test.ts`

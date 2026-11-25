@@ -43,7 +43,12 @@ export type ParsedMediaDataUrl =
   | {
     ok: false;
     reason: MediaDataUrlRefusal;
-    /** Present when the payload length alone determines it (`too_large` included). */
+    /**
+     * A conservative upper bound of what the payload can decode to, present for every `data:` URL
+     * that has a payload (`too_large` included). A refusal here is only a translated-route verdict:
+     * native Responses passthrough forwards the original body, so input admission still has to
+     * charge a clip this parser does not accept.
+     */
     decodedBytes?: number;
   };
 
@@ -61,11 +66,14 @@ export function parseMediaDataUrl(url: string, options: { maxBytes?: number } = 
     // A header that names base64 somewhere but not in the one accepted place is malformed; one
     // that never names it is a plain (percent-encoded or raw) payload.
     const parameters = header.split(";").slice(1).map(parameter => parameter.trim().toLowerCase());
-    return { ok: false, reason: parameters.includes("base64") ? "malformed_header" : "not_base64" };
+    // Its UTF-8 length bounds both readings: no decoding yields more bytes than that.
+    return { ok: false, reason: parameters.includes("base64") ? "malformed_header" : "not_base64", decodedBytes: payloadUtf8Bytes(url, comma) };
   }
   const start = comma + 1;
   const length = url.length - start;
-  if (length === 0 || length % 4 !== 0) return { ok: false, reason: "malformed_payload" };
+  // A base64 decoder turns n characters into at most floor(3n/4) bytes, so that bounds an
+  // unpadded or otherwise malformed payload without scanning it.
+  if (length === 0 || length % 4 !== 0) return { ok: false, reason: "malformed_payload", decodedBytes: Math.floor((length * 3) / 4) };
   const padding = url.endsWith("==") ? 2 : url.endsWith("=") ? 1 : 0;
   const decodedBytes = (length / 4) * 3 - padding;
   if (options.maxBytes !== undefined && decodedBytes > options.maxBytes) return { ok: false, reason: "too_large", decodedBytes };
@@ -88,6 +96,11 @@ export function decodeMediaDataUrl(parsed: Extract<ParsedMediaDataUrl, { ok: tru
   const bytes = Buffer.from(parsed.base64, "base64");
   if (bytes.toString("base64") !== parsed.base64) throw new Error("media data URL payload is not canonical base64");
   return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+}
+
+/** UTF-8 byte length of the payload after `comma`, without slicing the payload into a copy. */
+function payloadUtf8Bytes(url: string, comma: number): number {
+  return Buffer.byteLength(url, "utf8") - Buffer.byteLength(url.slice(0, comma + 1), "utf8");
 }
 
 /** The value of one standard base64 character, or -1. */

@@ -73,8 +73,9 @@ todas las rutas traducidas; envíe en su lugar la URL del archivo del proveedor.
 directo y Chat nativo reenvían el cuerpo original y dejan el tamaño y el soporte al proveedor.
 Una solicitud de Chat que se traduce se comprueba en ambos casos (un `video_url` fuera del
 contenido de usuario, o por encima del límite) antes de que su conversión construya nada, y
-responde el mismo HTTP 400 `unsupported_input_modality`.  La admisión de entrada cobra el
-video en línea por tamaño, a unos 1.250 bytes por token, y una URL descargada como un minuto (6.000
+responde el mismo HTTP 400 `unsupported_input_modality`. La admisión de entrada cobra el
+video en línea por tamaño, a unos 1.250 bytes por token (un clip en cualquier otra forma se cobra
+por su tamaño máximo posible, porque Responses de paso directo aún lo reenvía), y una URL descargada como un minuto (6.000
 tokens). El rechazo no nombra la URL ni los bytes.
 
 ## Continuación del punto de control después de la compactación enrutada

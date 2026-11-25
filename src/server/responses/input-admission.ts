@@ -131,8 +131,9 @@ function base64PayloadTokens(base64: string, bytesPerToken = IMAGE_BYTES_PER_TOK
 
 /**
  * Inline video by the shared decoder's decoded size at the video rate; a fetched URL at the flat
- * remote charge. A clip the decoder refuses is charged by its length when that is known (an
- * oversized one) and otherwise nothing: the input guard refuses it before any send.
+ * remote charge. A clip the decoder refuses still carries the decoder's conservative size bound:
+ * translated routes refuse it before any send, but native Responses passthrough forwards the
+ * original body, so admission must charge what that body can carry.
  */
 function videoTokens(videoUrl: string): number {
   const parsed = parseInlineVideo(videoUrl);
