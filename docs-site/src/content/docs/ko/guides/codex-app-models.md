@@ -218,7 +218,7 @@ Fast 또는 Default 강제 모드는 Flex 선택을 덮어씁니다. `ocx sync` 
 ### Codex 데스크톱에서 Ultra Fast 선택
 
 `service_tier: "ultrafast"`를 지원하는 프로바이더에는 전송 매핑을 한 번 설정하면 됩니다.
-opencodex가 라우팅 모델의 Codex 기본 속도 메뉴에 **Ultra Fast**를 추가하므로, 동기화할 때마다
+opencodex가 라우팅 모델의 Codex 기본 속도 메뉴에 **Ultrafast**를 추가하므로, 동기화할 때마다
 `opencodex-catalog.json`을 직접 수정할 필요가 없습니다. 예를 들어 GPT-6.1 Sol용 API
 프로바이더의 기존 설정에 다음 필드를 병합하세요.
 
@@ -238,7 +238,7 @@ opencodex가 라우팅 모델의 Codex 기본 속도 메뉴에 **Ultra Fast**를
 Ultra Fast를 지원한다면 별도 프로바이더 항목을 사용하세요. 앱에서 선택한 속도를 전달하려면
 opencodex의 Fast 모드를 **Auto**로 유지하세요(`fastMode` 생략). Fast 강제 모드는 `priority`를
 전송하고, Default 강제 모드는 tier를 제거합니다. 모델 카탈로그를 새로고침하고, 앱에 이전
-목록이 남아 있다면 Codex 데스크톱을 다시 시작한 뒤 라우팅 모델의 속도 메뉴에서 **Ultra Fast**를
+목록이 남아 있다면 Codex 데스크톱을 다시 시작한 뒤 라우팅 모델의 속도 메뉴에서 **Ultrafast**를
 선택하세요. 기본 속도는 Standard로 유지됩니다.
 
 이 선택지를 라우팅 항목에 자동 생성하려면 사용 가능한 `service-tier` 전송 경로와 명시적인
