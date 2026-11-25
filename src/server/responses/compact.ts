@@ -238,7 +238,7 @@ import {
 } from "./core";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel, sendWithConnectionPolicy } from "./fetch-helpers";
 import { requestPacingOverloadResponse } from "./pacing-overload";
-import { shouldRetryCodexPoolAccountQuota, shouldRetryCodexPoolAccountTransient } from "./core-codex-account";
+import { codexPoolAccountEgressRoute, shouldRetryCodexPoolAccountQuota, shouldRetryCodexPoolAccountTransient } from "./core-codex-account";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
 import { affinityLaneFromRequest, linkRequestSessionLane, reasoningReplayConversationIdFromResponsesRequest, sessionIdHeaderFromRequest, sessionLaneIdFromRequest } from "../request-log-conversation";
 import { recallComboForLane } from "./combo-session-recall";
@@ -1240,7 +1240,7 @@ export async function handleResponsesCompact(
         sendProvider.authMode !== "forward" && sendProvider.apiKey ? 0 : connectMs(),
         false,
         providerFetch(sendProvider, undefined, {
-          providerName: route.providerName,
+          providerName: route.providerName, account: () => codexPoolAccountEgressRoute(config, sendAuthCtx),
           modelId: route.modelId,
           accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: sendAuthCtx }, headers),
           beforeDispatch: isCanonicalOpenAiForwardProvider(sendProvider)

@@ -281,6 +281,14 @@ Encienda el interruptor CLI en Conecte → Claude, o ejecute `ocx claude config 
 
 <a id="model-picker-in-the-cli"></a>
 
+#### Vista previa antes de activarlo y homes de Claude
+
+Al activar el interruptor en el panel, OpenCodex primero muestra las claves que añadiría o cambiaría en el `settings.json` del home predeterminado (por ejemplo `env.HTTPS_PROXY`, `env.NODE_EXTRA_CA_CERTS`, `env.NO_PROXY`) y espera tu confirmación. Nunca muestra valores y la vista previa no escribe nada; si cancelas o la vista previa falla, el interruptor queda apagado y no se envía ningún cambio. El interruptor aún puede rechazar el cambio después, al iniciar la intercepción o preparar su certificado y su token. Los scripts pueden leer la misma vista previa con `GET /api/claude-code/first-party/preview?enabled=true`.
+
+El interruptor solo escribe en el home predeterminado de Claude (`CLAUDE_CONFIG_DIR`, o si no `~/.claude`). Si usas otros homes de Claude, añádelos en `claudeCode.extraConfigDirs` (por ejemplo `ocx config set claudeCode.extraConfigDirs '["~/.claude-work"]' --json`) y la página de Claude Code y **Connect → Client connections** mostrarán adónde se dirige cada uno. OpenCodex solo lee esos homes y nunca busca otros en el disco.
+
+**Client connections** en la vista general de Connect muestra, para Codex, Claude Code (por home) y Claude Desktop, adónde debería ir el cliente, adónde apuntan ahora sus archivos, quién los controla, por qué difieren y qué claves cambiaría volver atrás.
+
 #### Selector de modelos en el CLI
 
 Con el interruptor de primera parte CLI encendido y el enrutamiento Claude habilitado, inicie un nuevo `claude` y abra `/model`. Sus modelos opencodex aparecen junto a los modelos Claude de su cuenta, etiquetados como " Grok 4.7 (xai)" y descritos con su ruta ( `opencodex · xai/grok-4.7` ). Escoger uno dirige esa sesión al modelo, al igual que un enlace.
@@ -569,7 +577,7 @@ Un catálogo mixto que contiene un puente Codex `exec_command` o `shell_command`
 
 ## Esfuerzo de razonamiento
 
-En las solicitudes traducidas Messages → Responses, Claude Code `/effort` Configuración de mapas de la siguiente manera:
+Al traducir solicitudes de Messages a Responses, se asigna el valor de `/effort` de Claude Code así:
 
 | Formato de protocolo | Mapeo |
 | --- | --- |

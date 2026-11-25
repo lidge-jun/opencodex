@@ -5,6 +5,7 @@ import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
+import { connectionsCopy } from "./connections-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
@@ -141,6 +142,7 @@ export const zhTW: Record<TKey, string> = {
   ...remoteLinkDiagnosticsCopy("zh-TW"),
   ...remoteLinkChildCopy("zh-TW"),
   ...gatewayClientsCopy("zh-TW"),
+  ...connectionsCopy("zh-TW"),
   ...modelsV2Copy("zh-TW"),
   ...modelsOverallCopy("zh-TW"),
   ...accountsV2Copy("zh-TW"),
@@ -2767,6 +2769,27 @@ export const zhTW: Record<TKey, string> = {
   "cws.copied": "已複製",
   "cws.tab.config": "配置",
   "cws.tab.about": "關於",
+  "cws.quotaPreset.openai-first": "OpenAI 優先",
+  "cws.quotaPreset.claude-first": "Claude 優先",
+  "cws.quotaOnly": "僅在配額用盡時切換",
+  "cws.preserveModel": "備援時保留相同模型",
+  "cws.allowPaidLocal": "允許本機用戶端進行付費呼叫",
+  "cws.meteredTarget": "付費 API 目標",
+  "cws.preview.title": "備援預覽",
+  "cws.preview.note": "預覽依據組合設定。呼叫方的權限與實際配額會在送出請求時檢查。",
+  "cws.preview.unchecked": "路由尚未檢查，因此預覽顯示已設定的目標。重新導向、呼叫方的權限與實際配額會在送出請求時檢查。",
+  "cws.preview.paid": "付費 API",
+  "cws.preview.billingUnknown": "計費方式未知",
+  "cws.preview.consent": "呼叫付費 API 需要授權",
+  "cws.preview.model": "已鎖定模型，但此處模型不同",
+  "cws.preview.provider": "供應商無法使用",
+  "cws.preview.incomplete": "目標設定不完整",
+  "cws.preview.unreached": "無法到達",
+  "cws.preview.skipped": "已略過 · {reason}",
+  "cws.preview.terminal": "如果最後一個目標也失敗，則停止。",
+  "cws.preview.stopAt": "在第 {step} 步停止。",
+  "cws.preview.quotaRule": "只在確認配額或額度用盡後切換至下一個目標。",
+  "cws.preview.subscriptionsOnly": "只使用訂閱",
   "cws.strategy": "策略",
   "cws.strategy.failover": "容錯移轉",
   "cws.strategy.roundRobin": "輪詢",
@@ -2804,6 +2827,7 @@ export const zhTW: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "此 effort 不在目標的共同階梯中 — 請求時會被忽略或就近對應。",
   "cws.field.defaultEffortUnsupportedOption": "不在交集中",
   "cws.targets": "目標",
+  "cws.targets.order": "目標順序",
   "cws.targets.failoverHint": "順序很重要 — 第一個為主。",
   "cws.targets.roundRobinHint": "權重控制確定性的相對選擇；順序用於打破輪換環中的平局。",
   "cws.targets.randomHint": "權重控制每次抽取的機率，順序無關緊要。",

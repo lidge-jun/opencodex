@@ -1,4 +1,5 @@
 import { registerStoredDirectIdentityTests } from "../helpers/stored-direct-identity";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -102,6 +103,7 @@ beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-auth-ctx-"));
   previousOpencodexHome = process.env.OPENCODEX_HOME;
   process.env.OPENCODEX_HOME = testDir;
+  bindStoredCodexPoolRoutingForTests();
   // Isolate the main-account credential source: testDir has no auth.json, so the main
   // account is deterministically absent (these cases test pool-only fail-closed behavior).
   previousCodexHome = process.env.CODEX_HOME;

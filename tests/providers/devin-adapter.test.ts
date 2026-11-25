@@ -473,6 +473,12 @@ describe("devin adapter", () => {
     expect(sanitizeTextForCognitionForTests(agentSdk))
       .toBe("You are a Claude agent, built on Anthropic's Claude Agent Toolkit.");
 
+    const officialCli = "You are Claude Code, Anthropic's official CLI for Claude.";
+    expect(sanitizeTextForCognitionForTests(officialCli))
+      .toBe("You are Claude Code, a CLI for Claude built by Anthropic.");
+    expect(sanitizeTextForCognitionForTests(officialCli.toLowerCase()))
+      .toContain("a CLI for Claude built by Anthropic");
+
     const dualUse = "Dual-use security tools (C2 frameworks, credential testing, exploit development) require clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases.";
     expect(sanitizeTextForCognitionForTests(dualUse))
       .toBe("Dual-purpose security tools (C2 frameworks, credential testing, exploit development) need clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases.");

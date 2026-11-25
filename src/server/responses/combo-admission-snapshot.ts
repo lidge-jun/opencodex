@@ -1,4 +1,38 @@
-import type { OcxConfig, OcxProviderConfig, OcxComboConfig } from "../../types";
+import type { OcxConfig, OcxProviderConfig, OcxComboConfig, OcxComboTarget } from "../../types";
+import { routeConcreteModel, type RouteResult } from "../../router";
+import { configuredComboProviderBilling } from "../../combos/billing";
+import { targetKey } from "../../combos/identifiers";
+
+export function comboTargetRequiresConsent(
+  config: OcxConfig, target: OcxComboTarget, quotaOnly: boolean, resolved?: RouteResult,
+): boolean {
+  if (target.metered) return true;
+  if (!quotaOnly) return false;
+  const provider = config.providers[target.provider];
+  if (provider && configuredComboProviderBilling({ ...provider, name: target.provider }) === "consent") return true;
+  try {
+    const route = resolved ?? routeConcreteModel(config, `${target.provider}/${target.model}`);
+    return configuredComboProviderBilling({ ...route.provider, name: route.providerName }) === "consent";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a Combo send that waited after admission needs paid-call consent under the live config. The live
+ * target and Combo rule apply to the destination's live row and to the destination as prepared. The rule the
+ * send was admitted under stays a floor, and a Combo deleted during the wait keeps the strictest rule.
+ */
+export function liveComboSendRequiresConsent(
+  liveConfig: OcxConfig, comboId: string, target: OcxComboTarget, admittedQuotaOnly: boolean, destination: RouteResult,
+): boolean {
+  const liveCombo = liveConfig.combos?.[comboId];
+  const liveTarget = liveCombo?.targets.find(candidate => targetKey(candidate) === targetKey(target)) ?? target;
+  const quotaOnly = admittedQuotaOnly || liveCombo === undefined || liveCombo.quotaOnlyFallback === true;
+  const liveDestination = { ...destination, provider: liveConfig.providers[destination.providerName] ?? destination.provider };
+  return comboTargetRequiresConsent(liveConfig, liveTarget, quotaOnly, liveDestination)
+    || comboTargetRequiresConsent(liveConfig, liveTarget, quotaOnly, destination);
+}
 
 const providerFields = [
   "adapter", "authMode", "baseUrl", "codexAccountMode", "anthropicOAuthInstance", "disabled",

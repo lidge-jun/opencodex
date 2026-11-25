@@ -1402,7 +1402,7 @@ export function getAccountCredential(provider: string, accountId: string): OAuth
 export function getAccountCredentialWithStatus(
   provider: string,
   accountId: string,
-): { credential: OAuthCredentials; needsReauth: boolean; paused: boolean } | null {
+): { credential: OAuthCredentials; needsReauth: boolean; paused: boolean; loginId?: string; addedAt?: number } | null {
   provider = oauthCredentialSlot(provider);
   const account = loadAuthStore()[provider]?.accounts.find(a => a.id === accountId);
   if (!account?.credential) return null;
@@ -1410,6 +1410,9 @@ export function getAccountCredentialWithStatus(
     credential: account.credential,
     needsReauth: account.needsReauth === true,
     paused: account.paused === true,
+    // The login incarnation of this same snapshot, for results attributed to the credential read here.
+    ...(account.loginId !== undefined ? { loginId: account.loginId } : {}),
+    ...(account.addedAt !== undefined ? { addedAt: account.addedAt } : {}),
   };
 }
 

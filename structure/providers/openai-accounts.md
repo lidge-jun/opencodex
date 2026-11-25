@@ -71,8 +71,7 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6.2-sol` and `gpt-6.2-astra` (Sol and Luna added 2026-09-23 from a
   live roster probe; https://openai.com/index/introducing-gpt-6-sol-and-luna/; 6.1 Sol added
   2026-09-30 and 6.1 Terra on 2026-10-27 from openai/codex models.json). None is gated, and all are native-main
-  drain sentinels. The confirmed-denial ordering below is still scoped to the first four
-  (`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS`); the GPT-6 and GPT-6.1 rows do not feed it yet.
+  drain sentinels. Roster-absence ordering stays scoped to the first four (`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS`); every registered ungated native also learns exact upstream unsupported-model refusals, including configured and discovered models.
 
 - The always-visible flagships (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`)
   use the same rosters with the opposite polarity, and are never gated on them. Only a CONFIRMED
@@ -89,10 +88,11 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   therefore the second source: an exact pre-stream unsupported-model 400 from a Pool account is
   recorded per (account, model) in `src/codex/observed-model-denials.ts` and unioned into
   `cachedDeniedCodexAccountIdsForModel`. It is confirmed, authenticated evidence, never a plan
-  name and never remaining quota. It is bounded and retained for six hours, it is outranked by any
-  confirmed roster grant for the same pair, it is cleared when that account successfully serves
+  name and never remaining quota. An accepted refusal invalidates that account's cached rosters; rejected old-generation evidence does not. Invalidation also advances the account's pending-flight generation: earlier fetches cannot be joined or republish cached grants, but remain in the concurrency budget until they settle. Invalidated results return unconfirmed with no model or capability grants, including when a sibling fetch delays snapshot assembly. Snapshot validation rejects retired evidence after invalidation, replacement or eviction; weak references track the exact result objects without retaining account history. Flight fences retire when no fetch remains; a post-invalidation fetch can publish a later grant. Refusal evidence is bounded and retained for six hours, and a later
+  confirmed roster grant for the same pair outranks it, it is cleared when that account successfully serves
   that model, and it is discarded when the account's credential identity changes. Recording is
-  scoped to the always-visible flagships, so a 400 anywhere else cannot steer routing. Every
+  scoped to registered ungated natives, so an unrelated 400 cannot steer routing. Newer models
+  never infer denial from roster absence; a lagging roster leaves routing unchanged. Every
   consumer treats it exactly like a roster denial, so the restore-on-empty and pin-exempt rules
   above continue to hold and no request is refused before dispatch.
   Detection reads the model upstream actually named rather than rebuilding the sentence from

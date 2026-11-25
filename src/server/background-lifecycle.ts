@@ -34,7 +34,14 @@ import {
   type MemoryWatchdog,
 } from "./memory-watchdog";
 import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
+import { installApiKeyCooldownPersistence, uninstallApiKeyCooldownPersistence } from "../providers/api-key-cooldown-store";
 import { isTelemetryEnvOptOut } from "../telemetry/consent";
+import {
+  bindCodexAccountEgressConfig,
+  restoreCodexAccountEgressBinding,
+  unbindCodexAccountEgressConfig,
+  type CodexAccountEgressBinding,
+} from "../codex/account-egress-runtime";
 // The state module alone: the scheduler and its aggregation stay behind the dynamic import below.
 import { TELEMETRY_ENV_OPT_OUT_REFRESH_MS, endTelemetryEnvOptOut, recordTelemetryEnvOptOut } from "../telemetry/state";
 import { telemetryProfilePath } from "../telemetry/profile/paths";
@@ -52,6 +59,8 @@ type LeaseOwner = {
   applyPolicy: PolicyApply;
   resources: ServerResourceOwnerLease;
   lowQuota: LowQuotaRegistration;
+  /** This server's routing binding (config, its config home and load state) while it is the newest owner. */
+  egressBinding: CodexAccountEgressBinding;
 };
 
 export type ServerBackgroundLifecycleLease = {
@@ -218,6 +227,8 @@ function stopProcessLoops(): void {
   stopCatalogAutoRefresh();
   setCatalogAutoRefreshClientFanout(null);
   setLivePolicyOwner(null);
+  unbindCodexAccountEgressConfig();
+  uninstallApiKeyCooldownPersistence({ dropLocalHolds: true });
 }
 
 async function stopStoragePolicyWorker(): Promise<void> {
@@ -255,6 +266,7 @@ function releaseOwnerSynchronously(owner: LeaseOwner): "inactive" | "shared" | "
   const nextOwner = owners.at(-1);
   if (nextOwner) {
     setLivePolicyOwner(nextOwner.applyPolicy);
+    restoreCodexAccountEgressBinding(nextOwner.egressBinding);
     return "shared";
   }
   stopProcessLoops();
@@ -279,6 +291,13 @@ export function acquireServerBackgroundLifecycle(
   // The quota-pool identity (homeId and the accountRef key) is minted here, per server and off
   // the request path, so GET /api/quota-pool only ever reads it.
   try { ensureQuotaPoolIdentity(); } catch { /* the read reports quota_pool_identity_unavailable */ }
+  // Pool accounts' background calls (refresh, usage, warmup, reset credits) read this server's
+  // account routes while it is the newest owner; a release restores the surviving owner's and the
+  // final release (stopProcessLoops) detaches them.
+  const egressBinding = bindCodexAccountEgressConfig(config);
+  // Confirmed API-key cooldowns survive a restart only for a running server: the first lease
+  // binds the config dir's file, and the final release (stopProcessLoops) detaches it.
+  installApiKeyCooldownPersistence(config);
 
   const owner: LeaseOwner = {
     token: Symbol("server-background-lifecycle"),
@@ -286,6 +305,7 @@ export function acquireServerBackgroundLifecycle(
     applyPolicy,
     resources: acquireServerResourceOwner(),
     lowQuota: registerCodexLowQuotaProtection(config, { desktopSink: () => resolveLowQuotaDesktopSink() }),
+    egressBinding,
   };
   try {
     if (!processLoops) {
@@ -297,6 +317,10 @@ export function acquireServerBackgroundLifecycle(
   } catch (error) {
     owner.lowQuota();
     owner.resources.release();
+    const survivor = owners.at(-1);
+    if (survivor) restoreCodexAccountEgressBinding(survivor.egressBinding);
+    else unbindCodexAccountEgressConfig(config);
+    if (owners.length === 0) uninstallApiKeyCooldownPersistence({ dropLocalHolds: true });
     throw error;
   }
 

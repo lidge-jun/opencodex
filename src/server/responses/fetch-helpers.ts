@@ -25,7 +25,7 @@ import { providerTlsFetch } from "../../lib/provider-tls-profile";
 import { inheritPassiveKeyProof, markPassiveKeyTransparent } from "../../lib/passive-key-fetch-proof";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { configuredOutboundFetch } from "../../lib/proxy-env";
-import { isLoopbackUrl, rewriteUpstream } from "../../plugins/upstream-hooks";
+import { hasUpstreamRewriters, isLoopbackUrl, rewriteUpstream } from "../../plugins/upstream-hooks";
 import {
   describeProviderEgressForLog,
   bindProviderSocketRoute,
@@ -33,6 +33,7 @@ import {
   providerEgressSendInit,
   providerEgressIsExplicit,
   resolveProviderEgress,
+  type PoolAccountRoute,
   type ProviderEgressBinding,
 } from "../../lib/provider-egress";
 import { redactSecretString } from "../../lib/redact";
@@ -40,6 +41,7 @@ import { outboundCredentials } from "../../lib/outbound-credential-registry";
 import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
 import { redeemOutboundTurnState, TURN_STATE_BINDING_INIT, turnStateBinding } from "../turn-state-handles";
 import { EXECUTOR_PHYSICAL_SEND_RECEIPT, inheritAdapterSupportExecutor, markPhysicalSendReceiptExecutor, registerAdapterSupportExecutor } from "../../lib/executor-physical-send-receipt";
+import { assertSendAdmission } from "./send-admission";
 
 export { withUpstreamHttpVersion };
 
@@ -256,6 +258,7 @@ export function sendWithConnectionPolicy(
     ...(decide || redirectedToLoopback ? { [EGRESS_DECIDED]: true } : {}),
     ...{ [UPSTREAM_REWRITTEN]: true },
   };
+  assertSendAdmission();
   (init as Record<symbol, ((destination: string, headers: Headers) => void) | undefined> | undefined)?.[PHYSICAL_SEND_GUARD]?.(target, headers);
   // Final headers, after plugin rewrites: an upstream can only echo what it received here, so the
   // request log refuses any diagnostic that repeats one of these values (see request-log-terminal-status).
@@ -339,6 +342,11 @@ export interface ProviderFetchOptions {
    * incremental prefixes are scoped to it; absent means no caller may continue a prefix.
    */
   codexWsCaller?: string;
+  /**
+   * The pool account serving this request, read at each physical send (and for the WebSocket
+   * route decision), so a request that failover moves to another account takes that account's route.
+   */
+  account?: () => PoolAccountRoute | undefined;
   /** Revalidate/rebuild a queued request at its physical send boundary, after pacing. */
   dispatchOverride?: (input: Parameters<typeof globalThis.fetch>[0], init: RequestInit, execute: typeof globalThis.fetch,
     reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>) => Promise<Response>;
@@ -354,7 +362,7 @@ export function providerFetch(
   const customExecutor = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch;
   // The route is applied at the physical send (see `sendWithConnectionPolicy`). This binding is
   // only what that boundary needs to decide it.
-  const egressBinding: ProviderEgressBinding = { providerName, provider };
+  const egressBinding: ProviderEgressBinding = { providerName, provider, ...(options.account ? { account: options.account } : {}) };
   // Resolved per request, not once per wrapper: `providers.<name>.noProxy` is evaluated against
   // the destination, so two requests through the same executor can legitimately take different
   // routes. A malformed value throws and rejects the request rather than degrading to the
@@ -363,6 +371,7 @@ export function providerFetch(
     providerName,
     provider,
     url: typeof input === "string" ? input : input instanceof URL ? input : input.url,
+    account: options.account?.(),
   });
   // The built-in executor forwards its init to a transport that honours the proxy option.
   const configuredFetch = markEgressTransparentExecutor(Object.assign(
@@ -405,8 +414,10 @@ export function providerFetch(
       // full decision can be made now. With an override, only the configured value is checked:
       // the override may rebuild against a different host and select a different transport, and
       // refusing on this destination would reject a request whose real route is fine.
+      // The NO_PROXY exemption is asked early only when this URL is final: a plugin rewrite may
+      // still move it, and is then decided at the physical send, before its receipt.
       if (override) egressFor(input);
-      else providerEgressSendInit(egressBinding, transport, input);
+      else providerEgressSendInit(egressBinding, transport, input, { exemption: !hasUpstreamRewriters() });
       // The hook inspects the outgoing headers and refuses the send by throwing; it is not a
       // mutator, and the copy it receives is deliberately not threaded onward. `Connection`
       // is decided inside `dispatch`, which runs after this, so the fresh-connection policy

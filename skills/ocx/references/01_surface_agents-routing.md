@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 71.
+Declared capabilities: 72.
 
 ### `ocx agent subagents force`
 
@@ -201,6 +201,23 @@ Drives no management route.
 
 - macOS/Linux only. Default queue/read tools need no proxy/control socket; resume uses the explicitly configured existing Unix socket. Starts bounded stdio helpers only when a tool is called; existing sessions/send behavior stays unchanged.
 - Stored threads are not verified live sessions. queued is not processing; unknown is never replayed. --allow-reply-read exposes bounded same-turn final text, not exclusive reply ownership or goal completion. No daemon start, steer, automatic replies or registration. Resume preflight is separate opt-in through a same-home existing Unix server; managed requirements and unavailable profiles refuse. The checked native API cannot enforce unloaded-only resume atomically, so execution is blocked with resume_atomicity_unsupported; no thread/resume is sent.
+
+### `ocx message claude-sessions`
+
+Usage: `ocx message claude-sessions --claude <absolute-cli-path> [--json]`
+
+List local Claude Code session IDs and their reported activity.
+
+State-changing: no. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--claude` | string | Absolute path to a trusted Claude Code CLI with agents --json support. |
+| `--json` | boolean | Emit a versioned Claude Code session directory. |
+
+- macOS/Linux only. Invokes the selected local CLI once. Returns only UUID, interactive/background kind and busy/waiting/idle status. Does not test reachability or send a message.
 
 ### `ocx advisor`
 
@@ -983,7 +1000,7 @@ State-changing: no. JSON mode: `payload`.
 
 ### `ocx combo set`
 
-Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--cooldown-reprobe <on|off>] [--cooldown-reprobe-interval <ms>] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->] [--description <text|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->] [--session-pin <duration|->] [--session-pin-effort <pinned|per-turn>] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--jev-effort-mode <decide|client>] [--json]`
+Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--cooldown-reprobe <on|off>] [--cooldown-reprobe-interval <ms>] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--quota-only-fallback <on|off>] [--preserve-fallback-model <on|off>] [--display-name <label|->] [--description <text|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->] [--session-pin <duration|->] [--session-pin-effort <pinned|per-turn>] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--jev-effort-mode <decide|client>] [--json]`
 
 Create, update or rename a combo.
 
@@ -996,6 +1013,8 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--quota-only-fallback` | string | on limits ordered fallback to confirmed quota or billing exhaustion. |
+| `--preserve-fallback-model` | string | on holds the resolved model ID across ordered fallback hops. |
 | `--allow-metered-targets` | string | on grants operator consent to metered targets only on a loopback-only proxy; off clears it. |
 | `--targets` | string | Ordered provider/model[:weight] list; required for creation. |
 | `--strategy` | string | Routing strategy. |

@@ -214,3 +214,5 @@ export function registerPoolReauthCauseCases(
     expect(account?.health?.status).not.toBe("reauth_required");
   });
 }
+
+export { bindStoredCodexPoolRoutingForTests } from "./codex-pool-routing";

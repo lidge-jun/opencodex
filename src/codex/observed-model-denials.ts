@@ -115,25 +115,26 @@ function modelIdOfDenialKey(key: string): string {
  *
  * Re-recording refreshes the entry rather than extending an older one, so a pair that keeps
  * being refused stays remembered and one that stops being refused ages out.
+ * Returns false for superseded evidence, so its caller cannot invalidate a replacement roster.
  */
 export function recordObservedCodexModelDenial(
   accountId: string,
   modelId: string,
   generation: number | undefined,
   now = Date.now(),
-): void {
+): boolean {
   // A refusal dispatched under generation G can arrive after G+1 has been saved. Reject it
   // BEFORE touching the map at all, not merely when this key already holds newer evidence:
   // with no entry for this key the stale row would otherwise be inserted, and at the entry
   // bound it would evict a valid row that nothing can restore (#4952).
-  if (generation !== undefined && !beginGenerationLiveCheck()(accountId, generation)) return;
+  if (generation !== undefined && !beginGenerationLiveCheck()(accountId, generation)) return false;
   const key = denialKey(accountId, modelId);
   const existing = observedDenials.get(key);
   // Second fence, for the window where the replacement credential has been dispatched but the
   // store read above still answers live. Both sides must name a generation to be comparable;
   // an account-scoped entry is not older or newer than a credential-scoped one.
   if (existing !== undefined && existing.generation !== undefined && generation !== undefined
-    && existing.generation > generation) return;
+    && existing.generation > generation) return false;
   // Delete before set so the refreshed entry moves to the back of the eviction order.
   observedDenials.delete(key);
   observedDenials.set(key, { expiresAt: now + OBSERVED_DENIAL_TTL_MS, generation });
@@ -142,6 +143,7 @@ export function recordObservedCodexModelDenial(
     if (oldest.done) break;
     observedDenials.delete(oldest.value);
   }
+  return true;
 }
 
 /**

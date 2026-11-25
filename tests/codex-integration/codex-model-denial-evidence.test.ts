@@ -1,11 +1,18 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import {
   cachedDeniedCodexAccountIdsForModel,
+  cachedAvailableAccountGatedNativeModels,
   clearCodexModelDenialEvidence,
+  codexModelEntitlementStateForAccount,
+  isCodexModelEntitlementSnapshotCurrent,
   recordCodexModelDenialEvidence,
+  resolveCodexModelEntitlements,
   resetCodexModelEntitlementCacheForTests,
   seedCodexModelEntitlementsForTests,
+  type CodexModelEntitlementCredentialSnapshot,
 } from "../../src/codex/model-entitlements";
+import { beginCodexAccountGenerationLiveCheck, readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { setObservedDenialGenerationCheck } from "../../src/codex/observed-model-denials";
 import {
   codexUnsupportedModelFromDetail,
@@ -13,6 +20,8 @@ import {
   shouldRetryCodexPoolAccountModel400,
 } from "../../src/server/responses/core-codex-account";
 import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
+import { setConfiguredNativeOpenAiModels, setDiscoveredNativeOpenAiModels } from "../../src/codex/catalog/native-models";
+import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
 
 /** Credential generation these fixtures record under (#4952). */
 const GEN = 1;
@@ -37,6 +46,203 @@ function refusalResponse(modelId: string): Response {
 }
 
 beforeEach(() => resetCodexModelEntitlementCacheForTests());
+
+describe("a refusal fences roster fetches that started before it", () => {
+  let isolated: ReturnType<typeof installIsolatedCodexHome>;
+  const credentials: CodexModelEntitlementCredentialSnapshot[] = [];
+  const config = { codexAccounts: [] };
+  const now = 1_800_000_000_000;
+
+  function roster(...models: string[]): Response {
+    return Response.json({ models: models.map(slug => ({ slug, supported_in_api: true, visibility: "list",
+      supports_reasoning_effort_updates: true, context_window: 500_000,
+      available_access_programs: { cyber: ["standard"] }, availability_nux: { message: "fixture grant" },
+    })) });
+  }
+
+  function deferredRoster(): { promise: Promise<Response>; resolve: (response: Response) => void } {
+    let resolve!: (response: Response) => void;
+    const promise = new Promise<Response>(settle => { resolve = settle; });
+    return { promise, resolve };
+  }
+
+  beforeEach(() => {
+    isolated = installIsolatedCodexHome("ocx-refusal-roster-flight-");
+    credentials.length = 0;
+    for (const accountId of ["a", "b"]) {
+      saveCodexAccountCredential(accountId, {
+        accessToken: `access-${accountId}`, refreshToken: `refresh-${accountId}`,
+        expiresAt: now + 3600_000, chatgptAccountId: `chatgpt-${accountId}`,
+      });
+      credentials.push({ accountId, accessToken: `access-${accountId}`, chatgptAccountId: `chatgpt-${accountId}`,
+        credentialIdentity: `pool:${readCodexAccountRecord(accountId)!.generation}:chatgpt-${accountId}` });
+    }
+    bindStoredCodexPoolRoutingForTests();
+    setObservedDenialGenerationCheck(beginCodexAccountGenerationLiveCheck);
+  });
+
+  afterEach(() => {
+    resetCodexModelEntitlementCacheForTests();
+    isolated.restore();
+  });
+
+  test.each([SOL, "gpt-6.2-sol"].flatMap(model => ["old-first", "new-first"].map(order => [model, order] as const)))(
+    "%s does not rejoin or publish a pre-refusal grant (%s)", async (model, order) => {
+      const old = deferredRoster();
+      const fresh = deferredRoster();
+      let calls = 0;
+      const options = { credentials: [credentials[0]!], now, clientVersion: TEST_CLIENT_VERSION,
+        fetcher: (async () => ++calls === 1 ? old.promise : fresh.promise) as typeof fetch };
+      const earlier = resolveCodexModelEntitlements(config, options);
+      let later: ReturnType<typeof resolveCodexModelEntitlements> | undefined;
+      try {
+        expect(calls).toBe(1);
+        recordCodexModelDenialEvidence("a", model, readCodexAccountRecord("a")!.generation, now);
+        later = resolveCodexModelEntitlements(config, options);
+        expect(calls).toBe(2);
+        if (order === "old-first") {
+          old.resolve(roster(model, DAYBREAK));
+          const stale = await earlier;
+          expect(stale.confirmedAccountIds.has("a")).toBe(false);
+          expect(codexModelEntitlementStateForAccount(stale, "a", DAYBREAK)).toBe("unknown");
+          expect(isCodexModelEntitlementSnapshotCurrent(stale)).toBe(false);
+          expect(cachedDeniedCodexAccountIdsForModel(model, now)).toEqual(new Set(["a"]));
+          expect(cachedAvailableAccountGatedNativeModels(now).has(DAYBREAK)).toBe(false);
+        }
+        fresh.resolve(roster(model));
+        const current = await later;
+        expect(current.confirmedAccountIds.has("a")).toBe(true);
+        expect(isCodexModelEntitlementSnapshotCurrent(current)).toBe(true);
+        expect(cachedDeniedCodexAccountIdsForModel(model, now)).toBeUndefined();
+        old.resolve(roster(model, DAYBREAK));
+        const stale = await earlier;
+        expect(stale.confirmedAccountIds.has("a")).toBe(false);
+        expect(stale.modelsByAccount.get("a")?.size).toBe(0);
+        expect(stale.capabilitiesByAccount?.has("a")).toBe(false);
+        expect(stale.accessProgramsByAccount?.has("a")).toBe(false);
+        expect(stale.availabilityNuxByAccount?.has("a")).toBe(false);
+        expect(isCodexModelEntitlementSnapshotCurrent(stale)).toBe(false);
+        const cached = await resolveCodexModelEntitlements(config, options);
+        expect([...cached.modelsByAccount.get("a")!]).toEqual([model]);
+        expect(cachedAvailableAccountGatedNativeModels(now).has(DAYBREAK)).toBe(false);
+        expect(calls).toBe(2);
+      } finally {
+        old.resolve(roster());
+        fresh.resolve(roster());
+        await Promise.all([earlier, later]);
+      }
+    },
+  );
+
+  test("a completed cached snapshot stops being current after refusal, but another account's stays current", async () => {
+    const model = "gpt-6.2-sol";
+    const options = { now, clientVersion: TEST_CLIENT_VERSION,
+      fetcher: (async () => roster(model, DAYBREAK)) as typeof fetch };
+    const original = await resolveCodexModelEntitlements(config, { ...options, credentials: [credentials[0]!] });
+    const cached = await resolveCodexModelEntitlements(config, { ...options, credentials: [credentials[0]!] });
+    const other = await resolveCodexModelEntitlements(config, { ...options, credentials: [credentials[1]!] });
+    expect(isCodexModelEntitlementSnapshotCurrent(original)).toBe(true);
+    expect(isCodexModelEntitlementSnapshotCurrent(cached)).toBe(true);
+    recordCodexModelDenialEvidence("a", model, readCodexAccountRecord("a")!.generation, now);
+    expect(isCodexModelEntitlementSnapshotCurrent(original)).toBe(false);
+    expect(isCodexModelEntitlementSnapshotCurrent(cached)).toBe(false);
+    expect(isCodexModelEntitlementSnapshotCurrent(other)).toBe(true);
+    const restored = await resolveCodexModelEntitlements(config, { ...options, credentials: [credentials[0]!] });
+    expect(restored.confirmedAccountIds.has("a")).toBe(true);
+    expect(isCodexModelEntitlementSnapshotCurrent(restored)).toBe(true);
+    expect(isCodexModelEntitlementSnapshotCurrent(original)).toBe(false);
+  });
+
+  test("an account invalidated while a sibling is pending cannot contribute a confirmed snapshot grant", async () => {
+    const model = "gpt-6.2-sol";
+    const gate = deferredRoster();
+    const options = { credentials, now, clientVersion: TEST_CLIENT_VERSION,
+      fetcher: (async (_input, init) => new Headers(init?.headers).get("chatgpt-account-id") === "chatgpt-b"
+        ? gate.promise : roster(model, DAYBREAK)) as typeof fetch };
+    const pending = resolveCodexModelEntitlements(config, options);
+    try {
+      for (let i = 0; i < 100 && !cachedAvailableAccountGatedNativeModels(now, new Set(["a"])).has(DAYBREAK); i++) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      expect(cachedAvailableAccountGatedNativeModels(now, new Set(["a"])).has(DAYBREAK)).toBe(true);
+      recordCodexModelDenialEvidence("a", model, readCodexAccountRecord("a")!.generation, now);
+      gate.resolve(roster(model, DAYBREAK));
+      const snapshot = await pending;
+      expect(snapshot.confirmedAccountIds).toEqual(new Set(["b"]));
+      expect(codexModelEntitlementStateForAccount(snapshot, "a", DAYBREAK)).toBe("unknown");
+      expect(codexModelEntitlementStateForAccount(snapshot, "b", DAYBREAK)).toBe("granted");
+      expect(isCodexModelEntitlementSnapshotCurrent(snapshot)).toBe(false);
+    } finally {
+      gate.resolve(roster());
+      await pending;
+    }
+  });
+
+  test("cache replacement retires an older snapshot without rejecting its replacement", async () => {
+    const options = { credentials: [credentials[0]!], now, clientVersion: TEST_CLIENT_VERSION,
+      fetcher: (async () => roster(SOL, DAYBREAK)) as typeof fetch };
+    const original = await resolveCodexModelEntitlements(config, options);
+    const replacement = await resolveCodexModelEntitlements(config, { ...options, now: now + 5 * 60_000 + 1 });
+    expect(isCodexModelEntitlementSnapshotCurrent(original)).toBe(false);
+    expect(isCodexModelEntitlementSnapshotCurrent(replacement)).toBe(true);
+  });
+
+  test("evicting a roster does not leave an untracked snapshot able to pass later validation", async () => {
+    const original = await resolveCodexModelEntitlements(config, { credentials: [credentials[0]!], now,
+      clientVersion: TEST_CLIENT_VERSION, fetcher: (async () => roster(SOL, DAYBREAK)) as typeof fetch });
+    for (let i = 0; i < 64; i++) seedCodexModelEntitlementsForTests(`evict-${i}`, [SOL], now);
+    recordCodexModelDenialEvidence("a", SOL, readCodexAccountRecord("a")!.generation, now);
+    expect(isCodexModelEntitlementSnapshotCurrent(original)).toBe(false);
+  });
+
+  test("invalidating pending rosters preserves the four-flight account budget", async () => {
+    const gate = deferredRoster();
+    let calls = 0;
+    const options = { credentials: [credentials[0]!], now,
+      loadPersistedRuntime: () => ({ selectedVersion: TEST_CLIENT_VERSION }),
+      fetcher: (async () => { calls += 1; return (await gate.promise).clone(); }) as typeof fetch };
+    const pending = [TEST_CLIENT_VERSION, "0.147.0", "0.148.0", "0.149.0"].map(clientVersion => (
+      resolveCodexModelEntitlements(config, { ...options, clientVersion })
+    ));
+    try {
+      expect(calls).toBe(4);
+      recordCodexModelDenialEvidence("a", "gpt-6.2-sol", readCodexAccountRecord("a")!.generation, now);
+      const blocked = resolveCodexModelEntitlements(config, { ...options, clientVersion: TEST_CLIENT_VERSION });
+      expect(calls).toBe(4);
+      gate.resolve(roster("gpt-6.2-sol"));
+      await Promise.all(pending);
+      expect((await blocked).confirmedAccountIds.size).toBe(0);
+      expect(cachedDeniedCodexAccountIdsForModel("gpt-6.2-sol", now)).toEqual(new Set(["a"]));
+      const restored = await resolveCodexModelEntitlements(config, { ...options, clientVersion: TEST_CLIENT_VERSION });
+      expect(restored.confirmedAccountIds.has("a")).toBe(true);
+      expect(calls).toBe(5);
+      expect(cachedDeniedCodexAccountIdsForModel("gpt-6.2-sol", now)).toBeUndefined();
+    } finally {
+      gate.resolve(roster());
+      await Promise.all(pending);
+    }
+  });
+
+  test("a refusal does not invalidate another account's pending roster", async () => {
+    const gate = deferredRoster();
+    let calls = 0;
+    const options = { credentials: [credentials[1]!], now, clientVersion: TEST_CLIENT_VERSION,
+      fetcher: (async () => { calls += 1; return gate.promise; }) as typeof fetch };
+    const pending = resolveCodexModelEntitlements(config, options);
+    try {
+      recordCodexModelDenialEvidence("a", "gpt-6.2-sol", readCodexAccountRecord("a")!.generation, now);
+      gate.resolve(roster("gpt-6.2-sol", DAYBREAK));
+      await pending;
+      await resolveCodexModelEntitlements(config, options);
+      expect(calls).toBe(1);
+      expect(cachedAvailableAccountGatedNativeModels(now).has(DAYBREAK)).toBe(true);
+      expect(cachedDeniedCodexAccountIdsForModel("gpt-6.2-sol", now)).toEqual(new Set(["a"]));
+    } finally {
+      gate.resolve(roster());
+      await pending;
+    }
+  });
+});
 
 /**
  * #4906. `#4797` taught selection to order by roster denial, and the reporter still lands on a
@@ -78,6 +284,16 @@ describe("upstream refusal as per-account model denial evidence", () => {
     expect(cachedDeniedCodexAccountIdsForModel(ASTRA, now)).toBeUndefined();
   });
 
+  test("an accepted refusal invalidates an older roster grant, but a later grant still restores it", () => {
+    const now = 1_800_000_000_000;
+    const model = "gpt-6.2-sol";
+    seedCodexModelEntitlementsForTests("free", [model], now, TEST_CLIENT_VERSION);
+    recordCodexModelDenialEvidence("free", model, GEN, now + 1);
+    expect(cachedDeniedCodexAccountIdsForModel(model, now + 1)).toEqual(new Set(["free"]));
+    seedCodexModelEntitlementsForTests("free", [model], now + 2, TEST_CLIENT_VERSION);
+    expect(cachedDeniedCodexAccountIdsForModel(model, now + 2)).toBeUndefined();
+  });
+
   test("a success clears the refusal for that pair only", () => {
     const now = 1_800_000_000_000;
     recordCodexModelDenialEvidence("free", SOL, GEN, now);
@@ -102,12 +318,45 @@ describe("upstream refusal as per-account model denial evidence", () => {
     expect(cachedDeniedCodexAccountIdsForModel(SOL, now + 6 * 60 * 60_000 + 1)).toBeUndefined();
   });
 
-  test("only always-visible natives are recorded, so a 400 elsewhere cannot steer routing", () => {
+  test.each(["gpt-5.5", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra"])(
+    "%s remembers exact refusal without using roster absence as denial", model => {
+      const now = 1_800_000_000_000;
+      seedCodexModelEntitlementsForTests("free", ["gpt-6-astra"], now, TEST_CLIENT_VERSION);
+      expect(cachedDeniedCodexAccountIdsForModel(model, now)).toBeUndefined();
+      recordCodexModelDenialEvidence("free", model, GEN, now);
+      expect(cachedDeniedCodexAccountIdsForModel(model, now)).toEqual(new Set(["free"]));
+      expect(cachedDeniedCodexAccountIdsForModel(model, now, { excludeAccountIds: new Set(["free"]) })).toBeUndefined();
+      clearCodexModelDenialEvidence("free", model, GEN);
+      expect(cachedDeniedCodexAccountIdsForModel(model, now)).toBeUndefined();
+      recordCodexModelDenialEvidence("free", model, GEN, now);
+      seedCodexModelEntitlementsForTests("free", [model], now, TEST_CLIENT_VERSION);
+      expect(cachedDeniedCodexAccountIdsForModel(model, now)).toBeUndefined();
+    },
+  );
+
+  test("configured and discovered natives learn refusals without another model-name list", () => {
     const now = 1_800_000_000_000;
-    recordCodexModelDenialEvidence("free", "gpt-5.5", GEN, now);
+    try {
+      setConfiguredNativeOpenAiModels(["gpt-future-configured"]);
+      setDiscoveredNativeOpenAiModels([{ slug: "gpt-future-discovered" }]);
+      for (const model of ["gpt-future-configured", "gpt-future-discovered"]) {
+        recordCodexModelDenialEvidence("free", model, GEN, now);
+        expect(cachedDeniedCodexAccountIdsForModel(model, now)).toEqual(new Set(["free"]));
+      }
+    } finally {
+      setConfiguredNativeOpenAiModels([]);
+      setDiscoveredNativeOpenAiModels([]);
+    }
+    expect(cachedDeniedCodexAccountIdsForModel("gpt-future-configured", now)).toBeUndefined();
+    expect(cachedDeniedCodexAccountIdsForModel("gpt-future-discovered", now)).toBeUndefined();
+  });
+
+  test("only registered ungated natives are recorded, so a 400 elsewhere cannot steer routing", () => {
+    const now = 1_800_000_000_000;
+    recordCodexModelDenialEvidence("free", "gpt-not-registered", GEN, now);
     recordCodexModelDenialEvidence("free", DAYBREAK, GEN, now);
 
-    expect(cachedDeniedCodexAccountIdsForModel("gpt-5.5", now)).toBeUndefined();
+    expect(cachedDeniedCodexAccountIdsForModel("gpt-not-registered", now)).toBeUndefined();
     // Daybreak is account-gated and fails closed through the eligibility path instead.
     expect(cachedDeniedCodexAccountIdsForModel(DAYBREAK, now)).toBeUndefined();
   });
@@ -226,7 +475,7 @@ describe("unsupported-model refusal detection", () => {
 // to be relied on sits behind a condition requiring a previously cached roster,
 // so with no roster it never runs; these pin the store's own behaviour instead.
 
-describe("denial evidence is scoped to the credential generation (#4952)", () => {
+describe.each([SOL, "gpt-6.2-sol"])("denial evidence is scoped to the credential generation (#4952), %s", model => {
   beforeEach(() => {
     resetCodexModelEntitlementCacheForTests();
   });
@@ -236,15 +485,25 @@ describe("denial evidence is scoped to the credential generation (#4952)", () =>
     setObservedDenialGenerationCheck(() => (_id, generation) => generation === live);
   }
 
+  test("a late old-generation refusal cannot invalidate the replacement's cached roster", () => {
+    const now = Date.now();
+    onlyGenerationIsLive(2);
+    seedCodexModelEntitlementsForTests("pooled", [model, DAYBREAK], now, TEST_CLIENT_VERSION);
+    expect(cachedAvailableAccountGatedNativeModels(now).has(DAYBREAK)).toBe(true);
+    recordCodexModelDenialEvidence("pooled", model, 1, now);
+    expect(cachedAvailableAccountGatedNativeModels(now).has(DAYBREAK)).toBe(true);
+    expect(cachedDeniedCodexAccountIdsForModel(model, now)).toBeUndefined();
+  });
+
   test("evidence from a superseded credential stops denying the replacement", () => {
     const now = Date.now();
-    recordCodexModelDenialEvidence("pooled", SOL, 1, now);
-    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toEqual(new Set(["pooled"]));
+    recordCodexModelDenialEvidence("pooled", model, 1, now);
+    expect(cachedDeniedCodexAccountIdsForModel(model, now)).toEqual(new Set(["pooled"]));
 
     // The account reauthenticates: same id, generation 1 is no longer live.
     onlyGenerationIsLive(2);
 
-    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toBeUndefined();
+    expect(cachedDeniedCodexAccountIdsForModel(model, now)).toBeUndefined();
   });
 
   test("a late refusal from the old generation cannot deny the replacement", () => {
@@ -252,38 +511,38 @@ describe("denial evidence is scoped to the credential generation (#4952)", () =>
     // The replacement has already been refused and re-granted, so nothing is recorded
     // for generation 2 — then generation 1's in-flight 400 finally lands.
     onlyGenerationIsLive(2);
-    recordCodexModelDenialEvidence("pooled", SOL, 1, now);
+    recordCodexModelDenialEvidence("pooled", model, 1, now);
 
-    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toBeUndefined();
+    expect(cachedDeniedCodexAccountIdsForModel(model, now)).toBeUndefined();
   });
 
   test("a late refusal cannot overwrite newer evidence", () => {
     const now = Date.now();
-    recordCodexModelDenialEvidence("pooled", SOL, 2, now);
+    recordCodexModelDenialEvidence("pooled", model, 2, now);
     // Generation 1's refusal arrives afterwards; it must not take the entry back a
     // generation, which would make it vanish the moment the reader checks liveness.
-    recordCodexModelDenialEvidence("pooled", SOL, 1, now);
+    recordCodexModelDenialEvidence("pooled", model, 1, now);
 
     onlyGenerationIsLive(2);
-    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toEqual(new Set(["pooled"]));
+    expect(cachedDeniedCodexAccountIdsForModel(model, now)).toEqual(new Set(["pooled"]));
   });
 
   test("a late success from the old generation cannot clear newer evidence", () => {
     const now = Date.now();
-    recordCodexModelDenialEvidence("pooled", SOL, 2, now);
+    recordCodexModelDenialEvidence("pooled", model, 2, now);
     // Generation 1's 200 lands after generation 2 was refused. Clearing here would
     // re-admit an account that the current credential has just been refused by.
-    clearCodexModelDenialEvidence("pooled", SOL, 1);
+    clearCodexModelDenialEvidence("pooled", model, 1);
 
     onlyGenerationIsLive(2);
-    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toEqual(new Set(["pooled"]));
+    expect(cachedDeniedCodexAccountIdsForModel(model, now)).toEqual(new Set(["pooled"]));
   });
 
   test("a success from the same generation still clears, which is the ordinary case", () => {
     const now = Date.now();
-    recordCodexModelDenialEvidence("pooled", SOL, 2, now);
-    clearCodexModelDenialEvidence("pooled", SOL, 2);
-    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toBeUndefined();
+    recordCodexModelDenialEvidence("pooled", model, 2, now);
+    clearCodexModelDenialEvidence("pooled", model, 2);
+    expect(cachedDeniedCodexAccountIdsForModel(model, now)).toBeUndefined();
   });
 
   // A `main-pool` context — the stored main login taking part in rotation — has a real account
@@ -292,23 +551,23 @@ describe("denial evidence is scoped to the credential generation (#4952)", () =>
   // the login just refused, on every request. Its evidence is account-scoped instead.
   test("evidence with no generation is account-scoped, not discarded", () => {
     const now = Date.now();
-    recordCodexModelDenialEvidence("main-pool-account", SOL, undefined, now);
-    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toEqual(new Set(["main-pool-account"]));
+    recordCodexModelDenialEvidence("main-pool-account", model, undefined, now);
+    expect(cachedDeniedCodexAccountIdsForModel(model, now)).toEqual(new Set(["main-pool-account"]));
   });
 
   test("account-scoped evidence is not expired by a pool generation rolling over", () => {
     const now = Date.now();
-    recordCodexModelDenialEvidence("main-pool-account", SOL, undefined, now);
+    recordCodexModelDenialEvidence("main-pool-account", model, undefined, now);
     // No generation was ever claimed, so there is nothing for the liveness fence to supersede.
     onlyGenerationIsLive(7);
-    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toEqual(new Set(["main-pool-account"]));
+    expect(cachedDeniedCodexAccountIdsForModel(model, now)).toEqual(new Set(["main-pool-account"]));
   });
 
   test("an account-scoped success clears account-scoped evidence", () => {
     const now = Date.now();
-    recordCodexModelDenialEvidence("main-pool-account", SOL, undefined, now);
-    clearCodexModelDenialEvidence("main-pool-account", SOL, undefined);
-    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toBeUndefined();
+    recordCodexModelDenialEvidence("main-pool-account", model, undefined, now);
+    clearCodexModelDenialEvidence("main-pool-account", model, undefined);
+    expect(cachedDeniedCodexAccountIdsForModel(model, now)).toBeUndefined();
   });
 
   // The write fence has to reject a stale refusal BEFORE it mutates the map, not only when the
@@ -317,16 +576,16 @@ describe("denial evidence is scoped to the credential generation (#4952)", () =>
   // read fence can restore, because the evidence is simply gone.
   test("a stale refusal for an unseen key cannot evict valid evidence at the entry bound", () => {
     const now = Date.now();
-    recordCodexModelDenialEvidence("first-pooled", SOL, 2, now);
-    for (let i = 0; i < 511; i++) recordCodexModelDenialEvidence(`filler-${i}`, SOL, 2, now);
-    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)?.has("first-pooled")).toBe(true);
+    recordCodexModelDenialEvidence("first-pooled", model, 2, now);
+    for (let i = 0; i < 511; i++) recordCodexModelDenialEvidence(`filler-${i}`, model, 2, now);
+    expect(cachedDeniedCodexAccountIdsForModel(model, now)?.has("first-pooled")).toBe(true);
 
     // Generation 1 is dead and this account has no entry of its own. The insert would take the
     // map to 513 and evict the oldest row, which is the valid one recorded first.
     onlyGenerationIsLive(2);
-    recordCodexModelDenialEvidence("late-stale", SOL, 1, now);
+    recordCodexModelDenialEvidence("late-stale", model, 1, now);
 
-    const denied = cachedDeniedCodexAccountIdsForModel(SOL, now);
+    const denied = cachedDeniedCodexAccountIdsForModel(model, now);
     expect(denied?.has("first-pooled")).toBe(true);
     expect(denied?.has("late-stale")).toBe(false);
   });
@@ -336,14 +595,14 @@ describe("denial evidence is scoped to the credential generation (#4952)", () =>
   // store read on its behalf, and must stay unknown rather than denied.
   test("an excluded account is skipped before the liveness check reads anything", () => {
     const now = Date.now();
-    recordCodexModelDenialEvidence("excluded", SOL, 1, now);
+    recordCodexModelDenialEvidence("excluded", model, 1, now);
     let lookups = 0;
     setObservedDenialGenerationCheck(() => {
       lookups += 1;
       return () => true;
     });
 
-    expect(cachedDeniedCodexAccountIdsForModel(SOL, now, {
+    expect(cachedDeniedCodexAccountIdsForModel(model, now, {
       excludeAccountIds: new Set(["excluded"]),
     })).toBeUndefined();
     expect(lookups).toBe(0);
@@ -351,16 +610,16 @@ describe("denial evidence is scoped to the credential generation (#4952)", () =>
 
   test("the credential store is opened at most once per lookup", () => {
     const now = Date.now();
-    recordCodexModelDenialEvidence("pool-a", SOL, 1, now);
-    recordCodexModelDenialEvidence("pool-b", SOL, 1, now);
-    recordCodexModelDenialEvidence("pool-c", SOL, 1, now);
+    recordCodexModelDenialEvidence("pool-a", model, 1, now);
+    recordCodexModelDenialEvidence("pool-b", model, 1, now);
+    recordCodexModelDenialEvidence("pool-c", model, 1, now);
     let opens = 0;
     setObservedDenialGenerationCheck(() => {
       opens += 1;
       return () => true;
     });
 
-    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toEqual(new Set(["pool-a", "pool-b", "pool-c"]));
+    expect(cachedDeniedCodexAccountIdsForModel(model, now)).toEqual(new Set(["pool-a", "pool-b", "pool-c"]));
     expect(opens).toBe(1);
   });
 });

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,6 +39,7 @@ beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   home = mkdtempSync(join(tmpdir(), "ocx-direct-credit-ingress-"));
   process.env.OPENCODEX_HOME = home;
+  bindStoredCodexPoolRoutingForTests();
   codexHome = installIsolatedCodexHome("ocx-credit-ingress-native-");
   releaseSpendHome = acquireOwnedSpendHome();
   clearAccountQuota(); clearCodexQuotaPrimeState(); resetQuotaQueryBackoffForTests();

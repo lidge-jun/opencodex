@@ -77,6 +77,9 @@ context_management.experimental_mode = true
 시작하세요. 이 기능은 명시적으로 켜야 하며, 사용자 소유 URL과 원격 사용자 지정 provider
 주입은 변경하지 않습니다. 컨텍스트 창이나 압축 한도를 덮어쓰지 않습니다.
 
+Windows 데스크톱 호환의 관찰 모드는 이 경로가 현재 OpenCodex 프록시의 주소와 포트를
+가리키면 실험적 컨텍스트 관리를 켠 상태에서도 시작할 수 있습니다.
+
 이 backend 접두사는 Responses WebSocket 업그레이드를 포함한 기존 데이터 경로의 별칭입니다.
 원래 `/v1` 경로와 realtime sideband 오버라이드도 유지됩니다. 열 개의 네이티브
 `alpha/history/v2/*`, `alpha/notes/v2/*` POST 엔드포인트는 `openai-responses` 어댑터와 정식

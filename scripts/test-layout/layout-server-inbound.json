@@ -1,4 +1,8 @@
 {
+  "provider-egress-account.test.ts": "lib",
+  "provider-egress-account-calls.test.ts": "lib",
+  "account-diagnostics-routes.test.ts": "server",
+  "explicit-proxy-no-proxy.test.ts": "lib",
   "gemini-native.test.ts": "server",
   "gemini-native-wire.test.ts": "server",
   "gemini-native-routes.test.ts": "server",
@@ -6,6 +10,7 @@
   "claude-translated-hosted-advisor-choice.test.ts": "claude-integration",
   "management-provider-forward-advisor-tool.test.ts": "server",
   "local-control-socket.test.ts": "server",
+  "local-control-socket-windows.test.ts": "server",
   "config-concurrent-inbound-body.test.ts": "config",
   "inbound-body-admission.test.ts": "server",
   "inbound-body-budget.test.ts": "server",
