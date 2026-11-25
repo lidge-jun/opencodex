@@ -1,4 +1,5 @@
 import { clearableDeadline } from "../lib/abort";
+import { inheritAdapterSupportExecutor } from "../lib/executor-physical-send-receipt";
 import { sendTrackingRequestSlot } from "../providers/request-pacing";
 import type { ProviderFetch } from "../server/responses/fetch-helpers";
 
@@ -42,9 +43,17 @@ export function pacingHeaderDeadline(timeoutMs: number, parent: AbortSignal) {
       current.signal.removeEventListener("abort", relayExpiry);
     },
     /** Preserve the pacing seams used by adapter physical-send helpers, without double admission. */
-    pacedFetch(executor: typeof globalThis.fetch): typeof globalThis.fetch {
+    pacedFetch(executor: typeof globalThis.fetch, onDispatch?: () => void): typeof globalThis.fetch {
       const pacing = executor as ProviderFetch;
-      if (!pacing.waitForPacing) return executor;
+      if (!pacing.waitForPacing) {
+        if (!onDispatch) return executor;
+        return ((input, init) => {
+          signal.throwIfAborted();
+          init?.signal?.throwIfAborted();
+          onDispatch();
+          return executor(input, init);
+        }) as typeof globalThis.fetch;
+      }
       const waitForPacing: NonNullable<ProviderFetch["waitForPacing"]> = async (sendSignal) => {
         pause();
         try {
@@ -59,10 +68,12 @@ export function pacingHeaderDeadline(timeoutMs: number, parent: AbortSignal) {
         return sendTrackingRequestSlot(slot, () => {
           signal.throwIfAborted();
           init?.signal?.throwIfAborted();
+          onDispatch?.();
           return unpacedFetch(input, init);
         });
       };
-      return Object.assign(wrapped, { preconnect: executor.preconnect, waitForPacing, unpacedFetch }) as ProviderFetch;
+      const paced = Object.assign(wrapped, { preconnect: executor.preconnect, waitForPacing, unpacedFetch }) as ProviderFetch;
+      return inheritAdapterSupportExecutor(paced, executor);
     },
   };
 }

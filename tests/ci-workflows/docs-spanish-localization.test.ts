@@ -184,6 +184,24 @@ describe("Spanish documentation localization", () => {
   });
 
   test.each([
+    ["reference/configuration/providers.md", /only when tools are available on that iteration/, /without another send/],
+    ["es/reference/configuration/providers.md", /solo si hay herramientas disponibles en esa iteración/, /sin otro envío/],
+  ] as const)("qualifies hosted-search re-asks in %s", (page, toolsAvailable, noResend) => {
+    const row = source(join(root, page)).split("\n").find(line => line.startsWith("| `terminalContinuationGuard?` |"));
+    expect(row).toMatch(toolsAvailable);
+    expect(row).toMatch(noResend);
+  });
+
+  test.each([
+    ["reference/configuration/providers.md", /charged against the request send budget and configured spend ceilings/, /refuses it before dispatch/],
+    ["es/reference/configuration/providers.md", /se carga al presupuesto de envíos de la solicitud y a los límites de gasto configurados/, /la rechaza antes del envío/],
+  ] as const)("charges terminal re-asks to the send budget in %s", (page, charged, refused) => {
+    const row = source(join(root, page)).split("\n").find(line => line.startsWith("| `terminalContinuationGuard?` |"));
+    expect(row).toMatch(charged);
+    expect(row).toMatch(refused);
+  });
+
+  test.each([
     ["en", /routing policy aliases.*combo aliases/],
     ["es", /alias de políticas de enrutamiento.*alias de combos/],
     ["fr", /alias de politique de routage.*alias de combos/],
@@ -208,6 +226,13 @@ describe("Spanish documentation localization", () => {
     expect(passthrough).toMatch(/Claude picker and Desktop ingress aliases resolve before `modelMap`/);
     expect(passthrough).toMatch(/a `modelMap` entry keyed by a raw model ID.+(?:either|both) /i);
     expect(passthrough).toMatch(/router.+provider-model alias/);
+  });
+
+  test.each([
+    ["guides/kiro-request-credits.md", "The Combo attempt table shows the USD estimate for each attempt and the calculation for each credit-priced attempt."],
+    ["es/guides/kiro-request-credits.md", "La tabla del Combo muestra el costo estimado en USD de cada intento y el cálculo de los intentos con precio por crédito."],
+  ])("%s describes the USD estimate and credit calculation shown per Combo attempt", (path, description) => {
+    expect(source(join(root, path))).toContain(description);
   });
 
   test("code spans keep a trailing backslash literal without swallowing later identifiers", () => {

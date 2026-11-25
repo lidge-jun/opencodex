@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { isImageGenName, extractHostedImageGeneration, buildImageTool } from "../../src/images/synthetic-tool";
+import { resolveXaiAspectRatioLiteral } from "../../src/images/xai-client";
 
 describe("isImageGenName", () => {
   test("'image_gen' → true", () => {
@@ -88,6 +89,14 @@ describe("buildImageTool", () => {
     const tool = buildImageTool();
     const aspect = (tool.parameters as { properties?: { aspect_ratio?: { enum?: string[] } } })
       .properties?.aspect_ratio;
-    expect(aspect?.enum).toEqual(["1:1", "16:9", "9:16", "4:3", "3:4", "auto"]);
+    expect(aspect?.enum).toEqual(["1:1", "16:9", "9:16", "4:3", "3:4", "2:3", "3:2", "9:19.5", "19.5:9", "9:20", "20:9", "1:2", "2:1", "21:9", "5:2", "auto"]);
+    // Every advertised literal is one the xAI client forwards.
+    for (const literal of aspect!.enum!.filter(value => value !== "auto")) expect(resolveXaiAspectRatioLiteral(literal)).toBe(literal);
+  });
+
+  test("offers the xAI 2.0 quality values", () => {
+    const tool = buildImageTool();
+    const quality = (tool.parameters as { properties?: { quality?: { enum?: string[] } } }).properties?.quality;
+    expect(quality?.enum).toEqual(["low", "medium", "auto"]);
   });
 });

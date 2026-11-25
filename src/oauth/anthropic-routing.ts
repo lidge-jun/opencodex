@@ -1,4 +1,6 @@
 import { clearAllAnthropicFamilyQuota, anthropicModelQuotaFor, anthropicModelPercents, anthropicModelRankPercent, anthropicModelWeeklyPercent } from "./anthropic-model-quota";
+import { resetNearWeightOf } from "../routing/machine-weighted-routing";
+import { getAnthropicResetNearQuota } from "../providers/quota/account-cache";
 /**
  * Opt-in Anthropic OAuth account pool (#294).
  *
@@ -881,13 +883,18 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     if (!admitted(config)) return null;
     const strategy = isAnthropicAccountPoolEnabled(config) ? anthropicPoolStrategy(config) : "quota";
     const eligible = routeCandidates(getEligibleAnthropicAccounts(now, model), decision).filter(id => id !== excludeId && !excludedAccountIds?.has(id));
-    if (strategy === "round-robin") {
-      return peekRoundRobinAccount(poolKey, eligible, stickyLimitForPool(config));
+    if (strategy === "round-robin" || strategy === "reset-near-weighted") {
+      const weightOf = strategy === "reset-near-weighted" ? anthropicResetNearWeightOf(eligible, now) : undefined;
+      return peekRoundRobinAccount(poolKey, eligible, stickyLimitForPool(config), weightOf);
     }
     if (strategy === "fill-first") {
       return pickNextFillFirstAnthropicAccount(config, excludeId, eligible, decision, model);
     }
     return pickLowestUsage(config, excludeId, now, decision, model, excludedAccountIds);
+  }
+
+  function anthropicResetNearWeightOf(eligible: readonly string[], now: number) {
+    return resetNearWeightOf(eligible, id => getAnthropicResetNearQuota(PROVIDER, id, now), now);
   }
 
   function stickyLimitForPool(config: OcxConfig): number {
@@ -946,11 +953,13 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     const strategy = anthropicPoolStrategy(config);
     if (strategy === "quota") return null;
 
-    if (strategy === "round-robin") {
+    if (strategy === "round-robin" || strategy === "reset-near-weighted") {
       const eligible = routeCandidates(getEligibleAnthropicAccounts(now, model), decision);
       const limit = stickyLimitForPool(config);
       const headroom = model ? eligible.filter(id => !anthropicModelExhausted(id, model)) : eligible;
-      const picked = peekRoundRobinAccount(poolKey, headroom.length ? headroom : eligible, limit);
+      const candidates = headroom.length ? headroom : eligible;
+      const weightOf = strategy === "reset-near-weighted" ? anthropicResetNearWeightOf(candidates, now) : undefined;
+      const picked = peekRoundRobinAccount(poolKey, candidates, limit, weightOf);
       if (!picked) return null;
       return { accountId: picked, reason: "round-robin" };
     }
@@ -1044,9 +1053,8 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
 
     const strategy = anthropicPoolStrategy(config);
     // No session identity (Desktop turns without a sticky key): hold the current
-    // active under RR/fill-first instead of treating every turn as a new session.
-    // Round-robin only when there is a real new-session key (or active is unusable).
-    if (!key && (strategy === "round-robin" || strategy === "fill-first")) {
+    // active for new-session rotation strategies while it can still serve the turn.
+    if (!key && (strategy === "round-robin" || strategy === "fill-first" || strategy === "reset-near-weighted")) {
       const activeOk = set.accounts.some(a => a.id === set.activeAccountId && a.needsReauth !== true)
         && !isCooled(set.activeAccountId, now)
         && eligible.includes(set.activeAccountId) && (!model || !anthropicModelExhausted(set.activeAccountId, model));
@@ -1300,9 +1308,16 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     const current = captureOAuthAccountSelection(PROVIDER);
     if (current?.accountId !== committed.accountId || current.revision !== committed.revision) return false;
     if (isAnthropicAccountPoolEnabled(options.config)) {
-      if (anthropicPoolStrategy(options.config) === "round-robin" && options.reason !== "affinity") {
+      const rotationStrategy = anthropicPoolStrategy(options.config);
+      const weighted = rotationStrategy === "reset-near-weighted";
+      if (options.reason !== "affinity" && (rotationStrategy === "round-robin" || (weighted && options.reason !== "active"))) {
         const limit = stickyLimitForPool(options.config);
-        const picked = pickRoundRobinAccount(poolKey, routeCandidates(getEligibleAnthropicAccounts(Date.now(), options.model), options.routeDecision ?? null), limit);
+        const now = Date.now();
+        const eligible = routeCandidates(getEligibleAnthropicAccounts(now, options.model), options.routeDecision ?? null);
+        const headroom = weighted && options.model ? eligible.filter(id => !anthropicModelExhausted(id, options.model)) : eligible;
+        const candidates = headroom.length ? headroom : eligible;
+        const weightOf = weighted ? anthropicResetNearWeightOf(candidates, now) : undefined;
+        const picked = pickRoundRobinAccount(poolKey, candidates, limit, weightOf);
         if (picked !== accountId) seedPoolRotationAccount(poolKey, accountId);
         notePoolRotationSuccess(poolKey, accountId, limit);
       }

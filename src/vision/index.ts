@@ -282,7 +282,8 @@ async function executeDescription(
  * Replace every image part in the request with a gpt-described text part, so a text-only model can
  * reason about it. Mutates `parsed.context.messages` in place; uses the message's own text as the
  * description context. All images are described with bounded concurrency (not serially) so a
- * multi-image turn doesn't pay the sum of per-image latencies. Failures degrade to a short marker.
+ * multi-image turn doesn't pay the sum of per-image latencies. If all descriptions are required,
+ * a failure leaves the request untouched. Otherwise failed images become short markers.
  */
 export async function describeImagesInPlace(
   parsed: OcxParsedRequest,
@@ -291,7 +292,8 @@ export async function describeImagesInPlace(
   abortSignal?: AbortSignal,
   recordSidecarOutcome?: SidecarOutcomeRecorder,
   translatorBudget?: TranslatorBudget,
-): Promise<void> {
+  requireAll = false,
+): Promise<boolean> {
   const jobs: ImageJob[] = [];
   const targets: { msg: OcxMessage; parts: OcxContentPart[] }[] = [];
   for (const msg of parsed.context.messages) {
@@ -310,7 +312,7 @@ export async function describeImagesInPlace(
   }
   if (jobs.length === 0) {
     syncRawBodyImageDescriptions(parsed, []);
-    return;
+    return true;
   }
 
   const inFlight = new Map<string, Promise<DescribeOutcome>>();
@@ -363,6 +365,8 @@ export async function describeImagesInPlace(
 
   await runBounded(executions, VISION_CONCURRENCY, execute => execute());
   const outcomes = await Promise.all(outcomePromises);
+  const complete = outcomes.every(outcome => !outcome.error && outcome.text.trim().length > 0);
+  if (requireAll && !complete) return false;
 
   let oi = 0;
   const descriptions: string[] = [];
@@ -385,4 +389,5 @@ export async function describeImagesInPlace(
     msg.content = newParts;
   }
   syncRawBodyImageDescriptions(parsed, descriptions);
+  return complete;
 }

@@ -47,7 +47,6 @@ import {
 } from "../ws-bridge";
 import { websocketsEnabled } from "../../config";
 import { metricsExportEnabled } from "../../config/feature-flags";
-import { grokDefaultReasoningEffort } from "../../grok/effort";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
 import {
@@ -93,6 +92,7 @@ import {
   type RequestLogEntry,
 } from "../request-log";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
+import { mintConnectionReplayScope, releaseConnectionReplayScope } from "../../responses/state/connection-scope";
 import { responseWithDeferredRequestLog } from "../relay";
 import { createRequestMetricsOwner } from "../request-metrics";
 import { cachedKiroQuotaMetricRows } from "../../providers/kiro-quota-metrics";
@@ -110,6 +110,7 @@ import {
   resolveApiAuth,
   resolveResponsesApiAuth,
   resolveFilteredReplayPrincipal,
+  resolveContextPrincipal,
   type RequestPolicyView,
   withCors,
   withManagementCors,
@@ -128,12 +129,9 @@ import {
 } from "../claude-messages";
 import { handleChatCompletions } from "../chat-completions";
 import { anthropicErrorResponse } from "../../claude/outbound";
-import {
-  buildDesktop3pRegistry,
-  desktop3pModelOptions,
-  generateDesktop3pModels,
-} from "../../claude/desktop-3p";
+import { desktopSnapshotBusyResponse, renderAnthropicModelListing } from "./anthropic-model-listing";
 import { buildDesktopDiscoveryInputs } from "../../claude/desktop-discovery-inputs";
+import { observeModelCacheRevision } from "../../codex/model-cache";
 import { handleImages } from "../images";
 import {
   handleLive,
@@ -219,7 +217,7 @@ import { dispatchGeminiRoute } from "./gemini-routes";
 
 import { readyProtocolMetadata } from "../../remote/protocol";
 import { homeInstanceId, stampServedBy } from "../../remote/served-by";
-import { modelCapabilityFields } from "../models-capabilities";
+import { grokEffortFields, modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
 import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-error";
 import { withGrokSessionIdentity } from "../../grok/session-identity";
@@ -584,6 +582,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (!websocketLease) return serverBusyResponse(req, "Codex WebSockets", policy);
         const forwardHeaders = selectForwardHeaders(req.headers);
         const replayPrincipal = resolveFilteredReplayPrincipal(req, config, admission, forwardHeaders);
+        // An unidentified loopback caller gets a server-minted replay scope bound to this
+        // socket and its handshake thread; a keyed caller keeps the durable principal path.
+        const replayScope = admission.kind === "loopback" && resolveContextPrincipal(req, config, admission) === undefined
+          ? mintConnectionReplayScope(req.headers.get("thread-id") ?? undefined)
+          : undefined;
         // Upgrade on the server that RECEIVED this request, not the captured `server`
         // binding. They are the same object for the public listener, but the
         // unauthenticated loopback listener (#1102) is a second Bun.serve, and handing its
@@ -594,9 +597,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             admission,
             websocketLease,
             sessionLaneIdFromRequest(req.headers),
-            classifyUsageClient(req.headers), replayPrincipal,
+            classifyUsageClient(req.headers), replayPrincipal, replayScope,
           ), peerLocal: classifyRequestPeer(ingress, requestServer.requestIP?.(req)?.address, config.dashboardTrustedProxy, req.headers).local },
         })) return undefined as unknown as Response;
+        releaseConnectionReplayScope(replayScope);
         websocketLease.release();
         return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
       }
@@ -924,6 +928,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       }
 
       if (url.pathname === "/v1/models" && req.method === "GET") {
+        let config = ctx.config;
         // #809: the catalog read sits immediately before model discovery because it shares
         // that route's admission rationale exactly. Keep them adjacent so a future change to
         // one is made in sight of the other.
@@ -942,11 +947,15 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // The Integrations page reports whether a Cursor client has reached this proxy; the
         // recorder keeps only a bounded User-Agent value and a timestamp, in memory.
         recordCursorSeen(req.headers);
+        const providerContentRevisions = new Map<string, string>();
+        // Entitlement resolution and imports can outlive the gather that chose these rows.
+        const canInstallAliases = () => config === ctx.config
+          && [...providerContentRevisions].every(([provider, revision]) => observeModelCacheRevision(provider) === revision);
         let goModels;
         let modelEntitlements;
         try {
           [goModels, modelEntitlements] = await Promise.all([
-            fetchAllModels(config),
+            fetchAllModels(config, { providerContentRevisions, allowSuperseded: true, publishProjection: projection => { config = projection; } }),
             // Codex sends its own client_version on this request, and upstream filters the
             // entitlement roster by it. Passing it through is what stops an entitled account
             // being told it cannot use models a newer client can (#2886).
@@ -960,6 +969,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           ]);
         } catch (error) {
           if (error instanceof CatalogGatherBusyError) {
+            if (wantsDesktopConfig && !canInstallAliases()) return desktopSnapshotBusyResponse(req, policy);
             return withCors(new Response(JSON.stringify({ error: { type: "server_error", code: "catalog_busy", message: error.message } }), {
               status: 503,
               headers: { "content-type": "application/json", "Retry-After": "1" },
@@ -1021,7 +1031,6 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           config, models: goModels, modelEntitlements,
           desktopNativeCandidates: desktopVisibleNativeSlugs(config),
         });
-        const desktopNativeSlugs = desktopInputs.nativeSlugs;
         const goOrdered = desktopInputs.routedModels;
         // Claude Code / Claude Desktop gateway model discovery (GET /v1/models with
         // Anthropic-style headers; 003 G1-G8 + devlog 131). Entries use the official
@@ -1040,10 +1049,6 @@ export function createServeOptions(ctx: ServeOptionsContext) {
          * `additional_speed_tiers` the Codex picker's own toggle is built from — but an
          * operator capability override or the final wire resolution can still make the
          * route ineligible, and `decideTier` would then drop the tier the row advertised.
-         *
-         * Declared here, above the Claude discovery call, because that call reads it while
-         * the raw OpenAI mapper further down does too; defining it there would leave this
-         * use in its temporal dead zone.
          */
         const nativeFastEligible = (metadataId: string): boolean =>
           catalogFastRowEligible(config, { provider: OPENAI_CODEX_PROVIDER_ID, id: metadataId, native: true });
@@ -1056,97 +1061,28 @@ export function createServeOptions(ctx: ServeOptionsContext) {
          * cannot classify it. Its aggregated `supportsServiceTier` is already true only
          * when EVERY member supports the tier (aggregation.ts:201), which is the right
          * rule for a row that fans out to all of them.
-         *
-         * Declared beside nativeFastEligible, above the Claude discovery call that reads
-         * both; defining it near the raw OpenAI mapper below would leave that use in its
-         * temporal dead zone.
          */
         const catalogRowFastEligible = (m: { provider: string; id: string; supportsServiceTier?: boolean }): boolean =>
           catalogFastRowEligible(config, m);
 
         if (wantsAnthropicList && !url.searchParams.has("client_version")) {
-          if (wantsDesktopConfig) {
-            const models = config.claudeCode?.enabled === false ? [] : generateDesktop3pModels(
-              desktopInputs.nativeSlugs, desktopInputs.routedModels,
-              config.claudeCode?.desktopProfile, desktopInputs.nativeContextCap,
-              desktop3pModelOptions(config.claudeCode),
-            );
-            const response = jsonResponse({ version: 1, models }, 200, req, policy);
-            response.headers.set("Cache-Control", "no-store");
-            return response;
-          }
-          if (config.claudeCode?.enabled === false) return jsonResponse({ data: [] }, 200, req, policy);
-          // Build Desktop 3P registry so inbound alias resolution works for subsequent requests.
-          buildDesktop3pRegistry(
-            desktopNativeSlugs,
-            desktopInputs.routedModels,
-            config.claudeCode?.desktopProfile,
-            desktopInputs.nativeContextCap,
-          );
-          const { buildAnthropicModelInfos, configuredRoutedDisplayName } = await import("../../claude/model-info");
-          const { resolveAutoContext } = await import("../../claude/context-windows");
-          const { resolvableDesktop3pAlias } = await import("../../claude/desktop-3p");
-          // Per-surface id family (devlog 050): explicit ?ids= wins; otherwise the
-          // Claude Code CLI discovery UA (`claude-code/<version>`, binary n_()) gets
-          // readable claude-ocx ids and every other client (Desktop 3P) keeps the
-          // hashed family its config was written with. Unknown UA -> hashed (safe).
-          const idsParam = url.searchParams.get("ids");
-          const idStyle = idsParam === "cli"
-            ? "readable" as const
-            : idsParam === "desktop"
-              ? "desktop3p" as const
-              : (/^claude-code\//i.test(req.headers.get("user-agent") ?? "") ? "readable" as const : "desktop3p" as const);
-          const data = buildAnthropicModelInfos(
-            desktopNativeSlugs,
-            goOrdered,
-            resolveAutoContext(config.claudeCode),
-            idStyle,
-            resolvableDesktop3pAlias,
-            desktopInputs.nativeContextCap,
-            config.fastMode,
-            // Explicit opt-out omits the Fast predicate.
-            config.fastRows !== false
-              ? (model: { provider: string; id: string; supportsServiceTier?: boolean }) =>
-                model.provider === "native"
-                  ? nativeFastEligible(model.id)
-                  : catalogRowFastEligible(model)
-              : undefined,
-            { modelPickerOrder: config.modelPickerOrder, featured: config.subagentModels }, configuredRoutedDisplayName(config),
-          );
-          return jsonResponse({ data }, 200, req, policy);
+          return renderAnthropicModelListing({
+            req, url, policy, config, desktopInputs, wantsDesktopConfig, canInstallAliases,
+            fastEligible: model => model.provider === "native"
+              ? nativeFastEligible(model.id)
+              : catalogRowFastEligible(model),
+          });
         }
         if (url.searchParams.has("client_version")) {
           const { buildCodexModelList } = await import("../codex-model-list");
           return jsonResponse(buildCodexModelList({
             config, nativeSlugs, availableAccountNativeSlugs, accountNativeSlugs,
             accountNativeSlugsBySelector, goOrdered, exactComboSlugs, accountSelectors,
-            suppressedBareNativeSlugs, disabledModels,
+            suppressedBareNativeSlugs, disabledModels, roster: { snapshot: modelEntitlements, accountTargets },
           }), 200, req, policy);
         }
         // OpenAI list shape: native gpt bare + routed models namespaced "<provider>/<id>"
         // (pure availability list — disabled natives are omitted entirely).
-        // Grok Build discovers models through this endpoint too, and its model picker only
-        // enables /effort for entries that advertise the reasoning ladder in the Grok model
-        // catalog shape (supports_reasoning_effort + reasoning_efforts[]). The Codex catalog
-        // branch above already carries the same ladders, so mirror them here — native rows
-        // from the upstream snapshot, routed rows from the configured provider tiers. The
-        // default uses the same canonical fallback as the Codex catalog resolver
-        // (configured default, then medium, then high, then the first tier). Extra fields
-        // are ignored by plain OpenAI clients.
-        const grokEffortOption = (value: string, isDefault: boolean) => ({
-          value,
-          label: `${value[0].toUpperCase()}${value.slice(1)} Effort`,
-          ...(isDefault ? { default: true } : {}),
-        });
-        const grokEffortFields = (efforts: string[], configuredDefault?: string) => {
-          const defaultEffort = grokDefaultReasoningEffort(efforts, configuredDefault);
-          if (defaultEffort === undefined) return {};
-          return {
-            supports_reasoning_effort: true,
-            reasoning_effort: defaultEffort,
-            reasoning_efforts: efforts.map(effort => grokEffortOption(effort, effort === defaultEffort)),
-          };
-        };
         // Cursor's local-agent runtime (Private Inference build) reads api_types + capabilities
         // to enable its effort control; every other consumer ignores them. See
         // src/server/models-capabilities.ts.
@@ -1898,11 +1834,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
       }
 
-      // Data-plane guard: unknown /v1/* paths must fail with JSON 404, never fall through to the
+      // Data-plane guard: unknown /v1/* and /v1beta/* paths must fail with JSON 404, never fall through to the
       // GUI static handler (extensionless paths would get index.html with HTTP 200 and codex-rs
       // endpoint clients — memories/*, realtime/* — would surface confusing
       // serde decode errors instead of a clean not-found).
-      if (url.pathname.startsWith("/v1/")) {
+      if (url.pathname.startsWith("/v1/") || url.pathname.startsWith("/v1beta/")) {
         return withCors(formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)), req, policy);
       }
 

@@ -29,6 +29,8 @@ export const RESPONSES_CORE_MODULES = [
   "native-steering-policy.ts",
   "native-steering-replay.ts",
   "codex-ws-correlation.ts",
+  // Reached from native dispatch: acknowledged-prefix state and its physical-send accounting.
+  "codex-ws-send-accounting.ts",
   "core-lifetime.ts",
   "core-replay.ts",
   "core-errors.ts",
@@ -41,10 +43,12 @@ export const RESPONSES_CORE_MODULES = [
   // Reached from core.ts: the keepalive head a slow streaming combo selection commits (#8326).
   "combo-selection-keepalive.ts",
   "deferred-send-reporter.ts",
+  "combo-admission-snapshot.ts",
   "combo-requested-effort.ts",
   "core-combo-native.ts",
   // Reached from core-combo.ts: tool-loop continuations stay on the lane's previous target (#7298).
   "combo-tool-loop-pin.ts",
+  "command-code-decision-refusal.ts",
   // Reached from core-combo.ts: opt-in JEV session pin keeps a session on its decided target (#7525).
   "jev-session-pin.ts",
   // Reached from core-combo.ts: the JEV model backend's internal decision turn.
@@ -52,6 +56,7 @@ export const RESPONSES_CORE_MODULES = [
   // Reached from core-combo.ts: JEV effort choices and resolved native quota identity.
   "jev-combo-choice.ts",
   "request-prepare.ts",
+  "replay-owner.ts",
   // Reached from request-prepare.ts and compact.ts: the eager Codex MCP catalog diagnostic (#8133).
   "codex-tool-catalog.ts",
   // Reached from codex-tool-catalog.ts: the rendered Code Mode exec section parser.

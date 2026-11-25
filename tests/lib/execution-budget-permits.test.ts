@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
+  capRequestExecutionBudgetSends,
+  createBoundedSameTargetRecovery,
   createRequestExecutionBudget,
   createPhysicalSendReporter,
   deriveRequestExecutionBudget,
+  rebindPhysicalSend,
   reportDispatchSends,
   type RequestExecutionBudgetPolicy,
 } from "../../src/lib/request-execution-budget";
@@ -113,6 +116,48 @@ function policyEpochFixture(maxTokens?: number, limit = 4) {
   };
   return { ledger, journal, policy, request, configure: (maxTokens?: number) => ledger.reconfigure({ ...policy, pool: { maxTokens } }) };
 }
+
+test("a configured retry rebind keeps its fresh booking or rebooks it against the selected identity", async () => {
+  const { ledger, request } = policyEpochFixture(30);
+  const { tracker, budget, send } = request();
+  await send("A");
+  await send("B");
+  const reporter = createPhysicalSendReporter(budget, () => ({ poolId: "P", identityId: "A" }));
+  try {
+    expect(reporter.beforeSend?.(true)).toBe(true);
+    await reporter.execute!(async () => {
+      expect(rebindPhysicalSend(budget, { poolId: "P", identityId: "A" })).toBe(true);
+      expect(ledger.snapshot("identity", "A")?.reserved).toBe(20);
+      expect(rebindPhysicalSend(budget, { poolId: "P", identityId: "B" })).toBe(true);
+      expect(ledger.snapshot("identity", "A")?.reserved).toBe(10);
+      expect(ledger.snapshot("identity", "B")?.reserved).toBe(20);
+      expect(ledger.snapshot("pool", "P")?.reserved).toBe(30);
+    });
+    reporter(1);
+  } finally { reporter.close?.(); }
+  tracker.settle(undefined);
+  expect(ledger.snapshot("pool", "P")).toMatchObject({ reserved: 0, unresolved: 30 });
+});
+
+test("adapter-owned sends under the compact cap prepay each retry on the same target", async () => {
+  const { ledger, request } = policyEpochFixture(20);
+  const { tracker, budget, send } = request();
+  const capped = capRequestExecutionBudgetSends(budget, 4)!;
+  await send();
+  const intent = { sendClass: "transient", targetKey: "P/model" } as const;
+  const abandoned = capped.reserveDispatch(intent);
+  if (!abandoned.allowed) throw new Error("fixture retry refused");
+  expect(ledger.snapshot("pool", "P")?.reserved).toBe(20);
+  abandoned.permit.release();
+  expect(ledger.snapshot("pool", "P")?.reserved).toBe(10);
+  const retry = capped.reserveDispatch(intent);
+  if (!retry.allowed) throw new Error("fixture retry refused");
+  expect(retry.permit.use()).toBe(true);
+  expect(capped.reserveDispatch(intent)).toEqual({ allowed: false, reason: "spend-exhausted" });
+  expect(capped.used).toBe(2);
+  tracker.settle(undefined);
+  expect(ledger.snapshot("pool", "P")).toMatchObject({ reserved: 0, unresolved: 20 });
+});
 
 test("request construction and read-only policy checks do not capture before actual start", async () => {
   const { request, configure, journal } = policyEpochFixture();
@@ -258,6 +303,53 @@ test("a prepaid reservation freezes L before a wider derived scope claims its fi
   expect(wires).toBe(1);
   expect(budget.physicalStarted).toBe(1);
   tracker.settle({ inputTokens: 10 });
+});
+
+test("an explicit send ceiling survives a derived scope with the same durable spend observer", async () => {
+  const { request, ledger } = policyEpochFixture(100, 4);
+  const { tracker, budget } = request();
+  let wires = 0;
+  const send = (scope: typeof budget) => fetchWithTransientRetry(
+    async () => { wires++; return new Response(); },
+    { attempts: 1, onSendsConsumed: createPhysicalSendReporter(scope, () => ({ poolId: "P" })) },
+  );
+  await send(budget);
+  const capped = capRequestExecutionBudgetSends(budget, 2);
+  expect(capped).toBe(budget);
+  const child = deriveRequestExecutionBudget(budget, { ...budget.policy, maxTotalModelSends: 6, baseSendAllowance: 6 });
+  expect(child.physicalLimit).toBe(2);
+  expect(child.remainingBaseSends(6)).toBe(1);
+  await send(child);
+  expect(child.reserveDispatch({ sendClass: "combo-failover", targetKey: "spare" }))
+    .toEqual({ allowed: false, reason: "total-exhausted" });
+  await expect(send(child)).rejects.toThrow(SendBudgetExhaustedError);
+  expect(wires).toBe(2);
+  expect(budget.used).toBe(2);
+  expect(budget.physicalStarted).toBe(2);
+  tracker.settle({ inputTokens: 10 });
+  expect(ledger.snapshot("pool", "P")).toMatchObject({ reserved: 0, settled: 10, unresolved: 10 });
+});
+
+test("a capped caller budget retains its own reservations and refuses unshareable prepayment", () => {
+  const backing = createRequestExecutionBudget();
+  const caller = {
+    ...backing,
+    get used() { return backing.used; },
+    set used(next: number) { backing.used = next; },
+  };
+  const capped = capRequestExecutionBudgetSends(caller, 1);
+  if (!capped) throw new Error("fixture cap denied");
+  const intent = { sendClass: "auth-recovery", targetKey: "P" } as const;
+  expect(capped.reserveDispatch({ ...intent, countedExternally: true }).allowed).toBe(false);
+  expect(caller.used).toBe(0);
+  const decision = capped.reserveDispatch(intent);
+  if (!decision.allowed) throw new Error("fixture reservation denied");
+  expect(caller.used).toBe(1);
+  expect(capped.remainingBaseSends(3)).toBe(0);
+  expect(capped.reserveDispatch(intent).allowed).toBe(false);
+  decision.permit.release();
+  expect(caller.used).toBe(0);
+  expect(capped.remainingBaseSends(3)).toBe(1);
 });
 
 describe("atomic dispatch permits", () => {
@@ -862,4 +954,42 @@ test("adapter executor refuses a reselection whose identity cannot obtain a norm
   tracker.settle(undefined);
   expect(wires).toBe(0);
   expect(ledger.snapshot("identity", "B")).toMatchObject({ settled: 30, reserved: 0, unresolved: 0 });
+});
+
+describe("bounded same-target recovery allowances", () => {
+  test("an ordinary reservation refund cannot enlarge the same-target recovery grant", () => {
+    const budget = createRequestExecutionBudget();
+    const ordinary = budget.reserveDispatch({ sendClass: "initial", targetKey: "openai|model" });
+    if (!ordinary.allowed) throw new Error("ordinary fixture reservation refused");
+    const recovery = createBoundedSameTargetRecovery(budget, "openai|model", 1);
+    ordinary.permit.release();
+    const retry = recovery.reserve();
+    if (!retry.allowed) throw new Error("recovery fixture reservation refused");
+    expect(retry.permit.use()).toBe(true);
+    expect(budget.used).toBe(1);
+    expect(recovery.reserve()).toEqual({ allowed: false, reason: "total-exhausted" });
+  });
+
+  for (const observed of [false, true]) {
+    test(`a foreign budget cannot mint a second recovery grant through a derived view (observed=${observed})`, () => {
+      const foreign = { ...createRequestExecutionBudget(), used: 1, workflowCountObserved: observed };
+      const first = createBoundedSameTargetRecovery(foreign, "openai|model", 1);
+      const derived = deriveRequestExecutionBudget(foreign, foreign.policy);
+      const again = createBoundedSameTargetRecovery(derived, "openai|model", 7);
+      if (observed) {
+        // The bridge cannot carry a foreign observer. It cannot turn that missing owner
+        // into permission to send without durable/root accounting.
+        expect(first.reserve()).toEqual({ allowed: false, reason: "spend-exhausted" });
+        expect(again.reserve()).toEqual({ allowed: false, reason: "spend-exhausted" });
+        expect(foreign.used).toBe(1);
+      } else {
+        expect(again).toBe(first);
+        const decision = first.reserve();
+        if (!decision.allowed) throw new Error("legacy recovery refused");
+        expect(decision.permit.use()).toBe(true);
+        expect(foreign.used).toBe(2);
+        expect(again.reserve()).toEqual({ allowed: false, reason: "total-exhausted" });
+      }
+    });
+  }
 });

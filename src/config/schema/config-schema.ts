@@ -13,6 +13,7 @@ import { desktopCompatibilitySchema } from "./desktop-compatibility";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
 import { mainAccountHardLockFallbackSchema } from "./main-account-hard-lock-fallback";
 import { fallbackPolicySchema } from "./fallback-policy";
+import { subscriptionReserveSchema } from "./subscription-reserve";
 import {
   agentTaskRecoverySchema,
   catalogAutoRefreshSchema,
@@ -50,7 +51,9 @@ import {
   modelPreferHostedToolsConfigError,
   providerModelCostsConfigError,
   providerRelativeSendPathConfigError,
+  isValidCreditPriceUsd,
 } from "./leaf-validators";
+import { MAX_CREDIT_PRICE_USD } from "../../usage/credit-billing";
 import { isValidProviderName, hasOwnProvider } from "../provider-name";
 import {
   apiKeyTransportConfigError,
@@ -105,11 +108,14 @@ export const protocolConfigSchema = z.object({
     managedMessagesNativeOAuth: z.boolean().optional(),
     directEncoders: z.boolean().optional(),
     antigravityDirect: z.boolean().optional(),
+    geminiNativeAntigravity: z.boolean().optional(),
     shadowPlan: z.boolean().optional(),
   }).strict().optional(),
 }).strict();
 
 export const configSchema = z.object({
+  // Malformed hand edits disable only this opt-in. Candidate writes reject them.
+  subscriptionReserve: subscriptionReserveSchema.optional().catch(undefined),
   chatgptDesktop: chatgptDesktopSchema.optional().catch(undefined),
   codexNativeSteering: z.boolean().optional().catch(false),
   codexNativeInjection: z.boolean().optional().catch(false),
@@ -151,6 +157,7 @@ export const configSchema = z.object({
         managedMessagesNativeOAuth: false,
         directEncoders: fields.directEncoders === true,
         antigravityDirect: fields.antigravityDirect === true,
+        geminiNativeAntigravity: false,
         shadowPlan: fields.shadowPlan === true,
       },
     };
@@ -184,6 +191,7 @@ export const configSchema = z.object({
   // Opt-in outbound request compression (#7247). An unknown codec degrades to identity, matching
   // the guards above: a hand-edit typo must not change what the proxy sends or refuse traffic.
   upstreamRequestCompression: z.enum(["off", "gzip", "zstd"]).optional().catch(undefined),
+  upstreamHistorySlim: z.enum(["off", "codex"]).optional().catch(undefined),
   // Opt-in inbound body ceiling (#3573). An invalid hand edit degrades to the 256 MiB default
   // rather than failing the parse, matching the outbound guard above: a malformed number must
   // not change what the proxy admits. The hard ceiling is NOT enforced here — because of that
@@ -397,6 +405,7 @@ export const configSchema = z.object({
   codexFailureWindow: z.boolean().optional().catch(undefined),
   codexPinnedTransientPolicy: z.enum(["hold", "detour-new-threads"]).optional().catch("hold"),
   codexWsReuseAcrossTurns: z.boolean().optional().catch(false),
+  codexWsIncrementalUpload: z.boolean().optional().catch(false),
   activeCodexAccountPinned: z.string().regex(CODEX_ACCOUNT_PIN_PATTERN).optional().catch(undefined),
   // A malformed hand edit must degrade to false without discarding providers, accounts,
   // or the exact selector map. Live writes remain strict.
@@ -823,6 +832,14 @@ export const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "minMaxOutputTokens"],
         message: minMaxOutputError,
+      });
+    }
+    const creditPrice = (provider as { creditPriceUsd?: unknown }).creditPriceUsd;
+    if (creditPrice !== undefined && !isValidCreditPriceUsd(creditPrice)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "creditPriceUsd"],
+        message: `creditPriceUsd must be a finite number between 0 and ${MAX_CREDIT_PRICE_USD}`,
       });
     }
     const defaultMaxOutputError = positiveIntegerConfigError(

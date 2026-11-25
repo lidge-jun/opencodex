@@ -7,7 +7,7 @@ Claude passthrough and direct compact use this policy. `src/lib/abort.ts` keeps 
 linked after clearing or disabling the header timer; `src/server/claude-messages.ts` retains dev's
 `fetchWithHeaderDeadline` success/error cleanup and timeout provenance. Local pacing admission
 still pauses positive header clocks; `src/web-search/header-deadline.ts` distinguishes disabled
-budgets from exhausted positive budgets. Default image/search sidecar deadlines stay unchanged.
+budgets from exhausted positive budgets. The hosted-search pacing wrapper carries the separate adapter support executor while keeping inference admission and its header deadline intact. Default image/search sidecar deadlines stay unchanged.
 Native Chat/Messages, non-forward Responses (including adapter retries/continuations), and keyed
 compact start header clocks at the final send after pacing and credential/destination refresh.
 Header and subsequent body policy follow the serving URL across local/public transitions.
@@ -70,8 +70,12 @@ Native Chat/Messages local JSON reads use `stallTimeoutSec` only as an inactivit
 five-second floor or stall-derived total deadline. Client cancellation and enclosing overall
 deadlines remain authoritative. Public JSON reads retain their legacy total/inactivity budget,
 `max(connectTimeoutMs ?? 200000, 5000)`. `src/lib/bounded-body.ts` arms no non-positive body timer;
-byte caps and cancellation remain active. Compact body reads retain their separate 300-second
-default even locally. Unset local header and stall clocks do not create an overall bound before
+byte caps and cancellation remain active. `src/server/responses/compact-response-body.ts` applies
+the same raw 32 MiB body limit and inactivity policy to native compact delivery and to retaining
+a refusal before a paced retry. The compact default is 300 seconds even locally.
+If the retry cannot send, an oversized body returns 502
+(`compact_response_too_large`) and a stalled body returns 504 (`upstream_stall_timeout`).
+Unset local header and stall clocks do not create an overall bound before
 headers. `tests/responses/local-upstream-deadlines.test.ts` covers dispatch, compact and native JSON
 policy, public header expiry, client/overall cancellation and explicit local body bounds.
 `tests/responses/refreshed-upstream-deadlines.test.ts` covers queued Responses destination changes;
@@ -115,8 +119,9 @@ request's path. The waiter polls that name's DNS once a second until it resolves
 probe races the remaining budget and client cancellation, and a success after the deadline does not count. The
 first send's slow-attempt clock restarts when the wait resumes. Adapters with their own `fetchResponse` transport
 (google Vertex and Cloud Code Assist, kiro, cursor, zed, command-code, mimo-free) are not wired; direct Google AI Studio is. One resend then
-follows inside the request's existing `attempts` budget and send accounting; no budget, a second DNS failure, an
-exhausted wait or any other failure returns the original error.
+follows inside the existing `attempts` budget and send accounting. The helper checks the live
+allowance before waiting and again before the resend. Exhaustion before the resend preserves
+the initial connection failure, as does an exhausted wait.
 A client cancel during the wait or a probe makes the waiter answer `false` instead of rejecting with the abort
 reason, so `fetchWithResetRetry` rethrows the original DNS error and a Codex pool send keeps the host-wide
 `connect_neutral` class in `classifyTransportFailureKind`. The resend's send carries its own recovery kind,
@@ -137,3 +142,5 @@ generated V1 provider `options` and V2 provider `settings`: `headerTimeoutMs` ma
 milliseconds or `false` pass through; unset fields retain the client's native defaults. These
 are provider-wide settings, including public and local models multiplexed through that provider.
 The builder remains pure; managed writes retain the existing ownership and snapshot rules.
+
+Web-search fallback fetches record dispatch after local pacing admits the send and checks cancellation. A rejected admission neither spends a send nor creates missing credit evidence.

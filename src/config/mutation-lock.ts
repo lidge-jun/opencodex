@@ -38,12 +38,14 @@ function configMutationDatabasePath(dir: string = getConfigDir()): string {
   // First statement on purpose: a rejected mutation must leave nothing behind, not a
   // freshly created/chmod'd directory or database. See src/lib/test-home-guard.ts.
   assertNotRealHomeUnderTest(dir);
+  const windowsAcl = windowsSecretAclApplies();
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-  } else {
+  } else if (!windowsAcl) {
     try { chmodSync(dir, 0o700); } catch { /* best-effort on existing dir */ }
   }
-  if (windowsSecretAclApplies()) {
+  // Windows chmod does not set a DACL and can invalidate its freshness memo.
+  if (windowsAcl) {
     try {
       // Distinct timeout memo from management-token directory harden: a required
       // management-dir timeout must not poison config mutation on the same home
@@ -115,7 +117,9 @@ export function withConfigMutationLockSync<T>(fn: () => T, dir?: string): T {
   let transactionOpen = false;
   try {
     database = new Database(path, { create: true });
-    try { chmodSync(path, 0o600); } catch { /* platform may ignore chmod */ }
+    if (!windowsSecretAclApplies()) {
+      try { chmodSync(path, 0o600); } catch { /* platform may ignore chmod */ }
+    }
     database.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     transactionOpen = true;
     initializeConfigGeneration(database);

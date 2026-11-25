@@ -75,14 +75,14 @@ export interface ResponsesItemIdRepairConfig {
  * Opt-in retry for pre-stream transient upstream statuses (500/502/503/504/520/521/522) on
  * `providers.<name>.transientRetryOn5xx`.
  *
- * Disabled unless the object is present; a bare `{}` opts in with defaults. Separate from
- * `retryOn429`, which handles rate limiting with its own waits.
+ * An object opts in for supported key-auth adapters. Canonical ChatGPT forward auth
+ * requires an explicit send total. Separate from `retryOn429`, which handles rate limiting.
  */
 export interface TransientRetryPolicy {
-  /** Master switch. Presence of the object also enables the policy (default true). */
+  /** Master switch for a qualifying policy (default true). */
   enabled?: boolean;
   /**
-   * TOTAL upstream sends allowed for one request, including the first (1..10, default 3).
+   * Total upstream sends allowed for one request, including the first (1..10, key-auth default 3).
    *
    * Not a per-layer retry count: the connection-reset and transient-status recovery layers
    * share this single budget, so `3` means at most three real requests reach the provider.
@@ -773,6 +773,11 @@ export interface OcxProviderConfig {
    */
   modelCosts?: Record<string, ProviderCostOverlay>;
   /**
+   * USD per provider credit (for example Kiro credits). For a model with a matched token price
+   * and a valid `providerCredits` reading, the estimate uses credits × this price.
+   */
+  creditPriceUsd?: number;
+  /**
    * Provider-wide auto-review (approval) model for routed models of this provider.
    *
    * The value is a catalog selector: either a bare model id of this provider
@@ -1184,8 +1189,8 @@ export interface OcxProviderConfig {
   retryOn429?: RateLimitRetryPolicy;
   /**
    * Opt-in retry for pre-stream transient upstream statuses
-   * (`providers.<name>.transientRetryOn5xx`). Disabled unless present; a bare `{}` opts in
-   * with defaults. Key-auth `openai-chat` only.
+   * (`providers.<name>.transientRetryOn5xx`). A bare `{}` opts in with defaults on supported
+   * key-auth OpenAI adapters. Canonical ChatGPT forward providers require explicit `attempts`.
    */
   transientRetryOn5xx?: TransientRetryPolicy;
   /**

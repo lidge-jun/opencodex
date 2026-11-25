@@ -17,6 +17,7 @@ import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility"
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
 import { fallbackPolicyError } from "./schema/fallback-policy";
+import { subscriptionReserveConfigError } from "./schema/subscription-reserve";
 import type { OcxConfig } from "../types";
 import { anthropicAccountPoolConfigError, anthropicOAuthInstanceConfigError, anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
 import { configReasoningPinsConfigError } from "./provider-validation";
@@ -35,6 +36,7 @@ import {
   sanitizeRetryOn429ForLoad,
   sanitizeCapabilityDeclarationsForLoad,
   sanitizeModelCostsForLoad,
+  sanitizeCreditPriceForLoad,
   sanitizeAutoReviewForLoad,
   degradedListenerWarnings,
   degradedReasoningRetentionWarning,
@@ -160,6 +162,7 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown, repai
   if (routedCatalogDefaultsConfigError(rawParsed)) warnings.push("routedCatalogDefaults ignored: " + ROUTED_CATALOG_DEFAULTS_SHAPE_HINT + "; routed catalog rows keep their derived values");
   if (mainAccountHardLockFallbackError(rawParsed)) warnings.push("codexMainAccountHardLockFallback ignored: expected a nonblank model selector and an optional declared reasoningEffort");
   if (fallbackPolicyError(rawParsed)) warnings.push("fallback partly ignored: expected boolean model/provider switches, providers/routes/devices maps of them, and devices.<id>.localFallback; ignored leaves keep today's fallback behavior");
+  if (subscriptionReserveConfigError(rawParsed)) warnings.push("subscriptionReserve ignored: invalid weekly reserve policy");
   const quotaAutoRefreshWarning = degradedCodexQuotaAutoRefreshWarning(rawParsed, normalized);
   if (quotaAutoRefreshWarning) warnings.push(quotaAutoRefreshWarning);
   if (rawEffort !== undefined && !isClaudeSubagentEffort(rawEffort)) {
@@ -293,6 +296,14 @@ function upstreamRequestCompressionError(value: unknown): string | null {
   const mode = raw.upstreamRequestCompression;
   if (mode === undefined || mode === "off" || mode === "gzip" || mode === "zstd") return null;
   return "schema_invalid: upstreamRequestCompression: must be \"off\", \"gzip\" or \"zstd\"";
+}
+
+function upstreamHistorySlimConfigError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "upstreamHistorySlim")) return null;
+  const mode = raw.upstreamHistorySlim;
+  if (mode === undefined || mode === "off" || mode === "codex") return null;
+  return "schema_invalid: upstreamHistorySlim: must be \"off\" or \"codex\"";
 }
 
 function plaintextV2AgentMessagesError(value: unknown): string | null {
@@ -789,6 +800,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     // OCX-11: the read schema degrades a malformed fallback leaf to absent, which would silently
     // drop a refusal on the next whole-config save; the write boundary rejects it instead.
     ?? fallbackPolicyError(value)
+    ?? subscriptionReserveConfigError(value)
     ?? nativeReasoningRetentionConfigError(value)
     ?? workflowBudgetConfigError(value)
     ?? routedCatalogDefaultsConfigError(value)
@@ -800,6 +812,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? appOwnedMemoryBudgetError(value)
     ?? upstreamHostCircuitThresholdError(value)
     ?? upstreamRequestCompressionError(value)
+    ?? upstreamHistorySlimConfigError(value)
     ?? plaintextV2AgentMessagesError(value)
     ?? agentTaskRecoveryError(value)
     ?? quotaResetNotifyError(value)
@@ -864,6 +877,10 @@ function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Ui
     sanitizeRetryOn429ForLoad(parsed, warn);
     sanitizeAgyAcpForLoad(parsed, reportAgyRepair);
     sanitizeModelCostsForLoad(parsed, warn);
+    sanitizeCreditPriceForLoad(parsed, message => {
+      repairs.push(message);
+      (warn ?? console.warn)(message);
+    });
     sanitizeCapabilityDeclarationsForLoad(parsed, warn);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
@@ -901,7 +918,10 @@ function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Ui
       };
     }
 
-    return { config: getDefaultConfig(), source: "fallback", error: schemaDiagnosticsError(result.error) };
+    return {
+      config: getDefaultConfig(), source: "fallback", error: schemaDiagnosticsError(result.error),
+      ...(repairs.length > 0 ? { warnings: repairs } : {}),
+    };
   } catch {
     return { config: getDefaultConfig(), source: "fallback", error: "invalid_json" };
   }

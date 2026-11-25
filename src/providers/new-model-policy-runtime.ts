@@ -36,6 +36,32 @@ export function captureModelDiscoveryBaseline(config: OcxConfig) {
     && isDeepStrictEqual(identity, inventory(disk.config)) };
 }
 
+function projectDiscovery(config: OcxConfig, reconcile: (target: OcxConfig) => boolean, choices = config): OcxConfig {
+  const providers = Object.fromEntries(Object.entries(config.providers).map(([name, provider]) => [name,
+    { ...provider, ...(provider.selectedModels === undefined ? {} : { selectedModels: [...provider.selectedModels] }) }]));
+  const projection = { ...config, providers, modelDiscovery: structuredClone(choices.modelDiscovery),
+    disabledModels: choices.disabledModels === undefined ? undefined : [...choices.disabledModels] };
+  reconcile(projection);
+  return projection;
+}
+
+/** Apply the request's visibility rules to caller-local rows after a newer observation wins. */
+export function projectSupersededModelDiscovery(
+  config: OcxConfig,
+  baseline: ReturnType<typeof captureModelDiscoveryBaseline>,
+  models: Iterable<{ provider: string; id: string; custom?: boolean }>,
+  authoritativeProviders: string[],
+): OcxConfig | null {
+  const filePath = fileBackedConfigPath(config);
+  if ((filePath !== undefined && filePath !== getConfigPath())
+    || !isDeepStrictEqual(baseline.identity, inventory(config))) return null;
+  const disk = baseline.persisted ? readConfigDiagnostics({ passive: true }) : null;
+  if (disk && (disk.source !== "file" || !isDeepStrictEqual(baseline.identity, inventory(disk.config)))) return null;
+  return projectDiscovery(config, target => reconcileSuccessfulModelDiscoveries({
+    config: target, models, authoritativeProviders, now: new Date().toISOString(), mode: "discovery",
+  }), disk?.config);
+}
+
 /** Publish new-arrival choices before returning discovery rows to any visibility consumer. */
 export function finalizeModelDiscovery(
   config: OcxConfig,
@@ -65,12 +91,7 @@ export function finalizeModelDiscovery(
     // Drift already existed at admission. Do not add unsaved disables or advance the live
     // merge baseline: a later rebase-save must preserve the operator's on-disk choices. The
     // provider rows are copied too, so an `admit` widens the projection's selection only.
-    const providers = Object.fromEntries(Object.entries(config.providers).map(([name, provider]) => [name,
-      provider.selectedModels === undefined ? provider : { ...provider, selectedModels: [...provider.selectedModels] }]));
-    const projection = { ...config, providers, modelDiscovery: structuredClone(config.modelDiscovery),
-      disabledModels: config.disabledModels === undefined ? undefined : [...config.disabledModels] };
-    reconcile(projection);
-    publishProjection(projection);
+    publishProjection(projectDiscovery(config, reconcile));
     return true;
   }
   // A file-loaded instance remains file-backed after inventory drift. The locked

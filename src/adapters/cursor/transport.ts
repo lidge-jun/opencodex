@@ -25,6 +25,8 @@ export interface CursorTransportFactoryInput {
   headers?: Headers;
   /** Router-prepared fetch that preserves provider overrides and per-request pacing. */
   fetch?: typeof globalThis.fetch;
+  /** Consumes the run's admission and publishes its receipt at transport dispatch. */
+  onRunDispatch?: () => void;
   /** Pre-first-frame deadline (dial + first server frame). Defaults to 30s when omitted. */
   firstFrameTimeoutMs?: number;
   /** Grace (ms) between close() and the force-destroy fallback after a first-frame timeout. Defaults to 1s. */

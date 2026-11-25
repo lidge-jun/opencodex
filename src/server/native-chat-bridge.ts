@@ -5,20 +5,32 @@
  * status, and the SSE-to-native stream pump with its settlement and cancellation rules. The
  * protocol-specific parts (frame shapes, error bodies) stay in each ingress.
  */
+import { isUnattendedAgyAcpHttpTurn } from "../adapters/agy-acp/policy";
 import { parseRetryAfterMs } from "../combos";
 import type { AdmissionLease } from "../lib/admission";
 import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../lib/workflow-budget";
+import type { OcxConfig } from "../types";
 import type { CapturedAdmissionPolicy } from "../types/admission-policy";
 import type { DataPlaneAdmission } from "./auth-cors";
+import { handleChatCompletions } from "./chat-completions";
 import type { NativeFinalLog } from "./native-final-log";
+import type { RequestLogContext } from "./request-log";
 import { linkRequestSessionLane } from "./request-log-conversation";
 
 // Session and workflow identity only: lineage, session lanes and the workflow root's spend
 // ceiling read these from the request Chat sees. Never authorization, cookies or admission keys.
 const IDENTITY_HEADERS = ["session_id", "session-id", "thread-id", "x-session-id", "x-codex-parent-thread-id"] as const;
 
-/** The synthesized Chat request: JSON content type, identity headers, the client signal and its session lane. */
-export function internalChatRequest(req: Request, chatJson: string): Request {
+/** Dispatch translated Chat while keeping the original turn label in process-local policy state. */
+export function handleNativeChat(
+  req: Request,
+  originalBody: unknown,
+  chatJson: string,
+  config: OcxConfig,
+  logCtx: RequestLogContext,
+  ids: NativeLogIds,
+): Promise<Response> {
+  const agyAcpUnattendedHttpTurn = isUnattendedAgyAcpHttpTurn(req.headers, originalBody);
   const headers = new Headers({ "content-type": "application/json" });
   for (const name of IDENTITY_HEADERS) {
     const value = req.headers.get(name);
@@ -26,7 +38,9 @@ export function internalChatRequest(req: Request, chatJson: string): Request {
   }
   const internal = new Request(new URL("/v1/chat/completions", req.url), { method: "POST", headers, body: chatJson, signal: req.signal });
   linkRequestSessionLane(req, internal);
-  return internal;
+  return handleChatCompletions(internal, config, logCtx, {
+    ...ids, suppressProtocolTrace: true, agyAcpUnattendedHttpTurn,
+  });
 }
 
 /** The request-log and admission identity a native handler passes to the inner Chat path. */
@@ -141,6 +155,8 @@ export interface NativeStreamTranslator {
   terminal(): NativeStreamTerminal;
   /** Encoded frames that end a stream that failed or did not settle. */
   failure(message: string): Uint8Array[];
+  /** Release translator-owned buffers after success, failure, or cancellation. */
+  dispose?(): void;
 }
 
 /**
@@ -162,15 +178,18 @@ export function streamNativeFromChat(translator: NativeStreamTranslator, body: R
   const end = async (controller: ReadableStreamDefaultController<Uint8Array>, failure?: string) => {
     if (ended) return;
     ended = true;
-    if (failure !== undefined) cancelInner();
+    if (failure !== undefined) {
+      cancelInner();
+      translator.dispose?.();
+    }
     const terminal = failure === undefined ? translator.terminal() : undefined;
     const settled = await finalLog.waitForInner();
-    if (cancelled || signal.aborted) {
-      commitCancelled(finalLog);
-      try { controller.close(); } catch { /* already cancelled by the client */ }
-      return;
-    }
     try {
+      if (cancelled || signal.aborted) {
+        commitCancelled(finalLog);
+        try { controller.close(); } catch { /* already cancelled by the client */ }
+        return;
+      }
       if (terminal?.ok === true && settled) {
         for (const frame of terminal.frames()) controller.enqueue(frame);
         finalLog.commit({ status: 200, terminalStatus: "completed", closeReason: "terminal" });
@@ -183,6 +202,8 @@ export function streamNativeFromChat(translator: NativeStreamTranslator, body: R
     } catch {
       // The client cancelled between settlement and the terminal frames; the row still lands once.
       commitCancelled(finalLog);
+    } finally {
+      if (failure === undefined) translator.dispose?.();
     }
   };
   // Returns how many frames were enqueued. Finish and usage chunks may enqueue nothing.
@@ -230,6 +251,7 @@ export function streamNativeFromChat(translator: NativeStreamTranslator, body: R
       if (ended) return;
       ended = true;
       cancelInner();
+      translator.dispose?.();
       await finalLog.waitForInner();
       commitCancelled(finalLog);
     },

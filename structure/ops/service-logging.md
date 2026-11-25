@@ -13,11 +13,27 @@ diagnostic fields. Windows service-wrapper messages retain their wrapper format.
 position in configuration and targets by position plus the validated provider-id label from
 `src/lib/error-destination.ts`. Failure, cooldown-wait, reprobe and JEV debug lines omit raw
 combo aliases, model ids and URLs. JEV effort decision lines retain failed gates and decision usage
-if the pinned target becomes unavailable before dispatch. The pin reason reflects the final selection.
+if the pinned target becomes unavailable before dispatch. After a paid decision, selection follows the [request-start snapshot and live spend rule](../providers/jev-decision.md#session-pin). The parent log captures completed decision usage before the post-decision recheck. A decision blocked by current key scope carries no decision usage. If the recheck throws, Responses, Chat and Messages finalize their usage row through the terminal HTTP response. The same parent decision field then reflects the final selection and pin reason.
 `src/combos/request.ts` effort diagnostics retain the
-validated provider and closed effort/capability fields, with no model field. Operational
+validated provider and closed effort/capability fields, with no model field. The `capabilityPolicy: "union"`
+effort clamp in `src/combos/request-capability.ts` logs a debug line on bridge and native Chat children with the same validated provider
+label and the requested and sent rungs only; the unservable-image and no-window-fits warnings in `core-combo.ts` name no
+combo, target or model. Operational
 selection and cooldown keys remain internal. `tests/responses/chat-error-body-normalization.test.ts`
 covers failure, wait, last-resort, reprobe and effort diagnostic output.
+
+The same child log decides whether a 429 cools the combo target or only the serving account.
+`core-combo.ts` reads the serving account from it, using the pool provider label
+(`<provider>-p<hex>`), or the `main` account label that only pool and main-pool contexts stamp
+(the main account logs under the bare provider name). It spares the target when the pool already
+holds that account's own cooldown. For the main account this applies only in effective pool mode
+(`providerCodexAccountMode`, which defaults to pool), where selection skips a cooled main. Direct
+mode serves the caller-owned main without a local cooldown check, so a direct-mode 429 still cools
+the target. `tests/server/server-combo-main-account-cooldown.test.ts` covers both modes end to
+end, including main's recovery without a stale target cooldown (#8880).
+
+The combo's request outcome and its child's [sealed upstream refusal](../usage-client-attribution.md#credential-recovery-attempts)
+can have different statuses. Child finalization preserves the refusal's physical attempt.
 
 When ladder exhaustion returns a child response, the combo's logical row takes diagnostics from that
 child. A synthetic exhaustion response can retain child diagnostics. For example, the quota-cooldown
@@ -63,3 +79,5 @@ formatting, startup and periodic checks, bounded generations, failure handling,
 continued writes through an append descriptor opened before rotation, unsafe
 leaves, controlled identity replacements, exclusive archive creation, parent
 aliases, and partial-copy/flush failures.
+
+Union routing checks whether a destination can forward a named hosted Advisor before it counts that target toward the request’s media capability.

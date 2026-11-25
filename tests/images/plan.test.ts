@@ -87,7 +87,7 @@ describe("planImageBridge", () => {
     const cfg = makeConfig({ xai: { baseUrl: "https://api.x.ai", apiKey: "test-token" } }, { bridgeEnabled: true });
     const plan = await planImageBridge(cfg, makeParsed(true), routed);
     expect(plan).toBeDefined();
-    expect(plan!.model).toBe("grok-imagine-image-quality");
+    expect(plan!.model).toBe("grok-imagine-image-2.0");
     expect(plan!.auth.token).toBe("test-token");
     expect(plan!.auth.baseUrl).toBe("https://api.x.ai/v1");
   });

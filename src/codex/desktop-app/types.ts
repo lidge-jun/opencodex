@@ -15,6 +15,7 @@ import { sep } from "node:path";
 export interface DesktopAppExecOptions {
   timeout?: number;
   windowsHide?: boolean;
+  env?: NodeJS.ProcessEnv;
 }
 
 /** Returns stdout. Options are part of the seam so the timeout is testable. */
@@ -23,6 +24,11 @@ export type DesktopExec = (
   args: readonly string[],
   options?: DesktopAppExecOptions,
 ) => string;
+
+/** Runtime-owned probes keep serving their listeners while the exact child drains. */
+export type DesktopAsyncExec = (
+  file: string, args: readonly string[], options?: DesktopAppExecOptions & { signal?: AbortSignal },
+) => Promise<string>;
 
 /** One discovered installation of the Codex desktop app. */
 export interface DesktopAppInstall {

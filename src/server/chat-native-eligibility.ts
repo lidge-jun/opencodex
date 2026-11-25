@@ -4,6 +4,7 @@ import type { ProtocolReasonCode } from "../protocols/contract";
 import type { RouteResult } from "../router";
 import type { OcxConfig } from "../types";
 import { isModelTextOnly, requiresVisionPreprocessing } from "../vision";
+import { isCommandCodeDecisionRoute } from "../providers/command-code-decision-models";
 
 type Rec = Record<string, unknown>;
 
@@ -22,6 +23,7 @@ export type NativeChatDeclineReason = Extract<
   | "vision-preprocessing"
   | "hosted-tool"
   | "opaque-state-stripped"
+  | "compatibility-reject"
 >;
 
 /**
@@ -36,6 +38,9 @@ export function nativeChatDeclineReason(
 ): NativeChatDeclineReason | undefined {
   const provider = route.provider;
   if (provider.adapter !== "openai-chat") return "cross-wire-ir";
+  // Command Code's System One decision models are not chat models (#8997). The native lane would
+  // forward the body verbatim; the translated path refuses it at the adapter guard before a send.
+  if (isCommandCodeDecisionRoute(provider, route.modelId)) return "compatibility-reject";
   if (provider.authMode !== undefined && provider.authMode !== "key" && provider.authMode !== "local") return "auth-mode-not-native";
   // Combo and policy execution own multi-candidate retries in the Responses pipeline.
   if (route.combo || route.routeKind === "combo" || route.routeKind === "policy") return "combo-or-policy-route";
@@ -47,6 +52,9 @@ export function nativeChatDeclineReason(
   // accepts — can contain signatures or redacted-thinking ciphertext, so use the bridge that
   // projects it to plaintext rather than disclosing it to an unrelated Chat destination.
   if (chatBodyCarriesAnthropicReasoningState(rawBody)) return "opaque-state-stripped";
+  // Gemini thought signatures (tool_calls[].extra_content) are Google's opaque state. Only Google's
+  // own OpenAI-compatible endpoint reads them; for any other Chat vendor the bridge drops them.
+  if (chatBodyCarriesGoogleOpaqueState(rawBody) && !isGoogleChatDestination(provider.baseUrl)) return "opaque-state-stripped";
   // A standard Chat tool message accepts a string or text parts, not image_url, so
   // normalizing a Pi/Anthropic tool image into image_url is not enough on its own —
   // the part is still inside a tool message. The translated adapter already places
@@ -74,6 +82,24 @@ export function nativeChatDeclineReason(
     }
   }
   return undefined;
+}
+
+/** Whether an assistant turn in the Chat body echoes provider-opaque tool-call state. */
+function chatBodyCarriesGoogleOpaqueState(rawBody: Rec): boolean {
+  if (!Array.isArray(rawBody.messages)) return false;
+  return rawBody.messages.some(message => isRec(message) && Array.isArray(message.tool_calls)
+    && message.tool_calls.some(call => isRec(call) && call.extra_content !== undefined));
+}
+
+/** Google's Gemini OpenAI-compatible hosts, which accept extra_content.google.thought_signature. */
+function isGoogleChatDestination(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== "string") return false;
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host === "generativelanguage.googleapis.com" || host === "aiplatform.googleapis.com" || host.endsWith("-aiplatform.googleapis.com");
+  } catch {
+    return false;
+  }
 }
 
 export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec, config?: OcxConfig): boolean {

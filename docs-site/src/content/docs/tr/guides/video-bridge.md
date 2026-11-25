@@ -47,7 +47,7 @@ Bu ön koşullar varsayılan xAI hedefi için geçerlidir. `images.videoProvider
   "images": {
     "bridgeEnabled": true,
     "videoBridgeEnabled": true,
-    "videoBridgeModel": "grok-imagine-video",
+    "videoBridgeModel": "grok-imagine-video-1.5-lite",
     "videoMaxRounds": 2,
     "videoTimeoutMs": 300000
   }
@@ -57,7 +57,7 @@ Bu ön koşullar varsayılan xAI hedefi için geçerlidir. `images.videoProvider
 | Seçenek | Varsayılan | Açıklama |
 |--------|---------|-------------|
 | `videoBridgeEnabled` | `false` | Ana anahtar. Açıkça etkinleştirilmelidir. |
-| `videoBridgeModel` | `"grok-imagine-video"` | xAI video model kimliği. |
+| `videoBridgeModel` | `"grok-imagine-video-1.5-lite"` | xAI video model kimliği. |
 | `videoMaxRounds` | `2` | Zorunlu nihai yanıttan önceki maksimum video üretim turu. |
 | `videoTimeoutMs` | `300000` (5 dk) | Yoklama dahil video başına zaman aşımı süresi. |
 | `videoProvider` | ayarlanmamış (xAI) | `video_gen` çağrılarını kendi `baseUrl` ve anahtarıyla karşılayan isteğe bağlı API anahtarlı sağlayıcı. Bkz. [Video sağlayıcısını seçme](#video-sağlayıcısını-seçme). |
@@ -80,7 +80,7 @@ Köprü varsayılan olarak `video_gen` işlerini `xai` sağlayıcısının API a
   "images": {
     "videoBridgeEnabled": true,
     "videoProvider": "my-video-bridge",
-    "videoBridgeModel": "grok-imagine-video"
+    "videoBridgeModel": "grok-imagine-video-1.5-lite"
   }
 }
 ```
@@ -110,17 +110,32 @@ Köprü varsayılan olarak `video_gen` işlerini `xai` sağlayıcısının API a
 
 | Parametre | Tip | Aralık | Açıklama |
 |-----------|------|-------|-------------|
-| `prompt` | string | gerekli | Ayrıntılı video üretim istemi |
+| `prompt` | string | görüntü veya kare varsa isteğe bağlı | Metin istemi |
 | `duration` | integer | 1-15 | Saniye cinsinden video uzunluğu |
-| `resolution` | string | `"480p"`, `"720p"` | Video çözünürlüğü |
-| `aspect_ratio` | string | 7 oran | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3` |
+| `resolution` | string | `480p`, `720p`, `1080p` | Modele bağlıdır; `last_frame`, `keyframes` veya `reference_images` ile en fazla 720p |
+| `aspect_ratio` | string | modele bağlı | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2`; yalnızca `image` canlandırılırken reddedilir; görüntü kendi oranını korur |
+| `image` | string | ilk kare | HTTPS URL’si, veri URL’si veya hatırlanan artifact |
+| `last_frame` | string | yalnızca 1.5 | Son kare |
+| `keyframes` | array | 1.5, en fazla 4 | `{image, timestamp_s}`; zaman damgası kesinlikle klibin içinde olmalıdır (`duration` atlanırsa 8 s) |
+| `reference_images` | array | 1.5: 14, klasik: 7 (≤ 10 s) | Referans görüntüler; klasik model bunları `image` ile birleştiremez |
+
+Modelin karşılayamayacağı ayarlar yok sayılmak yerine ücretli çağrıdan önce reddedilir.
+
+### Modeller ve görüntü girdileri
+
+| Model | Çözünürlük | Girdiler | saniye başına (480p / 720p / 1080p) |
+|-------|------------|--------|------------------|
+| `grok-imagine-video-1.5` | 480p / 720p / 1080p doğal | ilk/son kare, 4 anahtar kare, 14 referans (720p en fazla) | $0.08 / $0.14 / $0.25 |
+| `grok-imagine-video-1.5-lite` (varsayılan) | 480p / 720p / 1080p büyütülmüş | ilk kare | $0.02 / $0.03 / $0.14 |
+| `grok-imagine-video` | 480p / 720p | ilk kare, 7 referans | $0.05 / $0.07 / — |
+
+Kare sabitleme veya referanslar için `images.videoBridgeModel` değerini `grok-imagine-video-1.5` yapın. Bilinen modeller dokuz en boy oranını destekler; bilinmeyen modeller yedi oran ve 480p/720p ile sınırlıdır ve görüntü girdisi almaz. HTTPS URL’leri ve kodu çözülmüş boyutu 10 MiB’ye kadar PNG/JPEG/WebP veri URL’leri kabul edilir. Köprünün indirdiği görüntüler bir saat boyunca artifact URL’si, mutlak yol veya `file:` URL’siyle anılabilir; yerel dosya okunmadan kayıtlı kaynak URL kullanılır. Bu yalnızca sabit xAI hedefinde çalışır, özel `images.videoProvider` için çalışmaz. Satır içi sonuçların kaynak URL’si yoktur ve geçici URL daha erken sona erebilir.
+
 
 ## Sınırlamalar
 
 - **Varsayılan olarak xAI**: `videoProvider` olmadan video üretimi xAI'ın Grok Imagine Video API'sini kullanır; başka bir arka uç aynı eşzamansız API'yi uygulamalıdır
 - **Zaman uyumsuz (Asynchronous)**: Video üretimi 30-120 saniye sürer
-- **Maliyet**: Video üretimi ücretli bir xAI özelliğidir (~$0.05/sn @480p,
-  ~$0.07/sn @720p)
 - **Çağrı başına bir video**: Her `video_gen` çağrısı bir video üretir
 - **Görsel Köprüsü (Image Bridge) ile birlikte var olur**: Her iki köprü aynı
   anda etkinleştirilebilir

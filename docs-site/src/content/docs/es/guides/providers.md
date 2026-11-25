@@ -7,6 +7,12 @@ Un **proveedor** es un punto final de LLM ascendente más cómo llegar a él: un
 
 La vista general del proveedor del panel separa los detalles de conexión, el uso de la cuenta y las notas editables. Las notas aparecen una vez, debajo de las secciones de conexión y autenticación. Los ajustes preestablecidos de patrocinador compatibles también muestran una breve introducción, una etiqueta de patrocinador y enlaces al sitio o consola del proveedor. Estos enlaces conservan los parámetros de referencia del preset. La información del patrocinador se muestra solo cuando el nombre del proveedor configurado, el adaptador y el punto final coinciden con el ajuste preestablecido; nunca cambia el enrutamiento, la selección de la cuenta o los valores predeterminados.
 
+<a id="reasoning-effort-rejection-diagnostics"></a>
+
+## Diagnósticos de rechazo del esfuerzo de razonamiento
+
+Los reintentos al mismo proveedor y modelo con un esfuerzo menor, y el aprendizaje de niveles no admitidos, usan un diagnóstico de error completo de hasta 1.024 unidades de código UTF-16, incluido cualquier texto envolvente. Un diagnóstico mayor no autoriza estos reintentos ni el aprendizaje a partir de su prefijo. El cuerpo original sigue disponible para el manejo habitual de errores, incluida la conmutación ordinaria de Combo; se mantienen los límites existentes de visualización de errores del cliente. Un error legítimo pero demasiado largo tampoco activa la reducción automática del esfuerzo ni actualiza los niveles aprendidos. Los diagnósticos breves como `cannot use parameter 'reasoning_effort'` siguen identificando el esfuerzo; un campo ajeno real sigue bloqueando el reintento y el aprendizaje.
+
 <a id="openai-account-modes"></a>
 
 ## Modos de cuenta OpenAI
@@ -32,7 +38,7 @@ Para el inicio de sesión Codex en el modo Pool, la descripción general de prov
 
 Cuando la información de restablecimiento está disponible, la visión general muestra el siguiente tiempo de restablecimiento y la capacidad que se espera que se recupere como `+N% pool capacity`. **Cobertura incompleta** significa que una o más cuentas del grupo no podrían contribuir de manera segura a la estimación, por ejemplo, porque su plan o cuota es desconocido, su lectura es obsoleta o la cuenta está pausada o necesita reautenticación.
 
-Las cuentas Business Premium identificadas como `self_serve_business_prolite` cuentan como cinco unidades Standard en esta estimación. Ese peso solo sirve para mostrar capacidad: no selecciona cuentas ni crea una ventana de cinco horas si el proveedor solo informa uso semanal. La calibración sigue los [límites oficiales de Business](https://help.openai.com/en/articles/12003714-chatgpt-business-models-and-limits), comprobados el 20 de octubre de 2026. Los planes desconocidos mantienen el peso base y se informa su cantidad.
+Pro 100 (`prolite`), Pro 200 (`pro`) y Pro 500 (`promax`) cuentan como 10, 20 y 50 unidades Plus, respectivamente. Las cuentas Business Premium identificadas como `self_serve_business_prolite` cuentan como cinco unidades Standard en esta estimación. Ese peso solo sirve para mostrar capacidad: no selecciona cuentas ni crea una ventana de cinco horas si el proveedor solo informa uso semanal. La calibración sigue los [límites oficiales de Business](https://help.openai.com/en/articles/12003714-chatgpt-business-models-and-limits), comprobados el 20 de octubre de 2026. Los planes desconocidos mantienen el peso base y se informa su cantidad.
 
 Una advertencia de **Cobertura de ventana parcial** significa que algunas cuentas incluidas informaron una ventana de cuota pero no otra. La descripción general mantiene esas ventanas separadas y marca cada ventana afectada incompleta en lugar de tratar la lectura faltante como uso para esa ventana.
 
@@ -154,7 +160,7 @@ La pestaña Cuentas Antigravity muestra un nivel de membresía observado como un
 
 Gemini 4 Argon (`gemini-4-argon`) aparece en el preajuste `google` con niveles de pensamiento bajos, medios (el predeterminado) y altos. Google lo ofrece solo en el nivel pagado Gemini API, no en el nivel gratuito. El `google-antigravity`, Argon aparece con los mismos tres niveles, que se asignan a los modelos del protocolo `gemini-4-argon-low`, `-medium` y `-high`. Google lo limita a las cuentas AI Ultra y Enterprise elegibles. Cloud Code Assist sirve Argon solo al cliente Antigravity CLI, por lo que OpenCodex envía todas las solicitudes de modelos Gemini 4 y el descubrimiento de modelos con el CLI User-Agent (`antigravity/cli/1.3.4` ) y mantiene el IDE User-Agent para cualquier otro modelo. Gemini 4 Hydrogen (low, medium, high por defecto y xhigh) aparece en `google-antigravity` solo cuando la lista de modelos de tu cuenta lo incluye, y cada nivel se asigna a su modelo del protocolo `gemini-4-hydrogen-*`; solicitar `max` o `ultra` también selecciona xhigh.
 
-En Vertex AI, `gemini-4-argon`, `gemini-4-carbon` y `gemini-4-hydrogen` reciben las imágenes devueltas por herramientas, como capturas de pantalla, dentro de la respuesta de función correspondiente. El descubrimiento de modelos de Vertex AI, sus reglas de credenciales y este tratamiento se describen en [Google Vertex AI](/es/guides/google-vertex/).
+En Vertex AI, los modelos Gemini 3 y posteriores (incluidos `gemini-4-argon`, `gemini-4-carbon`, `gemini-4-hydrogen` y `gemini-4-neon`) reciben las imágenes devueltas por herramientas, como capturas de pantalla, dentro de la respuesta de función correspondiente. El descubrimiento de modelos de Vertex AI, sus reglas de credenciales y este tratamiento se describen en [Google Vertex AI](/es/guides/google-vertex/).
 
 Para Gemini en Antigravity, incluyendo Argon, los resúmenes de pensamiento marcados por el proveedor se mantienen separados de la respuesta: Responses usa elementos de resumen de razonamiento, Chat Completions usa `reasoning_content` y Messages usa `thinking` bloques. Los clientes deciden cómo mostrar esos campos. Un cliente Responses puede solicitar `reasoning.summary: "none"` para suprimir resúmenes; esto no desactiva el razonamiento interno del modelo. Una firma de pensamiento es metadatos de continuación y puede acompañar al texto ordinario, por lo que su presencia por sí sola no oculta ese texto. OpenCodex conserva texto de respuesta sin marcar incluso cuando su redacción suena como planificación o análisis.
 
@@ -337,6 +343,8 @@ Solo `anthropic` y `anthropic2` admiten este modo; otros proveedores responden `
 
 OAuth proveedores cuyas credenciales incluyen un ID de cuenta estable o correo electrónico pueden mantener más de un inicio de sesión. La página Proveedores muestra esas cuentas en un menú desplegable, le permite agregar otra y cambia la cuenta activa sin cerrar la sesión de las otras. Un inicio de sesión normal con una credencial sin identidad Kimi reemplaza la ranura activa, mientras que un **Añadir cuenta** explícito conserva esa ranura y activa una nueva y distinta. Las cuentas de Kiro se identifican mediante el ARN del perfil y, cuando está disponible, el correo electrónico del usuario conectado. Distintos usuarios de un perfil de organización pueden conservar credenciales separadas. `chatgpt` siempre es de una sola ranura porque las cuentas de grupo Codex tienen un libro mayor separado. Los tokens permanecen en `~/.opencodex/auth.json`; `/api/oauth/accounts` devuelve solo metadatos enmascarados.
 
+Las sesiones nuevas de Codex y del grupo OAuth de Anthropic pueden usar [`reset-near-weighted`](/es/reference/configuration/providers/#reset-near-weighted) para priorizar la cuota semanal que está a punto de renovarse. La afinidad de las sesiones activas se conserva.
+
 <a id="cockpit-tools-antigravity-import"></a>
 
 ### Importación de Antigravity desde Cockpit Tools
@@ -386,13 +394,9 @@ Para el diagnóstico de compatibilidad de cuenta-interruptor, habilitar la depur
 
 <a id="kiro-request-credits"></a>
 
-### Créditos de solicitud Kiro
+### Créditos por solicitud de Kiro
 
-En los giros habilitados para herramientas, opencodex mantiene el texto ordinario de Kiro hasta que se valide la finalización. Si Kiro termina con texto sin formato en lugar de su herramienta privada de respuesta final, todavía se ejecuta un reintento limitado y solo se muestra la respuesta final resultante. El progreso que acompaña a una llamada de herramienta real sigue siendo visible. Una respuesta final privada normal no necesita reintento de finalización.
-
-Si el filtro de seguridad de Kiro detiene un turno (`CONTENT_FILTERED`, por ejemplo el clasificador `BIO` de Claude), la solicitud termina con un rechazo que los clientes no reintentan. Los clientes Claude reciben `stop_reason: "refusal"` y Codex recibe una respuesta fallida con la categoría y explicación de Kiro. Si el filtro detiene el único reintento acotado, no se muestra una respuesta final: el progreso retenido del primer intento y el texto parcial del reintento aparecen como comentarios antes del rechazo.
-
-Cuando Kiro emite la medición de crédito, los registros de solicitudes conservan el gasto reportado como `usage.providerCredits`, incluso en el libro mayor de uso persistente. Estos son Kiro créditos; los recuentos de tokens aún pueden estimarse y el valor del crédito no reemplaza las estimaciones de costos de USD. Las solicitudes de reserva de finalización agregan sus créditos reportados. Un valor ausente significa que Kiro no reportó el uso del crédito; un cero explícito significa que no reportó ningún gasto.
+La guía [Créditos por solicitud de Kiro](/es/guides/kiro-request-credits/) describe la validación de respuestas, los rechazos del filtro de seguridad, el registro de créditos y su valoración en USD.
 
 <a id="kiro-refresh-attention"></a>
 
@@ -462,6 +466,7 @@ están en la página [Catálogo de proveedores con clave API](/es/guides/api-key
 - [CodeBuddy Code CLI oficial (Global y CN)](/es/guides/api-key-catalog/#official-codebuddy-code-cli-global--cn)
 - [Oficial Qoder CLI (Global y CN)](/es/guides/api-key-catalog/#official-qoder-cli-global--cn)
 - [Claude Code CLI (suscripción)](/es/guides/api-key-catalog/#claude-code-cli-subscription)
+- [StepCode CLI (suscripción)](/es/guides/step-cli/)
 - [Antigravity CLI (ACP, local)](/es/guides/api-key-catalog/#antigravity-cli-acp-local)
 - [Cuota de crédito A6API](/es/guides/api-key-catalog/#a6api-credit-quota)
 - [Plan de codificación BigModel sobre Responses](/es/guides/api-key-catalog/#bigmodel-coding-plan-over-responses)
@@ -561,10 +566,12 @@ Un resultado denegado por acceso no prueba por sí mismo un inicio de sesión ve
 
 Las solicitudes de chat compatibles con la traducción OpenAI reducen las imágenes en línea cuando sus datos base64 combinados superan los 3,5 MiB. Las imágenes más antiguas pierden detalle primero. Este es un presupuesto de imagen de mejor esfuerzo, por lo que el texto grande, los esquemas o las imágenes que no se pueden procesar aún pueden exceder un límite de solicitud ascendente. Las URL de imágenes remotas no se descargan y las imágenes que no se pueden reducir permanecen adjuntas. El passthrough de Native Chat mantiene sus bytes de imagen originales.
 
+Tras ajustar las imágenes al límite de tamaño, las solicitudes a Venice amplían las imágenes pequeñas en línea hasta que su lado más corto mida 64 píxeles, siempre que se puedan leer sus dimensiones y el códec confirme que la imagen de origen tiene como máximo 16 millones de píxeles. Si se omite la ampliación o falla, la solicitud conserva la imagen del paso anterior, que puede haberse vuelto a codificar. Venice aún puede rechazar una imagen que no alcance su tamaño mínimo.
+
 
 ### Cambios del catálogo y cuotas
 
-Mientras un inicio de sesión esté en curso, **Cuentas** ofrece **Cancelar** al aparecer instrucciones. Las plazas Business Premium `self_serve_business_prolite` pesan cinco unidades Standard en la estimación, según los límites Business oficiales citados en la sección de capacidad, verificados el 20 de octubre de 2026. No cambia selección de cuentas ni crea ventanas que no informe el proveedor. Un grupo OAuth Anthropic activado con dos o más cuentas ofrece estimación equivalente, con igual peso por cuenta; usa últimas lecturas sin consultas extra y señala cobertura incompleta por pausa, reautenticación o datos obsoletos. Con el grupo desactivado o una sola cuenta muestra su lectura individual.
+Mientras un inicio de sesión esté en curso, **Cuentas** ofrece **Cancelar** al aparecer instrucciones. Pro 100 (`prolite`), Pro 200 (`pro`) y Pro 500 (`promax`) cuentan como 10, 20 y 50 unidades Plus, respectivamente. Las plazas Business Premium `self_serve_business_prolite` pesan cinco unidades Standard en la estimación, según los límites Business oficiales citados en la sección de capacidad, verificados el 20 de octubre de 2026. No cambia selección de cuentas ni crea ventanas que no informe el proveedor. Un grupo OAuth Anthropic activado con dos o más cuentas ofrece estimación equivalente, con igual peso por cuenta; usa últimas lecturas sin consultas extra y señala cobertura incompleta por pausa, reautenticación o datos obsoletos. Con el grupo desactivado o una sola cuenta muestra su lectura individual.
 
 Las configuraciones v1 migran al marcador 2 y una fila compatible con opciones. Se guarda una sola copia `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json` la restaura.
 

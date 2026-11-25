@@ -127,6 +127,8 @@ Esta ruta no añade solicitudes de recuperación y, por tanto, no consume la cuo
 
 La restauración recorre un máximo de 10.000 identidades por respuesta. Si se agota ese presupuesto, la respuesta JSON acotada devuelve HTTP 502 y una transmisión devuelve `response.failed`; ninguna ruta envía los alias privados a Codex ni guarda la respuesta rechazada para continuar mediante `previous_response_id`.
 
+Para la reproducción local en v2 con texto sin cifrar, una conexión WebSocket de Responses en loopback cuyo cliente carece de una identidad de opencodex puede conservar en memoria el historial correspondiente a esa conexión y a su propio `thread-id`. Si una respuesta supera los límites de reproducción, el proxy no la guarda y conserva las entradas existentes.
+
 En las llamadas reescritas correctamente, la opción elimina el cifrado de aplicación de los argumentos de mensaje de agentes. HTTPS sigue cifrando el transporte de red, pero el texto puede aparecer en el historial de tareas de Codex, las solicitudes al proveedor enrutado, `responses-state.json` o sus archivos auxiliares y, si está activada la captura de depuración, `usage-debug.jsonl`. El comportamiento depende de campos no documentados del esquema y de la respuesta de ChatGPT y puede dejar de funcionar tras actualizar el cliente o el backend. Al iniciar se muestra una advertencia mientras la opción esté activada.
 
 ```json

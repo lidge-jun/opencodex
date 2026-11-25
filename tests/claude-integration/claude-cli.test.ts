@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { withClaudeContextSettings } from "../../src/cli/claude-context-settings";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
@@ -706,6 +706,16 @@ describe("ocx claude env assembly", () => {
     expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME).toBeUndefined();
   });
 
+  test.each([
+    ["2.1.280", "claude-fable-5-1[1m]"],
+    ["2.1.290", "claude-fable-5-2[1m]"],
+    [null, "claude-fable-5-1[1m]"],
+  ])("the launcher fills Fable for Claude Code %s", (claudeCodeVersion, expected) => {
+    const windows = buildClaudeContextWindows([], [], undefined, {});
+    const deps = { ...AUTH_PRESENT, claudeCodeVersion };
+    expect(buildClaudeEnv(cfg(), 10100, {}, windows, deps).ANTHROPIC_DEFAULT_FABLE_MODEL).toBe(expected);
+  });
+
   test("an alias tier slot this launch writes carries its /model label (#6926)", () => {
     const config = cfg({ claudeCode: { tierModels: { opus: "ocx-claude-native--gpt-6.1-sol", haiku: "claude-ocx-cursor--gpt-5.6-luna" } } });
     const env = buildClaudeEnv(config, 10100, {}, {}, AUTH_PRESENT);
@@ -1197,6 +1207,22 @@ describe("ocx claude management discovery destination", () => {
     }
   }
 
+  test.each([
+    ["TimeoutError", "Timed out after 3000 ms while loading model context information"],
+    ["TypeError", "Could not load model context information"],
+  ])("reports a %s without exposing raw error text", async (name, message) => {
+    const fetch = spyOn(globalThis, "fetch").mockRejectedValue(new DOMException("private diagnostic detail", name));
+    const warn = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await fetchClaudeCodeState(cfg({}), 10100)).toEqual({ contextWindows: {} });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(`⚠ ${message}. Automatic [1m] marking is skipped for this launch.`);
+    } finally {
+      fetch.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
   test("a hub with a management ingress is asked on the ingress, not the proxy bind", async () => {
     const seen = await captureDiscovery(cfg({
       hostname: "100.76.170.81",
@@ -1204,7 +1230,7 @@ describe("ocx claude management discovery destination", () => {
       hub: { managementIngress: { enabled: true, port: 10102 } },
       unauthenticatedLoopbackListener: { enabled: true, port: 10104 },
     } as Partial<OcxConfig>));
-    expect(seen.url).toBe("http://127.0.0.1:10102/api/claude-code");
+    expect(seen.url).toBe("http://127.0.0.1:10102/api/claude-code?view=launch");
     // The listener's port must NOT be used: it serves no /api/* at all.
     expect(seen.url).not.toContain("10104");
     expect(seen.header).toBe(FAKE_ADMIN_TOKEN);
@@ -1216,7 +1242,7 @@ describe("ocx claude management discovery destination", () => {
       runtimeRole: "hub",
       unauthenticatedLoopbackListener: { enabled: true },
     } as Partial<OcxConfig>));
-    expect(seen.url).toBe("http://100.76.170.81:10100/api/claude-code");
+    expect(seen.url).toBe("http://100.76.170.81:10100/api/claude-code?view=launch");
     expect(seen.header).toBe(FAKE_ADMIN_TOKEN);
   });
 
@@ -1224,8 +1250,8 @@ describe("ocx claude management discovery destination", () => {
     for (const hostname of [undefined, "127.0.0.1", "localhost", "0.0.0.0"]) {
       const seen = await captureDiscovery(cfg(hostname === undefined ? {} : { hostname }));
       const expected = hostname === "localhost"
-        ? "http://localhost:10100/api/claude-code"
-        : "http://127.0.0.1:10100/api/claude-code";
+        ? "http://localhost:10100/api/claude-code?view=launch"
+        : "http://127.0.0.1:10100/api/claude-code?view=launch";
       expect({ hostname, url: seen.url }).toEqual({ hostname, url: expected });
     }
   });

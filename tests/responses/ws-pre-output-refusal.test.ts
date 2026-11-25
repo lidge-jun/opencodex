@@ -226,6 +226,19 @@ describe("everything else keeps today's settle", () => {
     expect(body).toContain("server_is_overloaded");
   });
 
+  test.each([
+    ["created mark", [{ ...CREATED, replayUnsafe: true }, OVERLOADED]],
+    ["in-progress snapshot mark", [CREATED, { ...IN_PROGRESS, response: { ...IN_PROGRESS.response, replayUnsafe: true } }, OVERLOADED]],
+    ["queued malformed mark", [CREATED, { ...IN_PROGRESS, type: "response.queued", replayUnsafe: null }, OVERLOADED]],
+    ["heartbeat snapshot mark", [CREATED, { ...HEARTBEAT, response: { ...CREATED.response, replayUnsafe: true } }, OVERLOADED]],
+    ["metadata control mark", [CREATED, { ...QUOTA(20), replayUnsafe: true }, OVERLOADED]],
+    ["bare refusal mark", [CREATED, { ...OVERLOADED, replayUnsafe: true }]],
+    ["terminal snapshot mark", [CREATED, { ...FAILED_OVERLOADED, response: { ...FAILED_OVERLOADED.response, replayUnsafe: true } }]],
+  ] as const)("%s commits the stream without projecting the refusal", async (_name, frames) => {
+    const body = await committed(await exchange(opened(...frames)));
+    expect(body).toContain("server_is_overloaded");
+  });
+
   test("output after a heartbeat still commits the held preamble", async () => {
     const body = await committed(await exchange(opened(CREATED, HEARTBEAT, OUTPUT_ITEM, OVERLOADED)));
     expect(body).toContain("response.heartbeat");
@@ -266,6 +279,37 @@ describe("everything else keeps today's settle", () => {
   test("a created snapshot that already carries output commits", async () => {
     const resumed = { type: "response.created", response: { id: "resp_1", output: [{ id: "msg_0", type: "message" }] } };
     expect(await committed(await exchange(opened(resumed, OVERLOADED)))).toContain("server_is_overloaded");
+  });
+
+  test.each([
+    ["created frame item", { ...CREATED, item: OUTPUT_ITEM.item }, "msg_1"],
+    ["in-progress snapshot delta", { ...IN_PROGRESS, response: { ...IN_PROGRESS.response, delta: "partial" } }, "partial"],
+    ["queued frame content part", { ...IN_PROGRESS, type: "response.queued", part: { type: "output_text", text: "partial" } }, "partial"],
+    ["heartbeat snapshot item", { ...HEARTBEAT, response: { ...CREATED.response, item: OUTPUT_ITEM.item } }, "msg_1"],
+  ] as const)("a %s commits the stream and reaches the client", async (_name, frame, marker) => {
+    const body = await committed(await exchange(opened(frame, OVERLOADED)));
+    expect(body).toContain(`event: ${frame.type}`);
+    expect(body).toContain(marker);
+    expect(body).toContain("server_is_overloaded");
+  });
+
+  test.each([
+    ["bare error frame delta", { ...OVERLOADED, delta: "partial" }],
+    ["bare error snapshot output text", { ...OVERLOADED, response: { ...CREATED.response, output_text: "partial" } }],
+    ["failed frame tool arguments", { ...FAILED_OVERLOADED, arguments: "partial" }],
+    ["failed snapshot text", { ...FAILED_OVERLOADED, response: { ...FAILED_OVERLOADED.response, text: "partial" } }],
+  ] as const)("a %s is delivered with its output", async (_name, frame) => {
+    const body = await committed(await exchange(opened(CREATED, frame)));
+    expect(body).toContain(`event: ${frame.type}`);
+    expect(body).toContain("partial");
+    expect(body).toContain("server_is_overloaded");
+  });
+
+  test("empty output and a snapshot text format leave a refusal eligible", async () => {
+    const frame = { ...CREATED, output: [], response: { ...CREATED.response, text: { format: { type: "text" } } } };
+    const response = await exchange(opened(frame, OVERLOADED));
+    expect(response.status).toBe(503);
+    expect(isCodexWsPreOutputRefusal(response)).toBe(true);
   });
 
   test.each([

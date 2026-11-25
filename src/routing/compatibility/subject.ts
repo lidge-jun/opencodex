@@ -67,20 +67,22 @@ export function resolveCompatibilitySubjectsForInboundWire(
   routed: OcxProviderConfig,
   inboundWire: InboundWire,
   configDir?: string,
+  effectiveAdapter?: string,
 ): ResolvedPolicyCompatibilitySubjects {
   const registryEntry = getProviderRegistryEntry(providerName);
-  const staticPolicy = resolveModelPolicy({
-    providerName,
-    modelId,
-    provider: routed,
-    registryEntry,
-    transportMatchedRegistry: !!registryEntry
-      && providerMatchesRegistryTransportWithStaticGuards(providerName, routed),
-    inboundWire,
-    modelCapabilities: routed.modelCapabilities?.[modelId],
-    ...(routed.authMode ? { effectiveAuth: { authMode: routed.authMode } } : {}),
-  });
-  const effective = resolveWireProtocolOverride(providerName, modelId, routed, inboundWire, staticPolicy);
+  // Production can already have a negotiated wire. Policy candidates still need static resolution.
+  const effective = effectiveAdapter !== undefined ? { ...routed, adapter: effectiveAdapter }
+    : resolveWireProtocolOverride(providerName, modelId, routed, inboundWire, resolveModelPolicy({
+      providerName,
+      modelId,
+      provider: routed,
+      registryEntry,
+      transportMatchedRegistry: !!registryEntry
+        && providerMatchesRegistryTransportWithStaticGuards(providerName, routed),
+      inboundWire,
+      modelCapabilities: routed.modelCapabilities?.[modelId],
+      ...(routed.authMode ? { effectiveAuth: { authMode: routed.authMode } } : {}),
+    }));
   const baseUrl = typeof effective.baseUrl === "string" ? effective.baseUrl.trim() : "";
   const adapter = effective.adapter ?? "openai-responses";
   const inboundProtocol = inboundProtocolForWire(inboundWire);
@@ -119,6 +121,7 @@ export function resolveCompatibilitySubjectsForInboundWire(
     modelId,
     effective,
     installationSalt,
+    effectiveAdapter === undefined ? undefined : { inbound: inboundWire, adapter },
   );
   if (!behaviorValues) return { subjectIds };
 
@@ -194,6 +197,7 @@ export function resolveProductionRouteSubject(
   routed: OcxProviderConfig,
   inboundWire: InboundWire,
   configDir?: string,
+  effectiveAdapter?: string,
 ): ResolvedPolicyRouteSubject | null {
   return resolveCompatibilitySubjectsForInboundWire(
     config,
@@ -202,5 +206,6 @@ export function resolveProductionRouteSubject(
     routed,
     inboundWire,
     configDir,
+    effectiveAdapter,
   ).route ?? null;
 }

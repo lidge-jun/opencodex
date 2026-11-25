@@ -20,6 +20,13 @@ describe("ocx account CLI verify status", () => {
     expect(deadLine).toMatch(/needs-reauth$/);
     expect(deadLine).not.toContain("(verify)");
   });
+
+  test("a tos_violation suspension renders its own STATUS", () => {
+    const table = formatAccountTable([
+      { provider: "google-antigravity", type: "oauth", id: "tos", label: "tos", active: false, needsReauth: true, needsReauthReason: "verify_account", needsReauthCause: "tos_violation" },
+    ]);
+    expect(table.split("\n")[1]).toMatch(/needs-reauth\(tos\)$/);
+  });
 });
 
 function listingHarness(accounts: Record<string, unknown>[] = []) {
@@ -87,6 +94,7 @@ describe("ocx account listing health and next actions", () => {
   test.each([
     ["openai", "__main__", "Reauthentication required", "ocx account main reauth --device"],
     ["anthropic", "acct_1", "Verification required", "Verify the account with the provider in a browser"],
+    ["google-antigravity", "acct_1", "Account suspended", "appeal with the provider before running: ocx account reauth google-antigravity --id acct_1"],
     ["anthropic", "acct_1", "Credential conflict", "only one proxy process"],
     ["openai", "acct_1", "Validation pending", "click Refresh quotas in the dashboard Codex account pool"],
   ])("%s %s %s keeps recovery states distinct", async (provider, id, healthLabel, action) => {

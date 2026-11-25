@@ -48,6 +48,7 @@ metadata-free frames; main and main-pool remain outside this validation.
 apply the same identity to HTTP headers and a cloned client-metadata map. The serialized body feeds
 `src/server/responses/codex-ws-request.ts`; WebSocket preparation preserves these existence gates.
 The inbound `buildResponsesWsData` contract in `src/server/ws-bridge.ts` keeps the observational usage client separate from the admitted replay principal. `src/server/index/serve-options.ts` passes both; client classification never grants replay authority.
+For an unidentified loopback WebSocket, the upgrade also mints a separate opaque replay scope bound to its own thread. `src/server/index/websocket-handler.ts` retains it only for that socket and releases it before cancelling on close. It grants no credential, history or notes authority; keyed callers retain the durable principal path. The [Responses replay contract](../transports/responses.md) defines its memory-only retention and refusal boundaries.
 `src/server/responses/codex-ws-pool.ts` includes immutable outgoing headers and account in its reuse
 identity. `src/server/ws-bridge.ts` isolates explicit Pool header overrides as well.
 Its inbound handshake snapshot also retains caller-supplied `user-agent` and
@@ -67,6 +68,8 @@ Native compact in `src/server/responses/compact.ts` projects the body per physic
 failover uses the newly selected account ID. Alternate construction reports identity failures as
 503 instead of treating them as absence of an eligible account, while recording the first
 account's completed rejection and quota headers without attributing a send to the alternate.
+The first native compact send and a credential replay each enter the
+[usage attempt log](../usage-client-attribution.md#credential-recovery-attempts) at guarded dispatch.
 `src/server/context-history.ts` applies the same clone
 and header contract. `src/server/search.ts`, `src/server/images.ts` and `src/server/live.ts`
 retain the selected context and project cloned client metadata immediately before each physical
@@ -111,3 +114,11 @@ contracts are covered by `tests/responses/codex-installation-compact-empty.test.
 `tests/responses/codex-installation-turn-limit.test.ts`.
 
 The Claude bridge carries its private pool identity through Codex selection; see [Claude affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch).
+
+## Claude system prompt placement for GPT-6.2
+
+The canonical Codex Responses adapter sends the translated Messages system prompt as the first
+`developer` item for GPT-6.2 Sol and Astra, so it participates in prefix caching. The projection
+uses the final outbound model and only changes the outbound copy. Cache keys and chronological
+system messages retain their original translation. Native Responses requests and compaction
+retain their existing prompt envelopes.

@@ -601,7 +601,11 @@ export default function ApiKeysWorkspace({
                 />
                 </div>
                 <div id={sectionAnchorId("api", "examples")} className="awi-section-anchor">
-                  <ApiKeysUsagePanel endpoints={endpoints} claudeCodeEnabled={claudeCodeEnabled} />
+                  <ApiKeysUsagePanel
+                    endpoints={endpoints}
+                    claudeCodeEnabled={claudeCodeEnabled}
+                    geminiEnabled={surfaces?.gemini?.enabled === true}
+                  />
                 </div>
               </div>
             </div>

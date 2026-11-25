@@ -1,5 +1,6 @@
 import { oauthSubscriptionMaker } from "../combos/suggestion-channel";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-forward-destination";
+import { transientRetryOn5xxPolicyConfigError } from "../config/load-degrade";
 import { providerRelativeSendPathConfigError } from "../config/provider-relative-send-path";
 import { contextTierRecordConfigError, modelCapabilitiesConfigError, providerInputModalitiesConfigError } from "../config/provider-validation";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -939,6 +940,7 @@ export function providerManagementConfigError(
     // sends recover, not what the canonical forward seed is. Validated below
     // (retryOnResetPolicyConfigError).
     delete canonicalCandidate.retryOnReset;
+    delete canonicalCandidate.transientRetryOn5xx;
     // Validated account eligibility policy is independent of the canonical transport.
     delete canonicalCandidate.accountAutoPause;
     // Context windows are the same kind of user-owned overlay as requestPacing: the operator
@@ -1007,6 +1009,10 @@ export function providerManagementConfigError(
     // The provider name is caller-controlled and can be token-shaped; redact and JSON-escape
     // it before it reaches the management API response.
     return `provider ${JSON.stringify(redactSecretString(name))} ${retryOn429Error}`;
+  }
+  const transientRetryError = transientRetryOn5xxPolicyConfigError(raw.transientRetryOn5xx);
+  if (transientRetryError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${transientRetryError}`;
   }
   const retryOnResetError = retryOnResetPolicyConfigError(raw.retryOnReset);
   if (retryOnResetError) {
@@ -1268,6 +1274,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   minMaxOutputTokens: "editor",
   modelMaxOutputTokens: "editor",
   modelCosts: "editor",
+  creditPriceUsd: "editor",
   headers: "redacted",
   forwardClientHeaders: "editor",
   openRouterRouting: "editor",
@@ -1527,6 +1534,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     // historical auto-open behavior.
     oauthOpenBrowser: config.oauthOpenBrowser !== false,
     showCodexCredits: config.showCodexCredits === true,
+    subscriptionReserve: config.subscriptionReserve,
     providers,
   };
 }

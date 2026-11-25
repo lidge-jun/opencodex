@@ -370,7 +370,7 @@ Regression coverage lives in `tests/codex-integration/codex-quota-parser-parity.
 `tests/usage/quota-reset-observation.test.ts`, and `tests/usage/quota-reset-seen-store.test.ts`.
 
 Codex pool display capacity in `src/providers/codex-capacity.ts` calibrates the observed Business Premium plan
-`self_serve_business_prolite` at five Standard-seat units. This estimate does not drive routing or create a
+`self_serve_business_prolite` at five Standard-seat units, and Pro 100 (`prolite`), Pro 200 (`pro`), and Pro 500 (`promax`) at 10, 20, and 50 Plus-seat units respectively. This estimate does not drive routing or create a
 missing five-hour window; unknown plans keep the conservative baseline and are counted in `unknownPlanAccounts`. An account given an explicit `weight` (the pooled Anthropic report, where every routable seat weighs 1) bypasses the plan table and is not counted there. The same weights (`codexCapacityWeight`) weight the Codex `pooled` windows of [`GET /api/quota-pool`](../quota-pool.md#pooled-windows).
 
 `codexMainAccountHardLock` is a local admission policy that is **on by default** since #5694, at
