@@ -282,14 +282,15 @@ describe.skipIf(!windows || ROOT === null)("Windows hub with a non-loopback publ
     }
   }, SERVER_BUDGET_MS);
 
-  test("a loose pre-existing run directory is hardened before the socket binds", async () => {
+  test("a loose pre-existing run directory is refused and left loose, so no client trusts what it holds", async () => {
     mkdirSync(localControlSocketDir(), { recursive: true });
     loosen(localControlSocketDir());
     expect(windowsTrustedPath(localControlSocketDir())).toBe(false);
     const { server, publicPort } = await startHub();
     try {
-      expect(windowsTrustedPath(localControlSocketDir())).toBe(true);
-      expect(usableLocalControlSocket(publicPort)).toBe(localControlSocketPath(publicPort));
+      expect(windowsTrustedPath(localControlSocketDir())).toBe(false);
+      expect(portEntries(publicPort)).toEqual([]);
+      expect(usableLocalControlSocket(publicPort)).toBeNull();
     } finally {
       await server.stop(true);
     }

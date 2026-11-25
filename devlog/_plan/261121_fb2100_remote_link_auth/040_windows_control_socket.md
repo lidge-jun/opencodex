@@ -53,7 +53,7 @@ the claim mutex) and replace only the parts that read POSIX identity:
 
 Tests: `tests/server/local-control-socket-windows.test.ts` (win32 only: TCP 403 vs socket 200, other routes 404,
 `ocx link status` over the socket, files and lease removed on stop, a crashed predecessor's socket names replaced while a
-decoy and the lease format survive, a loosened directory refused by the client, a loose pre-existing directory hardened,
+decoy and the lease format survive, a loosened directory refused by the client, a loose pre-existing directory refused and left loose,
 a config home under a parent other users can write refused by server and client while the token stays protected, a
 failed publication that leaves no private name and no lease) and platform-neutral name-matcher cases. Registered in the
 test layout.

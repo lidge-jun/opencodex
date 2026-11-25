@@ -79,9 +79,17 @@ function preparePrivateDir(dir: string): void {
   if (WINDOWS) {
     // Trust the path above the run directory before creating anything in it (#8998).
     if (!windowsTrustedPath(dir, false)) throw new Error("socket directory path is not trusted");
-    try { mkdirSync(dir); } catch (error) { if (!isCode(error, "EEXIST")) throw error; }
+    let created = true;
+    try { mkdirSync(dir); } catch (error) { if (!isCode(error, "EEXIST")) throw error; created = false; }
     // Refuse a pre-existing junction or other reparse point before any ACL operation can follow it.
     if (!windowsPlainDirectory(dir)) throw new Error("socket directory is not a plain directory");
+    // A run directory that already existed without private permissions may hold a socket and lease
+    // someone else planted while it was open. Hardening it would make those entries look trusted to
+    // the client, which checks only the directory's current permissions, so refuse instead and leave
+    // it loose: the client then refuses it too. No released runtime creates this directory loose.
+    if (!created && !isPrivateSocketDir(dir)) {
+      throw new Error("socket directory already existed without private permissions; remove it to enable the control socket");
+    }
     hardenSecretDir(dir, { required: true, verifyExistingRuntimeDirectory: true });
     if (!isPrivateSocketDir(dir)) throw new Error("socket directory could not be made private");
     return;
