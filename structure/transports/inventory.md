@@ -195,7 +195,11 @@ Kiro generation in `src/adapters/kiro-retry.ts` passes the routed provider execu
 A reset-triggered rebuild may retarget the request to another region's canonical host mid-flight; that admission is marked `rebasedTarget` and does not consume or require an unused transition/alternate-target allowance (the total-send and replay-safety checks still apply), and the alternate-host fallback resolves the legacy gateway from the current request URL so rebuilt credentials stay with their own region.
 
 `src/lib/provider-egress.ts` resolves a provider route for one destination. The route is carried only
-by transports that can preserve that request-local decision:
+by transports that can preserve that request-local decision. An explicit HTTP(S) proxy is never sent
+toward a destination that the process `NO_PROXY` or `no_proxy` exempts, because Bun's fetch and
+WebSocket connect directly there: `configuredOutboundFetch` refuses the send with
+`ExplicitProxyExemptedError`, and the Responses WebSocket upstream leaves such a turn to that HTTP path.
+`tests/lib/explicit-proxy-no-proxy.test.ts` checks the route on real loopback sockets.
 
 | Request path | Per-provider route | Current contract |
 | --- | --- | --- |

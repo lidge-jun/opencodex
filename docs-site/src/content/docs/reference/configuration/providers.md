@@ -599,6 +599,11 @@ to choose direct egress explicitly.
 evaluated for each request. A matching destination goes direct whether the provider would otherwise
 use its own `proxy` or inherit a global proxy.
 
+An HTTP(S) `proxy` on a provider and a process `NO_PROXY` entry that matches the same destination
+cannot both apply, because the runtime would connect directly. Such a request is refused rather than
+sent without the configured proxy. List the host in the provider's `noProxy` to connect directly, or
+remove it from `NO_PROXY` to keep the proxy. A `socks5://` or `socks5h://` proxy is not affected.
+
 #### What the route covers
 
 The route is applied to routed inference, provider discovery and connection tests, and API-key

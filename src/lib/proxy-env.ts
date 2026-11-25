@@ -201,6 +201,32 @@ export function socks5ProxyFromEnv(env: ProxyEnvMap = process.env): string | und
  */
 export type ProxyCapableRequestInit = RequestInit & { proxy?: string | false };
 
+/** A request named an HTTP(S) proxy for a destination the process `NO_PROXY` exempts. */
+export class ExplicitProxyExemptedError extends Error {
+  override readonly name = "ExplicitProxyExemptedError";
+  readonly code = "explicit_proxy_exempted";
+}
+
+/**
+ * Whether the process `NO_PROXY` or `no_proxy` exempts `url`.
+ *
+ * Bun's fetch and WebSocket connect directly to such a destination even when the request names a
+ * proxy, as a string or as `{ url }`; only `proxy: false` outranks the environment. Each spelling
+ * is checked on its own because either one is enough for Bun to skip the proxy.
+ */
+export function processNoProxyExempts(url: URL, env: ProxyEnvMap = process.env): boolean {
+  return [env.NO_PROXY, env.no_proxy].some(value =>
+    typeof value === "string" && value.trim() !== "" && noProxyMatches(url, { NO_PROXY: value }));
+}
+
+/** The refusal for an explicit HTTP(S) proxy that the process environment would make Bun skip. */
+export function explicitProxyExemptedError(url: URL): ExplicitProxyExemptedError {
+  return new ExplicitProxyExemptedError(
+    `the configured proxy for ${url.origin} cannot be applied because NO_PROXY in the process environment `
+    + "exempts this destination; remove it from NO_PROXY to keep the proxy, or list it in the provider's noProxy to connect directly",
+  );
+}
+
 export function configuredOutboundFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -223,6 +249,13 @@ export function configuredOutboundFetch(
     url = new URL(input instanceof Request ? input.url : String(input));
   } catch {
     return base!(input, init);
+  }
+  // An HTTP(S) proxy string reaches Bun's fetch as `init.proxy`, and Bun ignores it for a
+  // destination the process NO_PROXY exempts. The caller named this proxy, so the request must not
+  // leave without it: refuse instead. SOCKS5 strings never reach Bun's proxy option (below).
+  if (typeof explicitProxy === "string" && !isSocks5ProxyUrl(explicitProxy)
+    && (url.protocol === "http:" || url.protocol === "https:") && processNoProxyExempts(url)) {
+    return Promise.reject(explicitProxyExemptedError(url));
   }
   // A mixed inherited SOCKS/HTTP ALL_PROXY environment cannot put bare "localhost" in
   // NO_PROXY: Bun would also bypass its HTTP proxy for app.localhost. Keep the name exact
