@@ -311,9 +311,10 @@ async function providerOutboundRequest(
   // proxy-only DNS answers.
   //
   // A provider route replaces that decision outright rather than combining with it. An
-  // explicit provider proxy applies even where global NO_PROXY exempts the host, because the
-  // operator named this proxy for this provider; `providers.<name>.noProxy` is the exemption
-  // that belongs to that choice, and `resolveProviderEgress` has already applied it. A
+  // explicit provider proxy is never traded for direct egress where global NO_PROXY exempts the
+  // host: `configuredOutboundFetch` refuses that send, because Bun would skip the proxy there.
+  // `providers.<name>.noProxy` is the exemption that belongs to the operator's choice, and
+  // `resolveProviderEgress` has already applied it. A
   // provider pinned to `direct` keeps the DNS-pinned transport, which reaches the peer
   // through no proxy at all — the one route on this path that needs nothing from Bun.
   const proxyApplies = egress.kind === "inherit"

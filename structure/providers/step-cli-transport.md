@@ -41,6 +41,8 @@ permission denials.
 
 `session-pool.ts` latches shutdown before awaiting sessions and in-flight opens. The pool owns
 each session before workspace setup, so shutdown can close an opening session before it spawns.
+At eight owned sessions a home pool refuses new conversations with retryable `step_cli_pool_full`.
+Existing handles and coalesced opens still work. Only confirmed cleanup releases capacity.
 The pool retains ownership of adapter, idle-timer and sweep closes until termination is
 confirmed. Shutdown drains those receipts and propagates failures.
 Closing handles refuse replacement. Session close is idempotent and clears held-request timers.

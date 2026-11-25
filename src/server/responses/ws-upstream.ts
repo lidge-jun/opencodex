@@ -19,7 +19,7 @@ import type { NativeResponseControl } from "./native-response-control";
 
 import { codexWsReuseAcrossTurnsEnabled } from "../../config/codex-ws-reuse-setting";
 import { compareBunVersions } from "../../lib/bun-stream-caps";
-import { resolveProxyRoute, socks5ProxyFromEnv } from "../../lib/proxy-env";
+import { processNoProxyExempts, resolveProxyRoute, socks5ProxyFromEnv } from "../../lib/proxy-env";
 import { estimateTokens } from "../../lib/token-estimate";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { CODEX_RESPONSES_HTTP_URL, CODEX_RESPONSES_WS_URL, CODEX_WS_FRAME_HEADERS, prepareCodexHttpInit, prepareCodexWsRequest } from "./codex-ws-request";
@@ -215,6 +215,9 @@ export async function codexWsUpstreamFetch(
   }
 
   const wsUrl = wsUpstreamUrlFor(url);
+  // Bun's WebSocket also skips an explicit proxy for a destination the process NO_PROXY exempts.
+  // The HTTP path refuses that route rather than dialing around it.
+  if (explicitProxy && processNoProxyExempts(new URL(wsUrl))) return sseFallback(url, init);
   const proxyRoute = explicitProxy ? { kind: "proxy" as const, proxy: explicitProxy } : resolveProxyRoute(new URL(wsUrl));
   if (proxyRoute.kind === "fallback") return sseFallback(url, init);
   const proxy = proxyRoute.kind === "proxy" ? proxyRoute.proxy : undefined;
