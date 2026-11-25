@@ -442,7 +442,8 @@ The `capabilities` line lets Codex forward a Cyber access-program selection thro
 turns that capability off by default for every provider id except its built-in `openai`, and the
 loopback form already uses that id. Codex releases that predate the field ignore it. A table written by an
 earlier OpenCodex release, without the line, is still recognized by `ocx restore` and uninstall. The
-`ocx codex` launcher trusts only the current shape, so run `ocx start` once after upgrading to rewrite it.
+`ocx codex` launcher trusts only the current shape: after upgrading, if `ocx codex` stops supplying
+credentials, run `ocx start` once to rewrite the table.
 
 When OpenCodex owns routing, both modes write `$CODEX_HOME/opencodex.config.toml` as a
 reference/fallback config. On loopback it contains the root keys you can merge manually if automatic
