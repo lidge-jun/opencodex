@@ -226,7 +226,7 @@ describe("committed-terminal combo cooldown", () => {
     expect(targetKey(pick.target)).toBe(targetKey({ provider: "b", model: "m2" }));
   });
 
-  test("addFinalRequestLog passes comboTarget, outputCeiling and respects paused turn from child context", async () => {
+  test.each([false, true])("a committed output ceiling respects quota-only routing (%s)", async quotaOnly => {
     registerCommittedTerminalCooldownHandler(coolComboTargetForCommittedTerminal);
     try {
       const cfg: OcxConfig = {
@@ -242,6 +242,8 @@ describe("committed-terminal combo cooldown", () => {
         combos: {
           aliasCombo: {
             strategy: "failover",
+            quotaOnlyFallback: quotaOnly,
+            allowMeteredTargets: true,
             targets: [{ provider: "a", model: "m-alias" }],
           },
         },
@@ -270,6 +272,7 @@ describe("committed-terminal combo cooldown", () => {
           cfg,
           pausedParentLog,
           {
+            admission: { kind: "loopback", source: "loopback" },
             translatorBudget: budget1,
             setTerminalOutcomeRecorder: recorder => { terminalRecorder = recorder; },
           },
@@ -322,6 +325,7 @@ describe("committed-terminal combo cooldown", () => {
           cfg,
           unpausedParentLog,
           {
+            admission: { kind: "loopback", source: "loopback" },
             translatorBudget: budget2,
             setTerminalOutcomeRecorder: recorder => { unpausedTerminalRecorder = recorder; },
           },
@@ -348,7 +352,8 @@ describe("committed-terminal combo cooldown", () => {
       nativeTerminal!("incomplete");
       unpausedTerminalRecorder?.("incomplete");
       addFinalRequestLog("ocx-test-unpaused", Date.now(), unpausedParentLog, 200, { terminalStatus: "incomplete" }, () => {});
-      expect(isComboTargetInCooldown("aliasCombo", { provider: "a", model: "m-alias" })).toBe(true);
+      expect(isComboTargetInCooldown("aliasCombo", { provider: "a", model: "m-alias" })).toBe(!quotaOnly);
+      if (quotaOnly) expect(pickComboTarget(cfg, "aliasCombo")?.target.model).toBe("m-alias");
     } finally {
       registerCommittedTerminalCooldownHandler(undefined);
     }

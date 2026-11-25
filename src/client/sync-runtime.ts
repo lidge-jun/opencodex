@@ -24,6 +24,14 @@ export function readSyncRuntime(): RuntimePortState | null {
   } catch { throw new ClientSyncRuntimeError("client_runtime_unverified"); }
 }
 
+export function isPublishedRuntimeStopping(
+  expected: Required<Pick<RuntimePortState, "pid" | "port" | "attestationSecret" | "servingGeneration">>,
+): boolean {
+  const current = readSyncRuntime();
+  return current?.clientStopping === true && current.pid === expected.pid && current.port === expected.port
+    && current.attestationSecret === expected.attestationSecret && current.servingGeneration === expected.servingGeneration;
+}
+
 /** Capture and recheck under C. Proven no-runtime sync keeps its existing offline behavior. */
 export function clientSyncRuntimeGuard(): () => void {
   const expected = readSyncRuntime();

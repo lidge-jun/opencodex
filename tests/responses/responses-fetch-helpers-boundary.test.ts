@@ -235,6 +235,8 @@ describe("Responses fetch-helper import boundary", () => {
       // Opt-in outbound Codex history slimming at the final send.
       "./history-slim",
       "./request-compression",
+      // Combo admission checked again at the send (src/server/responses/send-admission.ts); node: built-ins only.
+      "./send-admission",
       "./ws-upstream",
     ]);
   });

@@ -509,7 +509,7 @@ For multiple API-key pool entries, opt into normal-request distribution separate
 
 This admits at most ten active requests across the provider and one per credential reference, with starts on each reference at least four seconds apart. These are local upper bounds, not a promise of upstream capacity. A provider-wide RPM setting, when present, remains an aggregate limit and does not multiply with key count. Key limits span models; model rules remain additional restrictions. Projects sharing quota need an appropriate aggregate limit; TPM and daily quotas are not tracked here.
 
-Round-robin selects keys per request without saving a new active key. Known 401/429 cooldowns are skipped; when none remains eligible, new requests receive a retryable 429 instead of repeatedly sending. Already queued work normally retains its selected key and may wait behind that key even when another is idle. If that selection becomes cooled or invalid, the request selects an eligible key again and reacquires pacing admission for it; the bounded queue expires rather than waiting forever. Selection and diagnostics are process-local, reset on restart, and do not equal balanced token usage or billing. Starts count pacing admissions, including work cancelled before dispatch. OAuth and forwarded credentials keep their existing selection. The dashboard shows key handles, starts, in-flight work, queued work and known cooldowns, never secret key values. These limits cover the inference pacing executor, not the standalone Images relay's direct fetch.
+Round-robin selects keys per request without saving a new active key. Known 401/429 cooldowns are skipped; when none remains eligible, new requests receive a retryable 429 instead of repeatedly sending. Already queued work normally retains its selected key and may wait behind that key even when another is idle. If that selection becomes cooled or invalid, the request selects an eligible key again and reacquires pacing admission for it; the bounded queue expires rather than waiting forever. Selection and diagnostics are process-local, reset on restart, and do not equal balanced token usage or billing. Known cooldowns of inline keys are the exception: a hold from a 401, 429 or billing refusal is saved in `api-key-cooldowns.json` in the config directory and still applies after a restart until it expires. Replacing the key under that pool entry or clearing it from key management drops the hold. Keys given as an environment or keychain reference keep their cooldowns in memory only. Starts count pacing admissions, including work cancelled before dispatch. OAuth and forwarded credentials keep their existing selection. The dashboard shows key handles, starts, in-flight work, queued work and known cooldowns, never secret key values. These limits cover the inference pacing executor, not the standalone Images relay's direct fetch.
 
 ### Azure OpenAI model metadata discovery
 
@@ -598,6 +598,13 @@ to choose direct egress explicitly.
 `noProxy` accepts a comma-separated string or an array of strings in `NO_PROXY` syntax. It is
 evaluated for each request. A matching destination goes direct whether the provider would otherwise
 use its own `proxy` or inherit a global proxy.
+
+An HTTP(S) `proxy` on a provider and a process `NO_PROXY` entry that matches the same destination
+cannot both apply, because the runtime would connect directly. Such a request is refused rather than
+sent without the configured proxy. List the host in the provider's `noProxy` to connect directly, or
+remove it from `NO_PROXY` to keep the proxy. While `NO_PROXY` is set, a redirect answered to such a
+request is refused rather than followed, because the next hop could leave without the proxy. A
+`socks5://` or `socks5h://` proxy is not affected.
 
 #### What the route covers
 
@@ -1823,18 +1830,21 @@ See the [reasoning-effort diagnostic limits](/guides/providers/#reasoning-effort
 ## Routed agent messages
 
 With the [`openai-responses` adapter](/reference/adapters/#openai-responses), Codex
-`agent_message` items containing nonempty arrays of supported plaintext parts become user messages when `authMode` is not `"forward"`
-(for example, `"key"`). Providers using `authMode: "forward"` retain these items unchanged.
+`agent_message` items containing nonempty arrays of supported parts (`input_text`, `input_image`
+or `input_file`) become user messages when `authMode` is not `"forward"` (for example, `"key"`).
+Providers using `authMode: "forward"` retain these items unchanged.
 `agent_message` is private to the ChatGPT Codex backend, and the routed destinations
 reported so far answer the whole request with
 `422 unknown item type "agent_message"`; Codex replays sub-agent history on every
 subsequent turn, so the thread keeps failing until the item is converted.
 Author and recipient remain explicit text metadata, and the content parts are preserved.
-For HTTPS `api.x.ai` and `cli-chat-proxy.grok.com` on the standard port, non-forward
+For HTTPS `api.x.ai`, `us.api.x.ai` and `cli-chat-proxy.grok.com` on the standard port, non-forward
 Responses dispatch also accepts a nonblank string child result and turns it into one
 `input_text` part. The original string, including leading/trailing whitespace and newlines,
 is preserved. Other destinations keep string-valued agent messages unchanged. Empty or
-whitespace-only strings remain unchanged, as do incomplete and mixed encrypted/unknown shapes.
+whitespace-only strings remain unchanged, as do empty content arrays and arrays that mix in
+encrypted or unknown parts. A nonempty array whose parts all use a supported type is converted
+as sent, even when a part lacks its expected field.
 Encrypted and unknown content is not normalized; native encrypted tasks still require the
 separate opt-in [task recovery](/reference/configuration/agents/#encrypted-v2-task-recovery).
 

@@ -322,6 +322,7 @@ describe("combo web-search deadline provenance", () => {
   const secondary = { provider: "fixture-backup", model: "fixture-model" };
 
   async function comboRun(stallOnBody: boolean, surface = "responses", upstream = false, stream = true, backup = false): Promise<Outcome> {
+    const stickyBodyDeadline = backup && stallOnBody;
     let releaseSpendHome: (() => void) | undefined;
     let warn: ReturnType<typeof spyOn<typeof console, "warn">> | undefined;
     const home = createTempHome("ocx-combo-web-search-deadline-");
@@ -349,7 +350,9 @@ describe("combo web-search deadline provenance", () => {
       }) as typeof fetch;
 
       const config: OcxConfig = {
-        port: 0, defaultProvider: "fixture-routed", connectTimeoutMs: HEADER_MS,
+        port: 0, defaultProvider: "fixture-routed",
+        // This case stalls after visible body bytes. Healthy responses use the normal header budget.
+        ...(stickyBodyDeadline ? {} : { connectTimeoutMs: HEADER_MS }),
         providers: {
           "fixture-routed": { adapter: "openai-chat", baseUrl: "https://routed.test/v1", authMode: "key", apiKey: "fixture" },
           ...(backup && { "fixture-backup": { adapter: "openai-chat", baseUrl: "https://backup.test/v1", authMode: "key", apiKey: "fixture" } as const }),
@@ -403,11 +406,15 @@ describe("combo web-search deadline provenance", () => {
       }
 
       const outcome = await send();
-      if (backup && stallOnBody) {
+      if (stickyBodyDeadline) {
         expect(outcome.wire).toContain(output);
         expect(outcome.row.failureDetail).toEqual({ code: "generation_timeout", value: comboStallMs });
         expect(isComboTargetInCooldown(comboId, primary)).toBe(false);
-        expect((await send()).wire).toContain("primary answered");
+        const next = await send();
+        expect(next.row.attempts?.map(({ provider, status }) => ({ provider, status }))).toEqual([
+          { provider: primary.provider, status: 200 },
+        ]);
+        expect(next.wire).toContain("primary answered");
         expect((await send()).wire).toContain("backup answered");
         expect(sends).toEqual([primaryUrl, primaryUrl, backupUrl]);
         return outcome;

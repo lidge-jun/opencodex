@@ -108,6 +108,16 @@ export function isCodexAccountHeldAtUsageLimit(
   );
 }
 
+/** A missing, unusable or throttled member is not evidence that the whole pool spent its allowance. */
+export function codexPoolHasConfirmedUsageLimit(config: OcxConfig, now: number, refusedId?: string): boolean {
+  const ids = [
+    MAIN_CODEX_ACCOUNT_ID,
+    ...(config.codexAccounts ?? []).filter(isSelectableCodexPoolAccount).map(account => account.id),
+  ].filter(id => !isCodexAccountPaused(config, id) && !isCodexAccountPlanExcluded(config, id)
+    && isCodexAccountUsable(config, id));
+  return ids.length > 0 && ids.every(id => id === refusedId || isCodexAccountHeldAtUsageLimit(config, id, now));
+}
+
 /** The automatic-rotation policies that also bind the legacy keep-the-active-account fallback. */
 export function isCodexAccountRotationExcluded(
   config: OcxConfig,
