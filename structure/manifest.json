@@ -1253,6 +1253,20 @@
       ]
     },
     {
+      "path": "clients/connections.md",
+      "tier": 5,
+      "title": "Client Connections",
+      "scope": "Read-only Connections view (desired, observed, owner, drift, restore preview) and the Claude Code first-party preview.",
+      "documents": [
+        "gui/",
+        "src/claude/",
+        "src/codex/",
+        "src/integrations/",
+        "src/lib/",
+        "src/server/"
+      ]
+    },
+    {
       "path": "clients/claude-desktop-config-reads.md",
       "tier": 5,
       "title": "Claude Desktop Configuration Reads",
