@@ -40,6 +40,15 @@ export const AGENT_ROUTING_CAPABILITIES: readonly Capability[] = [
       "Stored threads are not verified live sessions. queued is not processing; unknown is never replayed. --allow-reply-read exposes bounded same-turn final text, not exclusive reply ownership or goal completion. No daemon start, steer, automatic replies or registration. Resume preflight is separate opt-in through a same-home existing Unix server; managed requirements and unavailable profiles refuse. The checked native API cannot enforce unloaded-only resume atomically, so execution is blocked with resume_atomicity_unsupported; no thread/resume is sent."],
   },
   {
+    command: ["message", "claude-sessions"],
+    usage: "ocx message claude-sessions --claude <absolute-cli-path> [--json]",
+    summary: "List local Claude Code session IDs and their reported activity.",
+    routes: [], mutates: false, json: "envelope",
+    flags: [{ name: "--claude", value: "string", required: true, summary: "Absolute path to a trusted Claude Code CLI with agents --json support." },
+      { name: "--json", value: "boolean", summary: "Emit a versioned Claude Code session directory." }],
+    details: ["macOS/Linux only. Invokes the selected local CLI once. Returns only UUID, interactive/background kind and busy/waiting/idle status. Does not test reachability or send a message."],
+  },
+  {
     command: ["advisor"],
     summary: "Inspect and configure the advisor sidecar (expert consultation for routed workers).",
     routes: [

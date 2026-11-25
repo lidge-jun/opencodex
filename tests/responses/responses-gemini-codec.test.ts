@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { createTranslatorBudget, TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 import {
   GeminiCodecError,
   MAX_GEMINI_TOOL_CALLS,
   chatToGeminiResponse,
   consumeGeminiChatChunk,
   createGeminiStreamState,
+  disposeGeminiStreamTools,
   geminiStreamTerminal,
   geminiToChat,
 } from "../../src/protocols/codecs/gemini";
@@ -141,6 +143,66 @@ describe("Gemini codec response mapping", () => {
     expect(() => consumeGeminiChatChunk(state, { error: { message: "x" } })).toThrow();
     consumeGeminiChatChunk(state, { choices: [{ index: 0, delta: { content: "a" }, finish_reason: "stop" }] });
     expect(() => consumeGeminiChatChunk(state, { choices: [{ index: 0, delta: { content: "b" } }] })).toThrow();
+  });
+
+  test("completed tools release their UTF-8 budget before a trailing usage record", () => {
+    const budget = createTranslatorBudget({ maxCallArgumentBytes: 2, maxTurnBytes: 8 });
+    const state = createGeminiStreamState("m", budget);
+    const part = (tool: Record<string, unknown>) => ({ choices: [{ delta: { tool_calls: [{ index: 0, ...tool }] } }] });
+    const signature = (value: string) => ({ extra_content: { google: { thought_signature: value } } });
+    try {
+      consumeGeminiChatChunk(state, part({ id: "a", function: { name: "한", arguments: "{" }, ...signature("xy") }));
+      expect(budget.snapshot().currentBytes).toBe(7);
+      consumeGeminiChatChunk(state, part({ id: "a", function: { arguments: "}" }, ...signature("z") }));
+      expect(budget.snapshot().currentBytes).toBe(7);
+      const records = consumeGeminiChatChunk(state, { choices: [{ delta: {}, finish_reason: "tool_calls" }] });
+      expect(records[0]?.candidates).toMatchObject([{ content: { parts: [{ functionCall: { id: "a", name: "한", args: {} }, thoughtSignature: "z" }] } }]);
+      expect(budget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0 });
+      consumeGeminiChatChunk(state, { choices: [], usage: { completion_tokens: 3 } });
+      expect(geminiStreamTerminal(state)?.usageMetadata).toMatchObject({ candidatesTokenCount: 3 });
+    } finally {
+      disposeGeminiStreamTools(state);
+    }
+  });
+
+  test("streamed calls share the turn budget and keep an independent argument budget", () => {
+    for (const limits of [{ maxCallArgumentBytes: 1, maxTurnBytes: 20 }, { maxCallArgumentBytes: 8, maxTurnBytes: 4 }]) {
+      const budget = createTranslatorBudget(limits);
+      const state = createGeminiStreamState("m", budget);
+      const part = (index: number, fn: Record<string, string>) => ({ choices: [{ delta: { tool_calls: [{ index, function: fn }] } }] });
+      try {
+        consumeGeminiChatChunk(state, part(0, { name: "a", arguments: "{" }));
+        consumeGeminiChatChunk(state, part(1, { name: "b", arguments: "{" }));
+        expect(() => consumeGeminiChatChunk(state, part(0, { arguments: "}" }))).toThrow(TranslatorBudgetExceededError);
+        expect(state.tools.get(0)?.arguments).toBe("{");
+      } finally {
+        disposeGeminiStreamTools(state);
+      }
+      expect(budget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0 });
+      expect(() => consumeGeminiChatChunk(state, part(1, { arguments: "}" }))).toThrow("Invalid Chat tool delta");
+    }
+  });
+
+  test("split Unicode tool fragments have the same UTF-8 size as a complete value", () => {
+    const name = "tool🙂";
+    const args = '{"v":"🙂"}';
+    const bytes = Buffer.byteLength(name) + Buffer.byteLength(args);
+    for (const split of [false, true]) {
+      const budget = createTranslatorBudget({ maxCallArgumentBytes: Buffer.byteLength(args), maxTurnBytes: bytes });
+      const state = createGeminiStreamState("m", budget);
+      const parts = split
+        ? [{ name: name.slice(0, -1), arguments: args.slice(0, 7) }, { name: "", arguments: "" },
+          { name: name.slice(-1), arguments: args.slice(7) }]
+        : [{ name, arguments: args }];
+      try {
+        for (const fn of parts) consumeGeminiChatChunk(state, { choices: [{ delta: { tool_calls: [{ index: 0, function: fn }] } }] });
+        expect(budget.snapshot().currentBytes).toBe(bytes);
+        const records = consumeGeminiChatChunk(state, { choices: [{ delta: {}, finish_reason: "tool_calls" }] });
+        expect(records[0]?.candidates).toMatchObject([{ content: { parts: [{ functionCall: { name, args: { v: "🙂" } } }] } }]);
+      } finally {
+        disposeGeminiStreamTools(state);
+      }
+    }
   });
 });
 

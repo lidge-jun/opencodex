@@ -113,8 +113,8 @@ export interface QuotaTableAccount {
 }
 
 export interface PoolCell {
-  /** Remaining share, 0–100. */
-  remaining: number;
+  /** Consumed share, 0–100 — the same direction every other quota surface reports. */
+  used: number;
   /** Epoch milliseconds. */
   resetAt?: number;
 }
@@ -141,8 +141,8 @@ function toMs(value: number | undefined): number | undefined {
   return value > 10_000_000_000 ? value : value * 1000;
 }
 
-function clampRemaining(usedPercent: number): number {
-  return Math.max(0, Math.min(100, 100 - usedPercent));
+function clampUsed(usedPercent: number): number {
+  return Math.max(0, Math.min(100, usedPercent));
 }
 
 function accountFlag(account: QuotaTableAccount): { flag: AccountFlag; probeStatus?: string } {
@@ -177,7 +177,7 @@ export function buildQuotaTable(accounts: readonly QuotaTableAccount[], now = Da
           const reading = readings[window];
           if (!reading || !Number.isFinite(reading.percent)) continue;
           const resetAt = toMs(reading.resetAt);
-          cell[window] = { remaining: clampRemaining(reading.percent), ...(resetAt && resetAt > now ? { resetAt } : {}) };
+          cell[window] = { used: clampUsed(reading.percent), ...(resetAt && resetAt > now ? { resetAt } : {}) };
         }
         if (cell.fiveHour || cell.weekly) cells[pool.key] = cell;
       }
@@ -194,7 +194,7 @@ export function buildQuotaTable(accounts: readonly QuotaTableAccount[], now = Da
       const cell = row.cells[pool.key];
       if (!cell || !USABLE.has(row.flag)) continue;
       const windows = [cell.fiveHour, cell.weekly].filter((window): window is PoolCell => window !== undefined);
-      if (windows.some(window => window.remaining <= 0)) continue;
+      if (windows.some(window => window.used >= 100)) continue;
       const resetAt = (cell.weekly ?? cell.fiveHour)?.resetAt;
       if (resetAt === undefined) continue;
       if (!best || resetAt < best.resetAt) best = { row, resetAt };
