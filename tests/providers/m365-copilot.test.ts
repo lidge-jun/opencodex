@@ -586,15 +586,30 @@ describe("Microsoft 365 Copilot socket egress", () => {
     expect(() => m365SocketDialOptions({ fetch: globalThis.fetch }, socketUrl, headers)).toThrow("cannot use a custom fetch executor");
     expect(() => m365SocketDialOptions({ proxy: "" }, socketUrl, headers)).toThrow(/providers[.]m365-copilot[.]proxy is invalid/);
   });
-  test("inherited proxy respects the global bypass list without overriding an explicit provider proxy", () => {
+  test("inherited proxy respects the global bypass list, and an exempted explicit provider proxy is refused", () => {
     const previousProxy = process.env.HTTPS_PROXY, previousNoProxy = process.env.NO_PROXY;
     process.env.HTTPS_PROXY = "http://127.0.0.1:9";
     process.env.NO_PROXY = "substrate.office.com";
     try {
       expect(m365SocketDialOptions({}, socketUrl, headers).proxy).toBeUndefined();
-      expect(m365SocketDialOptions({ proxy: "http://127.0.0.1:9" }, socketUrl, headers).proxy).toBe("http://127.0.0.1:9/");
+      // Bun's WebSocket would skip an explicit proxy here and connect directly, so the dial is refused.
+      expect(() => m365SocketDialOptions({ proxy: "http://127.0.0.1:9" }, socketUrl, headers)).toThrow("NO_PROXY");
+      expect(m365SocketDialOptions({ proxy: "http://127.0.0.1:9", noProxy: ["substrate.office.com"] }, socketUrl, headers).proxy).toBeUndefined();
     } finally {
       if (previousProxy === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = previousProxy;
+      if (previousNoProxy === undefined) delete process.env.NO_PROXY; else process.env.NO_PROXY = previousNoProxy;
+    }
+  });
+  test("an exempted explicit provider proxy refuses the turn before any socket is created", () => {
+    const previousNoProxy = process.env.NO_PROXY;
+    process.env.NO_PROXY = "office.com";
+    let sockets = 0;
+    try {
+      // The dial is planned synchronously, like the other dial refusals, before any socket exists.
+      expect(() => runM365CopilotTurn({ token: token(), model: "Claude_Sonnet", text: "fixture", conversation: createM365Conversation(), onText() {},
+        route: { proxy: "http://127.0.0.1:9" }, createSocket() { sockets += 1; return new WebSocket("ws://127.0.0.1:9"); } })).toThrow("NO_PROXY");
+      expect(sockets).toBe(0);
+    } finally {
       if (previousNoProxy === undefined) delete process.env.NO_PROXY; else process.env.NO_PROXY = previousNoProxy;
     }
   });

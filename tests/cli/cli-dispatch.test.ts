@@ -662,7 +662,7 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     expect(stop).toContain(": stoppingSibling || connectedClientAlreadyStopped ? noServiceStop() : await (async () => {");
     const managerBranch = stop.slice(stop.indexOf(": stoppingSibling || connectedClientAlreadyStopped ? noServiceStop()"),
       stop.indexOf("record.service = serviceStop;"));
-    expect(managerBranch).toMatch(/else claimHandoverBeforeManager\(\);\s+return stopServiceForOcxStop\(\{ receiptNonce: \(\) => teardownNonce, inheritedReceipts: inheritedTeardowns\.length \}\);\s+\}\)\(\);/);
+    expect(managerBranch).toMatch(/else claimHandoverBeforeManager\(\);\s+return stopServiceForOcxStop\(\{ receiptNonce: \(\) => teardownNonce, inheritedReceipts: inheritedTeardownProbeCount\(inheritedTeardowns\) \}\);\s+\}\)\(\);/);
     // The guarded desktop step refuses a manager approval for a sibling before #7771 wiring.
     const guardedSiblingAt = stop.indexOf('if (stoppingSibling && snapshot && snapshot.manager.kind !== "absent") {\n    return approvalChanged(');
     expect(guardedSiblingAt).toBeGreaterThan(siblingAt);
