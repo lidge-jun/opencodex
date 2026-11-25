@@ -21,25 +21,12 @@ import {
 } from "../../gui/src/combo-workspace-data";
 import { comboImageBlockedTargets, comboImagesSupported, comboVisionSidecarTargets } from "../../gui/src/combo-capabilities";
 
-test("stale display-name save retains metering on a remotely removed target", () => {
-  const [stored] = parseComboList({ combos: [{ id: "chain", strategy: "failover", allowMeteredTargets: true,
-    targets: [{ provider: "a", model: "m", metered: true }, { provider: "b", model: "m2" }] }] });
-  const draft = { ...stored!, displayName: "Edited" };
-  // Another client removed A after the baseline loaded, before this save.
-  const remote = { ...stored!, targets: [stored!.targets[1]!] };
-  expect(remote.targets).toHaveLength(1);
-  const body = toPutBody(draft, { stored: stored! }).combo;
-  expect(body.targets[0]).toEqual({ provider: "a", model: "m", metered: true });
-  expect(body.targets[1]).not.toHaveProperty("metered");
-  expect(body).not.toHaveProperty("allowMeteredTargets");
-});
-
-test("ordinary combo saves retain metered metadata from the loaded draft", () => {
+test("ordinary combo saves omit metered metadata from the loaded draft", () => {
   const [draft] = parseComboList({
     combos: [{ id: "chain", targets: [{ provider: "a", model: "m", metered: true }] }],
   });
   expect(draft!.targets[0]?.metered).toBe(true);
-  expect(toPutBody(draft!).combo.targets[0]?.metered).toBe(true);
+  expect(toPutBody(draft!).combo.targets[0]).not.toHaveProperty("metered");
 });
 
 test("a dashboard edit sends only the paid-call and failover settings changed since loading", () => {
@@ -51,8 +38,7 @@ test("a dashboard edit sends only the paid-call and failover settings changed si
     for (const key of ["allowMeteredTargets", "quotaOnlyFallback", "preserveFallbackModel"]) {
       expect(untouched).not.toHaveProperty(key);
     }
-    expect(untouched.targets[0]?.metered).toBe(true);
-    expect(untouched.targets[1]).not.toHaveProperty("metered");
+    expect(untouched.targets.some(target => Object.hasOwn(target, "metered"))).toBe(false);
   }
   const edited = {
     ...stored!,
@@ -63,7 +49,7 @@ test("a dashboard edit sends only the paid-call and failover settings changed si
   const body = toPutBody(edited, { stored: stored! }).combo;
   expect(body).toMatchObject({ allowMeteredTargets: false, preserveFallbackModel: true });
   expect(body).not.toHaveProperty("quotaOnlyFallback");
-  expect(body.targets).toEqual([{ provider: "b", model: "m2", metered: true }, { provider: "a", model: "m", metered: true }]);
+  expect(body.targets).toEqual([{ provider: "b", model: "m2", metered: true }, { provider: "a", model: "m" }]);
 });
 
 test("a new combo sends every enabled paid-call and failover setting", () => {
