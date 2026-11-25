@@ -39,6 +39,7 @@ import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse } from "../.
 import type { OcxConfig } from "../../src/types";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { hardenSecretDir } from "../../src/lib/windows-secret-acl";
 
 const windows = process.platform === "win32";
 const ADMIN = "admin-secret";
@@ -99,6 +100,11 @@ async function startHub(publicPort = 0) {
 
 function overSocket(socket: string, path: string, init: RequestInit = {}): Promise<Response> {
   return fetch("http://localhost" + path, { ...init, unix: socket } as RequestInit);
+}
+
+/** A run directory as a previous runtime leaves it: created, then made private the way startup does. */
+function privateRunDir(dir: string): void {
+  hardenSecretDir(dir, { required: true, verifyExistingRuntimeDirectory: true });
 }
 
 /** What the run directory lists for this port: the public name, private names and the lease. */
@@ -238,6 +244,7 @@ describe.skipIf(!windows || ROOT === null)("Windows hub with a non-loopback publ
     const publicPort = await findAvailablePort(0, "0.0.0.0");
     const dir = localControlSocketDir();
     mkdirSync(dir, { recursive: true });
+    privateRunDir(dir);
     // A real AF_UNIX file left by a runtime that was killed: only a completed stop unlinks it.
     const stale = localControlPrivateSocketPath(publicPort, "0123456789abcdef");
     const crashed = Bun.spawn([process.execPath, "-e",
@@ -271,6 +278,7 @@ describe.skipIf(!windows || ROOT === null)("Windows hub with a non-loopback publ
   test("a readable file at the public path is left alone, and the failed attempt leaves no socket and no lease", async () => {
     const publicPort = await findAvailablePort(0, "0.0.0.0");
     mkdirSync(localControlSocketDir(), { recursive: true });
+    privateRunDir(localControlSocketDir());
     writeFileSync(localControlSocketPath(publicPort), "not a socket");
     const { server } = await startHub(publicPort);
     try {
