@@ -4,7 +4,9 @@ The explicit, user-confirmed single-model completion test that complements the n
 
 Provider routes lazily dispatch `POST /api/providers/test-completion?name=...` to the completion runner. The registry assigns the mutating route to `src/server/management/provider-routes.ts`; normal management authentication, Origin admission and dashboard CSRF apply. Exact input is `{ model, confirm: true }`; invalid input, unknown providers and concurrent tests return 400, 404 and 409. A process-local slot is released in `finally` on every outcome.
 
-The separate capability probe uses the native model's reasoning ladder when an alias omits efforts.
+The separate dashboard capability probe (`POST /api/providers/probe-capabilities`) has no CLI verb
+and requires confirmation for metered requests. It uses the native model's reasoning ladder when
+an alias omits efforts.
 Applying a conclusive image result changes image membership without dropping other declared
 modalities. Provider overwrites and PATCH do not retain probe provenance across a destination
 change. Applying a new ladder clears an incompatible stored default. Codex catalog refresh is

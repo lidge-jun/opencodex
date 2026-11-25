@@ -410,7 +410,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PATCH", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
   { method: "POST", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
   { method: "POST", path: "/api/providers/test-completion", module: "server/management/provider-routes", mutates: true },
-  { method: "POST", path: "/api/providers/probe-capabilities", module: "server/management/provider-routes", mutates: true },
+  { method: "POST", path: "/api/providers/probe-capabilities", module: "server/management/provider-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Capability probing uses the dashboard's model selection and metered-request confirmation; no CLI verb exposes that workflow yet.", owner: "provider capability probe", ownerDoc: "structure/provider-completion-diagnostic.md" } },
   { method: "POST", path: "/api/providers/test", module: "server/management/provider-routes", mutates: true },
   { method: "PUT", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
   { method: "PUT", path: "/api/provider-context-caps", module: "server/management/provider-routes", mutates: true },
