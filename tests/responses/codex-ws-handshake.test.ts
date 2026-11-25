@@ -279,10 +279,12 @@ async function withAdvertisingServer(
         const id = `response-${frames.length}`;
         if (reply(frames.length - 1) === "call") {
           if (frames.length === 1) {
-            const item = { id: "item-c", type: "function_call", call_id: "c", name: "fixture", arguments: "{}" };
             send({ type: "response.created", response: { id, status: "in_progress", output: [] } });
-            send({ type: "response.output_item.added", output_index: 0, item });
-            send({ type: "response.output_item.done", output_index: 0, item });
+            for (const [index, call] of ["c", "d"].entries()) {
+              const item = { id: `item-${call}`, type: "function_call", call_id: call, name: "fixture", arguments: "{}" };
+              send({ type: "response.output_item.added", output_index: index, item });
+              send({ type: "response.output_item.done", output_index: index, item });
+            }
           }
           return;
         }
@@ -448,7 +450,7 @@ describe("stateful paths", () => {
       const decoder = new TextDecoder();
       let seen = "";
       // The call must be advertised on this response before a result for it can be injected.
-      while (!seen.includes("response.output_item.done")) {
+      while ((seen.match(/response\.output_item\.done/g) ?? []).length < 2) {
         const chunk = await body.read();
         if (chunk.done) throw new Error("stream ended before the call was advertised");
         seen += decoder.decode(chunk.value, { stream: true });
@@ -460,6 +462,31 @@ describe("stateful paths", () => {
       channel.inject({ type: "response.inject", response_id: "response-1", input: [{ type: "function_call_output", call_id: "c", output: "ok" }] });
       await received(2);
       expect(JSON.parse(frames[1]!).input[0].output).toBe("ok");
+      await body.cancel();
+    });
+  });
+
+  test("an oversized injection queued behind an unacknowledged one is refused without failing the channel", async () => {
+    const opening = [{ role: "user", content: "hi" }];
+    const limit = bytes(sizedRequest(opening).prepared.frameText) + 256;
+    await withAdvertisingServer(String(limit), () => "call", async ({ session, frames, received }) => {
+      const channel = new NativeInjectionChannel({ type: "response.create", model: "fixture-model", multi_agent: { enabled: true } });
+      const { response } = await exchange(session, opening, fresh(), { nativeControl: channel });
+      const body = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let seen = "";
+      while ((seen.match(/response\.output_item\.done/g) ?? []).length < 2) {
+        const chunk = await body.read();
+        if (chunk.done) throw new Error("stream ended before both calls were advertised");
+        seen += decoder.decode(chunk.value, { stream: true });
+      }
+      channel.inject({ type: "response.inject", response_id: "response-1", input: [{ type: "function_call_output", call_id: "c", output: "first" }] });
+      await received(2);
+      // The first result is still unacknowledged, so the second would queue. The refusal is synchronous.
+      expect(() => channel.inject({ type: "response.inject", response_id: "response-1",
+        input: [{ type: "function_call_output", call_id: "d", output: "x".repeat(limit) }] })).toThrow(NativeSteeringError);
+      expect(channel.ended).toBe(false);
+      expect(frames).toHaveLength(2);
       await body.cancel();
     });
   });

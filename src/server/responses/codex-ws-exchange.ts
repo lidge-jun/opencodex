@@ -530,6 +530,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
           // full-replay frame runs to megabytes. It seeds continuationBase on
           // the first create frame.
           let base: Record<string, unknown> | undefined;
+          nativeControl.setTransportMessageLimit?.(session.advertisedMessageLimit());
           detachSteering = nativeControl.attach(frame => {
             // Build, serialize and bound-check the reconstructed frame synchronously in the
             // channel callback: a typed refusal must reach the channel's synchronous rollback
