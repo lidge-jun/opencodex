@@ -545,6 +545,11 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   multi-regions, and `<location>-aiplatform.googleapis.com` for a region such as `us-central1`.
 - Vertex AI and Antigravity retry a `429` only when the response carries retry evidence, such as a
   valid `Retry-After` header, and surface hard quota exhaustion immediately.
+- For Cloud Code Assist requests routed to `gemini-3.7-flash`, `gemini-3.8-flash`, or
+  `gemini-4-neon`, the proxy removes the three Claude Code / Claude Agent SDK identity-opener
+  paragraphs when each stands alone as its own paragraph (an opener that shares a paragraph with
+  other text stays in the prompt), and rewords two trigger sentences in the system prompt. These
+  generations otherwise respond with `429 RESOURCE_EXHAUSTED` to those phrases.
 - The shared tool-catalog guidance uses wording verified with Antigravity Gemini 3.8 Flash to
   avoid a prompt-triggered `429 RESOURCE_EXHAUSTED`. The available tools, argument constraints,
   and Codex code-mode helper rules stay the same. This does not suppress real quota errors.

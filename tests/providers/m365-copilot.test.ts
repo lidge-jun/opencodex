@@ -11,7 +11,7 @@ import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { deriveProviderPresets } from "../../src/providers/derive";
 import { isPublicOAuthProvider } from "../../src/oauth";
 import { providerSupportsLiveModelDiscovery } from "../../src/providers/static-model-discovery";
-import { parseToolCalls } from "../../src/adapters/m365-copilot/tools";
+import { parseToolAnswer, parseToolCalls } from "../../src/adapters/m365-copilot/tools";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 
@@ -156,6 +156,143 @@ describe("Microsoft 365 Copilot registration and authentication", () => {
 });
 
 describe("Microsoft 365 Copilot native transport", () => {
+  const fixtureTools = [{ function: { name: "lookup", parameters: { properties: { query: { type: "string" } } } } }];
+  const block = (name: string, body: string) => ["```" + name, body, "```"].join("\n");
+
+  test("reuses the call IDs when the result marker follows the exact delivery text", () => {
+    const text = [block("lookup", "one"), block("lookup", "two")].join("\n");
+    const ids = spyOn(crypto, "randomUUID");
+    try {
+      const answer = parseToolAnswer(text + "<tool_response>example</tool_response>", fixtureTools);
+      expect(answer).toMatchObject({ accepted: text, document: false, truncated: true });
+      expect(answer.result.toolCalls.map(call => JSON.parse(call.function.arguments))).toEqual([{ query: "one" }, { query: "two" }]);
+      expect(new Set(answer.result.toolCalls.map(call => call.id)).size).toBe(2);
+      expect(ids).toHaveBeenCalledTimes(2);
+    } finally { ids.mockRestore(); }
+  });
+
+  test("checks the original prefix before trimming text for delivery", () => {
+    const first = block("lookup", "one"), second = block("lookup", "two");
+    const marker = "<tool_response>example</tool_response>";
+    const prose = first + "\u00a0" + marker;
+    const untouched = parseToolAnswer(prose, fixtureTools);
+    expect(untouched).toMatchObject({ accepted: prose, truncated: false });
+    expect(untouched.result.toolCalls).toHaveLength(0);
+
+    const accepted = first + "\n" + second;
+    const both = parseToolAnswer(accepted + "\u00a0" + marker, fixtureTools);
+    expect(both).toMatchObject({ accepted, truncated: true });
+    expect(both.result.toolCalls.map(call => JSON.parse(call.function.arguments))).toEqual([{ query: "one" }, { query: "two" }]);
+  });
+
+  test("keeps an identical tool example nested in a document fence", () => {
+    const call = block("lookup", "sample");
+    const example = block("markdown", call);
+    const answer = parseToolAnswer([example, "Then", call].join("\n"), fixtureTools);
+    expect(answer.result.toolCalls).toHaveLength(1);
+    expect(answer.result.textContent).toBe(example + "\nThen");
+    const document = ["# Examples", call, call].join("\r\n");
+    expect(parseToolAnswer(document, fixtureTools)).toMatchObject({ accepted: document, document: true, truncated: false });
+  });
+
+  test("preserves nested JSON in fenced calls and inline call precedence", () => {
+    const args = { fields: [{ label: "one", tags: ["a"] }], text: "two" };
+    const fence = block("tool_call", JSON.stringify({ name: "lookup", arguments: args }));
+    const fenced = parseToolAnswer(fence, fixtureTools);
+    expect(JSON.parse(fenced.result.toolCalls[0]!.function.arguments)).toEqual(args);
+    const toolFence = block("tool_call", JSON.stringify({ tool: "lookup", arguments: { field: { key: "blue" } } }));
+    const nested = parseToolAnswer(["Before", toolFence, "After"].join("\n"), fixtureTools);
+    expect(nested.result.textContent).toBe("Before\n\nAfter");
+    expect(JSON.parse(nested.result.toolCalls[0]!.function.arguments)).toEqual({ field: { key: "blue" } });
+    const inline = JSON.stringify({ tool: "lookup", arguments: { query: "inline" } });
+    const mixed = parseToolAnswer([inline, toolFence, fence].join("\n"), fixtureTools);
+    expect(mixed.result.toolCalls.map(call => JSON.parse(call.function.arguments))).toEqual([{ query: "inline" }]);
+    expect(mixed.result.textContent).toBeNull();
+    const documentation = block("sql", "SELECT 1");
+    expect(parseToolAnswer([documentation, block("json", inline)].join("\n"), fixtureTools).result.textContent).toBe(documentation);
+  });
+
+  test("retains YAML header values and separates repeated named fences by source position", () => {
+    const tools = [{ function: { name: "lookup", parameters: { properties: { options: { type: "object" }, label: { type: "string" } } } } }];
+    const fence = block("lookup", "options:\n  tags:\n    - blue\n    - green\nlabel: summary");
+    const answer = parseToolAnswer([fence, "Next", fence].join("\n"), tools);
+    expect(answer.document).toBe(false);
+    expect(answer.result.textContent).toBe("Next");
+    expect(answer.result.toolCalls.map(call => JSON.parse(call.function.arguments))).toEqual(
+      Array(2).fill({ options: { tags: ["blue", "green"] }, label: "summary" }),
+    );
+  });
+
+  test("keeps notes inside a tool_call wrapper without emitting the wrapper as a call", () => {
+    const call = (query: string) => JSON.stringify({ tool: "lookup", arguments: { query } });
+    const one = call("one"), two = call("two");
+    for (const [body, expected] of [
+      [[one, "Keep this note.", two].join("\n"), "Keep this note."],
+      [["Opening note.", one, two, "Closing note."].join("\r\n"), "Opening note.\r\n\r\n\r\nClosing note."],
+    ] as const) {
+      const answer = parseToolAnswer(block("tool_call", body), fixtureTools);
+      expect(answer.result.toolCalls.map(tool => JSON.parse(tool.function.arguments).query)).toEqual(["one", "two"]);
+      expect(answer.result.textContent).toBe(expected);
+      expect(answer.document).toBe(false);
+    }
+  });
+
+  test("preserves unaccepted JSON text alongside real calls without changing eligibility", () => {
+    const call = JSON.stringify({ tool: "lookup", arguments: { query: "one" } });
+    const example = '{"tool":"lookup","arguments":{"query":"' + "a".repeat(300) + '",}}';
+    const answer = parseToolAnswer([call, example, call].join("\n"), fixtureTools);
+    expect(answer.result.textContent).toBe(example);
+    expect(answer.result.toolCalls).toHaveLength(2);
+    expect(answer.document).toBe(false);
+    const note = '{"memo":"Keep this note."}';
+    expect(parseToolAnswer([call, block("tool_call", note)].join("\n"), fixtureTools).result.textContent).toBe(note);
+  });
+
+  test("stripping a mixed tool_call wrapper keeps its line endings and indentation", () => {
+    const call = JSON.stringify({ tool: "lookup", arguments: { query: "one" } });
+    for (const eol of ["\n", "\r\n"]) {
+      const answer = ["Before", "  ```tool_call  ", call, "  Keep the note.", call, "  ```  ", "After"].join(eol);
+      const expected = ["Before", "    ", "", "  Keep the note.", "", "    ", "After"].join(eol);
+      expect(parseToolAnswer(answer, fixtureTools).result.textContent).toBe(expected);
+    }
+  });
+
+  test("JSON call eligibility keeps its document threshold when Markdown display changes", () => {
+    const call = JSON.stringify({ tool: "lookup", arguments: { query: "one" } });
+    const prose = "a".repeat(289) + "\n" + block("sql", "q");
+    const actionable = parseToolAnswer([prose, call, call].join("\n"), fixtureTools);
+    expect(actionable.result.textContent).toBe(prose);
+    expect(prose.length).toBeGreaterThanOrEqual(300);
+    expect(actionable.document).toBe(false);
+
+    const intro = "a".repeat(299);
+    const example = block("tool_call", JSON.stringify({ tool: "lookup", arguments: { options: { label: "blue" } } }));
+    const document = parseToolAnswer([intro, call, call, example].join("\n"), fixtureTools);
+    expect(document.result.textContent).toBe(intro);
+    expect(document.document).toBe(true);
+  });
+
+  test("a named fence repeated in documentation keeps the original document decision", () => {
+    const first = block("lookup", "one");
+    const example = block("markdown", first);
+    const document = [example, "a".repeat(265), first, block("lookup", "two")].join("\n");
+    const answer = parseToolAnswer(document, fixtureTools);
+    expect(answer.result.textContent).toBe(example + "\n" + "a".repeat(265));
+    expect(answer.result.textContent?.length).toBe(299);
+    expect(answer.document).toBe(true);
+    const headingExample = ["```markdown", first + "# Notes", "```", "```", first, block("lookup", "two")].join("\n");
+    const heading = parseToolAnswer(headingExample, fixtureTools);
+    expect(heading.result.toolCalls).toHaveLength(2);
+    expect(heading.result.textContent).not.toMatch(/^#{1,6}\s/m);
+    expect(heading.document).toBe(true);
+  });
+
+  test("a result marker in plain prose does not truncate a later call", () => {
+    const answer = parseToolAnswer("About <tool_result> formatting\n" + block("lookup", "test"), fixtureTools);
+    expect(answer.truncated).toBe(false);
+    expect(answer.result.textContent).toBe("About <tool_result> formatting");
+  });
+
   test("invalid tool JSON remains text instead of becoming a client execution", () => {
     const malformed = '{"tool":"read_file","arguments":invalid}';
     const result = parseToolCalls(malformed);
@@ -292,6 +429,18 @@ describe("Microsoft 365 Copilot adapter", () => {
       expect(events.some(event => event.type === "text_delta")).toBe(false);
       expect(events.some(event => event.type === "tool_call_start")).toBe(false);
       expect(events.find(event => event.type === "error")).toMatchObject({ type: "error", message: "Microsoft 365 Copilot returned invalid tool arguments" });
+    } finally { budget.dispose(); }
+  });
+  test("an undeclared second call prevents all client output in the batch", async () => {
+    const answer = ["Notes", JSON.stringify({ tool: "read_file", arguments: { path: "sample.txt" } }),
+      JSON.stringify({ tool: "other", arguments: {} })].join("\n");
+    const adapter = createM365CopilotAdapter(provider(), { turn: async () => answer });
+    const events: AdapterEvent[] = [];
+    const budget = createTranslatorBudget();
+    try {
+      await adapter.runTurn!(request(), { headers: new Headers(), translatorBudget: budget }, event => events.push(event));
+      expect(events.some(event => event.type === "text_delta" || event.type === "tool_call_start")).toBe(false);
+      expect(events.find(event => event.type === "error")).toMatchObject({ message: "Microsoft 365 Copilot returned an undeclared tool" });
     } finally { budget.dispose(); }
   });
   test("isolates a shared conversation prefix by authenticated caller and resolved conversation", async () => {
