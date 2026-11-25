@@ -7,6 +7,39 @@ import {
   type RequestLogEntry,
 } from "../../src/server/request-log";
 import { createNativeFinalLog, NATIVE_FINAL_LOG_CUTOFF_CODE } from "../../src/server/native-final-log";
+import { streamGemini } from "../../src/server/gemini-inbound";
+import { translatorLiveBudgetCountForTests } from "../../src/lib/translator-budget";
+
+test.each(["cancel", "read error"] as const)("Gemini stream %s releases pending calls and commits once", async how => {
+  const before = translatorLiveBudgetCountForTests();
+  const outcomes: number[] = [];
+  const { readable, writable } = new TransformStream<Uint8Array>();
+  const writer = writable.getWriter();
+  const reader = streamGemini("m", true, readable, {
+    innerSettled: () => true,
+    waitForInner: async () => true,
+    commit: row => { outcomes.push(row.status); return true; },
+  }, new AbortController().signal).body!.getReader();
+  const delta = { content: "hello", tool_calls: [{ index: 0, function: { name: "find" } }] };
+  const sent = writer.write(new TextEncoder().encode("data: " + JSON.stringify({ choices: [{ delta }] }) + "\n\n"));
+  try {
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("hello");
+    await sent;
+    expect(translatorLiveBudgetCountForTests()).toBe(before + 1);
+    if (how === "cancel") {
+      await reader.cancel();
+    } else {
+      await writer.abort(new Error("fixture stream ended"));
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain("upstream stream failed");
+      expect((await reader.read()).done).toBe(true);
+    }
+    expect(outcomes).toEqual([how === "cancel" ? 499 : 502]);
+    expect(translatorLiveBudgetCountForTests()).toBe(before);
+  } finally {
+    await reader.cancel().catch(() => {});
+    writer.releaseLock();
+  }
+});
 
 function context(): RequestLogContext {
   const attempt = beginRequestAttempt(1, "fixture", "model", "openai-chat");
