@@ -328,6 +328,8 @@ Unix 解除安裝後，請從 shell 啟動檔移除載入行，並重新啟動 s
 從 npm 自我更新 opencodex。穩定安裝使用 `@latest`；預覽安裝停留在 `@preview`，除非你傳入 `--tag latest|preview`。它偵測原始碼 checkout 並告訴你改用
 `git pull && bun install`，且若你已是該 tag 的最新版本則為 no-op。執行中的代理會在檔案被替換前停止；已安裝的服務會自動重建並啟動，而前景安裝會印出 `ocx start` 作為下一步。
 
+預覽版的命名為 `X.Y.Z-preview.<date>` 或 `X.Y.Z-preview.<date>.<attempt>`，例如 `2.100.6-preview.20261119.1`；次數是該日期的發布序號。在 preview 通道中，預覽版依序按基礎版本、日期、次數比較，沒有次數的版本視為次數 0。在任一通道中，只有當穩定版的基礎版本高於預覽版時，才會向預覽版安裝提供該穩定版；穩定通道從不提供預覽版。這些規則適用於更新檢查、通知和儀表板的更新提示。`ocx update` 本身只要所選標籤指向的版本與已安裝版本不同就會安裝它，因此在預覽版安裝上執行 `ocx update --tag latest` 會切換到目前的穩定版，即使其基礎版本並不更高。
+
 ```bash
 ocx update
 ocx update --tag preview

@@ -229,6 +229,13 @@ export function isQuotaExhausted(percent: number): boolean {
   return percent >= 99.5;
 }
 
+/**
+ * Threshold every provider quota surface warns at, so the table, the capacity card and
+ * the pool settings cannot drift apart. Callers that track a per-account override pass
+ * their own value to `isQuotaWarn` instead.
+ */
+export const QUOTA_WARN_THRESHOLD = 80;
+
 export function isQuotaWarn(percent: number, threshold: number): boolean {
   return threshold > 0 && percent >= threshold;
 }
