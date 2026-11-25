@@ -112,10 +112,11 @@ export function recordAntigravityAccountRoster(
   }
 }
 
-function freshRoster(providerName: string, accountId: string, now: number): AccountRoster | undefined {
+function freshRoster(
+  providerName: string, accountId: string, now: number, generation = accountGeneration(providerName, accountId),
+): AccountRoster | undefined {
   const roster = rosters.get(rosterKey(providerName, accountId));
-  if (!roster || now - roster.observedAt > ANTIGRAVITY_ACCOUNT_ROSTER_TTL_MS
-    || roster.generation !== accountGeneration(providerName, accountId)) return undefined;
+  if (!roster || now - roster.observedAt > ANTIGRAVITY_ACCOUNT_ROSTER_TTL_MS || roster.generation !== generation) return undefined;
   return roster;
 }
 
@@ -139,13 +140,27 @@ export function antigravityAccountSupportsModel(
   modelId: string,
   now = Date.now(),
 ): boolean | undefined {
+  return supportsModel(providerName, accountId, modelId, now, accountGeneration(providerName, accountId));
+}
+
+/** The same answer for many models of one account, reading its credential generation once. */
+export function antigravityAccountModelSupport(
+  providerName: string, accountId: string, modelIds: readonly string[], now = Date.now(),
+): Map<string, boolean | undefined> {
+  const generation = accountGeneration(providerName, accountId);
+  return new Map(modelIds.map(id => [id, supportsModel(providerName, accountId, id, now, generation)] as const));
+}
+
+function supportsModel(
+  providerName: string, accountId: string, modelId: string, now: number, generation: string | undefined,
+): boolean | undefined {
   const id = modelId.trim();
   if (!id) return undefined;
   const key = rosterKey(providerName, accountId);
   const canonicalId = denialModelId(id);
   const denial = modelDenials.get(key)?.get(canonicalId);
-  const roster = freshRoster(providerName, accountId, now);
-  if (denial && denial.generation === accountGeneration(providerName, accountId)
+  const roster = freshRoster(providerName, accountId, now, generation);
+  if (denial && denial.generation === generation
     && now - denial.deniedAt <= ANTIGRAVITY_MODEL_DENIAL_TTL_MS
     && (!roster || denial.order >= roster.order)) return false;
   if (!roster) return undefined;

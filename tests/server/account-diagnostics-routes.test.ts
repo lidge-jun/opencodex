@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { chmodSync, mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OAUTH_PROVIDERS, getValidAccessTokenForAccount } from "../../src/oauth";
@@ -9,12 +9,18 @@ import {
   classifyOAuthRefreshFailure,
   clearOAuthRefreshOutcomes,
   lastOAuthRefreshOutcome,
+  MAX_OAUTH_REFRESH_OUTCOMES,
+  oauthRefreshOutcomeCountForTests,
   observeOAuthRefresh,
   recordOAuthRefreshOutcome,
 } from "../../src/oauth/refresh-outcomes";
+import { AnthropicTokenError } from "../../src/oauth/anthropic";
+import { KiroTokenRefreshError } from "../../src/oauth/kiro";
+import { acquireAccountLease } from "../../src/oauth/kiro-account-load";
+import { clearAntigravityAccountRosters, recordAntigravityAccountRoster } from "../../src/providers/antigravity-account-roster";
+import { join as joinPath } from "node:path";
 import { clearModelCache, setCached } from "../../src/codex/model-cache";
 import {
-  ACCOUNT_DIAGNOSTICS_PATH,
   buildAccountDiagnostics,
   handleAccountDiagnosticsRoutes,
 } from "../../src/server/management/account-diagnostics-routes";
@@ -38,6 +44,7 @@ afterEach(() => {
   clearOAuthRefreshOutcomes();
   clearModelCache("xai");
   clearModelCache("google-antigravity");
+  clearAntigravityAccountRosters();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
   removeTreeWithRetry(home);
 });
@@ -129,7 +136,7 @@ test("the route answers GET for a known OAuth provider and refuses an unknown on
   const cfg = config({ xai: oauthProvider("openai-chat", "https://api.x.ai/v1", ["grok-a"]) });
   await seed("xai", 1);
   const call = (query: string, method = "GET") => {
-    const url = new URL(`http://127.0.0.1${ACCOUNT_DIAGNOSTICS_PATH}${query}`);
+    const url = new URL(`http://127.0.0.1/api/oauth/accounts/diagnostics${query}`);
     return handleAccountDiagnosticsRoutes({ req: new Request(url, { method }), url, config: cfg });
   };
   const ok = call("?provider=xai")!;
@@ -138,4 +145,73 @@ test("the route answers GET for a known OAuth provider and refuses an unknown on
   expect((await ok.json() as { accounts: unknown[] }).accounts).toHaveLength(1);
   expect(call("?provider=not-a-provider")!.status).toBe(400);
   expect(call("?provider=xai", "POST")).toBeNull();
+});
+
+test("provider token errors keep their HTTP status", () => {
+  expect(classifyOAuthRefreshFailure(new AnthropicTokenError("denied", 401, "invalid_grant"))).toEqual({ reason: "rejected", status: 401 });
+  expect(classifyOAuthRefreshFailure(new AnthropicTokenError("unreachable", undefined, undefined, true))).toEqual({ reason: "error" });
+  expect(classifyOAuthRefreshFailure(new KiroTokenRefreshError(503))).toEqual({ reason: "upstream_error", status: 503 });
+});
+
+test("refresh results are scoped to the config home, the account's lifetime and a bounded size", async () => {
+  const cfg = config({ xai: oauthProvider("openai-chat", "https://api.x.ai/v1", ["grok-a"]) });
+  const [id] = await seed("xai", 1);
+  const addedAt = getAccountSet("xai")!.accounts[0]!.addedAt ?? 0;
+  recordOAuthRefreshOutcome("xai", id!, { at: addedAt - 1, ok: false, reason: "rejected" });
+  // A result older than the account (a removed and re-added login) is not this account's.
+  expect(buildAccountDiagnostics("xai", cfg).accounts[0]!.lastRefresh).toBeNull();
+  recordOAuthRefreshOutcome("xai", id!, { at: addedAt + 1, ok: true });
+  expect(buildAccountDiagnostics("xai", cfg).accounts[0]!.lastRefresh).toMatchObject({ ok: true });
+
+  const other = mkdtempSync(joinPath(tmpdir(), "ocx-account-diagnostics-other-"));
+  try {
+    process.env.OPENCODEX_HOME = other;
+    expect(lastOAuthRefreshOutcome("xai", id!)).toBeNull();
+  } finally {
+    process.env.OPENCODEX_HOME = home;
+    removeTreeWithRetry(other);
+  }
+
+  for (let i = 0; i < MAX_OAUTH_REFRESH_OUTCOMES + 10; i += 1) recordOAuthRefreshOutcome("xai", `churn-${i}`, { at: i, ok: true });
+  expect(oauthRefreshOutcomeCountForTests()).toBe(MAX_OAUTH_REFRESH_OUTCOMES);
+  expect(lastOAuthRefreshOutcome("xai", "churn-0")).toBeNull();
+});
+
+test("an Antigravity account whose roster omits every known model is not eligible", async () => {
+  const cfg = config({ "google-antigravity": oauthProvider("google", "https://cloudcode-pa.googleapis.com") });
+  setCached("google-antigravity", [{ id: "gemini-3-pro" }, { id: "claude-sonnet-4-6" }] as CatalogModel[]);
+  const [narrow, wide] = await seed("google-antigravity", 2);
+  recordAntigravityAccountRoster("google-antigravity", narrow!, [{ id: "gemini-2-flash", wireModelId: "gemini-2-flash" }]);
+  const view = buildAccountDiagnostics("google-antigravity", cfg);
+  const row = (id: string) => view.accounts.find(account => account.id === id)!;
+  expect(row(narrow!)).toMatchObject({ eligible: false, eligibleModels: [] });
+  expect(row(wide!)).toMatchObject({ eligible: true, eligibleModels: ["gemini-3-pro", "claude-sonnet-4-6"] });
+});
+
+test("a Kiro account at its concurrency cap is reported at capacity and not eligible", async () => {
+  const kiro = { ...oauthProvider("kiro", "https://q.us-east-1.amazonaws.com", ["claude-sonnet-4-6"]),
+    oauthAccountFailover: { enabled: true, maxConcurrentPerAccount: 1 } } as unknown as OcxProviderConfig;
+  const cfg = config({ kiro });
+  const [busy, idle] = await seed("kiro", 2);
+  const lease = await acquireAccountLease("kiro", busy!, { maxConcurrentPerAccount: 1 });
+  try {
+    const view = buildAccountDiagnostics("kiro", cfg);
+    const row = (id: string) => view.accounts.find(account => account.id === id)!;
+    expect(row(busy!)).toMatchObject({ inFlight: 1, atCapacity: true, eligible: false, eligibleModels: [] });
+    expect(row(idle!)).toMatchObject({ inFlight: 0, atCapacity: false });
+  } finally {
+    lease?.release();
+  }
+});
+
+test.skipIf(process.platform === "win32")("the diagnostics read does not harden or rewrite the credential store", async () => {
+  const cfg = config({ xai: oauthProvider("openai-chat", "https://api.x.ai/v1", ["grok-a"]) });
+  await seed("xai", 1);
+  const authPath = joinPath(home, "auth.json");
+  chmodSync(authPath, 0o644);
+  const before = statSync(authPath);
+  buildAccountDiagnostics("xai", cfg);
+  const after = statSync(authPath);
+  expect(after.mode & 0o777).toBe(0o644);
+  expect(after.mtimeMs).toBe(before.mtimeMs);
 });
