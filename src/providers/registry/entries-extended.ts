@@ -1306,6 +1306,24 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     note: "Sionic AI's OpenAI-compatible gateway. Public live discovery lists active models served on Chat Completions (plus pinned Responses-only rows), with Sionic-served ultrafast models first. The public catalog cannot validate keys.",
   },
   {
+    // Public contract checked 2026-11-26 without a key: https://runapi.co/api/pricing lists 208
+    // models with their supported endpoints (Chat Completions on 200, Responses on 53, Anthropic
+    // Messages on 37); /v1/models and /v1/chat/completions answer 401 without a token. runapi.co is
+    // canonical; runapi.host serves the same deployment as a mirror for mainland-China access.
+    // Standard sponsor under SPONSORS.md (agreement dated 2026-11-25). Pins the row in the picker
+    // and adds the chip; nothing about routing, discovery or defaults changes.
+    id: "runapi",
+    label: "RunAPI",
+    adapter: "openai-chat",
+    baseUrl: "https://runapi.co/v1",
+    authKind: "key",
+    dashboardUrl: "https://runapi.co",
+    sponsor: { tier: "standard", url: "https://runapi.co" },
+    liveModels: true,
+    preserveCustomDestination: true,
+    note: "Unified AI API gateway with a 200+ model catalog; this preset uses OpenAI Chat Completions, which most catalog models support. Use a RunAPI key; live discovery lists the models that key can use.",
+  },
+  {
     // Public contract checked 2026-09-29: https://docs.tokenlab.sh/api-reference/models/list-models
     // A supplied key is validated and scopes the catalog; anonymous discovery is also public.
     id: "tokenlab",
