@@ -75,15 +75,41 @@ function flatten(content: string | null): Map<string, string> {
   return keys;
 }
 
+/** Root keys OpenCodex writes or restores; any other root key is shown as `…`. */
+const SHOWN_ROOT_KEYS = new Set([
+  "model_provider", "model", "openai_base_url", "experimental_realtime_ws_base_url", "chatgpt_base_url",
+  "model_catalog_json", "web_search", "profile", "model_reasoning_effort",
+]);
+/** Codex's own top-level tables. A user-named table is shown as `…`. */
+const SHOWN_TABLES = new Set([
+  "model_providers", "profiles", "projects", "hooks", "plugins", "agents", "mcp_servers", "features",
+  "tools", "tui", "notice", "sandbox_workspace_write", "shell_environment_policy", "history", "otel",
+]);
+/** Table ids OpenCodex owns; every other id (a provider, profile, project or server name) is masked. */
+const SHOWN_TABLE_IDS = new Set(["opencodex", "openai", "state"]);
+/** Leaf keys of Codex's fixed vocabulary inside any table. */
+const SHOWN_LEAF_KEYS = new Set([
+  "base_url", "name", "wire_api", "env_key", "requires_openai_auth", "query_params", "http_headers",
+  "trust_level", "enabled", "trusted_hash", "model", "model_provider", "model_reasoning_effort",
+  "default_subagent_model", "default_subagent_reasoning_effort", "stream_idle_timeout_ms",
+  "request_max_retries", "stream_max_retries", "supports_websockets",
+]);
+
 /**
- * A config key as a response may show it. Root keys and generated table names are identifiers;
- * a quoted segment (a project path, a hook or plugin name), a segment with `@`, or a long bare
- * segment can carry a user name, an email or a secret, so it becomes `…`.
+ * A config key as a response may show it. Allowlist only: OpenCodex-managed root keys, Codex's
+ * own table names, the table ids OpenCodex owns and Codex's fixed leaf vocabulary are shown;
+ * every other segment — a provider, profile, project, hook or server name, which can be a user
+ * name, an email or a secret of any length — becomes `…`.
  */
 export function displayCodexConfigKey(key: string): string {
   const segments = key.match(/"(?:[^"\\]|\\.)*"|'[^']*'|[^.]+/g) ?? [key];
-  return segments.map(segment => segment.startsWith("\"") || segment.startsWith("'") || segment.includes("@")
-    || segment.length > 40 || !/^[A-Za-z0-9_-]+$/.test(segment) ? "…" : segment).join(".");
+  if (segments.length === 1) return SHOWN_ROOT_KEYS.has(segments[0]!) ? segments[0]! : "…";
+  const last = segments.length - 1;
+  return segments.map((segment, index) => {
+    if (index === 0) return SHOWN_TABLES.has(segment) ? segment : "…";
+    if (index === last) return SHOWN_LEAF_KEYS.has(segment) ? segment : "…";
+    return SHOWN_TABLE_IDS.has(segment) ? segment : "…";
+  }).join(".");
 }
 
 function profileIsSymlink(): boolean {

@@ -244,20 +244,26 @@ describe("Codex restore preview matches the real restore", () => {
 describe("restore preview privacy and ownership evidence", () => {
   test("table names that can carry identity are masked; managed keys stay readable", () => {
     const before = [
+      'sk_token = "x"',
       'openai_base_url = "http://127.0.0.1:10100/v1"',
       '[projects."/Users/person@example.com/repo"]', 'trust_level = "trusted"',
       "[model_providers.sk-live-0123456789abcdefghijklmnopqrstuvwxyz0123]", 'base_url = "https://x.test"',
+      "[model_providers.sk-secret-123]", 'base_url = "https://y.test"',
+      "[profiles.alice]", 'model = "gpt-5.5"',
+      "[mcp_servers.tools.env]", 'sk_live_abc = "x"',
       "[model_providers.opencodex]", 'name = "opencodex"',
     ].join("\n");
     const changes = codexConfigKeyChanges(before, "");
     const serialized = JSON.stringify(changes);
-    expect(serialized).not.toContain("person@example.com");
-    expect(serialized).not.toContain("sk-live");
-    expect(serialized).not.toContain("/Users/");
+    for (const planted of ["person@example.com", "sk-live", "/Users/", "sk-secret-123", "alice", "sk_live_abc", "sk_token"]) {
+      expect(serialized).not.toContain(planted);
+    }
     expect(changes.map(change => change.key)).toEqual(expect.arrayContaining([
       "openai_base_url", "model_providers.opencodex.name", "projects.….trust_level", "model_providers.….base_url",
+      "profiles.….model", "mcp_servers.….….…", "…",
     ]));
     expect(displayCodexConfigKey('hooks.state."plugin:demo:hook".trusted_hash')).toBe("hooks.state.….trusted_hash");
+    expect(displayCodexConfigKey("model_providers.sk-secret-123.base_url")).toBe("model_providers.….base_url");
   });
 
   test("a service manager claim alone never makes restore refuse, so the GET need not probe it", () => {
