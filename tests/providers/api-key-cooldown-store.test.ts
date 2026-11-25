@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
@@ -279,6 +279,61 @@ test("only a live server binds the file, and its final release detaches it", asy
   clearKeyCooldowns("p");
   await wait(400);
   expect(readFileSync(file(), "utf8")).toBe(before);
+});
+
+test("a peer's clear also drops this process's in-memory hold, so a later refusal is not extended by it", () => {
+  const cfg = config({ a: "sk-alpha-0001" });
+  const store = installApiKeyCooldownPersistence(cfg);
+  const now = Date.now();
+  setKeyCooldown("p", "a", now + 600_000, "sk-alpha-0001");
+  expect(store.flush(now)).toBe(true);
+  const peer = new ApiKeyCooldownStore(home);
+  peer.load(now);
+  peer.clear("p");
+  expect(peer.flush(now)).toBe(true);
+
+  // Recorded before this process learned of the clear: neither persisted nor kept as the old maximum.
+  setKeyCooldown("p", "a", now + 30_000, "sk-alpha-0001");
+  expect(store.flush(now)).toBe(true);
+  expect(stored().rows).toEqual([]);
+  expect(isKeyInCooldown("p", "a", now)).toBe(false);
+
+  setKeyCooldown("p", "a", now + 30_000, "sk-alpha-0001");
+  expect(getKeyCooldownUntil("p", "a", now)).toBe(now + 30_000);
+  expect(store.flush(now)).toBe(true);
+  expect(stored().rows.map(r => r.cooldownUntil)).toEqual([now + 30_000]);
+});
+
+test("a server for another home started after the last one stopped inherits no holds", () => {
+  const now = Date.now();
+  installApiKeyCooldownPersistence(config({ a: "sk-one" }), now);
+  setKeyCooldown("p", "a", now + 600_000, "sk-one");
+  uninstallApiKeyCooldownPersistence();
+  const other = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-other-"));
+  try {
+    process.env.OPENCODEX_HOME = other;
+    installApiKeyCooldownPersistence(config({ a: "sk-one" }), now);
+    expect(isKeyInCooldown("p", "a", now)).toBe(false);
+  } finally {
+    uninstallApiKeyCooldownPersistence();
+    process.env.OPENCODEX_HOME = home;
+    removeTreeWithRetry(other);
+  }
+});
+
+test("pending holds coalesce while writes keep failing", () => {
+  const now = Date.now();
+  const store = new ApiKeyCooldownStore(home);
+  // A directory where the file belongs makes every write fail.
+  mkdirSync(file());
+  for (let i = 1; i <= 500; i += 1) store.record(hold("a", "sk-a", now + i * 1_000));
+  store.record(hold("b", "sk-b", now + 5_000));
+  expect(store.flush(now)).toBe(false);
+  expect(store.flush(now)).toBe(false);
+  expect(store.pendingHolds).toBe(2);
+  rmdirSync(file());
+  expect(store.flush(now)).toBe(true);
+  expect(stored().rows.map(r => [r.keyId, r.cooldownUntil]).sort()).toEqual([["a", now + 500_000], ["b", now + 5_000]]);
 });
 
 test("a store whose home was removed drops its pending rows", () => {

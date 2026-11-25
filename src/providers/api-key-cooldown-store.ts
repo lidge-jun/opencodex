@@ -58,6 +58,7 @@ const SHUTDOWN_ATTEMPTS = 5;
 const SHUTDOWN_RETRY_MS = 200;
 
 const holdKey = (row: ApiKeyCooldownHold) => `${row.provider}\0${row.keyId}\0${row.generation}`;
+const taggedKey = (row: ApiKeyCooldownRow) => `${holdKey(row)}\0${row.epoch}\0${row.allEpoch}`;
 const isTime = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const isCount = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
@@ -115,8 +116,14 @@ function liveRows(rows: Iterable<ApiKeyCooldownRow>, epochs: Record<string, numb
 }
 
 export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
-  /** Pending holds, each tagged with the counters this process knew when it recorded them. */
-  private dirty: ApiKeyCooldownRow[] = [];
+  /**
+   * Pending holds, each tagged with the counters this process knew when it recorded them. One
+   * entry per provider, key, generation and counters (the longest expiry), so a write that keeps
+   * failing holds at most one entry per configured key.
+   */
+  private readonly dirty = new Map<string, ApiKeyCooldownRow>();
+  /** Whether counters were ever read from disk; a later increase is a peer's clear. */
+  private adopted = false;
   /** Counters as last read from disk, plus this process's own unwritten clears. */
   private readonly epochs = new Map<string, number>();
   private allEpoch = 0;
@@ -129,6 +136,9 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
 
   get path(): string { return join(this.dir, API_KEY_COOLDOWN_FILE); }
 
+  /** Pending holds not yet written (diagnostics and tests). */
+  get pendingHolds(): number { return this.dirty.size; }
+
   /** Live rows on disk now, adopting the file's clear counters. Throws on a read error other than a missing file. */
   load(now = Date.now()): ApiKeyCooldownRow[] {
     const state = readApiKeyCooldownState(this.path);
@@ -136,9 +146,22 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
     return liveRows(state.rows, state.epochs, state.allEpoch, now);
   }
 
+  /**
+   * Take the file's counters. A counter that moved past what this process knew is another
+   * process's clear: this process's own in-memory holds for it are dropped too, so a later refusal
+   * starts a fresh hold instead of extending the cleared one.
+   */
   private adopt(state: StoredState): void {
-    for (const [provider, epoch] of Object.entries(state.epochs)) if (!this.bumped.has(provider)) this.epochs.set(provider, epoch);
-    if (!this.bumpedAll) this.allEpoch = state.allEpoch;
+    if (!this.bumpedAll) {
+      if (this.adopted && state.allEpoch > this.allEpoch) resetLocalApiKeyCooldowns();
+      this.allEpoch = state.allEpoch;
+    }
+    for (const [provider, epoch] of Object.entries(state.epochs)) {
+      if (this.bumped.has(provider)) continue;
+      if (this.adopted && epoch > (this.epochs.get(provider) ?? 0)) resetLocalApiKeyCooldowns(provider);
+      this.epochs.set(provider, epoch);
+    }
+    this.adopted = true;
   }
 
   persists(credential: string): boolean {
@@ -146,7 +169,9 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
   }
 
   record(hold: ApiKeyCooldownHold): void {
-    this.dirty.push({ ...hold, epoch: this.epochs.get(hold.provider) ?? 0, allEpoch: this.allEpoch });
+    const row: ApiKeyCooldownRow = { ...hold, epoch: this.epochs.get(hold.provider) ?? 0, allEpoch: this.allEpoch };
+    const prior = this.dirty.get(taggedKey(row));
+    if (!prior || row.cooldownUntil > prior.cooldownUntil) this.dirty.set(taggedKey(row), row);
     this.schedule();
   }
 
@@ -154,17 +179,17 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
     if (provider === undefined) {
       this.allEpoch += 1;
       this.bumpedAll = true;
-      this.dirty = [];
+      this.dirty.clear();
     } else {
       this.epochs.set(provider, (this.epochs.get(provider) ?? 0) + 1);
       this.bumped.add(provider);
-      this.dirty = this.dirty.filter(row => row.provider !== provider);
+      for (const [key, row] of this.dirty) if (row.provider === provider) this.dirty.delete(key);
     }
     this.schedule();
   }
 
   private pending(): boolean {
-    return this.bumpedAll || this.bumped.size > 0 || this.dirty.length > 0;
+    return this.bumpedAll || this.bumped.size > 0 || this.dirty.size > 0;
   }
 
   private schedule(): void {
@@ -188,7 +213,7 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
         const allEpoch = this.bumpedAll ? Math.max(disk.allEpoch + 1, this.allEpoch) : disk.allEpoch;
         const epochs: Record<string, number> = { ...disk.epochs };
         for (const provider of this.bumped) epochs[provider] = Math.max((disk.epochs[provider] ?? 0) + 1, this.epochs.get(provider) ?? 0);
-        const own = this.dirty.map(row => ({
+        const own = [...this.dirty.values()].map(row => ({
           ...row,
           epoch: this.bumped.has(row.provider) && row.epoch === this.epochs.get(row.provider) ? epochs[row.provider]! : row.epoch,
           allEpoch: this.bumpedAll && row.allEpoch === this.allEpoch ? allEpoch : row.allEpoch,
@@ -209,7 +234,7 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
   }
 
   private discardPending(): void {
-    this.dirty = [];
+    this.dirty.clear();
     this.bumped.clear();
     this.bumpedAll = false;
     this.delayMs = FLUSH_DELAY_MS;
@@ -236,21 +261,23 @@ export function rowsMatchingCurrentKeys<T extends ApiKeyCooldownHold>(rows: read
 }
 
 let installed: { store: ApiKeyCooldownStore; detach: () => void; detachShutdown: () => void } | undefined;
+/** The config home the in-memory holds were last restored for; it outlives an uninstall. */
+let localHome: string | undefined;
 
 /**
  * Bind persistence to the running server's config dir and restore holds that are unexpired and
  * still belong to the configured key. The server background lifecycle calls this when a server
  * starts and `uninstallApiKeyCooldownPersistence` when the last one stops; repeat calls for the
- * same dir are no-ops. Switching to another dir first drops the in-memory holds, which belong to
- * the previous home. A failed read leaves the server running with in-memory cooldowns.
+ * same dir are no-ops. Installing for another dir than the last one first drops the in-memory
+ * holds, which belong to the previous home, even when its server has already stopped. A failed read leaves the server running with in-memory cooldowns.
  */
 export function installApiKeyCooldownPersistence(config: Pick<OcxConfig, "providers">, now = Date.now()): ApiKeyCooldownStore {
   const dir = getConfigDir();
   if (installed?.store.dir === dir) return installed.store;
-  if (installed) {
-    uninstallApiKeyCooldownPersistence();
-    resetLocalApiKeyCooldowns();
-  }
+  uninstallApiKeyCooldownPersistence();
+  // Holds restored or recorded for another home, even one whose server already stopped, are not this home's.
+  if (localHome !== undefined && localHome !== dir) resetLocalApiKeyCooldowns();
+  localHome = dir;
   const store = new ApiKeyCooldownStore(dir);
   try {
     restoreApiKeyCooldowns(rowsMatchingCurrentKeys(store.load(now), config), now);

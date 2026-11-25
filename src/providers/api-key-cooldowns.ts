@@ -84,9 +84,17 @@ export function clearKeyCooldowns(providerName?: string): void {
   }
 }
 
-/** Forget every hold in memory without writing; the holds belonged to a config home being left. */
-export function resetLocalApiKeyCooldowns(): void {
-  keyCooldowns.clear();
+/**
+ * Forget holds in memory without writing: every hold when the config home changes, or one
+ * provider's (or every provider's) when another process sharing the home cleared them.
+ */
+export function resetLocalApiKeyCooldowns(providerName?: string): void {
+  if (providerName === undefined) {
+    keyCooldowns.clear();
+    return;
+  }
+  const prefix = `${providerName}\0`;
+  for (const key of keyCooldowns.keys()) if (key.startsWith(prefix)) keyCooldowns.delete(key);
 }
 
 /** Route later cooldown writes and clears to a store. Returns a detach that only removes this sink. */
