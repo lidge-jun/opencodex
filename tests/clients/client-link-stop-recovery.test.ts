@@ -169,6 +169,16 @@ test("a finished parent stop preserves the retained sync fence through restart r
   expect(report.fileAfter.pi).not.toContain("127.0.0.1");
 }, 20_000);
 
+for (const finalRollbackProof of ["pending", "config-held"] as const) {
+  test(`unchanged Link rollback exhaustion defers exit when ownership is ${finalRollbackProof}`, async () => {
+    const report = await runStop({ mode: "file-restart-control", preserve: "restart-rollback", fileOnly: true,
+      retryRollbackPublication: "exhausted", finalRollbackProof });
+    expect(report.result).toMatchObject({ closedBeforeYield: true, published: false, bound: false, replacementAttempts: 1 });
+    expect(report.result.rollbackExit).toBeUndefined();
+    expect(report.protectedUnchanged).toBe(true);
+  }, 20_000);
+}
+
 for (const receipt of ["complete", "pending", "other-owner"] as const) {
   test(`a refused recycle after rollback exits only for its own completed disconnect (${receipt})`, async () => {
     const report = await runStop({ mode: "file-restart-control", preserve: "restart-rollback", refusedDisconnectRecycle: receipt });

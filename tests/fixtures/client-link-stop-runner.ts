@@ -49,6 +49,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   busyStopFence?: boolean;
   busyRollbackPublication?: boolean;
   retryRollbackPublication?: "lifecycle" | "config" | "owner-changed" | "exhausted";
+  finalRollbackProof?: "pending" | "config-held";
   terminationPlatform?: "linux" | "darwin";
   siblingEscalation?: "stopping" | "different-generation";
   removeToken?: boolean;
@@ -388,6 +389,16 @@ if (options.mode === "retry") {
       retryClientRollback: (attempt: Parameters<typeof retry>[0]) => retry(attempt, {
         now: () => now, deadline: contendProof ? 100 : 50, sleep: async ms => {
           now += ms;
+          if (options.finalRollbackProof) {
+            await rollbackTurn;
+            if (options.finalRollbackProof === "pending") {
+              const { markClientConnectPending } = await import("../../src/client/state");
+              lock(() => markClientConnectPending("a".repeat(64)), lifecycleLockDeps);
+            } else {
+              proofLock = new Database(prepareConfigMutationDatabasePathForWrite());
+              proofLock.exec("BEGIN IMMEDIATE");
+            }
+          }
           if (!contendProof) return;
           proofWaits++;
           if (options.refusedDisconnectRecycle === "config-held" || (options.refusedDisconnectRecycle === "config-at-deadline" && now < 100)) return;
@@ -477,6 +488,7 @@ if (options.mode === "retry") {
     if (options.retryRollbackPublication) {
       const closedBeforeYield = await rollbackTurn;
       await restartSettled!();
+      proofLock?.close();
       const after = readRuntimePort(process.pid)!;
       const published = after.servingGeneration !== before.servingGeneration;
       const bound = published && (await fetch(`http://127.0.0.1:${config.port}/healthz`)).ok;

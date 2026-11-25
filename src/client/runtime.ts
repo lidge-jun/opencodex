@@ -612,11 +612,19 @@ export async function startClientRuntime(
         if (clientRestartRollbackAction(state.value, readClientConnectionState()) === "recycle") return "refused";
         return serve({ port: servedPort, portWaitMs: remainingMs });
       }, { deadline }) !== "published") {
-        // A recycle cannot take over an unchanged Link. Its last unpublished listener has
-        // already closed; let the restart controller report failure unless a stop owns exit.
+        // The old config can still be current after a new connect claims its credential.
+        // Take the final snapshot under C, which excludes publication of that pending marker.
         if (linkMode && clientRestartRollbackAction(state.value, readClientConnectionStateWithEvidence()) === "resume") {
-          if (shuttingDown || observeExplicitStop()) return;
-          throw Object.assign(new Error("Could not republish the Link listener"), { code: "client_rollback_unpublished" });
+          let action: "defer" | "resume" | "recycle";
+          try {
+            action = withConfigMutationLockSync(() => shuttingDown || observeExplicitStop() || pendingClientConnectMayOwnToken()
+              ? "defer" : clientRestartRollbackAction(state.value, readClientConnectionStateWithEvidence()));
+          } catch {
+            console.warn("[client] restart: could not verify ownership of the unpublished Link listener; check ocx status");
+            return;
+          }
+          if (action === "defer") return;
+          if (action === "resume") throw Object.assign(new Error("Could not republish the Link listener"), { code: "client_rollback_unpublished" });
         }
         await recycleAfterRollback();
       }
