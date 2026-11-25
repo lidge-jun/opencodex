@@ -32,7 +32,20 @@ import { authorizationCredential } from "../lib/authorization-scheme";
 import { nativeMainRefreshFailureResponse } from "./responses/codex-auth-error";
 
 export const TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
-export const LIVE_AUDIO_MODEL = "gpt-live-1-codex";
+/** Codex's GPT-Live default since openai/codex b05266d61b (core/src/realtime_conversation.rs). */
+export const LIVE_AUDIO_MODEL = "gpt-live-1.1-codex";
+
+/** Public GPT-Live names a Frameless client may use for the Codex live models this relay reaches. */
+const LIVE_MODEL_ALIASES = new Map([
+  ["gpt-live-1", "gpt-live-1-codex"],
+  ["gpt-live-1.1", "gpt-live-1.1-codex"],
+]);
+
+/** The live model a Frameless request will run: an alias resolved, nothing named meaning the default. */
+export function resolveLiveAudioModel(model: string | null | undefined): string {
+  if (!model) return LIVE_AUDIO_MODEL;
+  return LIVE_MODEL_ALIASES.get(model) ?? model;
+}
 
 /** Audio keys remain identifiable even on the otherwise unauthenticated local listener. */
 export function resolveAudioAdmission(

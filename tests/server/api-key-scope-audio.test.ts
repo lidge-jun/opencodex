@@ -237,6 +237,52 @@ test("rejoining a call is judged on the model that call settled on", async () =>
   expect((await denial(resolved as Response)).model).toBe(OTHER_LIVE_MODEL);
 });
 
+test.each([
+  ["model=gpt-live-1.1", "gpt-live-1.1-codex"],
+  ["", "gpt-live-1.1-codex"],
+  ["model=gpt-live-1.1-codex", "gpt-live-1.1-codex"],
+] as const)("a Frameless standalone socket %p is admitted and forwarded as the model it is judged on", async (query, model) => {
+  const cfg = config({ allowedModels: ["gpt-live-1.1-codex"] });
+  const resolved = await resolveExternalLiveSocket(
+    client(cfg), cfg, logContext(), { style: "frameless-standalone", query }, { lease: lease(), bindings: new LiveCallBindings() },
+  );
+  expect(resolved).not.toBeInstanceOf(Response);
+  if (resolved instanceof Response) return;
+  try {
+    expect(new URL(resolved.upstreamWsUrl).searchParams.get("model")).toBe(model);
+  } finally { resolved.finish(); }
+});
+
+test("the gpt-live-1 alias is judged as the model it forwards", async () => {
+  const cfg = config({ allowedModels: ["gpt-live-1.1-codex"] });
+  const resolved = await resolveExternalLiveSocket(
+    client(cfg), cfg, logContext(), { style: "frameless-standalone", query: "model=gpt-live-1" }, { lease: lease(), bindings: new LiveCallBindings() },
+  );
+  expect(resolved).toBeInstanceOf(Response);
+  expect((resolved as Response).status).toBe(403);
+  expect((await denial(resolved as Response)).model).toBe("gpt-live-1-codex");
+});
+
+test("a call-create alias is judged as the model it forwards", async () => {
+  const cfg = config({ allowedModels: ["gpt-live-1.1-codex"] });
+  const create = (model: string) => handleExternalLive(
+    new Request("http://localhost/v1/live", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-opencodex-api-key": SCOPED_KEY },
+      body: JSON.stringify({ sdp: "v=0", session: { model } }),
+    }),
+    cfg, logContext(), { client: client(cfg), lease: lease(), bindings: new LiveCallBindings() },
+  );
+  const refused = await create("gpt-live-1");
+  expect(refused.status).toBe(403);
+  expect((await denial(refused)).model).toBe("gpt-live-1-codex");
+  expect(upstreamCalls).toEqual([]);
+  // The admitted alias reaches the keyed upstream; the fixture's JSON answer is not an SDP call.
+  const admitted = await create("gpt-live-1.1");
+  expect(admitted.status).not.toBe(403);
+  expect(upstreamCalls).toEqual(["https://api.openai.com/v1/live"]);
+});
+
 test("a key with no scope keeps every audio destination", async () => {
   const cfg = config({ allowedProviders: ["some-other-provider"] });
   const response = await handleAudioTranscriptions(
