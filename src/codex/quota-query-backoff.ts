@@ -44,6 +44,8 @@ export interface CodexUsageSchedule {
   recoveryProbe?: true;
   /** The sweep's clock also drives its quota-query deadline. */
   now?: () => number;
+  /** The account's own route for this credentialed read (`codexAccountFetch`); absent uses the global fetch. */
+  transport?: typeof globalThis.fetch;
 }
 
 /** Removal invalidates even active reads, so their late settlements cannot restore pacing. */
@@ -68,7 +70,7 @@ export async function fetchCodexUsage<T>(
 ): Promise<CodexUsageRead<T> | null> {
   if (schedule.unpaced) {
     onDispatch?.();
-    const response = await fetch("https://chatgpt.com/backend-api/wham/usage", init);
+    const response = await (schedule.transport ?? fetch)("https://chatgpt.com/backend-api/wham/usage", init);
     return { kind: "owner", response, settle: () => {} };
   }
   const pacingKey = scopedKey(schedule.pacingKey ?? baseQueryKey(key));
@@ -134,7 +136,7 @@ export async function fetchCodexUsage<T>(
   };
   try {
     onDispatch?.();
-    response = await fetch("https://chatgpt.com/backend-api/wham/usage", init);
+    response = await (schedule.transport ?? fetch)("https://chatgpt.com/backend-api/wham/usage", init);
     return { kind: "owner", response, settle };
   } catch (error) {
     settle(false);

@@ -13,6 +13,7 @@ import { clearCodexPoolRefreshFailure } from "../pool-refresh-backoff";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { emailMaskingEnabled, projectEmail } from "../../lib/privacy";
 import { CodexWarmupError, codexWarmupFailureReason, isCodexWarmupProvisioningFailure, warmCodexAccount } from "../warmup";
+import { codexAccountFetch } from "../account-egress-runtime";
 import type { CodexAccount, CodexAccountCredentials, OcxConfig } from "../../types";
 import type { OAuthCredentials } from "../../oauth/types";
 import type { CatalogDisposition } from "../convergence-types";
@@ -48,9 +49,10 @@ export async function verifyCodexAccountWarmup(
   accountId: string,
   accessToken: string,
   chatgptAccountId: string,
+  transport?: typeof globalThis.fetch,
 ): Promise<{ ok: true; validatedAt: number } | { ok: false; response: Response }> {
   try {
-    await warmCodexAccount({ accessToken, chatgptAccountId });
+    await warmCodexAccount({ accessToken, chatgptAccountId, ...(transport ? { transport } : {}) });
     return { ok: true, validatedAt: Date.now() };
   } catch (err) {
     const reason = codexWarmupFailureReason(err);
@@ -298,9 +300,11 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
               let plan = extractChatgptPlanType(undefined, cred.access);
               let quota: Omit<StoredAccountQuota, "updatedAt"> | null = null;
               let policyQuota: Omit<StoredAccountQuota, "updatedAt"> | null = null;
+              // The account's route; a new login has no row yet and takes the provider's.
+              const accountTransport = codexAccountFetch(accountId, { newLogin: !reauth });
               try {
                 const tokens = { access_token: cred.access, account_id: oauthAccountId };
-                const resp = await fetch("https://chatgpt.com/backend-api/wham/usage", {
+                const resp = await accountTransport("https://chatgpt.com/backend-api/wham/usage", {
                   headers: { Authorization: `Bearer ${tokens.access_token}`, "ChatGPT-Account-Id": tokens.account_id },
                   signal: AbortSignal.timeout(8000),
                 });
@@ -372,7 +376,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
               // and keep it unavailable to routing. Unknown/failed usage reads retain the gate.
               const warmup = isCodexQuotaExhausted(quota, plan)
                 ? { ok: true as const, validatedAt: undefined }
-                : await verifyCodexAccountWarmup(accountId, cred.access, oauthAccountId);
+                : await verifyCodexAccountWarmup(accountId, cred.access, oauthAccountId, accountTransport);
               if (!ownsPendingFlow()) return;
               if (!warmup.ok) {
                 const body = await warmup.response.json().catch(() => ({})) as { error?: string; code?: string; reason?: string };

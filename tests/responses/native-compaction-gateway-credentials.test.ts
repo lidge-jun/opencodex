@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import * as registry from "../../src/providers/registry";
 import * as authContext from "../../src/codex/auth-context";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -82,6 +83,7 @@ beforeEach(() => {
   previousOcxHome = process.env.OPENCODEX_HOME;
   previousCodexHome = process.env.CODEX_HOME;
   process.env.OPENCODEX_HOME = home;
+  bindStoredCodexPoolRoutingForTests();
   process.env.CODEX_HOME = home;
   releaseSpendHome = acquireOwnedSpendHome();
   for (const id of ["work", "other"]) clearAccountNeedsReauth(id);

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import {
   cachedDeniedCodexAccountIdsForModel,
   cachedAvailableAccountGatedNativeModels,
@@ -76,6 +77,7 @@ describe("a refusal fences roster fetches that started before it", () => {
       credentials.push({ accountId, accessToken: `access-${accountId}`, chatgptAccountId: `chatgpt-${accountId}`,
         credentialIdentity: `pool:${readCodexAccountRecord(accountId)!.generation}:chatgpt-${accountId}` });
     }
+    bindStoredCodexPoolRoutingForTests();
     setObservedDenialGenerationCheck(beginCodexAccountGenerationLiveCheck);
   });
 

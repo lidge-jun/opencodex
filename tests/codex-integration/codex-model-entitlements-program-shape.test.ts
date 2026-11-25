@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests, registerCodexPoolRowForTests } from "../helpers/codex-pool-routing";
 import {
   MAIN_CODEX_ACCOUNT_ID,
 } from "../../src/codex/main-account";
@@ -16,14 +17,14 @@ const SOL = "gpt-5.6-sol";
 
 function credential(accountId: string): CodexModelEntitlementCredentialSnapshot {
   return {
-    accountId,
+    accountId: registerCodexPoolRowForTests(accountId),
     accessToken: `token-${accountId}`,
     chatgptAccountId: `chatgpt-${accountId}`,
     credentialIdentity: `test:${accountId}`,
   };
 }
 
-beforeEach(() => resetCodexModelEntitlementCacheForTests());
+beforeEach(() => { resetCodexModelEntitlementCacheForTests(); bindStoredCodexPoolRoutingForTests(); });
 
 describe("Codex roster access program metadata", () => {
   test("a routed row never inherits native access programs from its template", () => {
