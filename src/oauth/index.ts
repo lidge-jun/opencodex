@@ -62,7 +62,7 @@ import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers
 import { isOAuthCredentialSiblingOf, oauthCredentialSlot } from "./credential-siblings";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { preservableApiKeyPool } from "./api-key-pool-preserve";
-import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
+import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport, withoutRegistryStaticHeaderCopies } from "../providers/registry";
 import { providerModelsUrl, resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
@@ -1229,12 +1229,13 @@ export function buildModelsRequest(
   // Model discovery is an upstream request like any other, so it carries the same registry
   // static headers the inference path does. Without this a provider is identified correctly
   // when it answers a completion but anonymously when it lists its own models, which is the
-  // kind of split fingerprint an upstream rate limiter reads as two different clients.
-  const registryStaticHeaders = providerMatchesRegistryTransport(providerName, effectiveProvider)
-    ? getProviderRegistryEntry(providerName)?.staticHeaders
-    : undefined;
+  // kind of split fingerprint an upstream rate limiter reads as two different clients. A row
+  // retargeted to another host keeps its own headers, not the preset's ones.
+  const registryEntry = getProviderRegistryEntry(providerName);
   const headers: Record<string, string> = {
-    ...(mergeRegistryStaticHeaders(registryStaticHeaders, effectiveProvider.headers) ?? {}),
+    ...((providerMatchesRegistryTransport(providerName, effectiveProvider)
+      ? mergeRegistryStaticHeaders(registryEntry?.staticHeaders, effectiveProvider.headers)
+      : withoutRegistryStaticHeaderCopies(registryEntry, effectiveProvider)) ?? {}),
   };
   const discoveryUrl = (defaultUrl: string): string => resolveProviderModelDiscoveryUrl(
     providerName,
