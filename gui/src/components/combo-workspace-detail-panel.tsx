@@ -138,9 +138,9 @@ export function DetailPanel({
   const draftBaseline = useRef(baseline);
   useEffect(() => {
     if (syncedBaselineKey.current === baselineSyncKey) return;
-    syncedBaselineKey.current = baselineSyncKey;
     const timer = window.setTimeout(() => {
       const result = mergeComboDraft(draftBaseline.current, draftRef.current, baseline);
+      syncedBaselineKey.current = baselineSyncKey;
       draftBaseline.current = baseline;
       draftRef.current = result.merged;
       setDraft(result.merged);
@@ -164,7 +164,22 @@ export function DetailPanel({
   };
 
   const save = async () => {
-    const code = validateComboDraft(draft, {
+    if (conflicts.length) return;
+    let workingDraft = draft;
+    if (syncedBaselineKey.current !== baselineSyncKey) {
+      const result = mergeComboDraft(draftBaseline.current, draftRef.current, baseline);
+      syncedBaselineKey.current = baselineSyncKey;
+      draftBaseline.current = baseline;
+      draftRef.current = result.merged;
+      workingDraft = result.merged;
+      setDraft(result.merged);
+      onDirtyChange(!draftEquals(result.merged, baseline));
+      if (result.conflicts.length) {
+        setConflicts(result.conflicts);
+        return;
+      }
+    }
+    const code = validateComboDraft(workingDraft, {
       existingIds: otherIds,
       existingAliases: otherAliases,
       combos,
@@ -172,21 +187,21 @@ export function DetailPanel({
       providers: providerMap,
     });
     if (code) {
-      setMsg({ ok: false, text: comboDraftErrorText(t, code, draft, providerMap) });
+      setMsg({ ok: false, text: comboDraftErrorText(t, code, workingDraft, providerMap) });
       return;
     }
     setBusy(true);
-    const trimmedId = draft.id.trim();
-    const alias = draft.alias?.trim() || null;
-    const displayName = draft.displayName?.trim() || null;
+    const trimmedId = workingDraft.id.trim();
+    const alias = workingDraft.alias?.trim() || null;
+    const displayName = workingDraft.displayName?.trim() || null;
     const item = {
-      ...draft,
+      ...workingDraft,
       id: trimmedId,
       alias,
       displayName,
       model: comboPublicModelId(trimmedId, alias),
       // The server keeps these only for JEV, so the saved baseline must not carry stale ones.
-      ...(draft.strategy === "jev" ? {} : { decisionProvider: null, decisionModel: null, decisionTimeoutMs: null, sessionPin: undefined }),
+      ...(workingDraft.strategy === "jev" ? {} : { decisionProvider: null, decisionModel: null, decisionTimeoutMs: null, sessionPin: undefined }),
     };
     const renameFrom = !isCreate && trimmedId !== baseline.id ? baseline.id : undefined;
     try {
@@ -235,14 +250,25 @@ export function DetailPanel({
               <IconTrash width={14} height={14} /> {t("common.remove")}
             </button>
           )}
-          <button id={isCreate ? "cwi-edit-create" : "cwi-edit-save"} type="button" className="btn btn-primary btn-sm" disabled={(!isCreate && !dirty) || busy || allTargetsExhausted} onClick={() => { void save(); }}>
+          <button id={isCreate ? "cwi-edit-create" : "cwi-edit-save"} type="button" className="btn btn-primary btn-sm" disabled={(!isCreate && !dirty) || busy || allTargetsExhausted || conflicts.length > 0} onClick={() => { void save(); }}>
             {busy ? t("common.saving") : t(isCreate ? "cws.create" : "common.save")}
           </button>
         </div>
       </div>
 
       {msg && <Notice tone={msg.ok ? "ok" : "err"}>{msg.text}</Notice>}
-      {conflicts.length > 0 && <Notice tone="err">{t("pws.draftConflictFields")} {conflicts.join(", ")}</Notice>}
+      {conflicts.length > 0 && <Notice tone="err">
+        {t("pws.draftConflictFields")} {conflicts.join(", ")} {t("pws.draftConflictResolveFirst")}
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => {
+          updateDraft(current => {
+            const next = { ...current };
+            for (const key of conflicts as (keyof ComboItem)[]) Object.assign(next, { [key]: draftBaseline.current[key] });
+            return next;
+          });
+          setConflicts([]);
+        }}>{t("pws.draftConflictUseSaved")}</button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConflicts([])}>{t("pws.draftConflictKeepDraft")}</button>
+      </Notice>}
       {allTargetsExhausted && (
         <div className="cwi-quota-banner" role="status" aria-live="polite">
           {t("cws.quota.allExhausted")}

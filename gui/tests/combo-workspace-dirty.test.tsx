@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 import { type ComboItem, providerQuotaStatesFromReports, toPutBody } from "../src/combo-workspace-data";
 import ComboWorkspace from "../src/components/ComboWorkspace";
 import { ComboRoutingEditor } from "../src/components/combo-workspace-fallback";
+import { mergeComboDraft } from "../src/components/combo-workspace-merge";
 import { LanguageProvider } from "../src/i18n/provider";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -501,10 +502,38 @@ test("remote changes merge untouched fields and retain conflicting draft edits",
     await flushTimers();
     expect(container.querySelector<HTMLInputElement>("#cwi-edit-display-name")!.value).toBe("my edit");
     expect(container.textContent).toContain("These fields changed on both sides");
+    expect(container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.disabled).toBe(true);
+    const keep = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Keep my draft")!;
+    await act(async () => { keep.click(); });
+    expect(container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.disabled).toBe(false);
+    await act(async () => { render({ ...loaded, allowMeteredTargets: undefined, displayName: "new server edit" }); });
+    await flushTimers();
+    expect(container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.disabled).toBe(true);
+    const useSaved = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Use saved values")!;
+    await act(async () => { useSaved.click(); });
+    expect(container.querySelector<HTMLInputElement>("#cwi-edit-display-name")!.value).toBe("new server edit");
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();
   }
+});
+
+test("reordered targets preserve remote metering and roster changes in the PUT", () => {
+  const a = { provider: "openai", model: "a", metered: false };
+  const b = { provider: "openai", model: "b" };
+  const c = { provider: "openai", model: "c", metered: true };
+  const previous = { ...combos[0]!, targets: [a, b] };
+  const local = { ...previous, targets: [b, a] };
+  const reorderedRemote = { ...previous, targets: [{ ...a, metered: true }, b] };
+  const reordered = mergeComboDraft(previous, local, reorderedRemote);
+  expect(reordered.merged.targets.map(t => t.model)).toEqual(["b", "a"]);
+  expect(reordered.merged.targets[1]!.metered).toBe(true);
+  expect(toPutBody(reordered.merged, { stored: reorderedRemote }).combo.targets[1]!.metered).not.toBe(false);
+  const remote = { ...previous, targets: [{ ...a, metered: true }, c] };
+  const result = mergeComboDraft(previous, local, remote);
+  expect(result.merged.targets.map(t => t.model)).toEqual(["a", "c"]);
+  expect(result.merged.targets[0]!.metered).toBe(true);
+  expect(toPutBody(result.merged, { stored: remote }).combo.targets[0]!.metered).not.toBe(false);
 });
 
 test("save adopts the server combo when refresh does not arrive", async () => {
