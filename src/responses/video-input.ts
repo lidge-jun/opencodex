@@ -58,11 +58,23 @@ export function parseInlineVideoDataUrl(url: string): { mediaType: string; base6
   if (!match) return null;
   const mediaType = match[1]!.trim().toLowerCase();
   const base64 = match[2]!;
-  return mediaType && STANDARD_BASE64.test(base64) ? { mediaType, base64 } : null;
+  return mediaType && usableStandardBase64(base64) ? { mediaType, base64 } : null;
 }
 
 /** Standard-alphabet base64 with at most two trailing pad characters; nothing else. */
 const STANDARD_BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * The alphabet check plus length consistency, the same rule `src/responses/inline-document.ts`
+ * applies to document bytes: padding must complete a four-character quantum, and an unpadded
+ * encoding cannot leave a single sextet, which represents no byte. `A`, `AA=` and `AAA==` fail.
+ * Unpadded `QQ` passes: the protobuf JSON mapping for `bytes`, which Gemini's REST surface
+ * follows, accepts base64 with or without padding.
+ */
+function usableStandardBase64(payload: string): boolean {
+  if (!STANDARD_BASE64.test(payload)) return false;
+  return payload.endsWith("=") ? payload.length % 4 === 0 : payload.length % 4 !== 1;
+}
 
 /**
  * Whether a Chat Completions body carries a `video_url` part over the inline cap, in any message.

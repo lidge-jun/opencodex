@@ -24,7 +24,7 @@ import { chatConversationToIr } from "../../src/protocols/codecs/chat-ir";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { untranslatedResponsesInputMedia } from "../../src/responses/input-media";
 import { parseRequest } from "../../src/responses/parser";
-import { inlineVideoDecodedBytes, MAX_INLINE_VIDEO_BYTES } from "../../src/responses/video-input";
+import { inlineVideoDecodedBytes, MAX_INLINE_VIDEO_BYTES, parseInlineVideoDataUrl } from "../../src/responses/video-input";
 import { estimateInputTokens } from "../../src/server/responses/input-admission";
 import { adapterBuildRefusal } from "../../src/server/responses/passthrough-build-error";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
@@ -253,6 +253,15 @@ describe("video input on a published carrier", () => {
     }
     const sent = await body(GOOGLE, videoRequest("gemini-3.8-flash", "data:video/mp4;base64,QQ=="));
     expect(JSON.stringify(sent.contents)).toContain(JSON.stringify({ inline_data: { mime_type: "video/mp4", data: "QQ==" } }));
+  });
+
+  test("base64 length and padding must be consistent before Gemini receives the bytes", () => {
+    for (const payload of ["A", "A=", "AA=", "AAA==", "AAAAA"]) {
+      expect(parseInlineVideoDataUrl(`data:video/mp4;base64,${payload}`)).toBeNull();
+    }
+    for (const payload of ["QQ==", "QUI=", "QUJD", "QQ", "QUI"]) {
+      expect(parseInlineVideoDataUrl(`data:video/mp4;base64,${payload}`)?.base64).toBe(payload);
+    }
   });
 
   test("the Moonshot preset declares video for the Kimi K3 series its docs list", () => {
