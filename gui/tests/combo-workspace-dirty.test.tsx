@@ -5,7 +5,7 @@ import type { Root } from "react-dom/client";
 import { type ComboItem, providerQuotaStatesFromReports, toPutBody } from "../src/combo-workspace-data";
 import ComboWorkspace from "../src/components/ComboWorkspace";
 import { ComboRoutingEditor } from "../src/components/combo-workspace-fallback";
-import { mergeComboDraft } from "../src/components/combo-workspace-merge";
+import { applySavedTargetOrder, mergeComboDraft } from "../src/components/combo-workspace-merge";
 import { LanguageProvider } from "../src/i18n/provider";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -586,6 +586,53 @@ test("order conflict blocks save and saved values resolve the target order", asy
     await act(async () => { useSaved.click(); });
     expect(container.textContent).not.toContain("Target order");
     expect(container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.disabled).toBe(true);
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
+
+test("taking the saved target order keeps added targets and unrelated target edits", () => {
+  const [a, b, c] = ["a", "b", "c"].map(model => ({ provider: "openai", model, clientKey: model }));
+  const d = { provider: "openai", model: "d", clientKey: "d" };
+  const previous = { ...combos[0]!, targets: [a!, b!, c!] };
+  const local = { ...previous, targets: [b!, a!, { ...c!, metered: true }, d] };
+  const remote = { ...previous, targets: [a!, c!, b!] };
+  const result = mergeComboDraft(previous, local, remote);
+  expect(result.conflicts).toEqual(["targets order"]);
+  const resolved = applySavedTargetOrder(result.merged.targets, remote.targets);
+  expect(resolved.map(t => t.model)).toEqual(["a", "c", "b", "d"]);
+  expect(resolved.find(t => t.model === "c")!.metered).toBe(true);
+});
+
+test("using the saved order after a conflict keeps a local target edit", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const [a, b, c] = ["a", "b", "c"].map(model => ({ provider: "openai", model, clientKey: model }));
+  const loaded = { ...combos[0]!, targets: [a!, b!, c!] };
+  const render = (item: ComboItem) => root.render(<LanguageProvider><ComboWorkspace
+    combos={[item]} providerQuotaStates={{ openai: "available" }} providers={[{ name: "openai" }]}
+    models={["a", "b", "c"].map(id => ({ provider: "openai", id }))} loading={false} onRefresh={() => {}}
+    onSave={async () => ({ ok: true })} onRemove={async () => ({ ok: true })}
+    onAdd={() => {}} adding={false} onCloseAdd={() => {}} onCreated={() => {}} />
+  </LanguageProvider>);
+  const paidSwitches = () => [...container.querySelectorAll<HTMLButtonElement>('[role="switch"]')]
+    .filter(button => button.textContent?.includes("Paid API target"));
+  try {
+    await act(async () => { render(loaded); });
+    await act(async () => { railButton(container, "combo/alpha").click(); });
+    await act(async () => { container.querySelectorAll<HTMLButtonElement>('[aria-label="Move down"]')[0]!.click(); });
+    await act(async () => { paidSwitches()[2]!.click(); });
+    await act(async () => { render({ ...loaded, targets: [a!, c!, b!] }); });
+    await flushTimers();
+    expect(container.textContent).toContain("Target order");
+    const useSaved = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Use saved values")!;
+    await act(async () => { useSaved.click(); });
+    expect(container.textContent).not.toContain("Target order");
+    expect(paidSwitches().map(button => button.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
+    expect(container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.disabled).toBe(false);
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();

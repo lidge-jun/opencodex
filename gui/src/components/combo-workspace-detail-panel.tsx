@@ -16,7 +16,7 @@ import { Notice, Switch } from "../ui";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
 import { ComboCapabilities, EffortSelect } from "./combo-workspace-controls";
 import { ComboRoutingEditor } from "./combo-workspace-fallback";
-import { mergeComboDraft } from "./combo-workspace-merge";
+import { applySavedTargetOrder, mergeComboDraft } from "./combo-workspace-merge";
 import { ComboJevDecisionSection } from "./combo-workspace-jev-decision";
 import { clampedNumberInput, comboDraftErrorText } from "./combo-workspace-utils";
 import type { JevDecisionRow } from "../jev-decision-service";
@@ -263,8 +263,12 @@ export function DetailPanel({
           updateDraft(current => {
             const next = { ...current };
             for (const conflict of conflicts) {
-              const key = (conflict === "targets order" ? "targets" : conflict) as keyof ComboItem;
-              Object.assign(next, { [key]: draftBaseline.current[key] });
+              if (conflict === "targets order") continue;
+              Object.assign(next, { [conflict]: draftBaseline.current[conflict as keyof ComboItem] });
+            }
+            // An order conflict takes the saved order alone; membership and target fields stay merged.
+            if (conflicts.includes("targets order") && !conflicts.includes("targets")) {
+              next.targets = applySavedTargetOrder(next.targets, draftBaseline.current.targets);
             }
             return next;
           });

@@ -73,6 +73,19 @@ function mergeTargets(previous: ComboTarget[], draft: ComboTarget[], remote: Com
   return { targets, conflict, orderConflict };
 }
 
+/**
+ * Resolve only a target-order conflict in favor of the saved order: targets that also exist on
+ * the server take its order, while draft-only targets keep their slots and every target keeps
+ * its merged fields.
+ */
+export function applySavedTargetOrder(current: ComboTarget[], saved: ComboTarget[]): ComboTarget[] {
+  const byKey = new Map(current.map(target => [identity(target), target]));
+  const savedOrder = saved.map(identity).filter(key => byKey.has(key));
+  const shared = new Set(savedOrder);
+  let next = 0;
+  return current.map(target => shared.has(identity(target)) ? byKey.get(savedOrder[next++]!)! : target);
+}
+
 export function mergeComboDraft(previous: ComboItem, draft: ComboItem, remote: ComboItem) {
   const merged = { ...remote };
   const conflicts: string[] = [];
