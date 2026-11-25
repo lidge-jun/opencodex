@@ -59,6 +59,17 @@ describe("anthropic tool input_schema normalization", () => {
     }
   });
 
+  test("sizes a referenced schema nested deeper than the call stack", () => {
+    // Reserving a reference walks the inlined copy; a recursive walk overflowed the stack here.
+    let deep: Record<string, unknown> = { type: "string" };
+    for (let i = 0; i < 50_000; i++) deep = { not: deep };
+    const schema = inputSchemas.normalizeAnthropicInputSchema({ $ref: "#/$defs/deep", $defs: { deep } });
+    expect(schema.type).toBe("object");
+    let depth = 0;
+    for (let node = schema.not as Record<string, unknown> | undefined; node; node = node.not as typeof node) depth++;
+    expect(depth).toBe(50_000);
+  });
+
   test("parameterless and type-less tools become valid object schemas", async () => {
     expect(await toolSchema({})).toEqual({ type: "object", properties: {} });
     expect(await toolSchema({ properties: { query: { type: "string" } }, required: ["query"] })).toEqual({
