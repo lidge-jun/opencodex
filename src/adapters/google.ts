@@ -51,7 +51,8 @@ import {
 } from "../lib/translator-budget";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { geminiProgressLead, trimsGeminiProgressHistory } from "./google-progress-history";
-import { GEMINI_UNFETCHABLE_VIDEO_MESSAGE, geminiFetchableVideoUri } from "./google-video-uri";
+import { GEMINI_INLINE_VIDEO_FORM_MESSAGE, GEMINI_UNFETCHABLE_VIDEO_MESSAGE, geminiFetchableVideoUri } from "./google-video-uri";
+import { parseInlineVideoDataUrl } from "../responses/video-input";
 import { configuredReasoningEfforts, mapReasoningEffort } from "../reasoning-effort";
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
@@ -415,8 +416,9 @@ function messagesToGeminiFormat(
               const mediaProcessing = geminiMediaProcessing(p.processing);
               const processingPart = mediaProcessing ? { media_processing: mediaProcessing } : {};
 
-              // Gemini accepts inline video bytes in the same Part union as images.
-              const data = parseDataUrl(p.videoUrl);
+              // Gemini accepts inline video bytes in the same Part union as images. The parser
+              // is the one the input media guard admits with, header parameters and case included.
+              const data = parseInlineVideoDataUrl(p.videoUrl);
               if (data) {
                 parts.push({
                   inline_data: { mime_type: data.mediaType, data: data.base64 },
@@ -438,7 +440,7 @@ function messagesToGeminiFormat(
               }
               // The input media guard refuses this before the build; the throw keeps a direct
               // caller from sending a text marker in place of a clip the model cannot see.
-              throw new Error(GEMINI_UNFETCHABLE_VIDEO_MESSAGE);
+              throw new Error(p.videoUrl.startsWith("data:") ? GEMINI_INLINE_VIDEO_FORM_MESSAGE : GEMINI_UNFETCHABLE_VIDEO_MESSAGE);
             }
             if (p.type === "document") {
               // Gemini takes document bytes through the same inline_data part as images and

@@ -2,6 +2,10 @@
 export const GEMINI_UNFETCHABLE_VIDEO_MESSAGE = "OpenCodex cannot send this remote video to Gemini: Gemini fetches only YouTube and Files API URLs. "
   + "Send the video inline as a data URL or upload it to the Gemini Files API first.";
 
+/** Fixed vocabulary only: Gemini's inline_data carries base64 bytes, so a plain data URL has no carrier. */
+export const GEMINI_INLINE_VIDEO_FORM_MESSAGE = "OpenCodex cannot send this inline video to Gemini: "
+  + "it must be a base64 data URL (data:<media type>;base64,...).";
+
 /**
  * A video URI Gemini fetches on its own behalf, as a `file_data` reference.
  *

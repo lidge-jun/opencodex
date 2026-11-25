@@ -41,6 +41,21 @@ export const OVERSIZED_INLINE_VIDEO_MESSAGE = "OpenCodex refuses inline video la
   + "Upload the video to the provider's file storage and send its URL instead.";
 
 /**
+ * The media type and base64 payload of an inline video `data:` URL, or null.
+ *
+ * Accepts what the size check accepts as base64: header parameters (`;codecs=avc1`) and a
+ * terminal `;base64` in any case. The media type is returned without its parameters, which is
+ * the form Gemini's `inline_data.mime_type` takes. The guard and the Gemini builder share this
+ * parser so a URL the guard admits is always one the builder can send.
+ */
+export function parseInlineVideoDataUrl(url: string): { mediaType: string; base64: string } | null {
+  const match = /^data:([^;,]+)(?:;[^;,]*)*;base64,(.*)$/is.exec(url);
+  if (!match) return null;
+  const mediaType = match[1]!.trim().toLowerCase();
+  return mediaType ? { mediaType, base64: match[2]! } : null;
+}
+
+/**
  * Whether a Chat Completions body carries a `video_url` part over the inline cap, in any message.
  *
  * Both Chat conversions (the projection onto the Responses core and the direct IR lane) run this

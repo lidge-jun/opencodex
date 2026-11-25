@@ -373,7 +373,8 @@ there.
 Video is the one kind whose carrier depends on the model. `src/adapters/video-input-carrier.ts`
 checks the normalized request's `video` parts (`src/responses/video-input.ts`) after the typed
 scan, which refuses an `input_video` block outside user or developer content because no
-converter there builds a part. The `google` wire carries inline bytes and the YouTube and Files
+converter there builds a part. The `google` wire carries base64 inline bytes (parsed by `parseInlineVideoDataUrl`, which the
+guard and the Gemini builder share; a plain `data:` URL is refused) and the YouTube and Files
 API URIs that `src/adapters/google-video-uri.ts` allowlists; any other remote URL is refused.
 The translated Chat builder (`provider.adapter === "openai-chat"`, not merely the inherited
 wire) emits the Chat `video_url` part only in user messages and only for a model whose
