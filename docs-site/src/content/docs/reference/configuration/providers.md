@@ -1830,18 +1830,21 @@ See the [reasoning-effort diagnostic limits](/guides/providers/#reasoning-effort
 ## Routed agent messages
 
 With the [`openai-responses` adapter](/reference/adapters/#openai-responses), Codex
-`agent_message` items containing nonempty arrays of supported plaintext parts become user messages when `authMode` is not `"forward"`
-(for example, `"key"`). Providers using `authMode: "forward"` retain these items unchanged.
+`agent_message` items containing nonempty arrays of supported parts (`input_text`, `input_image`
+or `input_file`) become user messages when `authMode` is not `"forward"` (for example, `"key"`).
+Providers using `authMode: "forward"` retain these items unchanged.
 `agent_message` is private to the ChatGPT Codex backend, and the routed destinations
 reported so far answer the whole request with
 `422 unknown item type "agent_message"`; Codex replays sub-agent history on every
 subsequent turn, so the thread keeps failing until the item is converted.
 Author and recipient remain explicit text metadata, and the content parts are preserved.
-For HTTPS `api.x.ai` and `cli-chat-proxy.grok.com` on the standard port, non-forward
+For HTTPS `api.x.ai`, `us.api.x.ai` and `cli-chat-proxy.grok.com` on the standard port, non-forward
 Responses dispatch also accepts a nonblank string child result and turns it into one
 `input_text` part. The original string, including leading/trailing whitespace and newlines,
 is preserved. Other destinations keep string-valued agent messages unchanged. Empty or
-whitespace-only strings remain unchanged, as do incomplete and mixed encrypted/unknown shapes.
+whitespace-only strings remain unchanged, as do empty content arrays and arrays that mix in
+encrypted or unknown parts. A nonempty array whose parts all use a supported type is converted
+as sent, even when a part lacks its expected field.
 Encrypted and unknown content is not normalized; native encrypted tasks still require the
 separate opt-in [task recovery](/reference/configuration/agents/#encrypted-v2-task-recovery).
 

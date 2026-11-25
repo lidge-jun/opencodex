@@ -88,6 +88,29 @@ export function fileTimeToEpochMs(fileTime: bigint): number | null {
   return ms > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(ms);
 }
 
+/** Keep owner, lifetime and creation evidence on one process handle; never cache a PID proof. */
+export function readSameUserWindowsStart(pid: number, io: {
+  open: (pid: number) => number | bigint;
+  close: (handle: number | bigint) => void;
+  fileTime: (handle: number | bigint) => bigint | null;
+  exited: (handle: number | bigint) => boolean | null;
+  ownerSid: (handle: number | bigint) => string;
+  currentSid: () => string;
+}): bigint | null {
+  if (!Number.isInteger(pid) || pid <= 0 || pid > 0x7fffffff) return null;
+  const handle = io.open(pid);
+  if (!handle) return null;
+  try {
+    const created = io.fileTime(handle);
+    if (created === null || created <= FILETIME_UNIX_EPOCH || io.exited(handle) !== false) return null;
+    const owner = io.ownerSid(handle);
+    if (!/^S-1-\d+(?:-\d+)+$/.test(owner) || owner !== io.currentSid() || io.exited(handle) !== false) return null;
+    // Preserve the creation identity already stored by the CIM-based stop owner protocol.
+    return (created + FILETIME_DOTNET_EPOCH) / 10n * 10n;
+  } catch { return null; }
+  finally { io.close(handle); }
+}
+
 /** Decode SERVICE_STATUS_PROCESS: the PID only while the service reports RUNNING. */
 export function decodeServiceStatusProcess(buffer: Uint8Array): number | null {
   if (buffer.byteLength < SERVICE_STATUS_PROCESS_BYTES) return null;
@@ -224,21 +247,24 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
       }
     },
     sameUserIdentity(pid, withCommandLine, expectedUserSid) {
-      const handle = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid);
-      if (!handle) return null;
-      try {
-        const fileTime = handleFileTime(handle);
-        if (fileTime === null) return null;
-        const userSid = handleUserSid(handle);
-        if (userSid !== handleUserSid(k.GetCurrentProcess()) || (expectedUserSid !== undefined && userSid !== expectedUserSid)) return null;
-        const commandLine = withCommandLine ? readWindowsProcessCommandLineFromHandle(handle) : undefined;
-        if (handleExited(handle) !== false) return null;
-        return { ticks: fileTimeToCimTicks(fileTime), commandLine };
-      } catch {
-        return null;
-      } finally {
-        k.CloseHandle(handle);
-      }
+      let commandLine: string | undefined;
+      const ticks = readSameUserWindowsStart(pid, {
+        open: target => k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, target),
+        close: handle => { k.CloseHandle(handle); },
+        fileTime: handle => {
+          const created = handleFileTime(handle);
+          if (withCommandLine) commandLine = readWindowsProcessCommandLineFromHandle(handle);
+          return created;
+        },
+        exited: handleExited,
+        ownerSid: handleUserSid,
+        // #9027: a caller that names the account requires exactly that account as well as the caller's.
+        currentSid: () => {
+          const current = handleUserSid(k.GetCurrentProcess());
+          return expectedUserSid === undefined || expectedUserSid === current ? current : "";
+        },
+      });
+      return ticks === null ? null : { ticks, commandLine };
     },
     terminate(pid, boundStartTime) {
       const handle = k.OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid);

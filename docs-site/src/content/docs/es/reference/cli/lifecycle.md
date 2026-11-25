@@ -127,7 +127,7 @@ Si OpenCodex no puede confirmar que un envoltorio terminó porque no dispone de 
 de objeto de proceso (handle), como puede ocurrir en ARM64, compruébalo en el Administrador de tareas desde la sesión
 de su propietario, detenlo si sigue en ejecución y vuelve a intentarlo.
 
-Si no puede demostrarse que el servicio se detuvo, `ocx stop` no envía una solicitud de parada al proxy, deja intacta la configuración del cliente y falla. Con `--json`, el resumen conserva `outcome: "failed"` y `proxy: "unknown"`, y añade `serviceStopReason`:
+Si no puede demostrarse que el servicio se detuvo, `ocx stop` no envía una solicitud de parada al proxy ni continúa con la restauración nativa compartida. En un Child de Remote Link, el prevuelo puede haber eliminado ya las integraciones de archivos propiedad del Link y pausado la sincronización; repara la parada del servicio y vuelve a ejecutar `ocx stop`. El comando falla. Con `--json`, el resumen conserva `outcome: "failed"` y `proxy: "unknown"`, y añade `serviceStopReason`:
 
 | `serviceStopReason` | Significado | Qué hacer |
 |---|---|---|
@@ -445,12 +445,22 @@ ocx catalog pull https://proxy.example.com/v1/catalog \
   --auth-env OPENCODEX_CATALOG_AUTH_TOKEN
 ```
 
-El valor se envía como un token de portador, pero nunca se acepta como un valor de argv. Las redirecciones son rechazadas, por lo que la autorización no puede cruzar orígenes. Las escrituras de catálogo y caché utilizan el bloqueo de catálogo Codex compartido y el escritor atómico. Una recuperación, validación, adquisición de bloqueos, escritura de catálogo o reconstrucción de caché fallida conserva los últimos archivos buenos conocidos. Si los bytes del catálogo son idénticos, la operación no cambia nada: conserva los mtimes y no modifica los procesos. `--restart-codex`, `--restart-app-server-only` y el alias `--restart-desktop-app` en desuso significan lo mismo aquí que en `ocx sync` y `ocx sync-cache`, y se aplican solo después de una escritura real.
+El valor se envía como token Bearer, pero no se acepta como argumento en argv. El comando
+rechaza las redirecciones para que la autorización no se envíe a otro origen. Las escrituras
+del catálogo y de la caché usan el bloqueo compartido del catálogo de Codex y el mecanismo
+de escritura atómica. Si falla la descarga, la validación, la adquisición del bloqueo o la
+escritura del catálogo o de la caché, se conservan los últimos archivos válidos.
+`--restart-codex`, `--restart-app-server-only` y el alias en desuso `--restart-desktop-app`
+seleccionan los mismos procesos que en `ocx sync` y `ocx sync-cache`. Al usar `ocx catalog pull`,
+solo se aplican si se escribe el catálogo.
 
 La URL debe nombrar `/v1/catalog` en la raíz del host. Este comando no admite un proxy inverso que sirva el punto final bajo un prefijo de ruta.
 
-El comando descarga el catálogo completo y compara bytes localmente en lugar de emitir un `ETag` /
-`If-None-Match` Solicitud condicional. Los bytes idénticos se tratan como un no-op completo, por lo que Codex casa cuyo catálogo es correcto, pero cuya `models_cache.json` falta o es rancio no reparado por este comando; usar `ocx sync-cache` Por eso.
+El comando descarga el catálogo completo y compara sus bytes localmente en vez de enviar una
+solicitud condicional con `ETag` / `If-None-Match`. Si los bytes del catálogo coinciden, el
+archivo se conserva sin cambios. El comando sí repara `models_cache.json` si falta o está
+desactualizado. En ese caso, el resultado puede indicar `status: "unchanged"` junto con
+`cacheSynced: true`. Si ambos archivos ya coinciden, mantienen sus fechas de modificación.
 
 `--json` emite un sobre estable en stdout. `schemaVersion`, `ok`, `status`, `catalogWritten`, `cacheSynced` y `codexRestarted` están siempre presentes. `codexRestarted` todavía significa solo servidores de aplicaciones. `desktopAppRestarted` está presente solo cuando se solicitó un reinicio del escritorio, y es `true` solo cuando se inició el relanzamiento; un traspaso no es un éxito. `status` es `updated`, `unchanged`, o `failed`. Un tirón exitoso agrega `modelCount`; un fallo agrega `code`, que es el campo en el que se ramifica un script:
 
@@ -682,7 +692,7 @@ ocx codex-shim uninstall
 Después de desinstalar Unix, elimine la línea de origen del archivo de inicio de shell y reinicie el shell o elimine la entrada de bin privado de su PATH. La desinstalación elimina el envoltorio, el archivo de entorno de shell y el estado propios; deja intacto el lanzador del administrador de paquetes. Se libera una shim Unix más antigua en el lugar utilizando sus datos de restauración registrados.
 
 :::note[Entorno del token en Windows]
-Windows CMD y las shims PowerShell recientemente generadas restauran el número de la persona que llama `OPENCODEX_API_AUTH_TOKEN` Después de la ejecución. Codex y sus procesos secundarios aún pueden heredar el token.
+Los shims nuevos de CMD y PowerShell en Windows restauran al terminar el valor de `OPENCODEX_API_AUTH_TOKEN` que tenía el proceso que los llamó. Codex y sus procesos secundarios aún pueden heredar el token.
 
 Después de actualizar OpenCodex, vuelva a crear una shim Windows existente con `ocx codex-shim uninstall` seguido por `ocx codex-shim install` para obtener este comportamiento. Una actualización ordinaria no reescribe una shim Windows saludable.
 :::

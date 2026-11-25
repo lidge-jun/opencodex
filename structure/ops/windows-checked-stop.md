@@ -28,7 +28,7 @@ lazily, caches a failed load as unavailable, and closes every handle in a `final
 - an exit watch: a handle opened at bind time and polled with `WaitForSingleObject(handle, 0)`;
 - the Task Scheduler service host PID through `QueryServiceStatusEx` on `Schedule`, only while it runs.
 
-Link stop reads a live process’s creation time and token user through one handle. To verify a stop owner, it also reads the command line through that handle using `src/config/windows-process-command-line.ts`. The creation time uses .NET ticks truncated to CIM’s microsecond precision so existing receipts and runtime records still match. If the native API is unavailable, a bounded CIM probe refreshes the creation time after reading the SID. A failed native read leaves the identity unverified. Forced Link termination requires the native handle and compares the saved creation time and token user on that handle before ending the process.
+The Link Child reads its live same-user creation proof in-process on one native handle, using `GetProcessTimes` and the token user SID; stop-owner argv is read through that same handle by `src/config/windows-process-command-line.ts`. It preserves the existing .NET tick identity at microsecond precision without spawning PowerShell or caching a PID proof. The process fallback compares that identity on the same handle used for termination. Unavailable native identity or handle binding refuses promptly; it does not fall back to repeated CIM subprocesses. `tests/windows/windows-stop-owner-identity.test.ts` covers handle ownership, stale identities and an actual-Windows-only repeated-read budget.
 
 Windows ARM64, other platforms and any test that simulates a platform get no native API.
 `src/service/windows-process-evidence.ts` is the facade the operations use. Its process snapshot is
@@ -183,7 +183,7 @@ objects. The final manager-state probe treats both running and queued tasks as a
 
 The task's running state is read from `schtasks /query /fo CSV`. The status words observed from shipped
 zh-CN, ko-KR, and ja-JP resources are recognized there, because a cold `Get-ScheduledTask` takes
-1.6 s to 4.9 s (#8863) and cannot finish inside the 1 s cap. Any other localized word still falls back to it.
+1.6 s to 4.9 s (#8863) and cannot finish inside the 1 s cap. Any other localized word (French `Prêt`, for example) falls back to the numeric `TASK_STATE` read through the `Schedule.Service` COM object, which needs no module import (about 0.3 s including PowerShell startup on the reporting host): 2 and 4 (queued, running) are active, 1 and 3 (disabled, ready) are stopped, and a failed, timed-out or other value stays unknown.
 The instance stop maps an access-denied HRESULT to `denied`. A running WinSW service is only this home's manager
 when `sc qc` shows a `BINARY_PATH_NAME` naming this installation's WinSW executable, the same
 proof the guarded manager path uses: the service ID is fixed, so a successful `sc query` alone

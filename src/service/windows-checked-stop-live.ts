@@ -179,7 +179,8 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
  * resources, and the PowerShell fallback cannot start inside Part A's 1 s manager-state cap on a
  * cold machine (#8863), so the words observed from shipped resources are read here: zh-CN, ja-JP
  * and ko-KR from their System32 locale directories, ko-KR running/ready also from two machines.
- * Any other word stays unknown and falls back to Get-ScheduledTask's locale-independent State enum.
+ * Any other word stays unknown here and falls back to the numeric TASK_STATE read through the
+ * Schedule.Service COM object, which is locale-independent and imports no module.
  */
 // A queued instance can launch after Part A. Only ready and disabled prove inactivity.
 const TASK_CSV_ACTIVE = new Set(["running", "queued", "正在运行", "已排队", "실행 중", "대기", "実行中", "キューに登録済み"]);
@@ -413,14 +414,15 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       const csv = await run("schtasks", ["/query", "/tn", TASK, "/fo", "CSV", "/nh"], timeoutMs);
       const parsed = csv.status === 0 ? parseTaskCsvState(csv.stdout) : "unknown";
       if (parsed !== "unknown") return parsed;
-      // A localized status word: ask Get-ScheduledTask, whose State is an enum name.
+      // Query TASK_STATE directly: importing ScheduledTasks can exhaust the one-second state budget.
       const left = timeoutMs - (Date.now() - started);
       if (left <= 0) return "unknown";
       const ps = await run("powershell", ["-NoProfile", "-NoLogo", "-NonInteractive", "-Command",
-        "(Get-ScheduledTask -TaskName '" + TASK + "' -TaskPath '\\' -ErrorAction Stop).State"], left);
+        `$ErrorActionPreference = 'Stop'; $s = New-Object -ComObject Schedule.Service; $s.Connect(); $s.GetFolder('\\').GetTask('${TASK}').State`], left);
+      if (ps.timedOut || ps.status !== 0) return "unknown";
       const state = ps.stdout.trim();
-      if (/^(running|queued)$/i.test(state)) return "running";
-      if (/^(ready|disabled)$/i.test(state)) return "not-running";
+      if (state === "2" || state === "4") return "running"; // queued or running
+      if (state === "1" || state === "3") return "not-running"; // disabled or ready
       return "unknown";
     },
     async winswStop(timeoutMs) {
