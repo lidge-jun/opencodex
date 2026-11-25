@@ -516,7 +516,9 @@ endpoint migrate to `kimi-k3.1-pro`, refreshing old built-in context and reasoni
 preserving explicit overrides. Custom destinations keep their saved selections. `kimi-k2.6` and
 `kimi-k2.7-code` (including highspeed) remain selectable for existing users: Moonshot closes the
 K2 series to new accounts on 2026-10-31 and plans to retire it by the end of December 2026; see the
-[Kimi API model list](https://platform.kimi.ai/docs/models.md) (checked 2026-10-28).
+[Kimi API model list](https://platform.kimi.ai/docs/models.md) (checked 2026-10-28) and the
+[Kimi API pricing page](https://platform.kimi.ai/docs/pricing/chat), which still states that plan on
+2026-11-26. The seeds keep both ids until Moonshot publishes the retirement date.
 
 A custom `openai-chat` provider can opt in when its upstream documents support for
 `prompt_cache_key`:
