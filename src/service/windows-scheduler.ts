@@ -269,6 +269,24 @@ export function windowsSchedulerStartRecovery(
   return "Service is not installed (Task Scheduler). Run 'ocx service install' first.";
 }
 
+/**
+ * `ocx service start` on the Scheduler backend: run the start and return install advice only for a
+ * confirmed missing registration. Every other failure propagates unchanged; success returns null.
+ */
+export function startWindowsSchedulerService(
+  start: () => void,
+  recovery: (error: unknown) => string | null = windowsSchedulerStartRecovery,
+): string | null {
+  try {
+    start();
+    return null;
+  } catch (error) {
+    const advice = recovery(error);
+    if (!advice) throw error;
+    return advice;
+  }
+}
+
 /** True when the Task Scheduler registration for the default proxy task is proven present. */
 export function windowsSchedulerTaskInstalled(taskName = TASK): boolean {
   return probeWindowsSchedulerTask(taskName).status === "present";
