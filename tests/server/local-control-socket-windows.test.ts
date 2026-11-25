@@ -387,5 +387,40 @@ describe.skipIf(!windows || ROOT === null)("Windows hub with a non-loopback publ
     await listener.stop();
     expect(portEntries(publicPort)).toEqual([]);
   }, SERVER_BUDGET_MS);
+
+  test("a lease that cannot be deleted fails the stop, and the next start retries it before serving again", async () => {
+    const publicPort = await findAvailablePort(0, "0.0.0.0");
+    const ctx = { config: { hostname: "0.0.0.0" } as OcxConfig, publicPort, dispatch: async () => Response.json({ ok: true }) };
+    const listener = createLocalControlListener();
+    listener.start(ctx);
+    expect(listener.socketPath()).toBe(localControlSocketPath(publicPort));
+    const lease = localControlLeasePath(publicPort);
+    // Another process holds the record open without FILE_SHARE_DELETE: it stays readable, but no
+    // unlink can remove it until that handle closes.
+    const holder = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+      "$f = [IO.File]::Open($env:OCX_HELD_LEASE, 'Open', 'Read', 'Read'); [Console]::Out.WriteLine('held'); [Console]::Out.Flush(); [void][Console]::In.ReadLine(); $f.Close()"],
+    { env: { ...process.env, OCX_HELD_LEASE: lease }, stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+    try {
+      const reader = holder.stdout.getReader();
+      let seen = "";
+      while (!seen.includes("held")) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error("the lease holder exited before opening the record");
+        seen += new TextDecoder().decode(chunk.value);
+      }
+      const failed = await listener.stop().then(() => null, (error: unknown) => error);
+      expect(failed).toBeInstanceOf(LocalControlReleaseError);
+      expect(readFileSync(lease, "utf8")).toContain("token");
+    } finally {
+      holder.stdin.write("\n");
+      await holder.stdin.end();
+      await holder.exited;
+    }
+    // The retained release runs first, so this runtime's own stale record does not read as a live owner.
+    listener.start(ctx);
+    expect(listener.socketPath()).toBe(localControlSocketPath(publicPort));
+    await listener.stop();
+    expect(portEntries(publicPort)).toEqual([]);
+  }, SERVER_BUDGET_MS);
 });
 

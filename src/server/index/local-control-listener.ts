@@ -123,7 +123,7 @@ type LeaseDecision =
   | { kind: "held" }
   | { kind: "unsafe" }
   | { kind: "contended" }
-  | { kind: "failed"; error: unknown; retained?: true };
+  | { kind: "failed"; error: unknown; retained?: "socket" | "lease" };
 
 const PUBLISH_ATTEMPTS = 4;
 /** `withLockClaim` is a try-lock; a contender retries a bounded number of times and then refuses. */
@@ -220,11 +220,19 @@ function writeLease(path: string, lease: LocalControlLease): void {
   }
 }
 
-/** Remove the record only when it is still this instance's; the caller holds the claim mutex. */
+/**
+ * Remove the record only when it is still this instance's; the caller holds the claim mutex.
+ * Only a record that is already gone counts as removed: any other unlink failure throws, so the
+ * caller keeps its retry state instead of reporting a release that left a live lease behind.
+ */
 function removeOwnedLease(path: string, token: string): void {
   const current = readLease(path);
   if (current.kind !== "record" || current.lease.token !== token) return;
-  try { unlinkSync(path); } catch { /* already gone */ }
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if (!isCode(error, "ENOENT")) throw error;
+  }
 }
 
 /**
@@ -306,8 +314,10 @@ function acquireLease(leasePath: string, token: string, publish: () => void, rol
       } catch (error) {
         // Undo what this attempt bound while it still holds the lease. A rollback that fails keeps
         // the lease, so no successor publishes over a name this attempt may still own.
-        try { rollback(); } catch { return { kind: "failed", error, retained: true }; }
-        removeOwnedLease(leasePath, token);
+        try { rollback(); } catch { return { kind: "failed", error, retained: "socket" }; }
+        // The names are gone; a lease that cannot be deleted still names this runtime, so it is
+        // retained for the next stop() or start() exactly like a release that failed.
+        try { removeOwnedLease(leasePath, token); } catch { return { kind: "failed", error, retained: "lease" }; }
         return { kind: "failed", error };
       }
       return { kind: "acquired" };
@@ -513,10 +523,13 @@ export function createLocalControlListener<T>(): LocalControlListener<T> {
       }
       if (decision.kind === "failed") {
         if (bound) void (bound as Server<T>).stop(true).catch(() => {});
-        if (decision.retained) {
+        if (decision.retained === "socket") {
           // The rollback could not remove what this attempt bound; keep the port owned and let the
           // next stop() or start() finish the release, exactly as a release that failed would.
           pendingRelease = { leasePath: leaseFile, token, publicPath: null, privatePath: privateTarget, identity: WINDOWS_SOCKET_IDENTITY };
+        } else if (decision.retained === "lease") {
+          // The names are gone and only the record survived its unlink: retry just the record.
+          pendingRelease = { leasePath: leaseFile, token, publicPath: null, privatePath: null, identity: null };
         }
         // Publishing is where a hard-link-less filesystem actually fails, and that error is
         // returned rather than thrown, so this branch is the one that has to classify it.
