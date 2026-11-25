@@ -1110,7 +1110,8 @@ describe("provider registry parity", () => {
       "kimi-k2.7-code-highspeed": 262_144,
       "kimi-k2.6": 262_144,
     });
-    expect(moonshot?.modelInputModalities?.["kimi-k3"]).toEqual(["text", "image"]);
+    // Kimi's vision guide lists video input for kimi-k3 and kimi-k3.1-pro (read 2026-11-25).
+    expect(moonshot?.modelInputModalities?.["kimi-k3"]).toEqual(["text", "image", "video"]);
     expect(moonshot?.noReasoningModels).not.toContain("kimi-k3");
     expect(moonshot?.noReasoningModels).toEqual(["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6"]);
     for (const field of ["noTemperatureModels", "noTopPModels", "noPenaltyModels", "preserveReasoningContentModels"] as const) {
@@ -1128,7 +1129,7 @@ describe("provider registry parity", () => {
       expect(moonshot?.noReasoningModels).not.toContain(modelId);
       expect(moonshot?.modelReasoningEfforts?.[modelId]).toEqual(["low", "high", "max"]);
       expect(moonshot?.modelDefaultReasoningEfforts?.[modelId]).toBe("max");
-      expect(moonshot?.modelInputModalities?.[modelId]).toEqual(["text", "image"]);
+      expect(moonshot?.modelInputModalities?.[modelId]).toEqual(modelId === "kimi-k3.1-pro" ? ["text", "image", "video"] : ["text", "image"]);
       for (const field of ["noTemperatureModels", "noTopPModels", "noPenaltyModels", "preserveReasoningContentModels"] as const) {
         expect(moonshot?.[field]).toContain(modelId);
       }
