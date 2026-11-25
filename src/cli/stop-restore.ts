@@ -217,6 +217,44 @@ export async function abandonedTeardownIsSafeToFinish(
   }
 }
 
+function teardownEndpointKey(endpoint: { hostname: string; port: number }): string {
+  return JSON.stringify([endpoint.hostname, endpoint.port]);
+}
+
+/**
+ * The liveness probes an inherited-receipt recovery will run: one per distinct exact endpoint
+ * (#8960). An unscannable, invalid or guessed-endpoint receipt blocks without probing, and
+ * receipts naming the same endpoint ask the same question, so they share one probe. Counting
+ * receipts instead let repeated failed stops against one proxy grow the admission budget
+ * without bound.
+ */
+export function inheritedTeardownProbeCount(reads: readonly OutstandingTeardown[]): number {
+  const endpoints = new Set<string>();
+  for (const read of reads) {
+    if (read.state === "valid" && read.receipt.endpointSource !== "guessed") endpoints.add(teardownEndpointKey(read.receipt.endpoint));
+  }
+  return endpoints.size;
+}
+
+/**
+ * `abandonedTeardownIsSafeToFinish`, asked once per endpoint within one recovery pass, so the
+ * pass runs exactly the probes `inheritedTeardownProbeCount` budgeted (#8960).
+ */
+export function abandonedTeardownProbeOncePerEndpoint(
+  probe: (endpoint: { hostname: string; port: number }) => Promise<boolean> = abandonedTeardownIsSafeToFinish,
+): (endpoint: { hostname: string; port: number }) => Promise<boolean> {
+  const answers = new Map<string, Promise<boolean>>();
+  return endpoint => {
+    const key = teardownEndpointKey(endpoint);
+    let answer = answers.get(key);
+    if (!answer) {
+      answer = probe(endpoint);
+      answers.set(key, answer);
+    }
+    return answer;
+  };
+}
+
 /** Require the pinned runtime's proof before accepting its shutdown contract. */
 export async function assertConnectedClientStopSupported(
   target: ConnectedStopTarget | null, options: { requireLinkStopFence?: boolean; healthOnly?: boolean } = {},
