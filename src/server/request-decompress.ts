@@ -400,14 +400,14 @@ export function readJsonRequestBody(
  * Read a non-JSON data-plane body (multipart) as decoded bytes under the same cap, declared-length
  * refusal and content-encoding handling as {@link readBoundedJsonRequestBody}.
  */
-export async function readBoundedRequestBodyBytes(req: Request, maxBytes: number): Promise<Uint8Array> {
+export async function readBoundedRequestBodyBytes(req: Request, maxBytes: number, signal: AbortSignal = req.signal): Promise<Uint8Array> {
   const declaredLength = declaredBodyLength(req);
   if (declaredLength !== null && declaredLength > maxBytes) {
     const error = new DecompressedBodyTooLargeError(declaredLength, maxBytes, "declared_wire");
     cancelStreamWithoutWaiting(req.body, error);
     throw error;
   }
-  const raw = await readRequestBodyBytesCapped(req.body, maxBytes, req.signal);
+  const raw = await readRequestBodyBytesCapped(req.body, maxBytes, signal);
   assertBodySizeWithinLimit(raw, maxBytes, "observed_wire_lower_bound");
   const decoded = decodeRequestBody(raw, req.headers.get("content-encoding"), maxBytes);
   recordRequestBodyFacts(req, raw.byteLength, req.headers.get("content-encoding"), decoded.byteLength);

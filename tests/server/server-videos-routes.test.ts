@@ -10,6 +10,9 @@ import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { VIDEO_HANDLE_KEY_FILE } from "../../src/server/video-handle";
+import { setVideoCreateBodyTimeoutForTests } from "../../src/server/videos";
+import { getActiveTurnCount } from "../../src/server/lifecycle";
+import { inboundBodyBudget } from "../../src/server/inbound-body-budget";
 import type { OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
@@ -98,6 +101,44 @@ test("create, poll and content flow through the proxy to the row's own upstream 
       ["gemini-omni-1.1-flash", 200], ["gemini-omni-1.1-flash", 200], ["gemini-omni-1.1-flash", 200],
     ]);
   } finally {
+    await server.stop(true);
+  }
+});
+
+test("a trickling create upload through the real server is refused at the deadline and releases its turn and body slots", async () => {
+  const config = getDefaultConfig();
+  config.providers.aistudio = {
+    adapter: "openai-chat", baseUrl: `http://127.0.0.1:${upstream!.port}/v1`, apiKey: KEY, authMode: "key",
+    allowPrivateNetwork: true, noProxy: "127.0.0.1", videoApi: "openai",
+  } as OcxProviderConfig;
+  saveConfig(config);
+  setVideoCreateBodyTimeoutForTests(150);
+  const server = startServer(0);
+  let tick: ReturnType<typeof setInterval> | undefined;
+  try {
+    const baseline = getActiveTurnCount();
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('{"model":"aistudio/m","prompt":"'));
+        tick = setInterval(() => { try { controller.enqueue(encoder.encode("p")); } catch { clearInterval(tick); } }, 20);
+      },
+      cancel() { clearInterval(tick); },
+    });
+    const response = await fetch(new URL("/v1/videos", server.url), {
+      method: "POST", headers: { "content-type": "application/json" }, body, duplex: "half",
+    } as RequestInit);
+    expect(response.status).toBe(408);
+    await response.text();
+    clearInterval(tick);
+    // Settlement is asynchronous after the response; wait for the slots to come back, bounded.
+    for (let i = 0; i < 50 && getActiveTurnCount() !== baseline; i++) await Bun.sleep(10);
+    expect(getActiveTurnCount()).toBe(baseline);
+    expect(inboundBodyBudget.snapshot()).toMatchObject({ activeLeases: 0, reservedBytes: 0 });
+    expect(seen).toEqual([]);
+  } finally {
+    clearInterval(tick);
+    setVideoCreateBodyTimeoutForTests(undefined);
     await server.stop(true);
   }
 });

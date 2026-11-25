@@ -26,7 +26,7 @@ import type { OcxConfig } from "../types";
 import { admissionScopeDenial } from "./admission-model-scope";
 import type { DataPlaneAdmission } from "./auth-cors";
 import type { RequestLogContext } from "./request-log";
-import { readBoundedRequestBodyBytes, readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
+import { readBoundedJsonRequestBody, readBoundedRequestBodyBytes, resolveInboundBodyLimitBytes } from "./request-decompress";
 import { decodeRequestErrorResponse } from "./responses";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import type { AdmissionLease } from "../lib/admission";
@@ -109,8 +109,8 @@ function failureResponse(error: unknown, req: Request, what: string): Response {
   return formatErrorResponse(502, "upstream_error", `${what} failed: ${message}`);
 }
 
-async function readMultipartCreateBody(req: Request, maxBytes: number): Promise<Record<string, unknown> | Response> {
-  const bytes = await readBoundedRequestBodyBytes(req, maxBytes);
+async function readMultipartCreateBody(req: Request, maxBytes: number, signal: AbortSignal): Promise<Record<string, unknown> | Response> {
+  const bytes = await readBoundedRequestBodyBytes(req, maxBytes, signal);
   let form: FormData;
   try {
     form = await new Response(bytes as unknown as BodyInit, { headers: { "content-type": req.headers.get("content-type") ?? "" } }).formData();
@@ -132,6 +132,19 @@ async function readMultipartCreateBody(req: Request, maxBytes: number): Promise<
   return body;
 }
 
+/**
+ * Whole-body deadline for a create. The listener's idle timeout only bounds silence, so a client that
+ * trickles a byte at a time could otherwise hold the turn slot and body reservation indefinitely. A create
+ * body is small JSON or one reference image.
+ */
+const VIDEO_CREATE_BODY_TIMEOUT_MS = 60_000;
+let createBodyTimeoutMs = VIDEO_CREATE_BODY_TIMEOUT_MS;
+
+/** Test seam: a short body deadline. `undefined` restores the default. */
+export function setVideoCreateBodyTimeoutForTests(ms: number | undefined): void {
+  createBodyTimeoutMs = ms ?? VIDEO_CREATE_BODY_TIMEOUT_MS;
+}
+
 export interface VideoRouteOptions {
   /** The create's turn lease: shutdown aborts the upstream create through it. */
   lease?: AdmissionLease;
@@ -142,12 +155,20 @@ export interface VideoRouteOptions {
 async function handleCreate(req: Request, config: OcxConfig, logCtx: RequestLogContext, admission: DataPlaneAdmission, options: VideoRouteOptions): Promise<Response> {
   const limit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
   let body: unknown;
+  const bodyDeadline = new AbortController();
+  const timer = setTimeout(() => bodyDeadline.abort(new DOMException("video create body deadline", "TimeoutError")), createBodyTimeoutMs);
+  const bodySignal = AbortSignal.any([req.signal, bodyDeadline.signal]);
   try {
     body = /^multipart\/form-data\b/i.test(req.headers.get("content-type") ?? "")
-      ? await readMultipartCreateBody(req, limit)
-      : await readJsonRequestBody(req, undefined, limit);
+      ? await readMultipartCreateBody(req, limit, bodySignal)
+      : await readBoundedJsonRequestBody(req, limit, undefined, { signal: bodySignal });
   } catch (error) {
+    if (bodyDeadline.signal.aborted && !req.signal.aborted) {
+      return formatErrorResponse(408, "invalid_request_error", `video create body was not received within ${Math.ceil(createBodyTimeoutMs / 1000)}s`);
+    }
     return decodeRequestErrorResponse(error, "videos");
+  } finally {
+    clearTimeout(timer);
   }
   options.onRequestBodyRead?.();
   if (body instanceof Response) return body;

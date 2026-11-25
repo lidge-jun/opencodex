@@ -14,7 +14,7 @@ import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { setVideoHandleKeyForTests } from "../../src/server/video-handle";
 import { matchVideoRoute } from "../../src/lib/video-routes";
-import { handleVideos, setVideoOutboundDependenciesForTests } from "../../src/server/videos";
+import { handleVideos, setVideoCreateBodyTimeoutForTests, setVideoOutboundDependenciesForTests } from "../../src/server/videos";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
@@ -337,6 +337,34 @@ describe("turn lease and listener timeout", () => {
     expect(response.status).toBe(503);
     expect((await response.json() as { error: { message: string } }).error.message).toBe("video create stopped during shutdown");
     expect(sent).toHaveLength(1);
+  });
+
+  test("a create body that keeps trickling is cut off at the whole-body deadline and never reaches upstream", async () => {
+    setVideoCreateBodyTimeoutForTests(80);
+    let cancelled = false;
+    let tick: ReturnType<typeof setInterval> | undefined;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('{"model":"aistudio/m","prompt":"'));
+        // A byte every 10 ms: never idle long enough for an inactivity timeout, never finished.
+        tick = setInterval(() => { try { controller.enqueue(encoder.encode("p")); } catch { clearInterval(tick); } }, 10);
+      },
+      cancel() { cancelled = true; clearInterval(tick); },
+    });
+    try {
+      const url = new URL("http://localhost/v1/videos");
+      const req = new Request(url, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + ALICE_SECRET }, body, duplex: "half" } as RequestInit);
+      const events: string[] = [];
+      const response = await handleVideos(req, url, config(), { kind: "create" }, logContext(), ALICE, { onRequestBodyRead: () => events.push("body-read") });
+      expect(response.status).toBe(408);
+      expect(cancelled).toBe(true);
+      expect(events).toEqual([]);
+      expect(sent).toEqual([]);
+    } finally {
+      clearInterval(tick);
+      setVideoCreateBodyTimeoutForTests(undefined);
+    }
   });
 
   test("the listener timeout is lifted only after the create body was read", async () => {

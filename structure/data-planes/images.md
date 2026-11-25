@@ -129,8 +129,9 @@ collapse onto another path of the same host. Bridge arguments map to `seconds`, 
 The dispatcher applies the Images admission: draining refusal, `resolveApiAuth`, origin policy and a
 request-log row (`usage.jsonl`); only the paid create takes an admitted turn slot and the inbound body gate
 (`/v1/videos` is in `CONFIGURABLE_JSON_BODY_ROUTES`). Its upstream POST is bound to that turn lease, so shutdown aborts
-it with a 503, and it keeps the listener request timeout until its body is read, so a stalled upload cannot
-hold either slot. The loopback listener and Remote Link admit
+it with a 503, and it keeps the listener request timeout until its body is read. The body read also has a 60 s
+whole-body deadline (the idle timeout alone bounds only silence), after which the reader is cancelled and the
+create answers 408 before any send, so neither a stalled nor a trickling upload can hold either slot. The loopback listener and Remote Link admit
 the same three shapes.
 
 `model` of `<provider>/<model>` names a configured row and sends the bare model; a model without a slash goes
