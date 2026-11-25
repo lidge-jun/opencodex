@@ -1739,8 +1739,7 @@ export async function executeComboResponses(
     const confirmedExhaustion = combo.quotaOnlyFallback && confirmedComboExhaustion(failure);
     const failureDecision = failure.nonReplayable || spentReplacement || (combo.quotaOnlyFallback && (!confirmedExhaustion || toolLoopPin))
       ? "stop"
-      // Quota-only advances on any confirmed exhaustion, including a billing code on 400 or 422.
-      : confirmedExhaustion || localDeadline || isPolicyCandidateRefusal(failure.response) ? "hop"
+      : localDeadline || isPolicyCandidateRefusal(failure.response) ? "hop"
       : comboFailureDecision(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,
         rootCode: failure.upstreamRootCode,
@@ -1754,6 +1753,7 @@ export async function executeComboResponses(
         // The adapter the failed leg actually resolved: a configured `kiro` provider can route a
         // model through another wire via `modelAdapters`, and an unresolved leg grants no hop.
         failedAdapter: childLog.providerAdapter,
+        confirmedQuotaExhaustion: confirmedExhaustion,
       });
     const wantsStream = (rawBody as { stream?: unknown } | null)?.stream === true;
     // Local byte admission has its own diagnostic; do not relabel it as an upstream refusal.

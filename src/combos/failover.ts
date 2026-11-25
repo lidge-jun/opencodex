@@ -1806,6 +1806,7 @@ export function comboFailureDecision(
     providerModerationRefusal?: boolean;
     /** Whole-body 413 intake verdict ({@link isProviderIntakeRefusalBody}); false vetoes the hop. */
     providerIntakeRefusal?: boolean;
+    confirmedQuotaExhaustion?: boolean;
   },
 ): ComboFailureDecision {
   const rootRawCode = typeof options?.rootCode === "number" ? String(options.rootCode) : options?.rootCode;
@@ -1837,6 +1838,7 @@ function decideComboFailure(
     providerModerationRefusal?: boolean;
     /** Whole-body 413 intake verdict ({@link isProviderIntakeRefusalBody}); false vetoes the hop. */
     providerIntakeRefusal?: boolean;
+    confirmedQuotaExhaustion?: boolean;
   },
 ): ComboFailureDecision {
   if (status === 499) return "stop";
@@ -1964,8 +1966,8 @@ function decideComboFailure(
   if (options?.failedAdapter === "kiro" && isKiroAccountProfileRefusal(status, message)) return "hop";
   // A structured account-window exhaustion code is provider-state evidence even inside a
   // 400 / invalid_request_error envelope, so it must precede that stop. Exhaustion prose alone
-  // never reaches this arm: a validation error can quote quota wording back (#7625).
-  if (hasAccountExhaustionCode(rawCode)) return "hop";
+  // never reaches this arm (#7625). A quota-only Combo's confirmed billing exhaustion joins it here.
+  if (hasAccountExhaustionCode(rawCode) || options?.confirmedQuotaExhaustion) return "hop";
   // OpenRouter can wrap an opaque provider failure as a numeric 400 with `metadata.raw: "ERROR"`
   // and no type. Let a heterogeneous combo try another target in this case, while keeping
   // malformed response_format diagnostics terminal and preserving any structured code.
