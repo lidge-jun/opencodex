@@ -884,6 +884,29 @@ describe("SWE-2 wire effort selection", () => {
   });
 });
 
+describe("SWE-2.1 wire effort selection without a catalog", () => {
+  // SWE-2.1 has five lanes where SWE-2 has three, so the degraded path must not
+  // borrow SWE-2's table, and must never invent a lane the catalog lacks
+  // (`swe-2-1-none`) or turn a top request down to the default.
+  test.each(["low", "medium", "high", "xhigh", "max"])("an explicit %s effort names that SWE-2.1 lane", async (effort) => {
+    for (const model of ["swe-2-1", "swe-2.1", "swe-2-1-low", "swe-2-1-high", "swe-2-1-max"]) {
+      expect(await resolveWireModelUidForTests(model, "unused", "unused", effort, null)).toBe(`swe-2-1-${effort}`);
+    }
+  });
+
+  test.each([
+    ["none", "low"], ["off", "low"], ["minimal", "low"], ["ultra", "max"], ["XHIGH", "xhigh"],
+  ])("maps %s to the SWE-2.1 %s lane", async (effort, expected) => {
+    expect(await resolveWireModelUidForTests("swe-2-1", "unused", "unused", effort, null)).toBe(`swe-2-1-${expected}`);
+  });
+
+  test("no effort keeps an explicit lane and gives the bare family its Medium default", async () => {
+    expect(await resolveWireModelUidForTests("swe-2-1", "unused", "unused", undefined, null)).toBe("swe-2-1-medium");
+    expect(await resolveWireModelUidForTests("swe-2-1-xhigh", "unused", "unused", undefined, null)).toBe("swe-2-1-xhigh");
+    expect(await resolveWireModelUidForTests("swe-2-1-high", "unused", "unused", "future-effort", null)).toBe("swe-2-1-high");
+  });
+});
+
 describe("effort suffix detection and caller effort values are different sets", () => {
   // The two had drifted: the request path was missing `priority`, so a UID that
   // already carried it read as unsuffixed and got a second suffix appended —

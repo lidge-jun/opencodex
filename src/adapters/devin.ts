@@ -152,39 +152,47 @@ function hasEffortSuffix(modelId: string): boolean {
 }
 
 /**
- * SWE-2 ships exactly three native lanes. Cognition spells them as the model id,
- * not as a separate effort field, so an explicit caller effort has to be resolved
- * to the UID before the suffix shortcut below accepts whatever the picker sent.
+ * Native effort lanes of Cognition's own SWE families. Cognition spells them as
+ * the model id, not as a separate effort field, so an explicit caller effort has
+ * to be resolved to the UID before the suffix shortcut below accepts whatever the
+ * picker sent. SWE-2 ships three lanes; SWE-2.1 (live catalog 2026-11-25) ships
+ * five, and its bare `swe-2-1` row is the Low lane rather than the default.
  *
  * Kept as a named table rather than an inline branch because the caller-effort
  * set does not carry `ultra`, `off`, or `minimal`, so the two would drift apart
- * silently.
- * Values below Medium select Medium: SWE-2 has no lane under it, and rounding down
- * to nothing would quietly disable its reasoning.
+ * silently. Longer ids come first so `swe-2-1` is never read as `swe-2` with a
+ * `1` suffix.
  */
-const SWE2_EFFORT: Record<string, "medium" | "high" | "max"> = {
-  none: "medium",
-  off: "medium",
-  minimal: "medium",
-  low: "medium",
-  medium: "medium",
-  high: "high",
-  xhigh: "max",
-  ultra: "max",
-  max: "max",
+const SWE_EFFORT_LANES: ReadonlyArray<readonly [family: string, lanes: readonly string[]]> = [
+  ["swe-2-1", ["low", "medium", "high", "xhigh", "max"]],
+  ["swe-2", ["medium", "high", "max"]],
+];
+
+/** Rank of a caller effort on the shared ladder; `ultra` is Max and no-reasoning spellings sit under Low. */
+const SWE_EFFORT_RANK: Record<string, number> = {
+  none: 0, off: 0, minimal: 0, low: 1, medium: 2, high: 3, xhigh: 4, max: 5, ultra: 5,
 };
+const SWE_LANE_RANK: Record<string, number> = { low: 1, medium: 2, high: 3, xhigh: 4, max: 5 };
 
 /**
- * Resolve an explicit effort onto a SWE-2 lane, or undefined when this is not a
- * SWE-2 id or the caller named no usable effort. Reached only when the catalog
- * is unavailable or lacks family metadata; otherwise the catalog's SWE-2 family
+ * Resolve an explicit effort onto a SWE lane, or undefined when this is not a
+ * SWE-2/SWE-2.1 id or the caller named no usable effort. Reached only when the
+ * catalog is unavailable or lacks family metadata; otherwise the catalog's family
  * rows decide, with the same rounding. Undefined leaves every existing
  * path untouched, which is what keeps other model families on suffix precedence.
+ *
+ * An effort lands on the lowest lane at or above it, or the top lane when none is:
+ * a missing rung never quietly turns reasoning down, and below the lowest lane
+ * the lowest lane is used rather than nothing.
  */
-function resolveSwe2Variant(modelId: string, reasoningEffort?: string): string | undefined {
-  if (!/^swe-2(?:-(?:medium|high|max))?$/.test(modelId)) return undefined;
-  const mapped = reasoningEffort ? SWE2_EFFORT[reasoningEffort.toLowerCase()] : undefined;
-  return mapped ? `swe-2-${mapped}` : undefined;
+function resolveSweLaneVariant(modelId: string, reasoningEffort?: string): string | undefined {
+  const match = SWE_EFFORT_LANES.find(([family, lanes]) =>
+    modelId === family || lanes.some((lane) => modelId === `${family}-${lane}`));
+  const rank = reasoningEffort ? SWE_EFFORT_RANK[reasoningEffort.toLowerCase()] : undefined;
+  if (!match || rank === undefined) return undefined;
+  const [family, lanes] = match;
+  const lane = lanes.find((l) => SWE_LANE_RANK[l]! >= rank) ?? lanes[lanes.length - 1]!;
+  return `${family}-${lane}`;
 }
 
 const VARIANT_EFFORT_TOKENS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -293,8 +301,8 @@ async function resolveWireModelUid(
   // Explicit effort wins over a suffix the picker already baked into the id, so
   // `swe-2-high` asked for at `medium` becomes `swe-2-medium` instead of ignoring
   // the caller. Runs before the shortcut below, which would otherwise return early.
-  const swe2 = resolveSwe2Variant(modelId, reasoningEffort);
-  if (swe2) return swe2;
+  const sweLane = resolveSweLaneVariant(modelId, reasoningEffort);
+  if (sweLane) return sweLane;
   if (hasEffortSuffix(modelId)) return modelId;
   const effort = reasoningEffort && CALLER_EFFORT_VALUES.has(reasoningEffort) ? reasoningEffort : "medium";
   if (entry) {

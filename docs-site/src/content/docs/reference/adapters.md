@@ -1045,7 +1045,8 @@ configuration that names the old id is rewritten at startup.
 
 The model id you pick is a model family, and the reasoning effort picks the
 variant. With no effort, the family's own default variant is used: `swe-1-7`
-selects `swe-1-7-medium` and `swe-2` selects `swe-2-high`. An effort changes only
+selects `swe-1-7-medium`, `swe-2` selects `swe-2-high`, and `swe-2-1` (SWE-2.1)
+selects `swe-2-1-medium` even though the catalog's bare `swe-2-1` row is its Low variant. An effort changes only
 the effort and lands on the lowest variant at or above it, or the highest one
 below when nothing is above, so a missing rung never turns reasoning down:
 `swe-1-7` at `high` selects the Max row `swe-1-7`, `swe-2` at `low` selects
@@ -1058,7 +1059,9 @@ An id naming a variant your account has disabled is sent as named when the effor
 still lands on it, so the request fails with that variant's own error rather than
 quietly switching tier. Resolution never moves
 to another family. When the account catalog is unavailable, the effort is
-appended to the id instead.
+appended to the id instead, except on SWE-2 (Medium, High, Max) and SWE-2.1
+(Low, Medium, High, XHigh, Max), where it still rounds onto one of the family's
+own lanes.
 
 ## `zed`
 
