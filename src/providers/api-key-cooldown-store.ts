@@ -34,6 +34,7 @@ import { atomicWriteFile } from "../config/atomic-write";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
 import { getConfigDir } from "../config/paths";
 import { registerOptionalShutdownHook } from "../lib/optional-shutdown-hooks";
+import { recordOwnedConfigPath } from "../lib/config-ownership";
 import type { OcxConfig } from "../types";
 import { GCP_CREDENTIAL_MARKER_PREFIX, isKeychainReference } from "./api-key-resolve";
 import {
@@ -236,6 +237,9 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
           allEpoch: this.bumpedAll && row.allEpoch === this.allEpoch ? allEpoch : row.allEpoch,
         }));
         const rows = liveRows([...disk.rows, ...own], epochs, allEpoch, now);
+        // Registered under this store's home, which can differ from the current config dir when a
+        // surviving server's store is rebound while another home is current.
+        recordOwnedConfigPath(this.dir, path);
         atomicWriteFile(path, JSON.stringify({ version: 1, rows, epochs, allEpoch }));
         written = { rows, epochs, allEpoch };
       }, this.dir);
@@ -258,14 +262,21 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
     this.delayMs = FLUSH_DELAY_MS;
   }
 
-  /** Bounded final write for process shutdown; never blocks for more than about a second. */
-  flushForShutdown(): void {
+  /** Bounded final write for a detach; never blocks for more than about a second. True when nothing is left pending. */
+  flushForShutdown(): boolean {
+    let flushed = false;
     for (let attempt = 0; attempt < SHUTDOWN_ATTEMPTS; attempt += 1) {
       if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
-      if (this.flush()) break;
+      if (this.flush()) { flushed = true; break; }
       if (attempt < SHUTDOWN_ATTEMPTS - 1) Bun.sleepSync(SHUTDOWN_RETRY_MS);
     }
     if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
+    return flushed;
+  }
+
+  /** Keep retrying a write that a detach could not finish; a detached store records nothing new. */
+  retryPending(): void {
+    if (this.pending()) this.schedule();
   }
 }
 
@@ -320,6 +331,8 @@ export function uninstallApiKeyCooldownPersistence(options: { dropLocalHolds?: b
   installed = undefined;
   current.detach();
   current.detachShutdown();
-  current.store.flushForShutdown();
+  // A busy lock (another process mid-write) must not lose this home's pending holds: the detached
+  // store keeps retrying on its own timer, so they still reach this home's file.
+  if (!current.store.flushForShutdown()) current.store.retryPending();
   if (options.dropLocalHolds === true) resetLocalApiKeyCooldowns();
 }

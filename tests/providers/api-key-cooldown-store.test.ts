@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { configPathOwnership } from "../../src/lib/config-ownership";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -453,3 +455,38 @@ test("when a newer server for another home stops, the surviving server's home ge
     removeTreeWithRetry(otherHome);
   }
 });
+
+test("a home whose lock is busy when another home takes over keeps its pending holds and writes them later", async () => {
+  const cfg = config({ a: "sk-alpha-0001" });
+  saveConfig(cfg);
+  const first = acquireServerBackgroundLifecycle(() => {}, cfg);
+  const otherHome = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-busy-"));
+  const blocker = new Database(join(home, "config-mutation.sqlite"));
+  try {
+    const until = Date.now() + 60_000;
+    setKeyCooldown("p", "a", until, false, "sk-alpha-0001");
+    blocker.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    process.env.OPENCODEX_HOME = otherHome;
+    const second = acquireServerBackgroundLifecycle(() => {}, config({ a: "sk-alpha-0001" }));
+    blocker.exec("ROLLBACK");
+    await waitUntil(() => existsSync(file()) && stored().rows.some(r => r.cooldownUntil === until), 9_000);
+    await second.release();
+    expect(getKeyCooldownUntil("p", "a")).toBe(until);
+    // Written while another home is current: still registered under this home's ownership.
+    expect(configPathOwnership(home, join(home, "config.json"))).toBe("listed");
+    expect(configPathOwnership(home, file())).toBe("listed");
+  } finally {
+    blocker.close();
+    process.env.OPENCODEX_HOME = home;
+    await first.release();
+    removeTreeWithRetry(otherHome);
+  }
+}, 15_000);
+
+async function waitUntil(condition: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("condition not met in time");
+    await wait(100);
+  }
+}
