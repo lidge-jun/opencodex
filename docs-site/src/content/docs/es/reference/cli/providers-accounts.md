@@ -559,7 +559,7 @@ o `error`, con el estado HTTP y un código de motivo reconocido. Los estados `pa
 (cuenta en pausa) y `token_expired` (token caducado) se determinan localmente, sin enviar
 una solicitud. La comprobación conserva los tokens y el estado de la cuenta. Los botones
 **Probar** y **Probar todas** de la tabla de cuotas de Antigravity llaman al mismo endpoint,
-`POST /api/oauth/accounts/probe`. La tabla muestra el plan, las cuotas restantes por grupo,
+`POST /api/oauth/accounts/probe`. La tabla muestra el plan, la cuota consumida por grupo,
 los plazos de restablecimiento y las acciones de cada cuenta. Si falla una actualización,
 la tabla conserva la cuota anterior e indica el error y las horas de lectura. Se ejecutan hasta cuatro
 comprobaciones a la vez. Espera a que termine la comprobación actual antes de iniciar otra.

@@ -121,7 +121,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 
 El bloque añadido manualmente es una instantánea estática: no sigue los cambios del catálogo como el bloque del lanzador. Vuelve a ejecutar `ocx export` después de añadir un proveedor o cambiar la visibilidad o los metadatos de un modelo. También puedes [activar la integración administrada](/es/guides/integrations/): `ocx sync` actualiza los bloques que ya administra, conservando los editados o eliminados manualmente.
 
-Después de combinar los bloques, exporta la clave de acceso antes de abrir OpenCode si el listener de inferencia exige autenticación. Un listener vinculado únicamente a loopback no la requiere:
+Después de combinar los bloques, exporta la clave de acceso antes de abrir OpenCode. Un listener vinculado únicamente a loopback no la comprueba, pero OpenCode rechaza una clave sin establecer, así que allí sirve cualquier valor no vacío:
 
 ```bash
 export OPENCODEX_OPENCODE_API_KEY=<your key>
@@ -157,7 +157,7 @@ Este ejemplo se configura manualmente en el cliente remoto. Prepara primero un f
 
 El valor real solo se transmite mediante el entorno del proceso hijo. `OPENCODEX_API_AUTH_TOKEN` tiene prioridad, seguido del archivo protegido de token del servicio y de una clave API configurada. Un listener vinculado fuera de loopback exige una credencial aceptada.
 
-Un listener vinculado a loopback (`127.0.0.1`, el valor predeterminado) no exige una clave del plano de datos, aunque haya claves de cliente configuradas. Para ese listener puedes dejar sin establecer la variable de la referencia `{env:…}`. La URL local por sí sola no basta: un listener público vinculado a `0.0.0.0` sigue exigiendo una clave aceptada aunque se acceda por `127.0.0.1`. Exporta la clave cuando `hostname` esté configurado fuera de loopback; consulta [Acceso remoto](/es/reference/configuration/server/#remote-access). Esta clave pertenece a opencodex y es distinta de las claves de los [proveedores de origen](/es/guides/providers/).
+Un listener vinculado a loopback (`127.0.0.1`, el valor predeterminado) no exige una clave del plano de datos, aunque haya claves de cliente configuradas. Aun así, OpenCode necesita un `apiKey` no vacío: rechaza una referencia `{env:…}` sin establecer con `Missing auth credential: apiKey` antes de enviar la solicitud. Cuando la [integración gestionada](/es/guides/integrations/) o la configuración de cliente del panel apuntan al [listener de loopback sin autenticación](/es/reference/configuration/server/), escriben como `apiKey` el marcador no secreto `opencodex-loopback`, así que no hace falta exportar nada. Las demás rutas, incluidas `ocx export` y un enlace a loopback sin ese listener, conservan la referencia: exporta `OPENCODEX_OPENCODE_API_KEY` con la clave de acceso donde se exija, o con cualquier valor no vacío en un enlace a loopback, que no la comprueba. La URL local por sí sola no basta para saber que no se comprueba ninguna clave: un listener público vinculado a `0.0.0.0` sigue exigiendo una clave aceptada aunque se acceda por `127.0.0.1`, y lo mismo ocurre con un listener autenticado al que se llega mediante un reenvío SSH. Exporta la clave siempre que el destino la compruebe, por ejemplo cuando `hostname` esté configurado fuera de loopback y el cliente no apunte al listener de loopback sin autenticación; consulta [Acceso remoto](/es/reference/configuration/server/#remote-access). Esta clave pertenece a opencodex y es distinta de las claves de los [proveedores de origen](/es/guides/providers/).
 
 <a id="reverting"></a>
 

@@ -214,6 +214,31 @@ text with the client. For a round trip:
    the round trip. If the wait expires, check the same receipt again or inspect
    the Codex conversation. A wait timeout does not justify another send.
 
+## List local Claude Code sessions
+
+On macOS or Linux, pass the absolute path to your trusted native Claude Code
+executable. It must support [`claude agents --json`](https://code.claude.com/docs/en/agent-view#list-sessions-as-json).
+
+```bash
+ocx message claude-sessions --claude /absolute/path/to/claude --json
+```
+
+The `ocx-claude-sessions/1` result lists session UUIDs (`id`), `kind`
+(`interactive` or `background`) and the activity reported by Claude Code
+(`busy`, `waiting` or `idle`). Rows with a missing or null session ID or PID
+are skipped. When both fields are present, a shortened or otherwise invalid
+session UUID or an invalid PID causes the entire lookup to fail.
+`CLAUDE_CONFIG_DIR`, if set, selects the local Claude configuration. Names,
+paths, PIDs and history are omitted from the result. The command invokes the
+Claude CLI once with a five-second deadline, 256 KiB output limit and 256-row
+limit. It respects the `CLAUDE_CODE_DISABLE_AGENT_VIEW` opt-out and disables
+nonessential Claude CLI traffic for the lookup. Claude Code can initialize
+its own configuration on first use. On failure the command returns a
+sanitized error and no partial list.
+
+A listed session is an observed local session. This command does not test
+inbox reachability, send messages, or use enrolled SSH peers.
+
 ## Discover and send
 
 ```bash
