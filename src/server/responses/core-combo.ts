@@ -1739,7 +1739,8 @@ export async function executeComboResponses(
     const confirmedExhaustion = combo.quotaOnlyFallback && confirmedComboExhaustion(failure);
     const failureDecision = failure.nonReplayable || spentReplacement || (combo.quotaOnlyFallback && (!confirmedExhaustion || toolLoopPin))
       ? "stop"
-      : localDeadline || isPolicyCandidateRefusal(failure.response) ? "hop"
+      // Quota-only advances on any confirmed exhaustion, including a billing code on 400 or 422.
+      : confirmedExhaustion || localDeadline || isPolicyCandidateRefusal(failure.response) ? "hop"
       : comboFailureDecision(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,
         rootCode: failure.upstreamRootCode,
