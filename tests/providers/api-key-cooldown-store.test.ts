@@ -428,3 +428,28 @@ test("a longer ordinary hold keeps the shorter spent-quota evidence, on restore 
   expect(getKeyCooldownUntil("p", "a")).toBe(now + 600_000);
   expect(isKeyQuotaSpent("p", "a")).toBe(true);
 });
+
+test("when a newer server for another home stops, the surviving server's home gets its cooldowns back", async () => {
+  const cfg = config({ a: "sk-alpha-0001" });
+  const until = Date.now() + 60_000;
+  writeRows([row("a", "sk-alpha-0001", until)]);
+  const first = acquireServerBackgroundLifecycle(() => {}, cfg);
+  const otherHome = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-other-"));
+  try {
+    expect(getKeyCooldownUntil("p", "a")).toBe(until);
+    process.env.OPENCODEX_HOME = otherHome;
+    const second = acquireServerBackgroundLifecycle(() => {}, config({ a: "sk-alpha-0001" }));
+    expect(isKeyInCooldown("p", "a")).toBe(false); // the other home's server starts with that home's holds
+    await second.release();
+    process.env.OPENCODEX_HOME = home;
+    expect(getKeyCooldownUntil("p", "a")).toBe(until); // the surviving server's holds and file are back
+    setKeyCooldown("p", "a", until + 60_000, false, "sk-alpha-0001");
+    await wait(400);
+    expect(stored().rows.map(r => r.cooldownUntil)).toEqual([until + 60_000]);
+    expect(existsSync(file(otherHome))).toBe(false);
+  } finally {
+    process.env.OPENCODEX_HOME = home;
+    await first.release();
+    removeTreeWithRetry(otherHome);
+  }
+});

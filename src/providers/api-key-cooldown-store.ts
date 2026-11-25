@@ -283,12 +283,14 @@ let installed: { store: ApiKeyCooldownStore; detach: () => void; detachShutdown:
 /**
  * Bind persistence to the running server's config dir and restore holds that are unexpired and
  * still belong to the configured key. The server background lifecycle calls this when a server
- * starts and `uninstallApiKeyCooldownPersistence` when the last one stops; repeat calls for the
- * same dir are no-ops. Installing for another dir first drops the in-memory holds, which belong
- * to the previous home. A failed read leaves the server running with in-memory cooldowns.
+ * starts (and again for the surviving server when a newer one stops) and
+ * `uninstallApiKeyCooldownPersistence` when the last one stops; repeat calls for the same dir are
+ * no-ops. Installing for another dir first drops the in-memory holds, which belong to the previous
+ * home. A failed read leaves the server running with in-memory cooldowns.
  */
-export function installApiKeyCooldownPersistence(config: Pick<OcxConfig, "providers">, now = Date.now()): ApiKeyCooldownStore {
-  const dir = getConfigDir();
+export function installApiKeyCooldownPersistence(
+  config: Pick<OcxConfig, "providers">, now = Date.now(), dir = getConfigDir(),
+): ApiKeyCooldownStore {
   if (installed?.store.dir === dir) return installed.store;
   // Holds restored or recorded for another home are not this home's.
   if (installed) uninstallApiKeyCooldownPersistence({ dropLocalHolds: true });
