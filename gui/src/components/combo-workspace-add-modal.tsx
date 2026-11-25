@@ -12,9 +12,9 @@ import { IconX } from "../icons";
 import { useT } from "../i18n/shared";
 import { Notice } from "../ui";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
-import { ComboCapabilities, EffortSelect, StrategySeg, TargetEditor } from "./combo-workspace-controls";
+import { ComboCapabilities, EffortSelect } from "./combo-workspace-controls";
+import { ComboRoutingEditor } from "./combo-workspace-fallback";
 import { ComboJevDecisionSection } from "./combo-workspace-jev-decision";
-import { COMBO_STRATEGY_HINT_KEYS, COMBO_TARGETS_HINT_KEYS } from "../combo-workspace-data";
 import { clampedNumberInput, comboDraftErrorText } from "./combo-workspace-utils";
 import type { JevDecisionRow } from "../jev-decision-service";
 
@@ -23,6 +23,7 @@ const NO_COMBOS: readonly ComboItem[] = [];
 
 export function AddComboModal({
   apiBase,
+  routingRevision,
   combos = NO_COMBOS,
   existingIds,
   existingAliases,
@@ -36,6 +37,7 @@ export function AddComboModal({
   onSubmit,
 }: {
   apiBase?: string;
+  routingRevision?: string;
   /** Existing combos; a JEV decision model may not name the new combo or any JEV combo. */
   combos?: readonly ComboItem[];
   existingIds: string[];
@@ -124,7 +126,7 @@ export function AddComboModal({
       onCancel={handleCancel}
     >
       <button type="button" className="modal-backdrop-dismiss" aria-label={t("common.close")} tabIndex={-1} onClick={requestClose} />
-      <div className="modal-card" style={{ width: "min(560px, 94vw)" }} onClick={(e) => e.stopPropagation()}>
+      <div className="modal-card cwi-combo-modal" onClick={(e) => e.stopPropagation()}>
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
           <h3 id="cwi-add-title" style={{ margin: 0 }}>{t("cws.addTitle")}</h3>
           <button type="button" className="btn btn-ghost btn-sm" onClick={requestClose} disabled={busy} aria-label={t("common.close")}>
@@ -159,6 +161,19 @@ export function AddComboModal({
               {t("cws.field.idInternalHint")}
             </p>
           </div>
+          <ComboRoutingEditor
+            apiBase={apiBase}
+            routingRevision={routingRevision}
+            draft={draft}
+            providers={providers}
+            models={models}
+            capabilityModels={capabilityModels}
+            providerQuotaStates={providerQuotaStates}
+            disabled={busy}
+            inDialog
+            offerSubscriptionsOnly={initialDraft?.quotaOnlyFallback === true}
+            onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))}
+          />
           <div className="cwi-field">
             <label htmlFor="cwi-new-alias">{t("cws.field.alias")}</label>
             <input
@@ -180,17 +195,6 @@ export function AddComboModal({
               {t("cws.field.idHint", {
                 model: draft.id.trim() ? comboPublicModelId(draft.id, draft.alias) : "…",
               })}
-            </p>
-          </div>
-          <div className="cwi-field">
-            <span className="field-label">{t("cws.strategy")}</span>
-            <StrategySeg
-              value={draft.strategy}
-              disabled={busy}
-              onChange={(strategy) => setDraft((d) => ({ ...d, strategy }))}
-            />
-            <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
-              {t(COMBO_STRATEGY_HINT_KEYS[draft.strategy])}
             </p>
           </div>
           {draft.strategy === "jev" && (
@@ -244,21 +248,6 @@ export function AddComboModal({
               </p>
             </div>
           )}
-          <div className="cwi-field">
-            <span className="field-label">{t("cws.targets")}</span>
-            <TargetEditor
-              targets={draft.targets}
-              strategy={draft.strategy}
-              providers={providers}
-              models={models}
-              capabilityModels={capabilityModels}
-              providerQuotaStates={providerQuotaStates}
-              onChange={(targets) => setDraft((d) => ({ ...d, targets }))}
-            />
-            <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
-              {t(COMBO_TARGETS_HINT_KEYS[draft.strategy])}
-            </p>
-          </div>
           <ComboCapabilities
             targets={draft.targets}
             models={capabilityModels}

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { createHash } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,6 +29,7 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-installation-failover-"));
   previous = homeKeys.map(name => process.env[name]);
   for (const name of homeKeys) process.env[name] = home;
+  bindStoredCodexPoolRoutingForTests();
   release = acquireOwnedSpendHome(); clear();
   for (const id of ["work", "other"]) setAccountQuotaFromParsed(id, { weeklyPercent: 10 });
   writeFileSync(join(home, "codex-accounts.json"), JSON.stringify(Object.fromEntries(["work", "other"].map(id => [id, {

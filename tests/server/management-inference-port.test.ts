@@ -52,6 +52,23 @@ test.each([10100, 10101])("OpenCode export uses runtime port, not ingress %s", a
   const body = await response.json() as { config: { provider: { opencodex: { options: { baseURL: string } } } } };
   expect(body.config.provider.opencodex.options.baseURL).toBe("http://127.0.0.1:23456/v1");
 });
+test("OpenCode export and apply on the keyless listener write the placeholder key in both generations (#9069)", async () => {
+  type Doc = { provider: { opencodex: { options: Record<string, unknown> } }; providers: { opencodex: { settings: Record<string, unknown>; headers?: unknown } } };
+  const exported = await route(config(), "/api/client-config?client=opencode", 10101, 23456);
+  expect(exported.status).toBe(200);
+  const spec = INTEGRATION_CLIENTS.opencode;
+  mkdirSync(spec.detectDir({}, home.root), { recursive: true });
+  const applied = await route(config(), "/api/client-integrations/opencode", 10101, 23456, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: true }),
+  });
+  expect(applied.status).toBe(200);
+  for (const doc of [((await exported.json()) as { config: Doc }).config, JSON.parse(readFileSync(spec.configPath({}, home.root), "utf8")) as Doc]) {
+    expect(doc.provider.opencodex.options).toMatchObject({ baseURL: "http://127.0.0.1:23456/v1", apiKey: "opencodex-loopback" });
+    expect(doc.provider.opencodex.options.headers).toBeUndefined();
+    expect(doc.providers.opencodex.settings.apiKey).toBe("opencodex-loopback");
+    expect(doc.providers.opencodex.headers).toBeUndefined();
+  }
+});
 test("an explicit loopback inference port stays distinct from both runtime and management ports", async () => {
   const cfg = config();
   cfg.unauthenticatedLoopbackListener = { enabled: true, port: 10500 };

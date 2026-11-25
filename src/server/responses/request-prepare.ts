@@ -24,11 +24,19 @@ import { admitParsedJsonRequestBody, readJsonRequestBody, resolveInboundBodyLimi
 import {
   clientCancelledResponse,
   decodeRequestErrorResponse,
+  ComboMeteredConsentRequiredError,
+  ComboModelChangeRefusedError,
+  ComboRouteRefusal,
+  ComboToolTargetQuotaExhaustedError,
+  ComboToolTargetUnavailableError,
   comboUnavailable,
   unreadableEncryptedAgentTaskResponse,
+  comboMeteredConsentRefused,
 } from "./core-errors";
+import { advisorPlanRootConfig } from "./advisor-plan-slot";
+import { requireSendAdmission } from "./send-admission";
 import { parseSyntheticRowId } from "../fast-row";
-import { resolveComboId, comboIdFromRawBody, comboExclusion, NoAvailableComboTargetsError, pickComboTarget } from "../../combos";
+import { resolveComboId, comboIdFromRawBody, comboExclusion, getCombo, NoAvailableComboTargetsError, pickComboTarget, targetKey } from "../../combos";
 import { INTERCEPT_TARGET_UNAVAILABLE_CODE, interceptTargetUnavailableResponse, resolveChosenTarget, resolveShadowCallTarget } from "./shadow-target-availability";
 import {
   MEMORY_MODEL_TARGET_UNAVAILABLE_CODE,
@@ -37,7 +45,11 @@ import {
   memoryModelRouteReason,
   memoryModelTargetUnavailableResponse,
 } from "./memory-models";
-import { recallComboForLane } from "./combo-session-recall";
+import { peekComboTargetForLane, quotaOnlyComboForLane, recallComboForLane, rememberComboForLane } from "./combo-session-recall";
+import {
+  COMBO_TOOL_LOOP_PIN_REASON, comboStillHasTarget, comboToolLoopLane, comboToolLoopRouteIdentity, isToolLoopContinuation, pinnedRouteStillResolves,
+  toolLoopPinnedPick,
+} from "./combo-tool-loop-pin";
 import {
   sessionLaneIdFromRequest,
   conversationIdFromResponsesRequest,
@@ -83,7 +95,7 @@ import {
 import { formatErrorResponse } from "../../bridge";
 import { chatCanPreserveMandatoryToolChoice } from "./combo-required-tool-contract";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
-import type { OcxParsedRequest } from "../../types";
+import type { OcxConfig, OcxParsedRequest } from "../../types";
 import { buildToolBridgeMaps } from "./collaboration";
 import { parseRequest } from "../../responses/parser";
 import { responsesHasFileImage, responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
@@ -97,7 +109,9 @@ import type { PersistedUsageAttempt } from "../../usage/log";
 import type { RouteResult } from "../../router";
 import {
   captureRouteStaticPolicy,
+  comboDestinationQuotaExhausted,
   previewRouteModel,
+  resolvedComboDestination,
   routeConcreteModel,
   routeCompactionModel,
   routeModel,
@@ -105,6 +119,7 @@ import {
   AnthropicSecondaryInstanceUnavailableError,
 } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
+import { comboTargetRequiresConsent, liveComboSendRequiresConsent } from "./combo-admission-snapshot";
 import { resolvePolicyProfileId } from "../../routing/profile";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { resolveNativeReasoningRetention } from "../../config/schema/native-reasoning-retention";
@@ -113,6 +128,7 @@ import {
   resolveSubagentFallbackChain,
   maybePrimeSubagentQuota,
   applySubagentModelFallback,
+  rewriteParsedModel,
 } from "../../codex/subagent-model-fallback";
 import { codexAccountSelectionForTurn } from "../lifecycle";
 import { isNativeMainTrafficBlocked } from "../../codex/native-profile-startup";
@@ -162,6 +178,7 @@ import {
   admissionModelDeniedResponse, projectAdmissionModelDeniedLog,
   AdmissionModelDeniedError,
   assertRouteAllowedByScope,
+  intersectAdmissionModelScopes,
   resolveAdmissionModelScope,
   routeAllowedByScope,
 } from "../admission-model-scope";
@@ -765,23 +782,116 @@ export async function prepareResponsesRequest(
     return markProxyError(formatErrorResponse(401, "authentication_error", "Anthropic Pool 2 requires an enabled configured provider"));
   }
   const admissionScope = options.admissionScope ?? resolveAdmissionModelScope(config, options.admission);
+  // Whether the admitted key is listed now, taken with the scope and before any later await. A
+  // configured key that is not listed stays unscoped, as resolveAdmissionModelScope treats it.
+  const admittedKeyId = options.admission?.kind === "configured" ? options.admission.keyId : undefined;
+  const admittedKeyListed = (current: OcxConfig): boolean =>
+    admittedKeyId !== undefined && (current.apiKeys ?? []).some(key => key.id === admittedKeyId);
+  const keyListedAtAdmission = admittedKeyListed(advisorPlanRootConfig(config));
   const advisorAdmissionPolicy = options.advisorAdmissionPolicy;
+  // What each Combo pick was admitted under, read from the config that selected it and before any await or
+  // wire normalization rewrites the route in place: its tool-loop identity, as a continuation re-routes the same
+  // target, the quota-only rule its paid consent follows, and whether its prepared destination needs that consent.
+  const comboRouteAdmissions = new WeakMap<RouteResult, { identity: string; model: string; quotaOnly: boolean; requiresConsent: boolean }>();
+  // A quota-only tool continuation keeps the target that issued its calls, as in the Combo loop. Its pin is
+  // consulted before the router's ordered selection, which can stop at an earlier blocked target.
+  const toolLoopPinnedRoutes = new WeakSet<RouteResult>();
+  const pinnedComboContinuation = (selector: string): RouteResult | undefined => {
+    const comboId = resolveComboId(config, selector);
+    const combo = comboId ? config.combos?.[comboId] : undefined;
+    if (!comboId || !combo?.quotaOnlyFallback || !isToolLoopContinuation(body)) return undefined;
+    const pinned = toolLoopPinnedPick({
+      config,
+      comboId,
+      lane: comboToolLoopLane(req.headers, true, options.claudeBridgePoolSession),
+      body,
+      // Consent does not decide the pin. A pinned target that lost paid-call consent is refused for consent below.
+      eligible: () => true,
+      quotaExhausted: (target, now) => comboDestinationQuotaExhausted(config, target, now),
+    });
+    if (pinned === "quota-exhausted") throw new ComboToolTargetQuotaExhaustedError();
+    if (!pinned) throw new ComboToolTargetUnavailableError();
+    const routed = routeConcreteModel(config, `${pinned.target.provider}/${pinned.target.model}`);
+    const pinnedRoute: RouteResult = { ...routed, combo: pinned, routeKind: "combo",
+      routeReason: routed.routeReason === "blocked-model-redirect" ? "blocked-model-redirect" : COMBO_TOOL_LOOP_PIN_REASON };
+    if (comboTargetRequiresConsent(config, pinned.target, true, pinnedRoute)
+      && !admissionMayUseMeteredComboTargets(config, options.admission, combo)) {
+      throw new ComboMeteredConsentRequiredError();
+    }
+    toolLoopPinnedRoutes.add(pinnedRoute);
+    return pinnedRoute;
+  };
+  const routeSelector = (selector: string): RouteResult =>
+    pinnedComboContinuation(selector) ?? routeModel(config, selector, routeEvidence(options, parsed));
+  // The subagent fallback chain checks availability through the same ordered selection, so a tool continuation
+  // answered by one of its quota-only Combos keeps that Combo before the chain is walked. Its result is marked
+  // pinned, so the reroute goes through the pin even when the Combo's selector matches the requested bare model.
+  type SubagentFallback = NonNullable<ReturnType<typeof applySubagentModelFallback>> & { pinned?: true };
+  const pinnedSubagentFallback = (chain: readonly string[] | null): SubagentFallback | undefined => {
+    if (!isToolLoopContinuation(body)) return undefined;
+    const lane = comboToolLoopLane(req.headers, true, options.claudeBridgePoolSession);
+    const comboId = quotaOnlyComboForLane(lane);
+    const combo = comboId === undefined ? undefined : config.combos?.[comboId];
+    if (comboId === undefined || (combo && combo.quotaOnlyFallback !== true)) return undefined;
+    const from = parsed.modelId;
+    // Without a fallback chain, a request that names the Combo itself is pinned by its own route.
+    if (!chain && resolveComboId(config, from) === comboId) return undefined;
+    // A deleted Combo, one that left the chain or a target that cannot serve refuses, and the lane keeps it for a retry.
+    const selector = combo && chain?.find(entry => resolveComboId(config, entry) === comboId);
+    const target = selector ? peekComboTargetForLane(config, lane, comboId) : undefined;
+    if (!selector || !target) return { from, to: from, refusal: new ComboToolTargetUnavailableError().response() };
+    // The same scoped fallback-policy admission as the chain's own rewrite.
+    const hop = guardFallbackHop(config, {
+      site: "subagent",
+      route: from,
+      from: { provider: route.providerName, model: route.modelId },
+      to: resolvedComboDestination(config, target),
+      trigger: "unavailable",
+      admission: options.admission,
+    });
+    if (!hop.ok) return { from, to: from, refusal: hop.response };
+    hop.commit();
+    rewriteParsedModel(parsed, selector);
+    return { from, to: selector, pinned: true };
+  };
   const captureInboundRoutePolicy = (candidate: RouteResult, captureRequestPolicy = true): RouteResult => {
     // Router-collapsed aliases bypass the combo loop. Re-pick before capturing destination
     // policy so random/RR cannot refuse while an unmetered target is still usable.
-    if (candidate.combo?.target.metered && !admissionMayUseMeteredComboTargets(
-      config, options.admission, config.combos?.[candidate.combo.comboId],
-    )) {
+    const collapsed = candidate.combo && config.combos?.[candidate.combo.comboId];
+    const metered = (target: NonNullable<RouteResult["combo"]>["target"], route?: RouteResult) =>
+      comboTargetRequiresConsent(config, target, collapsed?.quotaOnlyFallback === true, route);
+    if (candidate.combo && metered(candidate.combo.target, candidate)
+      && !admissionMayUseMeteredComboTargets(config, options.admission, collapsed)) {
+      const repickNow = Date.now();
+      const quotaExhausted = (target: NonNullable<RouteResult["combo"]>["target"], now: number) =>
+        comboDestinationQuotaExhausted(config, target, now);
+      let blockedByConsent = false;
       const pick = pickComboTarget(config, candidate.combo.comboId, {
-        eligible: target => !target.metered,
+        eligible: target => {
+          const allowed = !metered(target);
+          blockedByConsent ||= !allowed;
+          return allowed;
+        },
         allowCooldownReprobe: false,
+        quotaExhausted,
+        now: repickNow,
       });
       if (!pick) {
+        // A quota-only Combo stops at its first usable target, so a consent block is the reason it stopped.
+        if (blockedByConsent && collapsed?.quotaOnlyFallback) throw new ComboMeteredConsentRequiredError();
         throw new NoAvailableComboTargetsError(candidate.combo.comboId,
-          comboExclusion(config, candidate.combo.comboId, target => !target.metered));
+          comboExclusion(config, candidate.combo.comboId, target => !metered(target), repickNow, quotaExhausted));
       }
       const routed = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
       candidate = { ...routed, combo: pick, routeKind: "combo", routeReason: routed.routeReason === "blocked-model-redirect" ? "blocked-model-redirect" : "combo-pick" };
+    }
+    // The collapsed pick skips executeComboResponses, so its model lock is enforced here.
+    const pickedCombo = candidate.combo && getCombo(config, candidate.combo.comboId);
+    // A pinned continuation stays on the target that issued its calls, so it makes no hop to lock.
+    const lockedTarget = pickedCombo?.preserveFallbackModel && !toolLoopPinnedRoutes.has(candidate)
+      ? pickedCombo.targets[0] : undefined;
+    if (lockedTarget && candidate.modelId !== resolvedComboDestination(config, lockedTarget).model) {
+      throw new ComboModelChangeRefusedError();
     }
     // Every route this request path produces passes through here: the direct
     // name, an alias, a policy or combo selection, a compaction override, a
@@ -805,6 +915,11 @@ export async function prepareResponsesRequest(
       providerName: candidate.providerName,
       modelId: previewXaiOauthWireModel(parsed, candidate, config, inboundWire),
     });
+    if (candidate.combo) {
+      const quotaOnly = config.combos?.[candidate.combo.comboId]?.quotaOnlyFallback === true;
+      comboRouteAdmissions.set(candidate, { identity: comboToolLoopRouteIdentity(candidate), model: candidate.modelId, quotaOnly,
+        requiresConsent: comboTargetRequiresConsent(config, candidate.combo.target, quotaOnly, candidate) });
+    }
     return candidate;
   };
   try {
@@ -817,7 +932,7 @@ export async function prepareResponsesRequest(
         ? routeConcreteModel(config, modelId)
         : parsed._compactionRequest === true
           ? routeCompactionModel(config, modelId, routeEvidence(options, parsed))
-          : routeModel(config, modelId, routeEvidence(options, parsed));
+          : routeSelector(modelId);
       // A Pool 2 selector may leave Pool 2 only through an operator-configured cross-provider
       // blocked-model redirect, which the router marks as a credential-domain rewrite. Any other
       // destination means the selector fell through to default resolution, which stays refused.
@@ -888,6 +1003,8 @@ export async function prepareResponsesRequest(
     if (parsed._compactionRequest === true || options.compactionRoutingOverride) parsed._cursorIsolateConversation = true;
     route = memoryRoute ?? shadowRoute ?? resolveRoute(options.policyFallbackCandidate
       ? `${options.policyFallbackCandidate.provider}/${options.policyFallbackCandidate.model}` : parsed.modelId);
+    // A copy, since final normalization rewrites the route in place.
+    if (options.comboChildRoute) Object.assign(options.comboChildRoute, { route: { ...route }, identity: comboToolLoopRouteIdentity(route) });
     // Selection-free hard-lock preflight grants no hop. Enforce the actual ranked destination
     // against the locked source before admitting this first selection.
     const hardLockProfileTrace = options.mainHardLockFallbackOverride ? route.routeDecision?.profile : undefined;
@@ -947,6 +1064,7 @@ export async function prepareResponsesRequest(
     if (err instanceof NoAvailableComboTargetsError) {
       return comboUnavailable(err.comboId, undefined, err.exclusion);
     }
+    if (err instanceof ComboRouteRefusal) return err.response();
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the
       // no-eligible reason) so failed policy requests stay auditable.
@@ -1082,6 +1200,10 @@ export async function prepareResponsesRequest(
       await maybePrimeSubagentQuota(config, Date.now(), { nativeMainReadsForbidden });
     }
 
+  // An exact-account request without a fallback chain skips the block below, so its quota-only lane decides here.
+  const exactAccountPinRefusal = threadSpawn && !options.comboAttempt && route.codexAccountId !== undefined
+    && initialSubagentFallbackChain === null ? pinnedSubagentFallback(null)?.refusal : undefined;
+  if (exactAccountPinRefusal) return exactAccountPinRefusal;
   // Subagent fallback must settle the final model/provider BEFORE route-dependent
   // normalization (virtual models, effort caps, service tier, wire protocol).
   // Preview the preferred Codex account without acquiring a probe lease or refreshing
@@ -1131,7 +1253,7 @@ export async function prepareResponsesRequest(
       subagentFallbackModelEligibleAccountIdsForModel?.(route.modelId),
     );
     subagentFallbackAccountId = previewAccountId ?? config.activeCodexAccountId ?? null;
-    const fallback = applySubagentModelFallback(
+    const fallback: SubagentFallback | null = pinnedSubagentFallback(fallbackChain) ?? applySubagentModelFallback(
       parsed,
       req.headers,
       config,
@@ -1156,10 +1278,10 @@ export async function prepareResponsesRequest(
     }
     subagentQuotaFailureModel = fallback?.to ?? parsed.modelId;
 
-    if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
+    if (fallback?.to && (fallback.pinned || !slugsEquivalent(fallback.to, route.modelId))) {
       try {
         route = captureInboundRoutePolicy(
-          routeModel(config, fallback.to, routeEvidence(options, parsed)),
+          routeSelector(fallback.to),
         );
         leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
         credentialDomainWasRewritten = true;
@@ -1172,6 +1294,7 @@ export async function prepareResponsesRequest(
         if (err instanceof NoAvailableComboTargetsError) {
           return comboUnavailable(err.comboId, undefined, err.exclusion);
         }
+        if (err instanceof ComboRouteRefusal) return err.response();
         if (err instanceof NoEligiblePolicyCandidateError) {
           logCtx.routeDecision = err.trace;
         }
@@ -1283,7 +1406,7 @@ export async function prepareResponsesRequest(
           // makes the assignment readable, run selection again with the full configured chain
           // and keep the route in sync with any newly selected fallback.
           const recoverySelectionAdmission = codexAccountSelectionForTurn(options.turnAdmissionLease)?.();
-          const fallback = (() => {
+          const fallback = ((): SubagentFallback | null => {
             try {
               const recoveryNativeMainBlocked = isNativeMainTrafficBlocked();
               // Recompute ownership here rather than reusing the pre-decryption value: a
@@ -1372,7 +1495,7 @@ export async function prepareResponsesRequest(
                 recoveryNow,
                 subagentFallbackModelEligibleAccountIdsForModel?.(parsed.modelId),
               );
-              return applySubagentModelFallback(
+              return (threadSpawn ? pinnedSubagentFallback(resolveSubagentFallbackChain(parsed, config)) : undefined) ?? applySubagentModelFallback(
                 parsed,
                 req.headers,
                 config,
@@ -1401,10 +1524,10 @@ export async function prepareResponsesRequest(
           }
           subagentQuotaFailureModel = fallback?.to ?? parsed.modelId;
 
-          if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
+          if (fallback?.to && (fallback.pinned || !slugsEquivalent(fallback.to, route.modelId))) {
             try {
               route = captureInboundRoutePolicy(
-                routeModel(config, fallback.to, routeEvidence(options, parsed)),
+                routeSelector(fallback.to),
               );
               leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
               credentialDomainWasRewritten = true;
@@ -1417,6 +1540,7 @@ export async function prepareResponsesRequest(
               if (err instanceof NoAvailableComboTargetsError) {
                 return comboUnavailable(err.comboId, undefined, err.exclusion);
               }
+              if (err instanceof ComboRouteRefusal) return err.response();
               if (err instanceof NoEligiblePolicyCandidateError) {
                 logCtx.routeDecision = err.trace;
               }
@@ -1785,6 +1909,55 @@ export async function prepareResponsesRequest(
     ? admissionState.authCtx.accountId
     : config.activeCodexAccountId ?? null;
 
+  // A collapsed Combo pick skips executeComboResponses, which re-reads the key's live scope and paid
+  // consent before each send, and a Combo child is checked there against its configured target.
+  // Transport, sidecars and provider pacing still wait after this point, so the physical send checks
+  // the live scope again against the settled destination, the model actually sent, and a collapsed
+  // pick's paid consent. The captured scope stays an upper bound, so a widened key cannot widen it.
+  const collapsedCombo = route.combo && config.combos?.[route.combo.comboId];
+  // The pick itself identifies the admitted route, so a Combo deleted before this point still gets the check.
+  const collapsedPick = route.combo;
+  const admittedPick = comboRouteAdmissions.get(route);
+  const admittedQuotaOnly = admittedPick?.quotaOnly ?? collapsedCombo?.quotaOnlyFallback === true;
+  if (options.comboAttempt || collapsedPick) {
+    const admission = options.admission;
+    const sendRefusal = (): Response | undefined => {
+      const liveConfig = advisorPlanRootConfig(config);
+      const liveScope = intersectAdmissionModelScopes(admissionScope, resolveAdmissionModelScope(liveConfig, admission));
+      // A key listed at admission and removed since has no live scope left to intersect.
+      if ((keyListedAtAdmission && !admittedKeyListed(liveConfig)) || !routeAllowedByScope(liveScope, scopedDestination)) {
+        return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(new AdmissionModelDeniedError(inboundSelector, scopedDestination), logCtx));
+      }
+      if (!collapsedPick) return undefined;
+      // A pinned continuation must reach the target that issued its calls. Its selector is re-resolved from
+      // the live config, and a row that changed or no longer resolves refuses the send.
+      if (toolLoopPinnedRoutes.has(route) && (!comboStillHasTarget(liveConfig, collapsedPick.comboId, collapsedPick.target)
+        || !pinnedRouteStillResolves(liveConfig, targetKey(collapsedPick.target), admittedPick?.identity))) {
+        return new ComboToolTargetUnavailableError().response();
+      }
+      // The live target, Combo rule and destination row decide too. The prepared destination's requirement is the
+      // one captured at admission, because the transport rewrites the route.
+      const requiresConsent = admittedPick?.requiresConsent === true
+        || liveComboSendRequiresConsent(liveConfig, collapsedPick.comboId, collapsedPick.target, admittedQuotaOnly, route);
+      return requiresConsent && !admissionMayUseMeteredComboTargets(liveConfig, admission, liveConfig.combos?.[collapsedPick.comboId])
+        ? comboMeteredConsentRefused() : undefined;
+    };
+    const refusal = sendRefusal();
+    if (refusal) return refusal;
+    requireSendAdmission(sendRefusal);
+  }
+  // The Combo loop records its serving lane when a child completes. A collapsed quota-only pick
+  // records it on completion too, so its tool continuation finds the target that issued the call.
+  let rememberCollapsedComboLane: ((model: string) => void) | undefined;
+  const routeIdentity = admittedPick?.identity;
+  if (route.combo && admittedQuotaOnly && routeIdentity
+    && !options.compactionRoutingOverride && !options.mainHardLockFallbackOverride) {
+    const servingPick = route.combo;
+    const lane = comboToolLoopLane(req.headers, true, options.claudeBridgePoolSession);
+    rememberCollapsedComboLane = model => rememberComboForLane(lane, servingPick.comboId, servingPick.target, model,
+      servingPick.writerGeneration, undefined, routeIdentity, admittedPick?.model);
+  }
+
   commitSkillsSnapshot?.();
   return {
     inboundWire,
@@ -1821,6 +1994,7 @@ export async function prepareResponsesRequest(
     clientRequestedStream,
     substituteMainCredential,
     callerAuthHeaders,
+    rememberCollapsedComboLane,
   };
 }
 

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { mkdirSync, mkdtempSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,6 +59,7 @@ beforeEach(() => {
   previousOcxHome = process.env.OPENCODEX_HOME;
   process.env.CODEX_HOME = join(home, "codex");
   process.env.OPENCODEX_HOME = join(home, "ocx");
+  bindStoredCodexPoolRoutingForTests();
   mkdirSync(process.env.CODEX_HOME, { recursive: true });
   mkdirSync(process.env.OPENCODEX_HOME, { recursive: true });
   config = { port: 10100, providers: {}, defaultProvider: "openai", activeCodexAccountId: poolId,

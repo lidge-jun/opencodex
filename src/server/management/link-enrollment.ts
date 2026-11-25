@@ -9,7 +9,7 @@ import { confirmedLineTrust as confirmedLineTrustIn, type ConfirmedLineTrust } f
 import { isDetachedEphemeralChildConfig } from "../../link/ephemeral-child";
 import { classifyChildAttachConflict, classifyPlantFailure, inspectRemoteChildRuntime, parseFullInstallCensus, remoteFullInstallCensusArgv, remotePlantChildArgv, remotePurgePlantedChildArgv } from "../../link/remote-plant";
 import { requireRemotePlatform } from "../../link/remote-platform";
-import { LINK_CATALOG_MAX_BYTES, LINK_RELAY_VERIFY_MS, isChildHealth, linkCommandBudget, linkRestartBudget, parseChildHttp, remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../link/remote-probe";
+import { LINK_CATALOG_MAX_BYTES, LINK_RELAY_VERIFY_MS, isChildHealth, linkCommandBudget, linkRelayBudget, linkRestartBudget, parseChildHttp, remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../link/remote-probe";
 import { newLinkId, type LinkStore } from "../../link/store";
 import { residualRecovery } from "../../link/residual-recovery";
 import { SshRunnerError, boundHint, sshFailureHint, sshRunnerErrorHint, type SshRunResult } from "../../link/ssh-runner";
@@ -490,7 +490,7 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       const restarted = await run(ocx(["restart"]), linkRestartBudget(confirmed.sshLatencyMs));
       if (restarted.code !== 0) return await failed(fail("child_restart_failed", "The Child restart could not be verified.", 502, sshFailureHint(restarted.stderr)));
       phase = "child_relay";
-      const deadline = now() + LINK_RELAY_VERIFY_MS, remaining = () => Math.max(1, deadline - now());
+      const deadline = now() + linkRelayBudget(confirmed.sshLatencyMs), remaining = () => Math.max(1, deadline - now());
       const health = await run(remoteChildHttpArgv(childPort, "healthz", remaining(), remotePlatform), remaining());
       if (!isChildHealth(health.code === 0 ? parseChildHttp(health.stdout) : null, "client", childPort)) return await failed(fail("child_runtime_not_client", "The Child is not serving the client runtime after restart.", 502));
       let admitted = false;

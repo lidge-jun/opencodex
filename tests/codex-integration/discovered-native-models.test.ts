@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -75,6 +76,7 @@ beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   home = mkdtempSync(join(tmpdir(), "ocx-discovered-native-"));
   process.env.OPENCODEX_HOME = home;
+  bindStoredCodexPoolRoutingForTests(["future-test"]);
   path = join(home, "discovered-native-models.json");
   resetDiscoveredNativeModelsForTests();
   resetConfiguredNativeOpenAiModelsForTests();

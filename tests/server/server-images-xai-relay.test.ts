@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { handleImages } from "../../src/server/images";
 import type { OcxConfig } from "../../src/types";
 const oldFetch = globalThis.fetch;
@@ -19,6 +19,45 @@ test("relay collapses duplicate sources before the five-source limit, like the c
   await relay({prompt:"edit",images:Array(6).fill("https://example.com/a.png")});
   expect(calls).toHaveLength(1);
   expect(calls[0].image).toEqual({url:"https://example.com/a.png",type:"image_url"});
+});
+
+test("relay validates canonical edit data URLs without decoding their payloads", async () => {
+  const sources = [
+    "DATA:IMAGE/JPG;BASE64,/w==",
+    "data:image/jpeg;base64,//8=",
+    "data:image/webp;base64,+///",
+  ];
+  let forwarded: string[] = [];
+  globalThis.fetch = (async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as { images: { url: string }[] };
+    forwarded = body.images.map(image => image.url);
+    return Response.json({ data: [{ b64_json: "iVBORw0KGgo=" }] });
+  }) as typeof fetch;
+  using from = spyOn(Buffer, "from");
+  const res = await relay({ prompt: "edit", images: sources });
+  expect(res.status).toBe(200);
+  expect(forwarded).toEqual(sources);
+  for (const source of sources) {
+    expect(from).not.toHaveBeenCalledWith(source.split(",")[1], "base64");
+  }
+});
+
+test("relay keeps five distinct sources in order and validates entries after the limit", async () => {
+  const sources = Array.from({ length: 5 }, (_, i) => `https://example.com/${i}.png`);
+  const calls: string[][] = [];
+  globalThis.fetch = (async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as { images: { url: string }[] };
+    calls.push(body.images.map(image => image.url));
+    return Response.json({ data: [{ b64_json: "iVBORw0KGgo=" }] });
+  }) as typeof fetch;
+  const accepted = await relay({ prompt: "edit", images: [sources[0], ` ${sources[0]} `, ...sources] });
+  expect(accepted.status).toBe(200);
+  expect(calls).toEqual([sources]);
+
+  const rejected = await relay({ prompt: "edit", images: [...sources, "https://example.com/six.png", "not-a-url"] });
+  expect(rejected.status).toBe(400);
+  expect(await rejected.text()).toContain("every image");
+  expect(calls).toHaveLength(1);
 });
 
 test("relay refuses a request where any supplied edit source is unusable, before any upstream call", async () => {

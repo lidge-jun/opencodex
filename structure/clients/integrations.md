@@ -531,7 +531,7 @@ Kilo owns only `provider.opencodex` in the first existing global file among `kil
 `kilo.jsonc`. Parse accepts one leading UTF-8 BOM, JSONC comments (including CR, LF and CRLF line endings) and trailing
 commas after actual members, but refuses a comma in an otherwise empty container; serialize rewrites the whole file as pretty JSON, so comments in other keys are
 not preserved. Kilo and OpenCode participate in the implicit owned-catalog fan-out; unowned, removed or hand-edited blocks are never claimed or overwritten. Remote admission uses
-the same `{env:OPENCODEX_KILO_API_KEY}` / `x-opencodex-api-key` rule as OpenCode.
+the same `{env:OPENCODEX_KILO_API_KEY}` / `x-opencodex-api-key` rule as OpenCode. OpenCode's managed integration additionally writes the non-secret `opencodex-loopback` placeholder as `apiKey` in both generations when it targets the enabled unauthenticated loopback listener, because OpenCode refuses an unset `{env:…}` reference before sending (#9069); only `exportContextOf` and `/api/client-config`, which select that listener from the serving config, assert the destination (`keylessInference`), never a loopback URL alone (an SSH forward to an authenticated listener has one too), so the CLI-built `ocx export --client opencode` and the launcher keep the reference.
 All candidate files are inspected through the no-follow, bounded parser before status or
 any operation that adds or replaces a block. If another candidate defines
 `provider.opencodex`, status reports a conflict with every competing path in

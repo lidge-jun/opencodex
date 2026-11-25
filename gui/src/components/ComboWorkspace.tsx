@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   type ComboItem,
   comboModelId,
@@ -15,11 +15,13 @@ import { DetailPanel } from "./combo-workspace-detail-panel";
 import { RemoveComboDialog, UnsavedLeaveDialog } from "./combo-workspace-dialogs";
 import { OverviewPanel } from "./combo-workspace-overview-panel";
 import type { ComboWorkspaceProps } from "./combo-workspace-types";
+import { quotaComboDraft } from "./combo-workspace-utils";
 
 export type { ModelOption, ProviderOption, ComboWorkspaceProps } from "./combo-workspace-types";
 
 export default function ComboWorkspace({
   apiBase,
+  routingRevision,
   combos,
   providerQuotaStates,
   providers,
@@ -68,13 +70,18 @@ export default function ComboWorkspace({
       .map(provider => provider.name)),
     [providers],
   );
+  const quotaPresets = useMemo(() => ({
+    "openai-first": quotaComboDraft("openai-first", providers, models),
+    "claude-first": quotaComboDraft("claude-first", providers, models),
+  }), [providers, models]);
   const addDraft = useMemo(() => {
+    if (addIntent === "openai-first" || addIntent === "claude-first") return quotaPresets[addIntent];
     if (addIntent !== "jev-auto") return undefined;
     // A deep-linked row that is not a usable decision service falls back to TypeSafe.
     const usable = providers.length === 0
       || jevDecisionProviderIssue(addDecisionProvider, providerMap) === null;
     return jevAutoDraft(models, jevTargetProviders, usable ? addDecisionProvider : null);
-  }, [addDecisionProvider, addIntent, jevTargetProviders, models, providerMap, providers.length]);
+  }, [addDecisionProvider, addIntent, jevTargetProviders, models, providerMap, providers.length, quotaPresets]);
 
   const filtered = useMemo(() => filterCombos(combos, query), [combos, query]);
   const sections = useMemo(() => groupCombos(filtered), [filtered]);
@@ -87,6 +94,21 @@ export default function ComboWorkspace({
   const baseline = selected && localBaseline?.source === selected ? localBaseline.item : selected;
 
   const [detailDirty, setDetailDirty] = useState(false);
+  const mainRef = useRef<HTMLDivElement>(null);
+  const railRef = useRef<HTMLElement>(null);
+  const previousSelection = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const previous = previousSelection.current;
+    previousSelection.current = activeId;
+    if (!window.matchMedia?.("(max-width: 939px)").matches) return;
+    if (activeId) {
+      mainRef.current?.querySelector<HTMLElement>(".combos-workspace-detail-title")?.focus();
+    } else if (previous) {
+      const row = Array.from(railRef.current?.querySelectorAll<HTMLButtonElement>("[data-combo-id]") ?? [])
+        .find(button => button.dataset.comboId === previous);
+      row?.focus();
+    }
+  }, [activeId]);
 
   // Identity constraints for the detail editor: every OTHER combo's id (rename
   // collisions) and alias (public-name uniqueness), collected in one pass.
@@ -133,8 +155,8 @@ export default function ComboWorkspace({
   return (
     <>
     {renderSuggestions?.(detailDirty ? activeId : null)}
-    <div className={`combos-workspace-root${creatingFirstCombo ? " combos-workspace-root--empty" : ""}`}>
-      <aside className="combos-workspace-rail" aria-label={t("cws.railAria")}>
+    <div className={`combos-workspace-root${creatingFirstCombo ? " combos-workspace-root--empty" : ""}`} data-detail={baseline ? "" : undefined}>
+      <aside className="combos-workspace-rail" ref={railRef} aria-label={t("cws.railAria")}>
         <div className="combos-workspace-rail-header">
           <div className="combos-workspace-rail-heading">
             <div className="combos-workspace-rail-title">{t("nav.combos")}</div>
@@ -156,6 +178,18 @@ export default function ComboWorkspace({
           </button>
           {jevAutoExists && <span className="muted">{t("cws.jev.exists")}</span>}
         </div>
+        {quotaPresets["openai-first"] && (
+          <div className="flex flex-wrap gap-1 px-2 pb-2">
+            {(["openai-first", "claude-first"] as const).map(preset => (
+              <button key={preset} type="button" className="btn btn-ghost btn-sm"
+                onClick={() => {
+                  const saved = combos.find(combo => combo.id === preset || combo.alias === preset);
+                  if (saved) trySelect(saved.id);
+                  else onAdd(preset);
+                }}>{t(`cws.quotaPreset.${preset}`)}</button>
+            ))}
+          </div>
+        )}
         {/* Search has no decision value until at least one combo exists. */}
         {combos.length > 0 && (
         <div className="cwi-search-row">
@@ -195,6 +229,7 @@ export default function ComboWorkspace({
                         key={item.id}
                         type="button"
                         className={`combos-workspace-rail-row${activeId === item.id ? " combos-workspace-rail-row--selected" : ""}`}
+                        data-combo-id={item.id}
                         onClick={() => trySelect(item.id)}
                         aria-current={activeId === item.id ? "true" : undefined}
                       >
@@ -218,11 +253,12 @@ export default function ComboWorkspace({
         </div>
       </aside>
 
-      <div className="combos-workspace-main">
+      <div className="combos-workspace-main" ref={mainRef}>
         {baseline && selected ? (
           <DetailPanel
             key={baseline.id}
             apiBase={apiBase}
+            routingRevision={routingRevision}
             baseline={baseline}
             combos={combos.filter((c) => c.id !== baseline.id)}
             otherIds={otherComboIds}
@@ -254,6 +290,7 @@ export default function ComboWorkspace({
           <DetailPanel
             key="first-combo"
             apiBase={apiBase}
+            routingRevision={routingRevision}
             baseline={firstComboDraft}
             isCreate
             otherIds={[]}
@@ -290,6 +327,7 @@ export default function ComboWorkspace({
         <AddComboModal
           key={`${addIntent ?? "blank"}:${addDraft?.decisionProvider ?? ""}`}
           apiBase={apiBase}
+          routingRevision={routingRevision}
           combos={combos}
           existingIds={combos.map((c) => c.id)}
           existingAliases={existingComboAliases}
@@ -301,7 +339,7 @@ export default function ComboWorkspace({
           initialDraft={addDraft}
           onClose={onCloseAdd}
           onSubmit={async (item) => {
-            const res = await onSave(item, true);
+            const res = await onSave(item, true, undefined, null);
             if (res.ok) {
               onCloseAdd();
               onCreated(item.id);
