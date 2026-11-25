@@ -23,7 +23,7 @@ import { claudeFirstPartyTransition } from "./first-party-transition";
 import { claudeInterceptCaCertPath } from "./intercept/local-ca";
 import { readClaudeInterceptProxyToken } from "./intercept/proxy-auth";
 import { claudeInterceptEnabled } from "./intercept/runtime";
-import { claudeInterceptProxyUrl, claudeSettingsFileState, isClaudeInterceptProxyUrl, readClaudeSettingsEnv } from "./intercept/settings";
+import { claudeInterceptProxyUrl, claudeSettingsFileState, isClaudeInterceptProxyUrl, MAX_STATUS_SETTINGS_BYTES, readClaudeSettingsEnv } from "./intercept/settings";
 import { mergeClaudeInterceptNoProxy, noProxyMergeable, readNoProxyReceipt } from "./intercept/settings-no-proxy";
 
 export type SettingsChangeKind = "add" | "update" | "remove";
@@ -60,6 +60,8 @@ export interface FirstPartyPreviewInput {
 }
 
 const MANAGED_KEYS = ["HTTPS_PROXY", "NODE_EXTRA_CA_CERTS"] as const;
+// A receipt stores both the old and written NO_PROXY strings, plus its JSON fields.
+const MAX_PREVIEW_RECEIPT_BYTES = 2 * MAX_STATUS_SETTINGS_BYTES + 1024;
 
 function change(key: string, kind: SettingsChangeKind): FirstPartySettingsChange {
   return { file: "settings.json", key: `env.${key}`, change: kind };
@@ -67,7 +69,7 @@ function change(key: string, kind: SettingsChangeKind): FirstPartySettingsChange
 
 export function previewClaudeFirstPartySettings(input: FirstPartyPreviewInput): FirstPartyPreview {
   const { live, persisted, enabled } = input;
-  const options = input.options ?? {};
+  const options = { ...input.options, settingsReadLimit: MAX_STATUS_SETTINGS_BYTES };
   const dir = options.claudeConfigDir ?? claudeConfigDir();
   const path = join(dir, "settings.json");
   const refuse = (reason: FirstPartyPreviewRefusal): FirstPartyPreview => ({ ok: false, enabled, reason, path });
@@ -90,7 +92,7 @@ export function previewClaudeFirstPartySettings(input: FirstPartyPreviewInput): 
   const reconciled: OcxConfig = { ...live, claudeCode: nextBlock };
   const desired = firstPartyDesired(reconciled, observeClaudeDesktopMode(reconciled, options));
 
-  const read = readClaudeSettingsEnv(dir);
+  const read = readClaudeSettingsEnv(dir, { maxBytes: MAX_STATUS_SETTINGS_BYTES });
   if (read.kind === "unreadable") return refuse("unreadable");
   const env = read.kind === "env" ? read.env : {};
 
@@ -101,7 +103,12 @@ export function previewClaudeFirstPartySettings(input: FirstPartyPreviewInput): 
     if (typeof ca !== "string" || ca.trim() !== ownedCa) return accept([]);
     const changes = [change("NODE_EXTRA_CA_CERTS", "remove")];
     if (isClaudeInterceptProxyUrl(env.HTTPS_PROXY)) changes.push(change("HTTPS_PROXY", "remove"));
-    const receipt = readNoProxyReceipt(dir);
+    let receipt;
+    try {
+      receipt = readNoProxyReceipt(dir, MAX_PREVIEW_RECEIPT_BYTES);
+    } catch { // no-excuse-ok: catch -- a bounded read failure leaves the restoration undetermined.
+      return refuse("unreadable");
+    }
     if (receipt && env.NO_PROXY === receipt.written) {
       const restored = receipt.hadKey ? receipt.previous : undefined;
       if (restored === undefined) changes.push(change("NO_PROXY", "remove"));

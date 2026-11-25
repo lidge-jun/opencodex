@@ -1,18 +1,30 @@
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, statSync } from "node:fs";
 import { sameFileIdentity } from "./file-identity";
 
 const MAX_BOUNDED_READ_BYTES = 64 * 1024 * 1024;
 const READ_CHUNK_BYTES = 64 * 1024;
 
-export function readBoundedRegularFileSync(path: string, limit: number): Buffer {
+export interface BoundedRegularFileReadOptions {
+  /** Follow the final symlink while still requiring its opened target to be bounded regular data. */
+  followFinalSymlink?: boolean;
+}
+
+export function readBoundedRegularFileSync(
+  path: string,
+  limit: number,
+  options: BoundedRegularFileReadOptions = {},
+): Buffer {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_BOUNDED_READ_BYTES) {
     throw new RangeError("invalid bounded file read limit");
   }
 
   const windows = process.platform === "win32";
-  const flags = constants.O_RDONLY | (windows ? 0 : constants.O_NONBLOCK | constants.O_NOFOLLOW);
-  const entryBefore = windows ? lstatSync(path, { bigint: true }) : undefined;
-  if (entryBefore && (entryBefore.isSymbolicLink() || !entryBefore.isFile())) {
+  const followFinalSymlink = options.followFinalSymlink === true;
+  const posixFlags = constants.O_NONBLOCK | (followFinalSymlink ? 0 : constants.O_NOFOLLOW);
+  const flags = constants.O_RDONLY | (windows ? 0 : posixFlags);
+  const inspectEntry = followFinalSymlink ? statSync : lstatSync;
+  const entryBefore = windows || followFinalSymlink ? inspectEntry(path, { bigint: true }) : undefined;
+  if (entryBefore && !entryBefore.isFile()) {
     throw new Error("not a regular file");
   }
   const fd = openSync(path, flags);
@@ -40,8 +52,8 @@ export function readBoundedRegularFileSync(path: string, limit: number): Buffer 
     if (length > limit) throw new Error("file exceeds byte limit");
 
     if (entryBefore) {
-      const entryAfter = lstatSync(path, { bigint: true });
-      if (entryAfter.isSymbolicLink() || !entryAfter.isFile() || !sameFileIdentity(opened, entryAfter)) {
+      const entryAfter = inspectEntry(path, { bigint: true });
+      if (!entryAfter.isFile() || !sameFileIdentity(opened, entryAfter)) {
         throw new Error("file entry changed while reading");
       }
     }

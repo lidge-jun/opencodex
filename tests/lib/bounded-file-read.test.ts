@@ -117,6 +117,15 @@ describe("readBoundedRegularFileSync", () => {
     expect(() => readBoundedRegularFileSync(link, 64)).toThrow();
   });
 
+  test.skipIf(!canCreateFileSymlink())("follows a final symlink only when requested", () => {
+    const path = join(root, "target.json");
+    writeFileSync(path, "fixture");
+    const link = join(root, "linked.json");
+    symlinkSync(path, link, "file");
+    expect(readBoundedRegularFileSync(link, 64, { followFinalSymlink: true }).toString("utf8"))
+      .toBe("fixture");
+  });
+
   test.skipIf(process.platform === "win32")("rejects a FIFO without blocking", () => {
     const fifo = join(root, "input.pipe");
     const created = spawnSync("mkfifo", [fifo], { timeout: 2_000 });

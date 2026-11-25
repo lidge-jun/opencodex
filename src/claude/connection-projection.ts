@@ -17,7 +17,7 @@ import { inspectDesktopFirstParty, observeClaudeDesktopMode, resolveClaudeDeskto
 import { previewClaudeFirstPartySettings } from "./first-party-preview";
 import { firstPartyDesired, firstPartyProxyStatus } from "./first-party-settings";
 import { claudeInterceptEnabled } from "./intercept/runtime";
-import { claudeSettingsFileState } from "./intercept/settings";
+import { claudeSettingsFileState, MAX_STATUS_SETTINGS_BYTES } from "./intercept/settings";
 
 export interface ClaudeConnectionInput {
   live: OcxConfig;
@@ -31,7 +31,8 @@ export interface ClaudeConnectionInput {
 
 function claudeCodeRow(input: ClaudeConnectionInput, dir: string, source: "default" | "extra", ordinal?: number): ConnectionView {
   const { live } = input;
-  const options = { claudeConfigDir: dir, ...(input.opencodexConfigDir ? { opencodexConfigDir: input.opencodexConfigDir } : {}) };
+  const options = { claudeConfigDir: dir, settingsReadLimit: MAX_STATUS_SETTINGS_BYTES,
+    ...(input.opencodexConfigDir ? { opencodexConfigDir: input.opencodexConfigDir } : {}) };
   const settingsPath = join(dir, "settings.json");
   const fileState = claudeSettingsFileState(dir);
   if (fileState === "unsafe") {
@@ -84,7 +85,8 @@ function claudeCodeRow(input: ClaudeConnectionInput, dir: string, source: "defau
 
 function claudeDesktopRow(input: ClaudeConnectionInput): ConnectionView {
   const { live } = input;
-  const options = input.opencodexConfigDir ? { opencodexConfigDir: input.opencodexConfigDir } : {};
+  const options = { settingsReadLimit: MAX_STATUS_SETTINGS_BYTES,
+    ...(input.opencodexConfigDir ? { opencodexConfigDir: input.opencodexConfigDir } : {}) };
   const wanted = claudeDesktopIntegrationEnabled(live);
   const observation = observeClaudeDesktopMode(live, options);
   const mode = resolveClaudeDesktopMode(live, observation);
@@ -97,7 +99,8 @@ function claudeDesktopRow(input: ClaudeConnectionInput): ConnectionView {
     case "broken": case "unsafe": observed = "unknown"; break;
     case "standard": case "no_owned_state": {
       const settings = mode === "first-party" ? inspectDesktopFirstParty(live, options).settings : null;
-      observed = settings && (settings.kind === "applied" || settings.kind === "stale") ? "proxy" : "native";
+      observed = settings?.kind === "unreadable" ? "unknown"
+        : settings?.kind === "applied" || settings?.kind === "stale" ? "proxy" : "native";
       break;
     }
     default: {

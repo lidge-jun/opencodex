@@ -152,6 +152,8 @@ export interface DesktopFirstPartyInspection {
 export interface DesktopFirstPartyOptions {
   opencodexConfigDir?: string;
   claudeConfigDir?: string;
+  /** Read-only projections cap settings bytes and validate the opened descriptor. */
+  settingsReadLimit?: number;
 }
 
 /** Prepare rollback before replacing a gateway, without changing settings. */
@@ -176,7 +178,8 @@ export function inspectDesktopFirstParty(
   // so an owned env can never match the empty credential — it classifies stale, and a real
   // apply is what refreshes it.
   const target = firstPartyTarget(config, opencodexConfigDir, readClaudeInterceptProxyToken(opencodexConfigDir) ?? "");
-  const settings = inspectClaudeInterceptSettings(target.env, options.claudeConfigDir);
+  const settings = inspectClaudeInterceptSettings(target.env, options.claudeConfigDir,
+    { maxBytes: options.settingsReadLimit });
   return {
     interceptEnabled: claudeInterceptEnabled(config),
     proxyPort: target.proxyPort,
