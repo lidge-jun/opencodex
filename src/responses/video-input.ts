@@ -14,9 +14,11 @@ export const MAX_INLINE_VIDEO_BYTES = 50 * 1024 * 1024;
 
 /**
  * Decoded size of a `data:` URL, computed from its length; undefined for anything else.
- * Nothing is decoded or copied. A base64 payload decodes to three bytes per four characters;
- * any other payload (percent-encoded or plain) is charged its UTF-8 length, the most it can put
- * on the wire, so neither a non-base64 spelling nor non-ASCII text can slip under the cap.
+ * Nothing is decoded or copied. A payload is base64 only when `;base64` is the LAST header
+ * parameter, immediately before the comma (RFC 2397; decoders treat `;base64;foo` as plain
+ * bytes), and then decodes to three bytes per four characters. Any other payload is charged its
+ * UTF-8 length, which is never less than what it decodes to, so no header spelling, parameter
+ * order or non-ASCII text can slip under the cap.
  */
 export function inlineVideoDecodedBytes(videoUrl: string): number | undefined {
   if (!videoUrl.startsWith("data:")) return undefined;
@@ -25,7 +27,7 @@ export function inlineVideoDecodedBytes(videoUrl: string): number | undefined {
   if (comma < 0) return Buffer.byteLength(videoUrl, "utf8");
   const payload = videoUrl.length - comma - 1;
   if (payload <= 0) return 0;
-  const base64 = videoUrl.slice(5, comma).split(";").slice(1).some(parameter => parameter.trim().toLowerCase() === "base64");
+  const base64 = /;base64$/i.test(videoUrl.slice(5, comma));
   // Measured over the whole URL so the payload is never sliced into a copy; the header is short.
   if (!base64) return Buffer.byteLength(videoUrl, "utf8") - Buffer.byteLength(videoUrl.slice(0, comma + 1), "utf8");
   let padding = 0;

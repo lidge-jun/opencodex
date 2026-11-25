@@ -24,7 +24,7 @@ import { chatConversationToIr } from "../../src/protocols/codecs/chat-ir";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { untranslatedResponsesInputMedia } from "../../src/responses/input-media";
 import { parseRequest } from "../../src/responses/parser";
-import { MAX_INLINE_VIDEO_BYTES } from "../../src/responses/video-input";
+import { inlineVideoDecodedBytes, MAX_INLINE_VIDEO_BYTES } from "../../src/responses/video-input";
 import { estimateInputTokens } from "../../src/server/responses/input-admission";
 import { adapterBuildRefusal } from "../../src/server/responses/passthrough-build-error";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
@@ -129,6 +129,16 @@ describe("video input without a carrier is refused before send", () => {
     // 30 Mi characters of "é" are 30 Mi UTF-16 units but 60 MiB on the wire.
     const plain = `data:video/mp4,${"é".repeat(30 * 1024 * 1024)}`;
     expect(await refusal(KIMI, videoRequest("kimi-k3.1-pro", plain))).toContain("MiB");
+  });
+
+  test("only a terminal ;base64 marks a base64 payload; anything else is measured as UTF-8", async () => {
+    // A decoder reads ";base64;foo" and "; base64" as plain bytes, so the 3/4 formula would
+    // report 45 MiB for these 60 MiB payloads.
+    const payload = "A".repeat(60 * 1024 * 1024);
+    for (const header of ["data:video/mp4;base64;foo,", "data:video/mp4;base64 ,", "data:video/mp4;x=base64,"]) {
+      expect(await refusal(KIMI, videoRequest("kimi-k3.1-pro", header + payload))).toContain("MiB");
+    }
+    expect(inlineVideoDecodedBytes("data:video/mp4;codecs=avc1;BASE64,AAAA")).toBe(3);
   });
 
   test("both Chat conversions refuse an oversized clip before they build anything", () => {

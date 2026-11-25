@@ -326,6 +326,11 @@ async function handleChatCompletionsWithBudget(
       }
     }
   } catch (err) {
+    if (err instanceof ChatUnsupportedInputModalityError) {
+      logCtx.requestedModel = requestedModel;
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
+      return chatCompletionsErrorResponse(400, err.message, "invalid_request_error", err.code);
+    }
     if (err instanceof AnthropicSecondaryInstanceUnavailableError) {
       logCtx.requestedModel = requestedModel;
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 401, { closeReason: "non_stream" });

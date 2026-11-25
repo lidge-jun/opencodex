@@ -77,13 +77,14 @@ function config(direct: boolean): OcxConfig {
   } as OcxConfig;
 }
 
-async function send(direct: boolean, model: string, messages: unknown[]) {
+async function send(direct: boolean, model: string, messages: unknown[], extra: { protocols?: Record<string, unknown>; body?: Record<string, unknown> } = {}) {
   const cfg = config(direct);
+  if (extra.protocols) Object.assign(cfg.protocols as Record<string, unknown>, extra.protocols);
   saveConfig(cfg);
   const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model, stream: false, messages }),
+    body: JSON.stringify({ model, stream: false, messages, ...extra.body }),
   }), cfg, { model: "", provider: "" }, { requestId: `chat-video-${crypto.randomUUID()}`, start: Date.now() });
   return { status: response.status, body: await response.json() as { error?: { code?: string; message?: string } } };
 }
@@ -118,6 +119,17 @@ test("a Cursor-routed over-cap clip is refused before the usage estimate seriali
   const { status, body } = await send(true, "cursor/auto", [
     { role: "user", content: [{ type: "video_url", video_url: { url: oversized() } }] },
   ]);
+  expect(status).toBe(400);
+  expect(body.error?.code).toBe("unsupported_input_modality");
+  expect(upstreamSends).toBe(0);
+});
+
+test("the early Cursor/Kiro refusal ends the request before the protocol representability check", async () => {
+  // Under strict protocol rejection, `n: 2` alone would answer unsupported_feature. The video
+  // refusal happens first, at routing, and must not be swallowed by that block's catch.
+  const { status, body } = await send(true, "cursor/auto", [
+    { role: "user", content: [{ type: "video_url", video_url: { url: oversized() } }] },
+  ], { protocols: { unrepresentable: "reject" }, body: { n: 2 } });
   expect(status).toBe(400);
   expect(body.error?.code).toBe("unsupported_input_modality");
   expect(upstreamSends).toBe(0);
