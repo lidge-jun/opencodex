@@ -310,4 +310,30 @@ describe("failure classification and cleanup", () => {
     expect(await f.run("test-model", {}, AbortSignal.abort())).toMatchObject({ error: { code: "aborted" } });
     expect(f.calls).toHaveLength(0);
   });
+  test("opencode-go completion test sends deterministic x-opencode-session header", async () => {
+    const f = fixture({ baseUrl: "https://opencode.ai/zen/go/v1" });
+    f.config.providers["opencode-go"] = f.row;
+    const res = await runProviderCompletionTest({ config: f.config, name: "opencode-go", model: "glm-5" });
+    expect(res).toMatchObject({ ok: true, wire: "openai-chat" });
+    expect(f.calls).toHaveLength(1);
+    expect(new Headers(f.calls[0]?.init?.headers).get("x-opencode-session")).toBeTruthy();
+  });
+  for (const wire of ["openai-chat", "openai-responses"] as const) test(`Go ${wire} session is stable and respects explicit headers`, async () => {
+    const payload = wire === "openai-chat" ? chat() : frame({ type: "response.output_text.delta", delta: "OK" }) + frame({ type: "response.completed" });
+    const f = fixture({ adapter: wire, baseUrl: "https://opencode.ai/zen/go/v1" }, () => new Response(payload));
+    expect(await f.run()).toMatchObject({ ok: true, wire });
+    expect(await f.run()).toMatchObject({ ok: true, wire });
+    const header = (i: number) => new Headers(f.calls[i]!.init!.headers).get("x-opencode-session");
+    expect(header(0)).toMatch(/^ocx_[a-f0-9]{32}$/);
+    expect(header(1)).toBe(header(0));
+    f.row.headers = { "X-OpenCode-Session": "explicit-session" };
+    expect(await f.run()).toMatchObject({ ok: true });
+    expect(header(2)).toBe("explicit-session");
+  });
+  for (const baseUrl of ["https://provider.example/v1", "https://opencode.ai/zen/go/v1/other"]) test(`no Go session for ${baseUrl}`, async () => {
+    const f = fixture({ adapter: "openai-responses", baseUrl }, () => new Response(frame({ type: "response.output_text.delta", delta: "OK" }) + frame({ type: "response.completed" })));
+    expect(await f.run()).toMatchObject({ ok: true });
+    expect(new Headers(f.calls[0]!.init!.headers).has("x-opencode-session")).toBe(false);
+  });
+
 });
