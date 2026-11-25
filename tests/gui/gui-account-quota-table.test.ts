@@ -15,15 +15,15 @@ function antigravity(id: string, overrides: Partial<QuotaTableAccount> = {}, win
 }
 
 describe("account quota table", () => {
-  test("Antigravity windows land in Gemini, Claude & GPT and Argon pools as remaining percent", () => {
+  test("Antigravity windows land in Gemini, Claude & GPT and Argon pools as consumed percent", () => {
     const table = buildQuotaTable([
       antigravity("a", {}, [["Gem", 10, 2], ["Gem (Weekly)", 40, 50], ["Cla", 75, 3], ["Cla (Weekly)", 20, 100], ["Argon", 5, 1]]),
       antigravity("b", {}, [["Gem", 0, 4], ["Cla", 30, 1]]),
     ], NOW);
     expect(table.pools.map(pool => pool.key)).toEqual(["gemini", "claudeGpt", "argon"]);
     const a = table.rows[0]!;
-    expect(a.cells.gemini).toEqual({ fiveHour: { remaining: 90, resetAt: NOW + 2 * HOUR }, weekly: { remaining: 60, resetAt: NOW + 50 * HOUR } });
-    expect(a.cells.claudeGpt?.fiveHour?.remaining).toBe(25);
+    expect(a.cells.gemini).toEqual({ fiveHour: { used: 10, resetAt: NOW + 2 * HOUR }, weekly: { used: 40, resetAt: NOW + 50 * HOUR } });
+    expect(a.cells.claudeGpt?.fiveHour?.used).toBe(75);
     expect(table.rows[1]!.cells.argon).toBeUndefined();
   });
 
@@ -39,8 +39,8 @@ describe("account quota table", () => {
     }], NOW);
     expect(table.pools.map(pool => [pool.key, pool.scarce])).toEqual([["subscription", true]]);
     expect(table.rows[0]!.cells.subscription).toEqual({
-      fiveHour: { remaining: 36, resetAt: NOW + HOUR },
-      weekly: { remaining: 88, resetAt: NOW + 72 * HOUR },
+      fiveHour: { used: 64, resetAt: NOW + HOUR },
+      weekly: { used: 12, resetAt: NOW + 72 * HOUR },
     });
   });
 
@@ -99,7 +99,7 @@ describe("account quota table", () => {
 
   test("a reset already in the past shows no countdown", () => {
     const table = buildQuotaTable([antigravity("a", {}, [["Cla", 10, -1]])], NOW);
-    expect(table.rows[0]!.cells.claudeGpt?.fiveHour).toEqual({ remaining: 90 });
+    expect(table.rows[0]!.cells.claudeGpt?.fiveHour).toEqual({ used: 10 });
   });
 
   test("countdown text", () => {
