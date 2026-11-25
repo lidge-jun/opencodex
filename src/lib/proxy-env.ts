@@ -393,11 +393,18 @@ const MAX_EXPLICIT_PROXY_REDIRECTS = 20;
 /** Request fields the rebuilt `Request` carries; everything else in `init` (Bun's own options) is passed on. */
 const REQUEST_FIELDS = ["method", "headers", "body", "signal", "redirect", "duplex", "referrer", "referrerPolicy", "mode", "credentials", "cache", "integrity", "window"];
 
+/** Removed on a cross-origin hop, as Bun's own follower removes them (`CROSS_ORIGIN_STRIPPED_REQUEST_HEADERS`). */
+const CROSS_ORIGIN_STRIPPED_HEADERS = ["authorization", "proxy-authorization", "cookie", "host"];
+/** Request-body header names, dropped with the body when a redirect turns the request into a GET. */
+const REQUEST_BODY_HEADERS = ["content-type", "content-length", "content-encoding", "content-language", "content-location"];
+
 /**
  * Follow redirects of an explicit HTTP(S)-proxy request here, rechecking every destination before it
- * is contacted. Each hop is sent through the same proxy with `redirect: "manual"`. The Fetch rules
- * apply: 303, and 301/302 after a POST, become a bodiless GET; 307 and 308 replay the method and
- * body; a cross-origin hop drops `Authorization`; more than 20 redirects fail.
+ * is contacted. Each hop is sent through the same proxy with `redirect: "manual"`. The rules are the
+ * ones Bun 1.4.4's own follower applies: 303 (unless GET or HEAD), and 301/302 after a POST, become a
+ * bodiless GET; 307 and 308 replay the method and body, but a ReadableStream body cannot be replayed
+ * and fails; a cross-origin hop (scheme, host or port differ) drops the credential headers and Host;
+ * more than 20 redirects fail; a followed response reports `redirected: true`.
  */
 async function followExplicitProxyRedirects(
   base: typeof globalThis.fetch, input: RequestInfo | URL, init: RequestInit | undefined, proxyUrl: string, firstUrl: URL,
@@ -405,11 +412,15 @@ async function followExplicitProxyRedirects(
   const passthrough: Record<string, unknown> = { ...(init as Record<string, unknown> | undefined) };
   for (const field of REQUEST_FIELDS) delete passthrough[field];
   let request = new Request(input, { ...init, redirect: "manual" });
+  const streamedBody = typeof ReadableStream !== "undefined" && init?.body instanceof ReadableStream;
   let target = firstUrl;
   for (let hops = 0; ; hops += 1) {
     const response = await base(request.clone(), { ...passthrough, proxy: proxyUrl, redirect: "manual" } as ProxyCapableRequestInit);
     const location = REDIRECT_STATUSES.has(response.status) ? response.headers.get("location") : null;
-    if (location === null) return response;
+    if (location === null) {
+      if (hops > 0) Object.defineProperty(response, "redirected", { value: true });
+      return response;
+    }
     let next: URL;
     try {
       next = new URL(location, target);
@@ -420,11 +431,12 @@ async function followExplicitProxyRedirects(
     if (hops >= MAX_EXPLICIT_PROXY_REDIRECTS) throw new TypeError(`too many redirects from ${firstUrl.origin}`);
     if (next.protocol !== "http:" && next.protocol !== "https:") throw new TypeError(`redirect to an unsupported scheme from ${target.origin}`);
     if (processNoProxyExempts(next)) throw explicitProxyExemptedError(next);
-    const toGet = response.status === 303 ? request.method !== "HEAD"
+    const toGet = response.status === 303 ? request.method !== "GET" && request.method !== "HEAD"
       : (response.status === 301 || response.status === 302) && request.method === "POST";
+    if (!toGet && response.status !== 303 && streamedBody) throw new TypeError(`request body from ${firstUrl.origin} is not reusable for a redirect`);
     const headers = new Headers(request.headers);
-    if (toGet) for (const name of ["content-type", "content-length", "content-encoding", "content-language", "content-location"]) headers.delete(name);
-    if (next.origin !== target.origin) headers.delete("authorization");
+    if (toGet) for (const name of REQUEST_BODY_HEADERS) headers.delete(name);
+    if (next.origin !== target.origin) for (const name of CROSS_ORIGIN_STRIPPED_HEADERS) headers.delete(name);
     request = new Request(next, {
       method: toGet ? "GET" : request.method, headers, body: toGet ? null : request.body,
       redirect: "manual", signal: request.signal, duplex: "half",

@@ -204,8 +204,9 @@ matches at least as broadly as Bun: `bunNoProxyMatches` ports the `NO_PROXY` mat
 (comma and whitespace separators, subdomains, CIDR blocks, numeric ports, canonical addresses), unioned
 with `noProxyMatches`, for either spelling. While a bypass list is set, an explicit-proxy request in
 `follow` mode has its redirects followed by `configuredOutboundFetch` itself (`redirect: "manual"` per hop,
-Fetch method/body rules, `Authorization` dropped cross-origin), so every destination is checked before
-it is contacted. `tests/lib/explicit-proxy-no-proxy.test.ts` checks the route on real loopback sockets.
+with Bun's own redirect rules: method and body changes, no replay of a streamed body, the credential
+headers and Host dropped cross-origin, `redirected: true` on the result), so every destination is
+checked before it is contacted. `tests/lib/explicit-proxy-no-proxy.test.ts` checks the route on real loopback sockets.
 
 | Request path | Per-provider route | Current contract |
 | --- | --- | --- |

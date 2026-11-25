@@ -157,7 +157,8 @@ test("every entry form Bun 1.4.4 treats as a bypass is a bypass here", () => {
 });
 
 describe("redirects of an explicit-proxy request", () => {
-  type Seen = { method: string; path: string; body: string; authorization: string | null; apiKey: string | null };
+  type Seen = { method: string; path: string; body: string; authorization: string | null; apiKey: string | null;
+    cookie: string | null; proxyAuthorization: string | null; contentType: string | null };
   const viaProxy: Seen[] = [];
   const atExempt: Seen[] = [];
   let redirectTo = "";
@@ -165,7 +166,8 @@ describe("redirects of an explicit-proxy request", () => {
   let exempt: ReturnType<typeof Bun.serve>;
   let forwardProxy: ReturnType<typeof Bun.serve>;
   const seen = async (req: Request): Promise<Seen> => ({ method: req.method, path: new URL(req.url).pathname, body: await req.text(),
-    authorization: req.headers.get("authorization"), apiKey: req.headers.get("x-api-key") });
+    authorization: req.headers.get("authorization"), apiKey: req.headers.get("x-api-key"), cookie: req.headers.get("cookie"),
+    proxyAuthorization: req.headers.get("proxy-authorization"), contentType: req.headers.get("content-type") });
 
   beforeAll(() => {
     exempt = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async req => { atExempt.push(await seen(req)); return new Response("exempt"); } });
@@ -214,6 +216,46 @@ describe("redirects of an explicit-proxy request", () => {
     const response = await post();
     expect(await response.text()).toBe("landed GET ");
     expect(viaProxy[1]).toMatchObject({ path: "/landing", method: "GET", body: "", authorization: null });
+  });
+
+  // The same request through Bun's native follower (no bypass list, so Bun follows) and through the
+  // in-house one (a bypass list that does not match engages it) must reach the second hop identically.
+  for (const status of [307, 303]) {
+    test(`a cross-origin ${status} reaches its second hop exactly as Bun's own follower sends it`, async () => {
+      redirectStatus = status;
+      redirectTo = `http://localhost:${dest.port}/landing`;
+      const sendCredentialed = () => configuredOutboundFetch(`http://127.0.0.1:${dest.port}/start`, {
+        method: "POST", body: "synthetic-body", proxy: `http://127.0.0.1:${forwardProxy.port}`,
+        headers: { authorization: "Bearer synthetic-test-token", "x-api-key": "synthetic-test-key", cookie: "session=synthetic",
+          "proxy-authorization": "Basic c3ludGhldGlj", "content-type": "text/plain" },
+      } as ProxyCapableRequestInit as RequestInit);
+      const native = await sendCredentialed();
+      const nativeHops = viaProxy.splice(0);
+      process.env.NO_PROXY = "example.invalid";
+      const followed = await sendCredentialed();
+      const followedHops = viaProxy.splice(0);
+      expect(await followed.text()).toBe(await native.text());
+      expect(followed.redirected).toBe(native.redirected);
+      expect(followed.redirected).toBe(true);
+      expect(followedHops).toEqual(nativeHops);
+      expect(followedHops[1]).toMatchObject({ authorization: null, cookie: null, proxyAuthorization: null, apiKey: "synthetic-test-key" });
+    });
+  }
+
+  test("a streamed body is not replayed across a 307, like Bun", async () => {
+    process.env.NO_PROXY = "example.invalid";
+    redirectTo = `http://127.0.0.1:${dest.port}/landing`;
+    const body = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("streamed")); controller.close(); } });
+    await expect(configuredOutboundFetch(`http://127.0.0.1:${dest.port}/start`, {
+      method: "POST", body, duplex: "half", proxy: `http://127.0.0.1:${forwardProxy.port}` } as ProxyCapableRequestInit as RequestInit)).rejects.toThrow();
+    expect(viaProxy.map(request => request.path)).toEqual(["/start"]);
+  });
+
+  test("an unredirected response keeps redirected false", async () => {
+    process.env.NO_PROXY = "example.invalid";
+    const response = await configuredOutboundFetch(`http://127.0.0.1:${dest.port}/landing`, { proxy: `http://127.0.0.1:${forwardProxy.port}` } as ProxyCapableRequestInit as RequestInit);
+    expect(await response.text()).toBe("landed GET ");
+    expect(response.redirected).toBe(false);
   });
 
   test("a caller's manual redirect mode is left to the caller", async () => {
