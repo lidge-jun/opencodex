@@ -302,8 +302,8 @@ The `google` preset lists Gemini 4 Neon, Hydrogen, Carbon and Argon, Gemini 3.8 
 Flash, Gemini 3.5 Flash-Lite and Gemini 3.1 Pro Preview, and defaults to `gemini-3.6-flash`.
 Google no longer offers `gemini-3.5-flash` or `gemini-3.7-flash` in AI Studio and routes their
 endpoints to `gemini-3.6-flash` and `gemini-3.8-flash`
-([deprecations](https://ai.google.dev/gemini-api/docs/deprecations), checked 2026-11-26), so the
-picker no longer lists them; a saved selection keeps working. Usage estimates for Gemini 4 Argon and
+([deprecations](https://ai.google.dev/gemini-api/docs/deprecations), checked 2026-11-26), so new
+installs no longer list them. A saved model list keeps them, and a saved selection keeps working. Usage estimates for Gemini 4 Argon and
 Carbon use Google's list rate of $4 input, $20 output and $0.20 cached input per million tokens.
 The introductory rate that runs through November 30, 2026 is not applied.
 
