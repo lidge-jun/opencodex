@@ -1000,7 +1000,7 @@ State-changing: no. JSON mode: `payload`.
 
 ### `ocx combo set`
 
-Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--cooldown-reprobe <on|off>] [--cooldown-reprobe-interval <ms>] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->] [--description <text|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->] [--session-pin <duration|->] [--session-pin-effort <pinned|per-turn>] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--jev-effort-mode <decide|client>] [--json]`
+Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--cooldown-reprobe <on|off>] [--cooldown-reprobe-interval <ms>] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--quota-only-fallback <on|off>] [--preserve-fallback-model <on|off>] [--display-name <label|->] [--description <text|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->] [--session-pin <duration|->] [--session-pin-effort <pinned|per-turn>] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--jev-effort-mode <decide|client>] [--json]`
 
 Create, update or rename a combo.
 
@@ -1013,6 +1013,8 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--quota-only-fallback` | string | on limits ordered fallback to confirmed quota or billing exhaustion. |
+| `--preserve-fallback-model` | string | on holds the resolved model ID across ordered fallback hops. |
 | `--allow-metered-targets` | string | on grants operator consent to metered targets only on a loopback-only proxy; off clears it. |
 | `--targets` | string | Ordered provider/model[:weight] list; required for creation. |
 | `--strategy` | string | Routing strategy. |
