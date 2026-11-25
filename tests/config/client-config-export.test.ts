@@ -155,6 +155,29 @@ test("OpenCode managed document drops native rows in Codex Direct and keeps them
   }
 });
 
+test("OpenCode managed document keeps account-qualified native rows in Direct mode", () => {
+  // An account-qualified selector (`main/gpt-5.6-luna`) is pinned to one account and served
+  // from the pool credential (`codexAccountMode: "pool"` on the route), so it does not ride
+  // the caller's own bearer and works in Direct mode. Only the bare form must be dropped.
+  const models: ExportModel[] = [
+    { namespaced: "gpt-5.6-luna", provider: "openai", id: "gpt-5.6-luna", native: true },
+    { namespaced: "main/gpt-5.6-luna", provider: "openai", id: "main/gpt-5.6-luna", native: true },
+    { namespaced: "safe/model", provider: "safe", id: "model" },
+  ];
+  const direct = cfg({
+    codexAccountNamespaces: { main: "acct_primary" },
+    providers: {
+      openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", codexAccountMode: "direct" },
+      safe: { adapter: "openai-chat", baseUrl: "https://safe.example/v1" },
+    },
+  });
+
+  const doc = opencodeConfig(ctx({ models, config: direct }));
+  for (const block of [doc.provider.opencodex!.models, doc.providers.opencodex!.models]) {
+    expect(Object.keys(block).sort()).toEqual(["main/gpt-5.6-luna", "safe/model"]);
+  }
+});
+
 function piConfig(context: ExportContext = ctx()): PiGeneratedConfig {
   return buildClientConfig("pi", context) as PiGeneratedConfig;
 }

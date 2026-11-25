@@ -897,16 +897,42 @@ export function buildOpencodeProviderBlockFromCatalog(
  * opencode's decision, not a consequence of where we write it. Both blocks are generated in
  * one pass so they cannot disagree about the model set, the names, or the connection.
  */
+/**
+ * A native row addressed by its bare `gpt-*` slug, as opposed to an account-qualified
+ * `<namespace>/<gpt-*>` row. Only the bare form rides the caller's own credential in Codex
+ * Direct; the qualified form is pinned to an exact account and dispatched from the pool.
+ *
+ * A row is account-qualified when its first path segment is a configured Codex account
+ * namespace — the same spelling `routeModelInternal` uses to resolve
+ * `config.codexAccountNamespaces` — so this tracks the router rather than guessing from a
+ * slash that a routed row could also carry.
+ */
+function isBareNativeRow(
+  model: OpencodeCatalogModel,
+  config: Pick<OcxConfig, "codexAccountNamespaces">,
+): boolean {
+  if (model.native !== true) return false;
+  const slash = model.namespaced.indexOf("/");
+  if (slash <= 0) return true;
+  const namespace = model.namespaced.slice(0, slash);
+  return !Object.keys(config.codexAccountNamespaces ?? {}).includes(namespace);
+}
+
 function buildOpencodeClientConfig(ctx: ExportContext): OpencodeGeneratedConfig {
   const config = ctx.config ?? OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG;
   // Codex Direct forwards each caller's own bearer, while opencode sends the proxy's
-  // admission key, so a native row could only ever answer 401. Pi, DSH and the CLI's
-  // `ocx export` already drop native rows in that mode; the managed integration is the
-  // same client surface and has to agree, or a managed apply would list models that fail
-  // when selected. `ctx.config` is undefined for a caller that has no live config, and
-  // Direct cannot be claimed without one.
+  // admission key, so a *bare* native row could only ever answer 401. Pi, DSH and the
+  // CLI's `ocx export` already drop those rows in that mode; the managed integration is
+  // the same client surface and has to agree, or a managed apply would list models that
+  // fail when selected. `ctx.config` is undefined for a caller that has no live config,
+  // and Direct cannot be claimed without one.
+  //
+  // Account-qualified rows (`<namespace>/<gpt-*>`), which also carry `native: true`, are
+  // deliberately kept: `routeModelInternal` resolves them to an exact account and serves
+  // them from the **pool** credential (`codexAccountMode: "pool"` on the route), so they do
+  // not depend on the caller's own bearer and still work in Direct mode.
   const models = normalizeExportModels(ctx.models).filter(model =>
-    !(model.native === true && providerCodexAccountMode("openai", ctx.config?.providers?.openai) === "direct"));
+    !(isBareNativeRow(model, config) && providerCodexAccountMode("openai", config.providers?.openai) === "direct"));
   const blocks = opencodeProviderBlocks(ctx.baseUrl, models, config, { keylessInference: ctx.keylessInference === true });
   return {
     $schema: OPENCODE_CONFIG_SCHEMA,
