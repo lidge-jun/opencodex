@@ -16,6 +16,7 @@ import {
 import { providerEgressFetchInit, resolveProviderEgress } from "../../src/lib/provider-egress";
 import { providerFetch } from "../../src/server/responses/fetch-helpers";
 import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
+import { resetProviderTlsProfileForTests, setProviderTlsRuntimeForTest } from "../../src/lib/provider-tls-profile";
 import type { OcxProviderConfig } from "../../src/types";
 
 const ENV_KEYS = ["NO_PROXY", "no_proxy", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] as const;
@@ -201,6 +202,24 @@ describe("the provider send boundary", () => {
       expect(hits).toEqual({ dest: 1, proxy: 0 });
     } finally {
       unregister();
+    }
+  });
+
+  test("the Antigravity TLS profile transport never receives an exempted proxy route", async () => {
+    process.env.NO_PROXY = ".googleapis.com";
+    let tlsSends = 0;
+    setProviderTlsRuntimeForTest({ env: { ...process.env }, fetch: async () => { tlsSends += 1; return new Response("tls"); } });
+    try {
+      const send = providerFetch({
+        adapter: "google", authMode: "oauth", googleMode: "cloud-code-assist", baseUrl: "https://cloudcode-pa.googleapis.com",
+        tlsProfile: "antigravity-browser", proxy: proxyUrl,
+      } as unknown as OcxProviderConfig, undefined, { providerName: "google-antigravity" });
+      await expect(send("https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent", { method: "POST", body: "{}" }))
+        .rejects.toBeInstanceOf(ExplicitProxyExemptedError);
+      expect(tlsSends).toBe(0);
+      expect(hits).toEqual({ dest: 0, proxy: 0 });
+    } finally {
+      resetProviderTlsProfileForTests();
     }
   });
 

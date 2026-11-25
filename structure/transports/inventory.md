@@ -200,7 +200,8 @@ toward a destination that the process `NO_PROXY` or `no_proxy` exempts, because 
 WebSocket connect directly there: `providerEgressSendInit` refuses such a route against the destination
 actually sent, before its dispatch receipt (and before `beforeDispatch` when no plugin rewrite or
 dispatch override can still change the destination), `configuredOutboundFetch` refuses the send with
-`ExplicitProxyExemptedError` as a backstop for every other caller, the Responses WebSocket upstream leaves such a turn to that HTTP path, and
+`ExplicitProxyExemptedError` as a backstop for every other caller (the Antigravity TLS profile
+transport, reachable only through `providerFetch`, therefore never receives such a route), the Responses WebSocket upstream leaves such a turn to that HTTP path, and
 the Microsoft 365 Copilot ChatHub dial refuses before creating its socket. `processNoProxyExempts`
 matches at least as broadly as Bun: `bunNoProxyMatches` ports the `NO_PROXY` matcher of Bun 1.4.4
 (comma and whitespace separators, subdomains, CIDR blocks, numeric ports, canonical addresses), unioned
