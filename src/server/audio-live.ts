@@ -9,7 +9,7 @@ import { captureExplicitOpenAiCallerAuth } from "../providers/openai-sidecar";
 import type { OcxConfig } from "../types";
 import type { AudioClient } from "./audio-client";
 import { finishAudioUpstream, type AudioSocketTarget } from "./audio-dictation";
-import { LIVE_AUDIO_MODEL, resolveAudioUpstream, type AudioUpstream } from "./audio-upstream";
+import { LIVE_AUDIO_MODEL, resolveAudioUpstream, resolveLiveAudioModel, type AudioUpstream } from "./audio-upstream";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import {
   backendJsonBodyFromApiMultipart, buildLiveSidebandUpstreamWsUrl, forwardLiveUrl, keyedLiveUrl,
@@ -75,11 +75,15 @@ export async function handleExternalLive(
     if (offer instanceof Response) return offer;
     if (!options.bindings.hasCapacity()) return formatErrorResponse(503, "server_busy", "Live call capacity reached");
     const frameless = new URL(req.url).pathname === "/v1/live";
-    let session = offer.session ? { ...offer.session } : frameless ? {
-      model: LIVE_AUDIO_MODEL, instructions: "", audio: { output: { voice: "cove" } }, delegation: { type: "client" },
+    // Only a session the proxy writes itself gets a voice, and only once its destination is known.
+    const synthesized = !offer.session && frameless;
+    let session: Record<string, unknown> | undefined = offer.session ? { ...offer.session } : frameless ? {
+      model: LIVE_AUDIO_MODEL, instructions: "", delegation: { type: "client" },
     } : undefined;
-    if (session?.model === "gpt-live-1") session.model = LIVE_AUDIO_MODEL;
-    const model = typeof session?.model === "string" ? session.model : LIVE_AUDIO_MODEL;
+    if (typeof session?.model === "string" && session.model) session.model = resolveLiveAudioModel(session.model);
+    // Only a named model is judged as one, blank counting as none (as in live.ts liveCallCreateModel);
+    // a session the proxy writes always names the default.
+    const model = typeof session?.model === "string" && session.model.trim() ? session.model : undefined;
     const resolved = await resolveAudioUpstream(options.client.headers, config, log, {
       admission: options.client.admission, model, lease: options.lease, signal: deadline.signal,
     });
@@ -87,6 +91,8 @@ export async function handleExternalLive(
     deadline.signal.throwIfAborted();
     if (resolved instanceof Response) return resolved;
     relay = resolved;
+    // openai/codex realtime_call.rs inserts cove for ChatGPT calls; an API Frameless call defaults to marin.
+    if (synthesized && session) session = { ...session, audio: { output: { voice: relay.keyed ? "marin" : "cove" } } };
     session = isolateCodexPoolClientMetadata(session, relay.authContext?.kind === "pool"
       ? relay.authContext.chatgptAccountId : undefined) as typeof session;
     const headers = protocolHeaders(options.client, relay, frameless);
@@ -160,14 +166,14 @@ export async function resolveExternalLiveSocket(
   const frameless = upstreamTarget.style === "frameless-path" || upstreamTarget.style === "frameless-standalone";
   if (upstreamTarget.style === "frameless-standalone") {
     const query = new URLSearchParams(upstreamTarget.query);
-    if (!query.has("model") || query.get("model") === "gpt-live-1") query.set("model", LIVE_AUDIO_MODEL);
+    query.set("model", resolveLiveAudioModel(query.get("model")));
     upstreamTarget = { ...upstreamTarget, query: query.toString() };
   }
   // What this socket will actually run: the model a bound call settled on when
   // this same key created it, or the one a standalone session forwards in its
-  // own query. Reading only the Frameless query left a Realtime standalone
-  // socket judged as the default while its query carried another model.
-  const model = binding?.model ?? liveSidebandModel(upstreamTarget) ?? LIVE_AUDIO_MODEL;
+  // own query. When neither names one, the destination is unnamed and judged as
+  // such, never as the default.
+  const model = binding ? binding.model : liveSidebandModel(upstreamTarget);
   const relay = await resolveAudioUpstream(client.headers, config, log, {
     admission: client.admission, model, lease: options.lease,
     signal: options.signal,

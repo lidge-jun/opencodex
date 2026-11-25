@@ -156,6 +156,10 @@ WidgetKit 擴充套件，可顯示代理狀態、今日用量與供應商配額�
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
 <td>感謝 <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a> 贊助本專案！TokenLab 為程式設計智慧體提供統一的多模型 API，一把 API Key 即可接入主流模型，支援 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及串流輸出和工具呼叫。同時提供 MCP 伺服器和 Agent Skills，方便接入現有工作流程；交付模式可選，按量付費。在「新增供應商」選擇器選 <code>TokenLab</code>，或執行 <code>ocx provider add tokenlab</code>。</td>
 </tr>
+<tr>
+<td width="180"><a href="https://runapi.co"><img src="../assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
+<td>感謝 <a href="https://runapi.co">RunAPI</a> 贊助本專案！RunAPI 是統一的 AI API 閘道，一組 API 金鑰即可使用涵蓋 OpenAI、Anthropic、Google、xAI、DeepSeek、阿里巴巴、Moonshot 等廠商 200 多個模型的目錄，透過 OpenAI Chat Completions 與 Responses、Anthropic Messages 以及 Gemini 原生 API 格式提供（可用格式因模型而異）。智慧路由會為每個請求選擇快速穩定的供應商節點，並在故障時自動切換；按量計費，價格通常遠低於官方標準價。在「新增供應商」選擇器選 <code>RunAPI</code>，或執行 <code>ocx provider add runapi</code>。</td>
+</tr>
 </tbody>
 </table>
 

@@ -826,6 +826,16 @@ are on the [API-key catalog](/guides/api-key-catalog/) page. Its sections:
 - [GPT-5.6 preview paths](/guides/api-key-catalog/#gpt-56-preview-paths)
 - [Ollama Cloud](/guides/api-key-catalog/#ollama-cloud)
 
+### RunAPI
+
+[RunAPI](https://runapi.co) is a Standard sponsor. Select **RunAPI** in **Add provider** or
+run `ocx provider add runapi` and enter a RunAPI API key. The preset uses OpenAI Chat
+Completions with the base URL `https://runapi.co/v1`, and live discovery lists the models your
+key can use. RunAPI is a unified gateway to 200+ models from OpenAI, Anthropic, Google, xAI,
+DeepSeek, Alibaba, Moonshot and others, billed pay-as-you-go. RunAPI also serves the same API at
+`https://runapi.host`, a mirror for networks that cannot reach `runapi.co`; to use it, change the
+provider's base URL to `https://runapi.host/v1`.
+
 ## 4. Local providers
 
 Point opencodex at a local OpenAI-compatible server — usually with a blank key:

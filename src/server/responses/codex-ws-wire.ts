@@ -643,3 +643,12 @@ export function codexWsCreateFrameExceedsLimit(
   if (frameText.length * 3 < limitBytes) return false;
   return Buffer.byteLength(frameText, "utf8") >= limitBytes;
 }
+
+/**
+ * True when the frame is strictly larger than the ceiling the connection advertised
+ * (`x-codex-websocket-max-message-bytes`), the comparison Codex itself makes before it sends
+ * (openai/codex ed7ca22bb6). No advertisement leaves only the static ceiling above.
+ */
+export function codexWsFrameExceedsAdvertisedLimit(frameText: string, advertisedBytes: number | undefined): boolean {
+  return advertisedBytes !== undefined && codexWsCreateFrameExceedsLimit(frameText, advertisedBytes + 1);
+}
