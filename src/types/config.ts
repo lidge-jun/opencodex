@@ -67,6 +67,13 @@ export interface OcxClaudeCodeConfig extends OcxClaudeCodeToolLoadingConfig {
    * Independent of Desktop's first-party mode. Absent/false = off. */
   cliFirstParty?: boolean;
   /**
+   * Extra Claude Code config directories (`CLAUDE_CONFIG_DIR` homes) the operator registered so
+   * the Connections view reports each one. Read-only: OpenCodex never writes them and never
+   * discovers homes on disk; the first-party toggle keeps acting on the default home only.
+   * Absolute paths or `~/`-relative paths; anything else is ignored.
+   */
+  extraConfigDirs?: string[];
+  /**
    * Opt-in relocation of supported trailing Claude harness notices from system instructions
    * to a user input message on translated routes. Changes the Desktop cache-key prefix.
    * Default: false; only literal true enables it. Native passthrough is unchanged.

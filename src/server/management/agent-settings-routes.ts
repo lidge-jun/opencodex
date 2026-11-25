@@ -1535,6 +1535,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       return jsonResponse({ error: code, code }, code === "settings_changed" ? 409 : 500);
     }
   }
+  if (url.pathname.startsWith("/api/claude-code/first-party/")) return (await import("./claude-first-party-preview-routes")).handleClaudeFirstPartyPreviewRoute(ctx);
   if (url.pathname === "/api/claude-code" && req.method === "GET") {
     const models = await fetchAllModels(config);
     const { buildClaudeContextWindows, effectiveModelEnv, nativeClaudePassthroughFor, probeClaudeCodeVersionForTierFill } = await import("../../claude/context-windows");
@@ -1679,7 +1680,8 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       return jsonResponse({ error: "cliFirstParty must be sent alone", code: "cli_first_party_not_alone" }, 400);
     if (body.cliFirstParty !== undefined) {
       const { claudeInterceptEnabled, claudeInterceptProxyPort, getClaudeInterceptState } = await import("../../claude/intercept/runtime");
-      const { captureDesktopFirstPartyRollback, inspectDesktopFirstParty, observeClaudeDesktopMode, resolveClaudeDesktopMode, withFirstPartySecretsSettled } = await import("../../claude/desktop-first-party");
+      const { captureDesktopFirstPartyRollback, inspectDesktopFirstParty, observeClaudeDesktopMode, withFirstPartySecretsSettled } = await import("../../claude/desktop-first-party");
+      const { claudeFirstPartyTransition } = await import("../../claude/first-party-transition");
       const { firstPartyDesired, readFirstPartyProxyStatus, reconcileClaudeFirstPartySettings } = await import("../../claude/first-party-settings");
       const { commitClaudeCodeBlock } = await import("../../claude/claude-code-block");
       let bound = (deps.getClaudeInterceptState ?? getClaudeInterceptState)();
@@ -1719,25 +1721,9 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
             refusal: { error: `Claude intercept port mismatch (configured ${persistedPort}, bound ${bound?.proxyPort ?? "none"})`,
               code: "port_mismatch" as const, bound: bound?.proxyPort, configured: persistedPort } } };
         }
-        const before = structuredClone(persisted);
-        const previous = { present: Object.hasOwn(persisted.claudeCode ?? {}, "cliFirstParty"),
-          value: persisted.claudeCode?.cliFirstParty === true };
-        // Pin the mode Desktop resolves to *after* this mutation: while cliFirstParty is set the
-        // shared env is suppressed as Desktop evidence, so an opt-out observed with the flag still
-        // on would pin gateway and disconnect a Desktop install that predates the marker.
-        const observedBefore = structuredClone(before);
-        if (!body.cliFirstParty) delete observedBefore.claudeCode?.cliFirstParty;
-        const pinnedMode = persisted.claudeCode?.desktopMode === undefined
-          ? resolveClaudeDesktopMode(before, observeClaudeDesktopMode(observedBefore)) : undefined;
-        const nextBlock = { ...(persisted.claudeCode ?? {}) };
-        if (body.cliFirstParty) nextBlock.cliFirstParty = true;
-        else delete nextBlock.cliFirstParty;
-        if (pinnedMode) nextBlock.desktopMode = pinnedMode;
+        // Shared with GET /api/claude-code/first-party/preview, so the preview shows this transition.
+        const { nextBlock, previous, pinnedMode, retainedAmbiguous } = claudeFirstPartyTransition(persisted, body.cliFirstParty === true);
         commitClaudeCodeBlock(persisted, nextBlock);
-        // An opt-out that pins first-party from the shared env cannot tell whether that env was
-        // Desktop's or a hand-configured CLI-only one; the env is retained (Desktop keeps its
-        // route) and the caller is warned so it can pin gateway explicitly to release it.
-        const retainedAmbiguous = !body.cliFirstParty && previous.value && pinnedMode === "first-party";
         return { changed: true, value: { claudeCode: structuredClone(persisted.claudeCode), previous, pinnedMode, retainedAmbiguous } };
         });
         if (outcome.status !== "unavailable" && !("refusal" in outcome.value)) {
