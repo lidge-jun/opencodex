@@ -179,7 +179,8 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
  * resources, and the PowerShell fallback cannot start inside Part A's 1 s manager-state cap on a
  * cold machine (#8863), so the words observed from shipped resources are read here: zh-CN, ja-JP
  * and ko-KR from their System32 locale directories, ko-KR running/ready also from two machines.
- * Any other word stays unknown and falls back to Get-ScheduledTask's locale-independent State enum.
+ * Any other word stays unknown here and falls back to the numeric TASK_STATE read through the
+ * Schedule.Service COM object, which is locale-independent and imports no module.
  */
 // A queued instance can launch after Part A. Only ready and disabled prove inactivity.
 const TASK_CSV_ACTIVE = new Set(["running", "queued", "正在运行", "已排队", "실행 중", "대기", "実行中", "キューに登録済み"]);

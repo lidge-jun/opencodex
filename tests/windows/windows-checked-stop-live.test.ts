@@ -120,6 +120,23 @@ describe("capped command answers", () => {
     expect(await deps.taskState(1_000)).toBe(expected);
   });
 
+  test("the numeric state read gets only the time the CSV query left, and none once it is spent", async () => {
+    let now = 1_000_000;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      for (const [csvMs, expectedTimeout, expected] of [[900, 100, "not-running"], [1_000, null, "unknown"]] as const) {
+        const calls: Array<[string, number]> = [];
+        const deps = windowsCheckedStopLiveDeps({ run: async (program, _args, timeout) => {
+          calls.push([program, timeout]);
+          if (program === "schtasks") { now += csvMs; return result(0, '"\\opencodex-proxy","N/A","Prêt"'); }
+          return result(0, "3");
+        } });
+        expect(await deps.taskState(1_000)).toBe(expected);
+        expect(calls).toEqual(expectedTimeout === null ? [["schtasks", 1_000]] : [["schtasks", 1_000], ["powershell", expectedTimeout]]);
+      }
+    } finally { clock.mockRestore(); }
+  });
+
   test("the #3064 launcher survives the task stop proof round trip", async () => {
     const previousHome = process.env.OPENCODEX_HOME;
     const sid = "S-1-5-21-100-200-300-1001";
