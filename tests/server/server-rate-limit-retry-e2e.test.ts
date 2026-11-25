@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { startServer } from "../../src/server";
+import { handleResponses } from "../../src/server/responses/core";
+import { acquireSpendLedgerOwner } from "../../src/lib/spend-ledger-owner";
+import { CODEX_TEXT_GUARDED_BUDGET_POLICY, createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -381,6 +384,100 @@ describe("server same-target 429 retry (end-to-end)", () => {
       } finally {
         globalThis.fetch = originalFetch;
       }
+    }
+  });
+});
+
+describe("Vertex Retry-After across retry layers", () => {
+  const model = "gemini-3-pro-preview";
+  const cases = [
+    { name: "Responses returns an oversized provider delay", header: "300", expectedAdvice: "300" },
+    { name: "Responses applies a shorter configured wait ceiling", header: "1", expectedAdvice: "1" },
+    { name: "Responses preserves the guarded send limit", header: "300", expectedAdvice: "300", transient: 2, guarded: true },
+    { name: "search returns an oversized provider delay", header: "300", expectedAdvice: "300", search: true },
+    { name: "search returns promoted RetryInfo", retryInfo: "300s", expectedAdvice: "300", search: true },
+    { name: "search does not replay a held 429 after tool results", header: "300", search: true, afterSearch: true },
+    { name: "Responses can retry an affordable delay", header: "1", maxIntervalMs: 1000, recover: true },
+    { name: "Responses keeps the explicit outer opt-out", header: "300", respectRetryAfter: false, recover: true },
+  ];
+
+  test.each(cases)("$name", async ({
+    header, retryInfo, expectedAdvice, transient = 0, search = false, guarded = false,
+    afterSearch = false, maxIntervalMs = 100, respectRetryAfter = true, recover = false,
+  }) => {
+    const originalFetch = globalThis.fetch;
+    const ledgerOwner = acquireSpendLedgerOwner();
+    const sendBudget = guarded ? createRequestExecutionBudget(CODEX_TEXT_GUARDED_BUDGET_POLICY) : undefined;
+    const sends: number[] = [];
+    let searches = 0;
+    const unexpected: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (afterSearch && url.href === "https://api.exa.ai/search") {
+        searches += 1;
+        return Response.json({ results: [{ title: "Fixture source", url: "https://example.invalid/source", text: "Fixture result" }] });
+      }
+      if (url.origin !== "https://aiplatform.googleapis.com" || !url.pathname.includes(`/models/${model}:`)) {
+        unexpected.push(url.origin);
+        throw new Error("Unexpected fixture destination");
+      }
+      if (afterSearch && sends.length === 0) {
+        sends.push(200);
+        const toolCall = { functionCall: { name: "web_search", args: { query: "fixture" } } };
+        const turn = { candidates: [{ content: { role: "model", parts: [toolCall] }, finishReason: "STOP" }] };
+        return new Response(`data: ${JSON.stringify(turn)}\n\n`, { headers: { "content-type": "text/event-stream" } });
+      }
+      if (recover && sends.length > 0) {
+        sends.push(200);
+        return Response.json({ candidates: [{ content: { role: "model", parts: [{ text: "fixture recovered" }] }, finishReason: "STOP" }] });
+      }
+      const status = sends.length < transient ? 503 : 429;
+      sends.push(status);
+      return Response.json({ error: {
+        status: status === 429 ? "RESOURCE_EXHAUSTED" : "UNAVAILABLE",
+        message: "Fixture capacity",
+        ...(retryInfo ? { details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: retryInfo }] } : {}),
+      } }, { status, headers: header && status === 429 ? { "Retry-After": header } : undefined });
+    }) as typeof fetch;
+
+    try {
+      const config: OcxConfig = {
+        defaultProvider: "vertex-fixture",
+        providers: {
+          "vertex-fixture": {
+            adapter: "google", googleMode: "vertex", baseUrl: "https://aiplatform.googleapis.com",
+            project: "fixture-project", location: "global", authMode: "key", apiKey: "fixture-key",
+            models: [model], retryOn429: { attempts: 2, intervalMs: 100, maxIntervalMs, respectRetryAfter },
+          },
+        },
+        ...(search ? { webSearchSidecar: { backend: "exa", exaApiKey: "fixture-key" } } : {}),
+      };
+      const req = new Request("http://fixture.invalid/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: `vertex-fixture/${model}`, input: "hello", stream: search, store: false,
+          ...(search ? { tools: [{ type: "web_search" }] } : {}),
+        }),
+      });
+      const response = await handleResponses(req, config, { model: "", provider: "" }, { sendBudget });
+      const body = await response.text();
+      expect(unexpected).toEqual([]);
+      expect({ status: response.status, advice: response.headers.get("retry-after"), sends, searches }).toEqual({
+        status: recover || afterSearch ? 200 : 429,
+        advice: expectedAdvice ?? null,
+        sends: afterSearch ? [200, 429] : recover ? [429, 200] : [...Array<number>(transient).fill(503), 429],
+        searches: afterSearch ? 1 : 0,
+      });
+      expect(body).toContain(recover ? "fixture recovered" : "Fixture capacity");
+      if (afterSearch) expect(body).toContain("event: response.failed");
+      if (sendBudget) {
+        expect(sendBudget.used).toBe(sends.length);
+        expect(sendBudget.reserveSpent).toBe(false);
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+      ledgerOwner.release();
     }
   });
 });

@@ -29,6 +29,7 @@ import { pacingHeaderDeadline } from "./header-deadline";
 import { redactSecretString } from "../lib/redact";
 import { recordLocalFailureDetail, type FailureDetail } from "../server/request-log-failure-detail";
 import { readBoundedResponseBody } from "../lib/bounded-body";
+import { formatClientRetryAfter } from "../lib/client-retry-after";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, RESET_RETRY_MAX_ATTEMPTS, SendBudgetExhaustedError } from "../lib/upstream-retry";
 import { unwrapUpstreamRetryEvidenceError } from "../codex/auth-context";
 import { HostedAdvisorSpendRefusal } from "../server/responses/policy-request-scope";
@@ -345,7 +346,7 @@ class LoopError extends Error {
     readonly status: number,
     message: string,
     readonly event?: Extract<AdapterEvent, { type: "error" }>,
-    readonly detail?: Pick<SidecarLoopFailure, "upstreamCode" | "nonReplayable" | "verifiedPlanRefusal">,
+    readonly detail?: Pick<SidecarLoopFailure, "upstreamCode" | "nonReplayable" | "verifiedPlanRefusal"> & { retryAfter?: string },
     /** A deadline this proxy enforced; logged as local failure detail, never as upstream evidence. */
     readonly localFailure?: FailureDetail,
   ) {
@@ -635,6 +636,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         const event = await deps.thinkingRecovery.projectHttpFailure(prepared.response, signal);
         throw new LoopError(event.status ?? prepared.response.status, event.message, event);
       }
+      const detail = {
+        nonReplayable: isNonReplayableResponse(prepared.response),
+        retryAfter: prepared.response.status === 429 && prepared.responseAdapter.name === "google"
+          && isSameTargetRetryHold(prepared.response)
+          ? formatClientRetryAfter(prepared.response.headers.get("retry-after")) : undefined,
+      };
       let body: Awaited<ReturnType<typeof readBoundedResponseBody>>;
       try {
         body = await readBoundedResponseBody(prepared.response, { signal });
@@ -645,7 +652,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // raw message. A parent/client cancellation still owns the request lifecycle as 499.
         if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
         throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}`, undefined,
-          { nonReplayable: isNonReplayableResponse(prepared.response) });
+          detail);
       }
       let formatted = "";
       let upstreamCode: string | undefined;
@@ -669,7 +676,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       }
       const suffix = formatted ? `: ${formatted.slice(0, 400)}` : "";
       throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}${suffix}`, undefined,
-        { upstreamCode, nonReplayable: isNonReplayableResponse(prepared.response) });
+        { ...detail, upstreamCode });
     }
   };
 
@@ -1264,6 +1271,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       recordLocalLoopFailure(e);
       const failure = loopFailure(e);
       const failed = markSidecarContextOverflow(jsonError(e.status, e.message, e.event), failure);
+      if (e.detail?.retryAfter !== undefined) failed.headers.set("Retry-After", e.detail.retryAfter);
       if (failure.verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failed);
       return failed;
     }
