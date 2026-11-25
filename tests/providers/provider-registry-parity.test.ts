@@ -549,7 +549,7 @@ describe("provider registry parity", () => {
       defaultModel: "qwen3.8-max",
       liveModels: false,
       models: [
-        "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+        "qwen4-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
         "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "glm-5.2", "glm-5.3",
       ],
       modelInputModalities: {
@@ -577,7 +577,7 @@ describe("provider registry parity", () => {
       preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"]),
     });
     expect(PROVIDER_REGISTRY.find(entry => entry.id === "alibaba-token-plan")?.directReasoningEffortModels)
-      .toEqual(["qwen3.8-max", "qwen3.8-flash"]);
+      .toEqual(["qwen3.8-max", "qwen3.8-flash", "qwen4-max"]);
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
       .not.toContain("qwen3.8-max");
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
@@ -664,7 +664,7 @@ describe("provider registry parity", () => {
       .map(entry => entry.id);
     // The 5.3 family carries the number its own catalog reports, 1_048_576, which is what the
     // domestic Responses row already used. 5.2 keeps the round figure it was seeded with.
-    expect(zai?.modelContextWindows).toEqual({ "glm-5.3": 1_048_576, "glm-5.3[1m]": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 });
+    expect(zai?.modelContextWindows).toEqual({ "glm-5.4": 1_048_576, "glm-5.4[1m]": 1_048_576, "glm-5.3": 1_048_576, "glm-5.3[1m]": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 });
     // BUG-R5: glm-5.3-flash is a native VLM (docs.z.ai/guides/vlm/glm-5.3-flash), so it
     // must never sit in noVisionModels - that list routes a model's images through the
     // proxy's vision sidecar, which hands the model a text description of a picture it
@@ -707,8 +707,8 @@ describe("provider registry parity", () => {
     // no default effort and no output cap - and this assertion pinned that gap in
     // place rather than catching it, because it was written from the incomplete
     // state instead of from the family definition.
-    expect(zai?.modelDefaultReasoningEfforts).toEqual({ "glm-5.3": "max", "glm-5.3[1m]": "max", "glm-5.3-flash": "max" });
-    expect(zai?.modelMaxOutputTokens).toEqual({ "glm-5.3": 131_072, "glm-5.3[1m]": 131_072, "glm-5.3-flash": 131_072 });
+    expect(zai?.modelDefaultReasoningEfforts).toEqual({ "glm-5.4": "max", "glm-5.4[1m]": "max", "glm-5.3": "max", "glm-5.3[1m]": "max", "glm-5.3-flash": "max" });
+    expect(zai?.modelMaxOutputTokens).toEqual({ "glm-5.4": 131_072, "glm-5.4[1m]": 131_072, "glm-5.3": 131_072, "glm-5.3[1m]": 131_072, "glm-5.3-flash": 131_072 });
     // Every 5.3 row carries the same three-tier ladder. Asserted per member rather
     // than as one object literal so adding a member cannot quietly skip it.
     for (const id of ["glm-5.3", "glm-5.3[1m]", "glm-5.3-flash"]) {
@@ -789,7 +789,7 @@ describe("provider registry parity", () => {
       baseUrl: "https://open.bigmodel.cn/api/v1",
       authKind: "key",
       defaultModel: "glm-5.3",
-      models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"],
+      models: ["glm-5.4", "glm-5.3", "glm-5.3-flash", "glm-5-turbo"],
       liveModels: false,
       preserveCustomDestination: true,
       preserveResponsesReasoningContent: true,
@@ -800,13 +800,13 @@ describe("provider registry parity", () => {
     // Pinned separately from the global VLM rule above so that copying glm-5.3's ["text"] onto
     // Flash fails here, naming this preset, rather than only in a loop over every provider.
     const upstreamModalities = {
-      "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"], "glm-5-turbo": ["text"],
+      "glm-5.4": ["text", "image"], "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"], "glm-5-turbo": ["text"],
     };
     expect(registry.modelInputModalities).toEqual(upstreamModalities);
     expect(registry.modelInputModalities?.["glm-5.3-flash"]).toContain("image");
     expect(registry.noVisionModels ?? []).not.toContain("glm-5.3-flash");
     expect(KEY_LOGIN_PROVIDERS[id]).toMatchObject({
-      models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"], liveModels: false, apiKeyValidation: "unknown",
+      models: ["glm-5.4", "glm-5.3", "glm-5.3-flash", "glm-5-turbo"], liveModels: false, apiKeyValidation: "unknown",
     });
     const provider = providerConfigSeed(registry);
     enrichProviderFromRegistry(id, provider);
@@ -821,6 +821,8 @@ describe("provider registry parity", () => {
     // alike below, and this assertion is what keeps the reason for them different.
     expect(provider.modelInputModalities).toEqual(upstreamModalities);
     expect(models).toMatchObject([
+      { id: "glm-5.4", contextWindow: 1_048_576, reasoningEfforts: ["low", "high", "max"],
+        defaultReasoningEffort: "max", supportsReasoningSummaries: true, inputModalities: ["text", "image"] },
       { id: "glm-5.3", contextWindow: 1_048_576, reasoningEfforts: ["low", "high", "max"],
         defaultReasoningEffort: "max", supportsReasoningSummaries: true, inputModalities: ["text", "image"] },
       { id: "glm-5.3-flash", contextWindow: 1_048_576, reasoningEfforts: ["low", "high", "max"],
@@ -830,6 +832,7 @@ describe("provider registry parity", () => {
     ]);
     const entries = buildCatalogEntries(nativeTemplate(), [], models);
     for (const [modelId, window, efforts] of [
+      ["glm-5.4", 1_048_576, ["low", "high", "max", "ultra"]],
       ["glm-5.3", 1_048_576, ["low", "high", "max", "ultra"]],
       ["glm-5.3-flash", 1_048_576, ["low", "high", "max", "ultra"]],
       ["glm-5-turbo", 204_800, []],

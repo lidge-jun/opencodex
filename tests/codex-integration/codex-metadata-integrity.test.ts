@@ -620,3 +620,60 @@ describe("Lite follows the serialized wire model", () => {
     }
   });
 });
+
+describe("Codex stream-exclusion headers (openai/codex 8ecb4c9d0f, ae6c0c8ac1, a4ee1058d9, 98f8a3311b)", () => {
+  // Codex sends both on every Responses HTTP request and WebSocket handshake (core/src/client.rs
+  // build_responses_headers and with_default_stream_exclusions @5505daf388). The canonical backend
+  // then omits the echoed tool catalog, per-item usage attribution, delta sequence numbers and
+  // preliminary reasoning ciphertext.
+  const exclusions = {
+    "x-codex-exclude": "tools,usage.attribution",
+    "x-codex-exclude-stream-fields": "delta.sequence_number,reasoning.added.encrypted_content",
+  };
+  const canonical: OcxProviderConfig = {
+    adapter: "openai-responses",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    authMode: "forward",
+  };
+
+  test("the canonical forward request and its WebSocket handshake carry both headers verbatim", async () => {
+    const { prepareCodexWsRequest } = await import("../../src/server/responses/codex-ws-request");
+    const built = await createResponsesPassthroughAdapter(canonical).buildRequest(minimalParsed(), {
+      headers: new Headers({ authorization: "Bearer caller-token", ...exclusions }),
+    });
+    const sent = new Headers(built.headers);
+    for (const [name, value] of Object.entries(exclusions)) expect(sent.get(name)).toBe(value);
+    const prepared = prepareCodexWsRequest("https://chatgpt.com/backend-api/codex/responses", { body: built.body, headers: built.headers });
+    for (const [name, value] of Object.entries(exclusions)) expect(prepared!.headers[name]).toBe(value);
+  });
+
+  test("a pool account override keeps both headers", async () => {
+    const pooled = { ...canonical, _codexAccountRequired: true, _codexAccountOverride: {
+      accessToken: accountA.accessToken, chatgptAccountId: accountA.chatgptAccountId } } as OcxProviderConfig;
+    const built = await createResponsesPassthroughAdapter(pooled).buildRequest(minimalParsed(), {
+      headers: new Headers({ authorization: "Bearer caller-token", ...exclusions }),
+    });
+    const sent = new Headers(built.headers);
+    for (const [name, value] of Object.entries(exclusions)) expect(sent.get(name)).toBe(value);
+    const materialized = headersForCodexAuthContext(new Headers(exclusions), poolAuthContext);
+    for (const [name, value] of Object.entries(exclusions)) expect(materialized.get(name)).toBe(value);
+  });
+
+  test("the inbound WebSocket snapshot keeps both headers for the reconstructed turn", async () => {
+    const { selectForwardHeaders } = await import("../../src/server/ws-bridge");
+    const selected = selectForwardHeaders(new Headers(exclusions));
+    for (const [name, value] of Object.entries(exclusions)) expect(selected.get(name)).toBe(value);
+  });
+
+  test("a destination OpenCodex does not operate never receives them", async () => {
+    for (const authMode of ["key", "forward"] as const) {
+      const built = await createResponsesPassthroughAdapter({ adapter: "openai-responses", authMode,
+        baseUrl: "https://gateway.example/v1", apiKey: "gateway-key" }).buildRequest(minimalParsed(), {
+        headers: new Headers(exclusions),
+      });
+      const sent = new Headers(built.headers);
+      for (const name of Object.keys(exclusions)) expect(sent.has(name)).toBe(false);
+    }
+  });
+});
+

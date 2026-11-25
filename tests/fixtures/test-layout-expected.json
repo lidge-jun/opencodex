@@ -1273,6 +1273,8 @@
   "opper-provider.test.ts": "providers", "tokenlab-protocols.test.ts": "providers",
   "modelflare-provider.test.ts": "providers",
   "gpt61-terra-provider-rows.test.ts": "providers",
+  "registry-default-in-seed.test.ts": "providers",
+  "vendor-catalog-refresh.test.ts": "providers",
   "gpt62-provider-rows.test.ts": "providers",
   "aistupidlevel-provider.test.ts": "providers",
   "cheapaimodel-provider.test.ts": "providers",
