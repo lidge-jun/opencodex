@@ -81,8 +81,9 @@ export async function handleExternalLive(
       model: LIVE_AUDIO_MODEL, instructions: "", delegation: { type: "client" },
     } : undefined;
     if (typeof session?.model === "string" && session.model) session.model = resolveLiveAudioModel(session.model);
-    // Only a named model is judged as one; a session the proxy writes always names the default.
-    const model = typeof session?.model === "string" && session.model ? session.model : undefined;
+    // Only a named model is judged as one, blank counting as none (as in live.ts liveCallCreateModel);
+    // a session the proxy writes always names the default.
+    const model = typeof session?.model === "string" && session.model.trim() ? session.model : undefined;
     const resolved = await resolveAudioUpstream(options.client.headers, config, log, {
       admission: options.client.admission, model, lease: options.lease, signal: deadline.signal,
     });
