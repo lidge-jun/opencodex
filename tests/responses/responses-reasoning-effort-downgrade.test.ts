@@ -17,7 +17,7 @@ import { chatSuccess } from "../helpers/combo-failover-upstream";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
 
-// These configs contain only synthetic providers; use their fetch stubs on the pinned transport too.
+// These synthetic providers own their fetch executor, so leave production egress overrides unset.
 const handleResponses: typeof dispatchResponses = (request, config, ...args) =>
   dispatchResponses(request, withStubbedProviderFetch(config), ...args);
 
@@ -166,7 +166,7 @@ function config(): OcxConfig {
       first: {
         adapter: "openai-chat",
         baseUrl: "https://opencode.ai/zen/go/v1",
-        proxy: "direct", authMode: "key",
+        authMode: "key",
         apiKey: "test-key",
       },
     },
@@ -186,7 +186,7 @@ function passthroughConfig(): OcxConfig {
       first: {
         adapter: "openai-responses",
         baseUrl: "https://opencode.ai/zen/go/v1",
-        proxy: "direct", authMode: "key",
+        authMode: "key",
         apiKey: "test-key",
       },
     },
@@ -318,7 +318,7 @@ describe("rejected reasoning rungs", () => {
 
   test("native no-retry refusal learns the unsupported effort without resending", async () => {
     writeSnapshot(["low", "high", "max"]);
-    const cfg = passthroughConfig(); cfg.providers.first!.proxy = "direct";
+    const cfg = passthroughConfig();
     let sends = 0;
     globalThis.fetch = (async () => {
       sends++;
@@ -446,8 +446,8 @@ describe("rejected reasoning rungs", () => {
       }) as typeof fetch;
       const comboConfig = {
         providers: {
-          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", proxy: "direct", authMode: "key", apiKey: "test-key" },
-          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", proxy: "direct", authMode: "key", apiKey: "fallback-key" },
+          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
         },
         combos: {
           effort: {
@@ -490,8 +490,8 @@ describe("rejected reasoning rungs", () => {
       }) as typeof fetch;
       const comboConfig = {
         providers: {
-          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", proxy: "direct", authMode: "key", apiKey: "test-key" },
-          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", proxy: "direct", authMode: "key", apiKey: "fallback-key" },
+          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
         },
         combos: {
           effort: {
@@ -540,14 +540,14 @@ describe("rejected reasoning rungs", () => {
         custom: {
           adapter: "openai-responses",
           baseUrl: "https://custom.example/v1",
-          proxy: "direct", authMode: "key",
+          authMode: "key",
           apiKey: "custom-key",
           reasoningEfforts: ["low", "high", "max"],
         },
         fallback: {
           adapter: "openai-chat",
           baseUrl: "https://fallback.example/v1",
-          proxy: "direct", authMode: "key",
+          authMode: "key",
           apiKey: "fallback-key",
         },
       },
@@ -636,8 +636,8 @@ describe("rejected reasoning rungs", () => {
     }) as typeof fetch;
     const comboConfig = {
       providers: {
-        first: { adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", proxy: "direct", authMode: "key", apiKey: "test-key" },
-        fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", proxy: "direct", authMode: "key", apiKey: "fallback-key" },
+        first: { adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+        fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
       },
       combos: {
         effort: {
@@ -711,8 +711,8 @@ describe("rejected reasoning rungs", () => {
     }) as typeof fetch;
     const comboConfig = {
       providers: {
-        first: { adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", proxy: "direct", authMode: "key", apiKey: "test-key" },
-        fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", proxy: "direct", authMode: "key", apiKey: "fallback-key" },
+        first: { adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+        fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
       },
       combos: {
         effort: {
@@ -877,8 +877,8 @@ describe("rejected reasoning rungs", () => {
       }) as typeof fetch;
       const comboConfig = {
         providers: {
-          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", proxy: "direct", authMode: "key", apiKey: "test-key" },
-          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", proxy: "direct", authMode: "key", apiKey: "fallback-key" },
+          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
         },
         combos: {
           effort: {
@@ -956,8 +956,8 @@ describe("rejected reasoning rungs", () => {
       }) as typeof fetch;
       const comboConfig = {
         providers: {
-          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", proxy: "direct", authMode: "key", apiKey: "test-key" },
-          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", proxy: "direct", authMode: "key", apiKey: "fallback-key" },
+          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
         },
         combos: {
           effort: {
@@ -1052,8 +1052,8 @@ describe("rejected reasoning rungs", () => {
       }) as typeof fetch;
       const comboConfig = {
         providers: {
-          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", proxy: "direct", authMode: "key", apiKey: "test-key" },
-          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", proxy: "direct", authMode: "key", apiKey: "fallback-key" },
+          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
         },
         combos: {
           effort: {
@@ -1152,8 +1152,8 @@ describe("rejected reasoning rungs", () => {
       }) as typeof fetch;
       const comboConfig = {
         providers: {
-          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", proxy: "direct", authMode: "key", apiKey: "test-key" },
-          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", proxy: "direct", authMode: "key", apiKey: "fallback-key" },
+          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
         },
         combos: {
           effort: {
@@ -1315,8 +1315,8 @@ describe("canonical upstream effort refusals", () => {
       }) as typeof fetch;
       const comboConfig = {
         providers: {
-          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", proxy: "direct", authMode: "key", apiKey: "test-key" },
-          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", proxy: "direct", authMode: "key", apiKey: "fallback-key" },
+          first: { adapter, baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "test-key" },
+          fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key", apiKey: "fallback-key" },
         },
         combos: {
           effort: {
