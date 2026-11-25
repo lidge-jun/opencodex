@@ -4,6 +4,7 @@ import type { StepProtocolErrorPayload } from "./stdio-frames";
 type StepSessionErrorCode =
   | "step_cli_session_failed"
   | "step_cli_session_busy"
+  | "step_cli_pool_full"
   | "step_cli_binary_missing"
   | "step_cli_capability_missing"
   | "step_cli_protocol_violation"
@@ -68,6 +69,8 @@ export function mapSessionFailure(error: unknown): AdapterEvent {
       return refusal(failure.message, 401, failure.code, "authentication_error");
     case "step_cli_subscription_cooldown":
       return refusal(failure.message, 429, failure.code, "rate_limit_error");
+    case "step_cli_pool_full":
+      return refusal(failure.message, 503, failure.code, "server_error", true);
     case "timeout":
       return refusal(failure.message, 504, failure.code, "upstream_error", true);
     default:
