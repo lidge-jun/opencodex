@@ -302,6 +302,11 @@ describe("Cyber access-program capability in the legacy table (openai/codex 708e
     // Unrelated user keys stay masked and unchanged.
     for (const change of [...removal, ...addition]) expect(change.key).not.toContain("mine");
     expect(displayCodexConfigKey("model_providers.mine.capabilities")).toBe("model_providers.….capabilities");
+    // A rewriter that quotes the inline key or a value holding '#' is still one recognized value.
+    for (const line of ['capabilities = { "cyber_access_programs" = true }', "capabilities = { 'cyber_access_programs' = true, note = \"a#b\" }"]) {
+      expect(codexConfigKeyChanges(userKeys, userKeys + "[model_providers.opencodex]\n" + line + "\n"))
+        .toContainEqual({ file: "config.toml", key: "model_providers.opencodex.capabilities", change: "add" });
+    }
   });
 });
 
