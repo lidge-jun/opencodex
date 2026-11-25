@@ -1,7 +1,7 @@
 import type { OcxProviderConfig } from "../types";
 import { redactSecretString } from "./redact";
 import { runtimeProviderFetch } from "./provider-runtime-fetch";
-import { markEgressTransparentExecutor } from "./provider-egress";
+import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "./provider-egress";
 import {
   outboundProxyConfigured,
   proxyEnvPresent,
@@ -184,7 +184,7 @@ export function providerTlsFetch(
         return fallback;
       }
       if (azureOrigin) {
-        return markEgressTransparentExecutor((async (input, init) => {
+        const wrapped = (async (input, init) => {
           const destination = typeof input === "string" || input instanceof URL ? input : input.url;
           if (new URL(destination).origin !== azureOrigin) return fallback(input, init);
           const options = init as (RequestInit & { tls?: Record<string, unknown> }) | undefined;
@@ -192,7 +192,10 @@ export function providerTlsFetch(
             ...options,
             tls: { ...options?.tls, maxVersion: 771 },
           } as RequestInit);
-        }) as typeof globalThis.fetch);
+        }) as typeof globalThis.fetch;
+        return isEgressTransparentExecutor(fallback)
+          ? markEgressTransparentExecutor(wrapped)
+          : wrapped;
       }
     }
     return fallback;

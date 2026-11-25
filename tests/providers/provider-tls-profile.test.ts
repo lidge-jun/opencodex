@@ -8,7 +8,7 @@ import {
   resetProviderTlsProfileForTests,
   setProviderTlsRuntimeForTest,
 } from "../../src/lib/provider-tls-profile";
-import { isEgressTransparentExecutor } from "../../src/lib/provider-egress";
+import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../../src/lib/provider-egress";
 import { providerManagementConfigError } from "../../src/server/auth-cors";
 import { providerFetch } from "../../src/server/responses/fetch-helpers";
 import type { OcxProviderConfig } from "../../src/types";
@@ -345,6 +345,16 @@ describe("provider TLS profile", () => {
 
 describe("Azure repair reviewed regression", () => {
 const provider = { adapter: "azure-openai", baseUrl: "https://test.services.ai.azure.com/openai/v1", apiKey: "fixture", supportsResponsesCustomTools: true } as any;
+test("Azure TLS wrappers inherit rather than grant egress transparency", () => {
+  for (const adapter of ["azure", "azure-openai"]) {
+    const fallback = (async () => new Response("ok")) as typeof globalThis.fetch;
+    expect(isEgressTransparentExecutor(providerTlsFetch("azure", { ...provider, adapter }, fallback))).toBe(false);
+    expect(isEgressTransparentExecutor(fallback)).toBe(false);
+    markEgressTransparentExecutor(fallback);
+    expect(isEgressTransparentExecutor(providerTlsFetch("azure", { ...provider, adapter }, fallback))).toBe(true);
+  }
+});
+
 test("TLS workaround preserves cancellation, proxy, certificate checks and caller options", async () => {
   let observed: any;
   let sends = 0;
