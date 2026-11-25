@@ -843,6 +843,8 @@ export interface CodexNativeRosterDiscoveryOptions extends Pick<
   CodexModelEntitlementResolveOptions,
   "credentials" | "fetcher" | "signal" | "now" | "nativeMainRefreshDependencies"
 > {
+  /** Discover only stored Pool accounts without reading or claiming the native Codex login. */
+  readonly poolOnly?: boolean;
   /** Checked right before publication; false means the caller's scheduler generation is gone. */
   readonly isCurrent?: () => boolean;
 }
@@ -871,9 +873,11 @@ export async function discoverCodexNativeRoster(
 ): Promise<CodexNativeRosterDiscoveryOutcome> {
   const fetcher = options.fetcher ?? fetch;
   const run = async (excluded: ReadonlySet<string>, releaseMainLease?: () => void) => {
-    const credentials: CodexModelEntitlementCredentialSnapshot[] = [...(options.credentials ?? [])];
+    const credentials: CodexModelEntitlementCredentialSnapshot[] = (options.credentials ?? [])
+      .filter(credential => !options.poolOnly || credential.accountId !== MAIN_CODEX_ACCOUNT_ID);
     for (const accountId of options.credentials ? [] : normalizedCandidateAccountIds(config)) {
-      if (excluded.has(accountId)) continue;
+      if (options.signal?.aborted || options.isCurrent?.() === false) break;
+      if (excluded.has(accountId) || (options.poolOnly && accountId === MAIN_CODEX_ACCOUNT_ID)) continue;
       const credential = await accountCredentialSnapshot(accountId, {
         nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
         signal: options.signal,
@@ -888,7 +892,7 @@ export async function discoverCodexNativeRoster(
     return "unavailable" as const;
   };
   try {
-    return await withNativeMainCredentialAdmission(run);
+    return options.poolOnly ? await run(new Set()) : await withNativeMainCredentialAdmission(run);
   } catch {
     return "unavailable";
   }
@@ -899,6 +903,7 @@ async function fetchDiscoveryRoster(
   fetcher: typeof fetch,
   options: Pick<CodexNativeRosterDiscoveryOptions, "signal" | "now" | "isCurrent">,
 ): Promise<CodexNativeRosterDiscoveryOutcome> {
+  if (options.signal?.aborted || options.isCurrent?.() === false) return "unavailable";
   const controller = new AbortController();
   const abort = () => controller.abort(options.signal?.reason);
   options.signal?.addEventListener("abort", abort, { once: true });

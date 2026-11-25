@@ -11,6 +11,27 @@
  * copy is the one nobody looks at in the dashboard.
  */
 import { catalogEtag } from "../lib/catalog-etag";
+import type { OcxConfig } from "../types";
+import type { RawCatalog } from "../codex/catalog/parsing";
+
+import { discoveredNativeOpenAiModels } from "../codex/catalog/native-models";
+import { applyFullModelPickerOrder, buildCatalogEntriesFromObservedState } from "../codex/catalog/build-entries";
+import { applyNativeVisibility, desktopAllowlistSuppressedNativeSlugs, nativeContextLimits,
+    shouldIncludeNativeOpenAi, shouldIncludeAccountBoundNativeOpenAi, upstreamNativeEntry } from "../codex/catalog/metadata";
+import { websocketsEnabled } from "../config/feature-flags";
+import { resolveMultiAgentMode } from "../config/multi-agent-surface";
+
+import { trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "../codex/catalog/account-models";
+import { discoveredNativeModelsGeneration } from "../codex/catalog/discovered-natives";
+
+/** In-memory cache identity: only public projection policy, never credentials or full model rows. */
+export function catalogProjectionKey(config: OcxConfig): string {
+  if (config.runtimeRole !== "hub") return "persisted";
+  return JSON.stringify(["hub", discoveredNativeModelsGeneration(), nativeContextLimits(config),
+    config.disabledModels, [...desktopAllowlistSuppressedNativeSlugs(config)], shouldIncludeNativeOpenAi(config),
+    shouldIncludeAccountBoundNativeOpenAi(config), visibleCodexAccountSelectors(config), config.subagentModels,
+    config.modelPickerOrder, websocketsEnabled(config), resolveMultiAgentMode(config), config.keepNativeChatGptOnV1]);
+}
 
 export { catalogEtag };
 
@@ -40,7 +61,7 @@ export interface SerializedCatalog {
 }
 
 /**
- * Read and serialize the persisted catalog once.
+ * Read the persisted catalog and overlay server-owned hub discoveries.
  *
  * Returns `{ body: null }` for every unreadable case — absent file, unreadable
  * file, malformed JSON — because `readCatalog` already collapses those into
@@ -50,13 +71,40 @@ export interface SerializedCatalog {
  * Deliberately does NOT apply a size ceiling: a size policy belongs to the route
  * that serves the bytes, not to the shared serializer both planes depend on.
  */
-export async function serializePersistedCatalog(): Promise<SerializedCatalog> {
+export async function serializePersistedCatalog(config?: OcxConfig): Promise<SerializedCatalog> {
   const { readCatalog, readCodexCatalogPath } = await import("../codex/catalog");
-  const catalog = readCatalog(readCodexCatalogPath());
+  const persisted = readCatalog(readCodexCatalogPath());
+  const catalog = config?.runtimeRole === "hub" ? projectHubDiscoveries(persisted, config) : persisted;
   if (!catalog) return { body: null };
   const body = JSON.stringify(catalog);
   const bytes = Buffer.byteLength(body, "utf8");
   return { body, etag: catalogEtag(body), bytes };
+}
+
+/** Project server-owned discovery without materializing or rewriting the host's Codex files. */
+export function projectHubDiscoveries(catalog: RawCatalog | null, config: OcxConfig): RawCatalog | null {
+  if (!catalog) return null;
+  const existing = catalog.models ?? [];
+  // Converged rows already carry runtime clamps, account policy and user presentation.
+  // Fill gaps only: discovery must never replace those finalized rows.
+  const occupied = new Set(existing.map(entry => String(entry.slug)));
+  const suppressed = desktopAllowlistSuppressedNativeSlugs(config);
+  const selectors = shouldIncludeAccountBoundNativeOpenAi(config) ? visibleCodexAccountSelectors(config) : [];
+  const slugs = shouldIncludeNativeOpenAi(config)
+    ? discoveredNativeOpenAiModels().filter(slug => upstreamNativeEntry(slug) !== null).sort() : [];
+  if (slugs.length === 0) return catalog;
+  const entries = buildCatalogEntriesFromObservedState({
+    template: null, gptSlugs: slugs, goModels: [], featured: config.subagentModels,
+    wsEnabled: websocketsEnabled(config), multiAgentMode: resolveMultiAgentMode(config),
+    keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
+    exactComboSlugs: new Set(), accountSelectors: selectors, suppressedBareNativeSlugs: suppressed,
+    disabledNativeAccountSlugs: new Set((config.disabledModels ?? []).filter(slug => suppressed.has(slug))), multiAgentV2Enabled: false,
+    openaiContextCap: nativeContextLimits(config),
+  }).filter(entry => typeof entry.slug === "string" && !occupied.has(entry.slug)
+    && slugs.includes(trustedAccountBoundNativeCatalogSlug(entry) ?? entry.slug));
+  applyNativeVisibility(entries, new Set(config.disabledModels ?? []), selectors.length > 0);
+  applyFullModelPickerOrder(entries, config.modelPickerOrder ?? []);
+  return { ...catalog, models: [...existing, ...entries] };
 }
 
 /**

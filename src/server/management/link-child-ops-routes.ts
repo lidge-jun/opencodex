@@ -1,3 +1,5 @@
+import { loadConfig } from "../../config";
+import { catalogProjectionKey, projectHubDiscoveries } from "../catalog-download";
 import { DEFAULT_IDLE_AFTER_MS, isLinkIdle } from "../../link/child-activity";
 import { readChildPolicy, updateChildPolicy, validPolicyPatch } from "../../link/child-policy";
 import { createCatalogRevisionMonitor, type CatalogRevisionMonitor } from "../../link/child-catalog-freshness";
@@ -24,14 +26,17 @@ const NO_STORE = { "cache-control": "no-store" };
 let revisionMonitor: CatalogRevisionMonitor | undefined;
 
 /**
- * The production Home catalog revision: the exact bytes `/v1/catalog` serves, hashed like its etag, with the
+ * The production Home catalog revision: the same hub projection as `/v1/catalog`, hashed like its etag, with the
  * revision persisted as `homeCatalog` in child-observations.json. Created lazily on the first `?children=1` read.
  */
 export function catalogRevisionForRoutes(): CatalogRevisionMonitor {
   return revisionMonitor ??= createCatalogRevisionMonitor({
     catalogPath: () => readCodexCatalogPath(),
+    projectionKey: () => catalogProjectionKey(loadConfig()),
     read: path => {
-      const catalog = readCatalog(path);
+      const config = loadConfig();
+      const persisted = readCatalog(path);
+      const catalog = config.runtimeRole === "hub" ? projectHubDiscoveries(persisted, config) : persisted;
       return catalog ? JSON.stringify(catalog) : null;
     },
     load: () => readChildObservations().homeCatalog,

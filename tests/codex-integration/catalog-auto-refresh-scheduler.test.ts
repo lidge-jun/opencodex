@@ -867,3 +867,114 @@ describe("catalog auto-refresh without a managed Codex client", () => {
     expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalled();
   });
 });
+
+
+describe("hub native roster discovery without a local Codex client", () => {
+  function writeHubConfig(catalogAutoRefresh?: unknown): void {
+    writeFileSync(getConfigPath(), JSON.stringify({
+      ...getDefaultConfig(), runtimeRole: "hub", unauthenticatedLoopbackListener: { enabled: false },
+      ...(catalogAutoRefresh === undefined ? {} : { catalogAutoRefresh }),
+    }));
+  }
+
+  test.each([undefined, { enabled: true }])("discovers with local convergence remaining opt-in: %j", async section => {
+    writeHubConfig(section);
+    const before = readFileSync(DEFAULT_CATALOG_PATH, "utf8");
+    const nativeConfig = join(isolatedCodexHome!.path, "config.toml");
+    const configBefore = readFileSync(nativeConfig, "utf8");
+    await runCatalogAutoRefreshTickForTests();
+    expect(entitlements.discoverCodexNativeRoster).toHaveBeenCalledTimes(1);
+    expect(entitlements.discoverCodexNativeRoster).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ poolOnly: true }));
+    expect(bundled.loadBundledCodexCatalogAsync).not.toHaveBeenCalled();
+    expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
+    expect(convergeFactoryCalls).toBe(section?.enabled === true ? 1 : 0);
+    expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(before);
+    expect(readFileSync(nativeConfig, "utf8")).toBe(configBefore);
+    expect(catalogAutoRefreshTickCountForTests()).toBe(1);
+  });
+
+  test.each([{ enabled: false }, { intervalMinutes: 0 }])("honors explicit background disable: %j", async section => {
+    writeHubConfig(section);
+    await runCatalogAutoRefreshTickForTests();
+    expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalled();
+    expect(convergeFactoryCalls).toBe(0);
+  });
+
+  test("turning off local Codex integration does not turn off the hub Pool", async () => {
+    writeHubConfig();
+    const config = JSON.parse(readFileSync(getConfigPath(), "utf8"));
+    config.clientIntegrations = { codex: false };
+    writeFileSync(getConfigPath(), JSON.stringify(config));
+    await runCatalogAutoRefreshTickForTests();
+    expect(entitlements.discoverCodexNativeRoster).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ poolOnly: true }));
+    expect(convergeFactoryCalls).toBe(0);
+  });
+
+  test("a hub managing its loopback client retains the complete source sequence", async () => {
+    writeHubConfig();
+    const config = JSON.parse(readFileSync(getConfigPath(), "utf8"));
+    config.unauthenticatedLoopbackListener = { enabled: true };
+    writeFileSync(getConfigPath(), JSON.stringify(config));
+    await runCatalogAutoRefreshTickForTests();
+    expect(bundled.loadBundledCodexCatalogAsync).toHaveBeenCalledTimes(1);
+    expect(entitlements.ensureCodexEntitlementFreshness).toHaveBeenCalledTimes(1);
+    expect(entitlements.discoverCodexNativeRoster).toHaveBeenCalledTimes(1);
+    expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ poolOnly: true }));
+    expect(convergeFactoryCalls).toBe(1);
+  });
+
+  test("hub opt-in convergence rechecks a concurrent disable at commit", async () => {
+    writeHubConfig({ enabled: true });
+    let beforeCommit: (() => boolean) | undefined;
+    const decisions: Array<boolean | undefined> = [];
+    spyOn(managementConvergence, "createManagementConvergeCodex").mockImplementation((_config, options) => {
+      beforeCommit = options?.beforeCommit;
+      return async () => {
+        decisions.push(beforeCommit?.());
+        writeHubConfig({ enabled: false });
+        decisions.push(beforeCommit?.());
+        return COMMITTED_CATALOG_ONLY;
+      };
+    });
+    await runCatalogAutoRefreshTickForTests();
+    expect(beforeCommit).toBeDefined();
+    expect(decisions).toEqual([true, false]);
+  });
+
+  test("stopping a hub tick revokes a late discovery publication", async () => {
+    writeHubConfig({ enabled: true });
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let finish!: () => void;
+    const waiting = new Promise<void>(resolve => { finish = resolve; });
+    let current: (() => boolean) | undefined;
+    let signal: AbortSignal | undefined;
+    spyOn(entitlements, "discoverCodexNativeRoster").mockImplementation(async (_config, options) => {
+      current = options?.isCurrent;
+      signal = options?.signal;
+      entered();
+      await waiting;
+      return "unavailable";
+    });
+    pendingTick = runCatalogAutoRefreshTickForTests();
+    await started;
+    expect(current?.()).toBe(true);
+    stopCatalogAutoRefresh();
+    expect(current?.()).toBe(false);
+    finish();
+    await pendingTick;
+    expect(signal?.aborted).toBe(true);
+    expect(convergeFactoryCalls).toBe(0);
+  });
+
+  test("a hub sibling leaves discovery to the live owner", async () => {
+    writeHubConfig();
+    const sibling = await import("../../src/codex/sibling-start");
+    const spy = spyOn(sibling, "siblingOfLivePort").mockReturnValue(10100);
+    try {
+      await runCatalogAutoRefreshTickForTests();
+      expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalled();
+      expect(convergeFactoryCalls).toBe(0);
+    } finally { spy.mockRestore(); }
+  });
+});

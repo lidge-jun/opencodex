@@ -85,17 +85,19 @@ export interface CatalogRevisionMonitor { current(): CatalogRevision | null }
 
 /**
  * Checked on each read, never on a timer: stat the catalog file, hash only when its size or mtime changed, persist
- * `homeCatalog` only when the etag moved. changedAt = min(now, mtimeMs). A persist failure (lock contention) keeps the
+ * `homeCatalog` only when the etag moved. An optional projection key also invalidates the stat cache. changedAt = min(now, mtimeMs). A persist failure (lock contention) keeps the
  * revision in memory and is retried on the next read, so a status read never fails on it. An unreadable file is null.
  */
 export function createCatalogRevisionMonitor(deps: {
   catalogPath: () => string; read: (path: string) => string | null; load: () => CatalogRevision | null;
   persist: (revision: CatalogRevision) => void; now?: () => number;
   stat?: (path: string) => { size: number; mtimeMs: number };
+  /** Dynamic overlays can change without a file stat change. */
+  projectionKey?: () => string;
 }): CatalogRevisionMonitor {
   const now = deps.now ?? Date.now;
   const stat = deps.stat ?? ((path: string) => statSync(path));
-  let cache: { path: string; size: number; mtimeMs: number; revision: CatalogRevision | null } | null = null;
+  let cache: { path: string; size: number; mtimeMs: number; projectionKey: string | undefined; revision: CatalogRevision | null } | null = null;
   let known: CatalogRevision | null | undefined;
   let pending: CatalogRevision | null = null;
   const persistPending = (): void => {
@@ -111,17 +113,19 @@ export function createCatalogRevisionMonitor(deps: {
     current() {
       let path: string;
       let info: { size: number; mtimeMs: number };
+      let projectionKey: string | undefined;
       try {
         path = deps.catalogPath();
         info = stat(path);
+        projectionKey = deps.projectionKey?.();
       } catch { cache = null; return null; }
-      if (cache && cache.path === path && cache.size === info.size && cache.mtimeMs === info.mtimeMs) {
+      if (cache && cache.projectionKey === projectionKey && cache.path === path && cache.size === info.size && cache.mtimeMs === info.mtimeMs) {
         persistPending();
         return cache.revision;
       }
       let body: string | null;
       try { body = deps.read(path); } catch { body = null; }
-      if (body === null) { cache = { path, size: info.size, mtimeMs: info.mtimeMs, revision: null }; return null; }
+      if (body === null) { cache = { path, size: info.size, mtimeMs: info.mtimeMs, projectionKey, revision: null }; return null; }
       const etag = catalogEtag(body);
       if (known === undefined) {
         try { known = deps.load(); } catch { known = null; }
@@ -133,7 +137,7 @@ export function createCatalogRevisionMonitor(deps: {
         known = revision;
         pending = revision;
       }
-      cache = { path, size: info.size, mtimeMs: info.mtimeMs, revision };
+      cache = { path, size: info.size, mtimeMs: info.mtimeMs, projectionKey, revision };
       persistPending();
       return revision;
     },
