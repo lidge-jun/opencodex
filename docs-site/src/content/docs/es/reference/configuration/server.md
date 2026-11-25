@@ -741,7 +741,7 @@ Los adaptadores RunTurn también utilizan el sidecar de búsqueda configurado. L
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | encendido cuando usable | Interruptor maestro. Cuando false, OpenCodex deja de interceptar `web_search` Y la integración Codex escribe `web_search = "disabled"` en `~/.codex/config.toml`. |
 | `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa" \| "parallel"` | `openai` | La selección explícita tiene prioridad. `parallel` usa la búsqueda anónima de Parallel por MCP. |
-| `model?` | `string` | backend-dependiente | `gpt-5.6-luna` para OpenAI, `claude-sonnet-5` para Anthropic o `grok-4.6` para xAI. `gpt-5.4-mini` explícito heredado migra al inicio. |
+| `model?` | `string` | backend-dependiente | `gpt-5.6-luna` para OpenAI, `claude-sonnet-5` para Anthropic o `grok-4.6` para xAI. `gpt-5.4-mini` explícito heredado migra al inicio. Parallel y Exa ignoran este campo. |
 | `exaApiKey?` | `string` | Ninguno | Clave de operador para el backend `exa`. Solo escritura: las lecturas de administración nunca devuelven el valor almacenado. |
 | `xSearch?` | `object` | omitido | Opt-in exclusivo de xAI para el `x_search` alojado: `enabled`, matrices mutuamente excluyentes `allowedXHandles` / `excludedXHandles` (máximo 20), y `fromDate` / `toDate` en ISO (`YYYY-MM-DD`). |
 | `reasoning?` | `string` | `low` | Esfuerzo de sidecar. `minimal` es rechazado con búsqueda web. |
