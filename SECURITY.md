@@ -6,11 +6,11 @@ opencodex accepts security fixes on a best-effort basis for these lines:
 
 | Version | Supported |
 | --- | --- |
-| `main` | ✅ |
+| `dev` | ✅ |
 | Latest published npm release | ✅ |
 | Older releases | ❌ |
 
-If you report an issue against an older release, maintainers may ask you to reproduce it on `main`
+If you report an issue against an older release, maintainers may ask you to reproduce it on `dev`
 or the latest published package before triage continues.
 
 ## Reporting a Vulnerability

@@ -771,6 +771,15 @@ export function normalizePersistedClaudeCode(claudeCode: unknown): OcxConfig["cl
   if (Object.hasOwn(normalized, "cliFirstParty") && typeof normalized.cliFirstParty !== "boolean") {
     delete normalized.cliFirstParty;
   }
+  // A read-only list of extra Claude homes: keep trimmed non-empty strings, drop anything else.
+  if (Object.hasOwn(normalized, "extraConfigDirs")) {
+    const raw = normalized.extraConfigDirs;
+    const kept = Array.isArray(raw)
+      ? raw.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).map(entry => entry.trim())
+      : [];
+    if (kept.length > 0) normalized.extraConfigDirs = kept;
+    else delete normalized.extraConfigDirs;
+  }
   if (Object.hasOwn(normalized, "subagentEffort") && !isClaudeSubagentEffort(normalized.subagentEffort)) {
     delete normalized.subagentEffort;
   }
