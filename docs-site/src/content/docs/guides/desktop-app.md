@@ -109,7 +109,7 @@ runtime to stop safely, ownership to transfer, and the bundled runtime to start.
 deciding at the prompt does not count toward this limit. Keep the app open while it finishes;
 if it fails, use **Retry** to resolve the current runtime again.
 
-On macOS, closing the dashboard keeps the app running in the menu bar. Open OpenCodex again from Dock or Finder to restore the dashboard without restarting the proxy.
+On macOS, closing the dashboard keeps the app running in the menu bar. Use **Open Dashboard** from the menu bar or reopen OpenCodex from Finder to restore the dashboard without restarting the proxy. The Dock icon appears while the dashboard is open by default. Enable [**Hide Dock icon**](/guides/macos-menu-bar/#menu-bar-and-usage-panel) from the menu bar to keep it hidden.
 
 On Windows, **Start at Login** quotes the executable path in the current-user startup
 registration, including installations under `Program Files`. Previously enabled

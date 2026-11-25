@@ -170,6 +170,15 @@ pub fn shows_update_page(window: &WebviewWindow) -> bool {
 }
 
 pub fn show(window: &WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    if window
+        .app_handle()
+        .state::<crate::dock::Preference>()
+        .enabled()
+    {
+        // The status menu must also restore a minimized dashboard in menu bar mode.
+        let _ = window.unminimize();
+    }
     let _ = window.show();
     let _ = window.set_focus();
     report_visibility(window, true);
@@ -205,12 +214,15 @@ pub fn report_visibility(window: &WebviewWindow, visible: bool) {
 
 #[cfg(target_os = "macos")]
 fn apply_tray_policy(app: &AppHandle, visible: bool) {
-    let policy = if visible {
+    let hide_dock = app.state::<crate::dock::Preference>().enabled();
+    let has_tray = app.state::<crate::exit::ExitCoordinator>().hides_to_tray();
+    let show_dock = crate::dock::show_in_dock(visible, hide_dock, has_tray);
+    let policy = if show_dock {
         tauri::ActivationPolicy::Regular
     } else {
         tauri::ActivationPolicy::Accessory
     };
-    let _ = app.set_dock_visibility(visible);
+    let _ = app.set_dock_visibility(show_dock);
     let _ = app.set_activation_policy(policy);
 }
 

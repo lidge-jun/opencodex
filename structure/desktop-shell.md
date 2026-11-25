@@ -137,6 +137,14 @@ window, closes the usage popup if it is open, and loads the dashboard if a hidde
 it. This is separate from the single-instance callback, which handles a second process notifying
 the existing one.
 
+The macOS tray's **Hide Dock icon** checkbox is a local desktop preference. The
+`desktop/src-tauri/src/dock.rs` marker in the desktop app configuration directory
+is loaded before AppKit launches and updated before the live preference changes.
+When the preference is enabled, showing the dashboard keeps the app in accessory
+mode while the window can still take focus. A failed tray installation restores
+Dock access when startup shows the dashboard. The preference and its tray item
+are macOS-only and do not depend on the proxy.
+
 The host window also answers whether the dashboard is visible at all. Windows WebView2 is reported
 to keep `document.visibilityState === "visible"` while the Tauri window sits hidden in the tray
 (tauri issues #10592 and #6864; macOS WKWebView does flip it, measured), so a hidden dashboard went
