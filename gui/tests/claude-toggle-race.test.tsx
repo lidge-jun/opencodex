@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
@@ -32,6 +32,11 @@ let putBodies: unknown[] = [];
 let claudeEnabled = false;
 let cliFirstParty = false;
 let firstPartyPutResponse: { body: unknown; status?: number } | null = null;
+/** The first-party preview answer: a body and status, or "network" for a rejected fetch. */
+let previewResponse: { body: unknown; status?: number } | "network" = {
+  body: { enabled: true, path: "~/.claude/settings.json", changes: [{ file: "settings.json", key: "env.HTTPS_PROXY", change: "add" }], applyChecks: ["intercept_start"] },
+};
+let previewRequests = 0;
 let releasePut: (() => void) | null = null;
 let putGate: Promise<void> | null = null;
 
@@ -88,6 +93,10 @@ beforeEach(() => {
   claudeEnabled = false;
   cliFirstParty = false;
   firstPartyPutResponse = null;
+  previewResponse = {
+    body: { enabled: true, path: "~/.claude/settings.json", changes: [{ file: "settings.json", key: "env.HTTPS_PROXY", change: "add" }], applyChecks: ["intercept_start"] },
+  };
+  previewRequests = 0;
   putGate = new Promise<void>((resolve) => {
     releasePut = resolve;
   });
@@ -97,6 +106,11 @@ beforeEach(() => {
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
 
     if (url.includes("/api/machine/status")) return jsonResponse({}, 404);
+    if (url.includes("/api/claude-code/first-party/preview")) {
+      previewRequests++;
+      if (previewResponse === "network") throw new TypeError("Failed to fetch");
+      return jsonResponse(previewResponse.body, previewResponse.status ?? 200);
+    }
     if (url.endsWith("/api/native-integrations/claude") && method === "PUT") {
       const body = JSON.parse(String(init?.body ?? "{}")) as { enabled: boolean };
       putBodies.push(body);
@@ -211,6 +225,15 @@ function firstPartySwitch(): HTMLButtonElement {
   return button as HTMLButtonElement;
 }
 
+
+function previewButton(label: "Turn on" | "Cancel"): HTMLButtonElement | null {
+  return (Array.from(container.querySelectorAll("button")).find(button => button.textContent === label) as HTMLButtonElement | undefined) ?? null;
+}
+
+async function answerPreview(label: "Turn on" | "Cancel"): Promise<void> {
+  await waitFor(() => previewButton(label) !== null);
+  await act(async () => { previewButton(label)!.click(); });
+}
 function claudeSwitch(): HTMLButtonElement {
   const btn = Array.from(container.querySelectorAll("button")).find(
     (b) => b.getAttribute("aria-label") === "Toggle Claude connection",
@@ -297,6 +320,9 @@ test("CLI first-party waits for one PUT and a confirmed GET", async () => {
     firstPartySwitch().click();
     firstPartySwitch().click();
   });
+  // Enabling previews first: one preview request, one confirmation, then exactly one PUT.
+  await answerPreview("Turn on");
+  expect(previewRequests).toBe(1);
   expect(putBodies).toEqual([{ cliFirstParty: true }]);
   expect(firstPartySwitch().disabled).toBe(true);
   expect(firstPartySwitch().getAttribute("aria-checked")).toBe("false");
@@ -324,6 +350,7 @@ for (const [code, message] of refusalCases) {
     await mountApp();
     await waitFor(() => { try { return !!firstPartySwitch(); } catch { return false; } });
     await act(async () => { firstPartySwitch().click(); });
+    await answerPreview("Turn on");
     await waitFor(() => (container.textContent ?? "").includes(message));
     expect(firstPartySwitch().getAttribute("aria-checked")).toBe("false");
   });
@@ -334,6 +361,7 @@ test("CLI first-party success trusts the divergent GET state", async () => {
   await mountApp();
   await waitFor(() => { try { return !!firstPartySwitch(); } catch { return false; } });
   await act(async () => { firstPartySwitch().click(); });
+  await answerPreview("Turn on");
   await waitFor(() => !firstPartySwitch().disabled);
   expect(firstPartySwitch().getAttribute("aria-checked")).toBe("false");
 });
@@ -366,4 +394,59 @@ test("the Save payload does not overwrite CLI first-party intent", async () => {
   });
   await waitFor(() => putBodies.length === 1);
   expect(putBodies[0]).not.toHaveProperty("cliFirstParty");
+});
+
+describe("CLI first-party preview", () => {
+  const PREVIEW_FAILED = "Could not preview the change, so nothing was changed.";
+
+  for (const [name, answer] of [
+    ["a network error", "network"],
+    ["a server error", { status: 500, body: { error: "first-party preview could not be computed", code: "preview_failed" } }],
+  ] as const) {
+    test(`${name} releases the switch, shows the error and never sends the PUT`, async () => {
+      previewResponse = answer;
+      await mountApp();
+      await waitFor(() => { try { return !!firstPartySwitch(); } catch { return false; } });
+      await act(async () => { firstPartySwitch().click(); });
+      await waitFor(() => (container.textContent ?? "").includes(PREVIEW_FAILED));
+      await waitFor(() => !firstPartySwitch().disabled);
+      expect(putBodies).toEqual([]);
+      expect(firstPartySwitch().getAttribute("aria-checked")).toBe("false");
+    });
+  }
+
+  test("a refusal the switch would give is shown before anything is written", async () => {
+    previewResponse = { status: 409, body: { error: "refused", code: "foreign_env" } };
+    await mountApp();
+    await waitFor(() => { try { return !!firstPartySwitch(); } catch { return false; } });
+    await act(async () => { firstPartySwitch().click(); });
+    await waitFor(() => (container.textContent ?? "").includes("Another program owns the Claude proxy settings."));
+    await waitFor(() => !firstPartySwitch().disabled);
+    expect(putBodies).toEqual([]);
+  });
+
+  test("the dialog lists keys and change kinds; Cancel sends nothing and releases the switch", async () => {
+    await mountApp();
+    await waitFor(() => { try { return !!firstPartySwitch(); } catch { return false; } });
+    await act(async () => { firstPartySwitch().click(); });
+    await waitFor(() => previewButton("Cancel") !== null);
+    const list = container.querySelector("[data-first-party-preview]");
+    expect(list?.textContent).toContain("env.HTTPS_PROXY");
+    expect(list?.querySelector("li")?.getAttribute("data-change")).toBe("add");
+    expect(firstPartySwitch().disabled).toBe(true);
+    await answerPreview("Cancel");
+    await waitFor(() => !firstPartySwitch().disabled);
+    expect(putBodies).toEqual([]);
+    expect(previewButton("Turn on")).toBeNull();
+  });
+
+  test("turning first-party off needs no preview", async () => {
+    cliFirstParty = true;
+    claudeEnabled = true;
+    await mountApp();
+    await waitFor(() => firstPartySwitch().getAttribute("aria-checked") === "true");
+    await act(async () => { firstPartySwitch().click(); releasePut?.(); releasePut = null; });
+    await waitFor(() => putBodies.length === 1);
+    expect(previewRequests).toBe(0);
+  });
 });
