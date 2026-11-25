@@ -208,30 +208,106 @@ export class ExplicitProxyExemptedError extends Error {
 }
 
 /**
- * One bypass entry as Bun's own matcher reads it (observed on Bun 1.4.4): case-insensitive; a
- * leading `*.` or `.` and a trailing `.` are dropped; `*` matches everything; a bare entry
- * matches that host and every subdomain of it (`localhost` matches `app.localhost`, `com` matches
- * `api.example.com`); an entry port must equal the destination port.
+ * Bun's own `NO_PROXY` match, ported from `src/dotenv/no_proxy.rs` at the pinned `bun-v1.4.4`.
+ *
+ * Entries split on commas and whitespace. `*` matches everything. An entry containing `/` is a CIDR
+ * block and matches only an IP-literal host inside it. Otherwise an optional `:port` must equal the
+ * destination port numerically, a leading `*.` or `.` and one trailing `.` are dropped, an IP-literal
+ * host matches only an equal address (compared canonically, so `::ffff:127.0.0.1` is `127.0.0.1`),
+ * and a name matches itself and every subdomain, case-insensitively.
  */
-function bunNoProxyEntryMatches(hostname: string, port: string, rawEntry: string): boolean {
-  const entry = rawEntry.trim().toLowerCase();
-  if (!entry) return false;
-  if (entry === "*") return true;
-  let entryHost = entry;
-  let entryPort = "";
-  const bracketed = /^\[([^\]]*)\](?::(\d+))?$/.exec(entry);
-  if (bracketed) {
-    entryHost = bracketed[1]!;
-    entryPort = bracketed[2] ?? "";
-  } else if ((entry.match(/:/g) ?? []).length === 1) {
-    const separator = entry.lastIndexOf(":");
-    entryHost = entry.slice(0, separator);
-    entryPort = entry.slice(separator + 1);
+function bunNoProxyMatches(list: string, url: URL): boolean {
+  const hostname = stripOneTrailingDot(stripIpv6Brackets(url.hostname));
+  if (!hostname) return false;
+  const port = Number(url.port || (url.protocol === "https:" || url.protocol === "wss:" ? "443" : "80"));
+  const hostIp = parseIpLiteral(hostname);
+  for (const entry of list.split(/[,\s]+/)) {
+    if (!entry) continue;
+    if (entry === "*") return true;
+    const slash = entry.indexOf("/");
+    if (slash !== -1) {
+      if (hostIp && cidrContains(entry, slash, hostIp)) return true;
+      continue;
+    }
+    const [rawHost, entryPort] = splitEntryPort(entry);
+    if (entryPort !== undefined && (!/^\d+$/.test(entryPort) || Number(entryPort) !== port)) continue;
+    const entryHost = stripOneTrailingDot(rawHost.startsWith("*.") ? rawHost.slice(2) : rawHost.startsWith(".") ? rawHost.slice(1) : rawHost);
+    if (!entryHost) continue;
+    if (hostIp) {
+      const entryIp = parseIpLiteral(entryHost);
+      if (entryIp && sameIp(entryIp, hostIp)) return true;
+      continue;
+    }
+    const host = hostname.toLowerCase();
+    const name = entryHost.toLowerCase();
+    if (host === name || (host.length > name.length && host.endsWith(`.${name}`))) return true;
   }
-  if (entryPort && entryPort !== port) return false;
-  entryHost = entryHost.replace(/^\*?\./, "").replace(/\.+$/, "");
-  if (!entryHost) return false;
-  return hostname === entryHost || hostname.endsWith(`.${entryHost}`);
+  return false;
+}
+
+interface IpLiteral { v6: boolean; bytes: number[] }
+
+function stripOneTrailingDot(host: string): string { return host.endsWith(".") ? host.slice(0, -1) : host; }
+function stripIpv6Brackets(host: string): string {
+  return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+}
+
+/** `host[:port]` where host may be a bracketed or bare IPv6 literal (only one colon means a port). */
+function splitEntryPort(entry: string): [string, string | undefined] {
+  if (entry.startsWith("[")) {
+    const close = entry.indexOf("]");
+    if (close === -1) return [entry, undefined];
+    const rest = entry.slice(close + 1);
+    return [entry.slice(1, close), rest.startsWith(":") ? rest.slice(1) : undefined];
+  }
+  const colons = entry.split(":").length - 1;
+  if (colons === 1) {
+    const colon = entry.indexOf(":");
+    return [entry.slice(0, colon), entry.slice(colon + 1)];
+  }
+  return [entry, undefined];
+}
+
+/** A dotted quad or an IPv6 literal as bytes, with `::ffff:a.b.c.d` folded to IPv4. */
+function parseIpLiteral(text: string): IpLiteral | null {
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(text)) {
+    const bytes = text.split(".").map(Number);
+    return bytes.every(byte => byte <= 255) ? { v6: false, bytes } : null;
+  }
+  if (!text.includes(":")) return null;
+  let canonical: string;
+  try { canonical = new URL(`http://[${text}]/`).hostname.slice(1, -1); } catch { return null; }
+  const halves = canonical.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const groups = halves.length === 2 ? [...head, ...Array(8 - head.length - tail.length).fill("0"), ...tail] : head;
+  if (groups.length !== 8 || !groups.every(group => /^[0-9a-f]{1,4}$/.test(group))) return null;
+  const bytes = groups.flatMap(group => { const value = parseInt(group, 16); return [value >> 8, value & 0xff]; });
+  const mapped = bytes.slice(0, 10).every(byte => byte === 0) && bytes[10] === 0xff && bytes[11] === 0xff;
+  return mapped ? { v6: false, bytes: bytes.slice(12) } : { v6: true, bytes };
+}
+
+function sameIp(a: IpLiteral, b: IpLiteral): boolean {
+  return a.v6 === b.v6 && a.bytes.every((byte, index) => byte === b.bytes[index]);
+}
+
+function cidrContains(entry: string, slash: number, host: IpLiteral): boolean {
+  const writtenText = stripIpv6Brackets(entry.slice(0, slash));
+  const network = parseIpLiteral(writtenText);
+  const prefix = entry.slice(slash + 1);
+  if (!network || !/^\d+$/.test(prefix)) return false;
+  let bits = Number(prefix);
+  // `::ffff:10.0.0.0/104` is `10.0.0.0/8`.
+  if (writtenText.includes(":") && !network.v6) {
+    if (bits < 96) return false;
+    bits -= 96;
+  }
+  if (network.v6 !== host.v6 || bits > network.bytes.length * 8) return false;
+  const whole = Math.floor(bits / 8);
+  const rem = bits % 8;
+  for (let index = 0; index < whole; index += 1) if (network.bytes[index] !== host.bytes[index]) return false;
+  return rem === 0 || ((network.bytes[whole]! ^ host.bytes[whole]!) >> (8 - rem)) === 0;
 }
 
 /**
@@ -239,17 +315,16 @@ function bunNoProxyEntryMatches(hostname: string, port: string, rawEntry: string
  *
  * Bun's fetch and WebSocket connect directly to such a destination even when the request names a
  * proxy, as a string or as `{ url }`; only `proxy: false` outranks the environment. This guard
- * therefore has to match at least everything Bun matches: entries split on commas AND whitespace,
- * bare entries match subdomains, and either spelling is enough. It also accepts anything
+ * therefore has to match at least everything Bun matches (`bunNoProxyMatches`: whitespace separators,
+ * subdomains, CIDR blocks, numeric ports, canonical addresses), and either spelling is enough. It also
+ * accepts anything
  * `noProxyMatches` accepts, so it never answers narrower than the routing decisions elsewhere.
  * Over-matching only refuses a request; under-matching would send it around the proxy.
  */
 export function processNoProxyExempts(url: URL, env: ProxyEnvMap = process.env): boolean {
-  const hostname = normalizeProxyHostname(url.hostname);
-  const port = url.port || (url.protocol === "https:" || url.protocol === "wss:" ? "443" : "80");
+  // Bun reads `no_proxy`, else `NO_PROXY`; checking each on its own covers whichever it picks.
   return [env.NO_PROXY, env.no_proxy].some(value => typeof value === "string" && value.trim() !== ""
-    && (value.split(/[\s,]+/).some(entry => bunNoProxyEntryMatches(hostname, port, entry))
-      || noProxyMatches(url, { NO_PROXY: value })));
+    && (bunNoProxyMatches(value, url) || noProxyMatches(url, { NO_PROXY: value })));
 }
 
 /** The refusal for an explicit HTTP(S) proxy that the process environment would make Bun skip. */

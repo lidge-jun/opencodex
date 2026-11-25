@@ -200,8 +200,9 @@ toward a destination that the process `NO_PROXY` or `no_proxy` exempts, because 
 WebSocket connect directly there: `configuredOutboundFetch` refuses the send with
 `ExplicitProxyExemptedError`, the Responses WebSocket upstream leaves such a turn to that HTTP path, and
 the Microsoft 365 Copilot ChatHub dial refuses before creating its socket. `processNoProxyExempts`
-matches at least as broadly as Bun (comma and whitespace separators, subdomains of a bare entry, either
-spelling). `tests/lib/explicit-proxy-no-proxy.test.ts` checks the route on real loopback sockets.
+matches at least as broadly as Bun: `bunNoProxyMatches` ports Bun 1.4.4's `src/dotenv/no_proxy.rs`
+(comma and whitespace separators, subdomains, CIDR blocks, numeric ports, canonical addresses), unioned
+with `noProxyMatches`, for either spelling. `tests/lib/explicit-proxy-no-proxy.test.ts` checks the route on real loopback sockets.
 
 | Request path | Per-provider route | Current contract |
 | --- | --- | --- |

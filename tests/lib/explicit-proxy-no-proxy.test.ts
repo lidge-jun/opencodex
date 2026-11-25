@@ -110,6 +110,36 @@ for (const spelling of ["NO_PROXY", "no_proxy"] as const) {
   });
 }
 
+for (const spelling of ["NO_PROXY", "no_proxy"] as const) {
+  test(`a ${spelling} CIDR block covering the destination is honored like Bun honors it`, async () => {
+    process.env[spelling] = "10.0.0.0/8 127.0.0.0/8";
+    await expect(send({ proxy: proxyUrl })).rejects.toBeInstanceOf(ExplicitProxyExemptedError);
+    expect(hits).toEqual({ dest: 0, proxy: 0 });
+  });
+  test(`a ${spelling} entry with a zero-padded port is compared numerically, like Bun`, async () => {
+    process.env[spelling] = `127.0.0.1:00${dest.port}`;
+    await expect(send({ proxy: proxyUrl })).rejects.toBeInstanceOf(ExplicitProxyExemptedError);
+    expect(hits).toEqual({ dest: 0, proxy: 0 });
+  });
+}
+
+test("addresses compare canonically and CIDR blocks cover both families", () => {
+  const v4 = new URL("http://127.0.0.1:8080/x");
+  const v6 = new URL("http://[::1]:8080/x");
+  for (const entry of ["127.0.0.1", "::ffff:127.0.0.1", "[::ffff:127.0.0.1]", "127.0.0.0/8", "::ffff:127.0.0.0/104", "0.0.0.0/0", "127.0.0.1:08080"]) {
+    expect(processNoProxyExempts(v4, { NO_PROXY: entry }), entry).toBe(true);
+  }
+  for (const entry of ["10.0.0.0/8", "127.0.0.2/32", "127.0.0.1:80", "::ffff:127.0.0.0/95"]) {
+    expect(processNoProxyExempts(v4, { NO_PROXY: entry }), entry).toBe(false);
+  }
+  for (const entry of ["::1", "[::1]", "0:0:0:0:0:0:0:1", "0000::1", "::1/128", "::/0", "[::1]:8080", "[::1]:08080"]) {
+    expect(processNoProxyExempts(v6, { NO_PROXY: entry }), entry).toBe(true);
+  }
+  for (const entry of ["fe80::/10", "[::1]:80", "::2"]) {
+    expect(processNoProxyExempts(v6, { NO_PROXY: entry }), entry).toBe(false);
+  }
+});
+
 test("every entry form Bun 1.4.4 treats as a bypass is a bypass here", () => {
   const url = new URL("http://api.example.com/x");
   // Each of these made Bun connect directly to api.example.com despite an explicit proxy.
