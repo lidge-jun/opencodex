@@ -35,6 +35,7 @@ interface TerminalStatusContext extends UpstreamErrorDiagnostics {
   upstreamError?: string;
   provider?: string;
   model?: string;
+  wireModel?: string;
   accountLogLabel?: string;
 }
 
@@ -112,9 +113,15 @@ function noteBoundedDiagnostic(
     const account = logCtx.accountLogLabel !== undefined && (logCtx.accountLogLabel === "main" || ACCOUNT_LOG_LABEL_RE.test(logCtx.accountLogLabel))
       ? logCtx.accountLogLabel
       : undefined;
+    const safeIdentifier = (value: string | undefined): string | undefined =>
+      value && /^[A-Za-z0-9._:\/@+-]{1,128}$/.test(value) && redactSecretString(value) === value
+        && diagnosticValueAllowed(value) && !repeatsRequestSentValue(logCtx, value) ? value : undefined;
+    const provider = safeIdentifier(logCtx.provider);
+    const model = safeIdentifier(logCtx.wireModel ?? logCtx.model);
+    const selector = logCtx.wireModel !== undefined && logCtx.model !== logCtx.wireModel ? safeIdentifier(logCtx.model) : undefined;
     console.warn(
       `[opencodex] upstream failure${status ? ` status=${status}` : ""}${type ? ` type=${type}` : ""}${code ? ` code=${code}` : ""}`
-      + `${logCtx.provider ? ` provider=${logCtx.provider}` : ""}${logCtx.model ? ` model=${logCtx.model}` : ""}${account ? ` account=${account}` : ""}`,
+      + `${provider ? ` provider=${provider}` : ""}${model ? ` model=${model}` : ""}${selector ? ` selector=${selector}` : ""}${account ? ` account=${account}` : ""}`,
     );
   }
 }

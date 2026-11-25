@@ -66,6 +66,32 @@ test("upstream failure warning includes provider, model, and valid account label
 });
 
 
+test.each([
+  { model: "model\ninjected", provider: "bad\nprovider" },
+  { model: "x".repeat(129), provider: "x".repeat(129) },
+  { model: "sk-" + "a".repeat(48), provider: "sk-" + "a".repeat(48) },
+])("unsafe warning identifiers are omitted", fields => {
+  const warnings: string[] = [];
+  const warn = console.warn;
+  console.warn = ((line: string) => { warnings.push(String(line)); }) as typeof console.warn;
+  try { inspectResponseLogJson(fields, JSON.stringify({ error: { type: "server_error" } })); }
+  finally { console.warn = warn; }
+  expect(warnings.length).toBeGreaterThan(0);
+  expect(warnings.join("\n")).not.toContain(" provider=");
+  expect(warnings.join("\n")).not.toContain(" model=");
+});
+
+test("upstream warning identifies a rewritten wire model and distinct selector", () => {
+  const log: RequestLogContext = { provider: "gateway", model: "alias", wireModel: "vendor/model" };
+  const warnings: string[] = [];
+  const warn = console.warn;
+  console.warn = ((line: string) => { warnings.push(String(line)); }) as typeof console.warn;
+  try { inspectResponseLogJson(log, JSON.stringify({ error: { type: "server_error" } })); }
+  finally { console.warn = warn; }
+  expect(warnings.join("\n")).toContain(" model=vendor/model selector=alias");
+});
+
+
 for (const shape of ["error", "last_error", "response"] as const) {
   test.each([
     ["rate_limit_error", "rate_limit_exceeded", 429],
