@@ -3062,6 +3062,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "PROCHAIN",
   "codexAuth.creditGranted": "Accordé le {date}",
   "codexAuth.creditExpires": "Expire le {date} ({days} j restants)",
+  "codexAuth.creditNoExpiry": "Sans expiration",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "{count} coupon(s) de réinitialisation Grok",
@@ -4386,6 +4387,13 @@ export const fr: Record<TKey, string> = {
   "quotaSummary.perMonth": "par mois",
   "quotaSummary.remainingLimit": "Restant / limite",
   "quotaSummary.openAccounts": "Ouvrir la gestion des comptes",
+  "quotaLive.title": "Mises à jour des quotas en direct",
+  "quotaLive.hint": "Relit à intervalle régulier les quotas mis en cache par le proxy. Un fournisseur n'est réinterrogé qu'après l'expiration de ce cache, pas à chaque mise à jour.",
+  "quotaLive.interval": "Toutes les",
+  "quotaLive.intervalAria": "Intervalle des mises à jour des quotas en direct, en secondes ({min}–{max})",
+  "quotaLive.intervalInc": "Allonger l’intervalle",
+  "quotaLive.intervalDec": "Raccourcir l’intervalle",
+  "quotaLive.unit": "s",
   "pws.protocol.title": "Protocole amont",
   "pws.protocol.note": "Le format d'API qu'opencodex utilise avec ce fournisseur. Il n'active ni ne désactive aucune API cliente ; c'est la page API qui les contrôle.",
   "pws.protocol.adapterLabel": "Protocole amont reçu par ce fournisseur",

@@ -2961,6 +2961,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "次",
   "codexAuth.creditGranted": "付与 {date}",
   "codexAuth.creditExpires": "失効 {date} (残り {days}日)",
+  "codexAuth.creditNoExpiry": "期限なし",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "{count} 個の Grok リセットクーポン",
@@ -4419,6 +4420,13 @@ export const ja: Record<TKey, string> = {
   "quotaSummary.perMonth": "毎月",
   "quotaSummary.remainingLimit": "残り / 上限",
   "quotaSummary.openAccounts": "アカウント管理を開く",
+  "quotaLive.title": "クォータのライブ更新",
+  "quotaLive.hint": "プロキシにキャッシュされたクォータを定期的に読み直します。プロバイダーへの再問い合わせはキャッシュの期限切れ後のみで、更新のたびには行いません。",
+  "quotaLive.interval": "間隔",
+  "quotaLive.intervalAria": "クォータのライブ更新間隔（秒、{min}〜{max}）",
+  "quotaLive.intervalInc": "間隔を長くする",
+  "quotaLive.intervalDec": "間隔を短くする",
+  "quotaLive.unit": "秒",
   "pws.protocol.title": "アップストリームのワイヤー形式",
   "pws.protocol.note": "opencodex がこのプロバイダーと通信する API 形式です。クライアント API のオン/オフは切り替えません。それは API ページで設定します。",
   "pws.protocol.adapterLabel": "このプロバイダーが受け取るワイヤー形式",

@@ -587,8 +587,8 @@ El proxy traduce cada solicitud Anthropic Messages API al formato Codex Response
 
 | Messages entrada | Responses salida |
 | --- | --- |
-| Nivel superior `system` | `instructions` (bloques de texto unidos con `\n\n`) |
-| `messages[].role: "system"` | También doblado en `instructions` |
+| Nivel superior `system` | `instructions` (bloques de texto unidos con `\n\n`). Para GPT-6.2 Sol y Astra con inicio de sesión de Codex, se envía como el primer mensaje `developer` para poder almacenarse en caché |
+| `messages[].role: "system"` | Se traducen a mensajes `developer` en su posición original |
 | Texto / imagen del usuario | `input_text` / `input_image` (base64 → URL de datos) |
 | Texto del asistente | `output_text` |
 | Asistente `tool_use` | `function_call` ( `input` → `arguments` serializado como JSON ) |
@@ -692,6 +692,10 @@ La barra de guardado pegajosa muestra **Sin cambios** cuando la configuración g
 <a id="troubleshooting"></a>
 
 ## Solución de problemas
+
+**Claude Code indica que Anthropic exige verificar la cuenta** — Abra el
+[Portal de verificación de Anthropic](https://portal.anthropic.com/verify) e inicie sesión con la cuenta afectada.
+OpenCodex conserva el HTTP 403 y registra `account_verification_required` en sus registros de solicitudes para este aviso.
 
 ### Desktop en Windows informa de `client_lifecycle_lock_failed` al aplicar
 

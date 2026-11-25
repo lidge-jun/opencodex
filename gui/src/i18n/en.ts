@@ -3146,6 +3146,7 @@ export const en = {
   "codexAuth.creditNextBadge": "NEXT",
   "codexAuth.creditGranted": "Granted {date}",
   "codexAuth.creditExpires": "Expires {date} ({days}d left)",
+  "codexAuth.creditNoExpiry": "No expiry",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "{count} Grok reset coupon(s)",
@@ -4431,6 +4432,13 @@ export const en = {
   "quotaSummary.perMonth": "per month",
   "quotaSummary.remainingLimit": "Remaining / limit",
   "quotaSummary.openAccounts": "Open account management",
+  "quotaLive.title": "Live quota updates",
+  "quotaLive.hint": "Re-reads the proxy's cached quota on a timer. A provider is asked again only after that cache expires, not on every update.",
+  "quotaLive.interval": "Every",
+  "quotaLive.intervalAria": "Live quota update interval in seconds ({min}–{max})",
+  "quotaLive.intervalInc": "Increase interval",
+  "quotaLive.intervalDec": "Decrease interval",
+  "quotaLive.unit": "s",
   "pws.protocol.title": "Upstream wire",
   "pws.protocol.note": "The API format opencodex speaks to this provider. It does not turn any client API on or off; the API page controls those.",
   "pws.protocol.adapterLabel": "Upstream wire this provider receives",

@@ -402,6 +402,15 @@ export function isConnectionRefused(error: unknown): boolean {
   return visit(error, 0);
 }
 
+/**
+ * A connect the host refused to start (Windows filtering can deny `::1` outright) says no more
+ * about a listener than a connect timeout does, so it qualifies for the same Windows bind proof.
+ */
+function isConnectAccessDenied(error: unknown): boolean {
+  const record = error as { code?: unknown; syscall?: unknown } | null;
+  return record?.code === "EACCES" && record.syscall === "connect";
+}
+
 export async function classifyHealthz(
   url: string,
   fetchFn: LivenessFetch,
@@ -566,7 +575,7 @@ async function proxyIdentityAtObserved(
       // has only just begun listening can miss a single short probe (#764).
       if (!isConnectionRefused(error)) {
         sawUnknown = true;
-        if (!isConnectPhaseTimeout(error)) sawOtherFailure = true;
+        if (!isConnectPhaseTimeout(error) && !isConnectAccessDenied(error)) sawOtherFailure = true;
       }
       if (io.signal?.aborted) return negative("unknown");
       if (attempt >= attempts) return negative(sawUnknown ? "unknown" : "dead", sawUnknown && !sawOtherFailure);

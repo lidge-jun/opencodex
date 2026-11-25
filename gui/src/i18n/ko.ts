@@ -2524,6 +2524,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "NEXT",
   "codexAuth.creditGranted": "획득 {date}",
   "codexAuth.creditExpires": "만료 {date} ({days}일 남음)",
+  "codexAuth.creditNoExpiry": "만료 없음",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "Grok 리셋 쿠폰 {count}개",
@@ -4419,6 +4420,13 @@ export const ko: Record<TKey, string> = {
   "quotaSummary.perMonth": "월별",
   "quotaSummary.remainingLimit": "남은 수 / 한도",
   "quotaSummary.openAccounts": "계정 관리 열기",
+  "quotaLive.title": "할당량 실시간 업데이트",
+  "quotaLive.hint": "프록시에 캐시된 할당량을 주기적으로 다시 읽습니다. 프로바이더에는 캐시가 만료된 뒤에만 다시 조회하며, 업데이트마다 조회하지 않습니다.",
+  "quotaLive.interval": "간격",
+  "quotaLive.intervalAria": "할당량 실시간 업데이트 간격(초, {min}~{max})",
+  "quotaLive.intervalInc": "간격 늘리기",
+  "quotaLive.intervalDec": "간격 줄이기",
+  "quotaLive.unit": "초",
   "pws.protocol.title": "업스트림 와이어",
   "pws.protocol.note": "opencodex가 이 프로바이더에 보내는 API 형식입니다. 클라이언트 API를 켜거나 끄지 않으며, 그 설정은 API 페이지에 있습니다.",
   "pws.protocol.adapterLabel": "이 프로바이더가 받는 업스트림 와이어",

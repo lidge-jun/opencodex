@@ -210,7 +210,7 @@ test("POST /v1/images/generations relays to xAI Imagine when the image bridge is
     expect(json.data?.[0]?.b64_json).toBe(CCA_TINY_PNG);
     expect(captured).toHaveLength(1);
     expect(captured[0]!.path).toBe("/v1/images/generations");
-    expect(JSON.stringify(captured[0]!.body)).toContain("grok-imagine-image-quality");
+    expect(JSON.stringify(captured[0]!.body)).toContain("grok-imagine-image-2.0");
     expect(captured[0]!.headers.get("authorization")).toBe("Bearer xai-test-token");
     expect(captured[0]!.headers.get("chatgpt-account-id")).toBeNull();
     expect(captured[0]!.headers.get("session_id")).toBeNull();

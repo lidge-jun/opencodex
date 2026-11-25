@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { comboFailureCooldownScope, comboFailureDecision, isDefiniteContextOverflow } from "../../src/combos/failover";
 import { classifyUpstreamCondition } from "../../src/lib/upstream-condition";
+import { fetchWithTransientRetry } from "../../src/lib/upstream-retry";
 
 /**
  * A differential matrix for the shared context-overflow verdict.
@@ -186,6 +187,70 @@ function occurrences(text: string): string[] {
 }
 
 describe("isDefiniteContextOverflow", () => {
+  test("aside folding preserves surrounding whitespace and clause boundaries", () => {
+    for (const aside of [
+      "actually", ", in fact,", "\nactually\n", ",\tper our checks,\n",
+      "approach, let alone", "come\tclose\nto, let\talone,", ",,let alone,",
+    ]) {
+      expect(isDefiniteContextOverflow(400, `not ${aside} context window exceeded`), aside).toBe(false);
+      expect(isDefiniteContextOverflow(400, `not ${aside}; context window exceeded`), aside).toBe(true);
+    }
+    expect(isDefiniteContextOverflow(400, "not\ncontext window exceeded")).toBe(true);
+    expect(isDefiniteContextOverflow(400, "not, arbitrary aside, context window exceeded")).toBe(true);
+    expect(isDefiniteContextOverflow(400, "not actually actually context window exceeded")).toBe(false);
+  });
+
+  test("aside matchers start at the aside when surrounding whitespace is present", () => {
+    const matches = new Set<string>();
+    const exec = RegExp.prototype.exec;
+    const observed = spyOn(RegExp.prototype, "exec").mockImplementation(function (this: RegExp, input: string) {
+      const result = exec.call(this, input);
+      if (result && (result[0].trim() === "actually" || result[0].trim() === "let alone")) {
+        matches.add(result[0]);
+      }
+      return result;
+    });
+    try {
+      isDefiniteContextOverflow(400, "not  actually  context window exceeded");
+      isDefiniteContextOverflow(400, "not  let alone  context window exceeded");
+    } finally {
+      observed.mockRestore();
+    }
+    expect([...matches].sort()).toEqual(["actually", "let alone"]);
+  });
+
+  test("accepted diagnostics near the size limit keep timers responsive", async () => {
+    const suffix = " Context window exceeded.";
+    const note = "Provider request metadata was checked. ";
+    const message = note.repeat(Math.ceil(15_840 / note.length)).slice(0, 15_840 - suffix.length) + suffix;
+    expect(message.length).toBe(15_840);
+    const started = performance.now();
+    const timer = new Promise<number>(resolve => setTimeout(() => resolve(performance.now() - started), 10));
+    expect(isDefiniteContextOverflow(503, message)).toBe(true);
+    expect(await timer).toBeLessThan(1_000);
+  }, 15_000);
+
+  test("retry inspection of a bounded 503 cannot starve a caller's abort timer", async () => {
+    const body = JSON.stringify({ error: { message: "Request metadata was checked. Context window exceeded." } });
+    const first = new Response(body, { status: 503 });
+    const abort = new AbortController();
+    let sends = 0;
+    const started = performance.now();
+    const timer = new Promise<number>(resolve => setTimeout(() => {
+      abort.abort();
+      resolve(performance.now() - started);
+    }, 10));
+    const result = await fetchWithTransientRetry(async () => {
+      sends += 1;
+      return first;
+    }, { attempts: 2, abortSignal: abort.signal });
+    expect(result).toBe(first);
+    expect(sends).toBe(1);
+    expect(await result.text()).toBe(body);
+    expect(await timer).toBeLessThan(1_000);
+    expect(abort.signal.aborted).toBe(true);
+  }, 15_000);
+
   test("accepts overflow wording on every status that speaks about the request", () => {
     for (const message of OVERFLOW_WORDING) {
       for (const status of [...REQUEST_STATUSES, ...SERVER_STATUSES]) {

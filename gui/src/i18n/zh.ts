@@ -2497,6 +2497,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "NEXT",
   "codexAuth.creditGranted": "获得 {date}",
   "codexAuth.creditExpires": "过期 {date}（剩余 {days} 天）",
+  "codexAuth.creditNoExpiry": "无到期时间",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "{count} 张 Grok 重置券",
@@ -4418,6 +4419,13 @@ export const zh: Record<TKey, string> = {
   "quotaSummary.perMonth": "每月",
   "quotaSummary.remainingLimit": "剩余 / 限额",
   "quotaSummary.openAccounts": "打开账号管理",
+  "quotaLive.title": "额度实时更新",
+  "quotaLive.hint": "定时重新读取代理缓存的额度。仅在缓存过期后才会再次查询提供商，而不是每次更新都查询。",
+  "quotaLive.interval": "间隔",
+  "quotaLive.intervalAria": "额度实时更新间隔（秒，{min}–{max}）",
+  "quotaLive.intervalInc": "延长间隔",
+  "quotaLive.intervalDec": "缩短间隔",
+  "quotaLive.unit": "秒",
   "pws.protocol.title": "上游协议",
   "pws.protocol.note": "opencodex 与此提供商通信时使用的 API 格式。它不会开启或关闭任何客户端 API；这些在 API 页面设置。",
   "pws.protocol.adapterLabel": "此提供商接收的上游协议",

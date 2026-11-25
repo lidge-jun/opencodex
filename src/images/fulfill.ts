@@ -1,3 +1,4 @@
+import { rememberArtifactSourceUrl } from "./video-image-input";
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import type { ImageBridgePlan, ImageCallResult } from "./types";
@@ -116,7 +117,9 @@ export async function fulfillImageCall(
       if (img.b64_json) {
         files.push(await materializeInlineImage(img.b64_json, budget));
       } else if (img.url) {
-        files.push(await downloadImageToArtifact(img.url, budget, signal));
+        const path = await downloadImageToArtifact(img.url, budget, signal);
+        rememberArtifactSourceUrl(path, img.url);
+        files.push(path);
       }
     } catch {
       // Keep warnings URL-free — error messages may embed provider CDN URLs.

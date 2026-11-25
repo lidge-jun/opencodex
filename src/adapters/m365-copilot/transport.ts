@@ -6,6 +6,7 @@ import type { OcxProviderConfig } from "../../types";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import type { M365ImageAnnotation } from "./images";
+import { M365_RESPONSE_LIMIT_MESSAGES } from "./response-limits";
 
 const RS = "\x1e";
 const MAX_FRAME_BYTES = 2 * 1024 * 1024;
@@ -23,7 +24,7 @@ export class M365TextComposer {
   snapshot(id: string | undefined, text: string) {
     if (!text) return;
     const key = id ?? this.target ?? "";
-    if (!this.messages.has(key) && this.messages.size >= 256) throw new M365CopilotTurnError("Microsoft 365 Copilot returned too many messages", 413);
+    if (!this.messages.has(key) && this.messages.size >= 256) throw new M365CopilotTurnError(M365_RESPONSE_LIMIT_MESSAGES.messages, 413);
     this.target ??= key;
     if (text.length > (this.messages.get(key)?.length ?? 0)) this.messages.set(key, text);
   }
@@ -146,7 +147,7 @@ export function runM365CopilotTurn(options: M365TurnOptions): Promise<string> {
     if (options.signal?.aborted) { cancel(); return; }
     const advance = () => {
       const text = composer.text;
-      if (text.length > MAX_ANSWER_LENGTH) throw new M365CopilotTurnError("Microsoft 365 Copilot answer exceeded the buffer limit", 413);
+      if (text.length > MAX_ANSWER_LENGTH) throw new M365CopilotTurnError(M365_RESPONSE_LIMIT_MESSAGES.answer, 413);
       const bytes = 2 * Buffer.byteLength(text);
       if (bytes > retainedBytes) options.budget?.chargeRetained(bytes - retainedBytes, { kind: "retained_collectors" });
       else if (bytes < retainedBytes) options.budget?.releaseRetained(retainedBytes - bytes, { kind: "retained_collectors" });
@@ -160,7 +161,7 @@ export function runM365CopilotTurn(options: M365TurnOptions): Promise<string> {
     let thinkingTotal = 0;
     const emitThinking = (text: string) => {
       thinkingTotal += text.length;
-      if (thinkingTotal > MAX_ANSWER_LENGTH) throw new M365CopilotTurnError("Microsoft 365 Copilot reasoning exceeded the buffer limit", 413);
+      if (thinkingTotal > MAX_ANSWER_LENGTH) throw new M365CopilotTurnError(M365_RESPONSE_LIMIT_MESSAGES.reasoning, 413);
       options.onThinking?.(text);
     };
     const messages = (rows: any[]) => {
@@ -174,7 +175,7 @@ export function runM365CopilotTurn(options: M365TurnOptions): Promise<string> {
           if (id === undefined) emitThinking(row.text);
           else {
             const seen = thinkingById.get(id);
-            if (seen === undefined && thinkingById.size >= MAX_THINKING_ENTRIES) throw new M365CopilotTurnError("Microsoft 365 Copilot returned too many messages", 413);
+            if (seen === undefined && thinkingById.size >= MAX_THINKING_ENTRIES) throw new M365CopilotTurnError(M365_RESPONSE_LIMIT_MESSAGES.messages, 413);
             if (seen === undefined || row.text.length > seen.length) {
               emitThinking(seen !== undefined && row.text.startsWith(seen) ? row.text.slice(seen.length) : row.text);
               thinkingById.set(id, row.text);
@@ -191,7 +192,7 @@ export function runM365CopilotTurn(options: M365TurnOptions): Promise<string> {
         const raw = typeof event.data === "string" ? event.data : event.data instanceof ArrayBuffer ? new TextDecoder().decode(event.data) : "";
         if (!raw || Buffer.byteLength(raw) > MAX_FRAME_BYTES) throw new M365CopilotTurnError("Microsoft 365 Copilot returned an invalid frame");
         pending += raw;
-        if (Buffer.byteLength(pending) > MAX_FRAME_BYTES) throw new M365CopilotTurnError("Microsoft 365 Copilot frame buffer exceeded its limit", 413);
+        if (Buffer.byteLength(pending) > MAX_FRAME_BYTES) throw new M365CopilotTurnError(M365_RESPONSE_LIMIT_MESSAGES.frame, 413);
         let end;
         while ((end = pending.indexOf(RS)) >= 0) {
           const piece = pending.slice(0, end); pending = pending.slice(end + 1);

@@ -47,6 +47,10 @@ describe("isNewer — latest channel", () => {
     expect(isNewer("2.9.1", "2.8.2-preview.20260731", "latest")).toBe(true);
     expect(isNewer("2.9.1", "2.9.1-preview.20260731", "latest")).toBe(false);
   });
+  test("a preview current with a publication attempt still compares by its base version", () => {
+    expect(isNewer("2.100.6", "2.100.5-preview.20261118.1", "latest")).toBe(true);
+    expect(isNewer("2.100.6", "2.100.6-preview.20261119.1", "latest")).toBe(false);
+  });
 });
 
 describe("isNewer — preview channel", () => {
@@ -64,6 +68,21 @@ describe("isNewer — preview channel", () => {
   });
   test("higher base preview beats lower base preview", () => {
     expect(isNewer("2.8.0-preview.1", "2.7.0-preview.9", "preview")).toBe(true);
+  });
+  test("dated previews with a publication attempt compare by date, then attempt", () => {
+    expect(isNewer("2.100.6-preview.20261119.1", "2.100.5-preview.20261118.1", "preview")).toBe(true);
+    expect(isNewer("2.100.6-preview.20261120.1", "2.100.6-preview.20261119.2", "preview")).toBe(true);
+    expect(isNewer("2.100.6-preview.20261119.2", "2.100.6-preview.20261119.1", "preview")).toBe(true);
+    expect(isNewer("2.100.6-preview.20261119.1", "2.100.6-preview.20261119.1", "preview")).toBe(false);
+    expect(isNewer("2.100.6-preview.20261119.1", "2.100.6-preview.20261119.2", "preview")).toBe(false);
+  });
+  test("an attempt suffix outranks the same date without one", () => {
+    expect(isNewer("2.100.6-preview.20261119.1", "2.100.6-preview.20261119", "preview")).toBe(true);
+    expect(isNewer("2.100.6-preview.20261119", "2.100.6-preview.20261119.1", "preview")).toBe(false);
+  });
+  test("a stable release is compared against a preview with a publication attempt (O3)", () => {
+    expect(isNewer("2.101.0", "2.100.6-preview.20261119.1", "preview")).toBe(true);
+    expect(isNewer("2.100.6", "2.100.6-preview.20261119.1", "preview")).toBe(false);
   });
 });
 

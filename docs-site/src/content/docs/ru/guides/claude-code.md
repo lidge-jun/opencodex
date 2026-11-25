@@ -584,8 +584,8 @@ Claude Code — это лишь учётные данные для доступ�
 
 | Вход Messages | Выход Responses |
 | --- | --- |
-| `system` верхнего уровня | `instructions` (текстовые блоки объединяются через `\n\n`) |
-| `messages[].role: "system"` | Также сворачивается в `instructions` |
+| `system` верхнего уровня | `instructions` (текстовые блоки объединяются через `\n\n`). Для GPT-6.2 Sol и Astra через вход Codex отправляется первым сообщением `developer`, чтобы его можно было кэшировать |
+| `messages[].role: "system"` | Преобразуется в сообщения `developer` на исходных позициях |
 | Текст / изображение пользователя | `input_text` / `input_image` (base64 → data URL) |
 | Текст ассистента | `output_text` |
 | `tool_use` ассистента | `function_call` (`input` → `arguments` в виде JSON-строки) |

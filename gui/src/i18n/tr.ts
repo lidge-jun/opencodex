@@ -3081,6 +3081,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "SONRAKİ",
   "codexAuth.creditGranted": "Verildiği tarih {date}",
   "codexAuth.creditExpires": "Son kullanma {date} ({days}gün kaldı)",
+  "codexAuth.creditNoExpiry": "Son kullanma tarihi yok",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "{count} Grok sıfırlama kuponu",
@@ -4420,6 +4421,13 @@ export const tr: Record<TKey, string> = {
   "quotaSummary.perMonth": "ay başına",
   "quotaSummary.remainingLimit": "Kalan / limit",
   "quotaSummary.openAccounts": "Hesap yönetimini aç",
+  "quotaLive.title": "Canlı kota güncellemeleri",
+  "quotaLive.hint": "Proxy'nin önbelleğindeki kotaları düzenli aralıklarla yeniden okur. Bir sağlayıcı her güncellemede değil, yalnızca bu önbelleğin süresi dolduktan sonra yeniden sorgulanır.",
+  "quotaLive.interval": "Her",
+  "quotaLive.intervalAria": "Canlı kota güncelleme aralığı, saniye cinsinden ({min}–{max})",
+  "quotaLive.intervalInc": "Aralığı uzat",
+  "quotaLive.intervalDec": "Aralığı kısalt",
+  "quotaLive.unit": "sn",
   "pws.protocol.title": "Yukarı akış protokolü",
   "pws.protocol.note": "opencodex'in bu sağlayıcıyla konuştuğu API biçimi. Hiçbir istemci API'sini açıp kapatmaz; bunlar API sayfasından yönetilir.",
   "pws.protocol.adapterLabel": "Bu sağlayıcının aldığı yukarı akış protokolü",
