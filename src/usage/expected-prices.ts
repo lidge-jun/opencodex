@@ -343,6 +343,15 @@ const DEVIN_SWE_21: Cost4 = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 
 const DEVIN_SWE_21_ULTRAFAST: Cost4 = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 0 };
 const DEVIN_SWE21_SOURCE = "list rate; free self-serve on Desktop/CLI through 2026-12-08 and 0.5/2.5/0.05 through 2027-01-30 are time-boxed promos, not baked in; https://docs.devin.ai/desktop/models (SWE-2.1 rows, read 2026-11-25), https://cognition.com/blog/swe-2-1";
 const DEVIN_SWE21_ULTRAFAST_SOURCE = "SWE-2.1 Ultrafast, every effort lane, excluded from the SWE-2.1 offer; https://docs.devin.ai/desktop/models (read 2026-11-25)";
+/**
+ * Every Ultrafast id a caller can name: the bare Low row plus one per lane. A family
+ * pick with `fast` is logged under the family id, so it still prices as standard;
+ * that holds for every Devin fast variant and is not specific to SWE-2.1.
+ */
+function devinSwe21UltrafastRows(provider: string): ExpectedPriceOverlay[] {
+  return ["swe-2-1-lightning", ...["low", "medium", "high", "xhigh", "max"].map((lane) => `swe-2-1-${lane}-lightning`)]
+    .map((modelId): ExpectedPriceOverlay => ({ provider, modelId, cost4: DEVIN_SWE_21_ULTRAFAST, source: DEVIN_SWE21_ULTRAFAST_SOURCE, verifiedAt: "2026-11-25", status: "verified-derived" }));
+}
 const DEVIN_SWE_17: Cost4 = { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0 };
 const DEVIN_SWE_17_LIGHTNING: Cost4 = { input: 2.5, output: 12.5, cacheRead: 1, cacheWrite: 0 };
 const DEVIN_SONNET_5: Cost4 = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
@@ -645,7 +654,7 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // billing rate for overage. glm-5-2 likewise takes the nonzero list column.
   { provider: "devin-cli", modelId: "swe-2", cost4: DEVIN_SWE_2, source: `${DEVIN_SWE2_NOTE}; ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "swe-2-1", cost4: DEVIN_SWE_21, source: DEVIN_SWE21_SOURCE, verifiedAt: "2026-11-25", status: "verified-derived" },
-  { provider: "devin-cli", modelId: "swe-2-1-lightning", cost4: DEVIN_SWE_21_ULTRAFAST, source: DEVIN_SWE21_ULTRAFAST_SOURCE, verifiedAt: "2026-11-25", status: "verified-derived" },
+  ...devinSwe21UltrafastRows("devin-cli"),
   { provider: "devin-cli", modelId: "swe-1-7", cost4: DEVIN_SWE_17, source: `list rate; self-serve column currently shows 0 (unannounced promo); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "swe-1-7-lightning", cost4: DEVIN_SWE_17_LIGHTNING, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "swe-1-6", cost4: DEVIN_SWE_17, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
@@ -668,7 +677,7 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "devin-cli", modelId: "grok-4-6", cost4: DEVIN_GROK, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "swe-2", cost4: DEVIN_SWE_2, source: `${DEVIN_SWE2_NOTE}; ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "swe-2-1", cost4: DEVIN_SWE_21, source: DEVIN_SWE21_SOURCE, verifiedAt: "2026-11-25", status: "verified-derived" },
-  { provider: "devin", modelId: "swe-2-1-lightning", cost4: DEVIN_SWE_21_ULTRAFAST, source: DEVIN_SWE21_ULTRAFAST_SOURCE, verifiedAt: "2026-11-25", status: "verified-derived" },
+  ...devinSwe21UltrafastRows("devin"),
   { provider: "devin", modelId: "swe-1-7", cost4: DEVIN_SWE_17, source: `list rate; self-serve column currently shows 0 (unannounced promo); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "swe-1-7-lightning", cost4: DEVIN_SWE_17_LIGHTNING, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "swe-1-6", cost4: DEVIN_SWE_17, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },

@@ -720,6 +720,8 @@ describe("resolveMatchedPrice", () => {
       ["devin-cli", "swe-2", { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 }],
       ["devin", "swe-2-1", { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 }],
       ["devin-cli", "swe-2-1-lightning", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 0 }],
+      ["devin", "swe-2-1-xhigh-lightning", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 0 }],
+      ["devin-cli", "swe-2-1-low-lightning", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 0 }],
       ["devin", "swe-1-7-lightning", { input: 2.5, output: 12.5, cacheRead: 1, cacheWrite: 0 }],
       ["devin", "gpt-5-6-luna", { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 }],
     ] as const) {
