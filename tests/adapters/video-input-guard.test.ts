@@ -19,12 +19,12 @@ import { describe, expect, test } from "bun:test";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import { UnsupportedInputModalityError, withInputMediaGuard } from "../../src/adapters/input-media-guard";
 import { createRegisteredAdapter } from "../../src/adapters/registry";
-import { ChatCompletionsRequestError, chatCompletionsToResponsesBody } from "../../src/chat/inbound";
+import { ChatCompletionsRequestError, chatCompletionsToResponsesBody, ChatUnsupportedInputModalityError } from "../../src/chat/inbound";
 import { chatConversationToIr } from "../../src/protocols/codecs/chat-ir";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { untranslatedResponsesInputMedia } from "../../src/responses/input-media";
 import { parseRequest } from "../../src/responses/parser";
-import { inlineVideoDecodedBytes, MAX_INLINE_VIDEO_BYTES, parseInlineVideoDataUrl } from "../../src/responses/video-input";
+import { MAX_INLINE_VIDEO_BYTES, parseInlineVideo } from "../../src/responses/video-input";
 import { estimateInputTokens } from "../../src/server/responses/input-admission";
 import { adapterBuildRefusal } from "../../src/server/responses/passthrough-build-error";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
@@ -119,32 +119,24 @@ describe("video input without a carrier is refused before send", () => {
     }
   });
 
-  test("a non-base64 data URL is measured by its length, so it cannot slip under the cap", async () => {
-    // 0.75 x length would read 45 MiB here; the payload decodes to up to 60 MiB.
-    const plain = `data:video/mp4,${"A".repeat(60 * 1024 * 1024)}`;
-    expect(await refusal(KIMI, videoRequest("kimi-k3.1-pro", plain))).toContain("MiB");
-  });
-
-  test("a non-ASCII plain data URL is measured in UTF-8 bytes, not UTF-16 units", async () => {
-    // 30 Mi characters of "é" are 30 Mi UTF-16 units but 60 MiB on the wire.
-    const plain = `data:video/mp4,${"é".repeat(30 * 1024 * 1024)}`;
-    expect(await refusal(KIMI, videoRequest("kimi-k3.1-pro", plain))).toContain("MiB");
-  });
-
-  test("only a terminal ;base64 marks a base64 payload; anything else is measured as UTF-8", async () => {
-    // A decoder reads ";base64;foo" and "; base64" as plain bytes, so the 3/4 formula would
-    // report 45 MiB for these 60 MiB payloads.
-    const payload = "A".repeat(60 * 1024 * 1024);
-    for (const header of ["data:video/mp4;base64;foo,", "data:video/mp4;base64 ,", "data:video/mp4;x=base64,"]) {
-      expect(await refusal(KIMI, videoRequest("kimi-k3.1-pro", header + payload))).toContain("MiB");
+  test("a data URL that is not canonical base64 is refused as malformed, never sized as base64", async () => {
+    // Each of these used to be measured some other way (plain bytes, UTF-16 units, a non-terminal
+    // ;base64). The shared decoder accepts one form only, so all of them are refused outright.
+    for (const url of [
+      `data:video/mp4,${"A".repeat(1024)}`,
+      `data:video/mp4,${"é".repeat(1024)}`,
+      "data:video/mp4;base64;foo,AAAA",
+      "data:video/mp4;base64 ,AAAA",
+      "data:video/mp4;x=base64,AAAA",
+    ]) {
+      expect(await refusal(KIMI, videoRequest("kimi-k3.1-pro", url))).toContain("standard padded base64");
     }
-    expect(inlineVideoDecodedBytes("data:video/mp4;codecs=avc1;BASE64,AAAA")).toBe(3);
   });
 
   test("both Chat conversions refuse an oversized clip before they build anything", () => {
     const body = {
       model: "kimi-k3.1-pro",
-      messages: [{ role: "user", content: [{ type: "video_url", video_url: { url: `data:video/mp4,${"A".repeat(MAX_INLINE_VIDEO_BYTES + 1)}` } }] }],
+      messages: [{ role: "user", content: [{ type: "video_url", video_url: { url: `data:video/mp4;base64,${"A".repeat(Math.ceil((MAX_INLINE_VIDEO_BYTES + 1) / 3) * 4)}` } }] }],
     };
     for (const convert of [() => chatCompletionsToResponsesBody(body), () => chatConversationToIr(body, "kimi-k3.1-pro")]) {
       let failure: unknown;
@@ -239,7 +231,7 @@ describe("video input on a published carrier", () => {
     let failure: unknown;
     try { await createRegisteredAdapter(GOOGLE).buildRequest(videoRequest("gemini-3.8-flash", "data:video/mp4,AAAA"), { headers: new Headers() } as never); } catch (error) { failure = error; }
     expect(failure).toBeInstanceOf(UnsupportedInputModalityError);
-    expect((failure as Error).message).toContain("base64 data URL");
+    expect((failure as Error).message).toContain("standard padded base64");
   });
 
   test("Gemini never receives a URL-escaped or non-standard base64 payload as inline_data", async () => {
@@ -249,24 +241,80 @@ describe("video input on a published carrier", () => {
       let failure: unknown;
       try { await createRegisteredAdapter(GOOGLE).buildRequest(videoRequest("gemini-3.8-flash", url), { headers: new Headers() } as never); } catch (error) { failure = error; }
       expect(failure).toBeInstanceOf(UnsupportedInputModalityError);
-      expect((failure as Error).message).toContain("base64 data URL");
+      expect((failure as Error).message).toContain("standard padded base64");
     }
     const sent = await body(GOOGLE, videoRequest("gemini-3.8-flash", "data:video/mp4;base64,QQ=="));
     expect(JSON.stringify(sent.contents)).toContain(JSON.stringify({ inline_data: { mime_type: "video/mp4", data: "QQ==" } }));
   });
 
-  test("base64 length and padding must be consistent before Gemini receives the bytes", () => {
-    for (const payload of ["A", "A=", "AA=", "AAA==", "AAAAA"]) {
-      expect(parseInlineVideoDataUrl(`data:video/mp4;base64,${payload}`)).toBeNull();
-    }
-    for (const payload of ["QQ==", "QUI=", "QUJD", "QQ", "QUI"]) {
-      expect(parseInlineVideoDataUrl(`data:video/mp4;base64,${payload}`)?.base64).toBe(payload);
+  test("unpadded and inconsistent base64 lengths are refused before Gemini receives the bytes", async () => {
+    for (const payload of ["A", "A=", "AA=", "AAA==", "AAAAA", "QQ", "QUI"]) {
+      expect(await refusal(GOOGLE, videoRequest("gemini-3.8-flash", `data:video/mp4;base64,${payload}`))).toContain("standard padded base64");
     }
   });
 
   test("the Moonshot preset declares video for the Kimi K3 series its docs list", () => {
     const modalities = getProviderRegistryEntry("moonshot")?.modelInputModalities ?? {};
     for (const model of ["kimi-k3", "kimi-k3.1-pro"]) expect(modalities[model]).toContain("video");
+  });
+});
+
+describe("every consumer reads a video data URL through the one decoder", () => {
+  /** mulberry32, seeded so a disagreement reproduces. */
+  function rng(seed: number): () => number {
+    let state = seed >>> 0;
+    return () => {
+      state = (state + 0x6d2b79f5) >>> 0;
+      let t = state;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const NOISE = [..."ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", "=", "%", " ", "-", "_", "é"];
+  const HEADERS = ["data:video/mp4;base64,", "data:Video/MP4;codecs=avc1;BASE64,", "data:video/mp4;base64;x=y,", "data:video/mp4,"];
+
+  function chatConversionRefuses(url: string): boolean {
+    try {
+      chatCompletionsToResponsesBody({ model: "kimi-k3.1-pro", messages: [{ role: "user", content: [{ type: "video_url", video_url: { url } }] }] });
+      return false;
+    } catch (error) {
+      return error instanceof ChatUnsupportedInputModalityError;
+    }
+  }
+
+  test("guards, Chat conversion, admission and both builders agree with the decoder on seeded mutations", async () => {
+    const next = rng(9131);
+    let accepted = 0;
+    for (let i = 0; i < 160; i++) {
+      const bytes = Uint8Array.from({ length: 1 + Math.floor(next() * 12) }, () => Math.floor(next() * 256));
+      let payload = Buffer.from(bytes).toString("base64");
+      if (next() < 0.6) {
+        const at = Math.floor(next() * (payload.length + 1));
+        const noise = NOISE[Math.floor(next() * NOISE.length)]!;
+        payload = next() < 0.5 ? payload.slice(0, at) + noise + payload.slice(at + 1) : payload.slice(0, at) + payload.slice(at + 1);
+      }
+      const url = HEADERS[Math.floor(next() * HEADERS.length)]! + payload;
+      const decoded = parseInlineVideo(url);
+      const ok = decoded.ok;
+      if (ok) accepted++;
+
+      const geminiRefusal = await refusal(GOOGLE, videoRequest("gemini-3.8-flash", url));
+      const chatRefusal = await refusal(KIMI, videoRequest("kimi-k3.1-pro", url));
+      expect({ url, gemini: geminiRefusal === undefined, chat: chatRefusal === undefined, conversion: !chatConversionRefuses(url) })
+        .toEqual({ url, gemini: ok, chat: ok, conversion: ok });
+      const expectedTokens = decoded.decodedBytes ? Math.ceil(decoded.decodedBytes / 1_250) : 0;
+      expect(estimateInputTokens({ modelId: "m", stream: false, options: {}, context: { messages: [{ role: "user", content: [{ type: "video", videoUrl: url }], timestamp: 0 }] } } as unknown as OcxParsedRequest, "m"))
+        .toBe(expectedTokens);
+      if (!decoded.ok) continue;
+      // Builders send the decoder's canonical output, never the raw substring or header parameters.
+      const gemini = await body(GOOGLE, videoRequest("gemini-3.8-flash", url));
+      expect(JSON.stringify(gemini.contents)).toContain(JSON.stringify({ inline_data: { mime_type: decoded.mime, data: decoded.base64 } }));
+      const chat = await body(KIMI, videoRequest("kimi-k3.1-pro", url));
+      expect(JSON.stringify(chat.messages)).toContain(JSON.stringify({ type: "video_url", video_url: { url: `data:${decoded.mime};base64,${decoded.base64}` } }));
+    }
+    expect(accepted).toBeGreaterThan(20);
+    expect(accepted).toBeLessThan(150);
   });
 });
 
@@ -281,10 +329,10 @@ describe("input admission charges video by its own rate", () => {
   }
 
   test("inline bytes are charged at the video rate, not the image tile proxy", () => {
-    // 1,250,000 decoded bytes: about ten seconds of ~1 Mbit/s video, which Gemini bills at
-    // roughly 100 tokens per second. The image proxy (750 bytes/token) charged 1,667.
-    const payload = "A".repeat((1_250_000 / 3) * 4);
-    expect(estimateInputTokens(videoOnly(`data:video/mp4;base64,${payload}`), "m")).toBe(1_000);
+    // 3,750,000 decoded bytes: about thirty seconds of ~1 Mbit/s video, which Gemini bills at
+    // roughly 100 tokens per second. The image proxy (750 bytes/token) charged 5,000.
+    const payload = "A".repeat((3_750_000 / 3) * 4);
+    expect(estimateInputTokens(videoOnly(`data:video/mp4;base64,${payload}`), "m")).toBe(3_000);
   });
 
   test("a fetched URL is charged a flat minute, not the 850-token image tile", () => {

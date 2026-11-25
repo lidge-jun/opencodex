@@ -12,6 +12,7 @@ import { peekReasoningForCall } from "../../responses/reasoning-replay-cache";
 import { chatReasoningReplayPolicy, isReflectionThinkingModel } from "./reasoning-replay";
 import type { ClaudeThinkingProjection } from "../../lib/claude-request-projection";
 import { inlineDocumentDataUrl } from "../../responses/inline-document";
+import { inlineVideoRefusal, parseInlineVideo } from "../../responses/video-input";
 import type { OcxAssistantMessage, OcxContentPart, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall } from "../../types";
 import { modelInList, namespacedToolName } from "../../types";
 
@@ -266,7 +267,13 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             // Chat upstream without the part never receives it. `processing` is the caller's
             // Gemini mode (OpenRouter forwards it) and is sent only when the caller sent it.
             if (p.type === "video") {
-              return { type: "video_url", video_url: { url: p.videoUrl, ...(p.processing ? { processing: p.processing } : {}) } };
+              // An inline clip goes through the shared decoder (the one the guard admitted it
+              // with) and is re-emitted in its canonical form; a remote URL is forwarded as is.
+              const inline = parseInlineVideo(p.videoUrl);
+              const inlineRefusal = inline.ok ? undefined : inlineVideoRefusal(p.videoUrl);
+              if (inlineRefusal) throw new Error(inlineRefusal);
+              const url = inline.ok ? `data:${inline.mime};base64,${inline.base64}` : p.videoUrl;
+              return { type: "video_url", video_url: { url, ...(p.processing ? { processing: p.processing } : {}) } };
             }
             return { type: "text", text: (p as OcxTextContent).text };
           });

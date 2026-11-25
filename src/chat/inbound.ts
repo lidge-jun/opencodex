@@ -9,7 +9,7 @@ import { normalizedClientExtraContent } from "../responses/provider-opaque-metad
 import { chatImageUrlFromPart } from "./image-parts";
 import { signedReasoningInputItems } from "./reasoning-details";
 import { chatAudioToResponsesPart, untranslatedChatInputMedia, untranslatedInputMediaMessage } from "../responses/input-media";
-import { chatBodyHasOversizedInlineVideo, OVERSIZED_INLINE_VIDEO_MESSAGE } from "../responses/video-input";
+import { chatBodyVideoRefusal } from "../responses/video-input";
 
 export class ChatCompletionsRequestError extends Error {}
 
@@ -24,7 +24,8 @@ export class ChatUnsupportedInputModalityError extends ChatCompletionsRequestErr
 /** The refusal for a Chat body's video, or undefined. Shared by both Chat conversions. */
 export function chatVideoRefusal(kind: string | undefined, raw: unknown): ChatUnsupportedInputModalityError | undefined {
   if (kind === "video") return new ChatUnsupportedInputModalityError(untranslatedInputMediaMessage("video"));
-  return chatBodyHasOversizedInlineVideo(raw) ? new ChatUnsupportedInputModalityError(OVERSIZED_INLINE_VIDEO_MESSAGE) : undefined;
+  const refusal = chatBodyVideoRefusal(raw);
+  return refusal ? new ChatUnsupportedInputModalityError(refusal) : undefined;
 }
 
 type Rec = Record<string, unknown>;

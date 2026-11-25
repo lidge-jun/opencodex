@@ -1,3 +1,4 @@
+import { parseMediaDataUrl, type ParsedMediaDataUrl } from "../lib/media-data-url";
 import type { OcxContentPart, OcxMessage } from "../types";
 
 /**
@@ -12,90 +13,53 @@ import type { OcxContentPart, OcxMessage } from "../types";
  */
 export const MAX_INLINE_VIDEO_BYTES = 50 * 1024 * 1024;
 
-/**
- * Decoded size of a `data:` URL, computed from its length; undefined for anything else.
- * Nothing is decoded or copied. A payload is base64 only when `;base64` is the LAST header
- * parameter, immediately before the comma (RFC 2397; decoders treat `;base64;foo` as plain
- * bytes), and then decodes to three bytes per four characters. Any other payload is charged its
- * UTF-8 length, which is never less than what it decodes to, so no header spelling, parameter
- * order or non-ASCII text can slip under the cap.
- */
-export function inlineVideoDecodedBytes(videoUrl: string): number | undefined {
-  if (!videoUrl.startsWith("data:")) return undefined;
-  const comma = videoUrl.indexOf(",");
-  // A `data:` URL with no payload separator carries nothing a wire could send; charge its length.
-  if (comma < 0) return Buffer.byteLength(videoUrl, "utf8");
-  const payload = videoUrl.length - comma - 1;
-  if (payload <= 0) return 0;
-  const base64 = /;base64$/i.test(videoUrl.slice(5, comma));
-  // Measured over the whole URL so the payload is never sliced into a copy; the header is short.
-  if (!base64) return Buffer.byteLength(videoUrl, "utf8") - Buffer.byteLength(videoUrl.slice(0, comma + 1), "utf8");
-  let padding = 0;
-  if (videoUrl.endsWith("==")) padding = 2;
-  else if (videoUrl.endsWith("=")) padding = 1;
-  return Math.max(0, Math.floor((payload * 3) / 4) - padding);
-}
-
 /** Fixed vocabulary only: the refusal never names the clip, its URL or its bytes. */
 export const OVERSIZED_INLINE_VIDEO_MESSAGE = "OpenCodex refuses inline video larger than 50 MiB. "
   + "Upload the video to the provider's file storage and send its URL instead.";
 
 /**
- * The media type and base64 payload of an inline video `data:` URL, or null.
- *
- * Accepts what the size check accepts as base64: header parameters (`;codecs=avc1`) and a
- * terminal `;base64` in any case. The media type is returned without its parameters, which is
- * the form Gemini's `inline_data.mime_type` takes. The guard and the Gemini builder share this
- * parser so a URL the guard admits is always one the builder can send.
- *
- * The payload must already be plain standard base64. A URL-escaped payload (`QQ%3D%3D`), embedded
- * whitespace or the URL-safe alphabet is valid in a `data:` URL but is not what `inline_data.data`
- * takes, and unescaping would copy a request-sized string, so those forms return null and the
- * guard refuses them with the typed modality refusal.
+ * Fixed vocabulary only. The one accepted inline form is the canonical base64 data URL that
+ * `parseMediaDataUrl` (src/lib/media-data-url.ts) defines.
  */
-export function parseInlineVideoDataUrl(url: string): { mediaType: string; base64: string } | null {
-  const match = /^data:([^;,]+)(?:;[^;,]*)*;base64,(.*)$/is.exec(url);
-  if (!match) return null;
-  const mediaType = match[1]!.trim().toLowerCase();
-  const base64 = match[2]!;
-  return mediaType && usableStandardBase64(base64) ? { mediaType, base64 } : null;
-}
-
-/** Standard-alphabet base64 with at most two trailing pad characters; nothing else. */
-const STANDARD_BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+export const VIDEO_DATA_URL_FORM_MESSAGE = "OpenCodex cannot send this inline video: it must be a data:<type>/<subtype>;base64, URL "
+  + "whose payload is standard padded base64 with no URL escapes or whitespace.";
 
 /**
- * The alphabet check plus length consistency, the same rule `src/responses/inline-document.ts`
- * applies to document bytes: padding must complete a four-character quantum, and an unpadded
- * encoding cannot leave a single sextet, which represents no byte. `A`, `AA=` and `AAA==` fail.
- * Unpadded `QQ` passes: the protobuf JSON mapping for `bytes`, which Gemini's REST surface
- * follows, accepts base64 with or without padding.
+ * An inline video URL through the shared decoder, capped at `MAX_INLINE_VIDEO_BYTES`. Admission,
+ * the input guard, both Chat conversions and the Gemini and translated-Chat builders all read
+ * video data URLs through this one call, so none of them can accept what another refuses.
  */
-function usableStandardBase64(payload: string): boolean {
-  if (!STANDARD_BASE64.test(payload)) return false;
-  return payload.endsWith("=") ? payload.length % 4 === 0 : payload.length % 4 !== 1;
+export function parseInlineVideo(url: string): ParsedMediaDataUrl {
+  return parseMediaDataUrl(url, { maxBytes: MAX_INLINE_VIDEO_BYTES });
+}
+
+/** The fixed refusal for an inline video the decoder rejects; undefined for a remote URL or an accepted one. */
+export function inlineVideoRefusal(url: string): string | undefined {
+  const parsed = parseInlineVideo(url);
+  if (parsed.ok || parsed.reason === "not_data_url") return undefined;
+  return parsed.reason === "too_large" ? OVERSIZED_INLINE_VIDEO_MESSAGE : VIDEO_DATA_URL_FORM_MESSAGE;
 }
 
 /**
- * Whether a Chat Completions body carries a `video_url` part over the inline cap, in any message.
+ * The refusal for the first Chat Completions `video_url` part the decoder rejects, in any message.
  *
  * Both Chat conversions (the projection onto the Responses core and the direct IR lane) run this
- * before they build or serialize anything, so an oversized clip is refused before translation
- * makes request-sized copies of it. Only typed content parts are read; nothing is decoded.
+ * before they build or serialize anything, so a refused clip is never copied by translation. Only
+ * typed content parts are read; the size cap is applied from the payload length before any scan.
  */
-export function chatBodyHasOversizedInlineVideo(body: unknown): boolean {
-  if (!isRecord(body) || !Array.isArray(body.messages)) return false;
+export function chatBodyVideoRefusal(body: unknown): string | undefined {
+  if (!isRecord(body) || !Array.isArray(body.messages)) return undefined;
   for (const message of body.messages) {
     if (!isRecord(message) || !Array.isArray(message.content)) continue;
     for (const part of message.content) {
       if (!isRecord(part) || part.type !== "video_url") continue;
       const url = typeof part.video_url === "string" ? part.video_url
         : isRecord(part.video_url) && typeof part.video_url.url === "string" ? part.video_url.url : undefined;
-      const bytes = url === undefined ? undefined : inlineVideoDecodedBytes(url);
-      if (bytes !== undefined && bytes > MAX_INLINE_VIDEO_BYTES) return true;
+      const refusal = url === undefined ? undefined : inlineVideoRefusal(url);
+      if (refusal) return refusal;
     }
   }
-  return false;
+  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

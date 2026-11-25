@@ -1,4 +1,5 @@
 {
+  "media-data-url.test.ts": "lib",
   "video-input-guard.test.ts": "adapters",
   "anthropic-oauth-caller-system-shape.test.ts": "adapters/anthropic",
   "anthropic-oauth-internal-system-wire.test.ts": "adapters/anthropic",

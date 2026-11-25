@@ -23,7 +23,7 @@ import { getModelMetadata } from "../../generated/model-metadata";
 import { estimateTokens } from "../../lib/token-estimate";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { modelRecordValue } from "../../reasoning-effort";
-import { inlineVideoDecodedBytes } from "../../responses/video-input";
+import { parseInlineVideo } from "../../responses/video-input";
 import type { OcxContentPart, OcxParsedRequest, OcxProviderConfig } from "../../types";
 
 /**
@@ -129,10 +129,15 @@ function base64PayloadTokens(base64: string, bytesPerToken = IMAGE_BYTES_PER_TOK
   return Math.max(1, Math.ceil(decoded / bytesPerToken));
 }
 
-/** Inline video by decoded size at the video rate; a fetched URL at the flat remote charge. */
+/**
+ * Inline video by the shared decoder's decoded size at the video rate; a fetched URL at the flat
+ * remote charge. A clip the decoder refuses is charged by its length when that is known (an
+ * oversized one) and otherwise nothing: the input guard refuses it before any send.
+ */
 function videoTokens(videoUrl: string): number {
-  const decoded = inlineVideoDecodedBytes(videoUrl);
-  if (decoded === undefined) return REMOTE_VIDEO_TOKENS;
+  const parsed = parseInlineVideo(videoUrl);
+  if (!parsed.ok && parsed.reason === "not_data_url") return REMOTE_VIDEO_TOKENS;
+  const decoded = parsed.decodedBytes ?? 0;
   return decoded === 0 ? 0 : Math.max(1, Math.ceil(decoded / VIDEO_BYTES_PER_TOKEN));
 }
 

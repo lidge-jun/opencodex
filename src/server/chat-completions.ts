@@ -19,7 +19,7 @@ import {
   ChatCompletionsRequestError,
   ChatUnsupportedInputModalityError,
 } from "../chat/inbound";
-import { chatBodyHasOversizedInlineVideo, OVERSIZED_INLINE_VIDEO_MESSAGE } from "../responses/video-input";
+import { chatBodyVideoRefusal } from "../responses/video-input";
 import { chatSettingsBody, chatToResponsesBody } from "../protocols/codecs/chat";
 import { getCombo } from "../combos/types";
 import { chatConversationToIr, chatIrRouteEvidence, withDirectChatConversation, type ChatIrConversation } from "../protocols/codecs/chat-ir";
@@ -299,8 +299,9 @@ async function handleChatCompletionsWithBudget(
     callerAuthorizationRoute = !routeMayChangeCredentialDomain
       && providerConsumesCallerAuthorization(route.provider);
     if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro") {
-      // Usage estimation serializes the messages; an over-cap clip is refused before that copy.
-      if (chatBodyHasOversizedInlineVideo(chatBody)) throw new ChatUnsupportedInputModalityError(OVERSIZED_INLINE_VIDEO_MESSAGE);
+      // Usage estimation serializes the messages; a refused clip is refused before that copy.
+      const videoRefusal = chatBodyVideoRefusal(chatBody);
+      if (videoRefusal) throw new ChatUnsupportedInputModalityError(videoRefusal);
       const parts: string[] = [];
       if (chatBody.messages !== undefined) parts.push(JSON.stringify(chatBody.messages));
       if (chatBody.tools !== undefined) parts.push(JSON.stringify(chatBody.tools));

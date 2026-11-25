@@ -49,6 +49,13 @@ Responses part `{"type": "input_video", "video_url": "…"}` or the Chat Complet
 `{"type": "video_url", "video_url": {"url": "…"}}`; `url` is a base64 `data:` URL or a URL
 the upstream fetches itself.
 
+An inline video must be exactly `data:<type>/<subtype>[;<attribute>=<value>]...;base64,<payload>`,
+where the payload is standard base64 with a length that is a multiple of four, at most two `=`
+only at the end, and no URL escapes, whitespace or URL-safe characters. Every other spelling is
+refused. One decoder applies this for input admission, the refusal check, both Chat conversions
+and the Gemini and Chat builders, which send its canonical base64, so no two of them can disagree
+about a clip.
+
 | Route | Carried as |
 | --- | --- |
 | `google` | `inline_data`, or `file_data` for YouTube and Gemini Files API URLs (see [`google`](#google)) |
@@ -74,7 +81,7 @@ than 50 MiB decoded is refused on every translated route; send the provider's fi
 Responses passthrough and native Chat forward the original body and leave size and support to
 the upstream. A Chat request that is translated is checked for both cases (a `video_url` outside
 user content, or over the cap) before its conversion builds anything, and answers the same HTTP
-400 `unsupported_input_modality`. A plain (non-base64) `data:` payload counts its UTF-8 length. Input
+400 `unsupported_input_modality`.  Input
 admission charges inline video by size at about 1,250 bytes per token and a fetched URL as one
 minute (6,000 tokens). The refusal names neither the URL nor the bytes.
 
@@ -644,7 +651,7 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
 
   | `url` | sent as |
   | --- | --- |
-  | base64 `data:` URL (header parameters and any-case `;base64` allowed; a plain `data:` URL, or a payload that is URL-escaped or not standard base64, is refused) | `inline_data` with the data URL's own media type, without parameters |
+  | canonical base64 `data:` URL (see [video input](#video-input-on-translated-routes)) | `inline_data` with the data URL's media type, without parameters, and its canonical base64 |
   | YouTube watch URL (`youtube.com`, `youtu.be`, `m.`/`music.`/`-nocookie` variants) | `file_data.file_uri` |
   | `https://generativelanguage.googleapis.com/<version>/files/<id>` — the Files API resource form, where `<version>` is `v1`, `v1beta` or `v1alpha` | `file_data.file_uri` |
 

@@ -90,7 +90,7 @@ async function send(direct: boolean, model: string, messages: unknown[], extra: 
 }
 
 const INLINE = "data:video/mp4;base64,AAAAIGZ0eXBpc29t";
-const oversized = () => `data:video/mp4,${"A".repeat(MAX_INLINE_VIDEO_BYTES + 1)}`;
+const oversized = () => `data:video/mp4;base64,${"A".repeat(Math.ceil((MAX_INLINE_VIDEO_BYTES + 1) / 3) * 4)}`;
 
 for (const direct of [true, false]) {
   test(`an assistant-position video_url is refused with unsupported_input_modality (direct=${direct})`, async () => {
@@ -111,6 +111,7 @@ for (const direct of [true, false]) {
     ]);
     expect(status).toBe(400);
     expect(body.error?.code).toBe("unsupported_input_modality");
+    expect(body.error?.message).toContain("50 MiB");
     expect(upstreamSends).toBe(0);
   });
 }

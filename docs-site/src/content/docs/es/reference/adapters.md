@@ -41,6 +41,13 @@ envían como la parte de Responses `{"type": "input_video", "video_url": "…"}`
 Completions `{"type": "video_url", "video_url": {"url": "…"}}`; `url` es una URL `data:` en
 base64 o una URL que el proveedor descarga por sí mismo.
 
+Un video en línea debe ser exactamente `data:<type>/<subtype>[;<attribute>=<value>]...;base64,<payload>`,
+donde la carga es base64 estándar con una longitud múltiplo de cuatro, como máximo dos `=` solo al
+final, y sin escapes de URL, espacios ni caracteres URL-safe. Cualquier otra forma se rechaza. Un
+solo decodificador aplica esta regla en la admisión de entrada, la comprobación de rechazo, ambas
+conversiones de Chat y los constructores de Gemini y Chat, que envían su base64 canónico, así que
+ninguno puede discrepar de otro sobre un clip.
+
 | Ruta | Se envía como |
 | --- | --- |
 | `google` | `inline_data`, o `file_data` para URL de YouTube y de la Files API de Gemini (véase [`google`](#google)) |
@@ -66,8 +73,7 @@ todas las rutas traducidas; envíe en su lugar la URL del archivo del proveedor.
 directo y Chat nativo reenvían el cuerpo original y dejan el tamaño y el soporte al proveedor.
 Una solicitud de Chat que se traduce se comprueba en ambos casos (un `video_url` fuera del
 contenido de usuario, o por encima del límite) antes de que su conversión construya nada, y
-responde el mismo HTTP 400 `unsupported_input_modality`. Una carga `data:` sin base64 cuenta su
-longitud en UTF-8. La admisión de entrada cobra el
+responde el mismo HTTP 400 `unsupported_input_modality`.  La admisión de entrada cobra el
 video en línea por tamaño, a unos 1.250 bytes por token, y una URL descargada como un minuto (6.000
 tokens). El rechazo no nombra la URL ni los bytes.
 
@@ -271,7 +277,7 @@ Consulta [Gemini nativo con Antigravity](/es/reference/proxy-formats/#native-gem
 
   | `url` | enviado como |
   | --- | --- |
-  | URL `data:` en base64 (se admiten parámetros de cabecera y `;base64` en cualquier caja; una URL `data:` sin base64, o una carga con escapes de URL o que no sea base64 estándar, se rechaza) | `inline_data` con el tipo de medio propio de la URL de datos, sin parámetros |
+  | URL `data:` canónica en base64 (véase [entrada de video](#entrada-de-video-en-rutas-traducidas)) | `inline_data` con el tipo de medio de la URL de datos, sin parámetros, y su base64 canónico |
   | YouTube ver URL (`youtube.com`, `youtu.be`, `m.`/`music.`/`-nocookie` variantes) | `file_data.file_uri` |
   | `https://generativelanguage.googleapis.com/<version>/files/<id>` - el formulario de recursos de Archivos API, donde `<version>` es `v1`, `v1beta` o `v1alpha` | `file_data.file_uri` |
 

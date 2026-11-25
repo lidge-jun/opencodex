@@ -1,14 +1,8 @@
 // Type-only: erased at compile time, so this does not create an import cycle with the registry.
 import type { AdapterWire } from "./registry";
-import { GEMINI_INLINE_VIDEO_FORM_MESSAGE, geminiFetchableVideoUri, GEMINI_UNFETCHABLE_VIDEO_MESSAGE } from "./google-video-uri";
+import { geminiFetchableVideoUri, GEMINI_UNFETCHABLE_VIDEO_MESSAGE } from "./google-video-uri";
 import { untranslatedInputMediaMessage } from "../responses/input-media";
-import {
-  inlineVideoDecodedBytes,
-  MAX_INLINE_VIDEO_BYTES,
-  OVERSIZED_INLINE_VIDEO_MESSAGE,
-  parseInlineVideoDataUrl,
-  videoParts,
-} from "../responses/video-input";
+import { inlineVideoRefusal, parseInlineVideo, videoParts } from "../responses/video-input";
 import { modelRecordValue } from "../reasoning-effort";
 import type { OcxParsedRequest, OcxProviderConfig } from "../types";
 
@@ -33,20 +27,15 @@ export function unrepresentableVideo(
 ): string | undefined {
   const videos = videoParts(parsed.context.messages);
   if (videos.length === 0) return undefined;
+  // Every inline clip goes through the shared decoder the builders use (size cap, canonical base64),
+  // so an admitted URL is always one the routed builder can send unchanged.
   for (const { part } of videos) {
-    const bytes = inlineVideoDecodedBytes(part.videoUrl);
-    if (bytes !== undefined && bytes > MAX_INLINE_VIDEO_BYTES) return OVERSIZED_INLINE_VIDEO_MESSAGE;
+    const refusal = inlineVideoRefusal(part.videoUrl);
+    if (refusal) return refusal;
   }
   if (wire === "google") {
-    // The same parser the Gemini builder uses, so an admitted URL is always one it can send.
-    for (const { part } of videos) {
-      if (part.videoUrl.startsWith("data:")) {
-        if (!parseInlineVideoDataUrl(part.videoUrl)) return GEMINI_INLINE_VIDEO_FORM_MESSAGE;
-      } else if (!geminiFetchableVideoUri(part.videoUrl)) {
-        return GEMINI_UNFETCHABLE_VIDEO_MESSAGE;
-      }
-    }
-    return undefined;
+    const unfetchable = videos.some(({ part }) => !parseInlineVideo(part.videoUrl).ok && !geminiFetchableVideoUri(part.videoUrl));
+    return unfetchable ? GEMINI_UNFETCHABLE_VIDEO_MESSAGE : undefined;
   }
   // `provider.adapter`, not the effective wire: adapters that inherit the Chat contract rebuild
   // messages with their own builders, and only the translated Chat builder emits `video_url`.

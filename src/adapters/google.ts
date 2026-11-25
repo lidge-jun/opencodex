@@ -51,8 +51,8 @@ import {
 } from "../lib/translator-budget";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { geminiProgressLead, trimsGeminiProgressHistory } from "./google-progress-history";
-import { GEMINI_INLINE_VIDEO_FORM_MESSAGE, GEMINI_UNFETCHABLE_VIDEO_MESSAGE, geminiFetchableVideoUri } from "./google-video-uri";
-import { parseInlineVideoDataUrl } from "../responses/video-input";
+import { GEMINI_UNFETCHABLE_VIDEO_MESSAGE, geminiFetchableVideoUri } from "./google-video-uri";
+import { inlineVideoRefusal, parseInlineVideo } from "../responses/video-input";
 import { configuredReasoningEfforts, mapReasoningEffort } from "../reasoning-effort";
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
@@ -416,16 +416,21 @@ function messagesToGeminiFormat(
               const mediaProcessing = geminiMediaProcessing(p.processing);
               const processingPart = mediaProcessing ? { media_processing: mediaProcessing } : {};
 
-              // Gemini accepts inline video bytes in the same Part union as images. The parser
-              // is the one the input media guard admits with, header parameters and case included.
-              const data = parseInlineVideoDataUrl(p.videoUrl);
-              if (data) {
+              // Gemini accepts inline video bytes in the same Part union as images. The shared
+              // decoder is the one the input media guard and admission use; Gemini receives its
+              // canonical base64 and parameter-free media type, never the raw substring.
+              const inline = parseInlineVideo(p.videoUrl);
+              if (inline.ok) {
                 parts.push({
-                  inline_data: { mime_type: data.mediaType, data: data.base64 },
+                  inline_data: { mime_type: inline.mime, data: inline.base64 },
                   ...processingPart,
                 });
                 continue;
               }
+              const inlineRefusal = inlineVideoRefusal(p.videoUrl);
+              // The input media guard refuses this before the build; the throw keeps a direct
+              // caller from sending a malformed or oversized clip.
+              if (inlineRefusal) throw new Error(inlineRefusal);
               // Two URI forms Gemini fetches itself: a YouTube watch URL and a Files API
               // uri. Those ARE valid file_data references (#3271), and flattening them to
               // a text marker was the whole reason agentic video could not be reached —
@@ -440,7 +445,7 @@ function messagesToGeminiFormat(
               }
               // The input media guard refuses this before the build; the throw keeps a direct
               // caller from sending a text marker in place of a clip the model cannot see.
-              throw new Error(p.videoUrl.startsWith("data:") ? GEMINI_INLINE_VIDEO_FORM_MESSAGE : GEMINI_UNFETCHABLE_VIDEO_MESSAGE);
+              throw new Error(GEMINI_UNFETCHABLE_VIDEO_MESSAGE);
             }
             if (p.type === "document") {
               // Gemini takes document bytes through the same inline_data part as images and
