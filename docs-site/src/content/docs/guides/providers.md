@@ -298,6 +298,15 @@ eligible Enterprise accounts. Cloud Code Assist serves Argon only to the Antigra
 OpenCodex sends every Gemini 4 model request and model discovery with the CLI User-Agent
 (`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model. Gemini 4 Hydrogen (low, medium, high by default, and xhigh) appears on `google-antigravity` only when your account's model list includes it, each level mapping to its `gemini-4-hydrogen-*` wire model; requesting `max` or `ultra` also selects xhigh.
 
+The `google` preset lists Gemini 4 Neon, Hydrogen, Carbon and Argon, Gemini 3.8 Flash, Gemini 3.6
+Flash, Gemini 3.5 Flash-Lite and Gemini 3.1 Pro Preview, and defaults to `gemini-3.6-flash`.
+Google no longer offers `gemini-3.5-flash` or `gemini-3.7-flash` in AI Studio and routes their
+endpoints to `gemini-3.6-flash` and `gemini-3.8-flash`
+([deprecations](https://ai.google.dev/gemini-api/docs/deprecations), checked 2026-11-26), so the
+picker no longer lists them; a saved selection keeps working. Usage estimates for Gemini 4 Argon and
+Carbon use Google's list rate of $4 input, $20 output and $0.20 cached input per million tokens.
+The introductory rate that runs through November 30, 2026 is not applied.
+
 Vertex AI model discovery, its credential rules and how Vertex Gemini 3+ models (including Gemini 4 Argon, Carbon, Hydrogen and Neon)
 receive tool images are described in [Google Vertex AI](/guides/google-vertex/).
 

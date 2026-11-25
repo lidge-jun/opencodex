@@ -1224,7 +1224,11 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   // devlog/_plan/260710_provider_hardening/001_research_frontier.md.
   {
     id: "google", label: "Google Gemini", adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", authKind: "key", featured: true,
-    dashboardUrl: "https://aistudio.google.com/apikey", defaultModel: "gemini-3.5-flash", models: ["gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"],
+    // 2026-11-26 (ai.google.dev deprecations): gemini-3.5-flash and gemini-3.7-flash are no longer
+    // offered in AI Studio and their endpoints route to gemini-3.6-flash / gemini-3.8-flash, so they
+    // leave the picker; their metadata rows stay so saved selections keep resolving. The default
+    // follows Google's named replacement. Gemini 4 Neon/Hydrogen/Carbon are GA on the models page.
+    dashboardUrl: "https://aistudio.google.com/apikey", defaultModel: "gemini-3.6-flash", models: ["gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview"],
     modelContextWindows: { "gemini-4-neon": 1_048_576, "gemini-4-hydrogen": 1_048_576, "gemini-4-carbon": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_000_000, "gemini-3.5-flash-lite": 1_048_576, "gemini-3.7-flash": 1_048_576 },
     modelInputModalities: { "gemini-4-neon": ["text", "image"], "gemini-4-hydrogen": ["text", "image"], "gemini-4-carbon": ["text", "image"], "gemini-4-argon": ["text", "image"], "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"], "gemini-3.7-flash": ["text", "image"] },
     modelReasoningEfforts: { ...GEMINI_MODEL_REASONING_EFFORTS },
