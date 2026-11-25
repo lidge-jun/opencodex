@@ -16,7 +16,8 @@ import {
 } from "../../combos/failover";
 import { parseRetryAfterMs } from "../../combos";
 import type { ConsumedComboFailure, HandleResponsesOptions } from "./core-options";
-import type { OcxUsage } from "../../types";
+import type { OcxConfig, OcxUsage } from "../../types";
+import { codexQuotaScopeForModel, getCodexQuotaHealthSnapshot } from "../../codex/routing";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { carryAnthropicRefusalCredential } from "../../oauth/anthropic-account-refusal";
 import { carryCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
@@ -44,6 +45,116 @@ import { isXaiLegacyPrivacyError, isXaiPrivacyModeRefusal, xaiPrivacyModeRefusal
 import { stampMetaMusePlanRefusal } from "../../providers/meta-muse-plan-refusal";
 import type { RequestFailureCause } from "../../usage/telemetry-contract";
 import { isRewrittenUpstreamError } from "../../adapters/upstream-http-error";
+import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
+import { getAccountSet } from "../../oauth/store";
+import { anthropicRefusalCredentialIsCurrent } from "../../oauth/anthropic-account-refusal";
+import { isAnthropicBillingFailure } from "../../providers/anthropic-billing-refusal";
+import { anthropicRoutingFor, formatAnthropicProviderForLog } from "../../oauth/anthropic-routing";
+import { codexAccountLogLabel, oauthAccountLogLabel } from "../../codex/account-label";
+import { isGenericFailoverProvider, rotateGenericOAuthAccountOn429 } from "../../oauth/generic-account-failover";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/account-id";
+import { providerCodexAccountMode } from "../../providers/registry";
+import { baseProviderLabel } from "../../providers/label";
+import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+
+export function cooledPoolAccountLabel(config: OcxConfig, providerName: string, modelId: string, label: string | undefined): string | undefined {
+  if (!label) return undefined;
+  const instance = configuredAnthropicInstance(config, providerName);
+  if (instance && config.providers[providerName]?.authMode === "oauth") {
+    const matches = getAccountSet(instance)?.accounts.filter(account =>
+      formatAnthropicProviderForLog(instance, account.id) === label) ?? [];
+    return matches.length === 1 && anthropicRoutingFor(instance).getAnthropicAccountHealthSnapshot(matches[0]!.id) ? label : undefined;
+  }
+  const provider = config.providers[providerName];
+  if (!provider || !isCanonicalOpenAiForwardProvider(provider)) return undefined;
+  const quotaScope = codexQuotaScopeForModel(modelId);
+  // The main account logs as `<provider>-main` and is not a `codexAccounts` entry (#8880). In pool
+  // mode the pool rotates past a cooled main itself, so its 429 is account evidence exactly like a
+  // pool account's, and parking the target would black out the siblings and main's own recovery for
+  // the upstream Retry-After (up to 24h). Direct mode serves main without that check, so there the
+  // target cooldown stays the only guard against re-sending to a spent account.
+  if (label === `${providerName}-main`) {
+    return providerCodexAccountMode(providerName, provider) === "pool"
+      && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope) ? label : undefined;
+  }
+  const matches = (config.codexAccounts ?? []).filter(account =>
+    `${providerName}-${codexAccountLogLabel(account)}` === label);
+  return matches.length === 1
+    && getCodexQuotaHealthSnapshot(matches[0]!.id, quotaScope)
+    ? label : undefined;
+}
+
+/**
+ * The generic OAuth pool's counterpart of `cooledPoolAccountLabel`. Its 429 names one account
+ * through `accountLogLabel`, but the per-request account budget can end the pool's own rotation
+ * before the last refused account is recorded. Hand that account to the pool's rotator, which
+ * cools it under the pool's own Retry-After policy, and spare the target only when the pool still
+ * has an eligible sibling. The rotator only peeks round-robin here: nothing is sent to that sibling.
+ * A lone account or an all-cooled pool returns null and cools the target.
+ */
+export function cooledGenericOAuthAccountLabel(
+  config: OcxConfig, providerName: string, modelId: string, label: string | undefined, retryAfter: string | undefined,
+): string | undefined {
+  const provider = config.providers[providerName];
+  if (!label || !provider || !isGenericFailoverProvider(providerName, provider)) return undefined;
+  const base = baseProviderLabel(providerName);
+  const matches = getAccountSet(providerName)?.accounts.filter(account =>
+    oauthAccountLogLabel(account.id, base) === label) ?? [];
+  return matches.length === 1
+    && rotateGenericOAuthAccountOn429(config, providerName, matches[0]!.id, retryAfter, Date.now(), modelId, false)
+    ? label : undefined;
+}
+
+/**
+ * A 402 credit-balance refusal names one Anthropic OAuth account -- the evidence the pool already
+ * accepts on a 403 -- but the pool rotates only on 401/403/429, so the 402 reaches the combo with
+ * that account still selectable. Cool it under the pool's entitlement backoff and spare the target
+ * only while a sibling is eligible; a lone account or an exhausted pool still cools the target.
+ */
+export function creditRefusedAnthropicAccountLabel(
+  config: OcxConfig, providerName: string, modelId: string, label: string | undefined,
+  message: string, code: string | null | undefined, response: Response,
+): string | undefined {
+  const instance = configuredAnthropicInstance(config, providerName);
+  if (!label || !instance || config.providers[providerName]?.authMode !== "oauth"
+    || !isAnthropicBillingFailure(402, message, code)) return undefined;
+  const routing = anthropicRoutingFor(instance);
+  const matches = getAccountSet(instance)?.accounts.filter(account =>
+    formatAnthropicProviderForLog(instance, account.id) === label) ?? [];
+  return matches.length === 1
+    && anthropicRefusalCredentialIsCurrent(response, instance, matches[0]!.id)
+    && routing.recordAnthropicAccountRefusal(config, matches[0]!.id, 403, null)
+    && routing.getEligibleAnthropicAccounts(Date.now(), modelId).length > 0
+    ? label : undefined;
+}
+
+/**
+ * True only for the Anthropic OAuth pool's OWN "all accounts cooled" 429. Its Retry-After is the
+ * earliest per-account cooldown restated (`getAnthropicPoolRetryAfterSeconds`), which the pool
+ * keeps enforcing locally, so it must not also park the combo target: an account added, resumed or
+ * cleared a minute later would otherwise sit ignored until the target expired, up to the 24h
+ * server-delay ceiling.
+ *
+ * Provenance, not just current state: the target must be the OAuth pool, no account may have been
+ * identified for the failure, and the pool must be holding the wait right now. An upstream 429 on
+ * a pool account always cools and names that account, and an API-key provider never qualifies, so
+ * a genuine upstream Retry-After still parks the target in full.
+ */
+export function isAnthropicPoolLocalRefusal(
+  config: OcxConfig,
+  providerName: string,
+  status: number,
+  failedAccount: string | undefined,
+  now = Date.now(),
+): boolean {
+  const instance = configuredAnthropicInstance(config, providerName);
+  return instance !== undefined
+    && config.providers[providerName]?.authMode === "oauth"
+    && status === 429
+    && failedAccount === undefined
+    && anthropicRoutingFor(instance).getEligibleAnthropicAccounts(now).length === 0
+    && anthropicRoutingFor(instance).getAnthropicPoolRetryAfterSeconds(now) !== null;
+}
 
 export function sanitizedRetryAfter(value: string | null, now: number): string | undefined {
   const trimmed = value?.trim();
