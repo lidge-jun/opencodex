@@ -2,6 +2,7 @@ import type { TFn } from "../i18n/shared";
 import type { RequestFailureCause, RequestFailureStage, ResendPermission, RequestSpendTotals } from "../../../src/usage/telemetry-contract";
 import type { UpstreamCondition } from "../../../src/lib/upstream-condition";
 import { boundedFailureDetail, type FailureDetailCode } from "../../../src/lib/failure-detail";
+import type { LogEntry } from "./Logs";
 
 interface LogFailureAttribution {
   failureCause?: RequestFailureCause;
@@ -78,6 +79,20 @@ export function failureAttributionLabels(
 
 const nonnegativeInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+/** A failed delivery can end an attempt in an otherwise successful request. Describe only the final failure. */
+export function isInterruptedWebSocketDelivery(row: LogEntry): boolean {
+  if (row.status !== 502 || (row.closeReason !== undefined && row.closeReason !== "terminal")
+    || (row.terminalStatus !== undefined && row.terminalStatus !== "failed")
+    || row.terminalSource !== "synthetic" || row.transportPhase !== "mid_stream"
+    || row.failureStage !== "semantic-output" || row.failureCause !== "transport-ambiguous"
+    || row.attemptNormalizationDropped === true || !Array.isArray(row.attempts)) return false;
+  const last = row.attempts.at(-1);
+  const stage = last?.codexWsStage;
+  return last?.status === row.status && last.failureStage === row.failureStage && last.failureCause === row.failureCause
+    && stage?.sent === true && stage.closeCode === 1006
+    && stage.terminalEvent === null && Number.isSafeInteger(stage.relayedEvents) && stage.relayedEvents > 0;
+}
 
 export function failureSummary(
   row: LogFailureAttribution & { spend?: RequestSpendTotals; attempts?: Array<{ sendCount: number }>; attemptNormalizationDropped?: boolean },
