@@ -99,6 +99,7 @@ function subscriptionProviders(config: OcxConfig, accountProviders: ReadonlyMap<
   for (const [name, provider] of Object.entries(config.providers ?? {})) {
     const auth = provider?.authMode ?? getProviderRegistryEntry(name)?.authKind;
     if (auth === "oauth" || auth === "forward") out.add(name);
+    else out.delete(name);
   }
   return out;
 }

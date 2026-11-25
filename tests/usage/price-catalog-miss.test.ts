@@ -160,6 +160,26 @@ describe("price catalog miss path", () => {
     expect(lookupCatalogPrice("late-model-6")?.source).toBe("models-dev");
   });
 
+  test("a memoized cost miss retries both failed feeds after their short backoff", async () => {
+    const start = Date.now();
+    setSystemTime(start);
+    sandbox.feeds.failing.add(MODELS_DEV_URL);
+    sandbox.feeds.failing.add("https://openrouter.ai/api/v1/models");
+    expect(resolveMatchedPrice("acme-relay", "zephyr-flash-2")).toBeNull();
+    await drainMisses();
+    expect(sandbox.feeds.calls).toHaveLength(2);
+    sandbox.feeds.failing.clear();
+    setSystemTime(start + 59_999);
+    expect(resolveMatchedPrice("acme-relay", "zephyr-flash-2")).toBeNull();
+    await drainMisses();
+    expect(sandbox.feeds.calls).toHaveLength(2);
+    setSystemTime(start + 60_000);
+    expect(resolveMatchedPrice("acme-relay", "zephyr-flash-2")).toBeNull();
+    await drainMisses();
+    expect(sandbox.feeds.calls).toHaveLength(4);
+    expect(resolveMatchedPrice("acme-relay", "zephyr-flash-2")?.source).toBe("models-dev");
+  });
+
   test("a miss that joins another key's held fetch still merges its own key", async () => {
     await refreshPriceCatalogs();
     sandbox.feeds.serve(MODELS_DEV_URL, { deepseek: { models: {

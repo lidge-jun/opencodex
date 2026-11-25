@@ -742,6 +742,7 @@ describe("Models manual price editor", () => {
     test("a multiplier write with a lost receipt recovers the persisted value before editing", async () => {
       await mount();
       await open();
+      await fill(["4", "5"]);
       const field = () => container.querySelector<HTMLInputElement>('dialog input[id$="-multiplier"]')!;
       const setField = async (value: string) => act(async () => {
         Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(field(), value);
@@ -755,6 +756,7 @@ describe("Models manual price editor", () => {
       multiplierReceiptLost = false;
       await click("Reload price");
       expect(field().value).toBe("0.5");
+      expect(inputs().slice(0, 2).map(input => input.value)).toEqual(["4", "5"]);
       await setField("");
       expect(button("Save multiplier").disabled).toBe(false);
       await click("Save multiplier");

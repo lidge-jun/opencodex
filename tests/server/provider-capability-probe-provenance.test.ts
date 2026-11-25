@@ -117,13 +117,24 @@ describe("modelCapabilityProbes management round trip", () => {
     expect(loadConfig().providers.caps!.modelCapabilityProbes).toEqual({ n: { probedAt: AT, inputModalities: true } });
   });
 
-  test("same-name POST to another destination does not carry the probe-written ladder", async () => {
+  test("same-name POST to another destination does not carry the probe-written ladder or provenance", async () => {
     const live = fixture();
     saveConfig(live);
     const form = { adapter: "openai-chat", baseUrl: "https://other.example.test/v1", liveModels: false, models: ["m", "n"] };
     expect((await request(live, "POST", "/api/providers", { name: "caps", provider: form })).status).toBe(200);
     expect(loadConfig().providers.caps!.modelReasoningEfforts).toBeUndefined();
-    expect(loadConfig().providers.caps!.modelCapabilityProbes).toEqual({ m: { probedAt: AT, inputModalities: true }, n: { probedAt: AT, inputModalities: true } });
+    expect(loadConfig().providers.caps!.modelCapabilityProbes).toBeUndefined();
+  });
+
+  test("PATCH to another destination keeps declarations but drops probe provenance", async () => {
+    const live = fixture();
+    saveConfig(live);
+    expect((await request(live, "PATCH", "/api/providers?name=caps", { baseUrl: "https://other.example.test/v1" })).status).toBe(200);
+    const reloaded = loadConfig().providers.caps!;
+    expect(reloaded.modelCapabilities).toEqual(fixture().providers.caps!.modelCapabilities);
+    expect(reloaded.modelReasoningEfforts).toEqual(fixture().providers.caps!.modelReasoningEfforts);
+    expect(reloaded.modelCapabilityProbes).toBeUndefined();
+    expect(live.providers.caps!.modelCapabilityProbes).toBeUndefined();
   });
 
   test("model-settings edit of a probed ladder makes it manual and stays sparse", async () => {

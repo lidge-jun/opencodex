@@ -39,9 +39,11 @@ function harness(config: OcxConfig, failPersist = false) {
   const persisted: OcxConfig[] = [];
   async function call(method: string, path: string, body?: unknown) {
     const url = new URL(`http://127.0.0.1:10100${path}`);
+    const req = body instanceof Request ? body
+      : new Request(url, { method, headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) }) });
     const response = await handleModelRoutes({
       version: "test",
-      req: new Request(url, { method, headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) }) }),
+      req,
       url,
       config,
       deps: { saveConfigPreservingClaudeCode: saved => { if (failPersist) throw new Error("disk full"); persisted.push(structuredClone(saved)); } },
@@ -127,6 +129,21 @@ describe("PUT /api/providers/:name/price-multiplier", () => {
     const unset = harness(fixture(), true);
     await expect(unset.call("PUT", multiplierPath, { multiplier: 5 })).rejects.toThrow("disk full");
     expect(Object.hasOwn(unset.config.providers[PROVIDER]!, "priceMultiplier")).toBe(false);
+  });
+
+  test("a provider deleted while reading a multiplier request returns 404 without persisting", async () => {
+    const h = harness(fixture());
+    const url = new URL(multiplierPath, "http://127.0.0.1:10100");
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } });
+    const response = h.call("PUT", multiplierPath, new Request(url, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body,
+    }));
+    delete h.config.providers[PROVIDER];
+    stream.enqueue(new TextEncoder().encode('{"multiplier":2}'));
+    stream.close();
+    expect((await response).status).toBe(404);
+    expect(h.persisted).toHaveLength(0);
   });
 
   test("an explicit write wins over a concurrent disk edit of the same field", async () => {

@@ -152,6 +152,27 @@ describe("capability probe: wire variants and classification", () => {
 });
 
 describe("capability probe: apply", () => {
+  for (const accepted of [true, false]) {
+    test(`applying a conclusive image probe (accepted: ${accepted}) preserves audio and video`, async () => {
+      const f = probeFixture(() => accepted ? ok() : status(422), {
+        modelCapabilities: { "test-model": { inputModalities: accepted ? ["text", "audio", "video"] : ["text", "image", "audio", "video"] } },
+      });
+      const result = await f.probe({ name: "fixture", model: "test-model", checks: ["image"], confirmMetered: true, apply: true });
+      const expected = accepted ? ["text", "audio", "video", "image"] : ["text", "audio", "video"];
+      expect(result.body.applied.inputModalities).toEqual(expected);
+      expect(f.saves[0]!.providers.fixture!.modelCapabilities?.["test-model"]?.inputModalities).toEqual(expected);
+    });
+  }
+  test("an alias without explicit efforts probes the native model's reasoning ladder", async () => {
+    const f = probeFixture(ok, {
+      models: ["house-model"], modelAliases: { "house-model": "short" },
+      modelReasoningEfforts: { "house-model": ["minimal", "xhigh"] },
+    });
+    const result = await f.probe({ name: "fixture", model: "short", checks: ["reasoning"], confirmMetered: true, apply: true });
+    expect(bodies(f.calls).map(effortOf)).toEqual(["minimal", "xhigh"]);
+    expect(result.body.applied.reasoningEfforts).toEqual(["minimal", "xhigh"]);
+    expect(f.saves[0]!.providers.fixture!.modelReasoningEfforts).toEqual({ "house-model": ["minimal", "xhigh"] });
+  });
   test("without apply nothing is written", async () => {
     const f = probeFixture(ok);
     await f.probe({ name: "fixture", model: "test-model", efforts: ["low"], confirmMetered: true });

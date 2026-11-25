@@ -848,6 +848,9 @@ function applyProviderPatchFields(
     // was ignored for the DNS probe so it cannot linger on the live row.
     delete next.allowPrivateNetwork;
   }
+  if (next.modelCapabilityProbes && !providerOverwriteKeepsDestination(next, provider, sampleProviderOverwrite(rawBody))) {
+    delete next.modelCapabilityProbes;
+  }
   return { next, touched, editorTouched, enablingOpenAi, headersTouched };
 }
 

@@ -595,11 +595,12 @@ and returns `{ ok: true, provider, modelId, cost }`; reset returns `cost: null`.
 ### Automatic prices
 
 A model with no manual price is priced, in this order, from a verified official price, then the
-public models.dev list, then the public OpenRouter list. The two public lists are fetched in the
-background (at most daily, plus one fetch when a model no source could price is first seen), never
-on a request path, and cached in `price-catalog-cache.json` in the OpenCodex home. Offline, the
-previous snapshot keeps answering. A price from a public list is always an estimate. A manual price
-always wins and is never scaled.
+public models.dev list, then the public OpenRouter list. The lists refresh daily on dashboard reads,
+and seeing an unpriced model can trigger a background fetch. A confirmed miss can trigger another
+fetch after six hours; a failed source can retry after 60 seconds. No request waits on these
+fetches. Lists are cached in `price-catalog-cache.json` in the OpenCodex home, so the last snapshot
+remains available offline. Public-list prices are estimates and do not affect routing caps or
+ranking. A manual price always wins and is never scaled.
 
 Each non-combo row of `GET /api/models` carries `price` when a price is known and omits it when not:
 `{ source, input, output, cacheRead, cacheWrite }` in USD per 1M tokens, where `source` is `manual`,
@@ -914,17 +915,20 @@ When sent, the response is `{ applicable: true, sent: true, metered, provider, m
   `reasoning_effort` reads as accepting every effort. Upstream response and error bodies are never
   returned or logged.
 
-With `apply: true`, conclusive results are saved and the Codex catalog is refreshed, as after a
-provider PATCH. An accepted image writes `modelCapabilities[model].inputModalities = ["text", "image"]`,
-a rejected one `["text"]`; other capability axes are untouched. The reasoning ladder is written to
+With `apply: true`, conclusive results are saved. The Codex catalog refresh is best effort; run
+Sync if the catalog remains stale. An accepted image adds `image` to `modelCapabilities[model].inputModalities`; a
+rejected image removes it. Other declared modalities and capability axes are untouched. With no
+declaration, the starting modality is `text`; it is also retained if removing `image` would leave
+no modalities. The reasoning ladder is written to
 `modelReasoningEfforts[model]` (accepted efforts in ladder order) only when every probed effort was
-conclusive. A model submitted as a configured alias is written under its native model ID; `model` in
-the response stays as submitted. If the provider's destination, auth mode, or the model's alias
+conclusive. If the stored default is not among the accepted efforts, the probe removes
+`modelDefaultReasoningEfforts[model]`; this removal is not listed in `applied`. A configured alias uses the native model's ladder if efforts are omitted and writes
+under that native model ID; `model` in the response stays as submitted. If the provider's destination, auth mode, or the model's alias
 target changes while the probe runs, nothing is written and the response is 409 with the results.
 `applied` reports what was written. Each written axis is labeled in the provider's
 `modelCapabilityProbes` field; a later manual edit of that axis through `PATCH /api/providers`
 (`modelCapabilities`) or `PUT /api/model-settings` removes the label, as does a provider save that
-changes the labeled declaration. A provider-form save to the same destination keeps a probe-written
+changes the labeled declaration or the destination. A provider-form save to the same destination keeps a probe-written
 reasoning ladder and its label.
 
 When Antigravity's quota-summary endpoint has no usable response, quota reports may also include

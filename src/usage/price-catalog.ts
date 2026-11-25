@@ -240,6 +240,22 @@ function autoAllowed(): boolean {
   return (testFetch !== null || process.env["NODE_ENV"] !== "test") && !isPassiveRead();
 }
 
+export function priceCatalogMissRetryAt(modelId: string): number {
+  const now = Date.now();
+  const key = priceCatalogKey(modelId);
+  if (!key || !autoEnabled || !autoAllowed()) return now + FAILURE_BACKOFF_MS;
+  const s = stateFor(getConfigDir());
+  const nextSourceRetry = Math.min(...SOURCES.map(def => {
+    const snapshot = s.snapshots.get(def.id);
+    const expiresAt = snapshot ? snapshot.fetchedAt + PRICE_CATALOG_TTL_MS : 0;
+    const lastMissFetch = s.lastMissFetch.get(def.id);
+    const sourceCooldown = lastMissFetch === undefined ? 0 : Math.min(expiresAt, lastMissFetch + PRICE_CATALOG_MISS_COOLDOWN_MS);
+    return Math.max(s.retryAfter.get(def.id) ?? 0, sourceCooldown);
+  }));
+  const retryAt = Math.max(s.cooldown.get(key) ?? 0, nextSourceRetry);
+  return retryAt > now ? retryAt : now + 1_000;
+}
+
 /** Record a key no tier could price and schedule one coalesced background refresh. */
 export function notePriceCatalogMiss(modelId: string): void {
   if (!autoEnabled || !autoAllowed()) return;
@@ -350,6 +366,7 @@ async function refreshSource(dir: string, s: State, def: SourceDef, mode: Mode):
         mergeKeys(s, def, parsed, mode.keys, at);
       }
       persist(dir, s);
+      s.retryAfter.delete(def.id);
       return statusOf(s, def);
     } catch (error) {
       s.retryAfter.set(def.id, Date.now() + FAILURE_BACKOFF_MS);

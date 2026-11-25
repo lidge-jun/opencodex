@@ -711,7 +711,7 @@ export function dropPatchedModelCapabilityProbes(provider: OcxProviderConfig, pa
 
 /**
  * Same-name `POST /api/providers` overwrite: the provider form never sends the provenance, so an
- * omitted field carries the live row's flags. The form never sends reasoning ladders either, so on
+ * omitted field carries the live row's flags only if the destination stays the same. The form never sends reasoning ladders either, so on
  * a same-destination save that omits `modelReasoningEfforts` a probe-written ladder is carried with
  * its flag. Then a carried flag whose declaration the overwrite changed, and every flag whose
  * declaration did not survive, is dropped. A submitted value is validated by
@@ -728,7 +728,11 @@ export function carryModelCapabilityProbes(
     pruneModelCapabilityProbes(candidate);
     return;
   }
-  if (keepsDestination && !Object.hasOwn(submitted, "modelReasoningEfforts")) {
+  if (!keepsDestination) {
+    delete candidate.modelCapabilityProbes;
+    return;
+  }
+  if (!Object.hasOwn(submitted, "modelReasoningEfforts")) {
     for (const [id, row] of Object.entries(probes)) {
       const ladder = probedDeclaration(live, id, "reasoningEfforts");
       if (row?.reasoningEfforts !== true || !Array.isArray(ladder) || ["__proto__", "prototype", "constructor"].includes(id)) continue;

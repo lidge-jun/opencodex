@@ -25,7 +25,7 @@ import type { PersistedUsageAttempt, UsageStatus } from "./log";
 import { cacheObservationFromUsage } from "./cache-provenance";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { activeAccountPricingProviders, activeConfiguredProviders, activeCreditPrices, activePriceMultipliers, activeSubscriptionProviders, activeUserCostOverlays, userCostOverlayVersion } from "./user-cost-overlays";
-import { PRICE_CATALOG_MISS_COOLDOWN_MS, resolveCatalogPrice } from "./price-catalog";
+import { priceCatalogMissRetryAt, resolveCatalogPrice } from "./price-catalog";
 import { costTokensWithinBound, isValidCreditPriceBound, isRepresentableCreditCount, type CreditBilling } from "./credit-billing";
 import {
   EXPECTED_PRICE_OVERLAYS,
@@ -259,11 +259,11 @@ export function resolveMatchedPrice(
     // not the collapsed namespace. The version covers both sets.
     const cacheKey = `${userCostOverlayVersion()} ${options.allowModelLevelFallback !== false} ${configuredName} ${provider} ${modelId}`;
     const cached = priceMemo.get(cacheKey);
-    // A memoized miss expires with the catalog's miss cooldown, so the lookup can queue its retry.
+    // A memoized miss expires when the catalog can retry, including after source failures.
     if (cached && (cached.price || Date.now() < cached.retryAt)) return cached.price;
     if (!cached && priceMemo.size >= 512) priceMemo.clear();
     const price = decoratePrice(resolveMatchedPriceInner(provider, modelId, overlays, userOverlays, options), configuredName, provider);
-    priceMemo.set(cacheKey, { price, retryAt: Date.now() + PRICE_CATALOG_MISS_COOLDOWN_MS });
+    priceMemo.set(cacheKey, { price, retryAt: price ? 0 : priceCatalogMissRetryAt(modelId) });
     return price;
   }
   return decoratePrice(resolveMatchedPriceInner(provider, modelId, overlays, userOverlays, options), configuredName, provider);

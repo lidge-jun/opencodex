@@ -150,6 +150,13 @@ describe("subscription API-equivalent label", () => {
     expect(resolveMatchedPrice("sub-oauth", "zephyr-flash-2")!.apiEquivalent).toBeUndefined();
   });
 
+  test("a configured key provider takes precedence over a Codex account label", async () => {
+    await loadCatalog();
+    expect(resolveMatchedPrice("openai-main", "zephyr-flash-2")!.apiEquivalent).toBe(true);
+    configure({ "openai-main": { authMode: "key" } });
+    expect(resolveMatchedPrice("openai-main", "zephyr-flash-2")!.apiEquivalent).toBeUndefined();
+  });
+
   test("switching a provider's auth mode refreshes the label", async () => {
     configure({ flip: { authMode: "key" } });
     await loadCatalog();

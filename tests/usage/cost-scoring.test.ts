@@ -209,6 +209,24 @@ describe("cost-aware scoring (RI-08)", () => {
       });
       expect(evidence.priceSource).toBe(expectedSource);
       expect(evidence.incomplete).toBe(true);
+      expect(evidence.estimatedUsd).toBeUndefined();
+      const candidates = [{ provider: "a", model: "m1" }, { provider: "a", model }];
+      const reports = [{ ...candidates[0]! }, { ...candidates[1]!, cost: evidence }];
+      const unknownEvidence = { capability: "allow", health: "penalize", quota: "penalize", cost: "penalize" } as const;
+      const result = evaluatePolicyProfile(config({
+        routingProfiles: {
+          cap: { candidates, limits: { maxEstimatedCostUsd: 0.000001 }, unknownEvidence },
+          rank: { candidates, optimize: { cost: 1 }, unknownEvidence },
+        },
+      }), "cap", {}, reports);
+      expect(result.candidates[1]!.eligible).toBe(true);
+      expect(result.trace.candidates[1]!.cost?.capOutcome).toBe("unknown-allowed");
+
+      const ranking = evaluatePolicyProfile(config({
+        routingProfiles: { rank: { candidates, optimize: { cost: 1 }, unknownEvidence } },
+      }), "rank", {}, reports);
+      expect(ranking.candidates[1]!.score!.components.cost).toBe(COST_UNKNOWN_PENALTY_SCORE);
+      expect(ranking.selectedIndex).toBe(0);
     }
   });
 });

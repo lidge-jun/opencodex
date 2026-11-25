@@ -117,7 +117,8 @@ as official) > `models-dev` > `openrouter` > unknown. The last two tiers run onl
 model-level fallback would otherwise return null, and only when the caller leaves
 `allowModelLevelFallback` on. A catalog price has `status: "verified-derived"`, so `estimated` is
 true; `sourceRef` is the feed URL and `verifiedAt` the fetch time. A user price, including explicit
-all-zero rates, is never replaced or scaled.
+all-zero rates, is never replaced or scaled. Routing traces can identify an online price source,
+but treat its amount as unknown for cost caps and scoring.
 
 `src/usage/price-catalog.ts` owns the two public lists. A model matches a row by
 `priceCatalogKey`: only the known `cn:` channel prefix, case, dots versus hyphens and a `[...]`
@@ -145,8 +146,9 @@ Refresh rules, all in the background and never on a request path:
   tick share one fetch per source (the feeds are whole-table GETs), and only the queued keys are
   merged into the existing snapshot, adding missing keys and leaving every other row alone. A key
   still unfound afterwards cools down for 6 hours (persisted in the cache file) and a source gets at
-  most one miss-driven fetch per 6 hour window. The resolver returns null at once and the next
-  lookup after the fetch finds the price.
+  most one successful miss-driven fetch per 6 hour window. Failed feeds remain eligible after
+  their 60-second backoff rather than giving the memoized miss a 6-hour lifetime. The resolver
+  returns null at once and the next lookup after a price is fetched finds it.
 - `GET /api/models` and `GET /api/usage` arm the miss path and start the daily refresh;
   `POST /api/pricing/refresh` forces both sources and clears cooldowns. Under `NODE_ENV=test` nothing
   fetches unless a test injects a fetcher with `setPriceCatalogFetchForTests`.
@@ -155,9 +157,11 @@ Refresh rules, all in the background and never on a request path:
 sparse) scales every non-user price for that provider's configured name. It is validated by
 `priceMultiplierConfigError`, dropped with a warning by `sanitizeModelCostsForLoad`, and set with
 `PUT /api/providers/{provider}/price-multiplier` (`{ multiplier: number | null }`; `null` deletes the
-key; the write rolls back when persistence fails). `GET /api/providers/{provider}/model-costs` returns
-`priceMultiplier` when set. A provider is a subscription when its effective auth (`authMode`, else
-the registry) is `oauth` or `forward`, or it is an exact Codex account identity; its non-user prices
+key; a provider removed while the body is read returns 404; the write rolls back when persistence
+fails). `GET /api/providers/{provider}/model-costs` returns `priceMultiplier` when set. After an
+uncertain write the dialog reloads the changed value without replacing the unrelated draft. A
+configured provider is a subscription when its effective auth (`authMode`, else the registry) is
+`oauth` or `forward`; unshadowed exact Codex account identities also count. The non-user prices
 carry `apiEquivalent`. `refreshUserCostOverlays` collects the multipliers and the subscription set
 and includes both in the change signature, so editing either bumps the version.
 `src/server/management/model-row-price.ts` projects the effective price onto each non-combo

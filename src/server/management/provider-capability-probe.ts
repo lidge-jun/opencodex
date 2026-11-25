@@ -122,6 +122,15 @@ function writeBack(
   const label = { probedAt, ...(previous?.inputModalities ? { inputModalities: true as const } : {}),
     ...(previous?.reasoningEfforts ? { reasoningEfforts: true as const } : {}) };
   if (applied.inputModalities) {
+    const capabilities = live.modelCapabilities;
+    const declared = capabilities && Object.hasOwn(capabilities, model) ? capabilities[model]?.inputModalities : undefined;
+    const modalities = declared ?? ["text"];
+    if (applied.inputModalities.includes("image")) {
+      applied.inputModalities = [...new Set([...modalities, "image"])];
+    } else {
+      applied.inputModalities = modalities.filter(modality => modality !== "image");
+      if (!applied.inputModalities.length) applied.inputModalities = ["text"];
+    }
     next.modelCapabilities = mergeModelCapabilities(next.modelCapabilities, { [model]: { inputModalities: applied.inputModalities } });
     label.inputModalities = true;
   }
@@ -178,7 +187,10 @@ export async function handleProviderCapabilityProbeRoute(
   const { name, model, checks, apply } = parsed;
   const blocked = providerCompletionTestApplicability(config, name, model);
   if (blocked) return jsonResponse({ ...blocked, sent: false, provider: name, model });
-  const efforts = checks.includes("reasoning") ? parsed.efforts ?? defaultEfforts(config, name, model) : [];
+  const authority = probeAuthority(config, name, model);
+  if (!authority) return jsonResponse({ error: "unknown provider" }, 404);
+  const target = authority.native;
+  const efforts = checks.includes("reasoning") ? parsed.efforts ?? defaultEfforts(config, name, target) : [];
   const plannedRequests = 1 + (checks.includes("image") ? 1 : 0) + efforts.length;
   const metered = providerProbeIsMetered(name, config.providers[name]!);
   if (metered && !parsed.confirmMetered) {
@@ -188,9 +200,6 @@ export async function handleProviderCapabilityProbeRoute(
   inFlight.add(name);
   try {
     // Declarations are keyed by the native id the requests are sent as, not by a submitted alias.
-    const authority = probeAuthority(config, name, model);
-    if (!authority) return jsonResponse({ error: "unknown provider" }, 404);
-    const target = authority.native;
     if (apply && (!isValidModelDiscoveryModelId(target) || ["__proto__", "prototype", "constructor"].includes(target))) return invalid();
     let stopped = false;
     let retargeted = false;

@@ -563,6 +563,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const multiplier = body.multiplier;
     const validationError = multiplier === null ? null : priceMultiplierConfigError(multiplier ?? "invalid", "multiplier");
     if (validationError) return jsonResponse({ error: validationError }, 400, req, config);
+    if (!hasOwnProvider(config.providers, name)) return jsonResponse({ error: "provider not found" }, 404, req, config);
     const provider = config.providers[name]!;
     const hadMultiplier = Object.hasOwn(provider, "priceMultiplier");
     const previous = provider.priceMultiplier;

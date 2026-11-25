@@ -21,6 +21,7 @@ const RATE_LABELS: Record<RateField, TKey> = {
 };
 const REQUEST_TIMEOUT_MS = 60_000;
 type AuxKind = "refreshPrices" | "multiplier";
+type RecoverMutation = "modelCosts" | "multiplier";
 type Phase = "loading" | "loadFailed" | "ready" | "saving" | "unknown" | "refreshing" | "refreshFailed";
 
 interface ModelPriceDialogProps {
@@ -42,6 +43,7 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
   const multiplierRef = useRef<HTMLInputElement>(null);
   const requestRef = useRef<BoundedFetch | null>(null);
   const mutationPendingRef = useRef(false);
+  const recoveryRef = useRef<RecoverMutation | null>(null);
   const [phase, setPhase] = useState<Phase>("loading");
   const [draft, setDraft] = useState<RateDraft>(EMPTY_RATES);
   const [pricingMode, setPricingMode] = useState<PricingMode>("automatic");
@@ -60,7 +62,7 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
   const mutating = phase === "saving" || phase === "refreshing";
   const locked = phase !== "ready";
 
-  const readOverride = useCallback((recover = false) => {
+  const readOverride = useCallback((recover: RecoverMutation | null = null) => {
     if (requestRef.current) return;
     const bounded = createBoundedFetch(REQUEST_TIMEOUT_MS);
     requestRef.current = bounded;
@@ -74,20 +76,23 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
       const cost = rawCost === undefined ? undefined : parseModelCost(rawCost);
       if (cost === INVALID) throw new Error("invalid model cost");
       if (requestRef.current !== bounded) return;
-      const loaded = loadDraft(cost);
-      setDraft(loaded.rates);
-      setPricingMode(loaded.mode);
-      setCustomDraft(loaded.custom);
-      setHasOverride(cost !== undefined);
+      if (recover !== "multiplier") {
+        const loaded = loadDraft(cost);
+        setDraft(loaded.rates);
+        setPricingMode(loaded.mode);
+        setCustomDraft(loaded.custom);
+        setHasOverride(cost !== undefined);
+      }
       const rawMultiplier = result.priceMultiplier;
       const loadedMultiplier = typeof rawMultiplier === "number" && Number.isFinite(rawMultiplier) && rawMultiplier > 0 ? rawMultiplier : null;
       setMultiplier(loadedMultiplier);
-      setMultiplierDraft(loadedMultiplier === null ? "" : String(loadedMultiplier));
+      if (recover !== "modelCosts") setMultiplierDraft(loadedMultiplier === null ? "" : String(loadedMultiplier));
       setErrorKey(null);
       setInvalidField(null);
       // This read recovers an editable snapshot, not ordering against an earlier
       // request still running on the server or writes from another client.
-      setRecovered(recover);
+      recoveryRef.current = null;
+      setRecovered(recover !== null);
       setPhase("ready");
     }).catch(() => {
       if (requestRef.current !== bounded) return;
@@ -154,6 +159,7 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
       } else onClose();
     } catch {
       if (requestRef.current !== bounded) return;
+      if (!confirmed) recoveryRef.current = "modelCosts";
       setPhase(confirmed ? "refreshFailed" : "unknown");
       setErrorKey(confirmed ? "pricing.override.refreshFailed" : "pricing.override.outcomeUnknown");
     } finally {
@@ -190,6 +196,7 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
       // A multiplier PUT whose receipt never arrived may still have been persisted:
       // recover through a fresh read instead of editing against a stale value.
       const unknown = !confirmed && kind === "multiplier";
+      if (unknown) recoveryRef.current = "multiplier";
       if (confirmed) setRetryKeepsOpen(true);
       setPhase(confirmed ? "refreshFailed" : unknown ? "unknown" : "ready");
       setErrorKey(confirmed ? "pricing.override.refreshFailed" : unknown ? "pricing.override.outcomeUnknown" : failKey);
@@ -237,7 +244,7 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
           if (phase === "unknown" || phase === "loadFailed") {
             setPhase("loading");
             setErrorKey(null);
-            void readOverride(phase === "unknown");
+            void readOverride(recoveryRef.current);
             return;
           }
           if (phase === "refreshFailed") { void save(undefined); return; }
