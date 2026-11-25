@@ -35,7 +35,7 @@ import { ProviderApiKeyPausedError } from "./api-key-pause-state";
 import { cachedApiKeyQuota } from "./quota-key-accounts";
 import { isDisplayOnlyQuota } from "./quota-types";
 
-// ---- cooldown state (in-memory, same as codex/routing.ts) ----
+// ---- cooldown state (api-key-cooldowns.ts; a running server persists it until expiry) ----
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 10 * 60_000; // cap at 10 min for api-key rotation
@@ -45,8 +45,8 @@ const MAX_COOLDOWN_MS = 10 * 60_000; // cap at 10 min for api-key rotation
  * ten-minute credential cap would hand a dead key back to rotation six times an hour. One hour
  * keeps it out of replacement and proactive selection while a funded sibling exists, and still
  * notices a top-up without a restart. When every key is held, requests keep using the active
- * key and return Anthropic's original refusal. The hold is in memory; dashboard key management
- * clears it.
+ * key and return Anthropic's original refusal. The hold survives a restart until it expires
+ * while the key is unchanged; dashboard key management clears it.
  */
 export const ANTHROPIC_BILLING_COOLDOWN_MS = 60 * 60_000;
 
@@ -840,7 +840,7 @@ export function recordDistributedKeyFailure(
   const delay = status === "billing" ? ANTHROPIC_BILLING_COOLDOWN_MS : status === 401 ? MAX_COOLDOWN_MS : quotaResetAt !== undefined
     ? Math.max(1, quotaResetAt - now) : parseRetryAfterMs(retryAfter, now) ?? DEFAULT_COOLDOWN_MS;
   for (const entry of provider.apiKeyPool ?? []) if (entry.key === failed.key) {
-    setKeyCooldown(providerName, entry.id, now + delay, status === "billing" || quotaExhausted);
+    setKeyCooldown(providerName, entry.id, now + delay, status === "billing" || quotaExhausted, entry.key);
   }
   sweepExpiredOnWrite(now);
   return true;
@@ -940,7 +940,7 @@ function rotateKeyAfterFailure(
       : quotaResetAt !== undefined
         ? Math.max(quotaResetAt - now, 1)
         : parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
-    setKeyCooldown(providerName, outcome.value.failedId, now + cooldownMs, failureStatus === "billing" || quotaExhausted);
+    setKeyCooldown(providerName, outcome.value.failedId, now + cooldownMs, failureStatus === "billing" || quotaExhausted, failedKey);
     sweepExpiredOnWrite(now);
   }
   if ("exhaustedCount" in outcome.value) {

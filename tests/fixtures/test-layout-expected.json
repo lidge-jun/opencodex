@@ -1843,5 +1843,6 @@
   "link-served-runtime-trust.test.ts": "clients",
   "link-ws-autobahn.test.ts": "clients",
   "routing-profile-types-reexport.test.ts": "config",
-  "provider-quota-probe-isolation.test.ts": "providers"
+  "provider-quota-probe-isolation.test.ts": "providers",
+  "api-key-cooldown-store.test.ts": "providers"
 }

@@ -183,7 +183,7 @@ objects. The final manager-state probe treats both running and queued tasks as a
 
 The task's running state is read from `schtasks /query /fo CSV`. The status words observed from shipped
 zh-CN, ko-KR, and ja-JP resources are recognized there, because a cold `Get-ScheduledTask` takes
-1.6 s to 4.9 s (#8863) and cannot finish inside the 1 s cap. Any other localized word still falls back to it.
+1.6 s to 4.9 s (#8863) and cannot finish inside the 1 s cap. Any other localized word (French `Prêt`, for example) falls back to the numeric `TASK_STATE` read through the `Schedule.Service` COM object, which needs no module import (about 0.3 s including PowerShell startup on the reporting host): 2 and 4 (queued, running) are active, 1 and 3 (disabled, ready) are stopped, and a failed, timed-out or other value stays unknown.
 The instance stop maps an access-denied HRESULT to `denied`. A running WinSW service is only this home's manager
 when `sc qc` shows a `BINARY_PATH_NAME` naming this installation's WinSW executable, the same
 proof the guarded manager path uses: the service ID is fixed, so a successful `sc query` alone

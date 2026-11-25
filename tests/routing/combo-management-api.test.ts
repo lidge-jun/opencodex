@@ -320,6 +320,24 @@ describe("combo management API", () => {
     });
   });
 
+  test("a draft preview resolves redirects with the same billing policy as dispatch", async () => {
+    const config = baseConfig({ blockedModelRedirects: { "a/m1": "b/m2" } });
+    config.providers.a = { ...config.providers.a!, authMode: "local", baseUrl: "http://127.0.0.1:19012" };
+    const response = await comboApi(config, "GET", "/api/combos?fallbackTarget=a%2Fm1&fallbackTarget=missing%2Fm");
+    expect(await responseJson(response)).toEqual({ routes: {
+      "a/m1": { provider: "b", model: "m2", requiresConsent: true },
+      "missing/m": null,
+    } });
+  });
+
+  test("the Combo list reports each provider's billing class for the dashboard", async () => {
+    const config = baseConfig();
+    config.providers.b = { ...config.providers.b!, authMode: "local", baseUrl: "http://127.0.0.1:19012/v1" };
+    const listed = await responseJson(await comboApi(config, "GET", "/api/combos"));
+    expect(listed.providerBilling).toEqual({ a: "consent", b: "local", c: "consent" });
+    expect(listed.combos.map((combo: { id: string }) => combo.id)).toEqual(["free"]);
+  });
+
   test("quota-only and same-model options survive a partial PUT and can be cleared", async () => {
     await withTempHome(async () => {
       const config = baseConfig({ combos: undefined });

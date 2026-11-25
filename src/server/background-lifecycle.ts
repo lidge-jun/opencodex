@@ -34,6 +34,7 @@ import {
   type MemoryWatchdog,
 } from "./memory-watchdog";
 import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
+import { installApiKeyCooldownPersistence, uninstallApiKeyCooldownPersistence } from "../providers/api-key-cooldown-store";
 import { isTelemetryEnvOptOut } from "../telemetry/consent";
 import {
   bindCodexAccountEgressConfig,
@@ -227,6 +228,7 @@ function stopProcessLoops(): void {
   setCatalogAutoRefreshClientFanout(null);
   setLivePolicyOwner(null);
   unbindCodexAccountEgressConfig();
+  uninstallApiKeyCooldownPersistence({ dropLocalHolds: true });
 }
 
 async function stopStoragePolicyWorker(): Promise<void> {
@@ -293,6 +295,9 @@ export function acquireServerBackgroundLifecycle(
   // account routes while it is the newest owner; a release restores the surviving owner's and the
   // final release (stopProcessLoops) detaches them.
   const egressBinding = bindCodexAccountEgressConfig(config);
+  // Confirmed API-key cooldowns survive a restart only for a running server: the first lease
+  // binds the config dir's file, and the final release (stopProcessLoops) detaches it.
+  installApiKeyCooldownPersistence(config);
 
   const owner: LeaseOwner = {
     token: Symbol("server-background-lifecycle"),
@@ -315,6 +320,7 @@ export function acquireServerBackgroundLifecycle(
     const survivor = owners.at(-1);
     if (survivor) restoreCodexAccountEgressBinding(survivor.egressBinding);
     else unbindCodexAccountEgressConfig(config);
+    if (owners.length === 0) uninstallApiKeyCooldownPersistence({ dropLocalHolds: true });
     throw error;
   }
 
