@@ -544,3 +544,57 @@ test("a detached home's late write never clears the current home's holds", async
     removeTreeWithRetry(otherHome);
   }
 }, 20_000);
+
+for (const scope of ["provider", "global"] as const) {
+  test(`a ${scope} clear made while the lock was busy still applies when the home is rebound`, async () => {
+    const cfg = config({ a: "sk-alpha-0001" });
+    saveConfig(cfg);
+    const until = Date.now() + 60_000;
+    writeRows([row("a", "sk-alpha-0001", until)]);
+    const first = acquireServerBackgroundLifecycle(() => {}, cfg);
+    const otherHome = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-clear-"));
+    const blocker = new Database(join(home, "config-mutation.sqlite"));
+    try {
+      expect(getKeyCooldownUntil("p", "a")).toBe(until);
+      blocker.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+      if (scope === "provider") clearKeyCooldowns("p"); else clearKeyCooldowns();
+      process.env.OPENCODEX_HOME = otherHome;
+      const second = acquireServerBackgroundLifecycle(() => {}, config({ a: "sk-alpha-0001" }));
+      await second.release(); // rebind while the clear is still unwritten
+      expect(isKeyInCooldown("p", "a")).toBe(false);
+      blocker.exec("ROLLBACK");
+      await waitUntil(() => stored().rows.length === 0, 9_000);
+      expect(isKeyInCooldown("p", "a")).toBe(false);
+    } finally {
+      blocker.close();
+      process.env.OPENCODEX_HOME = home;
+      await first.release();
+      removeTreeWithRetry(otherHome);
+    }
+  }, 15_000);
+}
+
+test("a pending hold is restored on rebind even when the file cannot be read", async () => {
+  const cfg = config({ a: "sk-alpha-0001" });
+  saveConfig(cfg);
+  const first = acquireServerBackgroundLifecycle(() => {}, cfg);
+  const otherHome = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-unreadable-"));
+  const blocker = new Database(join(home, "config-mutation.sqlite"));
+  try {
+    const until = Date.now() + 60_000;
+    setKeyCooldown("p", "a", until, false, "sk-alpha-0001");
+    blocker.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    process.env.OPENCODEX_HOME = otherHome;
+    const second = acquireServerBackgroundLifecycle(() => {}, config({ a: "sk-alpha-0001" }));
+    mkdirSync(file(home)); // the cooldown file path is now unreadable
+    await second.release();
+    expect(getKeyCooldownUntil("p", "a")).toBe(until);
+  } finally {
+    blocker.exec("ROLLBACK");
+    blocker.close();
+    try { rmdirSync(file(home)); } catch { /* removed already */ }
+    process.env.OPENCODEX_HOME = home;
+    await first.release();
+    removeTreeWithRetry(otherHome);
+  }
+}, 15_000);

@@ -180,11 +180,17 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
     this.onDrained = undefined;
   }
 
-  /** Live rows on disk now, adopting the file's clear counters. Throws on a read error other than a missing file. */
+  /**
+   * Live rows on disk now, adopting the file's clear counters. A clear of this store's that is not
+   * written yet still applies, so a row it cleared is not returned. Throws on a read error other
+   * than a missing file.
+   */
   load(now = Date.now()): ApiKeyCooldownRow[] {
     const state = readApiKeyCooldownState(this.path);
     this.adopt(state);
-    return liveRows(state.rows, state.epochs, state.allEpoch, now);
+    const epochs = Object.assign(epochTable(), state.epochs);
+    for (const provider of this.bumped) epochs[provider] = this.epochs.get(provider) ?? 0;
+    return liveRows(state.rows, epochs, this.bumpedAll ? this.allEpoch : state.allEpoch, now);
   }
 
   /**
@@ -335,11 +341,15 @@ export function installApiKeyCooldownPersistence(
   retrying.delete(dir);
   resumed?.reactivate();
   const store = resumed ?? new ApiKeyCooldownStore(dir);
+  let diskRows: ApiKeyCooldownRow[] = [];
   try {
-    restoreApiKeyCooldowns(rowsMatchingCurrentKeys([...store.load(now), ...store.pendingRows(now)], config), now);
+    diskRows = store.load(now);
   } catch {
-    // An unreadable file restores nothing; later writes still try to persist.
+    // An unreadable file restores nothing from disk; later writes still try to persist.
   }
+  // Pending holds of a resumed store are restored by the counters it last knew; its next flush
+  // re-filters them against the file, so a peer's clear it has not seen yet still wins on disk.
+  restoreApiKeyCooldowns(rowsMatchingCurrentKeys([...diskRows, ...store.pendingRows(now)], config), now);
   installed = {
     store,
     detach: attachApiKeyCooldownPersistence(store),
