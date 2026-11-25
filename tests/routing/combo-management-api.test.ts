@@ -320,6 +320,25 @@ describe("combo management API", () => {
     });
   });
 
+  test("quota-only and same-model options survive a partial PUT and can be cleared", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const targets = [{ provider: "a", model: "m1" }];
+      const put = (changes: Record<string, unknown>) => comboApi(config, "PUT", "/api/combos", {
+        id: "quota-route", combo: { targets, ...changes },
+      });
+      expect((await put({ quotaOnlyFallback: "yes" }))?.status).toBe(400);
+      expect((await put({ strategy: "round-robin", quotaOnlyFallback: true }))?.status).toBe(400);
+      const flags = { quotaOnlyFallback: true, preserveFallbackModel: true };
+      expect((await responseJson(await put(flags))).combo).toMatchObject(flags);
+      expect((await responseJson(await put({}))).combo).toMatchObject(flags);
+      expect((await responseJson(await put({ quotaOnlyFallback: false, preserveFallbackModel: false }))).combo)
+        .not.toHaveProperty("quotaOnlyFallback");
+      expect(config.combos?.["quota-route"]).not.toHaveProperty("preserveFallbackModel");
+    });
+  });
+
   test("model notes round-trip across strategies and reject invalid lengths", async () => {
     await withTempHome(async () => {
       const config = baseConfig({ combos: undefined });

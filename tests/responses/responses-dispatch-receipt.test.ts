@@ -4,6 +4,9 @@ import { codexWsExchange } from "../../src/server/responses/codex-ws-exchange";
 import { CodexWsSession } from "../../src/server/responses/codex-ws-session";
 import { prepareCodexWsRequest } from "../../src/server/responses/codex-ws-request";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import {
+  assertSendAdmission, requireSendAdmission, runWithSendAdmission, withSendAdmissionScope,
+} from "../../src/server/responses/send-admission";
 import { streamingInit } from "../helpers/ws-upstream-fixtures";
 
 const realWebSocket = globalThis.WebSocket;
@@ -41,9 +44,10 @@ test("HTTP local dispatch refusal leaves receipt and physical executor untouched
 class FakeSocket {
   static latest: FakeSocket;
   static onSend: ((data: string) => void) | undefined;
+  static autoOpen = true;
   listeners = new Map<string, Set<(event: unknown) => void>>();
   sent: string[] = [];
-  constructor() { FakeSocket.latest = this; queueMicrotask(() => this.emit("open", {})); }
+  constructor() { FakeSocket.latest = this; if (FakeSocket.autoOpen) queueMicrotask(() => this.emit("open", {})); }
   addEventListener(name: string, fn: (event: unknown) => void) {
     if (!this.listeners.has(name)) this.listeners.set(name, new Set());
     this.listeners.get(name)!.add(fn);
@@ -54,7 +58,7 @@ class FakeSocket {
   close() {}
 }
 
-afterEach(() => { FakeSocket.onSend = undefined; });
+afterEach(() => { FakeSocket.onSend = undefined; FakeSocket.autoOpen = true; });
 
 test("WebSocket receipt refusal before send rejects without fallback", async () => {
   globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
@@ -74,6 +78,56 @@ test("WebSocket receipt refusal before send rejects without fallback", async () 
 });
 
 const wsUrl = "https://chatgpt.com/backend-api/codex/responses";
+
+test("a WebSocket frame is not sent once the request's Combo admission is withdrawn", async () => {
+  globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
+  const init = streamingInit();
+  const prepared = prepareCodexWsRequest(wsUrl, init)!;
+  const session = new CodexWsSession("wss://chatgpt.com/backend-api/codex/responses", prepared.headers, false);
+  let admitted = true, fallbacks = 0, receipts = 0;
+  try {
+    expect(session.reserve()).toBe(true);
+    const result = await runWithSendAdmission(() => admitted ? undefined : new Response("fixture refusal", { status: 403 }), () => {
+      const exchange = codexWsExchange({ session, url: wsUrl, init, prepared,
+        sseFallback: (async () => { fallbacks++; return new Response("unexpected"); }) as unknown as typeof fetch,
+        onPhysicalDispatch: () => { receipts++; },
+      });
+      // Withdrawn after the exchange started and before its socket opened.
+      admitted = false;
+      return exchange;
+    });
+    expect(result.refused).toBe(true);
+    expect(result.response.status).toBe(403);
+    expect(FakeSocket.latest.sent).toHaveLength(0);
+    expect(receipts).toBe(0);
+    expect(fallbacks).toBe(0);
+  } finally { session.dispose(); }
+});
+
+test("an HTTP fallback a socket callback starts still checks the request's Combo admission", async () => {
+  globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
+  FakeSocket.autoOpen = false;
+  const init = streamingInit();
+  const prepared = prepareCodexWsRequest(wsUrl, init)!;
+  const session = new CodexWsSession("wss://chatgpt.com/backend-api/codex/responses", prepared.headers, false);
+  let admitted = true, fallbacks = 0;
+  // Created outside the request's slot, like a native socket event.
+  setTimeout(() => {
+    admitted = false;
+    FakeSocket.latest.emit("error", {});
+  }, 10);
+  try {
+    expect(session.reserve()).toBe(true);
+    const result = await runWithSendAdmission(() => admitted ? undefined : new Response("fixture refusal", { status: 403 }),
+      () => codexWsExchange({ session, url: wsUrl, init, prepared,
+        // The fallback's physical send reads the request's admission, as fetch-helpers does.
+        sseFallback: (async () => { assertSendAdmission(); fallbacks++; return new Response("unexpected"); }) as unknown as typeof fetch,
+      }));
+    expect(result.refused).toBe(true);
+    expect(result.response.status).toBe(403);
+    expect(fallbacks).toBe(0);
+  } finally { session.dispose(); }
+});
 const wsProvider = (physical: typeof fetch) => Object.assign({ adapter: "openai-responses", baseUrl: wsUrl }, { fetch: physical });
 
 test("providerFetch WS send failure shares one receipt with HTTP fallback", async () => {
@@ -125,4 +179,30 @@ test("D7: accepted WS receipt remains charged if send and local HTTP admission b
   booking.permit.release();
   expect(overrides).toBe(1); expect(httpSends).toBe(0); expect(receipts).toBe(1);
   expect(refunds).toBe(0); expect(budget.used).toBe(1);
+});
+
+test("a nested request's check stays in its own slot while the enclosing check still applies to its sends", async () => {
+  const refusal = (status: number) => new Response(null, { status });
+  let enclosingAdmitted = true;
+  const result = await runWithSendAdmission(() => enclosingAdmitted ? undefined : refusal(403), async () => {
+    // An auxiliary request names its own check, which refuses its send.
+    const auxiliary = await withSendAdmissionScope(async () => {
+      requireSendAdmission(() => refusal(409));
+      assertSendAdmission();
+      return new Response("sent");
+    });
+    expect(auxiliary.status).toBe(409);
+    // The enclosing request still sends under its own check.
+    expect(() => assertSendAdmission()).not.toThrow();
+    enclosingAdmitted = false;
+    const nested = await withSendAdmissionScope(async () => {
+      assertSendAdmission();
+      return new Response("sent");
+    });
+    expect(nested.status).toBe(403);
+    return new Response("enclosing answer");
+  });
+  // A send refused by the enclosing check refuses the enclosing request too.
+  expect(result.refused).toBe(true);
+  expect(result.response.status).toBe(403);
 });

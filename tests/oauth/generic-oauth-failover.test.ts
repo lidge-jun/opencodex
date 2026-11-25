@@ -344,7 +344,8 @@ describe("sidecar on429 wiring", () => {
   test("budget-withheld attribution proves a cooldown-eligible generic OAuth target", () => {
     // Kiro and non-Kiro continuation, native passthrough and run-turn have budget-denial branches.
     // A durable two-account quorum is insufficient because it intentionally ignores cooldowns.
-    expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\(/g)).toHaveLength(4);
+    // The fifth call decides whether a quota-only Combo may leave a generic OAuth pool.
+    expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\(/g)).toHaveLength(5);
     // The check must GATE the log, not merely run beside it: every call site wraps
     // noteAttemptRecoveryWithheld in the eligibility condition.
     expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\([\s\S]*?\)\s*\)\s*noteAttemptRecoveryWithheld/g)).toHaveLength(4);

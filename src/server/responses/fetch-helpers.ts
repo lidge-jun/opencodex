@@ -41,6 +41,7 @@ import { replayRefusalResponse } from "../../lib/upstream-retry";
 import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
 import { redeemOutboundTurnState, TURN_STATE_BINDING_INIT, turnStateBinding } from "../turn-state-handles";
 import { EXECUTOR_PHYSICAL_SEND_RECEIPT, inheritAdapterSupportExecutor, markPhysicalSendReceiptExecutor, registerAdapterSupportExecutor } from "../../lib/executor-physical-send-receipt";
+import { assertSendAdmission } from "./send-admission";
 
 export { withUpstreamHttpVersion };
 
@@ -257,6 +258,7 @@ export function sendWithConnectionPolicy(
     ...(decide || redirectedToLoopback ? { [EGRESS_DECIDED]: true } : {}),
     ...{ [UPSTREAM_REWRITTEN]: true },
   };
+  assertSendAdmission();
   (init as Record<symbol, ((destination: string, headers: Headers) => void) | undefined> | undefined)?.[PHYSICAL_SEND_GUARD]?.(target, headers);
   // Final headers, after plugin rewrites: an upstream can only echo what it received here, so the
   // request log refuses any diagnostic that repeats one of these values (see request-log-terminal-status).
