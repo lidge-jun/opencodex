@@ -114,3 +114,11 @@ contracts are covered by `tests/responses/codex-installation-compact-empty.test.
 `tests/responses/codex-installation-turn-limit.test.ts`.
 
 The Claude bridge carries its private pool identity through Codex selection; see [Claude affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch).
+
+## Claude system prompt placement for GPT-6.2
+
+The canonical Codex Responses adapter sends the translated Messages system prompt as the first
+`developer` item for GPT-6.2 Sol and Astra, so it participates in prefix caching. The projection
+uses the final outbound model and only changes the outbound copy. Cache keys and chronological
+system messages retain their original translation. Native Responses requests and compaction
+retain their existing prompt envelopes.

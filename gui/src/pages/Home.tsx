@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import { useKeyedClientResource } from "../client-resource";
 import { useT, getActiveLocale } from "../i18n/shared";
 import type { Page } from "../app-routing";
@@ -9,6 +10,8 @@ import { startupChecklistStep } from "../startup-health-ui";
 import { useStartupChecklist } from "../hooks/useStartupChecklist";
 import { TelemetryProfileCard } from "../components/telemetry-profile-card";
 import { readManagementHealth } from "../lib/proxy-health";
+import { isDesktopShell } from "../lib/desktop-shell";
+import { useGettingStartedHidden } from "../getting-started-visibility";
 
 /*
  * Design system v2 landing page. It answers the two questions people open the dashboard
@@ -70,18 +73,35 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
   const tokens7d = usage.data?.summary?.totalTokens ?? 0;
   const uptime = health.data?.uptime ?? null;
   const autostart = startupChecklistStep(startup.data);
+  // The desktop app turns Start at Login on when it is installed and first opened
+  // (desktop/src-tauri/src/first_run.rs), so its checklist has no such step.
+  const desktopShell = isDesktopShell();
+  const gettingStarted = useGettingStartedHidden();
+  // "Undo" only follows a click on Hide in this visit; a card hidden earlier stays quiet.
+  const [justHid, setJustHid] = useState(false);
+  // Hide and Undo each remove the button that was clicked, so focus moves to the other one.
+  const pendingFocus = useRef<"undo" | "hide" | null>(null);
+  const focusWhenMounted = (target: "undo" | "hide") => (element: HTMLButtonElement | null) => {
+    if (!element || pendingFocus.current !== target) return;
+    pendingFocus.current = null;
+    element.focus();
+  };
+  const hideChecklist = () => { pendingFocus.current = "undo"; setJustHid(true); gettingStarted.hide(); };
+  const undoHide = () => { pendingFocus.current = "hide"; setJustHid(false); gettingStarted.show(); };
+  // The Set up hub is the Checklist tab under Route; name it the way the sidebar does.
+  const restorePlace = `${t("nav.connect")} → ${t("shellV2.pageChecklist")}`;
 
   const steps = [
     { key: "provider", done: providerCount > 0, title: t("shellV2.stepProvider"), hint: t("shellV2.stepProviderHint"), showHint: false, go: () => navigate("providers") },
     { key: "request", done: requests7d > 0, title: t("shellV2.stepFirstRequest"), hint: t("shellV2.stepFirstRequestHint"), showHint: false, go: () => navigate("integrations") },
-    {
+    ...(desktopShell ? [] : [{
       key: "autostart",
       done: autostart.done,
       title: t(autostart.titleKey), hint: t(autostart.hintKey),
       // An unverified Desktop login still says where to check it.
       showHint: Boolean(startup.data) && autostart.desktop && autostart.done === undefined,
       go: () => autostart.subPath ? navigate("startup", autostart.subPath) : navigate("startup"),
-    },
+    }]),
   ];
   const doneCount = steps.filter(step => step.done).length;
   const allDone = doneCount === steps.length;
@@ -118,11 +138,24 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
 
       <TelemetryProfileCard apiBase={apiBase} />
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
-        <section className="flex flex-col gap-4 rounded-card bg-surface p-5">
+      {gettingStarted.hidden && justHid && (
+        <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-card bg-surface px-5 py-3 text-[13px] text-fg-muted">
+          <span>{t("gettingStarted.hiddenNote", { place: restorePlace })}</span>
+          <button type="button" ref={focusWhenMounted("undo")} onClick={undoHide}
+            className="cursor-pointer font-medium text-highlight hover:underline">{t("gettingStarted.undo")}</button>
+        </div>
+      )}
+
+      <div className={cn("grid gap-4", !gettingStarted.hidden && "lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]")}>
+        {!gettingStarted.hidden && <section className="flex flex-col gap-4 rounded-card bg-surface p-5">
           <div className="flex items-baseline justify-between gap-3">
             <h2 className="m-0 text-[15px] font-semibold">{t("shellV2.checklistTitle")}</h2>
-            <span className="text-[13px] text-fg-muted tabular-nums">{t("shellV2.checklistProgress", { done: String(doneCount), total: String(steps.length) })}</span>
+            <div className="flex items-baseline gap-3">
+              <span className="text-[13px] text-fg-muted tabular-nums">{t("shellV2.checklistProgress", { done: String(doneCount), total: String(steps.length) })}</span>
+              <button type="button" ref={focusWhenMounted("hide")} onClick={hideChecklist}
+                aria-label={t("gettingStarted.hideLabel")} title={t("gettingStarted.hideHint", { place: restorePlace })}
+                className="cursor-pointer text-[13px] font-medium text-fg-muted hover:text-fg hover:underline">{t("gettingStarted.hide")}</button>
+            </div>
           </div>
           <div className="h-1.5 overflow-hidden rounded-full bg-surface-2" aria-hidden>
             <div className="h-full origin-left rounded-full bg-accent transition-transform duration-[600ms] ease-soft"
@@ -156,7 +189,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
               })}
             </ol>
           )}
-        </section>
+        </section>}
 
         <section className="flex flex-col gap-3 rounded-card bg-surface p-5">
           <div className="flex items-baseline justify-between gap-3">

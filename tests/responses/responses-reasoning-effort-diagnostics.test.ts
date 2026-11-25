@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleResponses } from "../../src/server/responses/core";
+import { handleResponses as dispatchResponses } from "../../src/server/responses/core";
+import { refusedReasoningEffortDowngrade } from "../../src/server/responses/core-opaque-recovery";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import {
   hasConflictingReasoningEffortCode,
@@ -14,6 +15,11 @@ import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { chatSuccess } from "../helpers/combo-failover-upstream";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
+
+// These configs contain only synthetic providers; use their fetch stubs on the pinned transport too.
+const handleResponses: typeof dispatchResponses = (request, config, ...args) =>
+  dispatchResponses(request, withStubbedProviderFetch(config), ...args);
 
 /**
  * Diagnostic envelope and boundary tests for reasoning effort refusals (#8173).
@@ -272,6 +278,41 @@ afterEach(() => {
 });
 
 describe("reasoning effort diagnostic envelopes and boundaries", () => {
+  test.each(["openai-chat", "openai-responses"] as const)("%s keeps oversized effort errors without replay or learning", async adapter => {
+    writeSnapshot(["low", "high", "max"]);
+    const message = "Invalid reasoning effort. " + "x".repeat(1024) + " ORIGINAL-ERROR-TAIL";
+    const body = JSON.stringify({ error: { param: "reasoning_effort", message } });
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (outbound.length > 1) return adapter === "openai-chat" ? chatSuccess("unexpected replay")
+        : Response.json({ id: "unexpected-replay", object: "response", status: "completed", model: MODEL, output: [] });
+      return new Response(body, { status: 400, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const cfg = adapter === "openai-chat" ? config() : passthroughConfig();
+    const response = await handleResponses(request(), cfg, { model: "", provider: "" });
+    const text = await response.text();
+    expect(outbound, `${response.status}: ${text}`).toHaveLength(1);
+    expect(effortOf(outbound[0])).toBe("max");
+    expect(response.status).toBe(400);
+    expect(text).toContain("Invalid reasoning effort.");
+    if (adapter === "openai-responses") expect(text).toContain(message);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
+  test("oversized diagnostics leave the original response readable when no effort was requested", async () => {
+    const body = JSON.stringify({ error: { message: "parameter" + " ".repeat(1024) + "!" } });
+    const upstream = new Response(body, { status: 400 });
+    const guard = { attempted: false };
+    const cfg = config();
+    globalThis.fetch = (() => { throw new Error("unexpected network in diagnostic fixture"); }) as typeof fetch;
+    expect(await refusedReasoningEffortDowngrade(upstream, new AbortController().signal, guard, false,
+      { provider: cfg.providers.first, modelId: MODEL, requested: undefined })).toBeUndefined();
+    expect(guard.attempted).toBe(false);
+    expect(await upstream.text()).toBe(body);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(false);
+  });
+
   test("hasConflictingReasoningEffortCode unit checks", () => {
     expect(hasConflictingReasoningEffortCode(SERIALIZED_WRAPPER_CONFLICTING_REFUSAL)).toBe(true);
     expect(hasConflictingReasoningEffortCode(UNEXHAUSTED_QUEUE_CANDIDATES_REFUSAL)).toBe(true);

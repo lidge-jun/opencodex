@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleResponses } from "../../src/server/responses/core";
+import { handleResponses as dispatchResponses } from "../../src/server/responses/core";
 import { withRawBodyReasoningEffort } from "../../src/server/responses/core-opaque-recovery";
 import { clearComboSelectionState, clearComboTargetCooldowns, isComboTargetInCooldown } from "../../src/combos";
 import {
@@ -15,6 +15,11 @@ import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { chatSuccess } from "../helpers/combo-failover-upstream";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
+
+// These configs contain only synthetic providers; use their fetch stubs on the pinned transport too.
+const handleResponses: typeof dispatchResponses = (request, config, ...args) =>
+  dispatchResponses(request, withStubbedProviderFetch(config), ...args);
 
 /**
  * Rejected-rung learning on the request path: a rung the catalog advertises can still be refused

@@ -39,7 +39,8 @@ export function resolveResetCreditAutoRedeemSettings(config: Pick<OcxConfig, "re
 
 export interface ResetCredit {
   granted_at: string;
-  expires_at: string;
+  /** Null for a credit that does not expire; never planned, but it can still be consumed first. */
+  expires_at: string | null;
 }
 
 export interface AutoRedeemPlan {
@@ -55,16 +56,42 @@ export function planAutoRedeem(now: number, credits: readonly ResetCredit[], set
   if (!settings.enabled) return null;
   let best: AutoRedeemPlan | null = null;
   for (const credit of credits) {
+    if (credit.expires_at === null) continue;
+    // A credit without a usable grant time has no identity to protect: never plan it. It still
+    // blocks other plans through olderCreditPrecedes.
+    if (!Number.isFinite(Date.parse(credit.granted_at))) continue;
     const expires = Date.parse(credit.expires_at);
     if (!Number.isFinite(expires) || expires <= now) continue;
     const dueAt = expires - settings.leadTimeMinutes * 60_000;
-    if (!best || expires < Date.parse(best.expiresAt)) best = { grantedAt: credit.granted_at, expiresAt: credit.expires_at, dueAt };
+    const expiresAt = credit.expires_at;
+    if (!best || expires < Date.parse(best.expiresAt)) best = { grantedAt: credit.granted_at, expiresAt, dueAt };
   }
   return best;
 }
 
 export function creditStillPresent(credits: readonly ResetCredit[], plan: Pick<AutoRedeemPlan, "grantedAt" | "expiresAt">): boolean {
   return credits.some(c => c.granted_at === plan.grantedAt && c.expires_at === plan.expiresAt);
+}
+
+/**
+ * Consume names no credit, and the dashboard tells operators the oldest is used first. A credit
+ * granted before the planned one (a non-expiring one, or any with a later expiry) could be spent
+ * in its place while the planned credit still expires, so the redeemer stands down instead.
+ */
+export function olderCreditPrecedes(credits: readonly ResetCredit[], plan: Pick<AutoRedeemPlan, "grantedAt" | "expiresAt">): boolean {
+  const planned = Date.parse(plan.grantedAt);
+  if (!Number.isFinite(planned)) return true;
+  // Fail closed: an equal grant time has no known tie-breaker, and a grant time that does not
+  // parse cannot be ordered at all, so either blocks dispatch just like an older credit.
+  // Exactly one row is the planned credit; a second identical row is a distinct credit and a tie.
+  let plannedSeen = false;
+  return credits.some(c => {
+    if (!plannedSeen && c.granted_at === plan.grantedAt && c.expires_at === plan.expiresAt) {
+      plannedSeen = true;
+      return false;
+    }
+    return !(Date.parse(c.granted_at) > planned);
+  });
 }
 
 interface JournalEntry {
@@ -126,7 +153,7 @@ export type AutoRedeemOutcome =
   | { kind: "disabled" }
   | { kind: "nothing-to-protect" }
   | { kind: "scheduled"; dueAt: number }
-  | { kind: "skipped"; reason: "credit-gone" | "disabled-before-dispatch" }
+  | { kind: "skipped"; reason: "credit-gone" | "disabled-before-dispatch" | "order-not-guaranteed" }
   | { kind: "dispatched"; code: string; redeemRequestId: string }
   | { kind: "ambiguous"; redeemRequestId: string }
   | { kind: "error"; message: string };
@@ -247,6 +274,11 @@ export function createResetCreditAutoRedeemer(deps: AutoRedeemDeps): ResetCredit
         return { kind: "error", message: error instanceof Error ? error.message : "inspect failed" } as AutoRedeemOutcome;
       }
       if (!creditStillPresent(fresh, plan)) { schedule(idleRecheckMs); return { kind: "skipped", reason: "credit-gone" } as AutoRedeemOutcome; }
+      if (olderCreditPrecedes(fresh, plan)) {
+        log(`[opencodex] reset-credit auto-redeem: an older credit would be consumed first for account ${hashAccountKey(deps.accountId)}; not redeeming automatically`);
+        schedule(idleRecheckMs);
+        return { kind: "skipped", reason: "order-not-guaranteed" } as AutoRedeemOutcome;
+      }
       return dispatch(plan);
     })().finally(() => { inFlight = null; });
     return inFlight;

@@ -113,6 +113,8 @@ export function ProvidersPageModals({
           onAccountLogout={onAccountLogout}
           onAccountManage={onAccountManage}
           onOpen={onOpenAdd}
+          // Every dialog this page renders below opens above Add Provider; one Escape closes one layer (#8849).
+          stackedOverlayOpen={oauthTosPending !== null || codexLoginOpen || removeConfirmName !== null || jsonLeaveOpen === true}
         />
       )}
       {codexLoginOpen && (

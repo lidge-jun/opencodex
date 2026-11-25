@@ -4,10 +4,10 @@ import type { CodexAccountEntry } from "./codex-account-pool-types";
 import { daysUntil, formatCreditDate, formatCreditDateTime } from "./codex-account-pool-utils";
 
 export function CodexCreditItem({ index, grantedAt, expiresAt, isNext, locale, t }: {
-  index: number; grantedAt: string; expiresAt: string; isNext: boolean; locale: Locale; t: TFn;
+  index: number; grantedAt: string; expiresAt: string | null; isNext: boolean; locale: Locale; t: TFn;
 }) {
-  const days = daysUntil(expiresAt);
-  const urgent = days <= 7;
+  const days = expiresAt === null ? null : daysUntil(expiresAt);
+  const urgent = days !== null && days <= 7;
   return (
     <div className={`credit-item${isNext ? " credit-next" : ""}`}>
       <div className="credit-item-head">
@@ -19,7 +19,7 @@ export function CodexCreditItem({ index, grantedAt, expiresAt, isNext, locale, t
       </div>
       <div className="credit-item-dates">
         <span>{t("codexAuth.creditGranted", { date: formatCreditDate(grantedAt, locale) })}</span>
-        <span className={urgent ? "credit-urgent" : ""}>{t("codexAuth.creditExpires", { date: formatCreditDateTime(expiresAt, locale), days: String(days) })}</span>
+        <span className={urgent ? "credit-urgent" : ""}>{expiresAt === null ? t("codexAuth.creditNoExpiry") : t("codexAuth.creditExpires", { date: formatCreditDateTime(expiresAt, locale), days: String(days) })}</span>
       </div>
     </div>
   );

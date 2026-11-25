@@ -18,8 +18,8 @@ export function sealCredentialRefusal(logCtx: RequestLogContext, status: number,
 type AttemptSendProvider = Parameters<typeof noteProviderAttemptSend>[2];
 type AttemptSendRecovery = Parameters<typeof noteProviderAttemptSend>[4];
 
-/** Open a native compact attempt at its first physical send and count each send against it. */
-export function noteCompactAttemptSend(
+/** Open an attempt at its first physical send and count each send against it. */
+export function noteCredentialAttemptSend(
   logCtx: RequestLogContext, route: { providerName: string; modelId: string }, provider: AttemptSendProvider, recovery?: AttemptSendRecovery,
 ): void {
   const { providerName, modelId } = route;

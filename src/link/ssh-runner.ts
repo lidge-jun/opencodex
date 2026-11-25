@@ -61,9 +61,10 @@ export function sshFailureHint(stderr: string): string | undefined {
   return undefined;
 }
 
-/** The runner's own failure (spawn, timeout, output limit) as a hint; other errors give none. */
+/** The runner's own failure (spawn, timeout, output limit) or a diagnosed remote failure as a hint; other errors give none. */
 export function sshRunnerErrorHint(error: unknown): string | undefined {
-  return error instanceof SshRunnerError ? boundHint(error.message) : undefined;
+  if (error instanceof SshRunnerError) return boundHint(error.message);
+  return error instanceof SshDiagnosticError ? boundHint(error.hint) : undefined;
 }
 
 export interface SshRunResult {
@@ -113,6 +114,18 @@ export class SshRunnerError extends Error {
   constructor(readonly code: "spawn" | "timeout" | "output_limit" | "decode" | "aborted", message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = "SshRunnerError";
+  }
+}
+
+/**
+ * A remote step that ran and could not be interpreted, such as platform discovery (#8972). `hint` is
+ * built from the step's own message and its bounded stderr hint, so the dashboard learns why instead of
+ * reading every such failure as an SSH outage.
+ */
+export class SshDiagnosticError extends Error {
+  constructor(message: string, readonly hint: string) {
+    super(message);
+    this.name = "SshDiagnosticError";
   }
 }
 

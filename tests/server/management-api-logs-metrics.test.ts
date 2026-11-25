@@ -13,6 +13,7 @@ import {
   type RequestLogEntry,
 } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
+import { markNativeGeminiProtocol, protocolTraceForRequest } from "../../src/protocols/trace";
 import { buildRouteDecisionTrace } from "../../src/routing/trace";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { summarizeUsage } from "../../src/usage/summary";
@@ -91,6 +92,31 @@ function baseEntry(overrides: Partial<RequestLogEntry>): RequestLogEntry {
 }
 
 describe("GET /api/logs display metrics", () => {
+  test("native Gemini OAuth replay reports only the subtotal of priced attempts", async () => {
+    const provider = "google-antigravity", model = "gemini-4-neon-medium";
+    const usage = { inputTokens: 100, outputTokens: 10 };
+    const attempt = { provider, model, adapter: "google", durationMs: 100, sendCount: 1, accountLogLabel: "o123abc" as const };
+    const row = baseEntry({
+      provider, model, usage, usageStatus: "unreported",
+      attempts: [
+        { ...attempt, ordinal: 1, status: 401, recoveryKinds: [], usageStatus: "unreported" },
+        { ...attempt, ordinal: 2, status: 200, recoveryKinds: ["oauth-401"], usageStatus: "reported", usage },
+      ],
+    });
+    markNativeGeminiProtocol(row);
+    row.protocolTrace = protocolTraceForRequest(row, undefined);
+    addRequestLog(row);
+    const ledgerBefore = readFileSync(usageLogPath(), "utf8");
+    const [dto] = await readLogs();
+    expect(dto!.attempts[0].displayMetrics.cost.kind).toBe("unavailable");
+    expect(dto!.attempts[1].displayMetrics.cost.kind).toBe("value");
+    const subtotalUsd = dto!.attempts[1].displayMetrics.cost.estimate.cost.total;
+    expect(subtotalUsd).toBeGreaterThan(0);
+    expect(dto!.displayMetrics.cost).toEqual({ kind: "partial", subtotalUsd, unpricedAttempts: 1 });
+    expect(dto!.attempts.map((item: { accountLogLabel: string }) => item.accountLogLabel)).toEqual(["o123abc", "o123abc"]);
+    expect(readFileSync(usageLogPath(), "utf8")).toBe(ledgerBefore);
+  });
+
   test("parent, individual attempt DTO and summary agree on unresolved slash cost without rewriting history", async () => {
     const model = "anthropic/claude-3-haiku-20240307";
     const row = baseEntry({

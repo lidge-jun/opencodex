@@ -9,7 +9,11 @@ de OpenCodex pueden rechazar el inicio con «Proxy ownership is unverified» o
 «Shared-client owner could not be verified». El servicio del Programador de
 tareas puede entonces volver a iniciarse y cerrarse repetidamente.
 
-Si se agota el plazo para establecer la conexión durante el inicio, OpenCodex
+Algunos equipos rechazan la conexión de inmediato, por ejemplo con
+`connect EACCES ::1:10100` cuando se filtra el tráfico IPv6 de bucle local.
+OpenCodex lo trata igual que un tiempo de espera agotado.
+
+Si se agota el plazo o se deniega la conexión durante el inicio, OpenCodex
 puede abrir brevemente un socket exclusivo en la misma dirección y puerto.
 También comprueba si hay sockets a la escucha en todas las direcciones de esa
 familia, pues pueden coincidir con un socket de bucle local en Windows. El inicio

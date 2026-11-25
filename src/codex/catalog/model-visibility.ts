@@ -49,7 +49,7 @@ import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModel
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { effectiveModelAliases } from "../../providers/default-aliases";
-import { routedSlug, slugEquals, slugEquivalenceKey, slugsEquivalent } from "../../providers/slug-codec";
+import { hasRoutedSlug, routedSlug, slugEquivalenceKey, slugsEquivalent } from "../../providers/slug-codec";
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
@@ -303,12 +303,9 @@ export function filterCatalogVisibleModels(
     if (antigravityFamilyDisabled(config, m, models)) return false;
     const nativeAlias = m.provider === COMBO_NAMESPACE && m.nativeAlias === true;
     // disabledModels may be stored raw (canonical) or encoded (legacy UI writes).
-    for (const stored of disabled) {
-      // Combo management stores the public alias, while canonical `combo/<id>` references
-      // remain valid for backward compatibility through slugEquals below.
-      if (m.alias !== undefined && stored === catalogModelSlug(m) && !nativeAlias) return false;
-      if (slugEquals(stored, m.provider, m.id)) return false;
-    }
+    // Keep both the public combo alias and the canonical combo/<id> exclusion.
+    if (m.alias !== undefined && !nativeAlias && disabled.has(catalogModelSlug(m))) return false;
+    if (hasRoutedSlug(disabled, m.provider, m.id)) return false;
     const allow = allowByProvider.get(m.provider);
     return !allow || allow.has(slugEquivalenceKey(routedSlug(m.provider, m.id)));
   });

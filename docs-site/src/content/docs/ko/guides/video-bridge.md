@@ -39,7 +39,7 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
   "images": {
     "bridgeEnabled": true,
     "videoBridgeEnabled": true,
-    "videoBridgeModel": "grok-imagine-video",
+    "videoBridgeModel": "grok-imagine-video-1.5-lite",
     "videoMaxRounds": 2,
     "videoTimeoutMs": 300000
   }
@@ -49,7 +49,7 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
 | 옵션 | 기본값 | 설명 |
 |------|--------|------|
 | `videoBridgeEnabled` | `false` | 전체 스위치입니다. 반드시 명시적으로 켜야 합니다. |
-| `videoBridgeModel` | `"grok-imagine-video"` | xAI 비디오 모델 id입니다. |
+| `videoBridgeModel` | `"grok-imagine-video-1.5-lite"` | xAI 비디오 모델 id입니다. |
 | `videoMaxRounds` | `2` | 강제 최종 답변 전에 허용하는 최대 video-gen 라운드 수입니다. |
 | `videoTimeoutMs` | `300000` (5분) | 폴링 시간을 포함한 비디오별 타임아웃입니다. |
 | `videoProvider` | 미설정 (xAI) | `video_gen`을 자체 `baseUrl`과 키로 처리할 API 키 제공자(선택). [영상 제공자 선택](#영상-제공자-선택)을 참고하세요. |
@@ -72,7 +72,7 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
   "images": {
     "videoBridgeEnabled": true,
     "videoProvider": "my-video-bridge",
-    "videoBridgeModel": "grok-imagine-video"
+    "videoBridgeModel": "grok-imagine-video-1.5-lite"
   }
 }
 ```
@@ -99,16 +99,32 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
 
 | 파라미터 | 타입 | 범위 | 설명 |
 |----------|------|------|------|
-| `prompt` | string | required | 상세한 영상 생성 프롬프트 |
+| `prompt` | string | 이미지나 프레임이 있으면 선택 사항 | 텍스트 프롬프트 |
 | `duration` | integer | 1-15 | 영상 길이(초) |
-| `resolution` | string | `"480p"`, `"720p"` | 영상 해상도 |
-| `aspect_ratio` | string | 7 ratios | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3` |
+| `resolution` | string | `480p`, `720p`, `1080p` | 모델에 따라 다름; `last_frame`, `keyframes` 또는 `reference_images` 사용 시 최대 720p |
+| `aspect_ratio` | string | 모델에 따라 다름 | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2`; `image`만 애니메이션화할 때는 거부되며 원래 비율이 유지됨 |
+| `image` | string | 첫 프레임 | HTTPS URL, 데이터 URL 또는 기억된 아티팩트 |
+| `last_frame` | string | 1.5 전용 | 마지막 프레임 |
+| `keyframes` | array | 1.5, 최대 4 | `{image, timestamp_s}`; 타임스탬프는 클립 내부에만 허용 (`duration` 생략 시 8 s) |
+| `reference_images` | array | 1.5: 14, 클래식: 7 (≤ 10 s) | 참조 이미지; 클래식 모델에서는 `image`와 함께 사용할 수 없음 |
+
+모델이 지원할 수 없는 설정은 무시되지 않고 유료 호출 전에 거부됩니다.
+
+### 모델과 이미지 입력
+
+| 모델 | 해상도 | 입력 | 초당 (480p / 720p / 1080p) |
+|-------|------------|--------|------------------|
+| `grok-imagine-video-1.5` | 480p / 720p / 1080p 네이티브 | 첫/마지막 프레임, 4 키프레임, 14 참조 이미지 (720p 최대) | $0.08 / $0.14 / $0.25 |
+| `grok-imagine-video-1.5-lite` (기본값) | 480p / 720p / 1080p 업스케일 | 첫 프레임 | $0.02 / $0.03 / $0.14 |
+| `grok-imagine-video` | 480p / 720p | 첫 프레임, 7 참조 이미지 | $0.05 / $0.07 / — |
+
+프레임 지정이나 참조 이미지를 사용하려면 `images.videoBridgeModel`을 `grok-imagine-video-1.5`로 설정하세요. 알려진 모델은 화면비 9개를 지원합니다. 알 수 없는 모델은 기존 화면비 7개와 480p/720p만 제공하며 이미지 입력을 받지 않습니다. HTTPS URL과 디코딩 후 10 MiB 이하인 PNG/JPEG/WebP 데이터 URL을 사용할 수 있습니다. 이미지 브리지가 다운로드한 이미지는 아티팩트 URL, 절대 경로 또는 `file:` URL로 한 시간 동안 참조할 수 있습니다. 로컬 파일을 읽지 않고 저장된 원본 URL을 사용합니다. 이 참조는 고정 xAI 대상에서만 작동하며 사용자 지정 `images.videoProvider`에서는 사용할 수 없습니다. 인라인 결과에는 원본 URL이 없고 임시 URL은 더 일찍 만료될 수 있습니다.
+
 
 ## 제한 사항
 
 - **기본값은 xAI**: `videoProvider`가 없으면 xAI의 Grok Imagine Video API를 사용합니다. 다른 백엔드는 같은 비동기 API를 구현해야 합니다
 - **비동기**: 영상 생성에는 30-120초가 걸립니다
-- **비용**: 영상 생성은 유료 xAI 기능입니다(~$0.05/sec @480p, ~$0.07/sec @720p)
 - **한 번에 한 편**: 각 `video_gen` 호출은 영상 하나를 생성합니다
 - **Image Bridge와 공존 가능**: 두 브리지를 동시에 켤 수 있습니다
 - **웹 검색 우선순위**: 한 턴에 웹 검색 사이드카가 활성화되어 있으면(`runTurn` 어댑터가 아닌 경우) 비디오 브리지는 건너뜁니다. 둘은 동시에 실행할 수 없습니다. 로그에서 확인할 수 있도록 `console.warn`이 출력됩니다.
