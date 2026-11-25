@@ -24,7 +24,7 @@ import { ownershipMutationLeaseStatusLine } from "./ownership-mutation-lease.mjs
 import { foreignServiceOwnerRefusal, unknownServiceOwnerRefusal } from "./repair";
 import type { ServiceBackend } from "./state";
 import { unitPath } from "./systemd";
-import { inspectWindowsSchedulerServiceStatus, schtasksErrorDetail, probeWindowsSchedulerTask } from "./windows-scheduler";
+import { inspectWindowsSchedulerServiceStatus, schtasksErrorDetail, probeWindowsSchedulerTask, startWindowsSchedulerService, windowsSchedulerStartRecovery } from "./windows-scheduler";
 import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { win32 } from "node:path";
 import { serviceDiagnosticsSummary } from "./diagnostics";
@@ -393,7 +393,14 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         process.exitCode = 1;
         break;
       }
-      ops.start();
+      // Only a confirmed missing Scheduler registration becomes advice; anything else still throws.
+      const missingTask = startWindowsSchedulerService(() => { ops.start(); },
+        process.platform === "win32" && backend === "scheduler" ? windowsSchedulerStartRecovery : () => null);
+      if (missingTask) {
+        console.error(`❌ ${missingTask}`);
+        process.exitCode = 1;
+        break;
+      }
       await reportServiceServing("started");
       break;
     }
