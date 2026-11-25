@@ -69,7 +69,6 @@ try {
   $evidence = @{ xml = $xml; sid = $sid; name = $account }
   if ($nativeOwners) {
     $evidence.count = $count
-    if ($count -eq 0) { $evidence.state = [int]$task.State }
     $evidence.engines = $engines
   }
   $proof = Microsoft.PowerShell.Utility\ConvertTo-Json -Depth 4 -Compress -InputObject $evidence
@@ -128,7 +127,6 @@ export const WINDOWS_TASK_INSTANCE_STOP_SCRIPT = windowsTaskInstanceStopScript(f
 interface TaskStopProof {
   sid: string;
   count?: number;
-  state?: number;
   engines?: unknown[];
 }
 
@@ -160,7 +158,8 @@ export function verifyWindowsTaskEngineProof(line: string, launcher: string, ide
   withinDeadline: () => boolean): "ended" | "not-running" | null {
   const proof = readTaskStopProof(line, launcher);
   if (!proof || !Array.isArray(proof.engines) || proof.engines.length !== proof.count || proof.count > MAX_TASK_ENGINES) return null;
-  if (!proof.count) return proof.state === 1 || proof.state === 3 ? "not-running" : null;
+  // An empty capture has no stop targets. The helper checks the refreshed task's state after approval.
+  if (proof.count === 0) return "not-running";
   const ids = new Set<string>();
   try {
     for (const engine of proof.engines) {

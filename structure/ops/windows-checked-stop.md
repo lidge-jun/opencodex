@@ -50,10 +50,11 @@ time must exactly match the original CIM microsecond, and its token user must ma
 caller and the supported SID reported by the helper. This bounded probe can confirm a same-user
 wrapper only. It does not override conflicting evidence. Built-in and virtual service SIDs and
 unresolved lookups remain unverified. Later operations receive nullable `foreignOwner`.
-All reads share the snapshot timeout and output cap. On x64 a native creation time is kept
-only when it agrees with CIM within one millisecond. A disagreement clears creation time
-and owner evidence. Elsewhere the CIM time is used for observation. The Schedule PID falls
-back to a capped `sc.exe queryex Schedule` from the trusted system directory.
+All reads share the snapshot timeout and output cap. On x64 a native creation-time read
+must start and finish before the snapshot deadline and agree with CIM within one millisecond.
+Otherwise the row retains its ancestry with unknown creation time and owner. Elsewhere the CIM
+time is used for observation. The Schedule PID falls back to a capped `sc.exe queryex Schedule`
+from the trusted system directory.
 
 ## Binding rule
 
@@ -161,9 +162,10 @@ shape, the exact launcher, and the single run-as principal through `src/service/
 The logon scope and every recovery-trigger scope must match the expected account. Only the
 recognized legacy shape without recovery triggers may omit the logon scope. The stop proof accepts a disabled task with the same
 ownership evidence. Installation health still requires an enabled task.
-The helper requires a successful same-account SID check for every `EnginePID`, with the process
-creation time re-read after the owner lookup. After approval it re-reads the registration XML and
-refreshes every captured instance to verify that its GUID, engine PID and running state still agree.
+Each `EnginePID` requires the native identity proof described above when available.
+The CIM fallback re-reads process creation time after checking the owner SID. After approval the
+helper re-reads the registration XML and refreshes every captured instance to verify that its GUID,
+engine PID and running state still agree.
 It stops each captured `IRunningTask` by instance GUID. An empty collection counts as idle only if
 the final task state shows ready or disabled before the stop deadline. Failed proof returns
 `evidence-unreadable` with instructions to verify the task in Task Scheduler and repair an owned

@@ -138,17 +138,36 @@ describe("snapshot native wrapper owner proof", () => {
 
   test("discards proof that returns after the original snapshot deadline", async () => {
     setWindowsProcessPlatformForTests("win32");
+    const creationPids: number[] = [];
     let now = 0, reads = 0;
     const clock = spyOn(performance, "now").mockImplementation(() => now);
     try {
-      setWindowsProcessNativeForTests(fakeNative({ creationTime: () => ms, sameUserIdentity: () => {
+      setWindowsProcessNativeForTests(fakeNative({ creationTime: pid => {
+        creationPids.push(pid);
+        return ms;
+      }, sameUserIdentity: () => {
         reads++;
         now = 100;
         return { ticks };
       } }));
       const entries = await snapshot([row(10), row(11)], 100);
       expect(reads).toBe(1);
+      expect(creationPids).toEqual([10]);
       expect(entries?.map(entry => entry.foreignOwner)).toEqual([null, null]);
+      expect(entries?.[1]).toMatchObject({ pid: 11, parentPid: 7, startTime: null });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("discards a native creation-time read that finishes at the snapshot deadline", async () => {
+    setWindowsProcessPlatformForTests("win32");
+    let now = 0;
+    const clock = spyOn(performance, "now").mockImplementation(() => now);
+    try {
+      setWindowsProcessNativeForTests(fakeNative({ creationTime: () => { now = 100; return ms; } }));
+      const entries = await snapshot([row(10)], 100);
+      expect(entries?.[0]).toMatchObject({ pid: 10, parentPid: 7, startTime: null, foreignOwner: null });
     } finally {
       clock.mockRestore();
     }

@@ -289,15 +289,16 @@ describe("capped command answers", () => {
       expect(await check(live, () => ticks + 10n)).toEqual(["unverified-registration", [41], 0]);
       expect(await check(live, () => { elapsed.now = 2_000; return ticks; })).toEqual(["unverified-registration", [41], 0]);
       for (const fields of [{}, { ...live, engines: [] }, { ...live, engines: [first] }, { ...live, sid: "S-1-5-18" },
-        { ...live, xml: "<Task/>" }, { count: 33, engines: Array(33).fill(first) }, { count: 0, state: 4, engines: [] },
+        { ...live, xml: "<Task/>" }, { count: 33, engines: Array(33).fill(first) },
         ...[{ id: "00000000-0000-0000-0000-000000000000" }, { pid: 0 }, { ticks: "3e18" }].map(invalid => ({
           count: 1, engines: [{ ...first, ...invalid }],
         }))]) {
         expect(await check(fields, () => ticks)).toEqual(["unverified-registration", [], 0]);
       }
       expect(await check({ ...live, engines: [first, first] }, () => ticks)).toEqual(["unverified-registration", [41], 0]);
-      const idle = { count: 0, state: 3, engines: [] };
+      const idle = { count: 0, engines: [] };
       expect(await check(idle, () => null, "not-running")).toEqual(["not-running", [], 1]);
+      expect(await check(idle, () => null, "unverified-registration")).toEqual(["unverified-registration", [], 1]);
       expect(await check(idle, () => null, "ended")).toEqual(["failed", [], 1]);
     } finally { now.mockRestore(); }
   });
@@ -452,6 +453,13 @@ $instances | Add-Member ScriptMethod Item { param($index) $this.Rows[$index - 1]
 $script:task = [pscustomobject]@{ Xml = 'original'; State = 4; Instances = $instances }
 if ($script:scenario -in @('hidden', 'idle', 'idle-state-deadline')) { $instances.Rows = @() }
 if ($script:scenario -eq 'idle') { $script:task.State = 3 }
+if ($script:scenario -in @('native-idle', 'native-queued')) {
+  $instances.Rows = @()
+  $script:task | Add-Member -Force ScriptProperty State {
+    if ($script:taskReads -eq 1) { throw 'state read before registration recheck' }
+    if ($script:scenario -eq 'native-queued') { 2 } else { 3 }
+  }
+}
 if ($script:scenario -eq 'idle-state-deadline') {
   $script:task | Add-Member -Force ScriptProperty State {
     if ($script:taskReads -eq 2) { $script:elapsed = 2000 }
@@ -523,6 +531,8 @@ function Get-FixtureProcess([int]$enginePid) {
     ["idle", "not-running", ""],
     ["native-verified", "ended", "42,43"],
     ["native-reused", "unverified-registration", ""],
+    ["native-idle", "not-running", ""],
+    ["native-queued", "unverified-registration", ""],
     ["late-approval", "failed", ""],
     ["deadline-before-first", "failed", ""],
     ["deadline-between-stops", "failed", "42"],
@@ -551,8 +561,14 @@ function Get-FixtureProcess([int]$enginePid) {
       .toEqual({ scenario, stderr: "", code: 0, output: [status, "Stopped=" + stopped] });
     if (native) {
       const line = stdout.trim().split(/\r?\n/)[0]!;
-      expect(JSON.parse(Buffer.from(line, "base64").toString("utf8"))).toMatchObject({ count: 2,
-        engines: [{ pid: 42, ticks: "638628778070001650" }, { pid: 43, ticks: "638628778070001660" }] });
+      const proof = JSON.parse(Buffer.from(line, "base64").toString("utf8"));
+      if (scenario === "native-idle" || scenario === "native-queued") {
+        expect(proof).toMatchObject({ count: 0, engines: [] });
+        expect(proof).not.toHaveProperty("state");
+      } else {
+        expect(proof).toMatchObject({ count: 2,
+          engines: [{ pid: 42, ticks: "638628778070001650" }, { pid: 43, ticks: "638628778070001660" }] });
+      }
     }
   }
 }, 65_000);

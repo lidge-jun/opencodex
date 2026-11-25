@@ -264,8 +264,13 @@ function observeNativeSnapshot(native: WindowsProcessNativeApi, deadline: number
   const paths = [windowsLauncherVbsPath(), windowsServiceScriptPath()];
   const until = Math.min(deadline, performance.now() + OWNER_READ_BUDGET_MS);
   let remaining = OWNER_READ_LIMIT;
+  const creationTime = (pid: number) => {
+    if (performance.now() >= deadline) return null;
+    const created = native.creationTime(pid);
+    return performance.now() < deadline ? created : null;
+  };
   return (entry, record) => {
-    const checked = overlayNativeCreationTime(entry, pid => native.creationTime(pid));
+    const checked = overlayNativeCreationTime(entry, creationTime);
     // A returned CIM owner whose validation failed remains unknown. Supplement only an absent sample.
     if (record.Owner !== null || record.ProcessId !== entry.pid || checked.startTime === null
       || checked.startTime !== entry.startTime || !windowsWrapperImage(entry.name)
