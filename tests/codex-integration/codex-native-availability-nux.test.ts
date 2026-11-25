@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests, registerCodexPoolRowForTests } from "../helpers/codex-pool-routing";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { captureCatalogAdmissionSnapshot } from "../../src/codex/catalog-admission";
@@ -31,7 +32,7 @@ const mainCredential: CodexModelEntitlementCredentialSnapshot = {
   chatgptAccountId: "synthetic-main-account", credentialIdentity: "synthetic:main",
 };
 const poolCredential: CodexModelEntitlementCredentialSnapshot = {
-  accountId: "synthetic-pool", accessToken: "synthetic-pool-token",
+  accountId: registerCodexPoolRowForTests("synthetic-pool"), accessToken: "synthetic-pool-token",
   chatgptAccountId: "synthetic-pool-account", credentialIdentity: "synthetic:pool",
 };
 
@@ -51,7 +52,7 @@ async function snapshot(main: unknown[], pool: unknown[] = [], mainFails = false
   });
 }
 
-beforeEach(() => resetCodexModelEntitlementCacheForTests());
+beforeEach(() => { resetCodexModelEntitlementCacheForTests(); bindStoredCodexPoolRoutingForTests(); });
 
 test("confirmed main roster projects only its bounded message onto a bare native row", async () => {
   const result = await snapshot([rosterRow(MODEL, { message: `  ${"M".repeat(2_100)}  `, extra: "ignored" })],

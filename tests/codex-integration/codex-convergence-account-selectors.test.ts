@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, setDefaultTimeout, spyOn, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import {
   chmodSync,
   existsSync,
@@ -307,6 +308,7 @@ beforeEach(() => {
   mkdirSync(opencodexHome);
   process.env.CODEX_HOME = codexHome;
   process.env.OPENCODEX_HOME = opencodexHome;
+  bindStoredCodexPoolRoutingForTests();
   previousFetch = globalThis.fetch;
   modelRostersByChatgptAccount = new Map();
   modelAccessProgramsByChatgptAccount = new Map();

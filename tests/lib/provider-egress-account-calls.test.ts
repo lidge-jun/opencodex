@@ -28,7 +28,6 @@ import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const PROVIDER_PROXY = "http://127.0.0.1:7/";
-const UNLISTED_FIXTURE_SEAM = Symbol.for("opencodex.codex-account-egress.unlisted-fixture-seam");
 const ACCOUNT_PROXY = "http://127.0.0.1:9/";
 const PROXY_ENV = ["NO_PROXY", "no_proxy", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] as const;
 const savedEnv = new Map<string, string | undefined>();
@@ -61,7 +60,6 @@ function respond(url: string): Response {
 }
 
 beforeEach(() => {
-  (globalThis as Record<symbol, unknown>)[UNLISTED_FIXTURE_SEAM] = false;
   for (const key of PROXY_ENV) { savedEnv.set(key, process.env[key]); delete process.env[key]; }
   previousHomes = homeKeys.map(name => process.env[name]);
   home = mkdtempSync(join(tmpdir(), "ocx-account-egress-calls-"));
@@ -81,7 +79,6 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  (globalThis as Record<symbol, unknown>)[UNLISTED_FIXTURE_SEAM] = true;
   globalThis.fetch = realFetch;
   resetCodexAccountEgressConfigForTests();
   clearAccountQuota();

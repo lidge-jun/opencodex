@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -115,6 +116,7 @@ describe("primeCodexPoolQuotas", () => {
     setAsyncIcaclsRunnerForTests(async () => aclSuccess);
     mkdirSync(TEST_CODEX_HOME, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
+    bindStoredCodexPoolRoutingForTests();
     // Isolate the main-account source: TEST_CODEX_HOME has no auth.json, so the
     // main account is deterministically absent and priming only touches the pool.
     process.env.CODEX_HOME = TEST_CODEX_HOME;

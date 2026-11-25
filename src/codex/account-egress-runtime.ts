@@ -3,7 +3,6 @@ import { getConfigPath, loadConfig } from "../config";
 import { configLoadFellBack, fileBackedConfigPath } from "../config/rebase-provenance";
 import { providerEgressFetchInit, resolveProviderEgress, type PoolAccountRoute } from "../lib/provider-egress";
 import { configuredOutboundFetch } from "../lib/proxy-env";
-import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { codexAccountEgressRoute } from "./account-egress";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
@@ -69,17 +68,6 @@ export class CodexAccountRouteUnavailableError extends Error {
 /** The provider whose route a pool account inherits. */
 export const CODEX_POOL_PROVIDER = "openai";
 
-/**
- * Test seam: suites whose fixtures store pool credentials without a config (written long before
- * account routes existed) keep the earlier behaviour, sending with no account route instead of
- * refusing. The test preload sets it; the account-egress suites clear it to exercise the refusals.
- * It has no effect unless the test home guard is armed, so a production process cannot set it.
- */
-const UNLISTED_FIXTURE_SEAM = Symbol.for("opencodex.codex-account-egress.unlisted-fixture-seam");
-function unlistedFixturesAllowed(): boolean {
-  return (globalThis as { [UNLISTED_FIXTURE_SEAM]?: unknown })[UNLISTED_FIXTURE_SEAM] === true && isTestHomeGuardArmed();
-}
-
 const UNREADABLE = "Codex account routing configuration could not be loaded; refusing to send without it";
 
 /** The config whose routes apply now, or undefined when none exists (no binding, no `config.json`). */
@@ -119,13 +107,12 @@ export function codexAccountRouting(
   if (!accountId || accountId === MAIN_CODEX_ACCOUNT_ID) return undefined;
   const source = options.config ?? routingConfig();
   if (!source) {
-    if (options.newLogin === true || unlistedFixturesAllowed()) return undefined;
+    if (options.newLogin === true) return undefined;
     throw new CodexAccountRouteUnavailableError("no Codex account routing configuration exists; refusing to send a stored pool credential");
   }
   const row = source.codexAccounts?.find(candidate => candidate.id === accountId);
   if (row?.isMain === true) return undefined;
   if (!row && options.newLogin !== true) {
-    if (unlistedFixturesAllowed()) return undefined;
     throw new CodexAccountRouteUnavailableError("this Codex pool account is not configured; refusing to send its credential");
   }
   const account = codexAccountEgressRoute(source, accountId);

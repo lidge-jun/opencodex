@@ -107,10 +107,6 @@ if (!isTestHomeGuardArmed() || !protectedHomeForTests()) {
 // past a mock. Loopback fixtures and the reserved .test/.example/.invalid names still work.
 installNetworkEgressGuard();
 
-// Fixtures that store Codex pool credentials without a config keep sending with no account route;
-// the account-egress suites clear this to exercise the refusals (src/codex/account-egress-runtime.ts).
-(globalThis as Record<symbol, unknown>)[Symbol.for("opencodex.codex-account-egress.unlisted-fixture-seam")] = true;
-
 // `scripts/test.ts` owns the lock for wrapped runs. A bare `bun test` has no wrapper,
 // so a single-process runner uses its own PID while true parallel workers rendezvous
 // on their short-lived controller PID. The first worker acquires the lock and siblings
