@@ -583,6 +583,13 @@ async function settle(testWindow: Window) {
 }
 
 async function mount() {
+  // The first-party switch previews before its PUT; an empty preview has nothing to confirm, so
+  // these Save-race tests keep exercising the PUT and its reread (the dialog is covered in
+  // claude-toggle-race.test.tsx).
+  const served = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => String(input).includes("/api/claude-code/first-party/preview")
+    ? Response.json({ enabled: true, path: "~/.claude/settings.json", changes: [], applyChecks: [] })
+    : served(input, init)) as typeof fetch;
   const testWindow = new Window({ url: "http://localhost/" });
   const container = testWindow.document.createElement("div");
   testWindow.document.body.appendChild(container);
