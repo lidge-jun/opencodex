@@ -125,3 +125,18 @@ describe("qwen4-max on the Alibaba Token Plan, Beijing only (help.aliyun.com tok
     expect(intl.preserveReasoningContentModels ?? []).not.toContain("qwen4-max");
   });
 });
+
+describe("DeepSeek first-party seed (api-docs.deepseek.com create-chat-completion + updates, 2026-11-26)", () => {
+  const deepseek = getProviderRegistryEntry("deepseek")!;
+
+  test("seeds only ids the API reference still accepts, led by the default", () => {
+    // The model enum is deepseek-flash | deepseek-v4-pro; deepseek-chat / deepseek-reasoner were
+    // discontinued on 2026-07-24. deepseek-v4-flash and its vision preview are documented as
+    // accepted legacy names served by V4.1 Flash, so they stay.
+    expect(deepseek.defaultModel).toBe("deepseek-flash");
+    expect(deepseek.models?.[0]).toBe("deepseek-flash");
+    expect(deepseek.models).not.toContain("deepseek-chat");
+    expect(deepseek.models).not.toContain("deepseek-reasoner");
+    expect(deepseek.models).toEqual(["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"]);
+  });
+});

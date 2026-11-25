@@ -1269,14 +1269,13 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // back to the 128k strict-fields default (scripts/model-metadata.source.json,
     // verified 2026-08-08).
     jawcodeBundle: "deepseek",
-    // deepseek-chat/deepseek-reasoner were deprecated upstream on 2026-07-24 15:59 UTC;
-    // the current official identifier is deepseek-flash. They stay in
-    // the list only as compatibility aliases so existing saved configs and requests
-    // keep validating and routing (they previously mapped to v4-flash; devlog
-    // _fin/260710_provider_hardening/002_research_cn.md). The current offerings are
-    // V4.1-Flash and V4 Pro; Flash remains the default.
-    // Keep the legacy vision-preview alias; see DEEPSEEK_VISION_PREVIEW_MODEL.
-    models: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_NATIVE_THINKING_MODELS, DEEPSEEK_VISION_PREVIEW_MODEL],
+    // deepseek-chat/deepseek-reasoner were discontinued upstream on 2026-07-24, and the API
+    // reference's model enum is now deepseek-flash | deepseek-v4-pro (checked 2026-11-26:
+    // api-docs.deepseek.com/api/create-chat-completion), so they leave the seed. A saved config
+    // that still lists them keeps its list; their noVisionModels entries below stay for it.
+    // deepseek-v4-flash and the vision preview remain documented accepted names served by V4.1
+    // Flash (pricing page note 1); see DEEPSEEK_VISION_PREVIEW_MODEL. Flash remains the default.
+    models: [...DEEPSEEK_NATIVE_THINKING_MODELS, DEEPSEEK_VISION_PREVIEW_MODEL],
     // V4.1-Flash is the first-party default; `deepseek-v4-flash` now routes there
     // as a compatibility alias, so a new install should ask for the live id by name.
     defaultModel: "deepseek-flash",

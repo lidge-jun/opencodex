@@ -399,6 +399,11 @@ are sent directly to DeepSeek by default instead of through the vision sidecar. 
 `noVisionModels` or text-only declarations remain authoritative. First-party `deepseek-chat`,
 `deepseek-reasoner`, and `deepseek-v4-flash` remain sidecar-backed by default. Zen routes are
 unchanged and were not probed in this update.
+The DeepSeek preset lists `deepseek-flash` (the default), `deepseek-v4-flash`, `deepseek-v4-pro`
+and `deepseek-v4-flash-vision-exp`. DeepSeek discontinued `deepseek-chat` and `deepseek-reasoner`
+on July 24, 2026, and its [API reference](https://api-docs.deepseek.com/api/create-chat-completion)
+accepts only `deepseek-flash` and `deepseek-v4-pro` (checked 2026-11-26), so new installs no
+longer list them. A saved model list keeps whatever it already holds.
 
 > **Three Volcengine billing routes:** `volcengine` is the pay-as-you-go Ark API,
 > `volcengine-coding-plan` consumes Coding Plan quota, and `volcengine-agent-plan` consumes Agent

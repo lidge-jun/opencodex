@@ -118,7 +118,8 @@ export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
   {
     provider: "deepseek",
     from: ["deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"],
-    to: ["deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"],
+    // The target is the registry seed today; deepseek-chat/reasoner left it on 2026-11-26.
+    to: ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"],
     contextWindows: { "deepseek-v4-pro": 1_048_576 },
     destinationBaseUrls: ["https://api.deepseek.com", "https://api.deepseek.com/v1"],
   },
