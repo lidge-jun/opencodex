@@ -125,54 +125,86 @@ export interface OwnershipDeps extends ProbeDeps {
   readonly realpathSync?: (path: string) => string;
 }
 
-export function inspectNativeCodexOwnership(deps: OwnershipDeps = {}): OwnershipInspection {
+/** The verdict the recorded service state alone decides, with the state file it came from. */
+export interface RecordedServiceOwnership extends OwnershipInspection {
+  readonly ownership: "foreign" | "unknown";
+  /** The service state file that decided the verdict, when one file did. */
+  readonly path?: string;
+}
+
+type ValidStateEvidence = Extract<ServiceStateEvidence, { kind: "valid" }>;
+
+function recordedStateVerdict(deps: OwnershipDeps): {
+  verdict: RecordedServiceOwnership | null;
+  valid: ValidStateEvidence[];
+  current: { codexHome: string; opencodexHome: string };
+} {
   const current = deps.currentHomes ?? currentServiceHomes();
   const evidence = deps.statePaths
     ? inspectServiceStateEvidence(deps.statePaths)
     : inspectServiceStateEvidence();
+  const decide = (verdict: RecordedServiceOwnership) => ({ verdict, valid: [] as ValidStateEvidence[], current });
 
   const unreadable = evidence.find((e): e is Extract<ServiceStateEvidence, { kind: "unreadable" }> => e.kind === "unreadable");
   if (unreadable) {
-    return { ownership: "unknown", reason: `service state at ${unreadable.path} could not be read (${unreadable.reason})` };
+    return decide({ ownership: "unknown", reason: `service state at ${unreadable.path} could not be read (${unreadable.reason})`, path: unreadable.path });
   }
   const invalid = evidence.find(e => e.kind === "invalid");
   if (invalid) {
-    return { ownership: "unknown", reason: `service state at ${invalid.path} is malformed` };
+    return decide({ ownership: "unknown", reason: `service state at ${invalid.path} is malformed`, path: invalid.path });
   }
 
-  const valid = evidence.filter((e): e is Extract<ServiceStateEvidence, { kind: "valid" }> => e.kind === "valid");
+  const valid = evidence.filter((e): e is ValidStateEvidence => e.kind === "valid");
   // Mirrors that disagree with each other are not a majority vote.
   for (const one of valid) {
     for (const other of valid) {
       if (compareServicePathToInstall(one.state.codexHome, other.state.codexHome, deps) !== "same"
         || compareServicePathToInstall(one.state.opencodexHome, other.state.opencodexHome, deps) !== "same") {
-        return { ownership: "unknown", reason: "two service state files disagree about which homes are installed" };
+        return decide({ ownership: "unknown", reason: "two service state files disagree about which homes are installed" });
       }
     }
   }
 
-  const evidenceComparesDifferent = (e: Extract<ServiceStateEvidence, { kind: "valid" }>): boolean =>
+  const evidenceComparesDifferent = (e: ValidStateEvidence): boolean =>
     compareServicePathToInstall(e.state.codexHome, current.codexHome, deps) === "different"
     || compareServicePathToInstall(e.state.opencodexHome, current.opencodexHome, deps) === "different";
-  const evidenceComparesIndeterminate = (e: Extract<ServiceStateEvidence, { kind: "valid" }>): boolean =>
+  const evidenceComparesIndeterminate = (e: ValidStateEvidence): boolean =>
     compareServicePathToInstall(e.state.codexHome, current.codexHome, deps) === "unknown"
     || compareServicePathToInstall(e.state.opencodexHome, current.opencodexHome, deps) === "unknown";
   const foreign = valid.find(evidenceComparesDifferent);
   if (foreign) {
-    return {
+    return decide({
       ownership: "foreign",
       reason: `a service is installed for CODEX_HOME=${foreign.state.codexHome} / OPENCODEX_HOME=${foreign.state.opencodexHome}`,
-    };
+      path: foreign.path,
+    });
   }
   // A resolution that could not run (EACCES, EPERM, a vanished directory, transient I/O)
   // proves neither same nor different — report it as unknown, never as foreign.
   const indeterminateEvidence = valid.find(evidenceComparesIndeterminate);
   if (indeterminateEvidence) {
-    return {
+    return decide({
       ownership: "unknown",
       reason: `a recorded home in ${indeterminateEvidence.path} could not be resolved for comparison`,
-    };
+      path: indeterminateEvidence.path,
+    });
   }
+  return { verdict: null, valid, current };
+}
+
+/**
+ * The service-state half of {@link inspectNativeCodexOwnership}: file reads only, no
+ * service-manager probe (no `spawnSync`), so a status GET can ask it. `null` means the state
+ * files do not decide; the full inspection then consults the service manager. A `foreign`
+ * verdict here is the same verdict the full inspection returns, because it returns first.
+ */
+export function inspectRecordedServiceOwnership(deps: OwnershipDeps = {}): RecordedServiceOwnership | null {
+  return recordedStateVerdict(deps).verdict;
+}
+
+export function inspectNativeCodexOwnership(deps: OwnershipDeps = {}): OwnershipInspection {
+  const { verdict, valid, current } = recordedStateVerdict(deps);
+  if (verdict) return { ownership: verdict.ownership, reason: verdict.reason };
 
   // The manager assets live under the effective OPENCODEX_HOME. Production
   // callers do not inject ProbeDeps.configDir, so derive it from the same

@@ -15,8 +15,10 @@ import { readCodexAccountRecord, saveCodexAccountCredential } from "../../src/co
 import { getEffectiveActiveCodexAccountId, rememberActiveCodexAccount } from "../../src/codex/routing/active-account";
 import {
   cachedDeniedCodexAccountIdsForModel,
+  cachedAvailableAccountGatedNativeModels,
   recordCodexModelDenialEvidence,
   resetCodexModelEntitlementCacheForTests,
+  seedCodexModelEntitlementsForTests,
 } from "../../src/codex/model-entitlements";
 import {
   clearAccountNeedsReauth,
@@ -28,6 +30,11 @@ import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { handleResponses } from "../../src/server/responses";
+import type { RequestLogContext } from "../../src/server/request-log";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { installHarness, restorePool401Fetch } from "../helpers/pool-401-fetch";
+import { clearResponseStateForTests } from "../../src/responses/state";
 
 /**
  * Selection PREFERENCES, as distinct from selection ELIGIBILITY.
@@ -135,6 +142,24 @@ async function removeScratchState(): Promise<void> {
 describe("model entitlement ordering (#4768)", () => {
   beforeEach(installScratchState);
   afterEach(removeScratchState);
+
+  test.each(["gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"])("%s moves away from a refused account on the next request", modelId => {
+    const config = makeConfig();
+    const now = Date.now();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    expect(resolveCodexAccountForThread(null, config)).toBe("a");
+    recordCodexModelDenialEvidence("a", modelId, readCodexAccountRecord("a")!.generation, now);
+    const deniedModelAccountIds = cachedDeniedCodexAccountIdsForModel(modelId, now);
+    expect(deniedModelAccountIds).toEqual(new Set(["a"]));
+    expect(resolveCodexAccountForThreadDetailed(null, config, now, "shared", { deniedModelAccountIds }, modelId))
+      .toMatchObject({ status: "selected", accountId: "b" });
+    expect(config.activeCodexAccountId).toBe("a");
+    // Evidence orders automatic routing; an explicit operator selection stays authoritative.
+    config.activeCodexAccountPinned = "a";
+    expect(resolveCodexAccountForThreadDetailed(null, config, now, "shared", { deniedModelAccountIds }, modelId))
+      .toMatchObject({ status: "selected", accountId: "a" });
+  });
 
   test.each([
     ["observed Astra denial selects available main", true, MAIN_CODEX_ACCOUNT_ID],
@@ -331,6 +356,131 @@ describe("model entitlement ordering (#4768)", () => {
       { deniedModelAccountIds: new Set(["b"]) },
     )).toMatchObject({ status: "selected", accountId: "a" });
   });
+});
+
+describe("Responses learns a native model refusal across requests", () => {
+  beforeEach(installScratchState);
+  afterEach(removeScratchState);
+
+  function responsesConfig(): OcxConfig {
+    return makeConfig({ defaultProvider: "openai", providers: { openai: {
+      adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward", codexAccountMode: "pool", upstreamWebsocket: false,
+    } } });
+  }
+
+  function request(model: string, input: unknown = "fixture request"): Request {
+    return new Request("http://localhost/v1/responses", { method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, input, stream: false }),
+    });
+  }
+
+  test.each(["gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"])(
+    "%s retries another account once, then avoids the refused account without a roster fetch", async model => {
+      const release = acquireOwnedSpendHome();
+      const harness = installHarness({ responseForSend(authorization) {
+        if (authorization === "Bearer access-a") return Response.json({
+          detail: `The '${model}' model is not supported when using Codex with a ChatGPT account.`,
+        }, { status: 400 });
+      } });
+      try {
+        updateAccountQuota("a", 10);
+        updateAccountQuota("b", 20);
+        const config = responsesConfig();
+        const generation = readCodexAccountRecord("a")!.generation;
+        let discoveryCalls = 0;
+        for (let turn = 0; turn < 2; turn++) {
+          const response = await handleResponses(request(model), config, { model: "", provider: "" } as RequestLogContext, {
+            resolveCodexModelEntitlements: async () => { discoveryCalls++; throw new Error("unexpected roster fetch"); },
+          });
+          await response.text();
+          expect(response.status).toBe(200);
+        }
+        expect(harness.sends).toEqual(["Bearer access-a", "Bearer access-b", "Bearer access-b"]);
+        expect(harness.refreshes).toEqual([]);
+        expect(discoveryCalls).toBe(0);
+        expect(cachedDeniedCodexAccountIdsForModel(model)).toEqual(new Set(["a"]));
+        expect(config.activeCodexAccountId).toBe("a");
+        expect(readCodexAccountRecord("a")!.generation).toBe(generation);
+      } finally {
+        release();
+        restorePool401Fetch();
+        clearResponseStateForTests();
+      }
+    },
+  );
+
+  test.each(["first", "alternate"] as const)("a stale grant cannot mask a refusal from the %s account", async refused => {
+    const release = acquireOwnedSpendHome();
+    const model = "gpt-6.2-sol";
+    const harness = installHarness({ responseForSend(authorization) {
+      if (refused === "alternate" && authorization === "Bearer access-a") {
+        return Response.json({ error: { message: "quota exhausted" } }, { status: 429 });
+      }
+      if (authorization === (refused === "first" ? "Bearer access-a" : "Bearer access-b")) {
+        return Response.json({ detail: `The '${model}' model is not supported when using Codex with a ChatGPT account.` }, { status: 400 });
+      }
+    } });
+    try {
+      updateAccountQuota("a", 10);
+      updateAccountQuota("b", 20);
+      const id = refused === "first" ? "a" : "b";
+      const record = readCodexAccountRecord(id)!;
+      seedCodexModelEntitlementsForTests(id, [model], Date.now(), "0.146.0",
+        `pool:${record.generation}:${record.credential!.chatgptAccountId}`);
+      const otherId = id === "a" ? "b" : "a";
+      const other = readCodexAccountRecord(otherId)!;
+      seedCodexModelEntitlementsForTests(otherId, [model, "gpt-daybreak-blue-latest"], Date.now(), "0.146.0",
+        `pool:${other.generation}:${other.credential!.chatgptAccountId}`);
+      const config = responsesConfig();
+      const response = await handleResponses(request(model), config, { model: "", provider: "" } as RequestLogContext);
+      await response.text();
+      expect(response.status).toBe(refused === "first" ? 200 : 400);
+      expect(harness.sends).toEqual(["Bearer access-a", "Bearer access-b"]);
+      expect(cachedDeniedCodexAccountIdsForModel(model)).toEqual(new Set([id]));
+      expect(cachedAvailableAccountGatedNativeModels(Date.now(), new Set([otherId])).has("gpt-daybreak-blue-latest")).toBe(true);
+      expect(harness.refreshes).toEqual([]);
+    } finally {
+      release();
+      restorePool401Fetch();
+      clearResponseStateForTests();
+    }
+  });
+
+  test.each(["exact-selector", "uploaded-file", "all-refused", "unrelated-400"] as const)(
+    "a new-model refusal preserves the %s boundary", async boundary => {
+      const release = acquireOwnedSpendHome();
+      const model = "gpt-6.2-sol";
+      const harness = installHarness({ responseForSend(authorization) {
+        if (authorization === "Bearer access-a" || boundary === "all-refused") return Response.json({
+          detail: boundary === "unrelated-400" ? "Invalid tool schema"
+            : `The '${model}' model is not supported when using Codex with a ChatGPT account.`,
+        }, { status: 400 });
+      } });
+      try {
+        updateAccountQuota("a", 10);
+        updateAccountQuota("b", 20);
+        const config = responsesConfig();
+        config.codexAccountNamespaces = { work: "a" };
+        const response = await handleResponses(request(
+          boundary === "exact-selector" ? `work/${model}` : model,
+          boundary === "uploaded-file" ? [{ role: "user", content: [{ type: "input_file", file_id: "file-fixture" }] }] : undefined,
+        ), config, { model: "", provider: "" } as RequestLogContext);
+        await response.text();
+        expect(response.status).toBe(400);
+        expect(harness.sends).toEqual(boundary === "all-refused"
+          ? ["Bearer access-a", "Bearer access-b"] : ["Bearer access-a"]);
+        expect(harness.refreshes).toEqual([]);
+        expect(cachedDeniedCodexAccountIdsForModel(model)).toEqual(boundary === "unrelated-400"
+          ? undefined : new Set(boundary === "all-refused" ? ["a", "b"] : ["a"]));
+      } finally {
+        release();
+        restorePool401Fetch();
+        clearResponseStateForTests();
+      }
+    },
+  );
 });
 
 describe("uploaded-file account retention (#4778)", () => {

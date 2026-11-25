@@ -55,6 +55,8 @@ export interface NormalizedComboTarget {
 }
 
 export interface NormalizedComboConfig {
+  quotaOnlyFallback?: true;
+  preserveFallbackModel?: true;
   /** Operator consent, effective only on a loopback-only proxy. */
   allowMeteredTargets?: boolean;
   strategy: OcxComboStrategy;
@@ -197,6 +199,14 @@ export function comboConfigIssues(
   }
 
   const body = raw as Record<string, unknown>;
+  for (const setting of ["quotaOnlyFallback", "preserveFallbackModel"] as const) {
+    const value = body[setting];
+    if (value !== undefined && typeof value !== "boolean") {
+      issues.push({ path: [setting], message: `${setting} must be a boolean` });
+    } else if (value === true && body.strategy !== undefined && body.strategy !== "failover") {
+      issues.push({ path: [setting], message: `${setting} requires the failover strategy` });
+    }
+  }
   if (body.allowMeteredTargets !== undefined && typeof body.allowMeteredTargets !== "boolean") {
     issues.push({ path: ["allowMeteredTargets"], message: "allowMeteredTargets must be a boolean" });
   }
@@ -581,6 +591,8 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     : null;
   return {
     strategy: raw.strategy ?? "failover",
+    ...((raw.strategy ?? "failover") === "failover" && raw.quotaOnlyFallback === true ? { quotaOnlyFallback: true as const } : {}),
+    ...((raw.strategy ?? "failover") === "failover" && raw.preserveFallbackModel === true ? { preserveFallbackModel: true as const } : {}),
     ...(raw.allowMeteredTargets === true ? { allowMeteredTargets: true } : {}),
     stickyLimit: raw.stickyLimit ?? 1,
     cooldownMs: raw.cooldownMs,
