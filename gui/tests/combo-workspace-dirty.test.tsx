@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act, StrictMode } from "react";
 import type { Root } from "react-dom/client";
-import { type ComboItem, providerQuotaStatesFromReports, toPutBody } from "../src/combo-workspace-data";
+import { type ComboItem, draftEquals, providerQuotaStatesFromReports, toPutBody } from "../src/combo-workspace-data";
 import ComboWorkspace from "../src/components/ComboWorkspace";
 import { ComboRoutingEditor } from "../src/components/combo-workspace-fallback";
 import { applySavedTargetOrder, mergeComboDraft } from "../src/components/combo-workspace-merge";
@@ -603,6 +603,18 @@ test("taking the saved target order keeps added targets and unrelated target edi
   const resolved = applySavedTargetOrder(result.merged.targets, remote.targets);
   expect(resolved.map(t => t.model)).toEqual(["a", "c", "b", "d"]);
   expect(resolved.find(t => t.model === "c")!.metered).toBe(true);
+});
+
+test("taking the saved target order keeps every row when the draft duplicates a saved target", () => {
+  const [a, b, c] = ["a", "b", "c"].map(model => ({ provider: "openai", model, clientKey: model }));
+  const duplicate = { provider: "openai", model: "a", clientKey: "a-copy" };
+  const saved = [a!, c!, b!];
+  const resolved = applySavedTargetOrder([a!, c!, duplicate], saved);
+  expect(resolved).toHaveLength(3);
+  expect(resolved.every(Boolean)).toBe(true);
+  expect(resolved.map(t => t.clientKey)).toEqual(["a", "a-copy", "c"]);
+  const item = { ...combos[0]!, targets: saved };
+  expect(() => draftEquals({ ...item, targets: resolved }, item)).not.toThrow();
 });
 
 test("using the saved order after a conflict keeps a local target edit", async () => {

@@ -79,11 +79,15 @@ function mergeTargets(previous: ComboTarget[], draft: ComboTarget[], remote: Com
  * its merged fields.
  */
 export function applySavedTargetOrder(current: ComboTarget[], saved: ComboTarget[]): ComboTarget[] {
-  const byKey = new Map(current.map(target => [identity(target), target]));
-  const savedOrder = saved.map(identity).filter(key => byKey.has(key));
-  const shared = new Set(savedOrder);
-  let next = 0;
-  return current.map(target => shared.has(identity(target)) ? byKey.get(savedOrder[next++]!)! : target);
+  const rank = new Map<string, number>();
+  for (const key of saved.map(identity)) if (!rank.has(key)) rank.set(key, rank.size);
+  // Every row the server also has keeps a slot; duplicates of one identity stay together (stable sort).
+  const slots = current.flatMap((target, index) => rank.has(identity(target)) ? [index] : []);
+  const ordered = slots.map(index => current[index]!)
+    .sort((left, right) => rank.get(identity(left))! - rank.get(identity(right))!);
+  const result = [...current];
+  slots.forEach((slot, position) => { result[slot] = ordered[position]!; });
+  return result;
 }
 
 export function mergeComboDraft(previous: ComboItem, draft: ComboItem, remote: ComboItem) {
