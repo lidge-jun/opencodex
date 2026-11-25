@@ -6,7 +6,7 @@
  * `resolveAudioUpstream`, and the model it is given is the model the upstream
  * will run, so the refusal is asserted once per endpoint that reaches it.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +15,8 @@ import { resolveAudioClient, type AudioClient } from "../../src/server/audio-cli
 import { resolveDictationSocket } from "../../src/server/audio-dictation";
 import { handleExternalLive, resolveExternalLiveSocket } from "../../src/server/audio-live";
 import { handleAudioTranscriptions } from "../../src/server/audio-transcriptions";
-import { LIVE_AUDIO_MODEL, TRANSCRIPTION_MODEL } from "../../src/server/audio-upstream";
+import { LIVE_AUDIO_MODEL, resolveAudioUpstream, TRANSCRIPTION_MODEL } from "../../src/server/audio-upstream";
+import * as openAiSidecar from "../../src/providers/openai-sidecar";
 import { LiveCallBindings } from "../../src/server/live-call-bindings";
 import { tryAdmitTurn } from "../../src/server/lifecycle";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -316,6 +317,134 @@ test("a scoped call-create forwards, binds and rejoins on the model it was judge
   try {
     expect(joined.upstreamWsUrl).toBe("wss://api.openai.com/v1/live/rtc_scope_fixture");
   } finally { joined.finish(); }
+});
+
+
+test.each([
+  ["a Realtime standalone socket", "intent=transcription"],
+  ["a Realtime standalone socket with an empty model", "intent=quicksilver&model="],
+] as const)("%s that names no model is refused for a model-scoped key, as on the native path", async (_label, query) => {
+  const cfg = config({ allowedModels: [LIVE_AUDIO_MODEL] });
+  const resolved = await resolveExternalLiveSocket(
+    client(cfg), cfg, logContext(), { style: "realtime-standalone", query }, { lease: lease(), bindings: new LiveCallBindings() },
+  );
+  expect(resolved).toBeInstanceOf(Response);
+  expect((resolved as Response).status).toBe(403);
+  expect((await denial(resolved as Response)).type).toBe(MODEL_NOT_ALLOWED_FOR_KEY);
+});
+
+test.each([
+  ["/v1/realtime/calls with no session", "http://localhost/v1/realtime/calls", { sdp: "v=0" }],
+  ["/v1/live with a session that names no model", "http://localhost/v1/live", { sdp: "v=0", session: { instructions: "client" } }],
+] as const)("call-create %s is refused for a model-scoped key, as on the native path", async (_label, url, payload) => {
+  const cfg = config({ allowedModels: [LIVE_AUDIO_MODEL] });
+  const response = await handleExternalLive(
+    new Request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-opencodex-api-key": SCOPED_KEY },
+      body: JSON.stringify(payload),
+    }),
+    cfg, logContext(), { client: client(cfg), lease: lease(), bindings: new LiveCallBindings() },
+  );
+  expect(response.status).toBe(403);
+  expect((await denial(response)).type).toBe(MODEL_NOT_ALLOWED_FOR_KEY);
+  expect(upstreamCalls).toEqual([]);
+});
+
+test("an unnamed live destination stays open to a key without a model list", async () => {
+  const cfg = config({ allowedModels: [LIVE_AUDIO_MODEL] });
+  const resolved = await resolveExternalLiveSocket(
+    client(cfg, OPEN_KEY), cfg, logContext(), { style: "realtime-standalone", query: "intent=transcription" },
+    { lease: lease(), bindings: new LiveCallBindings() },
+  );
+  expect(resolved).not.toBeInstanceOf(Response);
+  if (resolved instanceof Response) return;
+  try {
+    expect(resolved.upstreamWsUrl).toBe("wss://api.openai.com/v1/realtime?intent=transcription");
+  } finally { resolved.finish(); }
+});
+
+
+test.each(["", "   "])("call-create with a blank session model %p is an unnamed destination", async model => {
+  const cfg = config({ allowedModels: [LIVE_AUDIO_MODEL] });
+  const response = await handleExternalLive(
+    new Request("http://localhost/v1/live", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-opencodex-api-key": SCOPED_KEY },
+      body: JSON.stringify({ sdp: "v=0", session: { model } }),
+    }),
+    cfg, logContext(), { client: client(cfg), lease: lease(), bindings: new LiveCallBindings() },
+  );
+  expect(response.status).toBe(403);
+  expect((await denial(response)).type).toBe(MODEL_NOT_ALLOWED_FOR_KEY);
+  expect(upstreamCalls).toEqual([]);
+  // A key the blank model does not stop records the call as unnamed, never as a model called "".
+  globalThis.fetch = (async (input: unknown) => {
+    upstreamCalls.push(String(input));
+    return new Response("v=0\r\n", { status: 201, headers: { "content-type": "application/sdp", location: "https://api.openai.com/v1/live/rtc_blank_fixture" } });
+  }) as unknown as typeof fetch;
+  const providerOnly = config({ allowedProviders: ["openai-apikey"] });
+  const audio = client(providerOnly);
+  const bindings = new LiveCallBindings();
+  const created = await handleExternalLive(
+    new Request("http://localhost/v1/live", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-opencodex-api-key": SCOPED_KEY },
+      body: JSON.stringify({ sdp: "v=0", session: { model } }),
+    }),
+    providerOnly, logContext(), { client: audio, lease: lease(), bindings },
+  );
+  expect(created.status).toBe(201);
+  await created.text();
+  expect(bindings.get(created.headers.get("location")!.split("/").at(-1)!, audio.owner)?.model).toBeUndefined();
+});
+
+test("an unnamed call binds no model, and its rejoin is judged as unnamed", async () => {
+  globalThis.fetch = (async (input: unknown) => {
+    upstreamCalls.push(String(input));
+    return new Response("v=0\r\n", { status: 201, headers: { "content-type": "application/sdp", location: "https://api.openai.com/v1/live/rtc_unnamed_fixture" } });
+  }) as unknown as typeof fetch;
+  const providerOnly = config({ allowedProviders: ["openai-apikey"] });
+  const audio = client(providerOnly);
+  const bindings = new LiveCallBindings();
+  const created = await handleExternalLive(
+    new Request("http://localhost/v1/live", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-opencodex-api-key": SCOPED_KEY },
+      body: JSON.stringify({ sdp: "v=0", session: { instructions: "client" } }),
+    }),
+    providerOnly, logContext(), { client: audio, lease: lease(), bindings },
+  );
+  expect(created.status).toBe(201);
+  await created.text();
+  const alias = created.headers.get("location")!.split("/").at(-1)!;
+  expect(bindings.get(alias, audio.owner)?.model).toBeUndefined();
+  const target = { style: "frameless-path", callId: alias } as const;
+  const joined = await resolveExternalLiveSocket(audio, providerOnly, logContext(), target, { lease: lease(), bindings });
+  expect(joined).not.toBeInstanceOf(Response);
+  if (!(joined instanceof Response)) joined.finish();
+  const modelScoped = config({ allowedModels: [LIVE_AUDIO_MODEL] });
+  const refused = await resolveExternalLiveSocket(client(modelScoped), modelScoped, logContext(), target, { lease: lease(), bindings });
+  expect(refused).toBeInstanceOf(Response);
+  expect((refused as Response).status).toBe(403);
+});
+
+test("an unnamed bound join still selects its account with the default live model id", async () => {
+  const cfg = {
+    ...config({}),
+    defaultProvider: "openai",
+    providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool" } },
+    codexAccounts: [{ id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "acct-a" }],
+  } as OcxConfig;
+  const select = spyOn(openAiSidecar, "resolveFirstUsableOpenAiSidecar").mockResolvedValue(null);
+  try {
+    const result = await resolveAudioUpstream(new Headers(), cfg, logContext(), {
+      admission: client(cfg, OPEN_KEY).admission, model: undefined, exactAccountId: "pool-a",
+    });
+    expect(result).toBeInstanceOf(Response);
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(select.mock.calls[0]![3]?.exactAccount).toEqual({ accountId: "pool-a", modelId: LIVE_AUDIO_MODEL });
+  } finally { select.mockRestore(); }
 });
 
 test("a key with no scope keeps every audio destination", async () => {

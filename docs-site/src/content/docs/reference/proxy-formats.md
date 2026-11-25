@@ -918,7 +918,8 @@ or the browser subprotocol pair described above. Standalone
 defaults to that identifier, Codex's current GPT-Live model; `gpt-live-1` and
 `gpt-live-1.1` are proxy aliases for `gpt-live-1-codex` and `gpt-live-1.1-codex`, and
 the same aliases apply to a call-create session. A key scoped to a live model is judged
-on the resolved name. When `POST /v1/live` carries no session, OpenCodex writes one
+on the resolved name, and such a key must name its model: a session without one,
+`/v1/realtime/calls` without a session and a Realtime socket without `model=` are refused for it. When `POST /v1/live` carries no session, OpenCodex writes one
 with that default model and the destination's default voice: `cove` for a ChatGPT
 account and `marin` for an OpenAI API key. A session you send keeps its own fields; only a model alias in it is resolved.
 This is not a claim that every public OpenAI Realtime SDK or API key supports GPT-Live.

@@ -81,7 +81,9 @@ export async function handleExternalLive(
       model: LIVE_AUDIO_MODEL, instructions: "", delegation: { type: "client" },
     } : undefined;
     if (typeof session?.model === "string" && session.model) session.model = resolveLiveAudioModel(session.model);
-    const model = typeof session?.model === "string" ? session.model : LIVE_AUDIO_MODEL;
+    // Only a named model is judged as one, blank counting as none (as in live.ts liveCallCreateModel);
+    // a session the proxy writes always names the default.
+    const model = typeof session?.model === "string" && session.model.trim() ? session.model : undefined;
     const resolved = await resolveAudioUpstream(options.client.headers, config, log, {
       admission: options.client.admission, model, lease: options.lease, signal: deadline.signal,
     });
@@ -169,9 +171,9 @@ export async function resolveExternalLiveSocket(
   }
   // What this socket will actually run: the model a bound call settled on when
   // this same key created it, or the one a standalone session forwards in its
-  // own query. Reading only the Frameless query left a Realtime standalone
-  // socket judged as the default while its query carried another model.
-  const model = binding?.model ?? liveSidebandModel(upstreamTarget) ?? LIVE_AUDIO_MODEL;
+  // own query. When neither names one, the destination is unnamed and judged as
+  // such, never as the default.
+  const model = binding ? binding.model : liveSidebandModel(upstreamTarget);
   const relay = await resolveAudioUpstream(client.headers, config, log, {
     admission: client.admission, model, lease: options.lease,
     signal: options.signal,

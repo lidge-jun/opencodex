@@ -76,7 +76,11 @@ export interface AudioUpstream {
 
 export interface AudioUpstreamOptions {
   admission: DataPlaneAdmission;
-  model: string;
+  /**
+   * The model the upstream will run, or undefined when the request names none. A key with a
+   * model list is then refused, as on the native voice path (`src/server/live.ts`).
+   */
+  model: string | undefined;
   lease?: AdmissionLease;
   exactAccountId?: string;
   providerName?: string;
@@ -132,7 +136,8 @@ export async function resolveAudioUpstream(
           admission: options.admission,
           beginCodexAccountSelection,
           signal: options.signal,
-          ...(options.exactAccountId ? { exactAccount: { accountId: options.exactAccountId, modelId: options.model } } : {}),
+          // Account selection needs some model id; an unnamed live call keeps the default it always used.
+          ...(options.exactAccountId ? { exactAccount: { accountId: options.exactAccountId, modelId: options.model ?? LIVE_AUDIO_MODEL } } : {}),
         });
         if (!resolved) return formatErrorResponse(401, "authentication_error", "Connect a ChatGPT account to use audio");
         context = resolved.authContext;
@@ -158,7 +163,7 @@ export async function resolveAudioUpstream(
         return forwardDenial;
       }
       log.provider = formatCodexProviderForLog(candidate.providerName, context.accountId, config);
-      log.model = options.model;
+      if (options.model !== undefined) log.model = options.model;
       return {
         providerName: candidate.providerName,
         providerBaseUrl: candidate.provider.baseUrl,
@@ -180,7 +185,7 @@ export async function resolveAudioUpstream(
       });
       if (keyedDenial) return keyedDenial;
       log.provider = providerName;
-      log.model = options.model;
+      if (options.model !== undefined) log.model = options.model;
       return {
         providerName, providerBaseUrl: provider.baseUrl, headers: Object.fromEntries(selected),
         keyed: true, release: () => {},
