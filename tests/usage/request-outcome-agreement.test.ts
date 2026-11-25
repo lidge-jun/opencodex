@@ -22,6 +22,7 @@ import { normalizeUsageEntryForTest, type PersistedUsageEntry } from "../../src/
 import { requestLogDto } from "../../src/server/management/shared";
 import { requestLogEntryFromPersistedUsage } from "../../src/server/request-log";
 import { failureSummary } from "../../gui/src/pages/logs-failure-summary";
+import { LOCALES } from "../../gui/src/i18n/shared";
 
 /**
  * The durable ledger, the Prometheus exporter and the dashboard have to answer "how did this
@@ -32,8 +33,6 @@ import { failureSummary } from "../../gui/src/pages/logs-failure-summary";
  * None of these cases can be satisfied by a request that returned 200 -- several of them are
  * specifically about a 200 that must NOT read as success.
  */
-
-const LOCALES = ["en", "ko", "ja", "zh", "zh-TW", "de", "fr", "ru", "tr", "vi", "pt"] as const;
 
 function sampleValue(snapshot: string, series: string): number {
   const line = snapshot.split("\n").find(row => row.startsWith(series + " "));
@@ -244,7 +243,7 @@ describe("the dashboard recovery roster cannot drift from the durable one", () =
       .map(match => match[1]!))];
     expect(keys.length).toBeGreaterThan(ATTEMPT_RECOVERY_KIND_ROSTER.length);
     const gaps: string[] = [];
-    for (const locale of LOCALES) {
+    for (const { code: locale } of LOCALES) {
       const catalog = readFileSync(repoPath("gui", "src", "i18n", `${locale}.ts`), "utf8");
       for (const key of keys) if (!catalog.includes(`"${key}"`)) gaps.push(`${locale}:${key}`);
     }
