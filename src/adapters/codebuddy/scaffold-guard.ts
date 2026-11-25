@@ -33,12 +33,15 @@ export interface CodeBuddyScaffoldFilterResult {
  * An open fenced code block (CommonMark): it closes only on a line whose fence run uses the same
  * character, is at least as long as the opener, and is followed by nothing but spaces or tabs.
  * `closing` tracks a candidate closing line whose remainder has not been seen yet: `run` while the
- * fence run may still grow, `space` once trailing whitespace started.
+ * fence run may still grow, `space` once trailing whitespace started. A backtick opener's info
+ * string may not contain a backtick (` ```a``` ` is an inline code span, not a fence).
  */
 interface FenceState {
   char: "`" | "~";
   length: number;
   closing: "run" | "space" | null;
+  /** A backtick opener whose info string is still being read; a backtick in it voids the fence. */
+  opening: boolean;
 }
 
 interface ScanResult {
@@ -122,7 +125,11 @@ function scan(
   let index = 0;
 
   while (index < text.length) {
-    if (fence?.closing) {
+    if (fence?.opening) {
+      const char = text[index]!;
+      if (char === "`") fence = null;
+      else if (char === "\n" || char === "\r") fence.opening = false;
+    } else if (fence?.closing) {
       const char = text[index]!;
       if (fence.closing === "run" && char === fence.char) {
         index += 1;
@@ -154,7 +161,7 @@ function scan(
           return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
         }
         if (!fence && runLength >= 3) {
-          fence = { char: runChar, length: runLength, closing: null };
+          fence = { char: runChar, length: runLength, closing: null, opening: runChar === "`" };
           index = runEnd;
           lineStart = false;
           continue;

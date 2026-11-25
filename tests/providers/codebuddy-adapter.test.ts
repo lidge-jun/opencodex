@@ -424,6 +424,36 @@ describe("codebuddy runTurn streams a headless turn", () => {
     expect(JSON.stringify(events)).not.toContain("private-body");
   });
 
+  test.each([
+    ["DSML", "<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"exec\">"],
+    ["DeepSeek native", "<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">"],
+  ])("refuses %s markup after an inline code span that looks like a fence opener", (_name, markup) => {
+    for (const deltas of [[` \`\`\`example\`\`\`\n${markup}private-body`], [" ```exam", `ple\`\`\`\n${markup}private-body`]]) {
+      const events: AdapterEvent[] = [];
+      const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+      for (const text of deltas) guarded({ type: "text_delta", text });
+
+      expect(events.at(-1)).toEqual(expect.objectContaining({ type: "error", code: "vendor_scaffold_detected" }));
+      expect(JSON.stringify(events)).not.toContain("private-body");
+    }
+  });
+
+  test("keeps a backtick fence with a valid info string open", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+    const answer = " ```md title=\"x\"\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">\n```\n"
+      + "~~~md `x`\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">\n~~~\n";
+
+    guarded({ type: "text_delta", text: answer });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: answer },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
   test("keeps a fence open when its opener is split across deltas", () => {
     const events: AdapterEvent[] = [];
     const guarded = guardCodeBuddyScaffolding(event => events.push(event));
