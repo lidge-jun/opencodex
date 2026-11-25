@@ -1,4 +1,5 @@
 import { codexWsIncrementalHasRetainedState, codexWsIncrementalUploadEnabled, prepareIncrementalFrame } from "./codex-ws-incremental";
+import { assertSendAdmission } from "./send-admission";
 import { OPENAI_API_RESPONSES_URL } from "./native-response-control";
 import { isInjectionRequest } from "./native-injection-protocol";
 import type { NativeResponseControl } from "./native-response-control";
@@ -228,6 +229,7 @@ export async function codexWsUpstreamFetch(
 
   // A local refusal is not a failed upgrade and must never enter the SSE fallback path.
   try {
+    assertSendAdmission();
     beforeDispatch?.(new Headers(headers));
   } catch (error) {
     return Promise.reject(error);

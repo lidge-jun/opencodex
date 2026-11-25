@@ -1,13 +1,22 @@
 /** Process-local cooldown state shared by selection validation and key failover. */
-const keyCooldowns = new Map<string, { cooldownUntil: number }>();
+const keyCooldowns = new Map<string, { cooldownUntil: number; quotaSpentUntil?: number }>();
 
 function cooldownKey(providerName: string, keyId: string): string {
   return `${providerName}\0${keyId}`;
 }
 
-export function setKeyCooldown(providerName: string, keyId: string, cooldownUntil: number): void {
+/**
+ * `quotaSpent` marks a refusal that proved the key's quota or credit is spent. A rate limit leaves
+ * it unset, because that key serves again once the window passes.
+ */
+export function setKeyCooldown(providerName: string, keyId: string, cooldownUntil: number, quotaSpent = false): void {
   const key = cooldownKey(providerName, keyId);
-  keyCooldowns.set(key, { cooldownUntil: Math.max(keyCooldowns.get(key)?.cooldownUntil ?? 0, cooldownUntil) });
+  const previous = keyCooldowns.get(key);
+  const quotaSpentUntil = Math.max(previous?.quotaSpentUntil ?? 0, quotaSpent ? cooldownUntil : 0);
+  keyCooldowns.set(key, {
+    cooldownUntil: Math.max(previous?.cooldownUntil ?? 0, cooldownUntil),
+    ...(quotaSpentUntil > 0 ? { quotaSpentUntil } : {}),
+  });
 }
 
 export function isKeyInCooldown(providerName: string, keyId: string, now = Date.now()): boolean {
@@ -24,6 +33,11 @@ export function getKeyCooldownUntil(providerName: string, keyId: string, now = D
   const entry = keyCooldowns.get(cooldownKey(providerName, keyId));
   if (!entry) return null;
   return entry.cooldownUntil > now ? entry.cooldownUntil : null;
+}
+
+/** True while the key is cooling because a refusal proved its quota or credit spent. */
+export function isKeyQuotaSpent(providerName: string, keyId: string, now = Date.now()): boolean {
+  return (keyCooldowns.get(cooldownKey(providerName, keyId))?.quotaSpentUntil ?? 0) > now;
 }
 
 export function sweepExpiredApiKeyCooldowns(now = Date.now()): number {

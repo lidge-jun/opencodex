@@ -26,11 +26,12 @@ export function createResponsesEffects(
     | "poolAffinityKey"
     | "route"
     | "substituteMainCredential"
+    | "rememberCollapsedComboLane"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction"> & Partial<Pick<ResponsesSidecarAuth, "preserveCompactionPrefix">>,
 ) {
   const { options, req, config } = requestContext;
-  const { parsed, poolAffinityKey, route, substituteMainCredential } = requestState;
+  const { parsed, poolAffinityKey, route, substituteMainCredential, rememberCollapsedComboLane } = requestState;
   const { routedCompaction, preserveCompactionPrefix } = sidecarState;
 
 
@@ -44,6 +45,7 @@ export function createResponsesEffects(
       || response.status !== "completed"
       || typeof response.model !== "string" || !response.model.trim()) return;
     responseCompletionNotified = true;
+    rememberCollapsedComboLane?.(response.model);
     options.onResponseComplete?.(response.model);
   };
 

@@ -104,19 +104,20 @@ function replayOnlyResponse(response: Response, chunks: readonly Uint8Array[]): 
  * before streaming the unread remainder. A rotation storm must not be gated on
  * reading N full error payloads. Any failure — no body, already consumed, slow,
  * malformed — returns undefined and leaves the `Retry-After` path in charge.
+ * `text` is the decoded prefix, so a caller can classify the refusal without a second read.
  */
 export async function readQuotaResetAt(
   response: Response,
   nowOrOptions: number | QuotaResetReadOptions = {},
-): Promise<{ at: number | undefined; response: Response }> {
-  if (!response.body) return { at: undefined, response };
+): Promise<{ at: number | undefined; response: Response; text: string }> {
+  if (!response.body) return { at: undefined, response, text: "" };
   const options = typeof nowOrOptions === "number" ? { now: nowOrOptions } : nowOrOptions;
   const now = options.now ?? Date.now();
   let reader: ReadableStreamDefaultReader<Uint8Array>;
   try {
     reader = response.body.getReader();
   } catch {
-    return { at: undefined, response };
+    return { at: undefined, response, text: "" };
   }
   const chunks: Uint8Array[] = [];
   let transferred = false;
@@ -192,14 +193,14 @@ export async function readQuotaResetAt(
       },
     });
     transferred = true;
-    return { at: parseQuotaResetAt(text, now), response: rebuiltResponse(response, rest) };
+    return { at: parseQuotaResetAt(text, now), response: rebuiltResponse(response, rest), text };
   } catch (error) {
     const clientAborted = options.signal?.aborted === true;
     void reader.cancel(error).catch(() => {}).finally(() => {
       try { reader.releaseLock(); } catch { /* already released */ }
     });
     if (clientAborted) throw options.signal!.reason ?? error;
-    return { at: undefined, response: replayOnlyResponse(response, chunks) };
+    return { at: undefined, response: replayOnlyResponse(response, chunks), text: "" };
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     if (!transferred) {
@@ -829,6 +830,7 @@ export function rateLimitRetryDelayMs(
 export function recordDistributedKeyFailure(
   config: OcxConfig, providerName: string, selection: ProviderApiKeySelection | undefined,
   status: 401 | 429 | "billing", now = Date.now(), retryAfter?: string | null, quotaResetAt?: number,
+  quotaExhausted = false,
 ): boolean {
   const provider = config.providers[providerName];
   if (!selection?.distributed || !provider || provider.authMode === "oauth" || provider.authMode === "forward") return false;
@@ -838,7 +840,7 @@ export function recordDistributedKeyFailure(
   const delay = status === "billing" ? ANTHROPIC_BILLING_COOLDOWN_MS : status === 401 ? MAX_COOLDOWN_MS : quotaResetAt !== undefined
     ? Math.max(1, quotaResetAt - now) : parseRetryAfterMs(retryAfter, now) ?? DEFAULT_COOLDOWN_MS;
   for (const entry of provider.apiKeyPool ?? []) if (entry.key === failed.key) {
-    setKeyCooldown(providerName, entry.id, now + delay);
+    setKeyCooldown(providerName, entry.id, now + delay, status === "billing" || quotaExhausted);
   }
   sweepExpiredOnWrite(now);
   return true;
@@ -854,6 +856,8 @@ function rotateKeyAfterFailure(
   attemptedSelection?: ProviderApiKeySelection,
   quotaResetAt?: number,
   acceptsFreshProvider?: (provider: OcxProviderConfig) => boolean,
+  /** The refusal body proved the key's quota spent. A credit refusal (`billing`) always does. */
+  quotaExhausted = false,
 ): OcxProviderConfig | null {
   const provider = config.providers[providerName];
   if (!provider) return null;
@@ -861,7 +865,7 @@ function rotateKeyAfterFailure(
 
   if (attemptedSelection?.distributed) {
     if (acceptsFreshProvider && !acceptsFreshProvider(provider)) return null;
-    if (!recordDistributedKeyFailure(config, providerName, attemptedSelection, failureStatus, now, retryAfterHeader, quotaResetAt)) return null;
+    if (!recordDistributedKeyFailure(config, providerName, attemptedSelection, failureStatus, now, retryAfterHeader, quotaResetAt, quotaExhausted)) return null;
     if (!(provider.apiKeyPool ?? []).some(entry => !entry.disabled && !isKeyInCooldown(providerName, entry.id, now))) return null;
     return allocateDistributedKey(providerName, provider, now);
   }
@@ -936,7 +940,7 @@ function rotateKeyAfterFailure(
       : quotaResetAt !== undefined
         ? Math.max(quotaResetAt - now, 1)
         : parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
-    setKeyCooldown(providerName, outcome.value.failedId, now + cooldownMs);
+    setKeyCooldown(providerName, outcome.value.failedId, now + cooldownMs, failureStatus === "billing" || quotaExhausted);
     sweepExpiredOnWrite(now);
   }
   if ("exhaustedCount" in outcome.value) {
@@ -967,8 +971,10 @@ export function rotateKeyOn429(
   attemptedKey?: string,
   attemptedSelection?: ProviderApiKeySelection,
   quotaResetAt?: number,
+  quotaExhausted?: boolean,
 ): OcxProviderConfig | null {
-  return rotateKeyAfterFailure(config, providerName, 429, retryAfterHeader, now, attemptedKey, attemptedSelection, quotaResetAt);
+  return rotateKeyAfterFailure(config, providerName, 429, retryAfterHeader, now, attemptedKey, attemptedSelection, quotaResetAt,
+    undefined, quotaExhausted);
 }
 
 /**
@@ -993,6 +999,8 @@ interface RotateProviderTransportOptions {
   retryAfter?: string | null;
   /** Epoch ms from `parseQuotaResetAt`, when the upstream dated the reset in its body. */
   quotaResetAt?: number;
+  /** The 429 body proved the key's quota or credit spent, so a quota-only Combo may leave the pool. */
+  quotaExhausted?: boolean;
   now?: number;
   attemptedKey?: string;
   attemptedSelection?: ProviderApiKeySelection;
@@ -1019,6 +1027,7 @@ export function rotateProviderTransportOn429(
     options.attemptedKey,
     options.attemptedSelection ?? routedProvider._apiKeyAttempt,
     options.quotaResetAt,
+    options.quotaExhausted,
   );
   if (!rotated) return null;
   return applyRotatedTransport(providerName, routedProvider, rotated, options.promptCacheKey);
