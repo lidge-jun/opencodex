@@ -545,6 +545,7 @@ describe("google adapter — Antigravity system prompt compatibility", () => {
     };
     const text = systemInstructionText(envelope.request);
     expect(text).not.toContain("You are Claude Code, Anthropic's official CLI for Claude.");
+    expect(text).not.toContain("You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.");
     expect(text).not.toContain(REJECTED_CLAUDE_SDK_PARAGRAPH);
     expect(text).toContain("Dual-purpose security tools");
     expect(text).toContain("Content inside <pasted_content> tags");
