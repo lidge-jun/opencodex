@@ -50,6 +50,8 @@ export interface ApiKeyCooldownPersistence {
   clear(provider?: string): void;
 }
 interface StoredState { rows: ApiKeyCooldownRow[]; epochs: Record<string, number>; allEpoch: number }
+/** Provider clear counters keyed by provider name; null-prototype, so a name like `valueOf` is an own key. */
+const epochTable = (): Record<string, number> => Object.create(null) as Record<string, number>;
 
 export const API_KEY_COOLDOWN_FILE = "api-key-cooldowns.json";
 const FLUSH_DELAY_MS = 250;
@@ -78,7 +80,7 @@ function errorCode(error: unknown): string | undefined {
 
 /** Valid content of the file. Missing file or unparsable JSON is empty; other read errors throw. */
 export function readApiKeyCooldownState(path: string): StoredState {
-  const empty: StoredState = { rows: [], epochs: {}, allEpoch: 0 };
+  const empty: StoredState = { rows: [], epochs: epochTable(), allEpoch: 0 };
   let text: string;
   try {
     text = readFileSync(path, "utf8");
@@ -90,7 +92,7 @@ export function readApiKeyCooldownState(path: string): StoredState {
   try { parsed = JSON.parse(text); } catch { return empty; }
   const file = parsed as { version?: unknown; rows?: unknown; epochs?: unknown; allEpoch?: unknown } | null;
   if (file?.version !== 1) return empty;
-  const state: StoredState = { rows: [], epochs: {}, allEpoch: isCount(file.allEpoch) ? file.allEpoch : 0 };
+  const state: StoredState = { rows: [], epochs: epochTable(), allEpoch: isCount(file.allEpoch) ? file.allEpoch : 0 };
   if (file.epochs && typeof file.epochs === "object" && !Array.isArray(file.epochs)) {
     for (const [provider, epoch] of Object.entries(file.epochs as Record<string, unknown>)) if (isCount(epoch)) state.epochs[provider] = epoch;
   }
@@ -215,7 +217,7 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
         // A clear of ours lands strictly after every clear already on disk; holds we recorded after
         // it move to the counter actually written. Anything else keeps the counter it was recorded with.
         const allEpoch = this.bumpedAll ? Math.max(disk.allEpoch + 1, this.allEpoch) : disk.allEpoch;
-        const epochs: Record<string, number> = { ...disk.epochs };
+        const epochs = Object.assign(epochTable(), disk.epochs);
         for (const provider of this.bumped) epochs[provider] = Math.max((disk.epochs[provider] ?? 0) + 1, this.epochs.get(provider) ?? 0);
         const own = [...this.dirty.values()].map(row => ({
           ...row,

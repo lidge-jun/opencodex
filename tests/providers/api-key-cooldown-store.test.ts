@@ -109,6 +109,20 @@ test.skipIf(process.platform === "win32")("the cooldown file is private like con
   expect(readFileSync(file(), "utf8")).not.toContain("sk-alpha-0001");
 });
 
+test("a provider named like an Object.prototype member keeps its holds across a restart", () => {
+  for (const name of ["valueOf", "toString"]) {
+    const cfg = config({ a: "sk-alpha-0001" });
+    cfg.providers = { [name]: cfg.providers.p! };
+    cfg.defaultProvider = name;
+    const store = restart(cfg);
+    const until = Date.now() + 60_000;
+    setKeyCooldown(name, "a", until, "sk-alpha-0001");
+    expect(store.flush()).toBe(true);
+    restart(cfg);
+    expect(getKeyCooldownUntil(name, "a")).toBe(until);
+  }
+});
+
 test("expired and malformed rows are ignored at load", () => {
   const now = Date.now();
   writeRows([row("a", "sk-alpha-0001", now - 1_000), row("b", "sk-beta-0002", now + 60_000)]);
