@@ -18,6 +18,7 @@ import { resolveNativeProfileContext } from "./native-profile-store";
 import { getMainQuotaCredentialGeneration, observeMainQuotaCredential } from "./main-account-cache";
 import { applyAccountQuotaFromUpstreamHeaders, getAccountQuota, type StoredAccountQuota } from "./quota";
 import { CodexWarmupError, codexWarmupFailureReason, warmCodexAccount } from "./warmup";
+import { codexAccountFetch } from "./account-egress-runtime";
 import {
   completedByAccount, retryAfterByAccount, scheduledByAccount, quotaRefreshAfterByAccount,
   resetCodexQuotaAutoRefreshStateForTests,
@@ -224,7 +225,7 @@ async function warmAccount(config: OcxConfig, accountId: string): Promise<void |
     if (isCodexAccountPaused(config, accountId) || isAccountNeedsReauth(accountId)) return false;
     const poolWriter = capturePoolQuotaWriter(accountId, token);
     try {
-      await warmCodexAccount({ ...token, onCompleted: headers => {
+      await warmCodexAccount({ ...token, transport: codexAccountFetch(accountId), onCompleted: headers => {
         if (isCodexAccountGenerationLive(accountId, token.generation)) {
           applyAccountQuotaFromUpstreamHeaders(accountId, headers, writerGeneration, undefined, { poolWriter, poolResponse: true });
         }

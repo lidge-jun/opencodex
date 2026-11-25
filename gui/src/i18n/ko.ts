@@ -5,6 +5,7 @@ import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
+import { connectionsCopy } from "./connections-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
@@ -143,6 +144,7 @@ export const ko: Record<TKey, string> = {
   ...remoteLinkDiagnosticsCopy("ko"),
   ...remoteLinkChildCopy("ko"),
   ...gatewayClientsCopy("ko"),
+  ...connectionsCopy("ko"),
   ...modelsV2Copy("ko"),
   ...modelsOverallCopy("ko"),
   ...accountsV2Copy("ko"),
@@ -3623,6 +3625,27 @@ export const ko: Record<TKey, string> = {
   "cws.tabsLabel": "콤보 상세 섹션",
   "cws.tab.config": "설정",
   "cws.tab.about": "정보",
+  "cws.quotaPreset.openai-first": "OpenAI 우선",
+  "cws.quotaPreset.claude-first": "Claude 우선",
+  "cws.quotaOnly": "할당량이 소진되었을 때만 전환",
+  "cws.preserveModel": "전환 시 동일한 모델 유지",
+  "cws.allowPaidLocal": "로컬 클라이언트의 유료 호출 허용",
+  "cws.meteredTarget": "유료 API 대상",
+  "cws.preview.title": "전환 미리보기",
+  "cws.preview.note": "이 미리보기는 콤보 설정을 따릅니다. 호출자의 권한과 실제 할당량은 요청을 보낼 때 확인합니다.",
+  "cws.preview.unchecked": "경로가 확인되지 않아 설정된 대상을 표시합니다. 리디렉션, 호출자의 권한, 실제 할당량은 요청을 보낼 때 확인합니다.",
+  "cws.preview.paid": "유료 API",
+  "cws.preview.billingUnknown": "과금 방식 알 수 없음",
+  "cws.preview.consent": "유료 API 호출에 권한이 필요합니다",
+  "cws.preview.model": "모델 고정 상태에서 다른 모델이 지정됨",
+  "cws.preview.provider": "공급자 사용 불가",
+  "cws.preview.incomplete": "대상 설정이 불완전함",
+  "cws.preview.unreached": "도달하지 않음",
+  "cws.preview.skipped": "건너뜀 · {reason}",
+  "cws.preview.terminal": "마지막 대상도 실패하면 중단합니다.",
+  "cws.preview.stopAt": "{step}단계에서 중단합니다.",
+  "cws.preview.quotaRule": "할당량 또는 크레딧 소진을 확인한 경우에만 다음 대상으로 전환합니다.",
+  "cws.preview.subscriptionsOnly": "구독만 사용",
   "cws.strategy": "전략",
   "cws.strategy.failover": "장애 조치",
   "cws.strategy.roundRobin": "라운드로빈",
@@ -3664,6 +3687,7 @@ export const ko: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "이 수준은 대상의 공통 사다리에 없습니다 — 요청 시 무시되거나 스냅됩니다.",
   "cws.field.defaultEffortUnsupportedOption": "교집합에 없음",
   "cws.targets": "대상",
+  "cws.targets.order": "대상 순서",
   "cws.targets.failoverHint": "순서가 중요합니다 — 첫 번째가 기본입니다.",
   "cws.targets.roundRobinHint": "가중치는 결정적 상대 선택을 제어하고, 순서는 회전 고리의 동률을 결정합니다.",
   "cws.targets.randomHint": "가중치가 각 추첨의 확률을 제어하며, 순서는 무관합니다.",

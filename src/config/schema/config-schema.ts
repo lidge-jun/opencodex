@@ -1,3 +1,4 @@
+import { poolAccountEgressConfigError } from "../../lib/provider-egress";
 import { dashboardTrustedProxySchema } from "../dashboard-trusted-proxy";
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
 import { validRemainingQuotaAccountIds } from "../../codex/account-use-remaining";
@@ -535,6 +536,12 @@ export const configSchema = z.object({
     }
   }
 
+  // A pool account's own route follows the provider egress rules (src/lib/provider-egress.ts).
+  if (Array.isArray(config.codexAccounts)) config.codexAccounts.forEach((account: unknown, index: number) => {
+    const { id, egress } = (account ?? {}) as { id?: unknown; egress?: unknown };
+    const error = poolAccountEgressConfigError(`codexAccounts.${typeof id === "string" ? id : index}.egress`, egress);
+    if (error) ctx.addIssue({ code: "custom", path: ["codexAccounts", index, "egress"], message: error });
+  });
   const accountNamespaces = config.codexAccountNamespaces;
   if (accountNamespaces) {
     const configuredAccountIds = configuredCodexPoolAccountIds(config.codexAccounts);

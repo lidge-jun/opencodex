@@ -541,6 +541,14 @@ The UI distinguishes uncertainty about whether settings still point at its proxy
 - Claude Code honours `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS` as documented for corporate proxies;
   a CLI release that stops doing so would stop routing, not break login.
 
+#### Preview before turning it on, and Claude homes
+
+When you turn the dashboard switch on, OpenCodex first lists the keys it would add or change in the default home's `settings.json` (for example `env.HTTPS_PROXY`, `env.NODE_EXTRA_CA_CERTS`, `env.NO_PROXY`) and waits for you to confirm. Values are never shown, and the preview writes nothing; cancelling, or a preview that fails, leaves the switch off and sends no change. The switch can still refuse afterwards while it starts the intercept or prepares its certificate and token. Scripts can read the same preview from `GET /api/claude-code/first-party/preview?enabled=true`.
+
+The switch only ever writes the default Claude home (`CLAUDE_CONFIG_DIR`, else `~/.claude`). If you keep other Claude homes, list them under `claudeCode.extraConfigDirs` (for example `ocx config set claudeCode.extraConfigDirs '["~/.claude-work"]' --json`) and the Claude Code page and **Connect → Client connections** show where each one routes. OpenCodex only reads those homes and never searches the disk for others.
+
+**Client connections** on the Connect overview shows, for Codex, Claude Code (per home) and Claude Desktop, where the client is wanted to go, where its files point now, who owns them, why the two differ, and which keys switching it back would change.
+
 #### Model picker in the CLI
 
 With the CLI first-party switch on and Claude routing enabled, start a new `claude` and open

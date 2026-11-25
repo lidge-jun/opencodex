@@ -5,6 +5,7 @@ import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
+import { connectionsCopy } from "./connections-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
@@ -144,6 +145,7 @@ export const de: Record<TKey, string> = {
   ...remoteLinkDiagnosticsCopy("de"),
   ...remoteLinkChildCopy("de"),
   ...gatewayClientsCopy("de"),
+  ...connectionsCopy("de"),
   ...modelsV2Copy("de"),
   ...modelsOverallCopy("de"),
   ...accountsV2Copy("de"),
@@ -3576,6 +3578,27 @@ export const de: Record<TKey, string> = {
   "cws.tabsLabel": "Combo-Detailbereiche",
   "cws.tab.config": "Konfiguration",
   "cws.tab.about": "Info",
+  "cws.quotaPreset.openai-first": "OpenAI zuerst",
+  "cws.quotaPreset.claude-first": "Claude zuerst",
+  "cws.quotaOnly": "Nur bei ausgeschöpftem Kontingent wechseln",
+  "cws.preserveModel": "Beim Wechsel dasselbe Modell behalten",
+  "cws.allowPaidLocal": "Kostenpflichtige Aufrufe lokaler Clients erlauben",
+  "cws.meteredTarget": "Kostenpflichtiges API-Ziel",
+  "cws.preview.title": "Vorschau der Ausweichroute",
+  "cws.preview.note": "Die Vorschau verwendet die Combo-Einstellungen. Berechtigungen und verfügbares Kontingent werden beim Senden geprüft.",
+  "cws.preview.unchecked": "Die Routen wurden nicht geprüft, daher zeigt die Vorschau die konfigurierten Ziele. Weiterleitungen, Berechtigungen und verfügbares Kontingent werden beim Senden geprüft.",
+  "cws.preview.paid": "Kostenpflichtige API",
+  "cws.preview.billingUnknown": "Abrechnung unbekannt",
+  "cws.preview.consent": "Kostenpflichtige API-Aufrufe benötigen eine Freigabe",
+  "cws.preview.model": "Anderes Modell bei aktiver Modellsperre",
+  "cws.preview.provider": "Anbieter nicht verfügbar",
+  "cws.preview.incomplete": "Unvollständiges Ziel",
+  "cws.preview.unreached": "Wird nicht erreicht",
+  "cws.preview.skipped": "Übersprungen · {reason}",
+  "cws.preview.terminal": "Abbruch, falls auch das letzte Ziel fehlschlägt.",
+  "cws.preview.stopAt": "Abbruch bei Schritt {step}.",
+  "cws.preview.quotaRule": "Wechselt erst nach bestätigter Ausschöpfung des Kontingents oder Guthabens.",
+  "cws.preview.subscriptionsOnly": "Nur Abos",
   "cws.strategy": "Strategie",
   "cws.strategy.failover": "Failover",
   "cws.strategy.roundRobin": "Round-Robin",
@@ -3617,6 +3640,7 @@ export const de: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "Dieser Aufwand liegt nicht in der gemeinsamen Leiter der Ziele — er wird zur Anfragezeit ignoriert oder angepasst.",
   "cws.field.defaultEffortUnsupportedOption": "nicht in der Schnittmenge",
   "cws.targets": "Ziele",
+  "cws.targets.order": "Reihenfolge der Ziele",
   "cws.targets.failoverHint": "Reihenfolge zählt — das erste ist primär.",
   "cws.targets.roundRobinHint": "Gewichte steuern die deterministische relative Auswahl; die Reihenfolge löst Gleichstände im Rotationsring.",
   "cws.targets.randomHint": "Gewichte steuern die Wahrscheinlichkeit jeder Ziehung; die Reihenfolge spielt keine Rolle.",

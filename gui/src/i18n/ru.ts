@@ -5,6 +5,7 @@ import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
+import { connectionsCopy } from "./connections-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
@@ -143,6 +144,7 @@ export const ru: Record<TKey, string> = {
   ...remoteLinkDiagnosticsCopy("ru"),
   ...remoteLinkChildCopy("ru"),
   ...gatewayClientsCopy("ru"),
+  ...connectionsCopy("ru"),
   ...modelsV2Copy("ru"),
   ...modelsOverallCopy("ru"),
   ...accountsV2Copy("ru"),
@@ -3792,6 +3794,27 @@ export const ru: Record<TKey, string> = {
   "cws.tabsLabel": "Разделы деталей комбо",
   "cws.tab.config": "Конфигурация",
   "cws.tab.about": "О комбо",
+  "cws.quotaPreset.openai-first": "Сначала OpenAI",
+  "cws.quotaPreset.claude-first": "Сначала Claude",
+  "cws.quotaOnly": "Переключаться только при исчерпании квоты",
+  "cws.preserveModel": "Сохранять модель при переключении",
+  "cws.allowPaidLocal": "Разрешить платные запросы локальных клиентов",
+  "cws.meteredTarget": "Цель с платным API",
+  "cws.preview.title": "Предпросмотр переключения",
+  "cws.preview.note": "Предпросмотр учитывает настройки комбо. Права клиента и фактическая квота проверяются при отправке.",
+  "cws.preview.unchecked": "Маршруты не проверены, поэтому показаны настроенные цели. Перенаправления, права клиента и фактическая квота проверяются при отправке.",
+  "cws.preview.paid": "Платный API",
+  "cws.preview.billingUnknown": "Тарификация неизвестна",
+  "cws.preview.consent": "Для платного API требуется разрешение",
+  "cws.preview.model": "Другая модель при включённой фиксации модели",
+  "cws.preview.provider": "Провайдер недоступен",
+  "cws.preview.incomplete": "Цель настроена не полностью",
+  "cws.preview.unreached": "Этап недоступен",
+  "cws.preview.skipped": "Пропущено · {reason}",
+  "cws.preview.terminal": "Остановка, если последняя цель тоже не ответит.",
+  "cws.preview.stopAt": "Остановка на шаге {step}.",
+  "cws.preview.quotaRule": "Переходит к следующей цели только после подтверждения исчерпания квоты или кредитов.",
+  "cws.preview.subscriptionsOnly": "Только подписки",
   "cws.strategy": "Стратегия",
   "cws.strategy.failover": "Failover",
   "cws.strategy.roundRobin": "Round-robin",
@@ -3833,6 +3856,7 @@ export const ru: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "Этот уровень не входит в общую лестницу целей — при запросе он будет проигнорирован или снижен.",
   "cws.field.defaultEffortUnsupportedOption": "нет в пересечении",
   "cws.targets": "Цели",
+  "cws.targets.order": "Порядок целей",
   "cws.targets.failoverHint": "Порядок важен — первая цель основная.",
   "cws.targets.roundRobinHint": "Веса задают детерминированный относительный выбор; при равных весах порядок определяет очерёдность в кольце ротации.",
   "cws.targets.randomHint": "Веса задают вероятности каждого выбора; порядок не важен.",

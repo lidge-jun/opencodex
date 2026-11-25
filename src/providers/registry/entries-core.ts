@@ -85,7 +85,7 @@ import {
   KIMI_AUTO_TOOL_CHOICE_ONLY_MODELS,
   KIMI_CODING_MODEL_CONTEXT_WINDOWS,
   KIMI_CODING_MODEL_INPUT_MODALITIES,
-  NEURALWATT_REASONING_HISTORY_MODELS,
+  NEURALWATT_MODEL_HINTS,
   UMANS_MODELS,
   UMANS_REASONING_EFFORTS,
   UMANS_GLM_REASONING_EFFORTS,
@@ -1078,49 +1078,11 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://portal.neuralwatt.com",
     defaultModel: "glm-5.3",
-    // 2026-07-10 live /v1/models: K2.5 rows were removed and GLM-5.2 short variants added.
-    // 260814: the glm-5.3 quartet is speculative; live discovery is authoritative and drops
-    // any id Neuralwatt has not published yet.
-    // Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md and https://api.neuralwatt.com/v1/models.
-    models: [
-      "glm-5.3", "glm-5.3-fast", "glm-5.3-short", "glm-5.3-short-fast",
-      "glm-5.3-flash",
-      "glm-5.2", "glm-5.2-fast", "glm-5.2-short", "glm-5.2-short-fast",
-      "kimi-k2.6", "kimi-k2.6-fast",
-      "kimi-k2.7-code",
-      "qwen3.5-397b", "qwen3.5-397b-fast", "qwen3.6-35b", "qwen3.6-35b-fast",
-    ],
-    // Neuralwatt's /v1/models metadata is authoritative; these static hints are the offline fallback.
-    modelReasoningEfforts: {
-      "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
-      "glm-5.3-fast": [],
-      "glm-5.3-short": ZAI_GLM_53_REASONING_EFFORTS,
-      "glm-5.3-short-fast": [],
-      // No `-fast`/`-short` variants are asserted for the flash tier: those suffixes
-      // encode routing Neuralwatt documents per model, and this seed has no source for them.
-      "glm-5.3-flash": ZAI_GLM_53_REASONING_EFFORTS,
-      "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
-      "glm-5.2-fast": [],
-      "glm-5.2-short": ZAI_GLM_52_REASONING_EFFORTS,
-      "glm-5.2-short-fast": [],
-      "kimi-k2.6": [],
-      "kimi-k2.6-fast": [],
-      "kimi-k2.7-code": [],
-      // Qwen3.x uses thinking_budget, NOT graded reasoning_effort; the adapter maps the five
-      // Codex picker levels onto budget fractions.
-      "qwen3.5-397b": THINKING_BUDGET_EFFORTS,
-      "qwen3.5-397b-fast": [],
-      "qwen3.6-35b": THINKING_BUDGET_EFFORTS,
-      "qwen3.6-35b-fast": [],
-    },
+    modelDiscovery: { path: "models", filter: { noneOf: [
+      { path: ["metadata", "capabilities", "task"], equalsAny: ["decision"] },
+    ] } },
+    ...NEURALWATT_MODEL_HINTS,
     thinkingBudgetModels: THINKING_BUDGET_MODELS,
-    noReasoningModels: ["glm-5.3-fast", "glm-5.3-short-fast", "glm-5.2-fast", "glm-5.2-short-fast", "kimi-k2.6-fast", "qwen3.5-397b-fast", "qwen3.6-35b-fast"],
-    noVisionModels: ["glm-5.3", "glm-5.3-fast", "glm-5.3-short", "glm-5.3-short-fast", "glm-5.2", "glm-5.2-fast", "glm-5.2-short", "glm-5.2-short-fast", "qwen3.5-397b", "qwen3.5-397b-fast"],
-    noTemperatureModels: ["kimi-k2.7-code"],
-    noTopPModels: ["kimi-k2.7-code"],
-    noPenaltyModels: ["kimi-k2.7-code"],
-    autoToolChoiceOnlyModels: ["kimi-k2.7-code"],
-    preserveReasoningContentModels: NEURALWATT_REASONING_HISTORY_MODELS,
   },
   {
     id: "openrouter",

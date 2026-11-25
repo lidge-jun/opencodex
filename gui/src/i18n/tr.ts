@@ -5,6 +5,7 @@ import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
+import { connectionsCopy } from "./connections-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
@@ -144,6 +145,7 @@ export const tr: Record<TKey, string> = {
   ...remoteLinkDiagnosticsCopy("tr"),
   ...remoteLinkChildCopy("tr"),
   ...gatewayClientsCopy("tr"),
+  ...connectionsCopy("tr"),
   ...modelsV2Copy("tr"),
   ...modelsOverallCopy("tr"),
   ...accountsV2Copy("tr"),
@@ -3626,6 +3628,27 @@ export const tr: Record<TKey, string> = {
   "cws.tabsLabel": "Kombo detay bölümleri",
   "cws.tab.config": "Konfigürasyon",
   "cws.tab.about": "Hakkında",
+  "cws.quotaPreset.openai-first": "Önce OpenAI",
+  "cws.quotaPreset.claude-first": "Önce Claude",
+  "cws.quotaOnly": "Yalnızca kota tükendiğinde geç",
+  "cws.preserveModel": "Geçişte aynı modeli koru",
+  "cws.allowPaidLocal": "Yerel istemcilerin ücretli çağrılarına izin ver",
+  "cws.meteredTarget": "Ücretli API hedefi",
+  "cws.preview.title": "Yedek akış önizlemesi",
+  "cws.preview.note": "Önizleme, kombinasyon ayarlarını kullanır. İstemci izinleri ve gerçek kota istek gönderildiğinde kontrol edilir.",
+  "cws.preview.unchecked": "Rotalar kontrol edilmedi, bu yüzden önizleme yapılandırılmış hedefleri gösteriyor. Yönlendirmeler, istemci izinleri ve gerçek kota istek gönderildiğinde kontrol edilir.",
+  "cws.preview.paid": "Ücretli API",
+  "cws.preview.billingUnknown": "Ücretlendirme bilinmiyor",
+  "cws.preview.consent": "Ücretli API çağrıları için izin gerekir",
+  "cws.preview.model": "Model kilidi açıkken farklı model",
+  "cws.preview.provider": "Sağlayıcı kullanılamıyor",
+  "cws.preview.incomplete": "Hedef eksik",
+  "cws.preview.unreached": "Ulaşılamaz",
+  "cws.preview.skipped": "Atlandı · {reason}",
+  "cws.preview.terminal": "Son hedef de başarısız olursa durur.",
+  "cws.preview.stopAt": "{step}. adımda durur.",
+  "cws.preview.quotaRule": "Yalnızca kota veya kredinin tükendiği doğrulanınca sonraki hedefe geçer.",
+  "cws.preview.subscriptionsOnly": "Yalnızca abonelikler",
   "cws.strategy": "Strateji",
   "cws.strategy.failover": "Yedekli (Failover)",
   "cws.strategy.roundRobin": "Round-robin",
@@ -3667,6 +3690,7 @@ export const tr: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "Bu çaba hedeflerin ortak merdiveninde yok — istek anında yok sayılacak veya uydurulacaktır.",
   "cws.field.defaultEffortUnsupportedOption": "kesişimde değil",
   "cws.targets": "Hedefler",
+  "cws.targets.order": "Hedef sırası",
   "cws.targets.failoverHint": "Sıralama önemlidir — birincil olan ilktir.",
   "cws.targets.roundRobinHint": "Ağırlıklar kararlı bağıntılı seçimi kontrol eder; sıralama rotasyon halkasındaki eşitlikleri bozar.",
   "cws.targets.randomHint": "Ağırlıklar her çekilişin olasılığını kontrol eder; sıralamanın önemi yoktur.",

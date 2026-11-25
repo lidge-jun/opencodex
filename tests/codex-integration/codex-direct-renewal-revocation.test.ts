@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -71,6 +72,7 @@ describe("credit renewal rechecks authority after token preparation", () => {
     priorHome = process.env.OPENCODEX_HOME;
     home = mkdtempSync(join(tmpdir(), "ocx-renewal-revocation-"));
     process.env.OPENCODEX_HOME = home;
+    bindStoredCodexPoolRoutingForTests();
     nativeHome = installIsolatedCodexHome("ocx-renewal-revocation-native-");
     clearCodexQuotaPrimeState(); clearAccountQuota(); resetQuotaQueryBackoffForTests();
     config = {

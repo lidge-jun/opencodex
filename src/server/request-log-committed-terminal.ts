@@ -11,6 +11,7 @@ export interface CommittedComboLogFields {
   comboTarget?: { provider: string; model: string };
   comboWriterGeneration?: number;
   comboTargetOutputCeiling?: number | null;
+  comboQuotaOnlyFallback?: boolean;
   /** Closed capacity/health reason recognized from a committed terminal; null when none applies. */
   committedIncompleteReason?: CommittedIncompleteReason | null;
 }
@@ -64,6 +65,7 @@ export function reportCommittedTerminalCooldown(
   try {
     committedTerminalCooldownHandler?.({
       ...(logCtx.comboId !== undefined ? { comboId: logCtx.comboId } : {}),
+      ...(logCtx.comboQuotaOnlyFallback ? { quotaOnlyFallback: true } : {}),
       ...(meta?.terminalStatus !== undefined ? { terminalStatus: meta.terminalStatus } : {}),
       ...(logCtx.committedIncompleteReason ? { terminalReason: logCtx.committedIncompleteReason } : {}),
       ...(servingAttempt ? {

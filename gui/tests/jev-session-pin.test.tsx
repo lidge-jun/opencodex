@@ -72,7 +72,7 @@ async function openPage(sessionPin?: unknown) {
         if (failure === "network") throw new Error("offline");
         if (failure === "http") return Response.json({ error: "save rejected" }, { status: 500 });
         stored = { ...stored, ...body.combo };
-        return Response.json({ success: true }); // no echoed combo required
+        return Response.json({ success: true, id: stored.id, model: stored.model, combo: stored });
       }
       return Response.json({ combos: [stored] });
     }

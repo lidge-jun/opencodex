@@ -62,6 +62,14 @@ const STATE_STORES = STATE_STORE_REGISTRATIONS.length;
  */
 const PAGES = [
   {
+    locale: "es",
+    path: "readme/README.es.md",
+    retained: /(\d+) almacenes retenidos/,
+    observed: /(\d+) búferes observados/,
+    stateStores: /(\d+) registros de almacenes de estado/,
+    totalSentence: "estado que retiene el proceso",
+  },
+  {
     locale: "en",
     path: "README.md",
     retained: /(\d+) retained stores/,

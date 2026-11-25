@@ -16,6 +16,8 @@ export interface CodexAccount {
   chatgptAccountId?: string;
   logLabel?: string;
   isMain: boolean;
+  /** This account's own upstream route (proxy / noProxy); absent uses the provider's. */
+  egress?: import("./pool-account").PoolAccountEgress;
 }
 
 export interface CodexAccountCredentials {

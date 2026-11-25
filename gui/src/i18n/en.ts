@@ -5,6 +5,7 @@ import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
+import { connectionsCopy } from "./connections-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
@@ -145,6 +146,7 @@ export const en = {
   ...remoteLinkDiagnosticsCopy("en"),
   ...remoteLinkChildCopy("en"),
   ...gatewayClientsCopy("en"),
+  ...connectionsCopy("en"),
   ...modelsV2Copy("en"),
   ...modelsOverallCopy("en"),
   ...accountsV2Copy("en"),
@@ -3690,6 +3692,27 @@ export const en = {
   "cws.tabsLabel": "Combo detail sections",
   "cws.tab.config": "Config",
   "cws.tab.about": "About",
+  "cws.quotaPreset.openai-first": "OpenAI first",
+  "cws.quotaPreset.claude-first": "Claude first",
+  "cws.quotaOnly": "Switch only when quota runs out",
+  "cws.preserveModel": "Keep the same model on fallback",
+  "cws.allowPaidLocal": "Allow paid calls from local clients",
+  "cws.meteredTarget": "Paid API target",
+  "cws.preview.title": "Fallback preview",
+  "cws.preview.note": "This preview uses the Combo settings. The caller’s permissions and current quota are checked when a request runs.",
+  "cws.preview.unchecked": "Routes have not been checked, so this preview shows the configured targets. Redirects, the caller’s permissions and current quota are checked when a request runs.",
+  "cws.preview.paid": "Paid API",
+  "cws.preview.billingUnknown": "Billing unknown",
+  "cws.preview.consent": "Paid API calls need permission",
+  "cws.preview.model": "Different model with model lock on",
+  "cws.preview.provider": "Provider unavailable",
+  "cws.preview.incomplete": "Incomplete target",
+  "cws.preview.unreached": "Not reached",
+  "cws.preview.skipped": "Skipped · {reason}",
+  "cws.preview.terminal": "Stop after the last target if it also fails.",
+  "cws.preview.stopAt": "Stop at step {step}.",
+  "cws.preview.quotaRule": "Moves to the next target only after confirmed quota or credit exhaustion.",
+  "cws.preview.subscriptionsOnly": "Subscriptions only",
   "cws.strategy": "Strategy",
   "cws.strategy.failover": "Failover",
   "cws.strategy.roundRobin": "Round-robin",
@@ -3731,6 +3754,7 @@ export const en = {
   "cws.field.defaultEffortUnsupported": "This effort is not in the targets' common ladder — it will be ignored or snapped at request time.",
   "cws.field.defaultEffortUnsupportedOption": "not in intersection",
   "cws.targets": "Targets",
+  "cws.targets.order": "Target order",
   "cws.targets.failoverHint": "Order matters — first is primary.",
   "cws.targets.roundRobinHint": "Weights control deterministic relative selection; order breaks ties in the rotation ring.",
   "cws.targets.randomHint": "Weights control each draw's odds; order does not matter.",

@@ -141,5 +141,3 @@ export function restoreCodexCatalog(): { removed: number; kept: number; path: st
   }
   return outcome.value;
 }
-
-/** Force Codex's models_cache stale from the on-disk catalog. Returns whether a cache write occurred. */
