@@ -393,6 +393,8 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     expect(fn).toContain('if (outcome === "absent") return false;');
     expect(fn).toContain('if (outcome === "failed")');
     expect(fn).toContain('if (outcome === "state-unknown")');
+    expect(fn).toContain("throw new Error(windowsPartAFailureMessage() ??");
+    expect(fn).not.toContain("the Windows Task Scheduler state could not be read");
   });
 
   test("shared teardown runs only when nothing that could still serve is unaccounted for", async () => {

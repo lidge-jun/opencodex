@@ -44,12 +44,17 @@ that baseline. Owner evidence arriving at or after either cutoff is discarded.
 Owner verification requires a successful `GetOwnerSid`,
 valid local/domain or Entra ID SIDs, and a fresh CIM read reporting the original creation time.
 Matching SIDs prove the current account. Different supported SIDs prove a foreign account.
-Built-in and virtual service SIDs and failed or skipped lookups leave ownership unverified.
-Raw SIDs stay within the snapshot parser. Later operations receive nullable `foreignOwner`.
-All reads share the snapshot timeout and output cap. On x64 a native creation time is kept
-only when it agrees with CIM within one millisecond. A disagreement clears creation time
-and owner evidence. Elsewhere the CIM time is used for observation. The Schedule PID falls
-back to a capped `sc.exe queryex Schedule` from the trusted system directory.
+On Windows x64, a missing CIM owner sample for a wrapper with this installation's complete
+launcher or script path can be supplemented by a query-only live handle. Its process creation
+time must exactly match the original CIM microsecond, and its token user must match both the
+caller and the supported SID reported by the helper. This bounded probe can confirm a same-user
+wrapper only. It does not override conflicting evidence. Built-in and virtual service SIDs and
+unresolved lookups remain unverified. Later operations receive nullable `foreignOwner`.
+All reads share the snapshot timeout and output cap. On x64 a native creation-time read
+must start and finish before the snapshot deadline and agree with CIM within one millisecond.
+Otherwise the row retains its ancestry with unknown creation time and owner. Elsewhere the CIM
+time is used for observation. The Schedule PID falls back to a capped `sc.exe queryex Schedule`
+from the trusted system directory.
 
 ## Binding rule
 
@@ -88,7 +93,12 @@ manager still running is `survived` (`unbound-wrapper` when the survivor was nev
 is `survived` while the proxy is still alive after the service reports stopped. The authorizer
 variant `guardedStopWindowsServiceChecked` runs its authorizer at entry, before each manager stop and before each terminate and
 reports a refusal as `WindowsCheckedStopRefusedError` with what had already happened. For Task
-Scheduler it reauthorizes after validating the helper proof, before sending `stop-before` on stdin. The
+Scheduler it reauthorizes after validating the helper proof, before sending `stop-before` on stdin.
+With native identity support, each captured running instance carries its GUID, engine PID and
+creation time through that exchange. The native handle must prove the matching process and
+token user for every engine. The helper rechecks the registration and the captured instances
+before calling their COM stop methods. The bounded CIM owner check remains the fallback when
+native identity support is unavailable. The
 helper and outer deadlines must still be open after authorization. The helper starts its
 monotonic clock before sending proof. The parent measures from proof receipt and sends the
 earlier deadline as a cutoff on that clock. Time spent delivering approval and refreshing
@@ -152,9 +162,10 @@ shape, the exact launcher, and the single run-as principal through `src/service/
 The logon scope and every recovery-trigger scope must match the expected account. Only the
 recognized legacy shape without recovery triggers may omit the logon scope. The stop proof accepts a disabled task with the same
 ownership evidence. Installation health still requires an enabled task.
-The helper requires a successful same-account SID check for every `EnginePID`, with the process
-creation time re-read after the owner lookup. After approval it re-reads the registration XML and
-refreshes every captured instance to verify that its GUID, engine PID and running state still agree.
+Each `EnginePID` requires the native identity proof described above when available.
+The CIM fallback re-reads process creation time after checking the owner SID. After approval the
+helper re-reads the registration XML and refreshes every captured instance to verify that its GUID,
+engine PID and running state still agree.
 It stops each captured `IRunningTask` by instance GUID. An empty collection counts as idle only if
 the final task state shows ready or disabled before the stop deadline. Failed proof returns
 `evidence-unreadable` with instructions to verify the task in Task Scheduler and repair an owned
