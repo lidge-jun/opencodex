@@ -55,6 +55,8 @@ describe("codex launcher credential destination", () => {
     ["default profile redirects provider", 'profile = "foreign"\n' + local + '\n[profiles.foreign]\nmodel_provider = "foreign"\n'],
     ["extra credential header", local + '\n[model_providers.opencodex.env_http_headers]\nx-key = "OPENCODEX_API_AUTH_TOKEN"\n'],
     ["malformed TOML", local + '\nmodel_provider = [\n'],
+    ["provider table written before the Cyber capability", local.replace("capabilities = { cyber_access_programs = true }\n", "")],
+    ["changed Cyber capability", local.replace("cyber_access_programs = true", "cyber_access_programs = false")],
   ]) {
     test(`does not load a token for ${name}`, () => fixture((_home, codexHome) => {
       writeFileSync(join(codexHome, "config.toml"), content!);

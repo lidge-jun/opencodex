@@ -34,6 +34,50 @@ El contenido vacío, las partes mal formadas u opacas, las imágenes identificad
 
 <a id="checkpoint-continuation-after-routed-compaction"></a>
 
+## Entrada de video en rutas traducidas
+
+Un video llega a un modelo solo por un cable con un portador de video publicado. Los clientes lo
+envían como la parte de Responses `{"type": "input_video", "video_url": "…"}` o la parte de Chat
+Completions `{"type": "video_url", "video_url": {"url": "…"}}`; `url` es una URL `data:` en
+base64 o una URL que el proveedor descarga por sí mismo.
+
+Un video en línea debe ser exactamente `data:<type>/<subtype>[;<attribute>=<value>]...;base64,<payload>`,
+donde la carga es base64 estándar con una longitud múltiplo de cuatro, como máximo dos `=` solo al
+final, y sin escapes de URL, espacios ni caracteres URL-safe. Cualquier otra forma se rechaza. Un
+solo decodificador aplica esta regla en la admisión de entrada, la comprobación de rechazo, ambas
+conversiones de Chat y los constructores de Gemini y Chat, que envían su base64 canónico, así que
+ninguno puede discrepar de otro sobre un clip.
+
+| Ruta | Se envía como |
+| --- | --- |
+| `google` | `inline_data`, o `file_data` para URL de YouTube y de la Files API de Gemini (véase [`google`](#google)) |
+| `openai-chat`, para un modelo cuyas modalidades de entrada incluyen `video` | la parte de Chat `video_url`, en mensajes de usuario |
+| Responses de paso directo (`openai-responses`, Azure) | la parte `input_video` original, sin cambios |
+| cualquier otra ruta | rechazado |
+
+La parte de Chat `video_url` depende del modelo: OpenRouter, Qwen en la API compatible con OpenAI
+de DashScope y Kimi la documentan, pero la mayoría de los modelos de Chat no aceptan video. Por eso
+el adaptador de Chat traducido la envía solo cuando el modelo enrutado declara video mediante
+`modelCapabilities.<id>.inputModalities`, `modelInputModalities` o el `inputModalities` de todo
+el proveedor. El preset de Moonshot lo declara para `kimi-k3` y `kimi-k3.1-pro`. Los modelos de
+chat Grok de xAI no aceptan entrada de video a fecha de 2026-11-25 (xAI documenta entrada de texto e
+imagen para `grok-4.6` y `grok-4.7`), así que un video enviado a Grok se rechaza.
+
+Un video rechazado devuelve HTTP 400 con el código `unsupported_input_modality` antes de enviar
+nada, así que un combo pasa a un miembro que pueda leerlo. Antes, las rutas de Chat traducido, Anthropic y Cursor sustituían el clip por un marcador de
+texto, Gemini convertía en marcador una URL que no puede descargar, y la solicitud se enviaba de
+todos modos. Un video fuera del contenido de usuario (sistema, asistente o salida de herramienta) no
+tiene conversor en ninguna ruta traducida y también se rechaza, igual que un video en un mensaje de
+desarrollador en la ruta de Chat. Un video en línea de más de 50 MiB decodificados se rechaza en
+todas las rutas traducidas; envíe en su lugar la URL del archivo del proveedor. Responses de paso
+directo y Chat nativo reenvían el cuerpo original y dejan el tamaño y el soporte al proveedor.
+Una solicitud de Chat que se traduce se comprueba en ambos casos (un `video_url` fuera del
+contenido de usuario, o por encima del límite) antes de que su conversión construya nada, y
+responde el mismo HTTP 400 `unsupported_input_modality`. La admisión de entrada cobra el
+video en línea por tamaño, a unos 1.250 bytes por token (un clip en cualquier otra forma se cobra
+por su tamaño máximo posible, porque Responses de paso directo aún lo reenvía), y una URL descargada como un minuto (6.000
+tokens). El rechazo no nombra la URL ni los bytes.
+
 ## Continuación del punto de control después de la compactación enrutada
 
 Un modelo enrutado reproduce un punto de control OpenCodex `ocx1:` como texto de usuario junto con las solicitudes anteriores conservadas. Cuando una solicitud contiene uno de esos puntos de control decodificados, OpenCodex añade una nota breve a las instrucciones del sistema en las rutas traducidas, o a `instructions` en el passthrough de Responses. La nota presenta las solicitudes completadas como historial y solo permite continuar el trabajo pendiente ya autorizado que siga dentro de ese alcance, sin volver a pedir la misma autorización mientras sea válida. Los permisos y las confirmaciones existentes siguen vigentes: las decisiones o autorizaciones pendientes deben resolverse antes de realizar acciones que dependan de ellas. Los puntos de control y las delegaciones, incluidos los de otro hilo, no amplían la autoridad ni el alcance. Los mensajes posteriores del usuario tienen prioridad, incluso si pausan, cancelan, sustituyen o cambian el alcance del trabajo. Las solicitudes de compactación, los blobs nativos opacos y las solicitudes sin punto de control no reciben esa nota.
@@ -234,11 +278,11 @@ Consulta [Gemini nativo con Antigravity](/es/reference/proxy-formats/#native-gem
 
   | `url` | enviado como |
   | --- | --- |
-  | `data:` URL | `inline_data` con el tipo de medio propio de la URL de datos |
+  | URL `data:` canónica en base64 (véase [entrada de video](#entrada-de-video-en-rutas-traducidas)) | `inline_data` con el tipo de medio de la URL de datos, sin parámetros, y su base64 canónico |
   | YouTube ver URL (`youtube.com`, `youtu.be`, `m.`/`music.`/`-nocookie` variantes) | `file_data.file_uri` |
   | `https://generativelanguage.googleapis.com/<version>/files/<id>` - el formulario de recursos de Archivos API, donde `<version>` es `v1`, `v1beta` o `v1alpha` | `file_data.file_uri` |
 
-  Cualquier otra URL remota se mantiene como el marcador de texto `[video: <url>]`, porque el adaptador no tiene ningún tipo de medio para él y no hay evidencia de que Gemini lo buscará. La lista de permisos se hace coincidir en el host de la URL analizada y la ruta sobre HTTPS, no en una subcadena, para que un host similar no se convierta en una referencia `file_data` que el proxy pida a Gemini que busque. La ruta está anclada en el inicio, por lo que el punto final de carga reanudable (`/upload/<version>/files/<id>`) es *no* aceptado: no es un recurso legible, y `file_data.file_uri` pide a Gemini que acceda al recurso indicado a lo que se da. `file_data` lleva `file_uri` solamente; no se adjunta `mime_type` adivinado.
+  Cualquier otra URL remota se rechaza antes de enviar con HTTP 400 `unsupported_input_modality`, porque el adaptador no tiene ningún tipo de medio para ella y no hay evidencia de que Gemini la descargue; antes se convertía en un marcador de texto `[video: <url>]` sobre el que respondía el modelo. La lista de permisos se hace coincidir en el host de la URL analizada y la ruta sobre HTTPS, no en una subcadena, para que un host similar no se convierta en una referencia `file_data` que el proxy pida a Gemini que busque. La ruta está anclada en el inicio, por lo que el punto final de carga reanudable (`/upload/<version>/files/<id>`) es *no* aceptado: no es un recurso legible, y `file_data.file_uri` pide a Gemini que acceda al recurso indicado a lo que se da. `file_data` lleva `file_uri` solamente; no se adjunta `mime_type` adivinado.
 
 - **Salida de imagen en línea:** cuando el modelo es uno de los ID de chat explícitos con capacidad de imagen (`gemini-3.1-flash-image`, `gemini-2.0-flash-preview-image-generation` o `gemini-3-pro-image-preview`), el adaptador envía `responseModalities: ["TEXT", "IMAGE"]`. No se incluyen los ID de generación de medios independientes, como `gemini-3-pro-image`. Las partes `inlineData` devueltas se materializan bajo el directorio OpenCodex `artifacts/` configurado y aparecen como enlaces de imagen de marcado descendente a la ruta opaca autenticada `/v1/opencodex/artifacts/<id>` (no `file:` URI o rutas del sistema de archivos host). Cada imagen se limita a 50 MB y cada respuesta a 100 MB de datos decodificados; se rechazan las cargas útiles base64 mal formadas. Los artefactos se podan automáticamente cuando el recuento supera los 200 archivos.
 
@@ -346,7 +390,7 @@ login` completa el propio inicio de sesión PKCE del CLI y escribe un `devin-ses
 - Para los flujos de Responses Codex, los fallos de límite de velocidad tipificados conocidos con un retardo válido se normalizan a `rate_limit_exceeded` con `Please try again in Ns.` antes del detalle redactado original. Esto permite que Codex honre el retraso indicado y use su notificación de reconexión nativa sin agregar un elemento de razonamiento al historial de conversaciones. Los reintentos del cliente son finitos y están controlados por el `stream_max_retries` del cliente; esto no promete recuperación después del apagado o reinicio de la aplicación. Deja `OPENCODEX_DEVIN_STATED_RESET_WAIT_MS` sin definir o en `0` para que el cliente sea el propietario de la espera. Una asignación de proxy positivo mantiene la espera existente propiedad de proxy; el cliente sólo se entera de un rechazo final después, y los reintentos de cliente pueden multiplicar los intentos por solicitud del proxy. La conmutación por error de destino/cuenta combinada y el manejo Grok HTTP 429 conservan su orden existente. La ubicación exacta de la interfaz de usuario y el texto dependen de la versión Codex; esto no es una cuenta atrás personalizada. Los errores de límite de velocidad de solo mensaje usan el mismo formato de retardo más largo. Los errores tipificados sin un retraso útil retienen su código original. Los reintentos de cliente crean nuevas solicitudes HTTP; no comparten el contador de envío o la asignación de espera acumulativa de una solicitud proxy. Esta asignación de compatibilidad no reemplaza los controles de una espera proxy habilitada explícitamente.
 - Puente no oficial experimental; no se muestra en el panel de control preestablecido de forma predeterminada. Vea el [guía del proveedor](/es/guides/providers/) para instrucciones de inicio de sesión.
 
-El identificador de modelo que elige es una familia de modelos, y el esfuerzo de razonamiento elige la variante. Sin esfuerzo, se utiliza la variante por defecto de la familia: `swe-1-7` selecciona `swe-1-7-medium` y `swe-2` selecciona `swe-2-high`. Un esfuerzo cambia solo el esfuerzo y aterriza en la variante más baja en o por encima de él, o la más alta por debajo cuando no hay nada por encima, por lo que un peldaño faltante nunca baja el razonamiento: `swe-1-7` en `high` selecciona la fila máxima `swe-1-7`, `swe-2` en `low` selecciona `swe-2-medium` y `kimi-k3` en `medium` selecciona `kimi-k3-high`. `fast` selecciona la variante Fast y `1m`, `max-1m` o `none-1m` la variante de contexto 1M donde la familia tiene uno; de lo contrario no cambian nada. Un id con sufijo como `claude-opus-5-high-fast` mantiene su variante sin esfuerzo, y con uno mantiene su configuración rápida y contextual a menos que eso disminuya el esfuerzo: sin fila rápida en o por encima del esfuerzo, se usa la fila regular. Un id que nombra una variante que tu cuenta ha deshabilitado se envía con el nombre cuando el esfuerzo aún aterriza en ella, por lo que la solicitud falla con el propio error de esa variante en lugar de cambiar de nivel silenciosamente. La resolución nunca se traslada a otra familia. Cuando el catálogo de la cuenta no está disponible, el esfuerzo se agrega al id.
+El identificador de modelo que elige es una familia de modelos, y el esfuerzo de razonamiento elige la variante. Sin esfuerzo, se utiliza la variante por defecto de la familia: `swe-1-7` selecciona `swe-1-7-medium`, `swe-2` selecciona `swe-2-high` y `swe-2-1` (SWE-2.1) selecciona `swe-2-1-medium` aunque la fila `swe-2-1` sin sufijo del catálogo sea su variante Low. Un esfuerzo cambia solo el esfuerzo y aterriza en la variante más baja en o por encima de él, o la más alta por debajo cuando no hay nada por encima, por lo que un peldaño faltante nunca baja el razonamiento: `swe-1-7` en `high` selecciona la fila máxima `swe-1-7`, `swe-2` en `low` selecciona `swe-2-medium` y `kimi-k3` en `medium` selecciona `kimi-k3-high`. `fast` selecciona la variante Fast y `1m`, `max-1m` o `none-1m` la variante de contexto 1M donde la familia tiene uno; de lo contrario no cambian nada. Un id con sufijo como `claude-opus-5-high-fast` mantiene su variante sin esfuerzo, y con uno mantiene su configuración rápida y contextual a menos que eso disminuya el esfuerzo: sin fila rápida en o por encima del esfuerzo, se usa la fila regular. Un id que nombra una variante que tu cuenta ha deshabilitado se envía con el nombre cuando el esfuerzo aún aterriza en ella, por lo que la solicitud falla con el propio error de esa variante en lugar de cambiar de nivel silenciosamente. La resolución nunca se traslada a otra familia. Cuando el catálogo de la cuenta no está disponible, el esfuerzo se agrega al id, salvo en SWE-2 (Medium, High, Max) y SWE-2.1 (Low, Medium, High, XHigh, Max), donde se redondea a uno de los carriles propios de la familia y `fast`, o un id que termina en `-lightning`, selecciona la fila Ultrafast de ese carril.
 
 ## `zed`
 

@@ -23,3 +23,12 @@ Every recovery attempt must complete permission hardening before publishing the
 file. Permission-denied errors remain failures and do not trigger an automatic
 retry. Cleanup of a failed write does not consume the next write's recovery
 attempt. Other file destinations have independent timeout tracking.
+
+If launching `icacls` is slow, you can set
+`OPENCODEX_ACL_BATCH_RESTRICTIONS=1` in the environment of the process
+that runs opencodex. This experimental option keeps the owner grant first,
+then uses one command to remove inheritance and broad group grants for private
+files and directories. A failed combined command fails the hardening attempt,
+including when it cannot identify which part failed. Remove the setting to
+use the default three-command sequence. Elevated staging keeps its separate
+permission sequence.

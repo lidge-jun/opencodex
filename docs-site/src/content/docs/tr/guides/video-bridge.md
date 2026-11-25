@@ -90,7 +90,7 @@ Köprü varsayılan olarak `video_gen` işlerini `xai` sağlayıcısının API a
 - Geri döngü veya özel ağ `baseUrl` değeri, diğer sağlayıcı trafiğinde olduğu gibi o sağlayıcıda `allowPrivateNetwork: true` gerektirir.
 - OpenCodex'in xAI'a ait olarak tanıyabildiği bir anahtar (`xai-` biçimli anahtar, herhangi bir `xai` satırının anahtarı veya adında xAI ya da Grok geçen ortam değişkeni başvurusu) yalnızca `https://api.x.ai` veya `https://cli-chat-proxy.grok.com` adresine gönderilir; diğer her kaynak reddedilir. Bu işaretleri taşımayan bir anahtar tanınamaz, bu yüzden xAI anahtarınızı başka bir sağlayıcının satırına yapıştırmayın. Başka bir sağlayıcının sırrına işaret eden anahtar zinciri başvurusu her zaman reddedilir, duraklatılmış etkin anahtar da reddedilir ve `baseUrl` kimlik bilgisi, sorgu veya parça içeremez.
 - Sağlayıcı yoksa, devre dışıysa, duraklatılmışsa, anahtarı yoksa veya reddedildiyse her `video_gen` çağrısı bu hatayı modele döndürür. Hiçbir şey gönderilmez ve köprü asla xAI'a geri dönmez.
-- Tamamlanan video yine yalnızca base64 `data:` URL'sinden veya herkese açık bir `https:` URL'sinden indirilir; bu nedenle yerel bir köprü `video.url` olarak bunlardan birini döndürmelidir.
+- xAI protokolünde tamamlanan video yalnızca base64 `data:` URL'sinden veya herkese açık bir `https:` URL'sinden indirilir; bu nedenle yerel bir köprü `video.url` olarak bunlardan birini döndürmelidir. Dosyayı kendi ana makinesinden sunan bir arka uç bunun yerine `"videoApi": "openai"` ayarlar (bkz. [İngilizce kılavuzdaki OpenAI Videos API bölümü](/guides/video-bridge/#openai-videos-api-backends)).
 
 ## Nasıl Çalışır?
 

@@ -314,7 +314,10 @@ export type LiveSidebandTarget =
   | { style: "realtime-calls-path"; callId: string }
   | { style: "realtime-query"; callId: string }
   | { style: "realtime-standalone"; query: string }
-  | { style: "frameless-standalone"; query: string };
+  | { style: "frameless-standalone"; query: string }
+  // Public GPT-Live (`/v1/live/sessions`): served only to external audio keys on an API-key provider.
+  | { style: "live-session-start" }
+  | { style: "live-session"; callId: string };
 
 export type LiveRelayTarget = {
   headers: Record<string, string>;
@@ -353,6 +356,13 @@ function httpsToWss(httpUrl: string): string {
 }
 
 export function parseLiveSidebandTarget(pathname: string, searchParams: URLSearchParams, rawQuery = ""): LiveSidebandTarget | null {
+  // Before the Frameless call-id form, which would otherwise read "sessions" as a call id.
+  if (pathname === "/v1/live/sessions" || pathname === "/v1/live/sessions/") return { style: "live-session-start" };
+  const sessionMatch = pathname.match(/^\/v1\/live\/sessions\/([^/]+)\/attach\/?$/);
+  if (sessionMatch) {
+    const callId = decodeLiveCallId(sessionMatch[1]!);
+    return callId ? { style: "live-session", callId } : null;
+  }
   const liveMatch = pathname.match(/^\/v1\/live\/([^/]+)\/?$/);
   if (liveMatch) {
     const callId = decodeLiveCallId(liveMatch[1]!);
@@ -478,6 +488,10 @@ export function buildLiveSidebandUpstreamWsUrl(
   }
   if (target.style === "realtime-calls-path") {
     return httpsToWss(`${sidebandRoot}/realtime/calls/${target.callId}`);
+  }
+  if (target.style === "live-session-start") return httpsToWss(`${sidebandRoot}/live/sessions`);
+  if (target.style === "live-session") {
+    return httpsToWss(`${sidebandRoot}/live/sessions/${encodeURIComponent(target.callId)}/attach`);
   }
   return httpsToWss(
     `${sidebandRoot}/realtime?intent=quicksilver&call_id=${encodeURIComponent(target.callId)}`,

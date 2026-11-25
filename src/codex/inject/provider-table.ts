@@ -7,6 +7,19 @@ function record(value: unknown): Record<string, unknown> | null {
     ? value as Record<string, unknown> : null;
 }
 
+/**
+ * Identity of an OpenCodex provider table across writer releases. A table written before the Cyber
+ * capability line and one written after it are the same table: exactly `{ cyber_access_programs: true }`
+ * compares as if `capabilities` were absent. Any other capabilities value stays significant, so a
+ * user-edited table is never mistaken for ours. Every other field compares exactly.
+ */
+export function ocxProviderTableIdentity(provider: Record<string, unknown>): Record<string, unknown> {
+  const capabilities = record(provider.capabilities);
+  if (!capabilities || Object.keys(capabilities).length !== 1 || capabilities.cyber_access_programs !== true) return provider;
+  const { capabilities: _owned, ...rest } = provider;
+  return rest;
+}
+
 function providerValue(text: string): Record<string, unknown> {
   let parsed: unknown;
   try { parsed = Bun.TOML.parse(text); }
@@ -102,7 +115,7 @@ export function appendOcxProviderTableBlock(content: string, block: string): str
   const captured = providerValue(block);
   const existing = extractOcxProviderTableBlock(content);
   if (existing !== null) {
-    if (!isDeepStrictEqual(providerValue(existing), captured)) {
+    if (!isDeepStrictEqual(ocxProviderTableIdentity(providerValue(existing)), ocxProviderTableIdentity(captured))) {
       throw new Error("Codex restore refused: the native config already defines a different [model_providers.opencodex] table.");
     }
     return content;

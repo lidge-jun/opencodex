@@ -63,7 +63,9 @@ adapter send path and last as long as the cooldown of that refusal. A rotation o
 records none, which keeps the Combo on the pool. A committed output ceiling does not cool a quota-only target. Scoped fallback policy, consent, account selection and replay
 safeguards remain in force. Destinations outside recognized subscription channels and configured
 loopback local routes require consent, including custom API providers and redirected destinations.
-Without consent the Combo returns `combo_metered_consent_required`.
+Without consent the Combo returns `combo_metered_consent_required`. The current dashboard
+reads provider billing classes from `GET /api/combos` and resolves draft targets through
+`GET /api/combos?fallbackTarget=…`.
 A tool continuation uses its remembered resolved target, including its send paths, per-model adapter
 and the Codex account and account mode it resolves to. It stops with `combo_tool_target_unavailable` when that target cannot be established or used,
 and with `combo_metered_consent_required` when the target still serves but lost paid-call consent. A pinned

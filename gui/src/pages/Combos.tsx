@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WorkspaceSuggestions } from "../components/route-board/WorkspaceSuggestions";
 import ComboWorkspace from "../components/ComboWorkspace";
 import { comboVisionSidecarTargets } from "../combo-capabilities";
@@ -20,6 +20,7 @@ import { DataSurfaceSkeleton } from "../components/data-surface";
 import { replaceHash } from "../hash-routing";
 import { jevAutoCreateDecisionProvider } from "../app-routing";
 import type { ComboAddIntent } from "../components/combo-workspace-types";
+import type { ComboProviderBilling } from "../../../src/combos/suggestion-channel";
 
 type ProviderOption = {
   name: string;
@@ -46,6 +47,7 @@ type ModelOption = {
 };
 type ProviderDto = {
   adapter: string;
+  alias?: string;
   baseUrl: string;
   disabled?: boolean;
   defaultModel?: string;
@@ -64,6 +66,7 @@ type CachedCombosPage = {
   capabilityModels?: ModelOption[];
   cataloguedComboIds: string[];
   hiddenModels?: string[];
+  routingRevision?: string;
 };
 type ProviderQuotasDto = { reports?: unknown };
 
@@ -118,6 +121,7 @@ export default function Combos({
    * on the load success path, never during render and never from an effect.
    */
   const [retainedData, setRetainedData] = useState<CachedCombosPage | null>(cached ?? null);
+  const routingGeneration = useRef(Number(cached?.routingRevision) || 0);
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(false);
   const [addIntent, setAddIntent] = useState<ComboAddIntent | null>(() => (
@@ -162,7 +166,7 @@ export default function Combos({
     if (!combosRes.ok || !configRes.ok || !modelsRes.ok) {
       throw new Error("combo workspace load failed");
     }
-    const combosJson = await combosRes.json();
+    const combosJson = await combosRes.json() as { providerBilling?: Record<string, ComboProviderBilling> };
     const configJson = await configRes.json() as ConfigDto;
     // /api/models returns a bare array (not { models: [...] }).
     const modelsRaw = await modelsRes.json() as unknown;
@@ -173,12 +177,15 @@ export default function Combos({
         : [];
 
     const combos = parseComboList(combosJson);
+    const providerBilling = combosJson.providerBilling ?? {};
     const allProviders = configJson.providers ?? {};
     // Collapse canonical forward aliases only in the new-member picker. Validation keeps
     // every configured provider id, including legacy chatgpt members already in a combo.
     const visibleProviders = hideRedundantChatGptForwardProviders(allProviders);
     const providers = Object.entries(allProviders).map(([name, p]) => ({
       name,
+      alias: p.alias,
+      comboBilling: Object.hasOwn(providerBilling, name) ? providerBilling[name] : undefined,
       disabled: !!p.disabled,
       hiddenFromPicker: p.adapter === "jev-decision" || !Object.hasOwn(visibleProviders, name),
       authMode: p.authMode,
@@ -251,7 +258,8 @@ export default function Combos({
       }
     }
 
-    const next = { combos, providers, models, capabilityModels, hiddenModels, cataloguedComboIds: [...catalogued] } satisfies CachedCombosPage;
+    // /api/config omits redirects, so each successful poll invalidates the route snapshot.
+    const next = { combos, providers, models, capabilityModels, hiddenModels, cataloguedComboIds: [...catalogued], routingRevision: String(++routingGeneration.current) } satisfies CachedCombosPage;
     writeSessionListCacheEntry(cacheKey, next);
     // Retain the coherent payload here — one place, on the success path, never during
     // render. See the `retainedData` note below.
@@ -274,6 +282,7 @@ export default function Combos({
       initialData: cached ?? undefined,
       initialDataCachedAt: seedCombosCachedAt(cacheKey),
       staleAfterMs: 60_000,
+      pollMs: 60_000,
       enabled: active,
     },
   );
@@ -356,13 +365,14 @@ export default function Combos({
   const capabilityModels = data?.capabilityModels ?? models;
   const cataloguedComboIds = new Set(data?.cataloguedComboIds ?? []);
 
-  const saveCombo = async (item: ComboItem, isCreate: boolean, renameFrom?: string) => {
+  const saveCombo = async (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null) => {
     try {
       const res = await fetch(`${apiBase}/api/combos`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(toPutBody(item, {
           ...(renameFrom ? { renameFrom } : {}),
+          stored,
           // Enabling images declares text-only members for the Vision Sidecar so the
           // operator never has to hand-edit provider config for a multimodal combo.
           ...(item.imageInput !== "disabled"
@@ -379,6 +389,15 @@ export default function Combos({
         notify(err, false);
         return { ok: false as const, error: err };
       }
+      const savedResponse = data as { id?: unknown; model?: unknown; combo?: unknown };
+      const saved = savedResponse.combo && typeof savedResponse.combo === "object"
+        ? parseComboList({ combos: [{ ...savedResponse.combo, id: savedResponse.id, model: savedResponse.model }] })[0]
+        : undefined;
+      if (!saved) {
+        const err = t("cws.saveFailed");
+        notify(err, false);
+        return { ok: false as const, error: err };
+      }
       resource.refresh();
       notify(
         renameFrom
@@ -386,7 +405,7 @@ export default function Combos({
           : isCreate ? t("cws.created", { model: item.model }) : t("cws.saved"),
         true,
       );
-      return { ok: true as const };
+      return { ok: true as const, item: saved };
     } catch {
       const err = t("cws.saveFailed");
       notify(err, false);
@@ -458,6 +477,7 @@ export default function Combos({
         </span>
         <ComboWorkspace
           apiBase={apiBase}
+          routingRevision={data?.routingRevision}
           combos={combos}
           providerQuotaStates={providerQuotaStates}
           providers={providers}
