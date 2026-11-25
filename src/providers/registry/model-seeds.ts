@@ -320,7 +320,9 @@ export const OPENAI_DAYBREAK_MAX_INPUT_TOKENS: Record<string, number> = {
 export const OPENAI_DAYBREAK_REASONING_EFFORTS: Record<string, string[]> = Object.fromEntries(
   OPENAI_DAYBREAK_MODELS.map(id => [id, [] as string[]]),
 );
-export const OPENROUTER_GPT56_MODELS = OPENAI_GPT56_MODELS.map(id => `openai/${id}`);
+// OpenAI documents bare `gpt-5.6` as an alias of GPT-5.6 Sol; OpenRouter's public catalog lists
+// only the tier slugs (openrouter.ai/api/v1/models, 2026-11-26), so the alias is not seeded there.
+export const OPENROUTER_GPT56_MODELS = OPENAI_GPT56_MODELS.filter(id => id !== "gpt-5.6").map(id => `openai/${id}`);
 export const XAI_MODELS = [
   "grok-4.7",
   "grok-4.6",

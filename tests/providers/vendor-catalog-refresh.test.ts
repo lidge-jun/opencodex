@@ -140,3 +140,14 @@ describe("DeepSeek first-party seed (api-docs.deepseek.com create-chat-completio
     expect(deepseek.models).toEqual(["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"]);
   });
 });
+
+describe("OpenRouter seed (openrouter.ai/api/v1/models, 2026-11-26)", () => {
+  test("seeds only OpenAI slugs OpenRouter's public catalog lists", () => {
+    const openrouter = getProviderRegistryEntry("openrouter")!;
+    // OpenAI documents bare gpt-5.6 as an alias of gpt-5.6-sol; OpenRouter lists only the tiers.
+    expect(openrouter.models).not.toContain("openai/gpt-5.6");
+    for (const id of ["openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/gpt-5.6-luna", "openai/gpt-6.2-sol", "openai/gpt-6.2-astra"]) {
+      expect(openrouter.models).toContain(id);
+    }
+  });
+});
