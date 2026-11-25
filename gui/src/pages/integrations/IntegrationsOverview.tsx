@@ -3,7 +3,7 @@ import { useDataSurface } from "../../data-surface";
 import { DataSurfaceSkeleton } from "../../components/data-surface";
 import { navigateHash } from "../../hash-routing";
 import { useT } from "../../i18n/shared";
-import { Notice, Switch } from "../../ui";
+import { Notice, Switch, type NoticeTone } from "../../ui";
 import ClientMark from "../../components/ClientMark";
 import { useHelpToggle } from "../../components/v2-connect/help-toggle";
 import { markFor } from "../../components/integration-marks";
@@ -153,7 +153,7 @@ function OverviewCard({
 }: {
   row: OverviewRow;
   pending: boolean;
-  result: { tone: "ok" | "err"; text: string } | null;
+  result: { tone: NoticeTone; text: string } | null;
   onOpen: () => void;
   onToggle: (() => void) | null;
   /** Present only for a conflicted file client; null everywhere else. */
@@ -234,8 +234,7 @@ function OverviewCard({
       {row.status?.reason === "candidate-conflict" && row.status.conflictPaths?.map(path => (
         <Notice key={path} tone="err">{t("integrations.status.candidateConflict", { path })}</Notice>
       ))}
-      {result?.tone === "err" && <Notice tone="err">{result.text}</Notice>}
-      {result?.tone === "ok" && <Notice tone="ok">{result.text}</Notice>}
+      {result && <Notice tone={result.tone}>{result.text}</Notice>}
       <div className="integration-card-actions">
         {row.toggle && onToggle && (
           <div className="integration-toggle-control">
@@ -324,7 +323,7 @@ export default function IntegrationsOverview({
   const [restoring, setRestoring] = useState<IntegrationJournalRow | null>(null);
   /* The row awaiting delete confirmation. */
   const [deleting, setDeleting] = useState<IntegrationJournalRow | null>(null);
-  const [cardResults, setCardResults] = useState<Partial<Record<OverviewRow["id"], { tone: "ok" | "err"; text: string }>>>({});
+  const [cardResults, setCardResults] = useState<Partial<Record<OverviewRow["id"], { tone: NoticeTone; text: string }>>>({});
   const [pendingToggle, setPendingToggle] = useState<OverviewRow | null>(null);
   const [plannedCard, setPlannedCard] = useState<{
     row: OverviewRow;
@@ -672,7 +671,7 @@ export default function IntegrationsOverview({
     grokResource.refresh();
   };
 
-  const setCardResult = (id: OverviewRow["id"], result: { tone: "ok" | "err"; text: string } | null) => {
+  const setCardResult = (id: OverviewRow["id"], result: { tone: NoticeTone; text: string } | null) => {
     setCardResults(current => {
       const next = { ...current };
       if (result) next[id] = result;
@@ -716,6 +715,8 @@ export default function IntegrationsOverview({
           setCardResult(row.id, { tone: "ok", text: t("integrations.native.msg.nonLoopbackSuperseded") });
         } else if (reapply && result.reason === "apply_incomplete") {
           setCardResult(row.id, { tone: "err", text: t("integrations.reapply.incomplete", { client: t(row.labelKey) }) });
+        } else if (reapply && (result.reason === "first_party_mode_unsaved" || result.reason === "gateway_state_unsaved")) {
+          setCardResult(row.id, { tone: "warn", text: t("integrations.reapply.stateUnsaved", { client: t(row.labelKey) }) });
         } else if (reapply) {
           setCardResult(row.id, { tone: "ok", text: t("integrations.reapply.done", { client: t(row.labelKey) }) });
         }

@@ -355,6 +355,38 @@ test("native toggle: enabling into gateway saves the gateway mode marker like th
   expect(resolveClaudeDesktopMode(saved)).toBe("gateway");
 });
 
+test("native toggle: gateway apply reports a warning when its profile state cannot be saved", async () => {
+  const path = join(root, "config.json");
+  const enabled = await dispatch("/api/native-integrations/claude-desktop", { method: "PUT", body: JSON.stringify({ enabled: true }) }, config(), {
+    writeDesktop3pConfig: () => {
+      rmSync(path);
+      return { written: true, path: join(library, "applied.json"), fingerprint: "gateway-fingerprint" };
+    },
+  });
+  expectStatus(enabled, 200);
+  expect(enabled.body).toMatchObject({ ok: true, changed: true, reason: "gateway_state_unsaved" });
+  expect(enabled.body.message).toContain("gateway mode/profile state was not saved");
+});
+
+test("native toggle: first-party apply reports a warning when its mode marker cannot be saved", async () => {
+  const gateway = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "gateway" }) });
+  expectStatus(gateway, 200);
+  const path = join(root, "config.json");
+  const saved = JSON.parse(readFileSync(path, "utf8")) as OcxConfig;
+  const chosen: OcxConfig = { ...saved, claudeCode: { ...saved.claudeCode, desktopMode: "first-party" } };
+  writeFileSync(path, JSON.stringify(chosen));
+  const enabled = await dispatch("/api/native-integrations/claude-desktop", { method: "PUT", body: JSON.stringify({ enabled: true }) }, chosen, {
+    removeDesktop3pStandardPivot: opts => {
+      const result = removeDesktop3pStandardPivot(opts);
+      rmSync(path);
+      return result;
+    },
+  });
+  expectStatus(enabled, 200);
+  expect(enabled.body).toMatchObject({ ok: true, changed: true, reason: "first_party_mode_unsaved" });
+  expect(enabled.body.message).toContain("first-party mode marker could not be saved");
+});
+
 test("ensure warns instead of touching a gateway profile that contradicts an explicit first-party marker", async () => {
   const logs: string[] = [];
   const deps = {

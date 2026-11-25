@@ -2575,6 +2575,7 @@ export const tr: Record<TKey, string> = {
   "integrations.action.reapply": "Yeniden uygulamak ve bu istemciyi güncellemek için tıklayın",
   "integrations.reapply.done": "{client} yeniden uygulandı.",
   "integrations.reapply.incomplete": "{client} yeniden uygulanamadı: değişiklik tamamlanmadı. Hâlâ güncelleme gerekiyor.",
+  "integrations.reapply.stateUnsaved": "{client} ayarları uygulandı ancak OpenCodex entegrasyon durumunu kaydedemedi. Görüntülenen durum güncel olmayabilir.",
   "integrations.action.manageKeys": "Anahtarları yönet",
   "integrations.action.restore": "Geri Yükle…",
   "integrations.action.undo": "Geri Al",

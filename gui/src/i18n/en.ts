@@ -2635,6 +2635,7 @@ export const en = {
   "integrations.action.reapply": "Click to re-apply and bring this client up to date",
   "integrations.reapply.done": "{client} was re-applied.",
   "integrations.reapply.incomplete": "{client} could not be re-applied: the change did not complete. It still needs an update.",
+  "integrations.reapply.stateUnsaved": "{client} settings were applied, but OpenCodex could not save the integration state. The displayed status may be out of date.",
   "integrations.action.manageKeys": "Manage keys",
   "integrations.action.restore": "Restore…",
   "integrations.action.undo": "Undo",

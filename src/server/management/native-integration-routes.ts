@@ -900,6 +900,7 @@ async function handleClaudeDesktopToggle(ctx: NativeDecisionContext): Promise<Re
           : null;
         return jsonResponse({
           ok: true, clientId: "claude-desktop", changed, state: "current", desiredEnabled,
+          ...(!modeSaved ? { reason: "first_party_mode_unsaved" } : {}),
           message: [
             changed
               ? "Claude Desktop integration enabled (first-party). Fully quit and reopen Claude Desktop."
@@ -952,6 +953,7 @@ async function handleClaudeDesktopToggle(ctx: NativeDecisionContext): Promise<Re
         if (!removed.ok) return postCommitRefusal(500, "claude-desktop", "write_failed", "Gateway applied, but first-party settings cleanup did not complete." + stateWarning, { desiredEnabled: latestDesiredEnabled });
         return jsonResponse({
           ok: true, clientId: "claude-desktop", changed: true, state: "current", desiredEnabled: latestDesiredEnabled,
+          ...(!committed.ok ? { reason: "gateway_state_unsaved" } : {}),
           message: [
             "Claude Desktop integration enabled.",
             stateWarning,

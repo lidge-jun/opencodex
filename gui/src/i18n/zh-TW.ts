@@ -3569,6 +3569,7 @@ export const zhTW: Record<TKey, string> = {
   "integrations.action.reapply": "點擊重新套用，讓這個用戶端更新到最新設定",
   "integrations.reapply.done": "{client} 已重新套用。",
   "integrations.reapply.incomplete": "{client} 未能重新套用：變更沒有完成，仍需要更新。",
+  "integrations.reapply.stateUnsaved": "已套用 {client} 的設定，但 OpenCodex 無法儲存整合狀態。顯示的狀態可能不是最新的。",
   "integrations.action.manageKeys": "管理金鑰",
   "integrations.action.restore": "還原…",
   "integrations.action.undo": "復原",

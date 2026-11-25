@@ -62,6 +62,7 @@ let codexDesiredEnabled = true;
 /** Claude Desktop reports an applied gateway whose file drifted ("Update needed"); the PUT below clears it. */
 let desktopStale = false;
 let desktopApplied = false;
+let desktopApplyWarning: "first_party_mode_unsaved" | "gateway_state_unsaved" | undefined;
 /** Codex's enable PUT saves intent but its sync does not complete (`apply_incomplete`). */
 let codexApplyIncomplete = false;
 let deleteResponse: () => Response;
@@ -140,6 +141,7 @@ beforeEach(() => {
   codexDesiredEnabled = true;
   desktopStale = false;
   desktopApplied = false;
+  desktopApplyWarning = undefined;
   codexApplyIncomplete = false;
   deleteResponse = () => json({ ok: true, clientId: "hermes", opId: "op-old", snapshotRemoved: true });
   previewResponse = body => {
@@ -182,9 +184,13 @@ beforeEach(() => {
         : json({ desiredEnabled: true, installed: true, observedKind: "standard", applied: desktopApplied, stale: desktopStale, activeProfile: null, appliedAt: null });
     }
     if (method === "PUT" && url.endsWith("/api/native-integrations/claude-desktop")) {
-      desktopStale = false;
+      if (!desktopApplyWarning) desktopStale = false;
       desktopApplied = true;
-      return json({ ok: true, clientId: "claude-desktop", changed: true, state: "current", message: "enabled", desiredEnabled: true });
+      return json({
+        ok: true, clientId: "claude-desktop", changed: true, state: "current", desiredEnabled: true,
+        message: desktopApplyWarning ? "The server reports an unsaved marker." : "enabled",
+        reason: desktopApplyWarning,
+      });
     }
     if (method === "PUT" && url.endsWith("/api/native-integrations/codex")) {
       const body = init?.body ? JSON.parse(String(init.body)) as { enabled?: unknown } : {};
@@ -1635,6 +1641,33 @@ test("the Update needed pill re-applies a drifted Claude Desktop in one click an
   // The pill the keyboard user pressed is gone; focus lands on the card title, not <body>.
   expect(testWindow.document.activeElement).toBe(card.querySelector(".integration-card-link") as never);
 });
+
+test.each(["first_party_mode_unsaved", "gateway_state_unsaved"] as const)(
+  "a Claude Desktop re-apply with %s warns and refreshes status",
+  async (reason) => {
+    desktopStale = true;
+    desktopApplied = true;
+    desktopApplyWarning = reason;
+    await mountOverview();
+    const card = () => container.querySelector(".integration-card[data-client='claudeDesktop']")!;
+    const pill = () => card().querySelector<HTMLButtonElement>("button.integration-badge-action");
+    expect(pill()?.textContent?.trim()).toBe("Update needed");
+
+    await act(async () => { pill()!.click(); });
+    await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 50)); });
+
+    const put = requests.findIndex(request => request.method === "PUT" && request.url.endsWith("/api/native-integrations/claude-desktop"));
+    expect(put).toBeGreaterThanOrEqual(0);
+    expect(requests[put].body).toEqual({ enabled: true });
+    expect(requests.slice(put + 1).some(request => request.url.includes("/api/claude-desktop/status"))).toBe(true);
+    expect(card().querySelector(".notice-warn")?.textContent).toContain(
+      "Claude Desktop settings were applied, but OpenCodex could not save the integration state. The displayed status may be out of date.",
+    );
+    expect(card().textContent).not.toContain("was re-applied.");
+    expect(card().textContent).not.toContain("The server reports an unsaved marker.");
+    expect(pill()).not.toBeNull();
+  },
+);
 
 test("a re-apply whose Codex sync did not complete reports failure, not success", async () => {
   // Routed but reporting an error is what the overview shows as "Update needed" for Codex.

@@ -2605,6 +2605,7 @@ export const pt: Record<TKey, string> = {
   "integrations.action.reapply": "Clique para reaplicar e atualizar este cliente",
   "integrations.reapply.done": "{client} foi reaplicado.",
   "integrations.reapply.incomplete": "Não foi possível reaplicar {client}: a alteração não foi concluída. Ainda é necessária uma atualização.",
+  "integrations.reapply.stateUnsaved": "As configurações de {client} foram aplicadas, mas o OpenCodex não conseguiu salvar o estado da integração. O status exibido pode estar desatualizado.",
   "integrations.action.manageKeys": "Gerenciar chaves",
   "integrations.action.restore": "Restaurar…",
   "integrations.action.undo": "Desfazer",

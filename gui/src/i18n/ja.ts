@@ -2456,6 +2456,7 @@ export const ja: Record<TKey, string> = {
   "integrations.action.reapply": "クリックして再適用し、このクライアントを最新にします",
   "integrations.reapply.done": "{client} を再適用しました。",
   "integrations.reapply.incomplete": "{client} を再適用できませんでした。変更が完了していません。引き続き更新が必要です。",
+  "integrations.reapply.stateUnsaved": "{client} の設定は適用されましたが、OpenCodex は連携の状態を保存できませんでした。表示されている状態が古い可能性があります。",
   "integrations.action.manageKeys": "キーを管理",
   "integrations.action.restore": "復元…",
   "integrations.action.undo": "元に戻す",
