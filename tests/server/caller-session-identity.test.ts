@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { callerSessionId, withCallerSessionIdentity } from "../../src/server/caller-session-identity";
 import { resolveDataPlaneAdmissionSecret, type DataPlaneAdmission } from "../../src/server/auth-cors";
-import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
+import { promotePromptCacheKeySession, sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import { clearComboRecallForTests, recallComboForLane, rememberComboForLane } from "../../src/server/responses/combo-session-recall";
 import { withGrokSessionIdentity } from "../../src/grok/session-identity";
@@ -161,6 +161,93 @@ describe("Non-Codex callers reach the ChatGPT Codex backend with session_id", ()
       expect(wire.headers.get("originator")).toBe("example-agent");
       expect(logCtx.conversationId).toBeTruthy();
     } finally { lease?.release(); }
+  });
+
+  // #9137: Oh My Pi sends only a body prompt_cache_key, no session header.
+  async function sendCacheKeyTurn(headers: Record<string, string>, inboundWire: "responses" | "chat" = "responses") {
+    const cfg = { openaiProviderTierVersion: 2, providers: {
+      openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", baseUrl: "https://chatgpt.com/backend-api/codex", models: ["gpt-5.6-luna"] },
+    } } as OcxConfig;
+    let wire: Headers | undefined;
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (request.url !== "https://chatgpt.com/backend-api/codex/responses") {
+        throw new Error("Unexpected outbound request in caller-session fixture");
+      }
+      wire = request.headers;
+      return Response.json({ id: "resp_cache_key", object: "response", status: "completed", output: [],
+        usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 } });
+    }, { preconnect() { /* No fixture opens an upstream socket. */ } });
+    const lease = tryAdmitTurn();
+    expect(lease).not.toBeNull();
+    try {
+      const req = new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}`, "user-agent": "omp/19.1.1", ...headers },
+        body: JSON.stringify({ model: "openai/gpt-5.6-luna", stream: false, store: false, prompt_cache_key: SESSION, input: "ping" }),
+      });
+      const logCtx = { model: "", provider: "" } as Parameters<typeof handleResponses>[2];
+      const response = await handleResponses(req, cfg, logCtx, { turnAdmissionLease: lease!, admission: LOOPBACK, inboundWire });
+      const text = await response.text();
+      expect(response.status, text).toBe(200);
+      expect(wire).toBeDefined();
+      return { wire: wire!, logCtx };
+    } finally { lease?.release(); }
+  }
+
+  test("a body prompt_cache_key stands in for the missing session header", async () => {
+    const { wire, logCtx } = await sendCacheKeyTurn({});
+    expect(wire.get("session_id")).toBe(SESSION);
+    expect(logCtx.conversationId).toBeTruthy();
+  });
+
+  for (const explicit of ["session_id", "session-id", "thread-id"]) test(`an explicit ${explicit} header wins over prompt_cache_key`, async () => {
+    const { wire } = await sendCacheKeyTurn({ [explicit]: "explicit-winner" });
+    expect(wire.get("session_id")).toBe("explicit-winner");
+  });
+
+  test("a Chat Completions replay keeps its own identity rules", async () => {
+    const { wire } = await sendCacheKeyTurn({}, "chat");
+    expect(wire.get("session_id")).toBeNull();
+  });
+});
+
+describe("promotePromptCacheKeySession", () => {
+  const body = (key: unknown) => ({ model: "m", input: "ping", prompt_cache_key: key });
+
+  test("promotes a safe key on loopback and returns it", () => {
+    const headers = new Headers();
+    expect(promotePromptCacheKeySession(headers, body(` ${SESSION} `), LOOPBACK)).toBe(SESSION);
+    expect(headers.get("session_id")).toBe(SESSION);
+  });
+
+  test("any caller session header, x-session-id included, wins", () => {
+    for (const name of ["session_id", "session-id", "thread-id", "x-session-id"]) {
+      const headers = new Headers({ [name]: "caller" });
+      expect(promotePromptCacheKeySession(headers, body(SESSION), LOOPBACK)).toBeUndefined();
+      expect(headers.get("session_id")).toBe(name === "session_id" ? "caller" : null);
+    }
+  });
+
+  test("ignores missing, empty, unsafe, overlong and non-string keys and non-object bodies", () => {
+    for (const candidate of [body(undefined), body(""), body("   "), body("a b"), body("x".repeat(129)), body("-leading"),
+      body(42), body(null), body({ id: SESSION }), body(["x"]), null, "text", [body(SESSION)]]) {
+      const headers = new Headers();
+      expect(promotePromptCacheKeySession(headers, candidate, LOOPBACK)).toBeUndefined();
+      expect(headers.has("session_id")).toBe(false);
+    }
+    const headers = new Headers();
+    expect(promotePromptCacheKeySession(headers, body("x".repeat(128)), LOOPBACK)).toBe("x".repeat(128));
+  });
+
+  test("authenticated callers are scoped to their principal, like x-session-id", () => {
+    const admission = admitted("cache-key-fixture-a");
+    const headers = new Headers();
+    const scoped = promotePromptCacheKeySession(headers, body(SESSION), admission);
+    expect(scoped).toMatch(/^[a-f0-9]{64}$/);
+    expect(scoped).toBe(promoted(admission).headers.get("session_id")!);
+    expect(promotePromptCacheKeySession(new Headers(), body(SESSION), admitted("cache-key-fixture-b"))).not.toBe(scoped);
+    expect(promotePromptCacheKeySession(new Headers(), body(SESSION), { kind: "environment", source: "bearer" })).toBeUndefined();
+    expect(promotePromptCacheKeySession(new Headers(), body(SESSION), undefined)).toBeUndefined();
   });
 });
 

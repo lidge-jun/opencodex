@@ -15,16 +15,19 @@ export function callerSessionId(headers: Headers): string | undefined {
 }
 
 /** Authenticated callers share continuity only within their trusted credential principal. */
+export function principalScopedSessionId(conversation: string, admission: DataPlaneAdmission): string | undefined {
+  if (admission.kind === "loopback") return conversation;
+  const principal = contextPrincipalIdOf(admission);
+  if (!principal) return undefined;
+  return new Bun.CryptoHasher("sha256")
+    .update(JSON.stringify(["opencodex-caller-session-v1", principal, conversation])).digest("hex");
+}
+
 export function withCallerSessionIdentity(req: Request, admission: DataPlaneAdmission): Request {
   const conversation = callerSessionId(req.headers);
   if (!conversation) return req;
-  let sessionId = conversation;
-  if (admission.kind !== "loopback") {
-    const principal = contextPrincipalIdOf(admission);
-    if (!principal) return req;
-    sessionId = new Bun.CryptoHasher("sha256")
-      .update(JSON.stringify(["opencodex-caller-session-v1", principal, conversation])).digest("hex");
-  }
+  const sessionId = principalScopedSessionId(conversation, admission);
+  if (!sessionId) return req;
   const headers = new Headers(req.headers);
   headers.set("session_id", sessionId);
   // Preserve the unread body stream and propagate the original request's abort signal.
