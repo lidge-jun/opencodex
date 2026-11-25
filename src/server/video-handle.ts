@@ -178,7 +178,9 @@ export function openVideoHandle(handle: string, principal: string): VideoHandleC
   const encoded = handle.slice(VIDEO_HANDLE_PREFIX.length);
   if (!/^[A-Za-z0-9_-]+$/.test(encoded)) return undefined;
   const sealed = Buffer.from(encoded, "base64url");
-  if (sealed.length <= NONCE_BYTES + TAG_BYTES) return undefined;
+  // Only the canonical encoding opens: trailing unused bits would otherwise let several strings
+  // name one handle.
+  if (sealed.length <= NONCE_BYTES + TAG_BYTES || sealed.toString("base64url") !== encoded) return undefined;
   let plaintext: string;
   try {
     const decipher = createDecipheriv("aes-256-gcm", encryptionKey(loadOrCreateKey()), sealed.subarray(0, NONCE_BYTES));

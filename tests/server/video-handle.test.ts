@@ -45,10 +45,22 @@ test("another principal, any edited byte, a foreign key and malformed input do n
   expect(openVideoHandle(handle, "key:bob")).toBeUndefined();
   expect(openVideoHandle(handle, "loopback")).toBeUndefined();
   const body = handle.slice("video_ocx_".length);
-  for (const at of [0, Math.floor(body.length / 2), body.length - 1]) {
-    const flipped = body.slice(0, at) + (body[at] === "A" ? "B" : "A") + body.slice(at + 1);
-    expect(openVideoHandle("video_ocx_" + flipped, "key:alice")).toBeUndefined();
+  const bytes = Buffer.from(body, "base64url");
+  // Nonce, ciphertext and tag: flipping any decoded byte fails authentication.
+  for (const at of [0, 11, 12, Math.floor(bytes.length / 2), bytes.length - 16, bytes.length - 1]) {
+    const edited = Buffer.from(bytes);
+    edited[at] = edited[at]! ^ 0x01;
+    expect(openVideoHandle("video_ocx_" + edited.toString("base64url"), "key:alice")).toBeUndefined();
   }
+  // A non-canonical spelling of the same bytes (set unused trailing bits) does not open either.
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const last = body[body.length - 1]!;
+  const sibling = alphabet[alphabet.indexOf(last) ^ 1]!;
+  const respelled = "video_ocx_" + body.slice(0, -1) + sibling;
+  // These claims seal to 95 bytes, so the last character carries two unused bits.
+  expect(bytes.length % 3).toBe(2);
+  expect(Buffer.from(respelled.slice("video_ocx_".length), "base64url").equals(bytes)).toBe(true);
+  expect(openVideoHandle(respelled, "key:alice")).toBeUndefined();
   for (const bad of ["", "video_68d7", "video_ocx_", "video_ocx_abc", "video_ocx_" + body + ".x", "video_ocx_" + "a".repeat(9000)]) {
     expect(openVideoHandle(bad, "key:alice")).toBeUndefined();
   }
