@@ -102,12 +102,39 @@ describe("capped command answers", () => {
     const programs: string[] = [];
     const deps = windowsCheckedStopLiveDeps({ run: async program => {
       programs.push(program);
-      if (program === "powershell") return result(0, "Queued\r\n");
+      if (program === "powershell") return result(0, "2\r\n");
       const word = status === "PowerShell" ? "Wird ausgeführt" : status;
       return result(0, `"\\opencodex-proxy","N/A","${word}"\r\n`);
     } });
     expect(await deps.taskState(1_000)).toBe("running");
     expect(programs).toEqual(status === "PowerShell" ? ["schtasks", "powershell"] : ["schtasks"]);
+  });
+
+  test.each([
+    [result(0, "1"), "not-running"], [result(0, "3"), "not-running"],
+    [result(0, "4"), "running"], [result(0, "0"), "unknown"],
+    [result(1, "3"), "unknown"], [result(0, "3", "", true), "unknown"],
+  ] as const)("reads the numeric scheduler state for an unrecognized CSV label", async (probe, expected) => {
+    const deps = windowsCheckedStopLiveDeps({ run: async program => program === "schtasks"
+      ? result(0, '"\\opencodex-proxy","N/A","Prêt"') : probe });
+    expect(await deps.taskState(1_000)).toBe(expected);
+  });
+
+  test("the numeric state read gets only the time the CSV query left, and none once it is spent", async () => {
+    let now = 1_000_000;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      for (const [csvMs, expectedTimeout, expected] of [[900, 100, "not-running"], [1_000, null, "unknown"]] as const) {
+        const calls: Array<[string, number]> = [];
+        const deps = windowsCheckedStopLiveDeps({ run: async (program, _args, timeout) => {
+          calls.push([program, timeout]);
+          if (program === "schtasks") { now += csvMs; return result(0, '"\\opencodex-proxy","N/A","Prêt"'); }
+          return result(0, "3");
+        } });
+        expect(await deps.taskState(1_000)).toBe(expected);
+        expect(calls).toEqual(expectedTimeout === null ? [["schtasks", 1_000]] : [["schtasks", 1_000], ["powershell", expectedTimeout]]);
+      }
+    } finally { clock.mockRestore(); }
   });
 
   test("the #3064 launcher survives the task stop proof round trip", async () => {
