@@ -112,6 +112,8 @@ export interface NativeToggleEnvelope {
   reason?: string;
   interceptReason?: string | null;
   artifacts?: CodexNativeRestoreResult["artifacts"];
+  /** Where the read-only Connections view explains this client's state (Codex only). */
+  connections?: "/api/connections";
 }
 
 export interface NativeRefusalEnvelope {
@@ -454,7 +456,7 @@ async function handleCodexToggle(ctx: NativeDecisionContext): Promise<Response> 
       const applied = await syncModelsToCodex(port);
       if (applied.status === "skipped") {
         return jsonResponse({
-          ok: true, clientId: "codex", changed: durable && persisted.status === "committed",
+          ok: true, clientId: "codex", connections: "/api/connections", changed: durable && persisted.status === "committed",
           state: rememberCodexToggle(true, "absent"),
           desiredEnabled: enabled,
           message: "Codex integration is OFF; enable did not change Codex.",
@@ -462,7 +464,7 @@ async function handleCodexToggle(ctx: NativeDecisionContext): Promise<Response> 
         } satisfies NativeToggleEnvelope);
       }
       return jsonResponse({
-        ok: true, clientId: "codex", changed: durable && persisted.status === "committed",
+        ok: true, clientId: "codex", connections: "/api/connections", changed: durable && persisted.status === "committed",
         state: rememberCodexToggle(true, applied.ok ? "current" : "absent"),
         desiredEnabled: enabled,
         message: applied.ok
@@ -480,7 +482,7 @@ async function handleCodexToggle(ctx: NativeDecisionContext): Promise<Response> 
       if (classifyNativeRoutedResidue().kind === "clean") {
         rememberCodexToggle(false, "absent");
         return jsonResponse({
-          ok: true, clientId: "codex", changed: false, state: "absent", desiredEnabled: false,
+          ok: true, clientId: "codex", connections: "/api/connections", changed: false, state: "absent", desiredEnabled: false,
           message: "Codex integration is already OFF and native; no Codex files changed.",
         } satisfies NativeToggleEnvelope);
       }
@@ -489,7 +491,7 @@ async function handleCodexToggle(ctx: NativeDecisionContext): Promise<Response> 
     const { OCX_NATIVE_REPLAY_RECOVERY_NOTE } = await import("../../responses/compaction");
     const restored = await restoreNativeCodexAsync({ revalidateDesiredState: true });
     return jsonResponse({
-      ok: true, clientId: "codex", changed: durable && persisted.status === "committed",
+      ok: true, clientId: "codex", connections: "/api/connections", changed: durable && persisted.status === "committed",
       state: rememberCodexToggle(false, restored.success ? "absent" : "unsafe"),
       desiredEnabled: enabled,
       message: restored.success
