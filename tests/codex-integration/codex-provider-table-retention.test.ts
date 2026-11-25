@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { deriveCodexInjectionPlan } from "../../src/codex/inject/plan";
 import { buildProviderTableBlockForTarget } from "../../src/codex/inject/config-toml";
 import { standaloneCodexRoutingTarget } from "../../src/codex/inject/routing-target";
-import { displayCodexConfigKey } from "../../src/codex/restore-preview";
+import { codexConfigKeyChanges, displayCodexConfigKey } from "../../src/codex/restore-preview";
 import { OCX_ROUTING_MARKER_LINE, OCX_SECTION_MARKER } from "../../src/codex/injected-marker";
 import { repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -288,8 +288,20 @@ describe("Cyber access-program capability in the legacy table (openai/codex 708e
     }
   });
 
-  test("the restore preview names the capability", () => {
-    expect(displayCodexConfigKey("model_providers.opencodex.capabilities")).toBe("model_providers.opencodex.capabilities");
+  test("the restore preview lists the capability line the writer emits, in both directions", () => {
+    const fresh = buildProviderTableBlockForTarget(target);
+    const userKeys = user + 'secret_named_key = "x"\n';
+    const withTable = userKeys + fresh;
+    const removal = codexConfigKeyChanges(withTable, userKeys);
+    expect(removal).toContainEqual({ file: "config.toml", key: "model_providers.opencodex.capabilities", change: "remove" });
+    const addition = codexConfigKeyChanges(userKeys, withTable);
+    expect(addition).toContainEqual({ file: "config.toml", key: "model_providers.opencodex.capabilities", change: "add" });
+    // The old shape differs only by that key.
+    expect(codexConfigKeyChanges(userKeys + oldShape(fresh), withTable))
+      .toEqual([{ file: "config.toml", key: "model_providers.opencodex.capabilities", change: "add" }]);
+    // Unrelated user keys stay masked and unchanged.
+    for (const change of [...removal, ...addition]) expect(change.key).not.toContain("mine");
+    expect(displayCodexConfigKey("model_providers.mine.capabilities")).toBe("model_providers.….capabilities");
   });
 });
 
