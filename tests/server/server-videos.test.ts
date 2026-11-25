@@ -367,6 +367,31 @@ describe("turn lease and listener timeout", () => {
     }
   });
 
+  test("a trickling multipart create is cut off at the same deadline", async () => {
+    setVideoCreateBodyTimeoutForTests(80);
+    let cancelled = false;
+    let tick: ReturnType<typeof setInterval> | undefined;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('--b\r\ncontent-disposition: form-data; name="prompt"\r\n\r\n'));
+        tick = setInterval(() => { try { controller.enqueue(encoder.encode("p")); } catch { clearInterval(tick); } }, 10);
+      },
+      cancel() { cancelled = true; clearInterval(tick); },
+    });
+    try {
+      const url = new URL("http://localhost/v1/videos");
+      const req = new Request(url, { method: "POST", headers: { "content-type": "multipart/form-data; boundary=b", authorization: "Bearer " + ALICE_SECRET }, body, duplex: "half" } as RequestInit);
+      const response = await handleVideos(req, url, config(), { kind: "create" }, logContext(), ALICE);
+      expect(response.status).toBe(408);
+      expect(cancelled).toBe(true);
+      expect(sent).toEqual([]);
+    } finally {
+      clearInterval(tick);
+      setVideoCreateBodyTimeoutForTests(undefined);
+    }
+  });
+
   test("the listener timeout is lifted only after the create body was read", async () => {
     const events: string[] = [];
     answer = () => { events.push("upstream"); return Response.json({ id: "video_up_9", status: "queued" }); };

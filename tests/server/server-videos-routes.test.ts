@@ -13,6 +13,7 @@ import { VIDEO_HANDLE_KEY_FILE } from "../../src/server/video-handle";
 import { setVideoCreateBodyTimeoutForTests } from "../../src/server/videos";
 import { getActiveTurnCount } from "../../src/server/lifecycle";
 import { inboundBodyBudget } from "../../src/server/inbound-body-budget";
+import { MAX_CONFIGURABLE_INBOUND_BODY_BYTES } from "../../src/server/request-decompress";
 import type { OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
@@ -111,8 +112,10 @@ test("a trickling create upload through the real server is refused at the deadli
     adapter: "openai-chat", baseUrl: `http://127.0.0.1:${upstream!.port}/v1`, apiKey: KEY, authMode: "key",
     allowPrivateNetwork: true, noProxy: "127.0.0.1", videoApi: "openai",
   } as OcxProviderConfig;
+  // A raised body limit puts the create under the shared inbound body budget, so a reservation is taken.
+  config.maxInboundBodyBytes = MAX_CONFIGURABLE_INBOUND_BODY_BYTES;
   saveConfig(config);
-  setVideoCreateBodyTimeoutForTests(150);
+  setVideoCreateBodyTimeoutForTests(1500);
   const server = startServer(0);
   let tick: ReturnType<typeof setInterval> | undefined;
   try {
@@ -125,14 +128,23 @@ test("a trickling create upload through the real server is refused at the deadli
       },
       cancel() { clearInterval(tick); },
     });
-    const response = await fetch(new URL("/v1/videos", server.url), {
+    const pending = fetch(new URL("/v1/videos", server.url), {
       method: "POST", headers: { "content-type": "application/json" }, body, duplex: "half",
     } as RequestInit);
+    // While the upload trickles, the create holds one turn slot and one body reservation.
+    let held = false;
+    for (let i = 0; i < 100 && !held; i++) {
+      held = getActiveTurnCount() === baseline + 1 && inboundBodyBudget.snapshot().activeLeases === 1;
+      if (!held) await Bun.sleep(10);
+    }
+    expect(held).toBe(true);
+    expect(inboundBodyBudget.snapshot().reservedBytes).toBeGreaterThan(0);
+    const response = await pending;
     expect(response.status).toBe(408);
     await response.text();
     clearInterval(tick);
     // Settlement is asynchronous after the response; wait for the slots to come back, bounded.
-    for (let i = 0; i < 50 && getActiveTurnCount() !== baseline; i++) await Bun.sleep(10);
+    for (let i = 0; i < 100 && (getActiveTurnCount() !== baseline || inboundBodyBudget.snapshot().activeLeases !== 0); i++) await Bun.sleep(10);
     expect(getActiveTurnCount()).toBe(baseline);
     expect(inboundBodyBudget.snapshot()).toMatchObject({ activeLeases: 0, reservedBytes: 0 });
     expect(seen).toEqual([]);
