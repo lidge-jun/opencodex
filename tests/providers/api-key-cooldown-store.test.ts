@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { configPathOwnership } from "../../src/lib/config-ownership";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -428,3 +430,200 @@ test("a longer ordinary hold keeps the shorter spent-quota evidence, on restore 
   expect(getKeyCooldownUntil("p", "a")).toBe(now + 600_000);
   expect(isKeyQuotaSpent("p", "a")).toBe(true);
 });
+
+test("when a newer server for another home stops, the surviving server's home gets its cooldowns back", async () => {
+  const cfg = config({ a: "sk-alpha-0001" });
+  const until = Date.now() + 60_000;
+  writeRows([row("a", "sk-alpha-0001", until)]);
+  const first = acquireServerBackgroundLifecycle(() => {}, cfg);
+  const otherHome = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-other-"));
+  try {
+    expect(getKeyCooldownUntil("p", "a")).toBe(until);
+    process.env.OPENCODEX_HOME = otherHome;
+    const second = acquireServerBackgroundLifecycle(() => {}, config({ a: "sk-alpha-0001" }));
+    expect(isKeyInCooldown("p", "a")).toBe(false); // the other home's server starts with that home's holds
+    await second.release();
+    process.env.OPENCODEX_HOME = home;
+    expect(getKeyCooldownUntil("p", "a")).toBe(until); // the surviving server's holds and file are back
+    setKeyCooldown("p", "a", until + 60_000, false, "sk-alpha-0001");
+    await wait(400);
+    expect(stored().rows.map(r => r.cooldownUntil)).toEqual([until + 60_000]);
+    expect(existsSync(file(otherHome))).toBe(false);
+  } finally {
+    process.env.OPENCODEX_HOME = home;
+    await first.release();
+    removeTreeWithRetry(otherHome);
+  }
+});
+
+test("a home whose lock is busy when another home takes over keeps its pending holds and writes them later", async () => {
+  const cfg = config({ a: "sk-alpha-0001" });
+  saveConfig(cfg);
+  const first = acquireServerBackgroundLifecycle(() => {}, cfg);
+  const otherHome = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-busy-"));
+  const blocker = new Database(join(home, "config-mutation.sqlite"));
+  try {
+    const until = Date.now() + 60_000;
+    setKeyCooldown("p", "a", until, false, "sk-alpha-0001");
+    blocker.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    process.env.OPENCODEX_HOME = otherHome;
+    const second = acquireServerBackgroundLifecycle(() => {}, config({ a: "sk-alpha-0001" }));
+    blocker.exec("ROLLBACK");
+    await waitUntil(() => existsSync(file()) && stored().rows.some(r => r.cooldownUntil === until), 9_000);
+    await second.release();
+    expect(getKeyCooldownUntil("p", "a")).toBe(until);
+    // Written while another home is current: still registered under this home's ownership.
+    expect(configPathOwnership(home, join(home, "config.json"))).toBe("listed");
+    expect(configPathOwnership(home, file())).toBe("listed");
+  } finally {
+    blocker.close();
+    process.env.OPENCODEX_HOME = home;
+    await first.release();
+    removeTreeWithRetry(otherHome);
+  }
+}, 15_000);
+
+async function waitUntil(condition: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("condition not met in time");
+    await wait(100);
+  }
+}
+
+test("a home rebound while its write is still blocked gets its pending hold back at once", async () => {
+  const cfg = config({ a: "sk-alpha-0001" });
+  saveConfig(cfg);
+  const first = acquireServerBackgroundLifecycle(() => {}, cfg);
+  const otherHome = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-rebind-"));
+  const blocker = new Database(join(home, "config-mutation.sqlite"));
+  try {
+    const until = Date.now() + 60_000;
+    setKeyCooldown("p", "a", until, false, "sk-alpha-0001");
+    blocker.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    process.env.OPENCODEX_HOME = otherHome;
+    const second = acquireServerBackgroundLifecycle(() => {}, config({ a: "sk-alpha-0001" }));
+    expect(isKeyInCooldown("p", "a")).toBe(false);
+    await second.release(); // the lock is still held: the hold is only pending
+    expect(getKeyCooldownUntil("p", "a")).toBe(until);
+    blocker.exec("ROLLBACK");
+    await waitUntil(() => existsSync(file()) && stored().rows.some(r => r.cooldownUntil === until), 9_000);
+    expect(getKeyCooldownUntil("p", "a")).toBe(until);
+  } finally {
+    blocker.close();
+    process.env.OPENCODEX_HOME = home;
+    await first.release();
+    removeTreeWithRetry(otherHome);
+  }
+}, 15_000);
+
+test("a detached home's late write never clears the current home's holds", async () => {
+  const cfg = config({ a: "sk-alpha-0001" });
+  saveConfig(cfg);
+  const first = acquireServerBackgroundLifecycle(() => {}, cfg);
+  const otherHome = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-detached-"));
+  const blocker = new Database(join(home, "config-mutation.sqlite"));
+  try {
+    setKeyCooldown("p", "a", Date.now() + 60_000, false, "sk-alpha-0001");
+    blocker.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    process.env.OPENCODEX_HOME = otherHome;
+    const second = acquireServerBackgroundLifecycle(() => {}, config({ a: "sk-alpha-0001" }));
+    const otherUntil = Date.now() + 120_000;
+    setKeyCooldown("p", "a", otherUntil, false, "sk-alpha-0001"); // the current (other) home's hold
+    // A peer process cleared provider p in the first home meanwhile.
+    writeFileSync(file(home), JSON.stringify({ version: 1, rows: [], epochs: { p: 5 }, allEpoch: 0 }));
+    blocker.exec("ROLLBACK");
+    await waitUntil(() => JSON.parse(readFileSync(file(home), "utf8")).epochs?.p === 5 && stored().rows.length === 0, 9_000);
+    await wait(4_500); // past the detached store's retry
+    expect(getKeyCooldownUntil("p", "a")).toBe(otherUntil);
+    await second.release();
+  } finally {
+    blocker.close();
+    process.env.OPENCODEX_HOME = home;
+    await first.release();
+    removeTreeWithRetry(otherHome);
+  }
+}, 20_000);
+
+for (const scope of ["provider", "global"] as const) {
+  test(`a ${scope} clear made while the lock was busy still applies when the home is rebound`, async () => {
+    const cfg = config({ a: "sk-alpha-0001" });
+    saveConfig(cfg);
+    const until = Date.now() + 60_000;
+    writeRows([row("a", "sk-alpha-0001", until)]);
+    const first = acquireServerBackgroundLifecycle(() => {}, cfg);
+    const otherHome = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-clear-"));
+    const blocker = new Database(join(home, "config-mutation.sqlite"));
+    try {
+      expect(getKeyCooldownUntil("p", "a")).toBe(until);
+      blocker.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+      if (scope === "provider") clearKeyCooldowns("p"); else clearKeyCooldowns();
+      process.env.OPENCODEX_HOME = otherHome;
+      const second = acquireServerBackgroundLifecycle(() => {}, config({ a: "sk-alpha-0001" }));
+      await second.release(); // rebind while the clear is still unwritten
+      expect(isKeyInCooldown("p", "a")).toBe(false);
+      blocker.exec("ROLLBACK");
+      await waitUntil(() => stored().rows.length === 0, 9_000);
+      expect(isKeyInCooldown("p", "a")).toBe(false);
+    } finally {
+      blocker.close();
+      process.env.OPENCODEX_HOME = home;
+      await first.release();
+      removeTreeWithRetry(otherHome);
+    }
+  }, 15_000);
+}
+
+test("a pending hold is restored on rebind even when the file cannot be read", async () => {
+  const cfg = config({ a: "sk-alpha-0001" });
+  saveConfig(cfg);
+  const first = acquireServerBackgroundLifecycle(() => {}, cfg);
+  const otherHome = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-unreadable-"));
+  const blocker = new Database(join(home, "config-mutation.sqlite"));
+  try {
+    const until = Date.now() + 60_000;
+    setKeyCooldown("p", "a", until, false, "sk-alpha-0001");
+    blocker.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    process.env.OPENCODEX_HOME = otherHome;
+    const second = acquireServerBackgroundLifecycle(() => {}, config({ a: "sk-alpha-0001" }));
+    mkdirSync(file(home)); // the cooldown file path is now unreadable
+    await second.release();
+    expect(getKeyCooldownUntil("p", "a")).toBe(until);
+  } finally {
+    blocker.exec("ROLLBACK");
+    blocker.close();
+    try { rmdirSync(file(home)); } catch { /* removed already */ }
+    process.env.OPENCODEX_HOME = home;
+    await first.release();
+    removeTreeWithRetry(otherHome);
+  }
+}, 15_000);
+
+for (const scope of ["provider", "global"] as const) {
+  test(`a pending ${scope} clear hides a peer's row at the same counter on rebind`, async () => {
+    const cfg = config({ a: "sk-alpha-0001" });
+    saveConfig(cfg);
+    const first = acquireServerBackgroundLifecycle(() => {}, cfg);
+    const otherHome = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-collide-"));
+    const blocker = new Database(join(home, "config-mutation.sqlite"));
+    try {
+      blocker.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+      // A peer cleared and then recorded a hold at counter 1, which this process has not read.
+      const peerUntil = Date.now() + 600_000;
+      writeFileSync(file(), JSON.stringify(scope === "provider"
+        ? { version: 1, rows: [{ ...row("a", "sk-alpha-0001", peerUntil), epoch: 1 }], epochs: { p: 1 }, allEpoch: 0 }
+        : { version: 1, rows: [{ ...row("a", "sk-alpha-0001", peerUntil), allEpoch: 1 }], epochs: {}, allEpoch: 1 }));
+      if (scope === "provider") clearKeyCooldowns("p"); else clearKeyCooldowns(); // also reaches counter 1 locally
+      process.env.OPENCODEX_HOME = otherHome;
+      const second = acquireServerBackgroundLifecycle(() => {}, config({ a: "sk-alpha-0001" }));
+      await second.release();
+      expect(isKeyInCooldown("p", "a")).toBe(false);
+    } finally {
+      blocker.exec("ROLLBACK");
+      blocker.close();
+      process.env.OPENCODEX_HOME = home;
+      await first.release();
+      removeTreeWithRetry(otherHome);
+    }
+  }, 15_000);
+}

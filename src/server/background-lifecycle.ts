@@ -35,6 +35,7 @@ import {
 } from "./memory-watchdog";
 import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
 import { installApiKeyCooldownPersistence, uninstallApiKeyCooldownPersistence } from "../providers/api-key-cooldown-store";
+import { getConfigDir } from "../config/paths";
 import { isTelemetryEnvOptOut } from "../telemetry/consent";
 import {
   bindCodexAccountEgressConfig,
@@ -61,6 +62,8 @@ type LeaseOwner = {
   lowQuota: LowQuotaRegistration;
   /** This server's routing binding (config, its config home and load state) while it is the newest owner. */
   egressBinding: CodexAccountEgressBinding;
+  /** This server's config and config dir, whose API-key cooldown file is bound while it is the newest owner. */
+  cooldownHome: { config: OcxConfig; dir: string };
 };
 
 export type ServerBackgroundLifecycleLease = {
@@ -267,6 +270,7 @@ function releaseOwnerSynchronously(owner: LeaseOwner): "inactive" | "shared" | "
   if (nextOwner) {
     setLivePolicyOwner(nextOwner.applyPolicy);
     restoreCodexAccountEgressBinding(nextOwner.egressBinding);
+    installApiKeyCooldownPersistence(nextOwner.cooldownHome.config, Date.now(), nextOwner.cooldownHome.dir);
     return "shared";
   }
   stopProcessLoops();
@@ -295,9 +299,11 @@ export function acquireServerBackgroundLifecycle(
   // account routes while it is the newest owner; a release restores the surviving owner's and the
   // final release (stopProcessLoops) detaches them.
   const egressBinding = bindCodexAccountEgressConfig(config);
-  // Confirmed API-key cooldowns survive a restart only for a running server: the first lease
-  // binds the config dir's file, and the final release (stopProcessLoops) detaches it.
-  installApiKeyCooldownPersistence(config);
+  // Confirmed API-key cooldowns survive a restart only for a running server: the newest lease binds
+  // its config dir's file, a release rebinds the surviving owner's, and the final release
+  // (stopProcessLoops) detaches it.
+  const cooldownHome = { config, dir: getConfigDir() };
+  installApiKeyCooldownPersistence(config, Date.now(), cooldownHome.dir);
 
   const owner: LeaseOwner = {
     token: Symbol("server-background-lifecycle"),
@@ -306,6 +312,7 @@ export function acquireServerBackgroundLifecycle(
     resources: acquireServerResourceOwner(),
     lowQuota: registerCodexLowQuotaProtection(config, { desktopSink: () => resolveLowQuotaDesktopSink() }),
     egressBinding,
+    cooldownHome,
   };
   try {
     if (!processLoops) {
@@ -320,7 +327,8 @@ export function acquireServerBackgroundLifecycle(
     const survivor = owners.at(-1);
     if (survivor) restoreCodexAccountEgressBinding(survivor.egressBinding);
     else unbindCodexAccountEgressConfig(config);
-    if (owners.length === 0) uninstallApiKeyCooldownPersistence({ dropLocalHolds: true });
+    if (survivor) installApiKeyCooldownPersistence(survivor.cooldownHome.config, Date.now(), survivor.cooldownHome.dir);
+    else uninstallApiKeyCooldownPersistence({ dropLocalHolds: true });
     throw error;
   }
 
