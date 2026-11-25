@@ -35,6 +35,7 @@ import {
 } from "./memory-watchdog";
 import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
 import { isTelemetryEnvOptOut } from "../telemetry/consent";
+import { bindCodexAccountEgressConfig, unbindCodexAccountEgressConfig } from "../codex/account-egress-runtime";
 // The state module alone: the scheduler and its aggregation stay behind the dynamic import below.
 import { TELEMETRY_ENV_OPT_OUT_REFRESH_MS, endTelemetryEnvOptOut, recordTelemetryEnvOptOut } from "../telemetry/state";
 import { telemetryProfilePath } from "../telemetry/profile/paths";
@@ -218,6 +219,7 @@ function stopProcessLoops(): void {
   stopCatalogAutoRefresh();
   setCatalogAutoRefreshClientFanout(null);
   setLivePolicyOwner(null);
+  unbindCodexAccountEgressConfig();
 }
 
 async function stopStoragePolicyWorker(): Promise<void> {
@@ -279,6 +281,9 @@ export function acquireServerBackgroundLifecycle(
   // The quota-pool identity (homeId and the accountRef key) is minted here, per server and off
   // the request path, so GET /api/quota-pool only ever reads it.
   try { ensureQuotaPoolIdentity(); } catch { /* the read reports quota_pool_identity_unavailable */ }
+  // Pool accounts' background calls (refresh, usage, warmup, reset credits) read this server's
+  // account routes while a lease is held; the final release (stopProcessLoops) detaches them.
+  bindCodexAccountEgressConfig(config);
 
   const owner: LeaseOwner = {
     token: Symbol("server-background-lifecycle"),
@@ -297,6 +302,7 @@ export function acquireServerBackgroundLifecycle(
   } catch (error) {
     owner.lowQuota();
     owner.resources.release();
+    if (owners.length === 0) unbindCodexAccountEgressConfig(config);
     throw error;
   }
 

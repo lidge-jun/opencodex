@@ -91,13 +91,14 @@ afterEach(async () => {
 test("a pool account inherits the openai provider's route unless it names its own proxy", () => {
   const config = poolConfig();
   config.codexAccounts!.push({ id: "__main__", email: "", isMain: true, egress: { proxy: ACCOUNT_PROXY } } as never);
-  expect(codexAccountRouting("routed", config)).toMatchObject({ provider: { proxy: PROVIDER_PROXY }, account: { egress: { proxy: ACCOUNT_PROXY } } });
-  expect(codexAccountRouting("bypass", config)).toMatchObject({ provider: { proxy: PROVIDER_PROXY }, account: { egress: { noProxy: "example.invalid" } } });
-  expect(codexAccountRouting("plain", config)).toEqual({ provider: { proxy: PROVIDER_PROXY, noProxy: undefined } });
-  expect(codexAccountRouting("__main__", config)).toBeUndefined();
-  expect(codexAccountRouting("unknown", config)).toBeUndefined();
+  expect(codexAccountRouting("routed", { config })).toMatchObject({ provider: { proxy: PROVIDER_PROXY }, account: { egress: { proxy: ACCOUNT_PROXY } } });
+  expect(codexAccountRouting("bypass", { config })).toMatchObject({ provider: { proxy: PROVIDER_PROXY }, account: { egress: { noProxy: "example.invalid" } } });
+  expect(codexAccountRouting("plain", { config })).toEqual({ provider: { proxy: PROVIDER_PROXY, noProxy: undefined } });
+  expect(codexAccountRouting("__main__", { config })).toBeUndefined();
+  // A stored credential the config does not list (not removed) takes the provider's route.
+  expect(codexAccountRouting("unknown", { config })).toEqual({ provider: { proxy: PROVIDER_PROXY, noProxy: undefined } });
   delete config.providers.openai!.proxy;
-  expect(codexAccountRouting("plain", config)).toBeUndefined(); // nothing configured: the process-wide route, unchanged
+  expect(codexAccountRouting("plain", { config })).toBeUndefined(); // nothing configured: the process-wide route, unchanged
 });
 
 test("token refresh follows the account route, inheriting the provider's when the account names none", async () => {

@@ -599,6 +599,7 @@ export async function fetchPoolAccountQuota(
         await warmCodexAccount({
           accessToken: sourceToken?.accessToken ?? record.credential.accessToken,
           chatgptAccountId: sourceToken?.chatgptAccountId ?? record.credential.chatgptAccountId,
+          transport: codexAccountFetch(accountId),
         });
         markCodexAccountValidated(accountId, Date.now(), generation);
         clearAccountNeedsReauth(accountId, generation);

@@ -150,7 +150,7 @@ export function createResetCreditWhamClient(config: OcxConfig, accountId: string
   };
   return {
     inspect: () => run(async auth => {
-      const resp = await codexAccountFetch(auth.isMain ? null : accountId, undefined, getRuntimeConfig(config))("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits", {
+      const resp = await codexAccountFetch(auth.isMain ? null : accountId)("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits", {
         headers: { Authorization: `Bearer ${auth.accessToken}`, "ChatGPT-Account-Id": auth.chatgptAccountId },
         signal: AbortSignal.timeout(8000),
       });
@@ -170,7 +170,7 @@ export function createResetCreditWhamClient(config: OcxConfig, accountId: string
       }) };
     }),
     consume: redeemRequestId => run(async auth => {
-      const resp = await codexAccountFetch(auth.isMain ? null : accountId, undefined, getRuntimeConfig(config))("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume", {
+      const resp = await codexAccountFetch(auth.isMain ? null : accountId)("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${auth.accessToken}`,
@@ -302,7 +302,7 @@ export async function inspectResetCredits(config: OcxConfig, accountId: string, 
     try {
       let resp: Response;
       try {
-        resp = await codexAccountFetch(auth.isMain ? null : accountId, undefined, getRuntimeConfig(config))(
+        resp = await codexAccountFetch(auth.isMain ? null : accountId)(
           "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
           {
             headers: {
@@ -389,7 +389,7 @@ export async function consumeResetCredits(config: OcxConfig, accountId: string, 
     try {
       let resp: Response;
       try {
-        resp = await codexAccountFetch(auth.isMain ? null : accountId, undefined, getRuntimeConfig(config))(
+        resp = await codexAccountFetch(auth.isMain ? null : accountId)(
           "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
           {
             method: "POST",
