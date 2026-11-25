@@ -80,6 +80,17 @@ const fixtureChunk = (text: string) => new TextEncoder().encode(text);
 
 const fixtureProxy = "http://proxy.example.test:8080/";
 const relayBaseUrl = "https://relay.example.test/cca";
+// Both spellings can affect a provider route on a developer or CI host.
+function setFixtureNoProxy(value: string): () => void {
+  const keys = ["NO_PROXY", "no_proxy"] as const;
+  const saved = keys.map(key => process.env[key]);
+  for (const key of keys) process.env[key] = value;
+  return () => keys.forEach((key, i) => {
+    if (saved[i] === undefined) delete process.env[key];
+    else process.env[key] = saved[i];
+  });
+}
+
 for (const { name, providerRoute, expected } of [
   { name: "inherits", providerRoute: {}, expected: undefined },
   { name: "uses its proxy", providerRoute: { proxy: fixtureProxy }, expected: fixtureProxy },
@@ -97,6 +108,7 @@ for (const { name, providerRoute, expected } of [
         ? new Response(null, { status: 401 })
         : new Response(event(finishedPayload));
     });
+    const restoreNoProxy = setFixtureNoProxy("");
     try {
       const response = await run(request(), { access: async () => old, refresh: async () => fresh },
         true, { ...config, providers: { [old.provider]: provider } });
@@ -104,21 +116,43 @@ for (const { name, providerRoute, expected } of [
       expect(await response.text()).toContain(finishedPayload);
       expect(routes).toEqual([expected, expected]);
     } finally {
+      restoreNoProxy();
       outbound.mockRestore();
     }
   });
 }
 
+test("native generation reports an explicit proxy conflict with process NO_PROXY before dispatch", async () => {
+  const provider = { ...config.providers[old.provider]!, baseUrl: relayBaseUrl, proxy: fixtureProxy };
+  const outbound = spyOn(proxyEnv, "configuredOutboundFetch").mockResolvedValue(new Response());
+  const restoreNoProxy = setFixtureNoProxy("relay.example.test");
+  try {
+    const response = await run(request(), { access: async () => old, refresh: async () => fresh },
+      false, { ...config, providers: { [old.provider]: provider } });
+    expect(response.status).toBe(503);
+    expect((await response.json()).error.message).toBe("Antigravity provider proxy conflicts with process NO_PROXY. Remove the destination from NO_PROXY to use the proxy, or add it to the provider's noProxy to connect directly.");
+    expect(outbound).not.toHaveBeenCalled();
+  } finally {
+    restoreNoProxy();
+    outbound.mockRestore();
+  }
+});
+
 test("native generation refuses a configured proxy on an opaque executor before dispatch", async () => {
   const provider = { ...config.providers[old.provider]!, proxy: fixtureProxy };
   let sends = 0;
-  const response = await run(request(), {
-    access: async () => old, refresh: async () => fresh,
-    fetch: transport(() => { sends++; return new Response('{"response":{}}'); }),
-  }, false, { ...config, providers: { [old.provider]: provider } });
-  expect(response.status).toBe(503);
-  expect(await response.text()).toContain("egress configuration");
-  expect(sends).toBe(0);
+  const restoreNoProxy = setFixtureNoProxy("");
+  try {
+    const response = await run(request(), {
+      access: async () => old, refresh: async () => fresh,
+      fetch: transport(() => { sends++; return new Response('{"response":{}}'); }),
+    }, false, { ...config, providers: { [old.provider]: provider } });
+    expect(response.status).toBe(503);
+    expect(await response.text()).toContain("egress configuration");
+    expect(sends).toBe(0);
+  } finally {
+    restoreNoProxy();
+  }
 });
 
 for (const { name, wire } of fixtureCredentials) {

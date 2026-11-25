@@ -27,7 +27,7 @@ import { DEFAULT_STALL_TIMEOUT_SEC, resolveStallTimeoutMs } from "../stall-timeo
 import { isLocalUpstream } from "../lib/local-upstream";
 import { assertProviderDestinationAllowed } from "../lib/destination-policy";
 import { InvalidProviderEgressError, markEgressTransparentExecutor, providerEgressSendInit } from "../lib/provider-egress";
-import { configuredOutboundFetch } from "../lib/proxy-env";
+import { configuredOutboundFetch, ExplicitProxyExemptedError } from "../lib/proxy-env";
 import { clientFacingModelLabel, type ClientFacingModelLabel } from "../lib/error-destination";
 import { registerTurn, unregisterTurn, type ActiveTurnLease } from "./lifecycle";
 import { containsGeminiCredential, geminiNativeReasoningFields, geminiSseTransform, readGeminiText, validateGeminiObject, GEMINI_NATIVE_MAX_BYTES, GEMINI_NATIVE_ERROR_CODE, unwrapGeminiResponse, wrapGeminiRequest } from "./gemini-native-wire";
@@ -295,6 +295,9 @@ export async function handleGeminiNative(
       const response = geminiNativeError(429, "Antigravity request queue is temporarily full; retry after the indicated delay");
       const seconds = Number.isFinite(error.retryAfterSeconds) ? Math.max(1, Math.ceil(error.retryAfterSeconds)) : 5;
       response.headers.set("Retry-After", String(seconds)); return response;
+    }
+    if (error instanceof ExplicitProxyExemptedError) {
+      return geminiNativeError(503, "Antigravity provider proxy conflicts with process NO_PROXY. Remove the destination from NO_PROXY to use the proxy, or add it to the provider's noProxy to connect directly.");
     }
     if (error instanceof InvalidProviderEgressError) {
       return geminiNativeError(503, "Antigravity provider egress configuration is unavailable or invalid; check proxy and noProxy in OC settings");

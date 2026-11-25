@@ -31,7 +31,9 @@ An applicable ceiling that cannot admit the reservation returns a Gemini-shaped 
 including reasoning. Sends without final usage retain unresolved spend at the reservation size.
 The destination policy checks the base URL and redirects remain manual. Before reserving each
 physical send, the native leg applies the provider's `proxy` and `noProxy` policy to the final
-URL and executor. Only proxy-constructed headers and the bound OAuth credential go upstream.
+URL and executor. When an explicit HTTP(S) proxy conflicts with a process `NO_PROXY` exemption,
+the client receives a fixed 503 configuration error before the generation request is sent.
+Only proxy-constructed headers and the bound OAuth credential go upstream.
 
 `src/server/gemini-native-wire.ts` validates the JSON object and embeds the original request
 under the CCA `request` member. It extracts successful `response` members by source offsets
