@@ -1,4 +1,4 @@
-import { markProxyError } from "../../lib/client-error-body";
+import { markProxyError, markProxyQuotaExhaustion } from "../../lib/client-error-body";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { formatErrorResponse } from "../../bridge";
 import {
@@ -85,11 +85,14 @@ export function mapCodexAuthContextErrorToResponse(
   }
   if (error instanceof CodexAccountCooldownError) {
     const response = cooldownErrorResponse(error, options.now, options.accountSelector);
+    if (error instanceof CodexMainAccountCreditsOffError || error instanceof CodexPoolAccountCreditsOffError) {
+      return markProxyQuotaExhaustion(response);
+    }
     // Exact class only (#7850): main hard-lock, credit, Reserve, recovery-withheld and future
     // policy subclasses keep their own retry semantics, including in combo target cooldowns.
     const presentation = error instanceof CodexMainAccountHardLockError ? "hard_lock"
       : error instanceof CodexRecoveryWithheldError ? "recovery"
-      : error instanceof CodexMainAccountCreditsOffError || error instanceof CodexPoolAccountCreditsOffError || error instanceof CodexReserveUnavailableError ? undefined
+      : error instanceof CodexReserveUnavailableError ? undefined
       : options.accountSelector ? "cooldown_pinned" : "cooldown";
     return markProxyError(error.constructor === CodexAccountCooldownError ? markCodexAccountCooldownResponse(response) : response, presentation);
   }

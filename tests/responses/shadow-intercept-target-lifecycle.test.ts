@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses } from "../../src/server/responses";
 import { handleManagementAPI } from "../../src/server/management-api";
+import { ComboModelChangeRefusedError } from "../../src/server/responses/core-errors";
+import { resolveChosenTarget } from "../../src/server/responses/shadow-target-availability";
 import {
   INTERCEPT_TARGET_UNAVAILABLE_CODE,
   INTERCEPT_TARGET_UNAVAILABLE_STATUS,
@@ -22,6 +24,11 @@ import type { OcxConfig } from "../../src/types";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+
+test("a chosen target that collapses to a model-locked Combo keeps the model-change refusal", () => {
+  expect(() => resolveChosenTarget("combo/locked", () => { throw new ComboModelChangeRefusedError(); }))
+    .toThrow(ComboModelChangeRefusedError);
+});
 
 const SOURCE = "gpt-5.6-luna";
 const TARGET_MODEL = "helper-fast";
