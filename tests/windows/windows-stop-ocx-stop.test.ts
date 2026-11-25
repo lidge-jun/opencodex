@@ -10,13 +10,14 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { fixturePath, repoPath } from "../helpers/repo-root";
 import { abandonedTeardownProbeOncePerEndpoint, inheritedTeardownProbeCount } from "../../src/cli/stop-restore";
 import type { OutstandingTeardown } from "../../src/config/pending-teardown";
+import { PENDING_TEARDOWN_PREFIX, PENDING_TEARDOWN_SUFFIX } from "../../src/config/pending-teardown-names.mjs";
 
 let home: string;
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), "ocx-windows-plain-stop-")); });
@@ -201,6 +202,22 @@ describe("an update handover refused by Part A (#8960)", () => {
     expect(run.nonce, run.stderr).toBeDefined();
     expect(run.receiptExists, run.stderr).toBe(true);
     expect(run.exitCode).toBe(1);
+  });
+
+  test("another run's receipt survives while this run removes only its own unchanged claim", () => {
+    const inherited = "0123456789abcdef0123456789abcdef";
+    const inheritedPath = join(home, PENDING_TEARDOWN_PREFIX + inherited + PENDING_TEARDOWN_SUFFIX);
+    const body = JSON.stringify({ ownerPid: 4242, nonce: inherited, createdAt: "2026-11-23T00:00:00.000Z",
+      endpoint: { hostname: "127.0.0.1", port: 10100 }, endpointSource: "exact" });
+    writeFileSync(inheritedPath, body);
+    const run = runStop("unverified-budget", undefined, { handover: true });
+    expect(run.calls.service, run.stderr).toBe(1);
+    expect(run.urls, run.stderr).toEqual([]);
+    expect(run.nonce, run.stderr).toBeDefined();
+    expect(run.nonce).not.toBe(inherited);
+    expect(run.receiptExists, run.stderr).toBe(false);
+    expect(readFileSync(inheritedPath, "utf8")).toBe(body);
+    expect(run.summary).toMatchObject({ outcome: "failed", serviceStopReason: "unverified-budget", sharedTeardown: "skipped" });
   });
 });
 
