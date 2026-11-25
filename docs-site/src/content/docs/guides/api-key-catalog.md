@@ -123,6 +123,13 @@ presets. Both regions offer both subscription tiers. The presets keep static cha
 lists because upstream discovery also includes non-chat models. Existing selections and
 explicit International endpoint overrides are preserved.
 
+The Beijing preset also lists `qwen4-max`, Alibaba's newest flagship, which the Personal
+Edition model list includes
+([quick start](https://help.aliyun.com/en/model-studio/token-plan-personal-quick-start), checked
+2026-11-26). It accepts text and image input, has a 1,000,000-token context and a 131,072-token
+output ceiling, and takes `low`, `high` or `xhigh` reasoning (default `high`). The
+International preset does not list it because the Team Edition overview does not.
+
 Both presets include `deepseek-v4.1-flash-1017` with text/image input, text output,
 1,000,000 context and `low`/`high`/`max` reasoning (default `high`). Its 393,216 output
 budget follows the existing published-budget normalization, not a measured boundary;

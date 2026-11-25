@@ -390,6 +390,11 @@ export const THINKING_BUDGET_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 // Qwen3.8-Max is the first Qwen3.x model with official direct `reasoning_effort` support.
 // Evidence: https://qwen.ai/blog?id=qwen3.8
 export const QWEN38_REASONING_EFFORTS = ["low", "medium", "xhigh"];
+// Qwen4-Max takes direct `reasoning_effort` low/high/xhigh (default high; minimal->low,
+// medium->high, max->xhigh) on Chat Completions, Responses and Anthropic Messages.
+// Evidence: https://www.alibabacloud.com/help/en/model-studio/qwen4-max (2026-11-26).
+export const QWEN4_MAX = "qwen4-max";
+export const QWEN4_MAX_REASONING_EFFORTS = ["low", "high", "xhigh"];
 export const THINKING_BUDGET_MODELS = [
   "qwen3.5-397b", "qwen3.6-35b",
   "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus",
@@ -602,10 +607,15 @@ export const deepseekReasoningMapFor = (modelId: string): Record<string, string>
 // untested on this exact id. Published 1M context and 393K output use 393216 here,
 // consistent with the existing plan budget convention, not a measured boundary;
 // the lab's 384000 precision differs. Do not inherit the bare model's JSON fallback.
-export const ALIBABA_TOKEN_PLAN_MODELS = [
+export const ALIBABA_TOKEN_PLAN_MODELS_BEFORE_QWEN4 = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
   "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "glm-5.2", "glm-5.3",
 ];
+// 261126: qwen4-max is on the Personal Edition supported list
+// (https://help.aliyun.com/en/model-studio/token-plan-personal-quick-start). The International
+// Team overview publishes no equivalent, so it is Beijing-only: its window and output ceiling live
+// in the BEIJING maps below, not in the maps the International row shares.
+export const ALIBABA_TOKEN_PLAN_MODELS = [QWEN4_MAX, ...ALIBABA_TOKEN_PLAN_MODELS_BEFORE_QWEN4];
 export const ALIBABA_TOKEN_PLAN_QWEN_MODELS = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
 ];
@@ -748,6 +758,11 @@ export const ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "glm-5.2": 131_072, "glm-5.3": 131_072, "glm-5.1": 128_000, "glm-5": 16_384,
   "MiniMax-M2.5": 32_768,
 };
+// qwen4-max model page: text/image/video input, 1,000,000 context, 131,072 maximum output (non-thinking).
+// The International modality map spreads the shared Beijing one, so qwen4-max gets its own map.
+export const ALIBABA_TOKEN_PLAN_BEIJING_INPUT_MODALITIES: Record<string, string[]> = { ...ALIBABA_TOKEN_PLAN_INPUT_MODALITIES, [QWEN4_MAX]: ["text", "image"] };
+export const ALIBABA_TOKEN_PLAN_BEIJING_CONTEXT_WINDOWS: Record<string, number> = { ...ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS, [QWEN4_MAX]: 1_000_000 };
+export const ALIBABA_TOKEN_PLAN_BEIJING_MAX_OUTPUT_TOKENS: Record<string, number> = { ...ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS, [QWEN4_MAX]: 131_072 };
 export const ALIBABA_TOKEN_PLAN_NO_VISION = [
   "qwen3.7-max", "deepseek-v4-pro", "deepseek-v4-pro-0813",
   "deepseek-v4-flash-0731", "glm-5.2", "glm-5.3", "glm-5.1", "glm-5", "MiniMax-M2.5",

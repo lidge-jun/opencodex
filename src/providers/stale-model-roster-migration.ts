@@ -22,6 +22,10 @@ import {
   ALIBABA_INTL_TOKEN_PLAN_MODELS,
   ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
   ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
+  ALIBABA_TOKEN_PLAN_BEIJING_CONTEXT_WINDOWS,
+  ALIBABA_TOKEN_PLAN_BEIJING_MAX_OUTPUT_TOKENS,
+  ALIBABA_TOKEN_PLAN_MODELS_BEFORE_QWEN4,
+  QWEN4_MAX,
   KIMI_API_DEFAULT_REASONING_EFFORTS,
   KIMI_API_MODEL_CONTEXT_WINDOWS,
   KIMI_API_MODELS,
@@ -130,7 +134,16 @@ export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
       .flatMap(url => [url, `${url}/chat/completions`]),
   })),
   ...[
-    { provider: "alibaba-token-plan", from: ALIBABA_TOKEN_PLAN_MODELS_BEFORE_1017, to: ALIBABA_TOKEN_PLAN_MODELS },
+    {
+      provider: "alibaba-token-plan", from: ALIBABA_TOKEN_PLAN_MODELS_BEFORE_1017, to: ALIBABA_TOKEN_PLAN_MODELS,
+      contextWindows: ALIBABA_TOKEN_PLAN_BEIJING_CONTEXT_WINDOWS, maxOutputTokens: ALIBABA_TOKEN_PLAN_BEIJING_MAX_OUTPUT_TOKENS,
+    },
+    // 261126 qwen4-max: a row saved with the pre-Qwen4 Beijing seed picks the new flagship up.
+    {
+      provider: "alibaba-token-plan", from: ALIBABA_TOKEN_PLAN_MODELS_BEFORE_QWEN4, to: ALIBABA_TOKEN_PLAN_MODELS,
+      contextWindows: ALIBABA_TOKEN_PLAN_BEIJING_CONTEXT_WINDOWS, maxOutputTokens: ALIBABA_TOKEN_PLAN_BEIJING_MAX_OUTPUT_TOKENS,
+      defaultReasoningEfforts: { [QWEN4_MAX]: "high" },
+    },
     // International honors pay-as-you-go and Custom URLs, which may still serve the retired ids.
     // Beijing needs no guard: the router pins it to the registry Token Plan host.
     {
@@ -138,10 +151,10 @@ export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
       destinationBaseUrls: [ALIBABA_INTL_TOKEN_PLAN_BASE_URL],
     },
   ].map(entry => ({
-    ...entry,
     contextWindows: ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
     maxOutputTokens: ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
-    defaultReasoningEfforts: { "deepseek-v4.1-flash-1017": "high" },
+    ...entry,
+    defaultReasoningEfforts: { "deepseek-v4.1-flash-1017": "high", ...("defaultReasoningEfforts" in entry ? entry.defaultReasoningEfforts : {}) },
   })),
   // Kimi K3.1 Pro (#7653). Both the International and China platforms list kimi-k3.1-pro and
   // -highspeed; a Custom URL may be another gateway, so it keeps its saved list.

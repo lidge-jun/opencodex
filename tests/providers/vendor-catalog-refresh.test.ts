@@ -96,3 +96,32 @@ describe("GLM-5.4 on the Z.ai / BigModel Coding Plan (docs.z.ai glm-5.4 + devpac
     expect(getProviderRegistryEntry("zhipu-bigmodel")!.models).not.toContain("glm-5.4");
   });
 });
+
+describe("qwen4-max on the Alibaba Token Plan, Beijing only (help.aliyun.com token-plan-personal-quick-start + qwen4-max model page, 2026-11-26)", () => {
+  const beijing = getProviderRegistryEntry("alibaba-token-plan")!;
+  const intl = getProviderRegistryEntry("alibaba-token-plan-intl")!;
+
+  test("Beijing seeds qwen4-max with its documented window, output, vision and direct effort ladder", () => {
+    expect(beijing.defaultModel).toBe("qwen3.8-max");
+    expect(beijing.models).toContain("qwen4-max");
+    expect(beijing.modelContextWindows?.["qwen4-max"]).toBe(1_000_000);
+    expect(beijing.modelMaxOutputTokens?.["qwen4-max"]).toBe(131_072);
+    expect(beijing.modelInputModalities?.["qwen4-max"]).toEqual(["text", "image"]);
+    expect(beijing.noVisionModels ?? []).not.toContain("qwen4-max");
+    // reasoning_effort low / high / xhigh, default high (minimal->low, medium->high, max->xhigh).
+    expect(beijing.modelReasoningEfforts?.["qwen4-max"]).toEqual(["low", "high", "xhigh"]);
+    expect(beijing.modelDefaultReasoningEfforts?.["qwen4-max"]).toBe("high");
+    expect(beijing.directReasoningEffortModels).toContain("qwen4-max");
+    expect(beijing.thinkingBudgetModels ?? []).not.toContain("qwen4-max");
+    expect(beijing.preserveReasoningContentModels).toContain("qwen4-max");
+  });
+
+  test("the International Team plan carries no qwen4-max row or metadata", () => {
+    expect(intl.models).not.toContain("qwen4-max");
+    for (const map of [intl.modelContextWindows, intl.modelMaxOutputTokens, intl.modelInputModalities, intl.modelReasoningEfforts, intl.modelDefaultReasoningEfforts]) {
+      expect(map?.["qwen4-max"]).toBeUndefined();
+    }
+    expect(intl.directReasoningEffortModels ?? []).not.toContain("qwen4-max");
+    expect(intl.preserveReasoningContentModels ?? []).not.toContain("qwen4-max");
+  });
+});

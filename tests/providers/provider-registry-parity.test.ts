@@ -549,7 +549,7 @@ describe("provider registry parity", () => {
       defaultModel: "qwen3.8-max",
       liveModels: false,
       models: [
-        "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+        "qwen4-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
         "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "glm-5.2", "glm-5.3",
       ],
       modelInputModalities: {
@@ -577,7 +577,7 @@ describe("provider registry parity", () => {
       preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"]),
     });
     expect(PROVIDER_REGISTRY.find(entry => entry.id === "alibaba-token-plan")?.directReasoningEffortModels)
-      .toEqual(["qwen3.8-max", "qwen3.8-flash"]);
+      .toEqual(["qwen3.8-max", "qwen3.8-flash", "qwen4-max"]);
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
       .not.toContain("qwen3.8-max");
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
