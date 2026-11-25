@@ -74,7 +74,8 @@ Expired aliases never fall through to native joins. Reconnect resolves the recor
 freshly; keyed provider replacement fails unless its credential digest still matches.
 The registry is per server, holds at most 1024 entries for 30 minutes and is cleared on shutdown.
 It does not proxy WebRTC media or execute delegation requests. Frameless defaults to Codex's gpt-live-1.1-codex (`resolveLiveAudioModel` in `src/server/audio-upstream.ts`); gpt-live-1 and gpt-live-1.1 alias the -codex models for call-create sessions and Frameless standalone sockets, and the resolved name is the one a key scope judges and the binding records; Realtime standalone queries pass unchanged.
-Only a session the proxy synthesizes gets a voice, chosen after the upstream resolves: marin for a keyed API relay, cove for ChatGPT, matching openai/codex. Dictation and Frameless event formats remain
+Only a session the proxy synthesizes gets a voice, chosen after the upstream resolves: marin for a keyed API relay, cove for ChatGPT, matching openai/codex.
+`src/server/audio-live-sessions.ts` relays the public GPT-Live session API (`POST /v1/live/sessions`, `WS /v1/live/sessions`, `WS /v1/live/sessions/<alias>/attach`) only to the API-key provider, refuses SIP, judges scope on `session.model` (a fresh socket is unnamed), and binds the returned id to the creating key; `tests/server/audio-live-sessions.test.ts`. Dictation and Frameless event formats remain
 separate. Coverage lives in `tests/server/audio-client.test.ts`,
 `tests/server/audio-dictation.test.ts` and `tests/server/live-call-bindings.test.ts`.
 

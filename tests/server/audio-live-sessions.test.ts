@@ -20,7 +20,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 const KEY = "ocx_data_live_sessions_fixture";
 const OTHER_KEY = "ocx_data_live_sessions_other";
 const SCOPED_KEY = "ocx_data_live_sessions_scoped";
-const UPSTREAM_KEY = "sk-fixture-live-sessions";
+const UPSTREAM_KEY = "fixture-upstream-key";
 const fetchOriginal = globalThis.fetch;
 const previousHome = process.env.OPENCODEX_HOME;
 const previousToken = process.env.OPENCODEX_API_AUTH_TOKEN;

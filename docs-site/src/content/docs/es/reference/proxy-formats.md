@@ -506,6 +506,16 @@ Los enlaces de llamadas duran 30 minutos, están limitados a 1024 entradas por s
 
 <a id="native-codex-compatibility"></a>
 
+### Sesiones GPT-Live
+
+OpenCodex también retransmite la API pública de sesiones GPT-Live de OpenAI para claves externas, solo a través de un proveedor de claves OpenAI API habilitado. Nunca se usa una cuenta ChatGPT para ello, y una solicitud sin ese proveedor recibe 400.
+
+- `POST /v1/live/sessions` acepta JSON `{ "session": { "model": ... }, "transport": { "type": "webrtc", "sdp": ... } }` (como máximo 1 MiB) y responde como la API, `201 { "session": { "id" }, "transport": { "type", "sdp" } }`. `session.model` es obligatorio y una clave limitada a modelos se evalúa con él. El transporte SIP se rechaza.
+- El `session.id` devuelto es un alias de OpenCodex vinculado a la clave que lo creó. Solo esa clave puede abrir `WS /v1/live/sessions/{id}/attach`, que llega a la conexión de control del servidor de la sesión.
+- `WS /v1/live/sessions` abre una sesión cuyo modelo llega después en `session.start`, por lo que una clave limitada a una lista de modelos no puede abrirla.
+
+`OpenAI-Safety-Identifier` se reenvía cuando el cliente lo envía. OpenCodex no transporta los medios WebRTC; el cliente se conecta a OpenAI con la respuesta SDP devuelta.
+
 ### Compatibilidad nativa con Codex
 
 Las personas que llaman en modo clave nativo API en el oyente local de confianza pueden usar la credencial exacta configurada para el nivel canónico OpenAI API. Otros valores de soporte presentados requieren una clave proxy registrada o un par de token/cuenta ChatGPT explícito, coincidente; un prefijo de clave arbitraria no es prueba de credenciales nativas. Las llamadas nativas locales de confianza sin credenciales conservan su comportamiento existente.
