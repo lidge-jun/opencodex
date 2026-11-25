@@ -646,6 +646,10 @@ available for unresolved work. Commentary-only and unphased histories are preser
 only the compaction request, not stored attachments or ordinary model requests. It reduces repeated
 vision input but does not guarantee that a long text history fits the provider's context limit.
 
+A routed Vertex AI compaction keeps the existing history if the model finishes with empty,
+whitespace-only, reasoning-only, or tool-only output. A successful compaction requires visible
+summary text.
+
 `compactionRecovery` leaves the initial compaction on the conversation's selected route. It
 permits one emergency attempt only after a supported, pre-output compaction failure. It is
 separate from `compactionRouting`, which chooses another model before compaction starts, and

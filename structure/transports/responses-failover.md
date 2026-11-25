@@ -286,6 +286,12 @@ only successful prose reaches the single synthetic compaction item. Truncated co
 Signed progress is not summary prose.
 `tests/responses/responses-anthropic-compaction-prefix.test.ts` covers the prefix and both delivery modes; image handling follows the [image-context recovery contract](../providers/anthropic-cache-lifecycle.md).
 
+Routed Vertex summaries use the same guard before streaming and buffered delivery. A successful
+summary requires non-whitespace assistant text. Tool calls and thought events are discarded,
+including when a valid summary accompanies them. A completed turn without prose fails with
+`compaction_invalid_summary` without publishing replacement history or sending another generation.
+`tests/responses/responses-vertex-compaction.test.ts` covers both delivery modes and the V1 HTTP handoff.
+
 `src/server/responses/compaction-routing.ts` applies `compactionRouting` before model routing in
 both `request-prepare.ts` and `compact.ts`. It requires explicit `request_kind: "compaction"` in
 `x-codex-turn-metadata`, supplied as a header or embedded in Responses `client_metadata`, and on
