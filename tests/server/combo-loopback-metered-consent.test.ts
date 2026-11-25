@@ -127,6 +127,26 @@ for (const wire of ["responses", "messages"]) {
   });
 }
 
+// A billing exhaustion code is authoritative on 400 and 422 too; quota-only failover must advance on it.
+for (const status of [400, 422]) {
+  for (const consent of [true, false]) {
+    test(`quota-only failover ${consent ? "advances past" : "stops at the consent check after"} a ${status} billing exhaustion`, async () => {
+      const cfg = config(consent);
+      Object.assign(cfg.providers.subscription!, { authMode: "local", baseUrl: "http://127.0.0.1:19012/v1", allowPrivateNetwork: true });
+      cfg.combos!.chain = {
+        ...cfg.combos!.chain!, quotaOnlyFallback: true,
+        targets: [{ provider: "subscription", model: "m" }, { provider: "paid", model: "m", metered: true }],
+      };
+      cfg.providers.subscription!.fetch = (async () => {
+        sent.push("subscription");
+        return Response.json({ error: { code: "project_spend_limit_exceeded", message: "Project spend limit exceeded" } }, { status });
+      }) as typeof fetch;
+      expect(await post("responses", cfg, local)).toBe(consent ? 400 : 403);
+      expect(sent).toEqual(consent ? ["subscription", "paid"] : ["subscription"]);
+    });
+  }
+}
+
 test("replacing a provider credential rechecks its quota before any paid fallback", async () => {
   const cfg = config(true);
   cfg.combos!.chain = {
