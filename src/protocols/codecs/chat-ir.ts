@@ -25,13 +25,13 @@ import { providerMetadataFromResponsesFunctionCall } from "../../responses/provi
 import {
   assistantReasoningText,
   ChatCompletionsRequestError,
+  chatVideoRefusal,
   contentToText,
   fileFromPart,
   videoFromPart,
 } from "../../chat/inbound";
 import { chatImageUrlFromPart } from "../../chat/image-parts";
 import { untranslatedChatInputMedia, untranslatedInputMediaMessage } from "../../responses/input-media";
-import { chatBodyHasOversizedInlineVideo, OVERSIZED_INLINE_VIDEO_MESSAGE } from "../../responses/video-input";
 import { inlineDocumentFromDataUrl } from "../../responses/inline-document";
 import { functionCallArgumentsFromText } from "../../responses/parser";
 import { normalizeVisualizationContext } from "../../responses/visualization-directives";
@@ -217,8 +217,9 @@ export function chatConversationToIr(raw: unknown, modelId: string): ChatIrConve
     throw new ChatCompletionsRequestError("messages must be a non-empty array");
   }
   const unsupportedMedia = untranslatedChatInputMedia(raw);
+  const videoRefusal = chatVideoRefusal(unsupportedMedia, raw);
+  if (videoRefusal) throw videoRefusal;
   if (unsupportedMedia) throw new ChatCompletionsRequestError(untranslatedInputMediaMessage(unsupportedMedia));
-  if (chatBodyHasOversizedInlineVideo(raw)) throw new ChatCompletionsRequestError(OVERSIZED_INLINE_VIDEO_MESSAGE);
 
   const now = Date.now();
   const systemParts: string[] = [];

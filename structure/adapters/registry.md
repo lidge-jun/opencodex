@@ -380,14 +380,18 @@ wire) emits the Chat `video_url` part only in user messages and only for a model
 `modelCapabilities`, `modelInputModalities` or provider `inputModalities` declares `video`;
 absent evidence is a refusal. Every other wire refuses. An inline video over
 `MAX_INLINE_VIDEO_BYTES` (50 MiB decoded, measured from the string length; a non-base64 payload
-counts one byte per character) is refused on every guarded wire; the exempt Responses wire and
+counts its UTF-8 length) is refused on every guarded wire; the exempt Responses wire and
 native Chat forward the original body. Each refusal is fixed vocabulary and names no URL or byte. A builder-path video refusal throws
 `UnsupportedInputModalityError`, which `adapterBuildRefusal` in
 `src/server/responses/passthrough-build-error.ts` answers as 400 `unsupported_input_modality` (the
 code `runTurn` emits, and a combo hop code); audio, file and declaration refusals keep the generic
 builder 400. Both Chat conversions refuse a `video_url` outside user content (the typed scan reads
 the Chat spelling too) and, through `chatBodyHasOversizedInlineVideo`, an over-cap clip before they
-build or serialize anything. The Gemini and Chat builders
+build or serialize anything; the Chat handler checks the cap before the Cursor/Kiro usage estimate
+serializes the messages. Those Chat refusals are `ChatUnsupportedInputModalityError` and reach the
+client as 400 `unsupported_input_modality` too. The builder refusal is not marked non-replayable:
+nothing was sent, and the marker would stop the combo loop before it reads the hop code
+(`tests/responses/responses-combo-video-hop.test.ts`). The Gemini and Chat builders
 no longer write a video text marker: Gemini throws for an unfetchable URL if reached directly.
 
 `src/adapters/input-media-guard.ts` guards adapters created by the registry after effective

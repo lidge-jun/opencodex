@@ -8,7 +8,6 @@ import { MuseToolChoiceCompatibilityError } from "../../adapters/openai-response
 import { MuseToolCatalogCompatibilityError } from "../../adapters/openai-responses/muse-tool-catalog";
 import { OpenGatewayInputCompatibilityError } from "../../adapters/openai-responses/opengateway-input";
 import { UnsupportedInputModalityError } from "../../adapters/input-media-guard";
-import { markResponseNonReplayable } from "../../lib/upstream-retry";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { HostedAdvisorSpendRefusal } from "./policy-request-scope";
 
@@ -44,11 +43,11 @@ export function adapterBuildRefusal(error: unknown, context: CodexAuthContext | 
  * A video the routed wire cannot carry, with the code `runTurn` adapters already emit, so a combo
  * hops to a member that can read the clip instead of ending on a generic 400. Built directly
  * because `formatErrorResponse` keeps only its allowlisted codes. The message is fixed vocabulary.
+ * Deliberately NOT marked non-replayable: nothing was sent, and that marker would stop the combo
+ * loop before it reads the hop code.
  */
 function unsupportedInputModalityResponse(message: string): Response {
-  const response = new Response(JSON.stringify({ error: {
+  return new Response(JSON.stringify({ error: {
     type: "invalid_request_error", code: "unsupported_input_modality", param: null, message,
   } }), { status: 400, headers: { "Content-Type": "application/json" } });
-  markResponseNonReplayable(response);
-  return response;
 }

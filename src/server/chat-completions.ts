@@ -17,7 +17,9 @@ import {
   assertChatCompletionsRoutingBody,
   chatRawReasoningVisible,
   ChatCompletionsRequestError,
+  ChatUnsupportedInputModalityError,
 } from "../chat/inbound";
+import { chatBodyHasOversizedInlineVideo, OVERSIZED_INLINE_VIDEO_MESSAGE } from "../responses/video-input";
 import { chatSettingsBody, chatToResponsesBody } from "../protocols/codecs/chat";
 import { getCombo } from "../combos/types";
 import { chatConversationToIr, chatIrRouteEvidence, withDirectChatConversation, type ChatIrConversation } from "../protocols/codecs/chat-ir";
@@ -297,6 +299,8 @@ async function handleChatCompletionsWithBudget(
     callerAuthorizationRoute = !routeMayChangeCredentialDomain
       && providerConsumesCallerAuthorization(route.provider);
     if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro") {
+      // Usage estimation serializes the messages; an over-cap clip is refused before that copy.
+      if (chatBodyHasOversizedInlineVideo(chatBody)) throw new ChatUnsupportedInputModalityError(OVERSIZED_INLINE_VIDEO_MESSAGE);
       const parts: string[] = [];
       if (chatBody.messages !== undefined) parts.push(JSON.stringify(chatBody.messages));
       if (chatBody.tools !== undefined) parts.push(JSON.stringify(chatBody.tools));
@@ -452,7 +456,7 @@ async function handleChatCompletionsWithBudget(
       status,
       overflow ? "request translation buffer exceeded the safe limit" : err instanceof Error ? err.message : String(err),
       overflow ? "request_too_large" : undefined,
-      overflow ? "translation_buffer_limit" : undefined,
+      overflow ? "translation_buffer_limit" : err instanceof ChatUnsupportedInputModalityError ? err.code : undefined,
     );
   }
 

@@ -73,7 +73,8 @@ and is refused too, as is a video in a developer message on the Chat route. An i
 than 50 MiB decoded is refused on every translated route; send the provider's file URL instead.
 Responses passthrough and native Chat forward the original body and leave size and support to
 the upstream. A Chat request that is translated is checked for both cases (a `video_url` outside
-user content, or over the cap) before its conversion builds anything, and answers HTTP 400. Input
+user content, or over the cap) before its conversion builds anything, and answers the same HTTP
+400 `unsupported_input_modality`. A plain (non-base64) `data:` payload counts its UTF-8 length. Input
 admission charges inline video by size at about 1,250 bytes per token and a fetched URL as one
 minute (6,000 tokens). The refusal names neither the URL nor the bytes.
 

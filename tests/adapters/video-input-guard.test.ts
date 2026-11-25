@@ -125,6 +125,12 @@ describe("video input without a carrier is refused before send", () => {
     expect(await refusal(KIMI, videoRequest("kimi-k3.1-pro", plain))).toContain("MiB");
   });
 
+  test("a non-ASCII plain data URL is measured in UTF-8 bytes, not UTF-16 units", async () => {
+    // 30 Mi characters of "é" are 30 Mi UTF-16 units but 60 MiB on the wire.
+    const plain = `data:video/mp4,${"é".repeat(30 * 1024 * 1024)}`;
+    expect(await refusal(KIMI, videoRequest("kimi-k3.1-pro", plain))).toContain("MiB");
+  });
+
   test("both Chat conversions refuse an oversized clip before they build anything", () => {
     const body = {
       model: "kimi-k3.1-pro",
