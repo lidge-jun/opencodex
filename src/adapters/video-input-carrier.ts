@@ -70,4 +70,3 @@ export function modelDeclaresVideoInput(
   const modalities = declared ?? modelRecordValue(provider.modelInputModalities, modelId) ?? provider.inputModalities;
   return Array.isArray(modalities) && modalities.includes("video");
 }
-

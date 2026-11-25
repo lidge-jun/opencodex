@@ -57,12 +57,16 @@ chat Grok de xAI no aceptan entrada de video a fecha de 2026-11-25 (xAI document
 imagen para `grok-4.6` y `grok-4.7`), así que un video enviado a Grok se rechaza.
 
 Un video rechazado devuelve HTTP 400 con el código `unsupported_input_modality` antes de enviar
-nada. Antes, las rutas de Chat traducido, Anthropic y Cursor sustituían el clip por un marcador de
+nada, así que un combo pasa a un miembro que pueda leerlo. Antes, las rutas de Chat traducido, Anthropic y Cursor sustituían el clip por un marcador de
 texto, Gemini convertía en marcador una URL que no puede descargar, y la solicitud se enviaba de
 todos modos. Un video fuera del contenido de usuario (sistema, asistente o salida de herramienta) no
 tiene conversor en ninguna ruta traducida y también se rechaza, igual que un video en un mensaje de
 desarrollador en la ruta de Chat. Un video en línea de más de 50 MiB decodificados se rechaza en
-todas las rutas; envíe en su lugar la URL del archivo del proveedor. La admisión de entrada cobra el
+todas las rutas traducidas; envíe en su lugar la URL del archivo del proveedor. Responses de paso
+directo y Chat nativo reenvían el cuerpo original y dejan el tamaño y el soporte al proveedor.
+Una solicitud de Chat que se traduce se comprueba en ambos casos (un `video_url` fuera del
+contenido de usuario, o por encima del límite) antes de que su conversión construya nada, y
+responde HTTP 400. La admisión de entrada cobra el
 video en línea por tamaño, a unos 1.250 bytes por token, y una URL descargada como un minuto (6.000
 tokens). El rechazo no nombra la URL ni los bytes.
 

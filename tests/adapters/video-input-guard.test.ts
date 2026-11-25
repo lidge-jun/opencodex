@@ -17,14 +17,16 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { ProviderAdapter } from "../../src/adapters/base";
-import { withInputMediaGuard } from "../../src/adapters/input-media-guard";
+import { UnsupportedInputModalityError, withInputMediaGuard } from "../../src/adapters/input-media-guard";
 import { createRegisteredAdapter } from "../../src/adapters/registry";
-import { chatCompletionsToResponsesBody } from "../../src/chat/inbound";
+import { ChatCompletionsRequestError, chatCompletionsToResponsesBody } from "../../src/chat/inbound";
+import { chatConversationToIr } from "../../src/protocols/codecs/chat-ir";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { untranslatedResponsesInputMedia } from "../../src/responses/input-media";
 import { parseRequest } from "../../src/responses/parser";
 import { MAX_INLINE_VIDEO_BYTES } from "../../src/responses/video-input";
 import { estimateInputTokens } from "../../src/server/responses/input-admission";
+import { adapterBuildRefusal } from "../../src/server/responses/passthrough-build-error";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 
 const INLINE = "data:video/mp4;base64,AAAAIGZ0eXBpc29t";
@@ -117,6 +119,52 @@ describe("video input without a carrier is refused before send", () => {
     }
   });
 
+  test("a non-base64 data URL is measured by its length, so it cannot slip under the cap", async () => {
+    // 0.75 x length would read 45 MiB here; the payload decodes to up to 60 MiB.
+    const plain = `data:video/mp4,${"A".repeat(60 * 1024 * 1024)}`;
+    expect(await refusal(KIMI, videoRequest("kimi-k3.1-pro", plain))).toContain("MiB");
+  });
+
+  test("both Chat conversions refuse an oversized clip before they build anything", () => {
+    const body = {
+      model: "kimi-k3.1-pro",
+      messages: [{ role: "user", content: [{ type: "video_url", video_url: { url: `data:video/mp4,${"A".repeat(MAX_INLINE_VIDEO_BYTES + 1)}` } }] }],
+    };
+    for (const convert of [() => chatCompletionsToResponsesBody(body), () => chatConversationToIr(body, "kimi-k3.1-pro")]) {
+      let failure: unknown;
+      try { convert(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(ChatCompletionsRequestError);
+      expect((failure as Error).message).toContain("50 MiB");
+    }
+  });
+
+  test("a Chat video_url outside user content is refused by both Chat conversions, not dropped", () => {
+    const body = {
+      model: "kimi-k3.1-pro",
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: [{ type: "text", text: "earlier" }, { type: "video_url", video_url: { url: INLINE } }] },
+        { role: "user", content: "and now?" },
+      ],
+    };
+    for (const convert of [() => chatCompletionsToResponsesBody(body), () => chatConversationToIr(body, "kimi-k3.1-pro")]) {
+      let failure: unknown;
+      try { convert(); } catch (error) { failure = error; }
+      expect((failure as Error).message).toContain("cannot translate video input");
+    }
+  });
+
+  test("a builder refusal reaches the client as 400 unsupported_input_modality", async () => {
+    let failure: unknown;
+    try { await createRegisteredAdapter(XAI).buildRequest(videoRequest("grok-4.7", INLINE), { headers: new Headers() } as never); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(UnsupportedInputModalityError);
+    const response = adapterBuildRefusal(failure, undefined)!;
+    expect(response.status).toBe(400);
+    const payload = await response.json() as { error: { type: string; code: string; message: string } };
+    expect(payload.error).toMatchObject({ type: "invalid_request_error", code: "unsupported_input_modality" });
+    expect(payload.error.message).not.toContain("AAAAIGZ0eXBpc29t");
+  });
+
   test("run-turn adapters answer with the established unsupported_input_modality error", async () => {
     let runs = 0;
     const adapter: ProviderAdapter = {
@@ -195,4 +243,3 @@ describe("input admission charges video by its own rate", () => {
     expect(estimateInputTokens(videoOnly(YOUTUBE), "m")).toBe(6_000);
   });
 });
-

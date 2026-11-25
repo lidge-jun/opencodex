@@ -31,6 +31,7 @@ import {
 } from "../../chat/inbound";
 import { chatImageUrlFromPart } from "../../chat/image-parts";
 import { untranslatedChatInputMedia, untranslatedInputMediaMessage } from "../../responses/input-media";
+import { chatBodyHasOversizedInlineVideo, OVERSIZED_INLINE_VIDEO_MESSAGE } from "../../responses/video-input";
 import { inlineDocumentFromDataUrl } from "../../responses/inline-document";
 import { functionCallArgumentsFromText } from "../../responses/parser";
 import { normalizeVisualizationContext } from "../../responses/visualization-directives";
@@ -217,6 +218,7 @@ export function chatConversationToIr(raw: unknown, modelId: string): ChatIrConve
   }
   const unsupportedMedia = untranslatedChatInputMedia(raw);
   if (unsupportedMedia) throw new ChatCompletionsRequestError(untranslatedInputMediaMessage(unsupportedMedia));
+  if (chatBodyHasOversizedInlineVideo(raw)) throw new ChatCompletionsRequestError(OVERSIZED_INLINE_VIDEO_MESSAGE);
 
   const now = Date.now();
   const systemParts: string[] = [];

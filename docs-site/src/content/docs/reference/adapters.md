@@ -64,12 +64,16 @@ therefore sends it only when the routed model declares video through
 Grok chat models do not accept video input as of 2026-11-25 (xAI documents text and image input
 for `grok-4.6` and `grok-4.7`), so a video sent to Grok is refused.
 
-A refused video returns HTTP 400 with code `unsupported_input_modality` before anything is sent.
+A refused video returns HTTP 400 with code `unsupported_input_modality` before anything is sent,
+so a combo moves on to a member that can read it.
 Previously the translated Chat, Anthropic and Cursor routes replaced the clip with a text marker,
 Gemini flattened an unfetchable URL into one, and the request went upstream anyway. A video
 outside user content (system, assistant or tool output) has no converter on any translated route
 and is refused too, as is a video in a developer message on the Chat route. An inline video larger
-than 50 MiB decoded is refused on every route; send the provider's file URL instead. Input
+than 50 MiB decoded is refused on every translated route; send the provider's file URL instead.
+Responses passthrough and native Chat forward the original body and leave size and support to
+the upstream. A Chat request that is translated is checked for both cases (a `video_url` outside
+user content, or over the cap) before its conversion builds anything, and answers HTTP 400. Input
 admission charges inline video by size at about 1,250 bytes per token and a fetched URL as one
 minute (6,000 tokens). The refusal names neither the URL nor the bytes.
 

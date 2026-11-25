@@ -52,9 +52,11 @@ function mediaKind(value: unknown, position: CarrierPosition, allowAudio: boolea
   if (value.type === "input_image" && typeof value.file_id === "string" && value.file_id.length > 0
       && !(typeof value.image_url === "string" && value.image_url.length > 0)) return "file";
   // Only user and developer content builds a video part; every other converter reduces its
-  // content to text and dropped the clip in silence. Whether the routed wire can carry a video
-  // that did become a part is decided on the normalized request (`src/adapters/video-input-carrier.ts`).
-  if (value.type === "input_video") {
+  // content to text and dropped the clip in silence. `video_url` is the Chat spelling, which
+  // reaches this scan for every Chat content part before either Chat conversion. Whether the
+  // routed wire can carry a video that did become a part is decided on the normalized request
+  // (`src/adapters/video-input-carrier.ts`).
+  if (value.type === "input_video" || value.type === "video_url") {
     return position === "user-content" || position === "developer-content" ? undefined : "video";
   }
   return undefined;

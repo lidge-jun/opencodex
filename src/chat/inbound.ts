@@ -9,6 +9,7 @@ import { normalizedClientExtraContent } from "../responses/provider-opaque-metad
 import { chatImageUrlFromPart } from "./image-parts";
 import { signedReasoningInputItems } from "./reasoning-details";
 import { chatAudioToResponsesPart, untranslatedChatInputMedia, untranslatedInputMediaMessage } from "../responses/input-media";
+import { chatBodyHasOversizedInlineVideo, OVERSIZED_INLINE_VIDEO_MESSAGE } from "../responses/video-input";
 
 export class ChatCompletionsRequestError extends Error {}
 
@@ -472,6 +473,7 @@ export function chatCompletionsToResponsesBody(raw: unknown, options: ChatRespon
   if (unsupportedMedia) {
     throw new ChatCompletionsRequestError(untranslatedInputMediaMessage(unsupportedMedia));
   }
+  if (chatBodyHasOversizedInlineVideo(raw)) throw new ChatCompletionsRequestError(OVERSIZED_INLINE_VIDEO_MESSAGE);
 
 
   const systemParts: string[] = [];
