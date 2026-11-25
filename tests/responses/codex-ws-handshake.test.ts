@@ -4,6 +4,7 @@ import { readCodexWsAdvertisedMessageLimit } from "../../src/server/responses/co
 import { codexWsUpstreamFetch } from "../../src/server/responses/ws-upstream";
 import type { NativeResponseControl } from "../../src/server/responses/native-response-control";
 import { NativeSteeringError } from "../../src/server/responses/native-steering";
+import { NativeInjectionChannel } from "../../src/server/responses/native-injection";
 import { codexWsExchange } from "../../src/server/responses/codex-ws-exchange";
 import { CodexWsSession } from "../../src/server/responses/codex-ws-session";
 import { CODEX_RESPONSES_HTTP_URL, prepareCodexWsRequest } from "../../src/server/responses/codex-ws-request";
@@ -246,15 +247,18 @@ describe("advertisement parsing", () => {
   });
 });
 
-type Reply = "complete" | "cache-miss" | "created";
+type Reply = "complete" | "cache-miss" | "created" | "call";
 
 /** Real Bun upgrade that advertises a ceiling; no credentials and no provider traffic. */
 async function withAdvertisingServer(
   advertised: string | undefined,
   reply: (index: number) => Reply,
-  run: (fixture: { session: CodexWsSession; frames: string[] }) => Promise<void>,
+  run: (fixture: { session: CodexWsSession; frames: string[]; received: (count: number) => Promise<void> }) => Promise<void>,
 ) {
   const frames: string[] = [];
+  const waiters: { count: number; resolve: () => void }[] = [];
+  const received = (count: number) => frames.length >= count ? Promise.resolve()
+    : new Promise<void>(resolve => { waiters.push({ count, resolve }); });
   const server = Bun.serve({
     hostname: "127.0.0.1", port: 0,
     fetch(req, srv) {
@@ -264,12 +268,24 @@ async function withAdvertisingServer(
     websocket: {
       message(ws, message) {
         frames.push(String(message));
+        for (const waiter of waiters.splice(0)) {
+          if (frames.length >= waiter.count) waiter.resolve(); else waiters.push(waiter);
+        }
         const send = (event: unknown) => ws.send(JSON.stringify(event));
         if (reply(frames.length - 1) === "cache-miss") {
           send({ type: "error", error: { type: "invalid_request_error", code: "previous_response_not_found", message: "miss" } });
           return;
         }
         const id = `response-${frames.length}`;
+        if (reply(frames.length - 1) === "call") {
+          if (frames.length === 1) {
+            const item = { id: "item-c", type: "function_call", call_id: "c", name: "fixture", arguments: "{}" };
+            send({ type: "response.created", response: { id, status: "in_progress", output: [] } });
+            send({ type: "response.output_item.added", output_index: 0, item });
+            send({ type: "response.output_item.done", output_index: 0, item });
+          }
+          return;
+        }
         if (reply(frames.length - 1) === "created") {
           if (frames.length === 1) send({ type: "response.created", response: { id, status: "in_progress", output: [] } });
           return;
@@ -281,7 +297,7 @@ async function withAdvertisingServer(
   });
   const session = new CodexWsSession(`ws://127.0.0.1:${server.port}`, sizedRequest().prepared.headers, true);
   try {
-    await run({ session, frames });
+    await run({ session, frames, received });
   } finally {
     session.dispose();
     await server.stop(true);
@@ -400,7 +416,7 @@ describe("stateful paths", () => {
   test("an oversized native control frame is a typed refusal the channel can roll back", async () => {
     const opening = [{ role: "user", content: "hi" }];
     const limit = bytes(sizedRequest(opening).prepared.frameText) + 64;
-    await withAdvertisingServer(String(limit), () => "created", async ({ session, frames }) => {
+    await withAdvertisingServer(String(limit), () => "created", async ({ session, frames, received }) => {
       let send: ((frame: Record<string, unknown>) => void) | undefined;
       const nativeControl = {
         kind: "injection",
@@ -415,9 +431,36 @@ describe("stateful paths", () => {
       expect(frames).toHaveLength(1);
       // The corrected frame still goes out on the same channel.
       send!({ type: "response.inject", response_id: "response-1", input: [{ type: "function_call_output", call_id: "c", output: "ok" }] });
-      await Bun.sleep(20);
+      await received(2);
       expect(frames).toHaveLength(2);
       expect(JSON.parse(frames[1]!).input[0].output).toBe("ok");
+    });
+  });
+
+  test("a real injection channel rolls an oversized result back and accepts the corrected one", async () => {
+    const opening = [{ role: "user", content: "hi" }];
+    const limit = bytes(sizedRequest(opening).prepared.frameText) + 256;
+    await withAdvertisingServer(String(limit), () => "call", async ({ session, frames, received }) => {
+      const channel = new NativeInjectionChannel({ type: "response.create", model: "fixture-model", multi_agent: { enabled: true } });
+      const { response } = await exchange(session, opening, fresh(), { nativeControl: channel });
+      expect(response.status).toBe(200);
+      const body = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let seen = "";
+      // The call must be advertised on this response before a result for it can be injected.
+      while (!seen.includes("response.output_item.done")) {
+        const chunk = await body.read();
+        if (chunk.done) throw new Error("stream ended before the call was advertised");
+        seen += decoder.decode(chunk.value, { stream: true });
+      }
+      expect(() => channel.inject({ type: "response.inject", response_id: "response-1",
+        input: [{ type: "function_call_output", call_id: "c", output: "x".repeat(limit) }] })).toThrow(NativeSteeringError);
+      expect(frames).toHaveLength(1);
+      expect(channel.ended).toBe(false);
+      channel.inject({ type: "response.inject", response_id: "response-1", input: [{ type: "function_call_output", call_id: "c", output: "ok" }] });
+      await received(2);
+      expect(JSON.parse(frames[1]!).input[0].output).toBe("ok");
+      await body.cancel();
     });
   });
 
