@@ -1,8 +1,10 @@
 import type { OcxProviderConfig } from "../types";
 import type { VisionReasoningEffort } from "../reasoning-effort";
 import { mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
+import { createOutboundCredentialMask } from "../server/responses/terminal-error-redaction";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry } from "../lib/upstream-retry";
 import { parseSidecarSSE } from "../web-search/parse";
@@ -70,7 +72,7 @@ export async function describeImage(
   if (invalid) return { text: "", error: invalid };
 
   const headers = Object.fromEntries(mergeCodexSelectedHeaders(
-    { "Content-Type": "application/json", ...forwardProvider.headers }, selectedForwardHeaders,
+    { "Content-Type": "application/json", ...resolveProviderHeaders(forwardProvider.headers) }, selectedForwardHeaders,
   ));
   const content: unknown[] = [];
   if (contextText) content.push({ type: "input_text", text: `The user's request about this image: ${contextText}` });
@@ -118,7 +120,7 @@ export async function describeImage(
         recordOutcome?.(res.status);
         const t = await res.text().catch(() => "");
         console.warn(`[vision] sidecar HTTP ${res.status} (${Date.now() - t0}ms)`);
-        return { text: "", error: `vision sidecar HTTP ${res.status}: ${redactSecretString(t.slice(0, 200))}` };
+        return { text: "", error: `vision sidecar HTTP ${res.status}: ${redactSecretString(createOutboundCredentialMask(headers)(t.slice(0, 200)))}` };
       }
       const parsed = await parseSidecarSSE(res);
       if (linkedSignal.signal.aborted) throw linkedSignal.signal.reason;

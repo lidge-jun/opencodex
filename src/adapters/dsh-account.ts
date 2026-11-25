@@ -3,6 +3,7 @@ import { createAnthropicAdapter } from "./anthropic";
 import type { AdapterFactoryContext } from "./registry";
 import type { OcxParsedRequest, OcxProviderConfig } from "../types";
 import { resolveDshAccountMessagesUrl } from "../providers/dsh-account-destination";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 
 export { DSH_ACCOUNT_DEFAULT_MESSAGES_URL, resolveDshAccountMessagesUrl } from "../providers/dsh-account-destination";
 
@@ -57,7 +58,7 @@ export function createDshAccountAdapter(
 
       // Apply custom provider headers strictly before authoritative authentication headers
       if (provider.headers) {
-        for (const [key, value] of Object.entries(provider.headers)) {
+        for (const [key, value] of Object.entries(resolveProviderHeaders(provider.headers))) {
           if (!DSH_ACCOUNT_RESERVED_HEADERS.has(key.toLowerCase()) && typeof value === "string") {
             headers[key] = value;
           }

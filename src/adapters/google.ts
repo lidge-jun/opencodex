@@ -3,6 +3,7 @@ import type { AdapterFetchContext, AdapterRequest, IncomingMeta, ProviderAdapter
 import { debugDroppedFrame, debugProviderDiagnosticLazy } from "../lib/debug";
 import { createToolCallIdAllocator } from "./tool-call-id";
 import { openCodeGoGeminiEndpoint } from "../types/opencode-go";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 import { withProviderFailureFacts } from "../lib/failure-detail";
 import { createImageBudget, materializeInlineImage, MAX_ENCODED_BYTES_PER_IMAGE, artifactHttpUrl } from "../images/artifacts";
 import type {
@@ -1140,7 +1141,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const method = parsed.stream ? "streamGenerateContent" : "generateContent";
       const streamParam = parsed.stream ? "?alt=sse" : "";
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (provider.headers) Object.assign(headers, provider.headers);
+      const providerHeaders = resolveProviderHeaders(provider.headers);
+      for (const name of Object.keys(providerHeaders)) {
+        for (const existing of Object.keys(headers)) {
+          if (existing.toLowerCase() === name.toLowerCase() && existing !== name) delete headers[existing];
+        }
+      }
+      Object.assign(headers, providerHeaders);
 
       if (provider.googleMode === "cloud-code-assist") {
         // Google Antigravity (Cloud Code Assist): wrap the flat Gemini body in the CCA envelope.

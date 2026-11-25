@@ -63,6 +63,7 @@ import { isOAuthCredentialSiblingOf, oauthCredentialSlot } from "./credential-si
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { preservableApiKeyPool } from "./api-key-pool-preserve";
 import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 import { providerModelsUrl, resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
@@ -1234,7 +1235,7 @@ export function buildModelsRequest(
     ? getProviderRegistryEntry(providerName)?.staticHeaders
     : undefined;
   const headers: Record<string, string> = {
-    ...(mergeRegistryStaticHeaders(registryStaticHeaders, effectiveProvider.headers) ?? {}),
+    ...(mergeRegistryStaticHeaders(registryStaticHeaders, resolveProviderHeaders(effectiveProvider.headers)) ?? {}),
   };
   const discoveryUrl = (defaultUrl: string): string => resolveProviderModelDiscoveryUrl(
     providerName,

@@ -119,6 +119,7 @@ import {
   type VertexDiscoveryAuth,
 } from "../../providers/google-vertex-model-discovery";
 import { applyConfiguredHeadersLast, fetchOllamaShowEnrichment, ollamaShowEnrichable } from "../../providers/ollama-show";
+import { resolveProviderHeaders } from "../../providers/provider-header-resolve";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } from "../../lib/admission";
 import { CODEX_CUSTOM_MODEL_CATALOG_KIND, JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
@@ -772,7 +773,7 @@ async function fetchProviderModelsUncached(
   // provider.headers LAST (configured wins, case-insensitive collapse). Reapply the configured
   // provider headers here so the whole Ollama request family shares that one authority.
   if (ollamaShowEnrichable(name, prov)) {
-    headers = applyConfiguredHeadersLast(headers, prov.headers);
+    headers = applyConfiguredHeadersLast(headers, resolveProviderHeaders(prov.headers));
   }
   const urlClass = new URL(url).hostname.endsWith("aiplatform.googleapis.com")
     ? "vertex-aiplatform"

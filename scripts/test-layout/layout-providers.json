@@ -26,5 +26,6 @@
   "management-provider-model-discovery.test.ts": "server",
   "claude-cli-fixture-stdout-flush.test.ts": "providers",
   "alibaba-token-plan-developer-role.test.ts": "providers",
-  "provider-quota-probe-isolation.test.ts": "providers"
+  "provider-quota-probe-isolation.test.ts": "providers",
+  "provider-header-env-refs.test.ts": "providers"
 }

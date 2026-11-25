@@ -1,5 +1,6 @@
 import { formatClientRetryAfter } from "../lib/client-retry-after";
 import { isolateCodexPoolClientMetadata, mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
 /** Native history/notes JSON relay. No interpretation of encrypted tool arguments or retries. */
 import { formatErrorResponse } from "../bridge";
@@ -113,7 +114,7 @@ async function relayContextHistory(
   }
   let authContext: Awaited<ReturnType<typeof resolveCodexAuthContext>>;
   let upstreamBody: unknown = body;
-  let headers = new Headers(candidate.provider.headers);
+  let headers = new Headers(resolveProviderHeaders(candidate.provider.headers));
   try {
     authContext = await resolveCodexAuthContext(contextSelectionHeaders(req.headers, sessionId), config, owner.kind === "stored" ? "pool" : "direct", {
       // The same deadline bounds credential selection and refresh waits.
@@ -135,7 +136,7 @@ async function relayContextHistory(
     logCtx.provider = formatCodexProviderForLog(candidate.providerName, codexLogAccountId(authContext), config);
     // Materialization rechecks the current account policy after async selection.
     // Synthetic lane IDs are local selection metadata, never upstream headers.
-    headers = mergeCodexSelectedHeaders(candidate.provider.headers, materializeCodexUpstreamAuth(req.headers, authContext, {
+    headers = mergeCodexSelectedHeaders(resolveProviderHeaders(candidate.provider.headers), materializeCodexUpstreamAuth(req.headers, authContext, {
       config, modelId: "context_history", admission, substituteMainCredential,
     }));
     if (authContext.kind === "pool") upstreamBody = isolateCodexPoolClientMetadata(body, authContext.chatgptAccountId);

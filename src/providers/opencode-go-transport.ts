@@ -53,6 +53,7 @@ export function resolveOpenCodeGoTransport<T extends OcxProviderConfig>(
   return {
     ...provider,
     headers: {
+      // Kept as configured; the outbound header builder resolves references once.
       ...(provider.headers ?? {}),
       [OPENCODE_GO_SESSION_HEADER]: deriveOpenCodeGoSessionId(sessionLane, provider.adapter),
     },

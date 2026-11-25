@@ -8,6 +8,7 @@ import {
 } from "../../codex/forward-transport-headers";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers-destination";
 import { normalizeForwardedClientHeaderName } from "../../lib/provider-client-headers";
+import { resolveProviderHeaders } from "../../providers/provider-header-resolve";
 import { AGENT_ASSERTION_HEADER } from "../../lib/authorization-scheme";
 import { openaiResponsesUrl } from "../openai-responses-url";
 
@@ -40,12 +41,21 @@ export function buildResponsesTransport(provider: OcxProviderConfig, incoming: P
   url: string; headers: Record<string, string>;
 } {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const providerHeaders = resolveProviderHeaders(provider.headers);
+  const applyProviderHeaders = () => {
+    for (const name of Object.keys(providerHeaders)) {
+      for (const existing of Object.keys(headers)) {
+        if (existing.toLowerCase() === name.toLowerCase() && existing !== name) delete headers[existing];
+      }
+    }
+    Object.assign(headers, providerHeaders);
+  };
   let url: string;
   if (provider.authMode === "forward") {
     const mayForwardCallerCredentials = isCanonicalOpenAiForwardProvider(provider);
     const baseUrl = mayForwardCallerCredentials ? CODEX_FORWARD_BASE_URL : stripTrailingSlashes(provider.baseUrl);
     url = `${baseUrl}/responses`;
-    if (provider.headers) Object.assign(headers, provider.headers);
+    applyProviderHeaders();
     const runtimeProvider = provider as {
       _codexAccountOverride?: { accessToken: string; chatgptAccountId: string; kind?: "pool" | "main-pool" };
       _codexAccountRequired?: boolean;
@@ -90,7 +100,7 @@ export function buildResponsesTransport(provider: OcxProviderConfig, incoming: P
       ? openaiResponsesUrl(provider.baseUrl)
       : `${provider.baseUrl.replace(/\/$/, "")}${provider.responsesPath}`;
     if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;
-    if (provider.headers) Object.assign(headers, provider.headers);
+    applyProviderHeaders();
   }
   if (Array.isArray(provider.forwardClientHeaders)) {
     for (const rawName of provider.forwardClientHeaders.slice(0, 64)) {

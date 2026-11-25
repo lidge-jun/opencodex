@@ -5,6 +5,7 @@ import { isPassiveKeyTransparent, markPassiveKeyTransparent } from "../lib/passi
 import { configuredOutboundFetch } from "../lib/proxy-env";
 import { resolveGithubCopilotTransport } from "./github-copilot-transport";
 import { resolveMistralTransport } from "./mistral-transport";
+import { resolveProviderHeaders } from "./provider-header-resolve";
 
 export const XAI_GROK_CLI_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 
@@ -126,6 +127,7 @@ export function resolveProviderTransport(
   if (providerName !== "xai") return resolveMistralTransport(provider);
 
   const cacheKey = promptCacheKey?.trim();
+  const providerHeaders = resolveProviderHeaders(provider.headers);
   const affinity = cacheKey ? deriveXaiConvId(cacheKey) : undefined;
   const stableDefaults: Record<string, string> = {
     [XAI_GROK_COMPATIBILITY.headers.userAgent]: XAI_GROK_COMPATIBILITY.userAgent,
@@ -141,6 +143,12 @@ export function resolveProviderTransport(
     ...withoutUserOverridden(stableDefaults, provider.headers),
     ...(provider.headers ?? {}),
   };
+  // The returned provider keeps configured references so the adapter resolves them once. The
+  // fetch wrapper below adds headers straight to the outbound init, so it gets resolved values.
+  const sentStableHeaders = {
+    ...withoutUserOverridden(stableDefaults, provider.headers),
+    ...providerHeaders,
+  };
   // Keep API-key provider metadata compatible with key-pool rotation; session/UA defaults
   // remain transport-scoped and are applied by the wrapper immediately below.
   const headers = provider.authMode === "oauth"
@@ -152,7 +160,7 @@ export function resolveProviderTransport(
         ...(provider.headers ?? {}),
       };
   const configuredRequestId = findHeaderCaseInsensitive(
-    provider.headers,
+    providerHeaders,
     XAI_GROK_COMPATIBILITY.headers.requestId,
   );
   // Pin the request id per resolved transport (= per logical request until key rotation):
@@ -168,7 +176,7 @@ export function resolveProviderTransport(
     ?? markEgressTransparentExecutor(((input, init) => configuredOutboundFetch(input, init)) as typeof globalThis.fetch);
   if (!provider.fetch) markPassiveKeyTransparent(baseFetch);
   const attemptFetch = ((input, init) =>
-    baseFetch(input, withGeneratedRequestId(init, requestId, stableHeaders))) as typeof globalThis.fetch;
+    baseFetch(input, withGeneratedRequestId(init, requestId, sentStableHeaders))) as typeof globalThis.fetch;
   // This wrapper only adds a header and forwards the init, so it carries a request-scoped proxy
   // option through to whatever it wraps — but only if what it wraps carries it too. A
   // configured executor owns its own routing and is not assumed to.

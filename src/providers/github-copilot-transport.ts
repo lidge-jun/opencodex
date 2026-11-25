@@ -35,6 +35,8 @@ export function resolveGithubCopilotTransport(
   provider: OcxProviderTransport,
   apiBaseUrl?: string,
 ): OcxProviderTransport {
+  // Configured values stay as written (references included): the adapter that builds the
+  // outbound headers resolves them once, so resolving here too would expand a value twice.
   const stableDefaults = withoutUserOverridden(GITHUB_COPILOT_EDITOR_HEADERS, provider.headers);
   const headers = {
     ...stableDefaults,

@@ -1,7 +1,9 @@
 import type { OcxProviderConfig } from "../types";
 import { CODEX_RESPONSES_LITE_HEADER, mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
+import { createOutboundCredentialMask } from "../server/responses/terminal-error-redaction";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import {
   applyUpstreamRecoveryInit,
@@ -85,7 +87,7 @@ export async function runWebSearch(
     return { text: "", sources: [], error: "Luna Reserve compatibility is only available as a conversation model, not a search helper. Choose another search helper model." };
   }
   const mergedHeaders = mergeCodexSelectedHeaders(
-    { "Content-Type": "application/json", ...forwardProvider.headers }, selectedForwardHeaders,
+    { "Content-Type": "application/json", ...resolveProviderHeaders(forwardProvider.headers) }, selectedForwardHeaders,
   );
   mergedHeaders.delete(CODEX_RESPONSES_LITE_HEADER);
   const headers = Object.fromEntries(mergedHeaders);
@@ -173,7 +175,7 @@ export async function runWebSearch(
       const t = await res.text().catch(() => "");
       detachBodyGuard();
       console.warn(`[web-search] sidecar HTTP ${res.status} for query "${query.slice(0, 80)}" (${Date.now() - t0}ms)`);
-      return { text: "", sources: [], error: `sidecar HTTP ${res.status}: ${redactSecretString(t.slice(0, 200))}` };
+      return { text: "", sources: [], error: `sidecar HTTP ${res.status}: ${redactSecretString(createOutboundCredentialMask(headers)(t.slice(0, 200)))}` };
     }
     try {
       const parsed = await parseSidecarSSE(res);

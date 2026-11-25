@@ -1,5 +1,6 @@
 import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
 import { isolateCodexPoolClientMetadata, mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 import { codexCompatibleUrl } from "../codex/context-compat";
 /**
  * /v1/live and /v1/realtime/calls relay (issue #371).
@@ -776,7 +777,7 @@ export async function resolveLiveRelay(
       forward.releaseProbeLease?.();
       return denial;
     }
-    const selectedHeaders = mergeCodexSelectedHeaders({ ...headers, ...provider.headers }, forward.headers);
+    const selectedHeaders = mergeCodexSelectedHeaders({ ...headers, ...resolveProviderHeaders(provider.headers) }, forward.headers);
     logCtx.model = "gpt-live";
     return {
       headers: Object.fromEntries(selectedHeaders),
@@ -797,7 +798,7 @@ export async function resolveLiveRelay(
       modelId: scopedModel,
     });
     if (denial) return denial;
-    if (provider.headers) Object.assign(headers, provider.headers);
+    Object.assign(headers, resolveProviderHeaders(provider.headers));
     headers.authorization = `Bearer ${apiKey}`;
     logCtx.provider = providerName;
     logCtx.model = "gpt-live";

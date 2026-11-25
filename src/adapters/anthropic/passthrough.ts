@@ -21,6 +21,7 @@ import { mergeAnthropicBetaHeader } from "../../providers/anthropic-fast";
 import { applyClaudeToolPrefix, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../../oauth/anthropic";
 import { credentialDomainFor, opaqueStateForDestination } from "../../protocols/opaque-state";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
+import { resolveProviderHeaders } from "../../providers/provider-header-resolve";
 import {
   anthropicBaseRequestHeaders,
   applyAnthropicKeyAuth,
@@ -311,10 +312,11 @@ export function buildAnthropicMessagesPassthroughRequest(
   if (oauth) applyAnthropicOAuthAuth(headers, provider.apiKey, resolvedSessionKey);
   else applyAnthropicKeyAuth(headers, provider);
   // Operator-configured provider headers apply exactly as the adapter applies them.
-  if (provider.headers) {
-    const configured = new Set(Object.keys(provider.headers).map(name => name.toLowerCase()));
+  const providerHeaders = resolveProviderHeaders(provider.headers);
+  if (Object.keys(providerHeaders).length > 0) {
+    const configured = new Set(Object.keys(providerHeaders).map(name => name.toLowerCase()));
     for (const name of Object.keys(headers)) if (configured.has(name.toLowerCase())) delete headers[name];
-    Object.assign(headers, provider.headers);
+    Object.assign(headers, providerHeaders);
   }
   if (oauth) {
     const wireHeaders = new Headers(headers);

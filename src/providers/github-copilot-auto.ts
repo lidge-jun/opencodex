@@ -5,6 +5,7 @@ import { ProviderOutboundSendCancelledError, providerOutboundGet, providerOutbou
 import { githubCopilotHttpError, resolveCopilotApiBaseUrl } from "../oauth/github-copilot";
 import { resolveGithubCopilotTransport } from "./github-copilot-transport";
 import { waitForProviderRequestSlot, releaseProviderRequestSlot } from "./request-pacing";
+import { resolveProviderHeaders } from "./provider-header-resolve";
 
 export interface CopilotModel {
   id: string;
@@ -42,7 +43,7 @@ async function requestJson(provider: OcxProviderConfig, path: string, signal?: A
   sessionToken?: string, beforeSend?: () => boolean, concurrency = true): Promise<Record<string, unknown>> {
   const boundedSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(8_000)]) : AbortSignal.timeout(8_000);
   boundedSignal.throwIfAborted();
-  const headers = new Headers(provider.headers);
+  const headers = new Headers(resolveProviderHeaders(provider.headers));
   headers.set("Authorization", `Bearer ${provider.apiKey}`);
   headers.set("X-GitHub-Api-Version", "2026-08-01");
   headers.set("Content-Type", "application/json");
@@ -124,9 +125,9 @@ export async function resolveCopilotAuto(provider: OcxProviderConfig, requestedM
   const transport = resolveGithubCopilotTransport(provider, provider.authMode === "oauth"
     ? resolveCopilotApiBaseUrl(provider.baseUrl) : undefined);
   // Never inherit a session token from a previous account or persist it in config.
-  const cleanHeaders = new Headers(transport.headers);
-  cleanHeaders.delete("Copilot-Session-Token");
-  transport.headers = Object.fromEntries(cleanHeaders);
+  // Filter the raw record: a Headers round trip would trim and join values before references resolve.
+  transport.headers = Object.fromEntries(Object.entries(transport.headers ?? {})
+    .filter(([name]) => name.toLowerCase() !== "copilot-session-token"));
   let models: CopilotModel[];
   try { models = await fetchCopilotAutoModels(transport, signal, beforeSend, 60_000, concurrency); }
   catch (error) {

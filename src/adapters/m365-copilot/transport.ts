@@ -7,6 +7,7 @@ import type { TranslatorBudget } from "../../lib/translator-budget";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import type { M365ImageAnnotation } from "./images";
 import { M365_RESPONSE_LIMIT_MESSAGES } from "./response-limits";
+import { resolveProviderHeaders } from "../../providers/provider-header-resolve";
 
 const RS = "\x1e";
 const MAX_FRAME_BYTES = 2 * 1024 * 1024;
@@ -67,7 +68,7 @@ export interface M365TurnOptions {
   onText(text: string): void; onThinking?(text: string): void; beforeConnect?(): void; beforeSend?(): void; budget?: TranslatorBudget;
   createSocket?: (url: string, headers: Record<string, string>) => WebSocket;
   /** Provider egress fields; the ChatHub socket follows the same route as discovery and uploads. */
-  route?: Pick<OcxProviderConfig, "proxy" | "noProxy"> & { fetch?: unknown; providerFetch?: typeof globalThis.fetch };
+  route?: Pick<OcxProviderConfig, "proxy" | "noProxy" | "headers"> & { fetch?: unknown; providerFetch?: typeof globalThis.fetch };
 }
 
 export interface M365SocketDialOptions { headers: Record<string, string>; proxy?: string }
@@ -111,7 +112,13 @@ export function runM365CopilotTurn(options: M365TurnOptions): Promise<string> {
   if (options.signal?.aborted) return Promise.reject(new M365CopilotTurnError("Microsoft 365 Copilot turn cancelled", 499));
   const requestId = crypto.randomUUID();
   const url = m365WebSocketUrl(options.token, options.model, options.conversation, requestId);
-  const headers = { Origin: "https://m365.cloud.microsoft", "User-Agent": "opencodex", "X-RoutingParameter-SessionKey": options.conversation.conversationId };
+  const configured = resolveProviderHeaders(options.route?.headers);
+  const configuredNames = new Set(Object.keys(configured).map(name => name.toLowerCase()));
+  // A configured name replaces its default in any letter case instead of joining it.
+  const defaults = Object.entries({ Origin: "https://m365.cloud.microsoft", "User-Agent": "opencodex",
+    "X-RoutingParameter-SessionKey": options.conversation.conversationId })
+    .filter(([name]) => !configuredNames.has(name.toLowerCase()));
+  const headers: Record<string, string> = { ...Object.fromEntries(defaults), ...configured };
   const dial = m365SocketDialOptions(options.route, url, headers);
   return new Promise((resolveTurn, reject) => {
     let socket: WebSocket;

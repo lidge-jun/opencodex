@@ -17,6 +17,7 @@ import { NativeProfileError } from "../codex/native-profile-types";
 import { formatCodexProviderForLog } from "../codex/routing";
 import type { AdmissionLease } from "../lib/admission";
 import { captureExplicitOpenAiCallerAuth, resolveFirstUsableOpenAiSidecar, selectOpenAiImagesProvider } from "../providers/openai-sidecar";
+import { resolveProviderHeaders } from "../providers/provider-header-resolve";
 import type { OcxConfig } from "../types";
 import { admissionScopeDenial } from "./admission-model-scope";
 import {
@@ -158,7 +159,7 @@ export async function resolveAudioUpstream(
     }
     if (candidates.keyed && options.exactAccountId === undefined) {
       const { providerName, provider, apiKey } = candidates.keyed;
-      const selected = new Headers(provider.headers);
+      const selected = new Headers(resolveProviderHeaders(provider.headers));
       selected.set("authorization", `Bearer ${apiKey}`);
       validateForwardAdmissionCredential(selected, config);
       const keyedDenial = admissionScopeDenial(config, options.admission, options.model, {

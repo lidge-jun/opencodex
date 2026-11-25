@@ -244,6 +244,7 @@ import { affinityLaneFromRequest, linkRequestSessionLane, reasoningReplayConvers
 import { recallComboForLane } from "./combo-session-recall";
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
 import { warnEagerCodexToolCatalog } from "./codex-tool-catalog";
+import { resolveProviderHeaders } from "../../providers/provider-header-resolve";
 
 export { COMPACT_RESPONSE_MAX_BYTES } from "./compact-response-body";
 
@@ -989,6 +990,10 @@ export async function handleResponsesCompact(
         stampApiKeyAccountLabel(logCtx, route.providerName, compactProvider);
       }
     }
+    // Same configured headers as a regular Responses send; the selected credential stays authoritative.
+    for (const [name, value] of Object.entries(resolveProviderHeaders(compactProvider.headers))) {
+      if (!/^(?:authorization|chatgpt-account-id)$/i.test(name)) headers.set(name, value);
+    }
     if (compactProvider.authMode !== "forward" && isProviderApiKeyPaused(compactProvider)) {
       return formatErrorResponse(403, "permission_error", new ProviderApiKeyPausedError().message);
     }
@@ -1263,7 +1268,9 @@ export async function handleResponsesCompact(
                 current = projectCapturedCustomToolPolicy(current, route.staticPolicy);
                 const rebuilt = new Headers(sendHeaders);
                 for (const name of Object.keys(sendProvider.headers ?? {})) rebuilt.delete(name);
-                for (const [name, value] of Object.entries(current.headers ?? {})) rebuilt.set(name, value);
+                // An unset Content-Type reference must fall back to JSON instead of dropping it.
+                if (!rebuilt.has("content-type")) rebuilt.set("content-type", "application/json");
+                for (const [name, value] of Object.entries(resolveProviderHeaders(current.headers))) rebuilt.set(name, value);
                 rebuilt.set("authorization", `Bearer ${resolveProviderApiKey(current.apiKey)}`);
                 const currentGateway = gatewayTransport
                   ? buildResponsesTransport({ ...current, apiKey: resolveProviderApiKey(current.apiKey) }, { headers: req.headers })
