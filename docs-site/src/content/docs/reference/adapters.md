@@ -1061,7 +1061,8 @@ quietly switching tier. Resolution never moves
 to another family. When the account catalog is unavailable, the effort is
 appended to the id instead, except on SWE-2 (Medium, High, Max) and SWE-2.1
 (Low, Medium, High, XHigh, Max), where it still rounds onto one of the family's
-own lanes.
+own lanes and `fast`, or an id ending in `-lightning`, selects that lane's
+Ultrafast row.
 
 ## `zed`
 
