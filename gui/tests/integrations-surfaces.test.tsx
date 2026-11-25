@@ -62,6 +62,7 @@ let codexDesiredEnabled = true;
 /** Claude Desktop reports an applied gateway whose file drifted ("Update needed"); the PUT below clears it. */
 let desktopStale = false;
 let desktopApplied = false;
+let desktopNativeDesiredEnabled = true;
 let desktopApplyWarning: "first_party_mode_unsaved" | "gateway_state_unsaved" | undefined;
 /** Codex's enable PUT saves intent but its sync does not complete (`apply_incomplete`). */
 let codexApplyIncomplete = false;
@@ -141,6 +142,7 @@ beforeEach(() => {
   codexDesiredEnabled = true;
   desktopStale = false;
   desktopApplied = false;
+  desktopNativeDesiredEnabled = true;
   desktopApplyWarning = undefined;
   codexApplyIncomplete = false;
   deleteResponse = () => json({ ok: true, clientId: "hermes", opId: "op-old", snapshotRemoved: true });
@@ -231,7 +233,7 @@ beforeEach(() => {
           state: "absent",
           installed: true,
           configPath: "/tmp/desktop",
-          desiredEnabled: true,
+          desiredEnabled: desktopNativeDesiredEnabled,
           disableBlocked: null,
         }] });
     }
@@ -1640,6 +1642,22 @@ test("the Update needed pill re-applies a drifted Claude Desktop in one click an
   expect(pill()).toBeNull();
   // The pill the keyboard user pressed is gone; focus lands on the card title, not <body>.
   expect(testWindow.document.activeElement).toBe(card.querySelector(".integration-card-link") as never);
+});
+
+test("the Claude Desktop Update needed badge cannot re-enable a client whose native intent is off", async () => {
+  desktopStale = true;
+  desktopApplied = true;
+  desktopNativeDesiredEnabled = false;
+  await mountOverview();
+
+  const card = container.querySelector(".integration-card[data-client='claudeDesktop']")!;
+  expect(switchFor("claudeDesktop")?.getAttribute("aria-checked")).toBe("true");
+  expect(card.textContent).toContain("The profile file changed after it was applied");
+  const badge = card.querySelector<HTMLElement>(".badge")!;
+  expect(badge.textContent?.trim()).toBe("Update needed");
+  expect(card.querySelector("button.integration-badge-action")).toBeNull();
+  await act(async () => { badge.click(); });
+  expect(requests.some(request => request.method === "PUT")).toBe(false);
 });
 
 test.each(["first_party_mode_unsaved", "gateway_state_unsaved"] as const)(

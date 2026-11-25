@@ -301,11 +301,12 @@ function elsewhere(row: OverviewRow): boolean {
  * when the switch is off (stale there means cleanup is pending, and applying would
  * undo the user's choice), and never for Aside, whose apply is per profile.
  */
-function canReapply(row: OverviewRow): boolean {
+function canReapply(row: OverviewRow, desktopNativeOff: boolean): boolean {
   return row.state === "stale"
     && row.installed
     && row.toggle !== null
     && Boolean(row.toggleOn ?? row.applied)
+    && !(row.toggle === "claude-desktop" && desktopNativeOff)
     && row.status?.clientId !== "aside";
 }
 
@@ -467,6 +468,7 @@ export default function IntegrationsOverview({
    */
   const clientsSettled = statesResource.state.data !== undefined;
   const native = nativeResource.state.data ?? null;
+  const desktopNativeOff = native?.some(status => status.clientId === "claude-desktop" && status.desiredEnabled === false) ?? false;
   // `readOptional` returns null for a failed probe. Only an actual array is a
   // settled contract; an empty array is meaningful and removes both switches.
   const nativeSettled = native !== null;
@@ -853,7 +855,7 @@ export default function IntegrationsOverview({
       onChooseProfile={row.status?.clientId === "aside" && row.status.state === "conflict" && row.status.reason !== "candidate-conflict" && row.installed
         ? () => navigateHash(row.hash)
         : null}
-      onReapply={canReapply(row) ? () => reapplyCard(row) : null}
+      onReapply={canReapply(row, desktopNativeOff) ? () => reapplyCard(row) : null}
     />
   );
 
