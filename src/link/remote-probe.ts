@@ -13,6 +13,12 @@ export function linkCommandBudget(latencyMs = 0): number {
   return Math.min(LINK_COMMAND_MAX_MS, LINK_COMMAND_WORK_MS + Math.ceil(latency * 4));
 }
 
+/** Post-restart relay check: the health and catalog probes are two SSH commands, so each pays SSH setup. */
+export function linkRelayBudget(latencyMs = 0): number {
+  const latency = Number.isFinite(latencyMs) ? Math.max(0, latencyMs) : 0;
+  return Math.min(LINK_COMMAND_MAX_MS, LINK_RELAY_VERIFY_MS + 2 * Math.ceil(latency * 4));
+}
+
 export function linkRestartBudget(latencyMs = 0): number {
   return MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIMEOUT_MS + linkCommandBudget(latencyMs);
 }
