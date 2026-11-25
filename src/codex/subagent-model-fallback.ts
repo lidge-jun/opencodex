@@ -467,7 +467,7 @@ export function getSubagentQuotaPrimeStateForTests(): {
   };
 }
 
-function rewriteParsedModel(parsed: OcxParsedRequest, model: string): void {
+export function rewriteParsedModel(parsed: OcxParsedRequest, model: string): void {
   parsed.modelId = model;
   if (parsed._rawBody && typeof parsed._rawBody === "object") {
     (parsed._rawBody as { model?: string }).model = model;

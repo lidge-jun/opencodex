@@ -238,8 +238,15 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       return jsonResponse({ error: "combo must be an object" }, 400);
     }
     const requestedCombo: Record<string, unknown> = body.combo;
+    const savedFailoverOptions: Record<string, true> = {};
+    if (requestedCombo.strategy === undefined || requestedCombo.strategy === "failover") {
+      for (const key of ["quotaOnlyFallback", "preserveFallbackModel"] as const) {
+        if (!Object.hasOwn(requestedCombo, key) && previous?.[key] === true) savedFailoverOptions[key] = true;
+      }
+    }
     const effectiveCombo = {
       ...requestedCombo,
+      ...savedFailoverOptions,
       // Clients that do not expose this opt-in must preserve it on unrelated edits.
       ...(!Object.hasOwn(requestedCombo, "cooldownReprobe") && previous?.cooldownReprobe !== undefined
         ? { cooldownReprobe: previous.cooldownReprobe }

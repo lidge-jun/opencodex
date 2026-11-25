@@ -9,7 +9,7 @@ import type { ApiKeyCooldownHold, ApiKeyCooldownPersistence } from "./api-key-co
  * one (unit tests, detached tools) the state stays in memory. Expiry checks and sweeps only drop
  * local rows: an expired local copy must never erase a row another process sharing the home extended.
  */
-type KeyCooldown = { cooldownUntil: number; generation?: string };
+type KeyCooldown = { cooldownUntil: number; generation?: string; quotaSpentUntil?: number };
 const keyCooldowns = new Map<string, KeyCooldown>();
 let persistence: ApiKeyCooldownPersistence | undefined;
 
@@ -30,15 +30,25 @@ export function apiKeyCooldownGeneration(providerName: string, keyId: string, cr
     .slice(0, 24);
 }
 
-export function setKeyCooldown(providerName: string, keyId: string, cooldownUntil: number, credential?: string): void {
+/**
+ * `quotaSpent` marks a refusal that proved the key's quota or credit is spent. A rate limit leaves
+ * it unset, because that key serves again once the window passes. `credential` is the key that
+ * failed; it binds the hold to that key and lets a running server persist it.
+ */
+export function setKeyCooldown(providerName: string, keyId: string, cooldownUntil: number, quotaSpent = false, credential?: string): void {
   const key = cooldownKey(providerName, keyId);
   const generation = credential === undefined ? undefined : apiKeyCooldownGeneration(providerName, keyId, credential);
   const prior = keyCooldowns.get(key);
   // A hold recorded against a different key under the same id belongs to that old key.
   const sameKey = prior !== undefined && (generation === undefined || prior.generation === undefined || prior.generation === generation);
   const until = sameKey ? Math.max(prior.cooldownUntil, cooldownUntil) : cooldownUntil;
+  const quotaSpentUntil = Math.max(sameKey ? prior.quotaSpentUntil ?? 0 : 0, quotaSpent ? cooldownUntil : 0);
   const kept = generation ?? (sameKey ? prior.generation : undefined);
-  keyCooldowns.set(key, kept === undefined ? { cooldownUntil: until } : { cooldownUntil: until, generation: kept });
+  keyCooldowns.set(key, {
+    cooldownUntil: until,
+    ...(kept !== undefined ? { generation: kept } : {}),
+    ...(quotaSpentUntil > 0 ? { quotaSpentUntil } : {}),
+  });
   // Only a hold bound to the key that just failed is written, and only for a key the store accepts.
   if (persistence && generation !== undefined && credential !== undefined && persistence.persists(credential)) {
     persistence.record({ provider: providerName, keyId, generation, cooldownUntil: until });
@@ -59,6 +69,11 @@ export function getKeyCooldownUntil(providerName: string, keyId: string, now = D
   const entry = keyCooldowns.get(cooldownKey(providerName, keyId));
   if (!entry) return null;
   return entry.cooldownUntil > now ? entry.cooldownUntil : null;
+}
+
+/** True while the key is cooling because a refusal proved its quota or credit spent. */
+export function isKeyQuotaSpent(providerName: string, keyId: string, now = Date.now()): boolean {
+  return (keyCooldowns.get(cooldownKey(providerName, keyId))?.quotaSpentUntil ?? 0) > now;
 }
 
 export function sweepExpiredApiKeyCooldowns(now = Date.now()): number {

@@ -78,7 +78,7 @@ test("a key cooled before a restart stays cooled until its expiry", () => {
   const cfg = config({ a: "sk-alpha-0001", b: "sk-beta-0002" });
   const store = installApiKeyCooldownPersistence(cfg);
   const until = Date.now() + 60_000;
-  setKeyCooldown("p", "a", until, "sk-alpha-0001");
+  setKeyCooldown("p", "a", until, false, "sk-alpha-0001");
   expect(store.flush()).toBe(true);
   expect(stored().rows).toEqual([row("a", "sk-alpha-0001", until)]);
   expect(readFileSync(file(), "utf8")).not.toContain("sk-alpha");
@@ -102,7 +102,7 @@ test.skipIf(process.platform === "win32")("the cooldown file is private like con
   const cfg = config({ a: "sk-alpha-0001" });
   saveConfig(cfg);
   const store = installApiKeyCooldownPersistence(cfg);
-  setKeyCooldown("p", "a", Date.now() + 60_000, "sk-alpha-0001");
+  setKeyCooldown("p", "a", Date.now() + 60_000, false, "sk-alpha-0001");
   expect(store.flush()).toBe(true);
   expect(statSync(file()).mode & 0o777).toBe(0o600);
   expect(statSync(file()).mode & 0o777).toBe(statSync(getConfigPath()).mode & 0o777);
@@ -116,7 +116,7 @@ test("a provider named like an Object.prototype member keeps its holds across a 
     cfg.defaultProvider = name;
     const store = restart(cfg);
     const until = Date.now() + 60_000;
-    setKeyCooldown(name, "a", until, "sk-alpha-0001");
+    setKeyCooldown(name, "a", until, false, "sk-alpha-0001");
     expect(store.flush()).toBe(true);
     restart(cfg);
     expect(getKeyCooldownUntil(name, "a")).toBe(until);
@@ -141,7 +141,7 @@ test("a key replaced under the same id does not inherit the old key's hold", () 
   expect(isKeyInCooldown("p", "a")).toBe(false);
 
   // While running: a replaced key drops the hold at the next reconcile.
-  setKeyCooldown("p", "a", Date.now() + 60_000, "sk-new-0002");
+  setKeyCooldown("p", "a", Date.now() + 60_000, false, "sk-new-0002");
   expect(reconcileApiKeyCooldownGenerations(config({ a: "sk-new-0002" }).providers)).toBe(0);
   expect(reconcileApiKeyCooldownGenerations(config({ a: "sk-newer-0003" }).providers)).toBe(1);
   expect(isKeyInCooldown("p", "a")).toBe(false);
@@ -149,17 +149,17 @@ test("a key replaced under the same id does not inherit the old key's hold", () 
 
 test("a cooldown for a new key replaces a longer hold of the old key", () => {
   const now = Date.now();
-  setKeyCooldown("p", "a", now + 600_000, "sk-old-0001");
-  setKeyCooldown("p", "a", now + 60_000, "sk-new-0002");
+  setKeyCooldown("p", "a", now + 600_000, false, "sk-old-0001");
+  setKeyCooldown("p", "a", now + 60_000, false, "sk-new-0002");
   expect(getKeyCooldownUntil("p", "a", now)).toBe(now + 60_000);
-  setKeyCooldown("p", "a", now + 30_000, "sk-new-0002");
+  setKeyCooldown("p", "a", now + 30_000, false, "sk-new-0002");
   expect(getKeyCooldownUntil("p", "a", now)).toBe(now + 60_000);
 });
 
 test("a manual clear is persisted, so a restart does not revive the hold", () => {
   const cfg = config({ a: "sk-alpha-0001" });
   const store = installApiKeyCooldownPersistence(cfg);
-  setKeyCooldown("p", "a", Date.now() + 60_000, "sk-alpha-0001");
+  setKeyCooldown("p", "a", Date.now() + 60_000, false, "sk-alpha-0001");
   expect(store.flush()).toBe(true);
   clearKeyCooldowns("p");
   expect(store.flush()).toBe(true);
@@ -173,10 +173,10 @@ test("a hold recorded right after a clear in the same process survives it", () =
   const cfg = config({ a: "sk-alpha-0001" });
   const store = installApiKeyCooldownPersistence(cfg);
   const now = Date.now();
-  setKeyCooldown("p", "a", now + 600_000, "sk-alpha-0001");
+  setKeyCooldown("p", "a", now + 600_000, false, "sk-alpha-0001");
   // No time passes between these: ordering comes from the clear counter, not the clock.
   clearKeyCooldowns("p");
-  setKeyCooldown("p", "a", now + 60_000, "sk-alpha-0001");
+  setKeyCooldown("p", "a", now + 60_000, false, "sk-alpha-0001");
   expect(store.flush(now)).toBe(true);
   expect(stored().rows.map(r => r.cooldownUntil)).toEqual([now + 60_000]);
   restart(cfg);
@@ -252,7 +252,7 @@ test("only inline keys are persisted; every value the resolver reads elsewhere s
   const cfg = config({ env: "${OCX_TEST_KEY}", dash: "$KEY-NAME", chain: "keychain:p/chain", inline: "sk-inline" });
   const store = installApiKeyCooldownPersistence(cfg);
   const until = Date.now() + 60_000;
-  for (const entry of cfg.providers.p!.apiKeyPool!) setKeyCooldown("p", entry.id, until, entry.key);
+  for (const entry of cfg.providers.p!.apiKeyPool!) setKeyCooldown("p", entry.id, until, false, entry.key);
   expect(store.flush()).toBe(true);
   expect(keyIds(stored().rows)).toEqual(["inline"]);
   expect(isKeyInCooldown("p", "dash")).toBe(true);
@@ -266,7 +266,7 @@ test("only inline keys are persisted; every value the resolver reads elsewhere s
 test("switching homes drops the previous home's holds before restoring", () => {
   const now = Date.now();
   installApiKeyCooldownPersistence(config({ a: "sk-one" }), now);
-  setKeyCooldown("p", "a", now + 600_000, "sk-one");
+  setKeyCooldown("p", "a", now + 600_000, false, "sk-one");
   const other = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-other-"));
   try {
     process.env.OPENCODEX_HOME = other;
@@ -301,7 +301,7 @@ test("only a live server binds the file, and its final release detaches it", asy
 
   // After the last server stops, a cooldown and a clear stay in memory and leave the file alone.
   const before = readFileSync(file(), "utf8");
-  setKeyCooldown("p", "a", until + 60_000, "sk-alpha-0001");
+  setKeyCooldown("p", "a", until + 60_000, false, "sk-alpha-0001");
   clearKeyCooldowns("p");
   await wait(400);
   expect(readFileSync(file(), "utf8")).toBe(before);
@@ -311,7 +311,7 @@ test("a peer's clear also drops this process's in-memory hold, so a later refusa
   const cfg = config({ a: "sk-alpha-0001" });
   const store = installApiKeyCooldownPersistence(cfg);
   const now = Date.now();
-  setKeyCooldown("p", "a", now + 600_000, "sk-alpha-0001");
+  setKeyCooldown("p", "a", now + 600_000, false, "sk-alpha-0001");
   expect(store.flush(now)).toBe(true);
   const peer = new ApiKeyCooldownStore(home);
   peer.load(now);
@@ -319,12 +319,12 @@ test("a peer's clear also drops this process's in-memory hold, so a later refusa
   expect(peer.flush(now)).toBe(true);
 
   // Recorded before this process learned of the clear: neither persisted nor kept as the old maximum.
-  setKeyCooldown("p", "a", now + 30_000, "sk-alpha-0001");
+  setKeyCooldown("p", "a", now + 30_000, false, "sk-alpha-0001");
   expect(store.flush(now)).toBe(true);
   expect(stored().rows).toEqual([]);
   expect(isKeyInCooldown("p", "a", now)).toBe(false);
 
-  setKeyCooldown("p", "a", now + 30_000, "sk-alpha-0001");
+  setKeyCooldown("p", "a", now + 30_000, false, "sk-alpha-0001");
   expect(getKeyCooldownUntil("p", "a", now)).toBe(now + 30_000);
   expect(store.flush(now)).toBe(true);
   expect(stored().rows.map(r => r.cooldownUntil)).toEqual([now + 30_000]);
@@ -342,7 +342,7 @@ for (const scope of ["provider", "global"] as const) {
 
     // This process clears without having seen the peer's clear, then records a fresh refusal.
     clearKeyCooldowns(scope === "provider" ? "p" : undefined);
-    setKeyCooldown("p", "a", now + 60_000, "sk-alpha-0001");
+    setKeyCooldown("p", "a", now + 60_000, false, "sk-alpha-0001");
     expect(store.flush(now)).toBe(true);
     expect(getKeyCooldownUntil("p", "a", now)).toBe(now + 60_000);
     expect(stored().rows.map(r => r.cooldownUntil)).toEqual([now + 60_000]);
@@ -354,7 +354,7 @@ for (const scope of ["provider", "global"] as const) {
 test("a server for another home started after the last one stopped inherits no holds", () => {
   const now = Date.now();
   installApiKeyCooldownPersistence(config({ a: "sk-one" }), now);
-  setKeyCooldown("p", "a", now + 600_000, "sk-one");
+  setKeyCooldown("p", "a", now + 600_000, false, "sk-one");
   // The final server release.
   uninstallApiKeyCooldownPersistence({ dropLocalHolds: true });
   const other = mkdtempSync(join(tmpdir(), "ocx-key-cooldown-other-"));
