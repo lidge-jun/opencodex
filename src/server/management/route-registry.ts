@@ -396,6 +396,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/provider-quotas", module: "server/management/provider-routes", mutates: false },
   { method: "GET", path: "/api/quota-pool", module: "server/management/quota-pool-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The ocx.quota-pool/1 read is a machine contract GOAT consumes over management and the link relay; the CLI shows the same caches through ocx provider quota and ocx account.", owner: "ocx-1 quota pool", ownerDoc: "structure/quota-pool.md" } },
   { method: "GET", path: "/api/fallback", module: "server/management/fallback-routes", mutates: false },
+  { method: "GET", path: "/api/oauth/accounts/diagnostics", module: "server/management/account-diagnostics-routes", mutates: false, exempt: { reason: "deferred-verb", why: "Per-account eligibility, refresh, cooldown and lease diagnostics are a read-only operator view with no CLI verb yet; ocx account shows the account list.", owner: "catch-up 040a account diagnostics", ownerDoc: "structure/providers/generic-account-pool.md" } },
   { method: "GET", path: "/api/route-to", module: "server/management/route-to-routes", mutates: false },
   { method: "PUT", path: "/api/route-to", module: "server/management/route-to-routes", mutates: true },
   { method: "POST", path: "/api/route-to/sync", module: "server/management/route-to-routes", mutates: true },

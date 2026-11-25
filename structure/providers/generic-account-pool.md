@@ -50,3 +50,11 @@ account has an eligible sibling before cooling the whole target. This probe reco
 account's cooldown but passes `commit: false`, so it only peeks at a round-robin pool. An unsent
 sibling does not consume a sticky turn. Dispatching callers retain the default committed pick.
 `tests/oauth/generic-oauth-combo-account-cooldown.test.ts` covers this distinction.
+
+## Account diagnostics
+
+`GET /api/oauth/accounts/diagnostics?provider=<id>` (`src/server/management/account-diagnostics-routes.ts`, loaded on demand by `src/server/management-api.ts`) is a passive read of why each account of one OAuth login can or cannot serve now. Each row carries the account id, `active`, `paused`, `needsReauth`, `eligible`, `eligibleModels`, `lastRefresh`, `cooldownUntil` and `inFlight`, and never an email, label, organization or credential field.
+
+Eligibility reuses the selection readers: Anthropic instances ask their routing (`getEligibleAnthropicAccounts`, per model), generic pools ask `eligibleFailoverAccounts` with the model's quota family, and Antigravity additionally drops a model its account roster is known to omit. Other OAuth providers count an account eligible when it is neither paused nor flagged for reauthentication. The model list is the discovered catalog, else the configured `models`; with neither, `eligibleModels` is `null`. `cooldownUntil` is the account-wide hold (`genericAccountCooldownUntil` or the Anthropic health snapshot); family-scoped holds show up as models missing from `eligibleModels`. `inFlight` counts account leases.
+
+`lastRefresh` comes from `src/oauth/refresh-outcomes.ts`. The generic, xAI and Anthropic refresh paths in `src/oauth/index.ts` wrap their upstream refresh call in `observeOAuthRefresh`, which records the time and outcome per login slot and account. A failure is reduced to a fixed reason (`rejected`, `upstream_error`, `network`, `timeout`, `aborted`, `error`) plus an HTTP status when the error carries one; no error text is kept. The record is process-local, so a restart reports `null`. `tests/server/account-diagnostics-routes.test.ts` covers the row fields, cooldown and family exclusion, refresh recording through `refreshGenericAccountWithLock`, and the absence of credential fields.
