@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
-import { saveConfig } from "../../src/config";
+import { getConfigPath, saveConfig } from "../../src/config";
 import {
   apiKeyCooldownGeneration,
   clearKeyCooldowns,
@@ -96,6 +96,17 @@ test("a failover rotation records the failed key's row", () => {
   expect(rotateKeyOn429(cfg, "p", "120", now)?.apiKey).toBe("key-beta-444555666777");
   expect(store.flush()).toBe(true);
   expect(stored().rows).toEqual([row("k1", "key-alpha-000111222333", now + 120_000)]);
+});
+
+test.skipIf(process.platform === "win32")("the cooldown file is private like config.json and holds no key or fingerprint source", () => {
+  const cfg = config({ a: "sk-alpha-0001" });
+  saveConfig(cfg);
+  const store = installApiKeyCooldownPersistence(cfg);
+  setKeyCooldown("p", "a", Date.now() + 60_000, "sk-alpha-0001");
+  expect(store.flush()).toBe(true);
+  expect(statSync(file()).mode & 0o777).toBe(0o600);
+  expect(statSync(file()).mode & 0o777).toBe(statSync(getConfigPath()).mode & 0o777);
+  expect(readFileSync(file(), "utf8")).not.toContain("sk-alpha-0001");
 });
 
 test("expired and malformed rows are ignored at load", () => {
