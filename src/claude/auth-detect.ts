@@ -12,8 +12,9 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { claudeKeychainReader } from "../oauth/claude-keychain-read";
+import type { OcxConfig } from "../types";
 
 export type AuthPresence = "present" | "absent" | "unknown";
 
@@ -100,6 +101,43 @@ export interface AuthDetectResult {
 export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = env.CLAUDE_CONFIG_DIR?.trim();
   return explicit ? explicit : join(homeDir(env), ".claude");
+}
+
+export interface RegisteredClaudeConfigDir {
+  dir: string;
+  source: "default" | "extra";
+}
+
+/** Read-only status work is bounded: at most this many extra homes are reported. */
+export const MAX_EXTRA_CLAUDE_CONFIG_DIRS = 16;
+
+/**
+ * The default Claude home followed by the extra homes the operator listed in
+ * `claudeCode.extraConfigDirs`. Nothing is discovered on disk: an unregistered home never
+ * appears. A leading `~` expands against the same home `claudeConfigDir` uses; entries that are
+ * still relative after that are skipped, and duplicates (including the default) collapse.
+ */
+export function registeredClaudeConfigDirs(
+  config: Pick<OcxConfig, "claudeCode">,
+  env: NodeJS.ProcessEnv = process.env,
+): RegisteredClaudeConfigDir[] {
+  const homes: RegisteredClaudeConfigDir[] = [{ dir: resolve(claudeConfigDir(env)), source: "default" }];
+  const seen = new Set(homes.map(home => home.dir));
+  const extras = config.claudeCode?.extraConfigDirs;
+  if (!Array.isArray(extras)) return homes;
+  for (const entry of extras) {
+    if (homes.length > MAX_EXTRA_CLAUDE_CONFIG_DIRS) break;
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    const expanded = trimmed === "~" ? homeDir(env)
+      : /^~[\\/]/.test(trimmed) ? join(homeDir(env), trimmed.slice(2)) : trimmed;
+    if (!expanded || !isAbsolute(expanded)) continue;
+    const dir = resolve(expanded);
+    if (seen.has(dir)) continue;
+    seen.add(dir);
+    homes.push({ dir, source: "extra" });
+  }
+  return homes;
 }
 
 /**
