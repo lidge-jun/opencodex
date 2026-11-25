@@ -234,7 +234,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   const config = migrateStartupZaiResponses(migrateStartupXaiResponses(startupConfig));
   warnPlaintextV2AgentMessagesStartup(config);
   warnAgentTaskRecoveryStartup(config);
-  setLiveStateStoreConfig(config, { persistApiKeyCooldowns: true });
+  setLiveStateStoreConfig(config);
   registerCommittedTerminalCooldownHandler(coolComboTargetForCommittedTerminal);
   applyProxyEnv(config, true);
   assertServerAuthConfig(config);

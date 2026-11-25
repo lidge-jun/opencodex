@@ -46,7 +46,6 @@ import { listLiveOAuthAccountKeys, reconcileOAuthReauthState } from "../oauth/st
 import { reconcileGuardianBackoff } from "../oauth/token-guardian";
 import { sweepExpiredApiKeyCooldowns } from "../providers/key-failover";
 import { reconcileApiKeyCooldownGenerations } from "../providers/api-key-cooldowns";
-import { installApiKeyCooldownPersistence } from "../providers/api-key-cooldown-store";
 import { reconcileProviderRequestPacing } from "../providers/request-pacing";
 import { sweepAbandonedResponseStateTemps, sweepExpiredResponseStates, sweepOrphanedResponseSpills } from "../responses/state";
 import { sweepExpiredAntigravityReplay } from "../adapters/google-antigravity-replay";
@@ -83,11 +82,7 @@ export function notifyLiveConfigObservers(config: OcxConfig): void {
   }
 }
 
-/**
- * Install the server's live config. `persistApiKeyCooldowns` is set by server startup only, so a
- * test or tool that adopts a config never binds the API-key cooldown file of whatever home it uses.
- */
-export function setLiveStateStoreConfig(config: OcxConfig, options: { persistApiKeyCooldowns?: boolean } = {}): void {
+export function setLiveStateStoreConfig(config: OcxConfig): void {
   liveServerConfig = config;
   // The one place the server's live config object is installed; detached configs (catalog sync)
   // never come through here, so the outbound compression opt-in follows the running server only.
@@ -95,7 +90,6 @@ export function setLiveStateStoreConfig(config: OcxConfig, options: { persistApi
   bindUpstreamHistorySlimConfig(config);
   bindCodexWsIncrementalConfig(config);
   bindWorkflowBudgetConfig(config);
-  if (options.persistApiKeyCooldowns === true) installApiKeyCooldownPersistence(config);
   notifyLiveConfigObservers(config);
 }
 

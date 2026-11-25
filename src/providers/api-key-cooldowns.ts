@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ApiKeyCooldownPersistence, ApiKeyCooldownRow } from "./api-key-cooldown-store";
+import type { ApiKeyCooldownHold, ApiKeyCooldownPersistence } from "./api-key-cooldown-store";
 
 /**
  * Cooldown state shared by selection validation and key failover.
@@ -41,7 +41,7 @@ export function setKeyCooldown(providerName: string, keyId: string, cooldownUnti
   keyCooldowns.set(key, kept === undefined ? { cooldownUntil: until } : { cooldownUntil: until, generation: kept });
   // Only a hold bound to the key that just failed is written, and only for a key the store accepts.
   if (persistence && generation !== undefined && credential !== undefined && persistence.persists(credential)) {
-    persistence.record({ provider: providerName, keyId, generation, cooldownUntil: until, recordedAt: Date.now() });
+    persistence.record({ provider: providerName, keyId, generation, cooldownUntil: until });
   }
 }
 
@@ -84,6 +84,11 @@ export function clearKeyCooldowns(providerName?: string): void {
   }
 }
 
+/** Forget every hold in memory without writing; the holds belonged to a config home being left. */
+export function resetLocalApiKeyCooldowns(): void {
+  keyCooldowns.clear();
+}
+
 /** Route later cooldown writes and clears to a store. Returns a detach that only removes this sink. */
 export function attachApiKeyCooldownPersistence(sink: ApiKeyCooldownPersistence): () => void {
   persistence = sink;
@@ -94,7 +99,7 @@ export function attachApiKeyCooldownPersistence(sink: ApiKeyCooldownPersistence)
  * Adopt rows a store loaded; the caller has already matched their generation to the current keys,
  * so a row replaces a local hold of any other generation and extends one of the same generation.
  */
-export function restoreApiKeyCooldowns(rows: readonly ApiKeyCooldownRow[], now = Date.now()): number {
+export function restoreApiKeyCooldowns(rows: readonly ApiKeyCooldownHold[], now = Date.now()): number {
   let restored = 0;
   for (const row of rows) {
     if (row.cooldownUntil <= now) continue;
