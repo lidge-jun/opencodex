@@ -76,6 +76,9 @@ retain the selected context and project cloned client metadata immediately befor
 JSON send, including live's converted multipart session. Live inspects JSON content independently
 of Content-Type; non-JSON SDP retains its original bytes. Their selected headers authoritatively
 replace or remove mixed-case provider identity defaults; main and main-pool preserve caller values.
+For hosted search, the selected pool account's network route takes precedence over the provider
+route. A caller's own bearer retains the process route. A local routing refusal releases the
+probe lease without recording an upstream connection failure.
 Vision, audio and sidecar credential selection share materialization.
 Dictation in `src/server/audio-dictation.ts` has a 600,000 ms recording budget and
 opts into a separate 60,000 ms finalization window after a validated `session.close`.

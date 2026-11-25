@@ -323,6 +323,55 @@ test("an account-qualified search model uses that exact account and sends the ba
   }
 });
 
+test("search uses the selected account or provider network route and refuses an unavailable route locally", async () => {
+  const config = exactSearchConfig();
+  const providerProxy = "http://provider.invalid:8080/";
+  const accountProxy = "http://account.invalid:8080/";
+  config.providers.openai!.proxy = providerProxy;
+  config.codexAccounts!.find(account => account.id === "pool-a")!.egress = { proxy: accountProxy };
+  saveConfig(config);
+  saveExactSearchCredentials();
+
+  const calls: Array<{ proxy: unknown; redirect?: RequestRedirect; account: string | null }> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (new URL(input instanceof Request ? input.url : input.toString()).pathname !== "/backend-api/codex/alpha/search") {
+      return Response.json({});
+    }
+    calls.push({ proxy: init?.proxy, redirect: init?.redirect, account: new Headers(init?.headers).get("chatgpt-account-id") });
+    return Response.json({ output: "ok" });
+  }) as typeof fetch;
+  const envKeys = ["NO_PROXY", "no_proxy"] as const;
+  const saved = envKeys.map(key => process.env[key]);
+  const search = (model: string, headers?: Record<string, string>) =>
+    handleSearch(alphaSearchRequest({ model }, headers), config, { model: "", provider: "" });
+  try {
+    for (const key of envKeys) delete process.env[key];
+    const poolHealth = getCodexUpstreamHealth("pool-a");
+    process.env.NO_PROXY = "chatgpt.com";
+    const denied = await search("side/gpt-test");
+    expect(denied.status).toBe(503);
+    expect((await denied.json()).error.message).toBe("The configured search network route is unavailable");
+    expect(calls).toHaveLength(0);
+    expect(getCodexUpstreamHealth("pool-a")).toEqual(poolHealth);
+    delete process.env.NO_PROXY;
+    expect((await search("side/gpt-test")).status).toBe(200);
+    config.providers.openai!.codexAccountMode = "pool";
+    expect((await search("gpt-test")).status).toBe(200);
+    config.providers.openai!.codexAccountMode = "direct";
+    expect((await search("gpt-test", { authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`, "chatgpt-account-id": "acct-123" })).status).toBe(200);
+    expect(calls).toEqual([
+      { proxy: accountProxy, redirect: "manual", account: "acct-pool-a" },
+      { proxy: providerProxy, redirect: "manual", account: "acct-pool-b" },
+      { proxy: undefined, redirect: "manual", account: "acct-123" },
+    ]);
+  } finally {
+    for (const [index, key] of envKeys.entries()) {
+      if (saved[index] === undefined) delete process.env[key];
+      else process.env[key] = saved[index];
+    }
+  }
+});
+
 test("an exact search 429 never switches to the active Pool account and reports only its public selector", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeSearchUpstream(captured, 429, { error: { message: "rate limited" } });

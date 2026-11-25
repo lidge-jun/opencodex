@@ -1,4 +1,5 @@
 import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
+import { CodexAccountRouteUnavailableError, codexAccountFetch } from "../codex/account-egress-runtime";
 import { isolateCodexPoolClientMetadata, mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
 /**
  * /v1/alpha/search relay.
@@ -34,6 +35,8 @@ import {
 import { formatCodexProviderForLog } from "../codex/routing";
 import { signalWithTimeout } from "../lib/abort";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
+import { InvalidProviderEgressError } from "../lib/provider-egress";
+import { ExplicitProxyExemptedError } from "../lib/proxy-env";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import type { OcxConfig } from "../types";
 import {
@@ -207,7 +210,8 @@ export async function handleSearch(
   let upstreamResponse: Response | undefined;
   try {
     upstream.beforeDispatch?.();
-    upstreamResponse = await fetch(url, {
+    const send = codexAccountFetch(codexLogAccountId(upstream.authContext), { config });
+    upstreamResponse = await send(url, {
       method: "POST",
       headers,
       body: JSON.stringify(isolateCodexPoolClientMetadata(
@@ -237,6 +241,10 @@ export async function handleSearch(
     if (contentType) relayHeaders["content-type"] = contentType;
     return new Response(observed.bytes, { status: upstreamResponse.status, headers: relayHeaders });
   } catch (err) {
+    if (err instanceof CodexAccountRouteUnavailableError || err instanceof InvalidProviderEgressError || err instanceof ExplicitProxyExemptedError) {
+      upstream.releaseProbeLease?.();
+      return formatErrorResponse(503, "server_busy", "The configured search network route is unavailable");
+    }
     if (err instanceof CodexInstallationIdUnavailableError) {
       upstream.releaseProbeLease?.();
       return formatErrorResponse(503, "server_busy", err.message);
@@ -254,7 +262,9 @@ export async function handleSearch(
     return formatErrorResponse(
       502,
       "upstream_error",
-      `search relay failed: ${err instanceof Error ? err.message : String(err)}`,
+      upstream.authContext.kind === "pool"
+        ? "The search relay could not reach the upstream for the selected account"
+        : `search relay failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   } finally {
     sidecarExit();
