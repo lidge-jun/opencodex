@@ -1,3 +1,4 @@
+import type { BareUpstreamError } from "../bare-upstream-error";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { responsesCompletionError } from "../../lib/errors";
 import { ResponseBodyInactivityError } from "../../lib/response-body-inactivity";
@@ -31,6 +32,8 @@ const BUFFERED_SSE_PROCESSING_SLICE_BYTES = 64 * 1024;
 export type BufferedFailedCompletion = {
   payload: unknown;
   error: NonNullable<ReturnType<typeof responsesCompletionError>>;
+  /** Keep the original provider evidence alongside the public replay projection. */
+  bare?: BareUpstreamError;
 };
 
 export type BufferedResponsesTerminal = {
@@ -338,6 +341,13 @@ export async function collectBufferedResponsesSse(
     if (!terminal.ok) {
       upstream.abort(new Error(`buffered Responses SSE ${terminal.kind}`));
       return withBoundaryError(terminal);
+    }
+    const bare = boundary.upstreamVerdict();
+    if (bare?.replayProjection) {
+      const error = { type: bare.terminalType, code: bare.terminalCode,
+        message: bare.rowCopyAllowed ? bare.message : "[REDACTED]" };
+      const payload = { type: "response.failed", response: { status: "failed", error, last_error: error } };
+      return { ok: true, terminal: { status: "failed", failedCompletion: { payload, error, bare } } };
     }
     return {
       ...terminal,

@@ -8,6 +8,7 @@ import { describe, expect, test } from "bun:test";
 import {
   adapterEofIncompleteFrame,
   createSseInspector,
+  createSseTerminalOutputBoundary,
   doneFrame,
   MAX_TAIL_ERROR_MESSAGE_CHARS,
 } from "../../src/server/relay";
@@ -27,6 +28,16 @@ function sse(event: string): Uint8Array {
 const COMPLETED = JSON.stringify({ type: "response.completed", response: { id: "resp_1", status: "completed", output: [] } });
 const DELTA = JSON.stringify({ type: "response.output_text.delta", delta: "hi" });
 const FAILED_EVENT_MARKER = "event: response.failed\ndata: ";
+
+test("a later bare replay veto cannot replace the status of a completed frame in the same chunk", () => {
+  const boundary = createSseTerminalOutputBoundary();
+  try {
+    const late = JSON.stringify({ type: "error", error: { cause: { code: "upstream_response_refused" } } });
+    const received = boundary.feed(enc.encode(`data: ${COMPLETED}\n\ndata: ${late}\n\ndata: [DONE]\n\n`));
+    expect(new TextDecoder().decode(received)).toBe(`data: ${COMPLETED}\n\ndata: [DONE]\n\n`);
+    expect(boundary.upstreamVerdict()).toBeUndefined();
+  } finally { boundary.dispose(); }
+});
 
 function countOccurrences(text: string, needle: string): number {
   return text.split(needle).length - 1;
@@ -1705,6 +1716,21 @@ describe("createSseInspector — extraction locks (h)", () => {
     inspector.finish();
     expect(completed.length).toBe(1);
     expect(terminals).toEqual(["completed"]);
+  });
+
+  test("a bare replay veto closes continuation observation before a later completion", () => {
+    const completed: unknown[] = [];
+    const statuses: string[] = [];
+    const inspector = createSseInspector({
+      onTerminal: status => statuses.push(status), onCompletedResponse: response => completed.push(response),
+    });
+    try {
+      const veto = JSON.stringify({ type: "error", error: { cause: { retryable: false } } });
+      inspector.feed(enc.encode(`data: ${veto}\n\ndata: ${COMPLETED}\n\n`));
+      inspector.finish();
+      expect(statuses).toEqual(["failed"]);
+      expect(completed).toEqual([]);
+    } finally { inspector.dispose(); }
   });
 
   test("per-block onCompletedResponse continues firing after reported", () => {

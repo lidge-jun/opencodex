@@ -383,10 +383,12 @@ export function createSseTerminalOutputBoundary(
     for (const frame of frames) {
       const payload = sseDataPayload(decoder.decode(frame.block));
       const isDone = payload === "[DONE]";
+      if (responsesTerminal && !isDone) continue;
       const parsed = payload === null ? undefined : parseSsePayload(payload);
       // Observe on the client reader itself: a tee inspection branch may lag
       // behind EOF, so its log context cannot determine the outgoing terminal.
       const evidence = reduceBareUpstreamEvidence(bareEvidence, parsed, options?.maskCredential);
+      const replay = evidence !== bareEvidence ? evidence?.verdict.replayProjection : undefined;
       if (evidence !== undefined && evidence !== bareEvidence) {
         bareEvidence = evidence;
         upstreamError = evidence.verdict.message;
@@ -402,25 +404,27 @@ export function createSseTerminalOutputBoundary(
       const policyError = parsed !== undefined && isPolicyRewriteType(parsed, typedBareSeen)
         ? cyberPolicyTerminalError(parsed)
         : undefined;
-      const policyPayload = policyError ? policyFailurePayload(policyError, parsed, options?.maskCredential) : undefined;
+      const terminalPayload = replay
+        ? JSON.stringify({ type: "response.failed", response: { status: "failed", ...replay.fields } })
+        : policyError ? policyFailurePayload(policyError, parsed, options?.maskCredential) : undefined;
       // An untyped envelope is evidence, not a Responses event: the client receives the terminal it
       // decides (as the WebSocket bridge already does), never the provider's raw diagnostic frame.
-      // Its verdict was reduced above; an explicit policy envelope continues as the policy terminal.
-      if (policyPayload === undefined && parsed !== undefined && isUntypedBareUpstreamError(parsed)) continue;
-      let outboundBlock = policyPayload !== undefined
-        // An untyped envelope's block is upstream text throughout (comments, extension and event
-        // lines), so its policy terminal is a fresh block; a typed terminal keeps its own lines.
-        ? encoder.encode(parsed !== undefined && isUntypedBareUpstreamError(parsed)
-          ? `event: response.failed\ndata: ${policyPayload}`
+      // Its verdict was reduced above; a winning refusal is emitted as a terminal.
+      if (terminalPayload === undefined && parsed !== undefined && isUntypedBareUpstreamError(parsed)) continue;
+      let outboundBlock = terminalPayload !== undefined
+        // A replay veto or untyped refusal gets a fresh block so upstream diagnostics in extension
+        // lines cannot accompany the public error. A typed policy frame keeps its guarded lines.
+        ? encoder.encode(replay || (parsed !== undefined && isUntypedBareUpstreamError(parsed))
+          ? `event: response.failed\ndata: ${terminalPayload}`
           // A typed source keeps its own lines, so they pass the same redaction as a forwarded frame.
-          : (options?.redactForwardedEvidence ?? ((block: string) => block))(rewritePolicyTerminalBlock(decoder.decode(frame.block), policyPayload)))
+          : (options?.redactForwardedEvidence ?? ((block: string) => block))(rewritePolicyTerminalBlock(decoder.decode(frame.block), terminalPayload)))
         : options?.redactForwardedEvidence !== undefined && asJsonRecord(parsed)?.type === "error"
           ? encoder.encode(options.redactForwardedEvidence(decoder.decode(frame.block)))
           : frame.block;
       if (safetyBuffering === "strip") {
         outboundBlock = encoder.encode(stripCodexSafetyBufferingField(
           decoder.decode(outboundBlock),
-          policyPayload !== undefined ? parseSsePayload(policyPayload) : parsed,
+          terminalPayload !== undefined ? parseSsePayload(terminalPayload) : parsed,
         ));
       }
       if (isDone) {
@@ -442,8 +446,8 @@ export function createSseTerminalOutputBoundary(
       // Preserve every frame through the first Responses terminal. Every
       // later non-DONE frame is dropped.
       if (!responsesTerminal) appendOutput(outboundBlock, frame.delimiter);
-      // The policy payload this boundary emitted is itself the turn's terminal.
-      if (!responsesTerminal && payload && (policyPayload !== undefined || terminalStatusFromParsed(parsed, typedBareSeen))) {
+      // An emitted failure ends the turn at this frame.
+      if (!responsesTerminal && payload && (terminalPayload !== undefined || terminalStatusFromParsed(parsed, typedBareSeen))) {
         responsesTerminal = true;
         if (pendingDone) {
           appendOutput(pendingDone.block, pendingDone.delimiter);
@@ -871,7 +875,10 @@ export function terminalStatusFromParsed(parsed: unknown, typedBareSeen = false)
 export function createTerminalStatusTracker(): (parsed: unknown) => ResponsesTerminalStatus | null {
   let evidence: BareUpstreamEvidence | undefined;
   return parsed => {
-    evidence = reduceBareUpstreamEvidence(evidence, parsed);
+    const next = reduceBareUpstreamEvidence(evidence, parsed);
+    const replay = next !== evidence && next?.verdict.replayProjection;
+    evidence = next;
+    if (replay) return "failed";
     return terminalStatusFromParsed(parsed, evidence?.typed === true);
   };
 }
@@ -1505,7 +1512,10 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
     const policyTerminal = status === "failed"
       && isPolicyRewriteType(parsed)
       && cyberPolicyTerminalError(parsed) !== undefined;
-    if (!sawTerminal && (policyTerminal || (parsedEvent?.type === "response.completed" && status === "failed"))) {
+    // A first failed bare event has already ended the client stream, including a replay veto.
+    // Later completion frames may still reach the raw inspection branch in the same chunk.
+    if (!sawTerminal && status === "failed"
+      && (policyTerminal || parsedEvent?.type === "response.completed" || parsedEvent?.type === "error" || isUntypedBareUpstreamError(parsed))) {
       completionBlocked = true;
     }
     if (status) sawTerminal = true;

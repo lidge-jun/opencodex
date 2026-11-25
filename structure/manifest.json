@@ -679,6 +679,7 @@
         "src/lib/upstream-retry.ts",
         "src/client/link-relay.ts",
         "src/server/responses/fetch-helpers.ts",
+        "src/server/responses/native-terminal-replay.ts",
         "src/server/responses/non-replayable-error.ts",
         "src/server/responses/image-context-recovery.ts"
       ]

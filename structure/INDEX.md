@@ -591,6 +591,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/responses/history-slim.ts` | [`transports/upload-reduction.md`](transports/upload-reduction.md) |
 | `src/server/responses/image-context-recovery.ts` | [`data-planes/replay-refusals.md`](data-planes/replay-refusals.md)<br>[`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/server/responses/input-admission.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/responses/native-terminal-replay.ts` | [`data-planes/replay-refusals.md`](data-planes/replay-refusals.md) |
 | `src/server/responses/non-replayable-error.ts` | [`data-planes/replay-refusals.md`](data-planes/replay-refusals.md) |
 | `src/server/responses/opengateway-completion-guard.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/server/responses/passthrough-build-error.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |

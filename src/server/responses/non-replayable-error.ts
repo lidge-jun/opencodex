@@ -1,14 +1,16 @@
-import { carryProxyError, ownedChatErrorPayload } from "../../lib/client-error-body";
-import { httpStatusFromTerminalError, responsesCompletionError } from "../../lib/errors";
+import { carryProxyError } from "../../lib/client-error-body";
+import { responsesCompletionError } from "../../lib/errors";
 import {
   applyReplayRefusalClientHeaders, withheldReplayDiagnostic, carryReplayRefusal, carryReplayRefusalToClient, hasClientReplayVeto, hasNoRetryDirective, hasUpstreamReplayRefusal, invitesResendAfterReplacement, isNonReplayableResponse,
   isNonReplayableUpstreamCode, replayRefusalVerdict, isReplayRefusalProjection, isReplayRefusalResponse, replayRefusalBodyCode,
-  isTerminalResetReplacement, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, retainReplayRefusal, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE, isReplayRefusalCode, UPSTREAM_RESET_REPLAY_REFUSED_CODE,
+  isTerminalResetReplacement, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, retainReplayRefusal, UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../../lib/upstream-retry";
 import { isXaiLegacyPrivacyError, isXaiPrivacyModeRefusal, xaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import type { RequestFailureCause } from "../../usage/telemetry-contract";
 import { terminalErrorRecords } from "./codex-ws-wire";
 import { clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors";
+import { projectNativeTerminalReplayVeto, type NativeTerminalReplayHttpEdits } from "./native-terminal-replay";
+export { NON_REPLAYABLE_COMPLETION_MESSAGE, projectNativeTerminalReplayVeto, type NativeTerminalReplayHttpEdits } from "./native-terminal-replay";
 
 const UPSTREAM_ERROR_TYPES = new Set([
   "invalid_request_error", "authentication_error", "permission_error", "not_found_error",
@@ -105,6 +107,12 @@ export async function sanitizeNonReplayableUpstreamError(
 }
 
 const projectedNativeTerminalResponses = new WeakSet<Response>();
+const committedPrivacyTerminals = new WeakMap<Response, string>();
+
+/** Preserve the exact frame generated from a local privacy refusal after its HTTP head was sent. */
+export function recordCommittedPrivacyTerminal(stream: Response, refusal: Response, payload: string): void {
+  if (isXaiPrivacyModeRefusal(refusal)) committedPrivacyTerminals.set(stream, payload);
+}
 
 export function markProjectedNativeTerminalResponse(response: Response, coded: boolean): Response {
   projectedNativeTerminalResponses.add(response);
@@ -117,47 +125,12 @@ export function isProjectedNativeTerminalResponse(response: Response): boolean {
   return projectedNativeTerminalResponses.has(response);
 }
 
-export const NON_REPLAYABLE_COMPLETION_MESSAGE = "Upstream reported a non-replayable failed completion.";
-
-function safeIncompleteDetails(value: unknown) {
-  const reason = (value as { reason?: unknown } | null | undefined)?.reason;
-  return reason === "max_output_tokens" || reason === "content_filter" || isReplayRefusalCode(reason)
-    ? { reason } : undefined;
-}
-
-/** The same terminal verdict owns the frame and any HTTP metadata still open for editing. */
-export function projectNativeTerminalReplayVeto(
-  verdict: ReturnType<typeof replayRefusalVerdict> & { inconclusive?: boolean },
-  mode: "streamed" | "buffered",
-  upstream: { type?: unknown; code?: unknown } | undefined,
-  reasons: { root?: unknown; response?: unknown },
-  status: number,
-  maskCode: (value: string) => string,
-) {
-  const { refusalCode, explicitVeto } = verdict;
-  if (!refusalCode && !explicitVeto) return;
-  const type = typeof upstream?.type === "string" ? upstream.type : undefined;
-  const code = typeof upstream?.code === "string" ? upstream.code : undefined;
-  const errorStatus = httpStatusFromTerminalError({ type, code });
-  const safe = ownedChatErrorPayload({ status: errorStatus, type, code, evidence: { status: errorStatus, type, code } }).error;
-  const error = refusalCode
-    ? { type: "upstream_error", code: refusalCode, message: REPLAY_REFUSAL_MESSAGE }
-    : { type: safe.type, code: code === undefined ? safe.code : maskCode(code), message: NON_REPLAYABLE_COMPLETION_MESSAGE };
-  return {
-    rootIncompleteDetails: safeIncompleteDetails(reasons.root),
-    fields: { incomplete_details: safeIncompleteDetails(reasons.response), retryable: false as const, error, last_error: error },
-    http: mode === "buffered"
-      ? { status: refusalCode ? REPLAY_REFUSED_STATUS : status, coded: refusalCode !== undefined, applyHeaders: applyReplayRefusalClientHeaders }
-      : undefined,
-  };
-}
-
-export type NativeTerminalReplayHttpEdits = NonNullable<NonNullable<ReturnType<typeof projectNativeTerminalReplayVeto>>["http"]>;
-
 export function rewriteNonRetryableFailurePayload(
   payload: string, comboAttempt: boolean, maskCode: (value: string) => string = value => value,
   buffered?: { status: number; onProjection: (edits: NativeTerminalReplayHttpEdits) => void },
+  source?: Response,
 ): string {
+  if (source && committedPrivacyTerminals.get(source) === payload) return payload;
   try {
     const event = JSON.parse(payload) as Record<string, unknown> & { response?: Record<string, unknown> };
     const terminalType = event?.type;
@@ -165,10 +138,13 @@ export function rewriteNonRetryableFailurePayload(
     const failed = terminalType === "response.failed";
     const upstream = failed ? terminalErrorRecords(event)[0] : responsesCompletionError(event, terminalType);
     const verdict = replayRefusalVerdict(event);
-    if (!failed && !upstream && !verdict.refusalCode) return payload;
-    const { error: _error, last_error: _lastError, message: _message, cause: _cause, details: _details,
+    const detailVeto = terminalType === "response.incomplete" && verdict.explicitVeto
+      && [event.incomplete_details, event.response?.incomplete_details].some(details =>
+        replayRefusalVerdict({ incomplete_details: details }).explicitVeto);
+    if (!failed && !upstream && !verdict.refusalCode && !detailVeto) return payload;
+    const { error: _error, last_error: _lastError, message: _message, cause: _cause, detail: _detail, details: _details,
       incomplete_details: rootIncompleteDetails, ...root } = event;
-    const { message: _responseMessage, cause: _responseCause, details: _responseDetails,
+    const { message: _responseMessage, cause: _responseCause, detail: _responseDetail, details: _responseDetails,
       incomplete_details: incompleteDetails, ...response } = event.response ?? {};
     const projection = projectNativeTerminalReplayVeto({
       ...verdict,

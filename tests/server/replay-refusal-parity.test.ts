@@ -8,7 +8,7 @@ import { CLIENT_ERROR_CONTRACTS, CLAUDE_CONTEXT_OVERFLOW_MESSAGE } from "../../s
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { startServer } from "../../src/server";
-import { clearRequestLogsForTests, getRequestLogEntries } from "../../src/server/request-log";
+import { clearRequestLogsForTests, getRequestLogEntries, type RequestLogContext } from "../../src/server/request-log";
 import {
   REPLAY_REFUSAL_NO_RETRY_HEADER,
   REPLAY_REFUSAL_NO_RETRY_VALUE,
@@ -25,6 +25,7 @@ import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } fr
 import { OPENAI_PROVIDER_TIER_VERSION, type OcxConfig } from "../../src/types";
 import { HOME_INITIATED_LINK_TUNNEL, relayLinkDataRequest } from "../../src/client/link-relay";
 import { handleResponses } from "../../src/server/responses";
+import { expandPreviousResponseInput, previousResponseReplayFailure } from "../../src/responses/state";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -1553,7 +1554,9 @@ test.each([...projectionCases, ...projectionControls])(
       : status === "failed" && coded ? "max_output_tokens" : undefined;
     const snapshot = {
       id: "resp_projection", object: "response", status, output: [],
-      ...(veto ? { error, last_error: error, incomplete_details: { reason: safeReason ?? diagnostic } } : {}),
+      ...(veto ? { error, last_error: error, detail: diagnostic, incomplete_details: {
+        reason: safeReason === "max_output_tokens" ? "max_tokens" : safeReason ?? diagnostic,
+      } } : {}),
       ...(verdict === "ordinary failure" ? { error } : {}),
       ...(verdict === "boolean only" ? { retryable: false } : {}),
       ...(verdict === "token limit" ? { incomplete_details: { reason: "max_output_tokens" } } : {}),
@@ -1563,7 +1566,7 @@ test.each([...projectionCases, ...projectionControls])(
       sends++;
       const output = !veto && stream
         ? 'data: {"type":"response.output_text.delta","delta":"visible fixture"}\n\n' : "";
-      return new Response(`${output}event: ${type}\ndata: ${JSON.stringify({ type, response: snapshot, ...(veto && { incomplete_details: { reason: diagnostic } }) })}\n\n`, {
+      return new Response(`${output}event: ${type}\ndata: ${JSON.stringify({ type, response: snapshot, ...(veto && { detail: diagnostic, incomplete_details: { reason: diagnostic } }) })}\n\n`, {
         headers: { "content-type": "text/event-stream", "retry-after": "60" },
       });
     }) as typeof fetch;
@@ -1608,3 +1611,88 @@ test.each([...projectionCases, ...projectionControls])(
     } finally { release(); }
   },
 );
+
+test("completed native JSON refusal wins before Combo tool validation", async () => {
+  const code = "upstream_response_refused";
+  const hosts: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    hosts.push(new URL(input instanceof Request ? input.url : input).hostname);
+    return Response.json({ id: "resp_refused_json", object: "response", status: "completed", code, output: [] });
+  }) as typeof fetch;
+  const release = acquireOwnedSpendHome();
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/pair", stream: false, ...RESPONSES_TURN,
+        tool_choice: "required", tools: [{ type: "function", name: "lookup", parameters: { type: "object" } }] }),
+    }), comboReplayConfig(), { model: "", provider: "" });
+    expect(hosts).toEqual([COMBO_FIRST_HOST]);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(await response.json()).toMatchObject({ error: { code, message: REPLAY_REFUSAL_MESSAGE } });
+    const followUp = { previous_response_id: "resp_refused_json", input: [] };
+    expandPreviousResponseInput(followUp, undefined, null);
+    expect(previousResponseReplayFailure(followUp)?.reason).toBe("missing");
+  } finally { release(); }
+});
+
+const sparseReplayCases = ["bare code", "bare veto", "flat incomplete", "nested incomplete"].flatMap(kind =>
+  ["first/model", "combo/pair"].flatMap(model => [true, false].map(stream => ({ kind, model, stream }))));
+
+test.each(sparseReplayCases)("sparse native replay verdict %j", async ({ kind, model, stream }) => {
+  const bare = kind.startsWith("bare");
+  const coded = kind === "bare code";
+  const code = "upstream_response_refused";
+  const diagnostic = "fixture diagnostic";
+  const details = { reason: "content_filter", retryable: false, detail: diagnostic };
+  const frame = bare
+    ? { type: "error", error: { message: diagnostic, ...(coded && { code: "server_is_overloaded" }), cause: coded ? { code } : { retryable: false } } }
+    : { type: "response.incomplete", ...(kind === "flat incomplete" ? { incomplete_details: details } : {}),
+      response: { id: "resp_incomplete", object: "response", status: "incomplete", output: [],
+        ...(kind === "nested incomplete" ? { incomplete_details: details } : {}) } };
+  let sends = 0;
+  globalThis.fetch = (async () => {
+    sends++;
+    return new Response(`event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`, {
+      headers: { "content-type": "text/event-stream", "retry-after": "60" },
+    });
+  }) as typeof fetch;
+  const config = comboReplayConfig();
+  for (const provider of Object.values(config.providers)) Object.assign(provider, {
+    baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward",
+    codexAccountMode: "direct", upstreamWebsocket: false,
+  });
+  const log: RequestLogContext = { model: "", provider: "" };
+  const release = acquireOwnedSpendHome();
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer fixture-forward-token" },
+      body: JSON.stringify({ model, stream, store: false, ...RESPONSES_TURN }),
+    }), config, log);
+    const body = await response.text();
+    expect(sends).toBe(1);
+    expect(body).not.toContain(diagnostic);
+    let snapshot;
+    if (stream) {
+      const frames = body.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+      expect(frames.map(frame => frame.type)).not.toContain("error");
+      const terminals = frames.filter(frame => ["response.failed", "response.incomplete"].includes(frame.type));
+      expect(terminals).toHaveLength(1);
+      expect(terminals[0].type).toBe(bare ? "response.failed" : "response.incomplete");
+      snapshot = terminals[0].response;
+    } else {
+      snapshot = JSON.parse(body);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect(response.headers.get("retry-after")).toBeNull();
+    }
+    expect(response.status).toBe(stream ? 200 : coded ? 429 : bare ? 502 : 200);
+    expect(snapshot.retryable).toBe(false);
+    expect(snapshot.error).toEqual(snapshot.last_error);
+    expect(snapshot.error.message).toBe(coded ? REPLAY_REFUSAL_MESSAGE : "Upstream reported a non-replayable failed completion.");
+    if (coded) {
+      expect(snapshot.error.code).toBe(code);
+      if (!stream && model === "first/model") expect(log).toMatchObject({ terminalHttpStatus: 503, upstreamErrorCode: "server_is_overloaded" });
+    }
+    if (!bare) expect(snapshot.incomplete_details).toEqual({ reason: "content_filter" });
+  } finally { release(); }
+});

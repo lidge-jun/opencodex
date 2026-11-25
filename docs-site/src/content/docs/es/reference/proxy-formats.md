@@ -27,9 +27,11 @@ error fijo tanto en rutas nativas como en rutas traducidas. En Responses nativo,
 conserva el código de rechazo que ya recibió aunque falle la entrega del cuerpo de la respuesta
 de reemplazo. La cancelación del cliente tiene prioridad.
 
-En Responses nativo, tanto las respuestas JSON con `status: "failed"` como los eventos
-`response.failed` del flujo usan el mismo mensaje fijo para los códigos de rechazo de reenvío
-reconocidos. El evento incluye `response.retryable: false`. Las rutas nativas de Responses y
+En Responses nativo, un código de rechazo reconocido en JSON detiene el reenvío incluso si
+el proveedor indica que la respuesta está completa. Un evento `error` con un veto termina
+el flujo con un único evento de fallo. Las rutas directas y Combo usan un mensaje fijo también
+cuando el veto figura en los detalles de una respuesta incompleta sin otro error.
+El evento incluye `response.retryable: false`. Las rutas nativas de Responses y
 Messages respetan los códigos de rechazo reconocidos en el cuerpo de las respuestas HTTP 429
 antes de reintentar con la misma clave. Los límites de frecuencia reales del proveedor siguen
 influyendo en las pausas temporales de las cuentas.

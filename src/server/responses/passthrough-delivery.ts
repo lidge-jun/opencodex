@@ -35,7 +35,8 @@ import {
 } from "../relay";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { carryReplayRefusal, replayRefusalVerdict, isNonReplayableResponse, isReplayRefusalResponse, isTerminalResetReplacement, markResponseNonReplayable, projectReplayRefusal, replayRefusalBodyCode } from "../../lib/upstream-retry";
-import { type NativeTerminalReplayHttpEdits, markProjectedNativeTerminalResponse, projectNativeTerminalReplayVeto, projectResponsesUpstreamRefusal, rewriteNonRetryableFailurePayload, sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
+import { type NativeTerminalReplayHttpEdits, projectNativeTerminalReplayVeto } from "./native-terminal-replay";
+import { markProjectedNativeTerminalResponse, projectResponsesUpstreamRefusal, rewriteNonRetryableFailurePayload, sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { sliceChunks, teeWithBoundedInspection } from "../inspection-tee";
 import { markPacedStream } from "../../lib/paced-stream";
 import { LINK_PACED_SLICE_BYTES, linkTurnPacesReads } from "../link-turn";
@@ -890,7 +891,8 @@ export async function deliverPassthroughResponse(
       let terminalReplayHttp: NativeTerminalReplayHttpEdits | undefined;
       const payloadRewrites = [
         (payload: string) => rewriteNonRetryableFailurePayload(payload, options.comboAttempt === true, synthesizedCopyMask,
-          canonicalBufferedJson ? { status: upstreamResponse.status, onProjection: edits => { terminalReplayHttp = edits; } } : undefined),
+          canonicalBufferedJson ? { status: upstreamResponse.status, onProjection: edits => { terminalReplayHttp = edits; } } : undefined,
+          nativeExchange.upstreamResponse),
         rewriteResponsesIncompleteReasonJson,
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         // #3217: a call whose namespace repeats its own name is unroutable in codex-rs.
@@ -1074,11 +1076,12 @@ export async function deliverPassthroughResponse(
             options.onNativePassthroughTerminal?.(status);
           }
           : undefined;
-        const deliverFailedCompletion = ({ payload, error }: BufferedFailedCompletion): Response => {
+        const deliverFailedCompletion = ({ payload, error, bare }: BufferedFailedCompletion): Response => {
           if (signal.aborted) return cancelAfterValidation();
           if (Date.now() >= bufferedRead.deadlineAt) {
             return failBufferedTurn("buffered Responses turn exceeded the safe total deadline");
           }
+          if (bare) logCtx.terminalHttpStatus = bare.terminalStatus;
           noteInspectedPayload(payload);
           inspectResponseLogSsePayloadParsed(logCtx, JSON.stringify(payload), payload);
           const status = logCtx.terminalHttpStatus ?? httpStatusFromTerminalError(error);
@@ -1087,7 +1090,7 @@ export async function deliverPassthroughResponse(
           reportNativeTerminal?.("failed", status);
           const defaults = bufferedErrorDefaults(status);
           const frame = payload as { incomplete_details?: unknown; response?: { incomplete_details?: unknown } };
-          const projection = projectNativeTerminalReplayVeto(
+          const projection = bare?.replayProjection ?? projectNativeTerminalReplayVeto(
             replayRefusalVerdict(payload), "buffered", error,
             { root: frame.incomplete_details, response: frame.response?.incomplete_details },
             status, synthesizedCopyMask,
@@ -1232,7 +1235,7 @@ export async function deliverPassthroughResponse(
 
         if (signal.aborted) return cancelAfterValidation();
 
-        const requiredFailure = await requiredToolFailure(JSON.stringify(client.terminal.response));
+        const requiredFailure = terminalReplayHttp ? undefined : await requiredToolFailure(JSON.stringify(client.terminal.response));
         if (requiredFailure) {
           const usage = usageFromResponsesPayload(client.terminal.response.usage);
           if (usage && !logCtx.usageFromBridge) {
@@ -1283,9 +1286,9 @@ export async function deliverPassthroughResponse(
           effectInspector.dispose();
         }
         if (signal.aborted) return cancelAfterValidation();
-        commitReasoningReplayServingRoute(nativeExchange.request.headers);
+        if (!terminalReplayHttp) commitReasoningReplayServingRoute(nativeExchange.request.headers);
         rawBytes = undefined;
-        if (client.terminal.status === "completed") {
+        if (!terminalReplayHttp && client.terminal.status === "completed") {
           rememberPassthroughResponseChecked(client.terminal.response);
         }
 
@@ -1507,7 +1510,7 @@ export async function deliverPassthroughResponse(
       }
       const text = bounded.text;
       inspectResponseLogJson(logCtx, text);
-      const refusalCode = replayRefusalBodyCode(text, "failed");
+      const refusalCode = replayRefusalBodyCode(text);
       if (refusalCode) return carryReplayRefusal(upstreamResponse, projectReplayRefusal(refusalCode));
       let plaintextV2RestoreFailed = false;
       let clientJson = (() => {

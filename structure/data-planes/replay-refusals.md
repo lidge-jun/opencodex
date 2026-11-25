@@ -28,11 +28,13 @@ adapter status, `retryable` flag or overflow-like diagnostic. Only successful fr
 publishes this verdict to its collector. A matching collected terminal returns the same fixed
 429 envelope and retry veto; an unmatched raw record cannot borrow that verdict. Streaming
 delivery preserves the fixed error code and wording without changing committed HTTP headers.
-`src/server/responses/non-replayable-error.ts` projects the same verdict for direct and
-Combo native Responses. A failed terminal or an error-bearing completed or incomplete
-terminal with a recognized refusal code or explicit veto carries fixed error text and
-`response.retryable: false`. Projection replaces both error carriers and keeps only
-recognized codes in `incomplete_details.reason`. Buffered delivery applies
+`src/server/responses/native-terminal-replay.ts` supplies the shared error projection for native
+Responses. A recognized code on an HTTP 200 JSON response takes precedence over tool validation
+and continuation storage, including when the upstream reports completion. For direct and Combo
+streams, a bare error carrying a replay veto ends the turn in one fixed failure frame.
+`src/server/responses/non-replayable-error.ts` projects failed terminals, error-bearing completions,
+and explicit vetoes in incomplete details on either the event or snapshot. It replaces both error
+carriers, withholds diagnostic detail, and preserves canonical incomplete reasons. Buffered delivery applies
 `x-should-retry: false`, removes `Retry-After`, and uses HTTP 429 for recognized codes
 or the existing status for an uncoded veto. Combo preserves the projected body when
 it consumes a failed member, and accounting reads the upstream evidence.
@@ -164,7 +166,7 @@ so they cannot hide a definite overflow in another sentence. A throttle worded o
 Body inspection time does not count toward the upstream slow-attempt budget, and empty chunks cannot
 starve the deadline or cancellation. `tests/lib/upstream-retry.test.ts` covers retry and cancellation.
 Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader.
-The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status. The shared detector handles negation asides in bounded time; `tests/lib/definite-overflow-verdict.test.ts` covers its classification and abort-timer responsiveness.
+The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status. The shared detector handles negation asides in bounded time. `tests/lib/definite-overflow-verdict.test.ts` covers its classification and abort-timer responsiveness.
 
 Buffered Responses delivery treats an error-bearing `response.completed` as a failed turn.
 A recognized refusal code on the event, snapshot, or one of their error carriers establishes failure on completion.

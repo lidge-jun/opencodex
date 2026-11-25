@@ -2,6 +2,7 @@ import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../../adapte
 import type { OcxParsedRequest } from "../../types";
 import type { PhysicalSendReporter } from "../../lib/request-execution-budget";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { readDisplaySafeErrorText } from "./core-errors";
 import { isRewrittenUpstreamError, markRewrittenUpstreamError } from "../../adapters/upstream-http-error";
 import { carryProxyError, isProxyError } from "../../lib/client-error-body";
 import { checkOutboundBodySize } from "./outbound-body-guard";

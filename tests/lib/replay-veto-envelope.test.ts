@@ -2,9 +2,40 @@ import { responsesCompletionError } from "../../src/lib/errors";
 import { expect, test } from "bun:test";
 import { fetchWithTransientRetry, hasClientReplayVeto, observedReplayRefusalCode, replayRefusalVerdict, REPLAY_REFUSAL_MESSAGE } from "../../src/lib/upstream-retry";
 
-import { NON_REPLAYABLE_COMPLETION_MESSAGE, rewriteNonRetryableFailurePayload } from "../../src/server/responses/non-replayable-error";
+import { NON_REPLAYABLE_COMPLETION_MESSAGE, recordCommittedPrivacyTerminal, rewriteNonRetryableFailurePayload } from "../../src/server/responses/non-replayable-error";
+import { bareUpstreamError } from "../../src/server/bare-upstream-error";
+import { xaiPrivacyModeRefusal } from "../../src/providers/xai-privacy-mode";
 
 const code = "upstream_response_refused";
+
+test("only the selected stream retains its locally generated privacy refusal", async () => {
+  const local = xaiPrivacyModeRefusal();
+  const { error } = await local.clone().json();
+  const frame = JSON.stringify({ type: "response.failed", response: { status: "failed", error, retryable: false } });
+  const selected = new Response();
+  const other = new Response();
+  recordCommittedPrivacyTerminal(selected, local, frame);
+  recordCommittedPrivacyTerminal(other, local.clone(), frame);
+  expect(rewriteNonRetryableFailurePayload(frame, false, undefined, undefined, selected)).toBe(frame);
+  for (const [source, content] of [[other, frame], [selected, frame.replace(error.message, "fixture diagnostic")]] as const) {
+    expect(JSON.parse(rewriteNonRetryableFailurePayload(content, false, undefined, undefined, source)).response.error.message)
+      .toBe(NON_REPLAYABLE_COMPLETION_MESSAGE);
+  }
+});
+
+test("a bare veto preserves the provider policy class and gives a public replay code priority", () => {
+  const base = { type: "error", error: { message: "fixture possible cybersecurity risk" } };
+  for (const [cause, status, expected] of [
+    [{ retryable: false }, 400, "cyber_policy"],
+    [{ code, retryable: false }, 429, code],
+  ] as const) {
+    const verdict = bareUpstreamError({ ...base, error: { ...base.error, cause } });
+    expect(verdict).toMatchObject({ terminalCode: "cyber_policy", terminalStatus: 400,
+      replayProjection: { http: { status }, fields: { error: { code: expected }, retryable: false } } });
+    expect(verdict?.replayProjection?.fields.error.message).not.toContain(base.error.message);
+  }
+});
+
 type Fields = Record<string, unknown>;
 const carriers: Record<string, (fields: Fields) => Fields> = {
   root: fields => fields,

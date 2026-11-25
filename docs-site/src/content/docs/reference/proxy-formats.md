@@ -27,8 +27,10 @@ combo fallback. A Responses SSE error with `retryable: false` stops automatic re
 an opaque-state rebuild. A terminal refusal on an authorized Responses replacement uses fixed
 error text on both native and translated routes. Native Responses keeps an observed replacement
 refusal code even if the replacement body fails during delivery. Caller cancellation takes
-precedence. Direct and Combo native Responses use fixed error text for replay refusals on failed
-terminals and on completed or incomplete terminals with an error. Stream events carry
+precedence. Native Responses stops on a recognized JSON refusal code even when the provider
+reports completion. A bare stream error carrying a veto ends the turn with one failure event.
+Direct and Combo routes use fixed error text for terminal replay refusals, including a veto in
+the incomplete details of a response that has no separate error record. Stream events carry
 `response.retryable: false`. Buffered responses include `x-should-retry: false` and omit
 `Retry-After`. Recognized replay-refusal codes use HTTP 429. Other explicit vetoes keep the
 existing status. Only recognized incomplete reason codes are exposed on these terminals.

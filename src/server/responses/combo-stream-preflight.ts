@@ -27,7 +27,7 @@ import { attachComboFailureEvidence, isPausedTurn } from "../../lib/client-error
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
 import { carryReplayRefusal, applyReplayRefusalClientHeaders, isAutomaticReplayBlocked, isNonReplayableUpstreamCode, markTerminalResetReplacement, ProtocolPreOutputEof, replayRefusalVerdict } from "../../lib/upstream-retry";
 import { carryPacedStream, pacedQueuingStrategy } from "../../lib/paced-stream";
-import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
+import { recordCommittedPrivacyTerminal, sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 
 const COMBO_STREAM_PREFLIGHT_MAX_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
 // Bound the prelude hold from its first client-visible event, even if upstream goes quiet.
@@ -1118,7 +1118,9 @@ function createResetSelection(
             const payload = { type: "response.failed", response: {
               status: "failed", output: [], retryable: false, error, last_error: error,
             } };
-            chosen = { response: carryReplayRefusal(replacement, new Response(`event: response.failed\ndata: ${JSON.stringify(payload)}\n\n`)), owner: "replacement" };
+            const json = JSON.stringify(payload);
+            recordCommittedPrivacyTerminal(held, refusal, json);
+            chosen = { response: carryReplayRefusal(replacement, new Response(`event: response.failed\ndata: ${json}\n\n`)), owner: "replacement" };
           } else {
             chosen = { response: replacement, owner: "replacement" };
           }
