@@ -61,7 +61,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 與啟動器的 runtime 區塊不同，合併後的區塊是靜態快照：它不會跟著你的目錄變動。新增供應商或變更
 模型可見度之後，請重新執行 `ocx export`。
 
-合併完成後，在啟動 opencode 之前先匯出 admission key——除非 proxy 在 loopback 上，此時不需要：
+合併完成後，在啟動 opencode 之前先匯出 admission key。僅綁定 loopback 的監聽器不會檢查它，但 OpenCode 會拒絕未設定的金鑰，因此在那裡任何非空值即可：
 
 ```bash
 export OPENCODEX_OPENCODE_API_KEY=<your key>
@@ -94,6 +94,8 @@ Loopback 範例：
 ```
 
 真實值只會經由子程序環境傳遞。優先順序為 `OPENCODEX_API_AUTH_TOKEN`，再來是 hardened service token 檔，然後才是已設定的 API 金鑰——非 loopback 綁定需要後者。
+
+Loopback 綁定（`127.0.0.1`，預設值）不要求資料面金鑰。但 OpenCode 本身需要非空的 `apiKey`：未設定的 `{env:…}` 參考會在送出請求前以 `Missing auth credential: apiKey` 被拒絕。當託管整合或儀表板的用戶端設定指向無驗證的 loopback 監聽器時，會把非機密的占位符 `opencodex-loopback` 寫為 `apiKey`，因此不需要匯出任何東西。包括 `ocx export` 在內的其他路徑保留該參考：在需要的地方匯出 admission key，在不檢查金鑰的 loopback 綁定上則把任意非空值匯出為 `OPENCODEX_OPENCODE_API_KEY`。只憑 loopback URL 無法確定不會檢查金鑰：綁定在 `0.0.0.0` 的公開監聽器，即使經由 `127.0.0.1` 連線，仍然要求可接受的金鑰；經由 SSH 轉發連到的已驗證監聽器也是如此。
 
 ## 還原
 
