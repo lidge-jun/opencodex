@@ -110,6 +110,14 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
 
+**Neuralwatt Cloud** discovers models from Neuralwatt’s public `/v1/models` catalog and skips
+non-chat decision models; an offline roster covers the chat models when discovery is unavailable.
+On Chat Completions, OpenCodex replays prior reasoning for the reasoning models Neuralwatt documents,
+including DeepSeek V4.1 Flash and its `nw-flash` tracking alias. Requests to Kimi K3.1 Pro omit
+`temperature`, `top_p` and penalties, which Moonshot fixes for that model.
+Usage cost estimates use the token list prices Neuralwatt publishes per model; Neuralwatt itself bills
+subscriptions and pay-as-you-go by GPU energy, so the estimate is not the amount charged.
+
 **Alibaba Token Plan** provides Beijing Personal Edition and International Team Edition
 presets. Both regions offer both subscription tiers. The presets keep static chat-model
 lists because upstream discovery also includes non-chat models. Existing selections and
