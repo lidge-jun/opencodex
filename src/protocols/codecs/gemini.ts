@@ -9,6 +9,7 @@
  * complete functionCall part, because Gemini clients expect whole calls.
  */
 import { normalizedClientExtraContent } from "../../responses/provider-opaque-metadata";
+import { createTranslatorBudget, type TranslatorBudget } from "../../lib/translator-budget";
 
 type Obj = Record<string, unknown>;
 
@@ -387,16 +388,37 @@ export function chatToGeminiResponse(model: string, input: unknown): Obj {
   return { candidates: [candidate(parts, reason)], ...(usage ? { usageMetadata: usage } : {}), modelVersion: model };
 }
 
-type StreamTool = { id?: string; name: string; arguments: string; signature?: string };
+type StreamTool = { id?: string; name: string; arguments: string; signature?: string; nameTail?: number; argumentsTail?: number };
 export interface GeminiStreamState {
   model: string;
   finishReason?: unknown;
   usage?: Obj;
   tools: Map<number, StreamTool>;
   toolsEmitted: boolean;
+  toolBudget?: TranslatorBudget | null;
 }
-export function createGeminiStreamState(model: string): GeminiStreamState {
-  return { model, tools: new Map(), toolsEmitted: false };
+export function createGeminiStreamState(model: string, toolBudget?: TranslatorBudget): GeminiStreamState {
+  return { model, tools: new Map(), toolsEmitted: false, toolBudget };
+}
+
+/** The stream owns its tool budget; finishing the calls or closing the stream releases it. */
+export function disposeGeminiStreamTools(state: GeminiStreamState): void {
+  state.tools.clear();
+  state.toolBudget?.dispose();
+  // An in-flight read may settle after cancellation. A closed stream must not open a new budget.
+  state.toolBudget = null;
+}
+
+function appendToolFragment(tool: StreamTool, field: "name" | "arguments", fragment: string, budget: TranslatorBudget, callId?: string): void {
+  if (!fragment) return;
+  const tail = field === "name" ? "nameTail" : "argumentsTail";
+  const previous = tool[tail];
+  const first = fragment.charCodeAt(0);
+  // Two isolated surrogate halves cost three UTF-8 bytes each, but together cost four.
+  const completesPair = previous !== undefined && previous >= 0xd800 && previous <= 0xdbff && first >= 0xdc00 && first <= 0xdfff;
+  budget.chargeRetained(Buffer.byteLength(fragment) - (completesPair ? 2 : 0), { kind: "tool_args", callId });
+  tool[field] += fragment;
+  tool[tail] = fragment.charCodeAt(fragment.length - 1);
 }
 
 function streamChunk(state: GeminiStreamState, parts: Obj[]): Obj {
@@ -424,24 +446,34 @@ export function consumeGeminiChatChunk(state: GeminiStreamState, input: unknown)
     if (value) records.push(streamChunk(state, [{ text: value }]));
   }
   if (delta.tool_calls !== undefined) {
-    if (!Array.isArray(delta.tool_calls) || state.toolsEmitted) throw new Error("Invalid Chat tool delta");
+    if (!Array.isArray(delta.tool_calls) || state.toolsEmitted || state.toolBudget === null) throw new Error("Invalid Chat tool delta");
     for (const raw of delta.tool_calls) {
       const call = object(raw, "tool delta");
       if (!Number.isSafeInteger(call.index) || (call.index as number) < 0) throw new Error("Invalid tool index");
       const index = call.index as number;
-      if (!state.tools.has(index) && state.tools.size >= MAX_GEMINI_TOOL_CALLS) throw new Error("Too many tool calls");
-      const current = state.tools.get(index) ?? { name: "", arguments: "" };
+      const previous = state.tools.get(index);
+      if (!previous && state.tools.size >= MAX_GEMINI_TOOL_CALLS) throw new Error("Too many tool calls");
+      const budget = state.toolBudget ??= createTranslatorBudget();
+      const callId = String(index);
+      if (!previous) budget.openCall(callId);
+      const current = previous ?? { name: "", arguments: "" };
       if (call.id !== undefined) {
         const id = text(call.id, "tool id", true);
         if (current.id && current.id !== id) throw new Error("Conflicting tool id");
+        if (!current.id) budget.chargeRetained(Buffer.byteLength(id), { kind: "tool_args" });
         current.id = id;
       }
       const signature = chatCallSignature(call.extra_content);
-      if (signature) current.signature = signature;
+      if (signature && signature !== current.signature) {
+        const delta = Buffer.byteLength(signature) - Buffer.byteLength(current.signature ?? "");
+        if (delta > 0) budget.chargeRetained(delta, { kind: "tool_args" });
+        if (delta < 0) budget.releaseRetained(-delta, { kind: "tool_args" });
+        current.signature = signature;
+      }
       if (call.function !== undefined) {
         const fn = object(call.function, "tool function");
-        if (fn.name !== undefined) current.name += text(fn.name, "tool name");
-        if (fn.arguments !== undefined) current.arguments += text(fn.arguments, "tool arguments");
+        if (fn.name !== undefined) appendToolFragment(current, "name", text(fn.name, "tool name"), budget);
+        if (fn.arguments !== undefined) appendToolFragment(current, "arguments", text(fn.arguments, "tool arguments"), budget, callId);
       }
       state.tools.set(index, current);
     }
@@ -453,6 +485,7 @@ export function consumeGeminiChatChunk(state: GeminiStreamState, input: unknown)
         .map(([index, tool]) => functionCallPart(tool.id, text(tool.name, "tool name", true), tool.arguments, index, tool.signature));
       records.push(streamChunk(state, parts));
       state.toolsEmitted = true;
+      disposeGeminiStreamTools(state);
     }
   }
   return records;
