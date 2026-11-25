@@ -157,7 +157,7 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 </tr>
 <tr>
 <td width="180"><a href="https://runapi.co"><img src="../assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
-<td>이 프로젝트를 후원해 주시는 <a href="https://runapi.co">RunAPI</a>에 감사합니다. RunAPI는 통합 AI API 게이트웨이로, API 키 하나로 OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot 등의 200개 이상 모델을 OpenAI Chat Completions와 Responses, Anthropic Messages, Gemini 네이티브 API 형식으로 쓸 수 있습니다. 스마트 라우팅이 요청마다 빠르고 안정적인 공급자 노드를 고르고 장애가 나면 자동으로 전환하며, 요금은 쓴 만큼 내는 방식으로 대개 표준 요금보다 훨씬 저렴합니다. Add provider 선택기에서 <code>RunAPI</code>를 고르거나 <code>ocx provider add runapi</code>를 실행하세요.</td>
+<td>이 프로젝트를 후원해 주시는 <a href="https://runapi.co">RunAPI</a>에 감사합니다. RunAPI는 통합 AI API 게이트웨이로, API 키 하나로 OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot 등 200개 이상 모델의 카탈로그를 쓸 수 있으며, OpenAI Chat Completions와 Responses, Anthropic Messages, Gemini 네이티브 API 형식으로 제공됩니다(쓸 수 있는 형식은 모델마다 다릅니다). 스마트 라우팅이 요청마다 빠르고 안정적인 공급자 노드를 고르고 장애가 나면 자동으로 전환하며, 요금은 쓴 만큼 내는 방식으로 대개 표준 요금보다 훨씬 저렴합니다. Add provider 선택기에서 <code>RunAPI</code>를 고르거나 <code>ocx provider add runapi</code>를 실행하세요.</td>
 </tr>
 </tbody>
 </table>

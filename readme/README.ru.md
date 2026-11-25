@@ -162,7 +162,7 @@ ocx start                         # прокси + панель управлен
 </tr>
 <tr>
 <td width="180"><a href="https://runapi.co"><img src="../assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
-<td>Спасибо <a href="https://runapi.co">RunAPI</a> за поддержку проекта! RunAPI — единый шлюз к API ИИ: один API-ключ открывает доступ к более чем 200 моделям OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot и других через форматы OpenAI Chat Completions и Responses, Anthropic Messages и нативный API Gemini. Умная маршрутизация отправляет каждый запрос на быстрый и стабильный узел поставщика с автоматическим переключением при сбоях, а оплата идёт по факту использования, обычно заметно ниже стандартных цен. Выберите <code>RunAPI</code> в селекторе Add provider или выполните <code>ocx provider add runapi</code>.</td>
+<td>Спасибо <a href="https://runapi.co">RunAPI</a> за поддержку проекта! RunAPI — единый шлюз к API ИИ: один API-ключ открывает каталог из более чем 200 моделей OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot и других, доступных через форматы OpenAI Chat Completions и Responses, Anthropic Messages и нативный API Gemini; набор форматов зависит от модели. Умная маршрутизация отправляет каждый запрос на быстрый и стабильный узел поставщика с автоматическим переключением при сбоях, а оплата идёт по факту использования, обычно заметно ниже стандартных цен. Выберите <code>RunAPI</code> в селекторе Add provider или выполните <code>ocx provider add runapi</code>.</td>
 </tr>
 </tbody>
 </table>

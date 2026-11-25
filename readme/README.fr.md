@@ -161,7 +161,7 @@ Voir [SPONSORS.md](../SPONSORS.md).
 </tr>
 <tr>
 <td width="180"><a href="https://runapi.co"><img src="../assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
-<td>Merci à <a href="https://runapi.co">RunAPI</a> de sponsoriser ce projet ! RunAPI est une passerelle d'API d'IA unifiée : une seule clé d'API donne accès à plus de 200 modèles d'OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot et d'autres, via les formats OpenAI Chat Completions et Responses, Anthropic Messages et l'API native de Gemini. Le routage intelligent envoie chaque requête vers un nœud fournisseur rapide et stable, avec basculement automatique, et la facturation se fait à l'usage, généralement bien en dessous des tarifs standard. Choisissez <code>RunAPI</code> dans le sélecteur Add provider ou exécutez <code>ocx provider add runapi</code>.</td>
+<td>Merci à <a href="https://runapi.co">RunAPI</a> de sponsoriser ce projet ! RunAPI est une passerelle d'API d'IA unifiée : une seule clé d'API ouvre un catalogue de plus de 200 modèles d'OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot et d'autres, servis via les formats OpenAI Chat Completions et Responses, Anthropic Messages et l'API native de Gemini ; les formats disponibles varient selon le modèle. Le routage intelligent envoie chaque requête vers un nœud fournisseur rapide et stable, avec basculement automatique, et la facturation se fait à l'usage, généralement bien en dessous des tarifs standard. Choisissez <code>RunAPI</code> dans le sélecteur Add provider ou exécutez <code>ocx provider add runapi</code>.</td>
 </tr>
 </tbody>
 </table>

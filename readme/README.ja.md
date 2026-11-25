@@ -158,7 +158,7 @@ ocx start                         # プロキシとダッシュボードが loca
 </tr>
 <tr>
 <td width="180"><a href="https://runapi.co"><img src="../assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
-<td>このプロジェクトを支援してくださる <a href="https://runapi.co">RunAPI</a> に感謝します。RunAPI は統合 AI API ゲートウェイで、1 つの API キーで OpenAI、Anthropic、Google、xAI、DeepSeek、Alibaba、Moonshot などの 200 以上のモデルを、OpenAI Chat Completions と Responses、Anthropic Messages、Gemini ネイティブ API の各形式で利用できます。スマートルーティングがリクエストごとに高速で安定したプロバイダーノードを選び、障害時は自動で切り替えます。料金は使った分だけの従量課金で、多くの場合は標準価格より大幅に安くなります。Add provider ピッカーで <code>RunAPI</code> を選ぶか <code>ocx provider add runapi</code> を実行してください。</td>
+<td>このプロジェクトを支援してくださる <a href="https://runapi.co">RunAPI</a> に感謝します。RunAPI は統合 AI API ゲートウェイで、1 つの API キーで OpenAI、Anthropic、Google、xAI、DeepSeek、Alibaba、Moonshot などの 200 以上のモデルのカタログを利用でき、OpenAI Chat Completions と Responses、Anthropic Messages、Gemini ネイティブ API の各形式で提供されます（使える形式はモデルによって異なります）。スマートルーティングがリクエストごとに高速で安定したプロバイダーノードを選び、障害時は自動で切り替えます。料金は使った分だけの従量課金で、多くの場合は標準価格より大幅に安くなります。Add provider ピッカーで <code>RunAPI</code> を選ぶか <code>ocx provider add runapi</code> を実行してください。</td>
 </tr>
 </tbody>
 </table>

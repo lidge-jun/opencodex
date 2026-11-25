@@ -154,7 +154,7 @@ Los patrocinadores permiten mantener opencodex al día con los cambios de protoc
 </tr>
 <tr>
 <td width="180"><a href="https://runapi.co"><img src="../assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
-<td>Gracias a <a href="https://runapi.co">RunAPI</a> por patrocinar este proyecto. RunAPI es una pasarela unificada de API de IA: una sola clave API da acceso a más de 200 modelos de OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot y otros, mediante los formatos OpenAI Chat Completions y Responses, Anthropic Messages y la API nativa de Gemini. El enrutamiento inteligente envía cada solicitud a un nodo de proveedor rápido y estable, con conmutación automática ante fallos, y el pago es por uso, normalmente muy por debajo de las tarifas estándar. Selecciona <code>RunAPI</code> en Añadir proveedor o ejecuta <code>ocx provider add runapi</code>.</td>
+<td>Gracias a <a href="https://runapi.co">RunAPI</a> por patrocinar este proyecto. RunAPI es una pasarela unificada de API de IA: una sola clave API abre un catálogo de más de 200 modelos de OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot y otros, servidos mediante los formatos OpenAI Chat Completions y Responses, Anthropic Messages y la API nativa de Gemini; los formatos disponibles varían según el modelo. El enrutamiento inteligente envía cada solicitud a un nodo de proveedor rápido y estable, con conmutación automática ante fallos, y el pago es por uso, normalmente muy por debajo de las tarifas estándar. Selecciona <code>RunAPI</code> en Añadir proveedor o ejecuta <code>ocx provider add runapi</code>.</td>
 </tr>
 </tbody>
 </table>

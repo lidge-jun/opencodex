@@ -1321,7 +1321,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     sponsor: { tier: "standard", url: "https://runapi.co" },
     liveModels: true,
     preserveCustomDestination: true,
-    note: "Unified AI API gateway with 200+ models on OpenAI Chat Completions. Use a RunAPI key; live discovery lists the models that key can use.",
+    note: "Unified AI API gateway with a 200+ model catalog; this preset uses OpenAI Chat Completions, which most catalog models support. Use a RunAPI key; live discovery lists the models that key can use.",
   },
   {
     // Public contract checked 2026-09-29: https://docs.tokenlab.sh/api-reference/models/list-models

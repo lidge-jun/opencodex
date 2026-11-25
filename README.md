@@ -166,7 +166,7 @@ See [SPONSORS.md](./SPONSORS.md).
 </tr>
 <tr>
 <td width="180"><a href="https://runapi.co"><img src="assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
-<td>Thanks to <a href="https://runapi.co">RunAPI</a> for sponsoring this project! RunAPI is a unified AI API gateway: one API key reaches 200+ models from OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot and more, through the OpenAI Chat Completions and Responses, Anthropic Messages, and Gemini native API formats. Smart routing sends each request to a fast, stable provider node with automatic failover, and pricing is pay-as-you-go, typically well below standard rates. Pick <code>RunAPI</code> in the Add provider picker or run <code>ocx provider add runapi</code>.</td>
+<td>Thanks to <a href="https://runapi.co">RunAPI</a> for sponsoring this project! RunAPI is a unified AI API gateway: one API key opens a catalog of 200+ models from OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot and more, served over the OpenAI Chat Completions and Responses, Anthropic Messages, and Gemini native API formats, with the formats available varying by model. Smart routing sends each request to a fast, stable provider node with automatic failover, and pricing is pay-as-you-go, typically well below standard rates. Pick <code>RunAPI</code> in the Add provider picker or run <code>ocx provider add runapi</code>.</td>
 </tr>
 </tbody>
 </table>

@@ -161,7 +161,7 @@ Her yukarı akış protokol değişiminde opencodex'in bakımını sürdürebilm
 </tr>
 <tr>
 <td width="180"><a href="https://runapi.co"><img src="../assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
-<td>Bu projeye sponsor olduğu için <a href="https://runapi.co">RunAPI</a>'ye teşekkürler! RunAPI birleşik bir yapay zekâ API ağ geçididir: tek bir API anahtarıyla OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot ve diğerlerinden 200'den fazla modele OpenAI Chat Completions ve Responses, Anthropic Messages ve Gemini'nin yerel API biçimleriyle erişilir. Akıllı yönlendirme her isteği hızlı ve kararlı bir sağlayıcı düğümüne gönderir ve arızada otomatik olarak geçiş yapar; ücretlendirme kullandıkça öde şeklindedir ve genellikle standart fiyatların epey altındadır. Add provider seçicisinden <code>RunAPI</code> seçin ya da <code>ocx provider add runapi</code> çalıştırın.</td>
+<td>Bu projeye sponsor olduğu için <a href="https://runapi.co">RunAPI</a>'ye teşekkürler! RunAPI birleşik bir yapay zekâ API ağ geçididir: tek bir API anahtarı OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot ve diğerlerinden 200'den fazla modellik bir kataloğu açar; modeller OpenAI Chat Completions ve Responses, Anthropic Messages ve Gemini'nin yerel API biçimleriyle sunulur ve kullanılabilen biçimler modele göre değişir. Akıllı yönlendirme her isteği hızlı ve kararlı bir sağlayıcı düğümüne gönderir ve arızada otomatik olarak geçiş yapar; ücretlendirme kullandıkça öde şeklindedir ve genellikle standart fiyatların epey altındadır. Add provider seçicisinden <code>RunAPI</code> seçin ya da <code>ocx provider add runapi</code> çalıştırın.</td>
 </tr>
 </tbody>
 </table>
