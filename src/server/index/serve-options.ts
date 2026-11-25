@@ -133,6 +133,8 @@ import { desktopSnapshotBusyResponse, renderAnthropicModelListing } from "./anth
 import { buildDesktopDiscoveryInputs } from "../../claude/desktop-discovery-inputs";
 import { observeModelCacheRevision } from "../../codex/model-cache";
 import { handleImages } from "../images";
+import { handleVideos } from "../videos";
+import { matchVideoRoute } from "../video-routes";
 import {
   handleLive,
   logLiveSidebandFrame,
@@ -1321,6 +1323,31 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           addFinalRequestLog(requestId, start, logCtx, response.status, response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);
         }, { requestId, start, logCtx });
+      }
+
+      // Public OpenAI Videos routes (#9110): images-endpoint admission; only the paid create takes a turn slot.
+      const videoRoute = url.pathname.startsWith("/v1/videos") ? matchVideoRoute(req.method, url.pathname) : undefined;
+      if (videoRoute) {
+        disableResponsesRequestTimeout(req, requestServer);
+        if (isDraining()) return drainingResponse(req, policy);
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
+        }
+        const start = Date.now();
+        const requestId = nextRequestLogId(start);
+        const logCtx: RequestLogContext = {
+          model: "video", provider: "unknown",
+          ...requestMetricsLogContext, client: classifyUsageClient(req.headers),
+          ...admissionFields(admission),
+        };
+        const run = async (): Promise<Response> => {
+          const response = await handleVideos(req, url, config, videoRoute, logCtx, admission);
+          addFinalRequestLog(requestId, start, logCtx, response.status, response.status === 499 ? { closeReason: "client_cancel" } : undefined);
+          return withCors(response, req, policy);
+        };
+        return videoRoute.kind === "create" ? runAdmittedHttpTurn(req, policy, run, { requestId, start, logCtx }) : run();
       }
 
       if (req.method === "GET" && url.pathname.startsWith("/v1/opencodex/artifacts/")) {

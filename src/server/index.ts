@@ -204,6 +204,7 @@ import {
 import { createReadinessGate, type ReadinessGate } from "./readiness";
 import { createServeOptions, type ServerIngress } from "./index/serve-options";
 import { createOptionalListenerSet, LINK_INGRESS_HOSTNAME } from "./index/optional-listeners";
+import { matchVideoRoute } from "./video-routes";
 import { createPackageTreeIntegrityGuardForServer } from "./index/package-tree-guard";
 import { inspectStartupOwnership, logProxyEndpoints, resolveInboundBodyLimitWithWarning, setStartupCacheInvalidationWrite, warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup, type StartServerDeps } from "./index/startup-warnings";
 import { acquireSpendLedgerServerLifecycle, recordFailedStartRollback, type SpendLedgerServerLifecycle } from "./index/spend-ledger-lifecycle";
@@ -422,6 +423,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     if (path === "/v1/images/generations" || path === "/v1/images/edits") {
       return req.method === "POST";
     }
+    if (path === "/v1/videos" || path.startsWith("/v1/videos/")) return matchVideoRoute(req.method, path) !== undefined;
     if (path === "/v1/models") return req.method === "GET";
     // Gemini wire (#8732): `ocx connect agy` points the CLI at this socket. Same admission as the
     // chat wire it is translated into; each Gemini path admits only its own HTTP method.

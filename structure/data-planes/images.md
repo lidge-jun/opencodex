@@ -106,6 +106,55 @@ a redirect, keep the 1 MiB response cap, and the finished-video download keeps i
 `data:` policy.
 `tests/videos/video-provider.test.ts` covers both halves.
 
+### Video wire
+
+A row's `videoApi` picks the job wire (`src/images/video-wire.ts`); `resolveVideoProviderRow` copies
+it onto `VideoProviderAuth` for custom rows only, so the pinned `xai` destination is always the xAI
+wire. Absent or `"xai"` keeps `POST /videos/generations`, poll `GET /videos/{id}` and the public
+`video.url` download above. `"openai"` selects `src/images/openai-video-client.ts`: `POST /videos`,
+poll `GET /videos/{id}` (`queued`/`in_progress` keep polling, `completed` finishes with no URL), and
+`GET /videos/{id}/content` streamed by `writeVideoResponseToArtifact` under the 200 MiB video cap and
+per-turn budget. All three requests use the same `providerOutboundPost`/`providerOutboundGet` policy,
+row name, key and `cleartextPolicy: "credentialed"` as the xAI wire, so the content download obeys the
+submit POST's address, private-network, cleartext, proxy and no-redirect rules and never reaches another
+host. Upstream job ids `.` and `..` are refused because they survive percent-encoding and would
+collapse onto another path of the same host. Bridge arguments map to `seconds`, `size` and
+`input_reference.image_url`; last frames, keyframes and reference images are refused before any send.
+`tests/videos/video-openai-client.test.ts` and `tests/videos/video-openai-wire-bridge.test.ts` cover it.
+
+## Public Videos
+
+`src/server/videos.ts` serves `POST /v1/videos`, `GET /v1/videos/{id}` and `GET /v1/videos/{id}/content`
+(`src/server/video-routes.ts` matches them; other methods and subpaths reach the JSON `/v1/*` 404).
+The dispatcher applies the Images admission: draining refusal, `resolveApiAuth`, origin policy and a
+request-log row (`usage.jsonl`); only the paid create takes an admitted turn slot and the inbound body
+gate (`/v1/videos` is in `CONFIGURABLE_JSON_BODY_ROUTES`). The loopback listener and Remote Link admit
+the same three shapes.
+
+`model` of `<provider>/<model>` names a configured row and sends the bare model; any other model goes to
+`images.videoProvider`. A prefix that names a configured row is final even when that row is refused.
+The row must pass `resolveVideoProviderRow` and set `videoApi: "openai"`; nothing else serves these
+routes and nothing falls back. A configured key's scope is checked with `admissionScopeDenial` against
+that row and model before the create, and again before each poll and content request.
+
+The returned job `id` is an HMAC-SHA256 handle (`src/server/video-handle.ts`) over the provider, the
+upstream id and the model, keyed by `video-handle-key` in the config directory (32 random bytes, mode
+0600, recorded as owned, created exclusively). The MAC also covers the admission principal (configured
+key id, environment key or loopback) without carrying it, so a handle presented by another principal,
+edited, or minted under another key reads as `404` before any credential is used. An unreadable or
+malformed key file fails closed instead of minting a process-local key. Poll and content re-resolve the
+row from the handle and refuse it if it has since become unusable.
+
+Create accepts JSON or multipart; a multipart `input_reference` PNG/JPEG/WebP file becomes the JSON
+`input_reference.image_url` data URL, and other files are refused. One upstream attempt per create.
+Upstream errors keep a 4xx status and only allowlisted detail; transport errors are redacted. Job
+objects pass through with the handle as `id` and a redacted `error.message`. Content is streamed with a
+fixed media-type allowlist (anything else is `application/octet-stream`), `nosniff`, `no-store`, a
+200 MiB cap, and only the `video`, `thumbnail` and `spritesheet` variants. List, delete, remix, edit
+and extension are not served. Neither xAI nor OpenAI publishes a Responses-API video tool (xAI Responses
+has `image_generation` only; OpenAI shut its Videos API down on 2026-09-24), so there is no Responses
+video path. `tests/server/server-videos.test.ts` and `tests/server/video-handle.test.ts` cover it.
+
 ## Hosted Responses image display
 
 For loopback-admitted Codex Responses clients,
