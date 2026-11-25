@@ -1,4 +1,5 @@
 {
+  "provider-egress-account.test.ts": "lib",
   "explicit-proxy-no-proxy.test.ts": "lib",
   "gemini-native.test.ts": "server",
   "gemini-native-wire.test.ts": "server",

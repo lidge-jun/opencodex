@@ -26,6 +26,7 @@
  * therefore a configuration error naming both real alternatives.
  */
 import type { OcxProviderConfig } from "../types";
+import type { PoolAccountEgress } from "../types/pool-account";
 import { explicitProxyExemptedError, isSocks5ProxyUrl, noProxyMatches, processNoProxyExempts } from "./proxy-env";
 
 export class InvalidProviderEgressError extends Error {
@@ -49,14 +50,24 @@ export type ProviderEgress =
   | { kind: "direct"; reason: "configured" | "noProxy" }
   | { kind: "proxy"; proxyUrl: string; transport: "http" | "socks5" };
 
+/** The selected pool account's own route, with the config path that names it in errors. */
+export interface PoolAccountRoute {
+  id: string;
+  /** Config path of the egress object, e.g. `codexAccounts.<id>.egress`. */
+  scope: string;
+  egress?: PoolAccountEgress;
+}
+
 export interface ProviderEgressContext {
   providerName: string;
   provider: Pick<OcxProviderConfig, "proxy" | "noProxy">;
   url: string | URL;
+  /** The pool account serving this request; its route outranks the provider's. */
+  account?: PoolAccountRoute;
 }
 
-function egressFailure(providerName: string, field: "proxy" | "noProxy", reason: string): never {
-  throw new InvalidProviderEgressError(field, reason, `providers.${providerName}.${field} is invalid: ${reason}`);
+function egressFailure(providerName: string, field: "proxy" | "noProxy", reason: string, scope = `providers.${providerName}`): never {
+  throw new InvalidProviderEgressError(field, reason, `${scope}.${field} is invalid: ${reason}`);
 }
 
 /**
@@ -93,23 +104,23 @@ function parseTargetUrl(providerName: string, url: string | URL): URL {
   }
 }
 
-function normalizeNoProxy(providerName: string, raw: string | string[] | undefined): string | null {
+function normalizeNoProxy(providerName: string, raw: string | string[] | undefined, scope?: string): string | null {
   if (raw === undefined) return null;
   const entries = Array.isArray(raw) ? raw : [raw];
   for (const entry of entries) {
     if (typeof entry !== "string") {
-      return egressFailure(providerName, "noProxy", "every entry must be a string host pattern");
+      return egressFailure(providerName, "noProxy", "every entry must be a string host pattern", scope);
     }
   }
   const joined = entries.join(",").trim();
   return joined.length > 0 ? joined : null;
 }
 
-function parseProviderProxyRoute(providerName: string, raw: string): ProviderEgress {
+function parseProviderProxyRoute(providerName: string, raw: string, scope?: string): ProviderEgress {
+  const egressFailureScoped = (field: "proxy" | "noProxy", reason: string): never => egressFailure(providerName, field, reason, scope);
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
-    return egressFailure(
-      providerName,
+    return egressFailureScoped(
       "proxy",
       `an empty value is ambiguous; write "${PROVIDER_EGRESS_DIRECT}" to force direct egress, or remove the field to inherit the global proxy`,
     );
@@ -119,27 +130,25 @@ function parseProviderProxyRoute(providerName: string, raw: string): ProviderEgr
   try {
     parsed = new URL(trimmed);
   } catch {
-    return egressFailure(
-      providerName,
+    return egressFailureScoped(
       "proxy",
       `"${PROVIDER_EGRESS_DIRECT}" or an absolute proxy URL is required; this value is neither`,
     );
   }
   if (isSocks5ProxyUrl(trimmed)) {
     if (!parsed.hostname) {
-      return egressFailure(providerName, "proxy", "the SOCKS5 proxy URL has no host");
+      return egressFailureScoped("proxy", "the SOCKS5 proxy URL has no host");
     }
     return { kind: "proxy", proxyUrl: trimmed, transport: "socks5" };
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return egressFailure(
-      providerName,
+    return egressFailureScoped(
       "proxy",
       `unsupported proxy scheme "${parsed.protocol}"; supported schemes are http, https, socks5 and socks5h`,
     );
   }
   if (!parsed.hostname) {
-    return egressFailure(providerName, "proxy", "the proxy URL has no host");
+    return egressFailureScoped("proxy", "the proxy URL has no host");
   }
   return { kind: "proxy", proxyUrl: parsed.toString(), transport: "http" };
 }
@@ -158,19 +167,26 @@ function parseProviderProxyRoute(providerName: string, raw: string): ProviderEgr
  * proxy — which is how a provider exempts one host without owning a proxy of its own.
  */
 export function resolveProviderEgress(context: ProviderEgressContext): ProviderEgress {
-  const { providerName, provider } = context;
-  const raw = provider.proxy;
+  const { providerName, provider, account } = context;
+  // An account that names its own proxy replaces the provider's; one that does not inherits it.
+  const accountProxy = account?.egress?.proxy;
+  const scope = accountProxy !== undefined ? account!.scope : undefined;
+  const raw = accountProxy !== undefined ? accountProxy : provider.proxy;
   let route: ProviderEgress;
   if (raw === undefined) {
     route = { kind: "inherit" };
   } else if (raw === null) {
     route = { kind: "direct", reason: "configured" };
   } else if (typeof raw !== "string") {
-    return egressFailure(providerName, "proxy", "the value must be a proxy URL string, \"direct\", null, or absent");
+    return egressFailure(providerName, "proxy", "the value must be a proxy URL string, \"direct\", null, or absent", scope);
   } else {
-    route = parseProviderProxyRoute(providerName, raw);
+    route = parseProviderProxyRoute(providerName, raw, scope);
   }
-  const noProxy = normalizeNoProxy(providerName, provider.noProxy);
+  // The account's bypass list comes first and the provider's still applies.
+  const noProxy = [
+    normalizeNoProxy(providerName, account?.egress?.noProxy, account?.scope),
+    normalizeNoProxy(providerName, provider.noProxy),
+  ].filter((value): value is string => value !== null).join(",") || null;
   if (noProxy !== null) {
     const target = parseTargetUrl(providerName, context.url);
     if (noProxyMatches(target, { NO_PROXY: noProxy })) return { kind: "direct", reason: "noProxy" };
@@ -260,6 +276,8 @@ export function egressTargetUrl(input: string | URL | Request): string | null {
 export interface ProviderEgressBinding {
   providerName: string;
   provider: Pick<OcxProviderConfig, "proxy" | "noProxy">;
+  /** Read at each physical send, so a request moved to another pool account follows that account. */
+  account?: () => PoolAccountRoute | undefined;
 }
 
 /**
@@ -282,7 +300,7 @@ export function providerEgressSendInit(
 ): { proxy?: string | false } {
   const url = egressTargetUrl(input);
   if (url === null) return {};
-  const egress = resolveProviderEgress({ providerName: binding.providerName, provider: binding.provider, url });
+  const egress = resolveProviderEgress({ providerName: binding.providerName, provider: binding.provider, url, account: binding.account?.() });
   // An HTTP(S) proxy route toward a destination the process NO_PROXY exempts would leave without the
   // proxy. Decided against the destination actually sent, before the dispatch receipt and before
   // any byte leaves; `providerFetch` also asks early, before `beforeDispatch`, when nothing can still
@@ -325,6 +343,22 @@ const EGRESS_VALIDATION_URL = "https://validation.invalid/";
  * one rejected here is rejected there for the identical reason. Restating the rules would give
  * this repository two definitions of a valid proxy value and no check that they agree.
  */
+/** The configuration error for a pool account's egress object, or null when it is usable. */
+export function poolAccountEgressConfigError(scope: string, egress: unknown): string | null {
+  if (egress === undefined) return null;
+  if (!egress || typeof egress !== "object" || Array.isArray(egress)) return `${scope} must be an object with optional proxy and noProxy`;
+  const { proxy, noProxy, ...rest } = egress as PoolAccountEgress & Record<string, unknown>;
+  if (Object.keys(rest).length > 0) return `${scope} accepts only proxy and noProxy`;
+  try {
+    resolveProviderEgress({ providerName: "<validation>", provider: {}, url: EGRESS_VALIDATION_URL,
+      account: { id: "<validation>", scope, egress: { proxy, noProxy } } });
+    return null;
+  } catch (error) {
+    if (error instanceof InvalidProviderEgressError) return error.message;
+    throw error;
+  }
+}
+
 export function providerEgressConfigError(
   provider: Pick<OcxProviderConfig, "proxy" | "noProxy">,
 ): string | null {

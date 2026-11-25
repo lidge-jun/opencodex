@@ -1,4 +1,7 @@
 import { publishCredentialSync } from "../local-credentials/generation";
+import { codexAccountEgressRoute } from "./account-egress";
+import { providerEgressFetchInit, resolveProviderEgress } from "../lib/provider-egress";
+import { configuredOutboundFetch } from "../lib/proxy-env";
 import { classifyChatgptRefreshFailure, noteChatgptRefreshFailure, type ChatgptRefreshDiagnosticCode } from "./chatgpt-refresh-failure";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 export { classifyChatgptRefreshFailure } from "./chatgpt-refresh-failure";
@@ -1405,7 +1408,12 @@ async function resolveCodexToken(
         provenance: "self-refresh",
       };
     }
-    const res = await fetch(CHATGPT_TOKEN_URL, {
+    // An account with its own route (codexAccounts[].egress) refreshes through it, like its requests.
+    const accountRoute = codexAccountEgressRoute(loadConfig(), id);
+    const res = await (accountRoute ? configuredOutboundFetch : fetch)(CHATGPT_TOKEN_URL, {
+      ...(accountRoute ? providerEgressFetchInit(resolveProviderEgress({
+        providerName: "codex-account", provider: {}, url: CHATGPT_TOKEN_URL, account: accountRoute,
+      })) : {}),
       method: "POST",
       headers: {
         "Content-Type": "application/json",

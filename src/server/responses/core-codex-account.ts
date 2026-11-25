@@ -1,3 +1,4 @@
+import { codexAccountEgressRoute } from "../../codex/account-egress";
 import { conversationStateAccountId, releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { captureAccountAutoPauseAttempt, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
@@ -1085,7 +1086,7 @@ export async function retryCodexPoolOnAlternateAccount(
             upstream.signal,
             connectMs,
             stream,
-            providerFetch(retryProvider, options.codexWsRuntimeIdentity, {
+            providerFetch(retryProvider, options.codexWsRuntimeIdentity, { account: () => codexAccountEgressRoute(config, codexLogAccountId(retryAuthCtx)),
               httpOnly,
               providerName: route.providerName,
               modelId: route.modelId,
