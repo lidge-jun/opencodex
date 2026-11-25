@@ -1670,7 +1670,7 @@ API keys and credential references can be stored in the OS credential store (mac
 
 ## Static model allowlists
 
-The `zhipu-bigmodel-responses` preset seeds `glm-5.3`, `glm-5.3-flash` and `glm-5-turbo` with
+The `zhipu-bigmodel-responses` preset seeds `glm-5.4`, `glm-5.3`, `glm-5.3-flash` and `glm-5-turbo` with
 `liveModels: false` for `https://open.bigmodel.cn/api/v1`. Its static roster and
 per-model context, effort, and summary metadata come from the
 [BigModel Responses guide](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses).

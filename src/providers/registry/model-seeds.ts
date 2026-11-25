@@ -102,7 +102,22 @@ export const ANTHROPIC_MODEL_REASONING_EFFORTS: Record<string, string[]> = Objec
 // disappears.
 export const ZAI_GLM_53_MODELS = ["glm-5.3", "glm-5.3[1m]", "glm-5.3-flash"];
 export const ZAI_GLM_52_MODELS = ["glm-5.2", "glm-5.2[1m]"];
-export const ZAI_GLM_5X_MODELS = [...ZAI_GLM_53_MODELS, ...ZAI_GLM_52_MODELS];
+// 261126 GLM-5.4: on every GLM Coding Plan tier (docs.z.ai/devpack/latest-model.md,
+// docs.bigmodel.cn/cn/coding-plan/latest-model.md); the pay-as-you-go Model API is still pending.
+// docs.z.ai/guides/llm/glm-5.4.md: 1M context, 128K output, video/image/text/file input, and the
+// same low/high/max effort fold (default max) as GLM-5.3.
+export const ZAI_GLM_54_MODELS = ["glm-5.4", "glm-5.4[1m]"];
+export const ZAI_GLM_5X_MODELS = [...ZAI_GLM_54_MODELS, ...ZAI_GLM_53_MODELS, ...ZAI_GLM_52_MODELS];
+/** 5.x members whose effort ladder, default effort and output cap follow the 5.3 contract. */
+export const ZAI_GLM_53_CONTRACT_MODELS = [...ZAI_GLM_54_MODELS, ...ZAI_GLM_53_MODELS];
+/** Native VLMs in the 5.x family: images go straight to the model, never through the sidecar. */
+export const ZAI_GLM_5X_NATIVE_VISION_MODELS = ["glm-5.3-flash", ...ZAI_GLM_54_MODELS];
+/** Static roster of the Z.ai and BigModel Chat Coding Plan rows (one list, two hosts). */
+export const ZAI_CODING_PLAN_MODELS = [...ZAI_GLM_54_MODELS, "glm-5.3", "glm-5.3[1m]", "glm-5.3-flash", "glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5", "glm-4.6"];
+/** Static roster of the BigModel Coding Plan Responses row. */
+export const BIGMODEL_RESPONSES_MODELS = ["glm-5.4", "glm-5.3", "glm-5.3-flash", "glm-5-turbo"];
+/** Static Gemini API (AI Studio) roster; see the google entry for the 2026-11-26 sources. */
+export const GOOGLE_GEMINI_API_MODELS = ["gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview"];
 /**
  * The 5.x rows whose images the PROXY has to describe, which is NOT the same set as
  * the 5.x rows themselves.
@@ -117,7 +132,7 @@ export const ZAI_GLM_5X_MODELS = [...ZAI_GLM_53_MODELS, ...ZAI_GLM_52_MODELS];
  * constant also drives `modelSupportsReasoningSummaries` and
  * `preserveReasoningContentModels`, where flash DOES belong.
  */
-export const ZAI_GLM_5X_SIDECAR_VISION_MODELS = ZAI_GLM_5X_MODELS.filter(id => id !== "glm-5.3-flash");
+export const ZAI_GLM_5X_SIDECAR_VISION_MODELS = ZAI_GLM_5X_MODELS.filter(id => !ZAI_GLM_5X_NATIVE_VISION_MODELS.includes(id));
 /**
  * Positive input-modality declaration for the Chat-path GLM rows.
  *
@@ -140,7 +155,7 @@ export const ZAI_GLM_5X_SIDECAR_VISION_MODELS = ZAI_GLM_5X_MODELS.filter(id => i
  */
 export const ZAI_GLM_5X_INPUT_MODALITIES: Record<string, string[]> = {
   ...Object.fromEntries(ZAI_GLM_5X_SIDECAR_VISION_MODELS.map(id => [id, ["text"]])),
-  "glm-5.3-flash": ["text", "image"],
+  ...Object.fromEntries(ZAI_GLM_5X_NATIVE_VISION_MODELS.map(id => [id, ["text", "image"]])),
 };
 export const ZAI_GLM_52_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 /**
@@ -153,7 +168,7 @@ export const ZAI_GLM_52_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "
 export const ZAI_GLM_53_REASONING_EFFORTS = ["low", "high", "max"];
 /** Per-model ladders for the Coding Plan rows: 5.3 gets its three effective tiers, 5.2 keeps five. */
 export const ZAI_GLM_5X_REASONING_EFFORTS: Record<string, string[]> = {
-  ...Object.fromEntries(ZAI_GLM_53_MODELS.map(id => [id, ZAI_GLM_53_REASONING_EFFORTS])),
+  ...Object.fromEntries(ZAI_GLM_53_CONTRACT_MODELS.map(id => [id, ZAI_GLM_53_REASONING_EFFORTS])),
   ...Object.fromEntries(ZAI_GLM_52_MODELS.map(id => [id, ZAI_GLM_52_REASONING_EFFORTS])),
 };
 // 260710 MiniMax models and context windows: Tier-2 evidence in
@@ -311,7 +326,9 @@ export const OPENAI_DAYBREAK_MAX_INPUT_TOKENS: Record<string, number> = {
 export const OPENAI_DAYBREAK_REASONING_EFFORTS: Record<string, string[]> = Object.fromEntries(
   OPENAI_DAYBREAK_MODELS.map(id => [id, [] as string[]]),
 );
-export const OPENROUTER_GPT56_MODELS = OPENAI_GPT56_MODELS.map(id => `openai/${id}`);
+// OpenAI documents bare `gpt-5.6` as an alias of GPT-5.6 Sol; OpenRouter's public catalog lists
+// only the tier slugs (openrouter.ai/api/v1/models, 2026-11-26), so the alias is not seeded there.
+export const OPENROUTER_GPT56_MODELS = OPENAI_GPT56_MODELS.filter(id => id !== "gpt-5.6").map(id => `openai/${id}`);
 export const XAI_MODELS = [
   "grok-4.7",
   "grok-4.6",
@@ -381,6 +398,11 @@ export const THINKING_BUDGET_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 // Qwen3.8-Max is the first Qwen3.x model with official direct `reasoning_effort` support.
 // Evidence: https://qwen.ai/blog?id=qwen3.8
 export const QWEN38_REASONING_EFFORTS = ["low", "medium", "xhigh"];
+// Qwen4-Max takes direct `reasoning_effort` low/high/xhigh (default high; minimal->low,
+// medium->high, max->xhigh) on Chat Completions, Responses and Anthropic Messages.
+// Evidence: https://www.alibabacloud.com/help/en/model-studio/qwen4-max (2026-11-26).
+export const QWEN4_MAX = "qwen4-max";
+export const QWEN4_MAX_REASONING_EFFORTS = ["low", "high", "xhigh"];
 export const THINKING_BUDGET_MODELS = [
   "qwen3.5-397b", "qwen3.6-35b",
   "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus",
@@ -593,10 +615,15 @@ export const deepseekReasoningMapFor = (modelId: string): Record<string, string>
 // untested on this exact id. Published 1M context and 393K output use 393216 here,
 // consistent with the existing plan budget convention, not a measured boundary;
 // the lab's 384000 precision differs. Do not inherit the bare model's JSON fallback.
-export const ALIBABA_TOKEN_PLAN_MODELS = [
+export const ALIBABA_TOKEN_PLAN_MODELS_BEFORE_QWEN4 = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
   "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "glm-5.2", "glm-5.3",
 ];
+// 261126: qwen4-max is on the Personal Edition supported list
+// (https://help.aliyun.com/en/model-studio/token-plan-personal-quick-start). The International
+// Team overview publishes no equivalent, so it is Beijing-only: its window and output ceiling live
+// in the BEIJING maps below, not in the maps the International row shares.
+export const ALIBABA_TOKEN_PLAN_MODELS = [QWEN4_MAX, ...ALIBABA_TOKEN_PLAN_MODELS_BEFORE_QWEN4];
 export const ALIBABA_TOKEN_PLAN_QWEN_MODELS = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
 ];
@@ -739,6 +766,11 @@ export const ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "glm-5.2": 131_072, "glm-5.3": 131_072, "glm-5.1": 128_000, "glm-5": 16_384,
   "MiniMax-M2.5": 32_768,
 };
+// qwen4-max model page: text/image/video input, 1,000,000 context, 131,072 maximum output (non-thinking).
+// The International modality map spreads the shared Beijing one, so qwen4-max gets its own map.
+export const ALIBABA_TOKEN_PLAN_BEIJING_INPUT_MODALITIES: Record<string, string[]> = { ...ALIBABA_TOKEN_PLAN_INPUT_MODALITIES, [QWEN4_MAX]: ["text", "image"] };
+export const ALIBABA_TOKEN_PLAN_BEIJING_CONTEXT_WINDOWS: Record<string, number> = { ...ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS, [QWEN4_MAX]: 1_000_000 };
+export const ALIBABA_TOKEN_PLAN_BEIJING_MAX_OUTPUT_TOKENS: Record<string, number> = { ...ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS, [QWEN4_MAX]: 131_072 };
 export const ALIBABA_TOKEN_PLAN_NO_VISION = [
   "qwen3.7-max", "deepseek-v4-pro", "deepseek-v4-pro-0813",
   "deepseek-v4-flash-0731", "glm-5.2", "glm-5.3", "glm-5.1", "glm-5", "MiniMax-M2.5",
