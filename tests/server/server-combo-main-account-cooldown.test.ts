@@ -9,7 +9,7 @@ import { clearCodexUpstreamHealth, clearCodexUpstreamHealthForAccount, recordCod
 import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { handleResponses } from "../../src/server/responses";
-import { cooledPoolAccountLabel } from "../../src/server/responses/core-combo";
+import { cooledPoolAccountLabel } from "../../src/server/responses/core-combo-failure";
 import type { OcxConfig } from "../../src/types";
 import { responsesSuccess } from "../helpers/combo-failover-upstream";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
