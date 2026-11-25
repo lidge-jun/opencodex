@@ -18,6 +18,7 @@ import {
   type LiveSidebandTarget,
 } from "./live";
 import { LIVE_CALL_TTL_MS, LiveCallBindings, upstreamLiveCallId } from "./live-call-bindings";
+import { liveSessionHeaders, liveSessionProviderName } from "./audio-live-sessions";
 import type { RequestLogContext } from "./request-log";
 
 function protocolHeaders(client: AudioClient, relay: AudioUpstream, frameless: boolean): Headers {
@@ -174,13 +175,27 @@ export async function resolveExternalLiveSocket(
   // own query. When neither names one, the destination is unnamed and judged as
   // such, never as the default.
   const model = binding ? binding.model : liveSidebandModel(upstreamTarget);
+  // A GPT-Live session socket names its model in session.start, so a fresh one is unnamed here,
+  // and it is served only by the configured API-key provider.
+  const liveSession = upstreamTarget.style === "live-session" || upstreamTarget.style === "live-session-start";
+  let sessionProvider: string | undefined;
+  if (liveSession && !binding) {
+    const provider = liveSessionProviderName(config);
+    if (provider instanceof Response) return provider;
+    sessionProvider = provider;
+  }
   const relay = await resolveAudioUpstream(client.headers, config, log, {
     admission: client.admission, model, lease: options.lease,
     signal: options.signal,
-    ...(binding ? { exactAccountId: binding.accountId, providerName: binding.providerName } : {}),
+    ...(binding ? { exactAccountId: binding.accountId, providerName: binding.providerName }
+      : sessionProvider ? { providerName: sessionProvider } : {}),
   });
   if (relay instanceof Response) return relay;
   try {
+    if (liveSession && !relay.keyed) {
+      relay.release();
+      return formatErrorResponse(400, "invalid_request_error", "GPT-Live sessions require an OpenAI API-key provider");
+    }
     if (binding && (relay.providerName !== binding.providerName
       || (new Headers(relay.headers).get("chatgpt-account-id") ?? undefined) !== binding.chatgptAccountId
       || (binding.keyedCredentialDigest !== undefined
@@ -190,7 +205,7 @@ export async function resolveExternalLiveSocket(
     }
     return {
       authContext: relay.authContext,
-      headers: Object.fromEntries(protocolHeaders(client, relay, frameless)),
+      headers: Object.fromEntries(liveSession ? liveSessionHeaders(client, relay) : protocolHeaders(client, relay, frameless)),
       upstreamWsUrl: buildLiveSidebandUpstreamWsUrl(upstreamTarget, binding ? binding.sidebandBaseUrl : config.experimentalRealtimeWsBaseUrl),
       maxSessionMs: LIVE_CALL_TTL_MS,
       finish: finishAudioUpstream(relay),

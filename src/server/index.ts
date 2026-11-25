@@ -444,6 +444,9 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     const isWebSocketUpgrade = req.headers.get("upgrade")?.toLowerCase() === "websocket";
     if (path === "/v1/realtime") return isWebSocketUpgrade;
     if (path === "/v1/live") return isWebSocketUpgrade || req.method === "POST";
+    // Public GPT-Live sessions: external audio keys only, checked again at the handler.
+    if (path === "/v1/live/sessions") return isWebSocketUpgrade || req.method === "POST";
+    if (/^\/v1\/live\/sessions\/[^/]+\/attach\/?$/.test(path)) return isWebSocketUpgrade;
     if (path === "/v1/realtime/calls") return req.method === "POST";
     if (/^\/v1\/(?:live|realtime\/calls)\/[^/]+\/?$/.test(path)) return isWebSocketUpgrade;
     return false;
