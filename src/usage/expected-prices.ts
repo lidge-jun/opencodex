@@ -333,6 +333,32 @@ const QWEN38_FLASH_PRICING = "https://qwen.ai/blog?id=qwen3.8-2026 (Qwen release
  * table entirely, so its row derives from Google's published rate instead.
  */
 const DEVIN_SWE_2: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 };
+/*
+ * SWE-2.1 (2026-11-24): every effort lane shares one list rate, and Ultrafast
+ * (`-lightning`) shares another. Self-serve is free on Desktop/CLI through
+ * 2026-12-08 and discounted to 0.5 / 2.5 / 0.05 through 2027-01-30; enterprise
+ * ACU gets the same discount window. Both are time-boxed, so the list rate is
+ * the durable value, as with SWE-2. Ultrafast is outside the offer.
+ */
+const DEVIN_SWE_21: Cost4 = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 };
+const DEVIN_SWE_21_ULTRAFAST: Cost4 = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 0 };
+const DEVIN_SWE21_SOURCE = "list rate; free self-serve on Desktop/CLI through 2026-12-08 and 0.5/2.5/0.05 through 2027-01-30 are time-boxed promos, not baked in; https://docs.devin.ai/desktop/models (SWE-2.1 rows, read 2026-11-25), https://cognition.com/blog/swe-2-1";
+const DEVIN_SWE21_ULTRAFAST_SOURCE = "SWE-2.1 Ultrafast, every effort lane, excluded from the SWE-2.1 offer; https://docs.devin.ai/desktop/models (read 2026-11-25)";
+/**
+ * Every SWE-2.1 id a caller can name: the family, one row per lane, and the
+ * Ultrafast bare row plus one per lane. A family pick with `fast` is logged under
+ * the family id, so it still prices as standard; that holds for every Devin fast
+ * variant and is not specific to SWE-2.1.
+ */
+function devinSwe21Rows(provider: string): ExpectedPriceOverlay[] {
+  const lanes = ["low", "medium", "high", "xhigh", "max"];
+  const row = (modelId: string, cost4: Cost4, source: string): ExpectedPriceOverlay =>
+    ({ provider, modelId, cost4, source, verifiedAt: "2026-11-25", status: "verified-derived" });
+  return [
+    ...["swe-2-1", ...lanes.map((lane) => `swe-2-1-${lane}`)].map((id) => row(id, DEVIN_SWE_21, DEVIN_SWE21_SOURCE)),
+    ...["swe-2-1-lightning", ...lanes.map((lane) => `swe-2-1-${lane}-lightning`)].map((id) => row(id, DEVIN_SWE_21_ULTRAFAST, DEVIN_SWE21_ULTRAFAST_SOURCE)),
+  ];
+}
 const DEVIN_SWE_17: Cost4 = { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0 };
 const DEVIN_SWE_17_LIGHTNING: Cost4 = { input: 2.5, output: 12.5, cacheRead: 1, cacheWrite: 0 };
 const DEVIN_SONNET_5: Cost4 = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
@@ -642,6 +668,7 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // column shows a discounted 1.2/6, and the doc calls the list rate the
   // billing rate for overage. glm-5-2 likewise takes the nonzero list column.
   { provider: "devin-cli", modelId: "swe-2", cost4: DEVIN_SWE_2, source: `${DEVIN_SWE2_NOTE}; ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  ...devinSwe21Rows("devin-cli"),
   { provider: "devin-cli", modelId: "swe-1-7", cost4: DEVIN_SWE_17, source: `list rate; self-serve column currently shows 0 (unannounced promo); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "swe-1-7-lightning", cost4: DEVIN_SWE_17_LIGHTNING, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "swe-1-6", cost4: DEVIN_SWE_17, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
@@ -663,6 +690,7 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "devin-cli", modelId: "gemini-3-8-flash", cost4: GEMINI_38_FLASH, source: `derived: absent from Devin's modelCostData table; Google published promotional rate through 2026-12-31 shown as estimate ${GEMINI_38_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "grok-4-6", cost4: DEVIN_GROK, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "swe-2", cost4: DEVIN_SWE_2, source: `${DEVIN_SWE2_NOTE}; ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  ...devinSwe21Rows("devin"),
   { provider: "devin", modelId: "swe-1-7", cost4: DEVIN_SWE_17, source: `list rate; self-serve column currently shows 0 (unannounced promo); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "swe-1-7-lightning", cost4: DEVIN_SWE_17_LIGHTNING, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "swe-1-6", cost4: DEVIN_SWE_17, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },

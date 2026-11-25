@@ -51,10 +51,15 @@ describe("devin advertises a ladder instead of inheriting the generic one", () =
   });
 
   test("SWE-2 advertises only the lanes it actually runs", () => {
-    // src/adapters/devin.ts SWE2_EFFORT maps every caller effort onto exactly
+    // src/adapters/devin.ts SWE_EFFORT_LANES maps every caller effort onto exactly
     // these three. Advertising low or xhigh would offer a control that silently
     // rounds to one of them.
     expect(DEVIN_MODEL_EFFORTS["swe-2"]).toEqual(["medium", "high", "max"]);
+  });
+
+  test("SWE-2.1 advertises its five measured lanes in degraded mode", () => {
+    expect(DEVIN_MODEL_EFFORTS["swe-2-1"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(DEVIN_STATIC_MODELS).toContain("swe-2-1");
   });
 
   test("degraded Grok roster excludes 4.6 until its Devin ladder is measured", () => {
