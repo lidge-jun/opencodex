@@ -384,6 +384,10 @@ export default function Combos({
         ? await res.json() as unknown
         : await res.json().catch(() => null) as unknown;
       const serverError = responseError(data);
+      if (res.status === 409 && data && typeof data === "object" && "code" in data && data.code === "combo_revision_conflict") {
+        resource.refresh();
+        return { ok: false as const, error: t("pws.draftConflict") };
+      }
       if (!res.ok || serverError || !responseSucceeded(data)) {
         const err = serverError || t("cws.saveFailed");
         notify(err, false);

@@ -262,6 +262,30 @@ test("editing can select and save a hidden model without changing its visibility
   expect(hiddenImage.disabled).toBe(true);
 });
 
+test("revision conflict reloads and keeps the dashboard draft", async () => {
+  const visible = { ...hiddenImage, id: "visible", disabled: false };
+  mockCatalog([hiddenImage, visible], [target(visible)], { revision: "old" });
+  const fetchCatalog = globalThis.fetch;
+  let writes = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT") {
+      writes++;
+      expect(JSON.parse(String(init.body)).ifRevision).toBe("old");
+      return Response.json({ code: "combo_revision_conflict" }, { status: 409 });
+    }
+    if (writes && new URL(String(input)).pathname === "/api/combos") return Response.json({ combos: [combo([target(visible)], { revision: "new" })] });
+    return fetchCatalog(input, init);
+  }) as typeof fetch;
+  await mount();
+  await openDetail();
+  await chooseOption(selectTrigger(container, MODEL), "hidden");
+  await act(async () => { container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0)); });
+  expect(writes).toBe(1);
+  expect(selectValue(selectTrigger(container, MODEL))).toBe("hidden");
+  expect(container.textContent).toContain("The saved settings changed on this server while you were editing");
+});
+
 test("JEV decision model suggestions include hidden models but exclude the JEV combo itself", async () => {
   mockCatalog([hiddenImage], [target(hiddenImage)], { strategy: "jev", decisionModel: "vision/hidden" });
   await mount();

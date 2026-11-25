@@ -213,6 +213,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   }
   delete combo.id;
   delete combo.model;
+  delete combo.revision;
   if (replacingTargets) combo.targets = additional.targets ?? parsedTargets;
   combo.strategy = strategy;
   if (stickyLimit !== undefined) combo.stickyLimit = stickyLimit;

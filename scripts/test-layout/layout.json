@@ -750,7 +750,7 @@
     "combo-reset-window-model-scope.test.ts": "codex-integration",
     "combo-child-headers.test.ts": "routing",
     "combo-last-resort.test.ts": "codex-integration",
-    "combo-management-api.test.ts": "routing",
+    "combo-management-api.test.ts": "routing", "combo-revision.test.ts": "routing",
     "combo-vision-enrollment.test.ts": "routing",
     "combo-stream-preflight.test.ts": "routing",
     "combo-workspace-data.test.ts": "gui",

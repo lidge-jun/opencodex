@@ -111,7 +111,7 @@ export function DetailPanel({
   const [conflicts, setConflicts] = useState<string[]>([]);
   const dirty = !draftEquals(draft, baseline);
   const allTargetsExhausted = comboQuotaState(draft.targets, providerQuotaStates, providerMap) === "exhausted";
-  const baselineSyncKey = JSON.stringify([baseline.id, baseline.alias, baseline.nativeAlias, baseline.displayName, baseline.strategy, baseline.stickyLimit, baseline.defaultEffort, baseline.imageInput, baseline.reasoningEffortMode, baseline.decisionProvider, baseline.decisionModel, baseline.decisionTimeoutMs, baseline.sessionPin === undefined, baseline.sessionPin, Boolean(baseline.allowMeteredTargets), Boolean(baseline.quotaOnlyFallback), Boolean(baseline.preserveFallbackModel), baseline.targets.map(t => [t.provider, t.model, t.weight, t.reasoningEfforts, t.modelProfile, Boolean(t.metered)])]);
+  const baselineSyncKey = JSON.stringify([baseline.revision, baseline.id, baseline.alias, baseline.nativeAlias, baseline.displayName, baseline.strategy, baseline.stickyLimit, baseline.defaultEffort, baseline.imageInput, baseline.reasoningEffortMode, baseline.decisionProvider, baseline.decisionModel, baseline.decisionTimeoutMs, baseline.sessionPin === undefined, baseline.sessionPin, Boolean(baseline.allowMeteredTargets), Boolean(baseline.quotaOnlyFallback), Boolean(baseline.preserveFallbackModel), baseline.targets.map(t => [t.provider, t.model, t.weight, t.reasoningEfforts, t.modelProfile, Boolean(t.metered)])]);
   const effortMap = useMemo(() => {
     const map = new Map<string, string[] | undefined>();
     for (const model of capabilityModels) {
@@ -145,7 +145,7 @@ export function DetailPanel({
       draftRef.current = result.merged;
       setDraft(result.merged);
       setConflicts(current => [...new Set([...current, ...result.conflicts])]);
-      setMsg(null);
+      setMsg(current => current?.text === t("pws.draftConflict") ? current : null);
       onDirtyChange(!draftEquals(result.merged, baseline));
     }, 0);
     return () => window.clearTimeout(timer);
