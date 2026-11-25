@@ -5,11 +5,15 @@ import { join } from "node:path";
 import { OAUTH_PROVIDERS, getValidAccessTokenForAccount } from "../../src/oauth";
 import { clearGenericFailoverHealth, rotateGenericOAuthAccountOn429 } from "../../src/oauth/generic-account-failover";
 import { getAccountSet, markAccountNeedsReauth, saveAccountCredential, saveCredential } from "../../src/oauth/store";
+import { refreshGenericAccountWithLock } from "../../src/oauth";
+import { readFileSync, writeFileSync } from "node:fs";
+const incarnationOf = (provider: string, id: string) => oauthLoginIncarnation(getAccountSet(provider)!.accounts.find(row => row.id === id));
 import {
   classifyOAuthRefreshFailure,
   clearOAuthRefreshOutcomes,
   lastOAuthRefreshOutcome,
   MAX_OAUTH_REFRESH_OUTCOMES,
+  oauthLoginIncarnation,
   oauthRefreshOutcomeCountForTests,
   observeOAuthRefresh,
   recordOAuthRefreshOutcome,
@@ -69,13 +73,13 @@ async function seed(provider: string, count: number): Promise<string[]> {
 
 test("a refresh failure is reduced to a fixed reason and status, never its message", async () => {
   const rejected = Object.assign(new Error("invalid_grant for secret-refresh-0"), { status: 401 });
-  await expect(observeOAuthRefresh("xai", "acct", () => Promise.reject(rejected))).rejects.toBe(rejected);
-  expect(lastOAuthRefreshOutcome("xai", "acct")).toMatchObject({ ok: false, reason: "rejected", status: 401 });
-  expect(JSON.stringify(lastOAuthRefreshOutcome("xai", "acct"))).not.toContain("secret");
+  await expect(observeOAuthRefresh("xai", "acct", () => Promise.reject(rejected), undefined)).rejects.toBe(rejected);
+  expect(lastOAuthRefreshOutcome("xai", "acct", "")).toMatchObject({ ok: false, reason: "rejected", status: 401 });
+  expect(JSON.stringify(lastOAuthRefreshOutcome("xai", "acct", ""))).not.toContain("secret");
 
-  await expect(observeOAuthRefresh("xai", "acct", () => Promise.resolve("token"))).resolves.toBe("token");
-  expect(lastOAuthRefreshOutcome("xai", "acct")).toMatchObject({ ok: true });
-  expect(lastOAuthRefreshOutcome("xai", "acct")?.reason).toBeUndefined();
+  await expect(observeOAuthRefresh("xai", "acct", () => Promise.resolve("token"), undefined)).resolves.toBe("token");
+  expect(lastOAuthRefreshOutcome("xai", "acct", "")).toMatchObject({ ok: true });
+  expect(lastOAuthRefreshOutcome("xai", "acct", "")?.reason).toBeUndefined();
 
   expect(classifyOAuthRefreshFailure(Object.assign(new Error("x"), { status: 503 }))).toEqual({ reason: "upstream_error", status: 503 });
   expect(classifyOAuthRefreshFailure(Object.assign(new Error("x"), { code: "ECONNREFUSED" }))).toEqual({ reason: "network" });
@@ -83,8 +87,8 @@ test("a refresh failure is reduced to a fixed reason and status, never its messa
   expect(classifyOAuthRefreshFailure(new DOMException("a", "AbortError"))).toEqual({ reason: "aborted" });
   expect(classifyOAuthRefreshFailure("boom")).toEqual({ reason: "error" });
   // A synchronous throw from the refresh call is recorded too.
-  await expect(observeOAuthRefresh("xai", "sync", () => { throw new Error("sync"); })).rejects.toThrow("sync");
-  expect(lastOAuthRefreshOutcome("xai", "sync")).toMatchObject({ ok: false, reason: "error" });
+  await expect(observeOAuthRefresh("xai", "sync", () => { throw new Error("sync"); }, undefined)).rejects.toThrow("sync");
+  expect(lastOAuthRefreshOutcome("xai", "sync", "")).toMatchObject({ ok: false, reason: "error" });
 });
 
 test("a real generic refresh records its outcome for the account", async () => {
@@ -92,7 +96,7 @@ test("a real generic refresh records its outcome for the account", async () => {
   const accountId = getAccountSet("kimi")!.activeAccountId!;
   OAUTH_PROVIDERS.kimi!.refresh = async () => ({ access: "kimi-fresh", refresh: "rt-new", expires: Date.now() + 3_600_000 });
   await expect(getValidAccessTokenForAccount("kimi", accountId)).resolves.toBe("kimi-fresh");
-  expect(lastOAuthRefreshOutcome("kimi", accountId)).toMatchObject({ ok: true });
+  expect(lastOAuthRefreshOutcome("kimi", accountId, oauthLoginIncarnation(getAccountSet("kimi")!.accounts[0]))).toMatchObject({ ok: true });
 });
 
 test("rows show cooldown, refresh result, reauth and eligibility without any credential field", async () => {
@@ -100,7 +104,7 @@ test("rows show cooldown, refresh result, reauth and eligibility without any cre
   const [cooled, failing, flagged] = await seed("xai", 3);
   const now = Date.now();
   rotateGenericOAuthAccountOn429(cfg, "xai", cooled!, "120", now);
-  recordOAuthRefreshOutcome("xai", failing!, { at: now, ok: false, reason: "rejected", status: 400 });
+  recordOAuthRefreshOutcome("xai", failing!, { at: now, ok: false, reason: "rejected", status: 400 }, incarnationOf("xai", failing!));
   await markAccountNeedsReauth("xai", flagged!, true);
 
   const view = buildAccountDiagnostics("xai", cfg, now);
@@ -157,7 +161,7 @@ test("provider token errors keep their HTTP status", () => {
 test("refresh results are fenced to the login, the config home and a bounded size", async () => {
   const cfg = config({ xai: oauthProvider("openai-chat", "https://api.x.ai/v1", ["grok-a"]) });
   const [id] = await seed("xai", 1);
-  recordOAuthRefreshOutcome("xai", id!, { at: Date.now(), ok: true });
+  recordOAuthRefreshOutcome("xai", id!, { at: Date.now(), ok: true }, incarnationOf("xai", id!));
   expect(buildAccountDiagnostics("xai", cfg).accounts[0]!.lastRefresh).toMatchObject({ ok: true });
 
   // An in-place login mints a new loginId: the previous login's result is not this login's.
@@ -183,7 +187,7 @@ test("a refresh that finishes after its login was replaced does not report on th
   const cfg = config({ xai: oauthProvider("openai-chat", "https://api.x.ai/v1", ["grok-a"]) });
   const [id] = await seed("xai", 1);
   let finish!: (value: string) => void;
-  const inFlight = observeOAuthRefresh("xai", id!, () => new Promise<string>(resolve => { finish = resolve; }));
+  const inFlight = observeOAuthRefresh("xai", id!, () => new Promise<string>(resolve => { finish = resolve; }), getAccountSet("xai")!.accounts[0]);
   const credential = getAccountSet("xai")!.accounts[0]!.credential;
   await saveAccountCredential("xai", id!, credential, { rotateLoginId: true });
   finish("token");
@@ -261,4 +265,25 @@ test.skipIf(process.platform === "win32")("the diagnostics read does not harden 
   const after = statSync(authPath);
   expect(after.mode & 0o777).toBe(0o644);
   expect(after.mtimeMs).toBe(before.mtimeMs);
+});
+
+test("a login replaced between the credential read and the refresh call does not inherit the result", async () => {
+  await saveCredential("kimi", { access: "kimi-old", refresh: "rt-old", expires: Date.now() - 1, accountId: "kimi-acct" } as never);
+  const accountId = getAccountSet("kimi")!.activeAccountId!;
+  const before = incarnationOf("kimi", accountId);
+  const stored = getAccountSet("kimi")!.accounts[0]!.credential;
+  const def = { ...OAUTH_PROVIDERS.kimi!, refresh: async () => ({ access: "kimi-fresh", refresh: "rt-new", expires: Date.now() + 3_600_000 }) };
+  const authPath = joinPath(home, "auth.json");
+  // Another process logs in again after this refresh read its credential and before it dispatches.
+  const replaceLogin = () => {
+    const authStore = JSON.parse(readFileSync(authPath, "utf8"));
+    authStore.kimi.accounts.find((row: { id: string }) => row.id === accountId).loginId = crypto.randomUUID();
+    writeFileSync(authPath, JSON.stringify(authStore));
+    return true;
+  };
+  await refreshGenericAccountWithLock("kimi", accountId, def, stored, { authorityCurrent: replaceLogin }).catch(() => undefined);
+  const after = incarnationOf("kimi", accountId);
+  expect(after).not.toBe(before);
+  expect(lastOAuthRefreshOutcome("kimi", accountId, after)).toBeNull();
+  expect(lastOAuthRefreshOutcome("kimi", accountId, before)).toMatchObject({ ok: true });
 });
