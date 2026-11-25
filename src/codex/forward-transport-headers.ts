@@ -8,6 +8,13 @@ export const CODEX_INSTALLATION_ID_HEADER = "x-codex-installation-id";
 export const CODEX_TURN_METADATA_HEADER = "x-codex-turn-metadata";
 export const CODEX_TURN_STATE_HEADER = "x-codex-turn-state";
 export const CODEX_ATTESTATION_HEADER = "x-oai-attestation";
+/**
+ * Codex's stream-exclusion requests (openai/codex 8ecb4c9d0f, ae6c0c8ac1, a4ee1058d9, 98f8a3311b):
+ * the backend omits the echoed tool catalog, per-item usage attribution, delta sequence numbers and
+ * preliminary reasoning ciphertext. No canonical-path consumer here reads those fields.
+ */
+export const CODEX_EXCLUDE_HEADER = "x-codex-exclude";
+export const CODEX_EXCLUDE_STREAM_FIELDS_HEADER = "x-codex-exclude-stream-fields";
 
 // Caller credentials are forwarded only to the canonical Codex destination, never by capability.
 export const FORWARD_HEADERS = [
@@ -15,6 +22,7 @@ export const FORWARD_HEADERS = [
   "thread-id", "x-client-request-id", "x-codex-beta-features", "x-codex-installation-id",
   "x-codex-parent-thread-id", "x-codex-turn-metadata", "x-codex-turn-state", "x-codex-window-id",
   "x-oai-attestation", "x-openai-subagent", "x-responsesapi-include-timing-metrics", "version", CODEX_RESPONSES_LITE_HEADER,
+  CODEX_EXCLUDE_HEADER, CODEX_EXCLUDE_STREAM_FIELDS_HEADER,
 ];
 
 const MAX_ROUTING_MODEL_BYTES = 256;
