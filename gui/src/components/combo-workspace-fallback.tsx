@@ -17,7 +17,7 @@ type StepState = "eligible" | "blocked" | "skipped" | "unreached";
 
 type FallbackRoutes = Record<string, { provider: string; model: string; requiresConsent: boolean } | null>;
 
-function useFallbackRoutes(apiBase: string | undefined, draft: ComboItem, providers: ProviderOption[]) {
+function useFallbackRoutes(apiBase: string | undefined, draft: ComboItem, providers: ProviderOption[], routingRevision?: string) {
   const params = new URLSearchParams();
   if (apiBase !== undefined && draft.strategy === "failover") {
     const selectors = new Set(draft.targets.filter(target => target.provider && target.model)
@@ -28,7 +28,7 @@ function useFallbackRoutes(apiBase: string | undefined, draft: ComboItem, provid
   // A provider edit can change how a selector resolves, so it invalidates the previous answer.
   const revision = JSON.stringify(providers.map(provider =>
     [provider.name, provider.disabled, provider.comboBilling, provider.authMode, provider.adapter, provider.baseUrl]));
-  const key = url && `${url} ${revision}`;
+  const key = url && `${url} ${revision} ${routingRevision ?? ""}`;
   const [snapshot, setSnapshot] = useState<{ key: string; routes?: FallbackRoutes }>();
   useEffect(() => {
     if (!url || !key) return;
@@ -53,7 +53,7 @@ function requiresConsent(target: ComboTarget, provider: ProviderOption | undefin
 function fallbackSteps(draft: ComboItem, providers: ProviderOption[], routes?: FallbackRoutes) {
   const byName = new Map(providers.map(provider => [provider.name, provider]));
   const first = draft.targets[0];
-  const originalModel = first && (routes?.[`${first.provider}/${first.model}`]?.model ?? first.model);
+  const originalModel = first && routes?.[`${first.provider}/${first.model}`]?.model;
   let stop: { step: number; reason: StopReason } | undefined;
 
   const steps = draft.targets.map((target, index) => {
@@ -76,7 +76,7 @@ function fallbackSteps(draft: ComboItem, providers: ProviderOption[], routes?: F
       if (!target.provider || !target.model) reason = "incomplete";
       else if (!provider || provider.disabled || resolved === null) reason = "provider";
       else if (paid && !draft.allowMeteredTargets) reason = "consent";
-      else if (draft.preserveFallbackModel && originalModel && originalModel !== model) reason = "model";
+      else if (draft.preserveFallbackModel && originalModel && resolved && originalModel !== resolved.model) reason = "model";
 
       if (reason && (draft.quotaOnlyFallback || reason === "model")) {
         state = "blocked";
@@ -133,9 +133,10 @@ export function ComboFallbackPreview({ draft, providers, consent, routes, routes
 }
 
 export function ComboRoutingEditor({ apiBase, draft, providers, models, capabilityModels, providerQuotaStates,
-  disabled, inDialog, offerSubscriptionsOnly, onChange,
+  disabled, inDialog, offerSubscriptionsOnly, onChange, routingRevision,
 }: {
   apiBase?: string;
+  routingRevision?: string;
   draft: ComboItem;
   providers: ProviderOption[];
   models: ModelOption[];
@@ -151,7 +152,7 @@ export function ComboRoutingEditor({ apiBase, draft, providers, models, capabili
   const heading = useId();
   const failover = draft.strategy === "failover";
   const showPreview = failover && draft.targets.some(target => target.provider);
-  const { routes, unchecked: routesUnchecked } = useFallbackRoutes(apiBase, draft, providers);
+  const { routes, unchecked: routesUnchecked } = useFallbackRoutes(apiBase, draft, providers, routingRevision);
   const strict = failover && draft.quotaOnlyFallback === true;
   const targetRequiresConsent = (target: ComboTarget) =>
     requiresConsent(target, providers.find(provider => provider.name === target.provider), strict, routes);

@@ -96,7 +96,8 @@ test.each([
   const sameModel = [...dialog.querySelectorAll<HTMLButtonElement>("[role=switch]")]
     .find(button => button.textContent === "Keep the same model on fallback")!;
   await act(async () => { sameModel.click(); });
-  expect(preview.textContent).toContain("Different model");
+  // No route lookup is available in this fixture, so the model lock is unverified.
+  expect(preview.textContent).not.toContain("Different model");
   await act(async () => { sameModel.click(); });
   expect(preview.textContent).toContain("Stop after the last target");
   await act(async () => { dialog.querySelector<HTMLButtonElement>(".cwi-modal-actions .btn-primary")!.click(); });

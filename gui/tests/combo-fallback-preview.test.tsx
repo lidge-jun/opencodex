@@ -41,10 +41,22 @@ test("a skipped paid step does not change the preserved model", () => {
 });
 
 test("after consent the model lock still reports the step that would switch models", () => {
-  const html = preview({ allowMeteredTargets: true, preserveFallbackModel: true });
+  const html = preview({ allowMeteredTargets: true, preserveFallbackModel: true }, {
+    "openai/shared-model": { provider: "openai", model: "shared-model", requiresConsent: false },
+    "openai-apikey/paid-model": { provider: "openai-apikey", model: "paid-model", requiresConsent: true },
+  });
   expect(html).toContain("Stop at step 2.");
   expect(html).toContain("Different model with model lock on");
   expect(html).not.toContain("Paid API calls need permission");
+});
+
+test("model lock does not claim a stop while either route is unresolved", () => {
+  const patch = { allowMeteredTargets: true, preserveFallbackModel: true };
+  for (const routes of [undefined, { "openai/shared-model": { provider: "openai", model: "same", requiresConsent: false } }]) {
+    const html = preview(patch, routes);
+    expect(html).not.toContain("Different model with model lock on");
+    expect(html).not.toContain('data-state="unreached"');
+  }
 });
 
 
