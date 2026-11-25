@@ -1427,7 +1427,7 @@ provider in question.
 `chatgptAccountId`, and privacy-safe `logLabel`. These records are normally dashboard-managed.
 An optional `egress` object gives one pool account its own route, with the same `proxy` and `noProxy` values as a provider's [per-provider egress](#per-provider-egress): an account `proxy` replaces the `openai` provider's for that account's requests, compactions, token refreshes, usage checks, warmups, model discovery and reset-credit calls, and the usage check and warmup after signing in; an omitted `proxy` keeps the provider's, and the account's `noProxy` entries apply ahead of the provider's.
 A pool account without an `egress` object sends those calls by the `openai` provider's route too.
-If `config.json` cannot be read, or a stored account credential is no longer listed in `codexAccounts` (for example, removed while a call was in flight), the call is refused instead of sent without the configured route.
+If `config.json` is missing or cannot be read, or a stored account credential is no longer listed in `codexAccounts` (for example, removed while a call was in flight), the call is refused instead of sent without the configured route.
 The main login has no pool entry and always uses the provider's route.
 
 ### `tokenGuardian` (`OcxTokenGuardianConfig`)

@@ -3,6 +3,7 @@ import { getConfigPath, loadConfig } from "../config";
 import { configLoadFellBack, fileBackedConfigPath } from "../config/rebase-provenance";
 import { providerEgressFetchInit, resolveProviderEgress, type PoolAccountRoute } from "../lib/provider-egress";
 import { configuredOutboundFetch } from "../lib/proxy-env";
+import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { codexAccountEgressRoute } from "./account-egress";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
@@ -20,8 +21,9 @@ import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
  * - a stored pool credential whose row the config no longer lists (removed while the credential was
  *   in hand, even if credential cleanup failed, or an orphan whose former route is unknown);
  * - a config that could not be read, so the load fell back to defaults while `config.json` exists.
- * Only a new login, whose row does not exist yet, takes the provider's route without a row. A
- * process with no binding and no `config.json` has no route configured anywhere and sends unchanged.
+ * - no routing configuration at all (no binding for the current home and no `config.json`): a
+ *   stored credential's former route cannot be known once its config is gone.
+ * Only a new login, whose row does not exist yet, takes the provider's route without a row.
  *
  * The running server binds its live config here for the lifetime of its background lifecycle
  * (`src/server/background-lifecycle.ts`), together with the config path it was loaded from. A call
@@ -29,18 +31,25 @@ import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
  */
 export type CodexAccountEgressConfig = Pick<OcxConfig, "codexAccounts" | "providers">;
 
-interface LiveBinding {
+export interface CodexAccountEgressBinding {
   config: CodexAccountEgressConfig;
   configPath: string;
   /** The config this server started with is defaults standing in for an unreadable file. */
   degraded: boolean;
 }
 
-let live: LiveBinding | undefined;
+let live: CodexAccountEgressBinding | undefined;
 
-export function bindCodexAccountEgressConfig(config: CodexAccountEgressConfig): void {
+/** Bind a server's config under the current config home; returns the binding so an owner can restore it. */
+export function bindCodexAccountEgressConfig(config: CodexAccountEgressConfig): CodexAccountEgressBinding {
   const configPath = getConfigPath();
   live = { config, configPath, degraded: configLoadFellBack(configPath) && existsSync(configPath) };
+  return live;
+}
+
+/** Reinstall a binding exactly as it was captured, with its own config home and load state. */
+export function restoreCodexAccountEgressBinding(binding: CodexAccountEgressBinding): void {
+  live = binding;
 }
 
 /** Detach the live binding; with a config, only when it is still the bound one. */
@@ -59,6 +68,17 @@ export class CodexAccountRouteUnavailableError extends Error {
 
 /** The provider whose route a pool account inherits. */
 export const CODEX_POOL_PROVIDER = "openai";
+
+/**
+ * Test seam: suites whose fixtures store pool credentials without a config (written long before
+ * account routes existed) keep the earlier behaviour, sending with no account route instead of
+ * refusing. The test preload sets it; the account-egress suites clear it to exercise the refusals.
+ * It has no effect unless the test home guard is armed, so a production process cannot set it.
+ */
+const UNLISTED_FIXTURE_SEAM = Symbol.for("opencodex.codex-account-egress.unlisted-fixture-seam");
+function unlistedFixturesAllowed(): boolean {
+  return (globalThis as { [UNLISTED_FIXTURE_SEAM]?: unknown })[UNLISTED_FIXTURE_SEAM] === true && isTestHomeGuardArmed();
+}
 
 const UNREADABLE = "Codex account routing configuration could not be loaded; refusing to send without it";
 
@@ -98,10 +118,14 @@ export function codexAccountRouting(
 ): CodexAccountRouting | undefined {
   if (!accountId || accountId === MAIN_CODEX_ACCOUNT_ID) return undefined;
   const source = options.config ?? routingConfig();
-  if (!source) return undefined;
+  if (!source) {
+    if (options.newLogin === true || unlistedFixturesAllowed()) return undefined;
+    throw new CodexAccountRouteUnavailableError("no Codex account routing configuration exists; refusing to send a stored pool credential");
+  }
   const row = source.codexAccounts?.find(candidate => candidate.id === accountId);
   if (row?.isMain === true) return undefined;
   if (!row && options.newLogin !== true) {
+    if (unlistedFixturesAllowed()) return undefined;
     throw new CodexAccountRouteUnavailableError("this Codex pool account is not configured; refusing to send its credential");
   }
   const account = codexAccountEgressRoute(source, accountId);

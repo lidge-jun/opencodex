@@ -35,7 +35,12 @@ import {
 } from "./memory-watchdog";
 import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
 import { isTelemetryEnvOptOut } from "../telemetry/consent";
-import { bindCodexAccountEgressConfig, unbindCodexAccountEgressConfig } from "../codex/account-egress-runtime";
+import {
+  bindCodexAccountEgressConfig,
+  restoreCodexAccountEgressBinding,
+  unbindCodexAccountEgressConfig,
+  type CodexAccountEgressBinding,
+} from "../codex/account-egress-runtime";
 // The state module alone: the scheduler and its aggregation stay behind the dynamic import below.
 import { TELEMETRY_ENV_OPT_OUT_REFRESH_MS, endTelemetryEnvOptOut, recordTelemetryEnvOptOut } from "../telemetry/state";
 import { telemetryProfilePath } from "../telemetry/profile/paths";
@@ -53,8 +58,8 @@ type LeaseOwner = {
   applyPolicy: PolicyApply;
   resources: ServerResourceOwnerLease;
   lowQuota: LowQuotaRegistration;
-  /** This server's config, whose pool account routes background calls use while it is the newest owner. */
-  egressConfig: OcxConfig;
+  /** This server's routing binding (config, its config home and load state) while it is the newest owner. */
+  egressBinding: CodexAccountEgressBinding;
 };
 
 export type ServerBackgroundLifecycleLease = {
@@ -259,7 +264,7 @@ function releaseOwnerSynchronously(owner: LeaseOwner): "inactive" | "shared" | "
   const nextOwner = owners.at(-1);
   if (nextOwner) {
     setLivePolicyOwner(nextOwner.applyPolicy);
-    bindCodexAccountEgressConfig(nextOwner.egressConfig);
+    restoreCodexAccountEgressBinding(nextOwner.egressBinding);
     return "shared";
   }
   stopProcessLoops();
@@ -287,7 +292,7 @@ export function acquireServerBackgroundLifecycle(
   // Pool accounts' background calls (refresh, usage, warmup, reset credits) read this server's
   // account routes while it is the newest owner; a release restores the surviving owner's and the
   // final release (stopProcessLoops) detaches them.
-  bindCodexAccountEgressConfig(config);
+  const egressBinding = bindCodexAccountEgressConfig(config);
 
   const owner: LeaseOwner = {
     token: Symbol("server-background-lifecycle"),
@@ -295,7 +300,7 @@ export function acquireServerBackgroundLifecycle(
     applyPolicy,
     resources: acquireServerResourceOwner(),
     lowQuota: registerCodexLowQuotaProtection(config, { desktopSink: () => resolveLowQuotaDesktopSink() }),
-    egressConfig: config,
+    egressBinding,
   };
   try {
     if (!processLoops) {
@@ -308,7 +313,7 @@ export function acquireServerBackgroundLifecycle(
     owner.lowQuota();
     owner.resources.release();
     const survivor = owners.at(-1);
-    if (survivor) bindCodexAccountEgressConfig(survivor.egressConfig);
+    if (survivor) restoreCodexAccountEgressBinding(survivor.egressBinding);
     else unbindCodexAccountEgressConfig(config);
     throw error;
   }

@@ -5,7 +5,7 @@
  * its credential is in hand, and a server whose config could not be read, refuse instead.
  */
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,7 +15,7 @@ import {
   resetCodexAccountEgressConfigForTests,
   unbindCodexAccountEgressConfig,
 } from "../../src/codex/account-egress-runtime";
-import { getCodexAccountCredential, markCodexAccountValidated, removeCodexAccountCredential, saveCodexAccountCredential } from "../../src/codex/account-store";
+import { forceRefreshCodexPoolToken, getCodexAccountCredential, markCodexAccountValidated, readCodexAccountRecord, removeCodexAccountCredential, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { handleCodexAuthLoginStart } from "../../src/codex/auth-api/login-flow";
 import { CODEX_LOGIN_TERMINAL_TTL_MS, codexAuthLoginState } from "../../src/codex/auth-api/login-state";
 import { inspectResetCredits } from "../../src/codex/auth-api/reset-credit-service";
@@ -32,6 +32,7 @@ import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const PROVIDER_PROXY = "http://127.0.0.1:7/";
+const UNLISTED_FIXTURE_SEAM = Symbol.for("opencodex.codex-account-egress.unlisted-fixture-seam");
 const ACCOUNT_PROXY = "http://127.0.0.1:9/";
 const PROXY_ENV = ["NO_PROXY", "no_proxy", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] as const;
 const savedEnv = new Map<string, string | undefined>();
@@ -56,6 +57,7 @@ const completed = () => new Response('event: response.completed\ndata: {"type":"
 });
 
 beforeEach(() => {
+  (globalThis as Record<symbol, unknown>)[UNLISTED_FIXTURE_SEAM] = false;
   for (const key of PROXY_ENV) { savedEnv.set(key, process.env[key]); delete process.env[key]; }
   previousHomes = homeKeys.map(name => process.env[name]);
   home = mkdtempSync(join(tmpdir(), "ocx-account-egress-bg-"));
@@ -80,6 +82,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  (globalThis as Record<symbol, unknown>)[UNLISTED_FIXTURE_SEAM] = true;
   globalThis.fetch = realFetch;
   resetCodexAccountEgressConfigForTests();
   clearAccountQuota();
@@ -214,7 +217,7 @@ test("a server that started on an unreadable config refuses pool sends, and its 
   saveConfig(config());
   await codexAccountFetch("routed")("https://chatgpt.com/backend-api/wham/usage");
   expect(proxiesFor("/wham/usage")).toEqual([ACCOUNT_PROXY]);
-  // A binding for one config home does not answer for another: this home configures no route.
+  // A binding for one config home does not answer for another: this home has no config at all.
   const other = config();
   other.codexAccounts![0]!.egress = { proxy: "http://127.0.0.1:13/" };
   bindCodexAccountEgressConfig(other);
@@ -222,8 +225,8 @@ test("a server that started on an unreadable config refuses pool sends, and its 
   process.env.OPENCODEX_HOME = otherHome;
   try {
     calls = [];
-    await codexAccountFetch("routed")("https://chatgpt.com/backend-api/wham/usage");
-    expect(proxiesFor("/wham/usage")).toEqual([undefined]);
+    await expect(codexAccountFetch("routed")("https://chatgpt.com/backend-api/wham/usage")).rejects.toBeInstanceOf(CodexAccountRouteUnavailableError);
+    expect(calls).toEqual([]);
   } finally {
     process.env.OPENCODEX_HOME = home;
     await flushConfigDirHardening(otherHome);
@@ -261,4 +264,44 @@ test("a direct caller's own bearer keeps the process-wide route under a provider
   await isDirectCallerEntitledToCodexModel(new Headers({ authorization: "Bearer direct-token", "chatgpt-account-id": "acc-direct" }), model, { fetcher });
   resetCodexModelEntitlementCacheForTests();
   expect(seen).toEqual([undefined]);
+});
+
+test("a stored credential whose config was deleted is refused, never sent without its former route", async () => {
+  saveConfig(config());
+  await codexAccountFetch("routed")("https://chatgpt.com/backend-api/wham/usage");
+  expect(proxiesFor("/wham/usage")).toEqual([ACCOUNT_PROXY]);
+  unlinkSync(getConfigPath());
+  calls = [];
+  const generation = readCodexAccountRecord("routed")!.generation;
+  await expect(forceRefreshCodexPoolToken("routed", { rejectedGeneration: generation, rejectedAccessToken: "routed-access" }))
+    .rejects.toBeInstanceOf(CodexAccountRouteUnavailableError);
+  await expect(codexAccountFetch("routed")("https://chatgpt.com/backend-api/wham/usage")).rejects.toBeInstanceOf(CodexAccountRouteUnavailableError);
+  expect(calls).toEqual([]);
+});
+
+test("restoring a surviving lifecycle owner keeps its own config home", async () => {
+  const homeA = home;
+  const first = config({ clientIntegrations: { codex: false } } as Partial<OcxConfig>);
+  first.codexAccounts![0]!.egress = { proxy: "http://127.0.0.1:21/" };
+  saveConfig(first);
+  const firstLease = acquireServerBackgroundLifecycle(() => {}, first);
+  const homeB = mkdtempSync(join(tmpdir(), "ocx-account-egress-bg-b-"));
+  try {
+    process.env.OPENCODEX_HOME = homeB;
+    const second = config({ clientIntegrations: { codex: false } } as Partial<OcxConfig>);
+    second.codexAccounts![0]!.egress = { proxy: "http://127.0.0.1:23/" };
+    saveConfig(second);
+    const secondLease = acquireServerBackgroundLifecycle(() => {}, second);
+    await secondLease.release();
+    // Home B is current; the survivor's binding belongs to home A, so B's own file answers.
+    await codexAccountFetch("routed")("https://chatgpt.com/backend-api/wham/usage");
+    process.env.OPENCODEX_HOME = homeA;
+    await codexAccountFetch("routed")("https://chatgpt.com/backend-api/wham/usage");
+  } finally {
+    process.env.OPENCODEX_HOME = homeA;
+    await firstLease.release();
+    await flushConfigDirHardening(homeB);
+    removeTreeWithRetry(homeB);
+  }
+  expect(proxiesFor("/wham/usage")).toEqual(["http://127.0.0.1:23/", "http://127.0.0.1:21/"]);
 });
