@@ -200,10 +200,15 @@ function parseSweLaneId(modelId: string): SweLaneId | undefined {
   return undefined;
 }
 
-/** The family's default row for a bare SWE family id, e.g. `swe-2-1` → `swe-2-1-medium`. */
+/**
+ * The family's default row for a bare SWE family id whose bare catalog row is a
+ * measured NON-default lane, e.g. `swe-2-1` (Low) → `swe-2-1-medium`. Families with
+ * no such measurement keep a bare row the catalog lists: SWE-2 ships none, and a
+ * catalog that does list one is trusted as named.
+ */
 function sweFamilyDefaultUid(modelId: string): string | undefined {
   const parsed = parseSweLaneId(modelId);
-  if (!parsed || parsed.lane || parsed.fast) return undefined;
+  if (!parsed || parsed.lane || parsed.fast || !SWE_BARE_ROW_LANE[parsed.family]) return undefined;
   const lane = SWE_DEFAULT_LANE[parsed.family];
   return lane ? `${parsed.family}-${lane}` : undefined;
 }

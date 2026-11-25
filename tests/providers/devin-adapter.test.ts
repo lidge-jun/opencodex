@@ -940,6 +940,14 @@ describe("SWE-2.1 wire effort selection without a catalog", () => {
     };
     expect(await resolveWireModelUidForTests("swe-2-1", "unused", "unused", undefined, catalog)).toBe("swe-2-1-medium");
   });
+
+  test("a metadata-free catalog listing a bare swe-2 row keeps it: only SWE-2.1's bare row is a measured non-default lane", async () => {
+    const catalog: CacheEntry = {
+      byUid: new Map([["swe-2", { modelUid: "swe-2", disabled: false } as ModelCatalogEntry]]),
+      fetchedAt: Date.now(), apiKey: "unused", host: "unused",
+    };
+    expect(await resolveWireModelUidForTests("swe-2", "unused", "unused", undefined, catalog)).toBe("swe-2");
+  });
 });
 
 describe("effort suffix detection and caller effort values are different sets", () => {
