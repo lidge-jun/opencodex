@@ -3,9 +3,10 @@
  *
  * A confirmed quota or billing hold that lives only in memory is forgotten on restart, so a
  * restarted proxy re-offers a key the upstream said to leave alone until its reset. Each row is
- * `{provider, keyId, generation, cooldownUntil, epoch, allEpoch}` and nothing else; `generation`
- * is a truncated fingerprint of the pool entry's key, so a key replaced under the same id is never
- * held by an old row.
+ * `{provider, keyId, generation, cooldownUntil, epoch, allEpoch}` plus, for a refusal that proved
+ * the key's quota or credit spent, `quotaSpentUntil` (a quota-only Combo reads it to leave a spent
+ * pool), and nothing else; `generation` is a truncated fingerprint of the pool entry's key, so a key
+ * replaced under the same id is never held by an old row.
  *
  * Only inline keys are persisted. A value the key resolver reads from the environment (any value
  * starting with `$`), a `keychain:` reference or a `gcp-sa:` marker names a secret that can change
@@ -22,7 +23,8 @@
  *   of a clear, however late it flushes, therefore cannot revive the hold; at worst a hold it
  *   recorded just after a peer's clear is not persisted and stays in that process's memory.
  *   Within one process the counter orders a clear and a later hold exactly.
- * - Among surviving rows of one provider, key id and generation the later expiry wins.
+ * - Among surviving rows of one provider, key id and generation the later expiry wins, and the
+ *   later spent-quota evidence is kept with it.
  * - A busy lock or I/O failure keeps everything pending and retries with bounded backoff.
  * - Rows load once, at install, and only while unexpired and matching the current key.
  */
@@ -41,7 +43,7 @@ import {
   restoreApiKeyCooldowns,
 } from "./api-key-cooldowns";
 
-export interface ApiKeyCooldownHold { provider: string; keyId: string; generation: string; cooldownUntil: number }
+export interface ApiKeyCooldownHold { provider: string; keyId: string; generation: string; cooldownUntil: number; quotaSpentUntil?: number }
 export interface ApiKeyCooldownRow extends ApiKeyCooldownHold { epoch: number; allEpoch: number }
 export interface ApiKeyCooldownPersistence {
   /** Whether a hold for this configured key value may be written to disk. */
@@ -101,9 +103,20 @@ export function readApiKeyCooldownState(path: string): StoredState {
     if (typeof row?.provider !== "string" || typeof row.keyId !== "string" || typeof row.generation !== "string") continue;
     if (!isTime(row.cooldownUntil) || !isCount(row.epoch) || !isCount(row.allEpoch)) continue;
     state.rows.push({ provider: row.provider, keyId: row.keyId, generation: row.generation,
-      cooldownUntil: row.cooldownUntil, epoch: row.epoch, allEpoch: row.allEpoch });
+      cooldownUntil: row.cooldownUntil, epoch: row.epoch, allEpoch: row.allEpoch,
+      ...(isTime(row.quotaSpentUntil) && row.quotaSpentUntil > 0 ? { quotaSpentUntil: Math.min(row.quotaSpentUntil, row.cooldownUntil) } : {}) });
   }
   return state;
+}
+
+/** Two holds for one key and generation: the later expiry, keeping the later spent-quota evidence. */
+function mergeHold<T extends ApiKeyCooldownHold>(prior: T | undefined, row: T, now: number): T {
+  const base = !prior || row.cooldownUntil > prior.cooldownUntil ? row : prior;
+  const quotaSpentUntil = Math.max(prior?.quotaSpentUntil ?? 0, row.quotaSpentUntil ?? 0);
+  const merged: T = { ...base };
+  delete merged.quotaSpentUntil;
+  if (quotaSpentUntil > now) merged.quotaSpentUntil = quotaSpentUntil;
+  return merged;
 }
 
 /** Rows that postdate every recorded clear and have not expired, one per provider/key/generation. */
@@ -111,8 +124,7 @@ function liveRows(rows: Iterable<ApiKeyCooldownRow>, epochs: Record<string, numb
   const out = new Map<string, ApiKeyCooldownRow>();
   for (const row of rows) {
     if (row.cooldownUntil <= now || row.allEpoch !== allEpoch || row.epoch !== (epochs[row.provider] ?? 0)) continue;
-    const prior = out.get(holdKey(row));
-    if (!prior || row.cooldownUntil > prior.cooldownUntil) out.set(holdKey(row), row);
+    out.set(holdKey(row), mergeHold(out.get(holdKey(row)), row, now));
   }
   return [...out.values()];
 }
@@ -176,8 +188,7 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
 
   record(hold: ApiKeyCooldownHold): void {
     const row: ApiKeyCooldownRow = { ...hold, epoch: this.epochs.get(hold.provider) ?? 0, allEpoch: this.allEpoch };
-    const prior = this.dirty.get(taggedKey(row));
-    if (!prior || row.cooldownUntil > prior.cooldownUntil) this.dirty.set(taggedKey(row), row);
+    this.dirty.set(taggedKey(row), mergeHold(this.dirty.get(taggedKey(row)), row, 0));
     this.schedule();
   }
 

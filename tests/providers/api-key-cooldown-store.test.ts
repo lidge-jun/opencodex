@@ -9,8 +9,10 @@ import {
   clearKeyCooldowns,
   getKeyCooldownUntil,
   isKeyInCooldown,
+  isKeyQuotaSpent,
   reconcileApiKeyCooldownGenerations,
   resetLocalApiKeyCooldowns,
+  restoreApiKeyCooldowns,
   setKeyCooldown,
 } from "../../src/providers/api-key-cooldowns";
 import {
@@ -390,4 +392,39 @@ test("a store whose home was removed drops its pending rows", () => {
   store.record(hold("a", "sk-a", Date.now() + 60_000));
   expect(store.flush()).toBe(true);
   expect(existsSync(gone)).toBe(false);
+});
+
+test("a spent-quota hold stays spent across a restart, so a quota-only Combo can leave a spent pool", () => {
+  const cfg = config({ a: "sk-alpha-0001", b: "sk-beta-0002" });
+  const store = installApiKeyCooldownPersistence(cfg);
+  const until = Date.now() + 600_000;
+  setKeyCooldown("p", "a", until, true, "sk-alpha-0001");
+  setKeyCooldown("p", "b", until, true, "sk-beta-0002");
+  expect(store.flush()).toBe(true);
+  restart(cfg);
+  // The predicate core-combo-failure uses: every enabled key refused with a spent quota.
+  expect(["a", "b"].every(id => isKeyQuotaSpent("p", id))).toBe(true);
+  expect(isKeyInCooldown("p", "a")).toBe(true);
+});
+
+test("a longer ordinary hold keeps the shorter spent-quota evidence, on restore and across peers", () => {
+  const cfg = config({ a: "sk-alpha-0001" });
+  const now = Date.now();
+  const generation = apiKeyCooldownGeneration("p", "a", "sk-alpha-0001");
+  setKeyCooldown("p", "a", now + 60_000, true, "sk-alpha-0001");
+  restoreApiKeyCooldowns([{ provider: "p", keyId: "a", generation, cooldownUntil: now + 600_000 }], now);
+  expect(getKeyCooldownUntil("p", "a", now)).toBe(now + 600_000);
+  expect(isKeyQuotaSpent("p", "a", now)).toBe(true);
+
+  resetLocalApiKeyCooldowns();
+  const spentPeer = new ApiKeyCooldownStore(home);
+  const ordinaryPeer = new ApiKeyCooldownStore(home);
+  spentPeer.record({ ...hold("a", "sk-alpha-0001", now + 60_000), quotaSpentUntil: now + 60_000 });
+  ordinaryPeer.record(hold("a", "sk-alpha-0001", now + 600_000));
+  expect(spentPeer.flush()).toBe(true);
+  expect(ordinaryPeer.flush()).toBe(true);
+  expect(stored().rows).toEqual([{ ...row("a", "sk-alpha-0001", now + 600_000), quotaSpentUntil: now + 60_000 }]);
+  restart(cfg);
+  expect(getKeyCooldownUntil("p", "a")).toBe(now + 600_000);
+  expect(isKeyQuotaSpent("p", "a")).toBe(true);
 });

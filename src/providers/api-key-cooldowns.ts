@@ -51,7 +51,7 @@ export function setKeyCooldown(providerName: string, keyId: string, cooldownUnti
   });
   // Only a hold bound to the key that just failed is written, and only for a key the store accepts.
   if (persistence && generation !== undefined && credential !== undefined && persistence.persists(credential)) {
-    persistence.record({ provider: providerName, keyId, generation, cooldownUntil: until });
+    persistence.record({ provider: providerName, keyId, generation, cooldownUntil: until, ...(quotaSpentUntil > 0 ? { quotaSpentUntil } : {}) });
   }
 }
 
@@ -128,8 +128,14 @@ export function restoreApiKeyCooldowns(rows: readonly ApiKeyCooldownHold[], now 
     if (row.cooldownUntil <= now) continue;
     const key = cooldownKey(row.provider, row.keyId);
     const prior = keyCooldowns.get(key);
-    if (prior && (prior.generation === undefined || prior.generation === row.generation) && prior.cooldownUntil >= row.cooldownUntil) continue;
-    keyCooldowns.set(key, { cooldownUntil: row.cooldownUntil, generation: row.generation });
+    const sameKey = prior !== undefined && (prior.generation === undefined || prior.generation === row.generation);
+    const quotaSpentUntil = Math.max(sameKey ? prior.quotaSpentUntil ?? 0 : 0, row.quotaSpentUntil ?? 0);
+    if (sameKey && prior.cooldownUntil >= row.cooldownUntil && (prior.quotaSpentUntil ?? 0) >= quotaSpentUntil) continue;
+    keyCooldowns.set(key, {
+      cooldownUntil: sameKey ? Math.max(prior.cooldownUntil, row.cooldownUntil) : row.cooldownUntil,
+      generation: row.generation,
+      ...(quotaSpentUntil > now ? { quotaSpentUntil } : {}),
+    });
     restored += 1;
   }
   return restored;
