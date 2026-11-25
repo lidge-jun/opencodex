@@ -4150,7 +4150,7 @@ export const es = {
   "pricing.source.openrouter": "Precio de OpenRouter",
   "pricing.source.unknown": "Precio desconocido",
   "pricing.source.unknownHint": "No se conoce el precio de este modelo, por lo que su coste aparece como desconocido.",
-  "pricing.source.rates": "Por millón de tokens (USD): entrada {input}, salida {output}, lectura de caché {cacheRead}, escritura de caché {cacheWrite}",
+  "pricing.source.rates": "Por 1 millón de tokens (USD): entrada {input}, salida {output}, lectura de caché {cacheRead}, escritura de caché {cacheWrite}",
   "pricing.source.fetched": "Consultado: {time}",
   "pricing.source.multiplier": "Multiplicador del intermediario ×{multiplier}",
   "pricing.source.apiEquivalent": "Equivalente estimado de API",
