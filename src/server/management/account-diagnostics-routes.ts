@@ -10,11 +10,11 @@
 import { isPublicOAuthProvider, OAUTH_PROVIDERS } from "../../oauth";
 import { oauthCredentialSlot } from "../../oauth/credential-siblings";
 import { getAccountSet, accountNeedsReauthForStatus } from "../../oauth/store";
-import { lastOAuthRefreshOutcome } from "../../oauth/refresh-outcomes";
+import { lastOAuthRefreshOutcome, oauthLoginIncarnation } from "../../oauth/refresh-outcomes";
 import { eligibleFailoverAccounts, genericAccountCooldownUntil, isGenericFailoverProvider } from "../../oauth/generic-account-failover";
 import { classifyModelFamilyForQuota } from "../../oauth/account-quota-rank";
 import { anthropicModelFamily } from "../../oauth/anthropic-model-family";
-import { accountInFlight } from "../../oauth/kiro-account-load";
+import { accountInFlightSnapshot } from "../../oauth/kiro-account-load";
 import { anthropicRoutingFor } from "../../oauth/anthropic-routing";
 import { antigravityAccountModelSupport } from "../../providers/antigravity-account-roster";
 import { configuredAnthropicInstance, isAnthropicOAuthInstance, type AnthropicInstanceId } from "../../providers/anthropic-instance";
@@ -91,7 +91,8 @@ export function buildAccountDiagnostics(
     const rows = accounts.map((account): AccountDiagnosticsRow => {
       const paused = account.paused === true;
       const needsReauth = accountNeedsReauthForStatus(provider, account, now);
-      const inFlight = accountInFlight(provider, account.id);
+      // A snapshot: reclaiming an expired lease here would hand its slot to a queued request.
+      const inFlight = accountInFlightSnapshot(provider, account.id, now);
       const atCapacity = cap !== undefined && inFlight >= cap;
       const selectable = !atCapacity && (anyModel ? anyModel.has(account.id) : !paused && !needsReauth);
       // Antigravity gates models per account from its discovered roster (#7500).
@@ -105,7 +106,7 @@ export function buildAccountDiagnostics(
       const cooldownUntil = anthropic
         ? anthropic.getAnthropicAccountHealthSnapshot(account.id, now)?.cooldownUntil ?? null
         : genericAccountCooldownUntil(provider, account.id, now);
-      const refresh = lastOAuthRefreshOutcome(provider, account.id, account.addedAt ?? 0);
+      const refresh = lastOAuthRefreshOutcome(provider, account.id, oauthLoginIncarnation(account));
       return {
         id: account.id,
         active: set?.activeAccountId === account.id,

@@ -112,12 +112,27 @@ export function recordAntigravityAccountRoster(
   }
 }
 
-function freshRoster(
-  providerName: string, accountId: string, now: number, generation = accountGeneration(providerName, accountId),
+function freshRoster(providerName: string, accountId: string, now: number): AccountRoster | undefined {
+  return freshRosterWith(providerName, accountId, now, () => accountGeneration(providerName, accountId));
+}
+
+/** The credential generation is read only when a roster exists and is within its TTL. */
+function freshRosterWith(
+  providerName: string, accountId: string, now: number, generationOf: () => string | undefined,
 ): AccountRoster | undefined {
   const roster = rosters.get(rosterKey(providerName, accountId));
-  if (!roster || now - roster.observedAt > ANTIGRAVITY_ACCOUNT_ROSTER_TTL_MS || roster.generation !== generation) return undefined;
+  if (!roster || now - roster.observedAt > ANTIGRAVITY_ACCOUNT_ROSTER_TTL_MS || roster.generation !== generationOf()) return undefined;
   return roster;
+}
+
+/** One credential-generation read per account, deferred until some evidence needs it. */
+function lazyGeneration(providerName: string, accountId: string): () => string | undefined {
+  let loaded = false;
+  let generation: string | undefined;
+  return () => {
+    if (!loaded) { generation = accountGeneration(providerName, accountId); loaded = true; }
+    return generation;
+  };
 }
 
 /** The picker ids one account's last discovery returned, or `undefined` when unknown. */
@@ -140,27 +155,27 @@ export function antigravityAccountSupportsModel(
   modelId: string,
   now = Date.now(),
 ): boolean | undefined {
-  return supportsModel(providerName, accountId, modelId, now, accountGeneration(providerName, accountId));
+  return supportsModel(providerName, accountId, modelId, now, lazyGeneration(providerName, accountId));
 }
 
 /** The same answer for many models of one account, reading its credential generation once. */
 export function antigravityAccountModelSupport(
   providerName: string, accountId: string, modelIds: readonly string[], now = Date.now(),
 ): Map<string, boolean | undefined> {
-  const generation = accountGeneration(providerName, accountId);
-  return new Map(modelIds.map(id => [id, supportsModel(providerName, accountId, id, now, generation)] as const));
+  const generationOf = lazyGeneration(providerName, accountId);
+  return new Map(modelIds.map(id => [id, supportsModel(providerName, accountId, id, now, generationOf)] as const));
 }
 
 function supportsModel(
-  providerName: string, accountId: string, modelId: string, now: number, generation: string | undefined,
+  providerName: string, accountId: string, modelId: string, now: number, generationOf: () => string | undefined,
 ): boolean | undefined {
   const id = modelId.trim();
   if (!id) return undefined;
   const key = rosterKey(providerName, accountId);
   const canonicalId = denialModelId(id);
   const denial = modelDenials.get(key)?.get(canonicalId);
-  const roster = freshRoster(providerName, accountId, now, generation);
-  if (denial && denial.generation === generation
+  const roster = freshRosterWith(providerName, accountId, now, generationOf);
+  if (denial && denial.generation === generationOf()
     && now - denial.deniedAt <= ANTIGRAVITY_MODEL_DENIAL_TTL_MS
     && (!roster || denial.order >= roster.order)) return false;
   if (!roster) return undefined;
