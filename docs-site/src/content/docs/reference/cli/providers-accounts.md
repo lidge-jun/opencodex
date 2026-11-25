@@ -1075,7 +1075,7 @@ locally and send nothing: `paused` (the account is paused; resume it to test it)
 (the stored token has expired). The probe never refreshes a token, never writes the auth store and
 never changes pause, active, cooldown or health state. The dashboard's **Test** and **Test all**
 buttons on the Antigravity account quota table call the same endpoint, `POST /api/oauth/accounts/probe`.
-The table shows each account’s plan, remaining quota by pool, reset times, and account actions.
+The table shows each account’s plan, quota consumed by pool, reset times, and account actions.
 If a quota refresh fails, the table keeps the cached quota and shows the failure and read times.
 A batch runs up to four checks at a time. Wait for the current check to finish before starting another.
 
