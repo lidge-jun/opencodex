@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { resolveCursorSelection } from "../../src/adapters/cursor/catalog";
 import { CURSOR_STATIC_MODELS, cursorModelContextWindows, cursorModelIds, cursorModelReasoningEfforts } from "../../src/adapters/cursor/discovery";
+import { projectStartupConfigRepairs } from "../../src/providers/model-rename-startup";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { findExpectedPriceOverlay } from "../../src/usage/expected-prices";
+import type { OcxConfig } from "../../src/types";
 
 // Vendor catalog refresh, 2026-11-26. Each block pins one provider family to the vendor page it
 // was read from, so a later edit that drifts from the source has to change a cited assertion.
@@ -83,8 +85,8 @@ describe("GLM-5.4 on the Z.ai / BigModel Coding Plan (docs.z.ai glm-5.4 + devpac
       expect(row.modelInputModalities?.[model]).toEqual(["text", "image"]);
       expect(row.noVisionModels ?? []).not.toContain(model);
       expect(row.modelReasoningEfforts?.[model]).toEqual(["low", "high", "max"]);
-      // Same default as the row's GLM-5.3 entry (the upstream default is max for both).
-      expect(row.modelDefaultReasoningEfforts?.[model]).toBe(row.modelDefaultReasoningEfforts?.["glm-5.3"]);
+      expect(row.modelDefaultReasoningEfforts?.[model]).toBe("max");
+      expect(row.modelMaxOutputTokens?.[model]).toBe(131_072);
     }
   });
 
@@ -164,5 +166,73 @@ describe("Cursor fallback seed (cursor.com/docs/models/gemini-4-neon, 2026-11-26
     expect(cursorModelContextWindows(CURSOR_STATIC_MODELS)["gemini-4-neon"]).toBe(1_048_576);
     expect(cursorModelReasoningEfforts(CURSOR_STATIC_MODELS)["gemini-4-neon"]).toEqual(["low", "medium", "high", "xhigh"]);
     expect(resolveCursorSelection("gemini-4-neon", "xhigh").wireId).toBe("gemini-4-neon-xhigh");
+  });
+});
+
+describe("saved static rosters follow the refreshed seeds without losing an id the operator could have selected", () => {
+  type Row = Record<string, unknown>;
+  const refresh = (provider: string, row: Row) => {
+    const config = { providers: { [provider]: row } } as unknown as OcxConfig;
+    const first = projectStartupConfigRepairs(config);
+    const again = projectStartupConfigRepairs(structuredClone(first.config));
+    return { changed: first.changed, row: first.config.providers![provider]! as Row, idempotent: !again.changed };
+  };
+
+  test.each(["deepseek-chat", "deepseek-reasoner", "deepseek-flash"])("DeepSeek's historical seed keeps %s as default and in the list", defaultModel => {
+    const before = ["deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"];
+    const { changed, row, idempotent } = refresh("deepseek", { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", models: [...before], liveModels: false, defaultModel });
+    expect(changed).toBe(true);
+    expect(idempotent).toBe(true);
+    expect(row.defaultModel).toBe(defaultModel);
+    for (const id of [...before, "deepseek-v4-pro"]) expect(row.models).toContain(id);
+  });
+
+  test("the Gemini API seed gains Gemini 4 and keeps the redirected Flash ids a saved default may name", () => {
+    const before = ["gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"];
+    const { changed, row, idempotent } = refresh("google", {
+      adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", models: [...before], defaultModel: "gemini-3.5-flash",
+      modelContextWindows: {}, modelDefaultReasoningEfforts: {},
+    });
+    expect(changed).toBe(true);
+    expect(idempotent).toBe(true);
+    expect(row.defaultModel).toBe("gemini-3.5-flash");
+    for (const id of [...before, "gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon"]) expect(row.models).toContain(id);
+    expect((row.modelContextWindows as Record<string, number>)["gemini-4-neon"]).toBe(1_048_576);
+    expect((row.modelDefaultReasoningEfforts as Record<string, string>)["gemini-4-hydrogen"]).toBe("high");
+  });
+
+  const glmBefore = ["glm-5.3", "glm-5.3[1m]", "glm-5.3-flash", "glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5", "glm-4.6"];
+  test.each([
+    ["zai", "https://api.z.ai", "openai-responses", glmBefore, ["glm-5.4", "glm-5.4[1m]"], 1_048_576],
+    ["zhipu-bigmodel-coding", "https://open.bigmodel.cn/api/coding/paas/v4", "openai-chat", glmBefore, ["glm-5.4", "glm-5.4[1m]"], 1_000_000],
+    ["zhipu-bigmodel-responses", "https://open.bigmodel.cn/api/v1", "openai-responses", ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"], ["glm-5.4"], 1_048_576],
+  ] as const)("%s at %s gains GLM-5.4 from its previous seed", (provider, baseUrl, adapter, before, added, window) => {
+    const { changed, row, idempotent } = refresh(provider, {
+      adapter, baseUrl, models: [...before], defaultModel: "glm-5.3",
+      modelContextWindows: {}, modelMaxOutputTokens: {}, modelDefaultReasoningEfforts: {},
+    });
+    expect(changed).toBe(true);
+    expect(idempotent).toBe(true);
+    expect(row.models).toEqual(getProviderRegistryEntry(provider)!.models);
+    for (const id of added) {
+      expect((row.modelContextWindows as Record<string, number>)[id]).toBe(window);
+      expect((row.modelMaxOutputTokens as Record<string, number>)[id]).toBe(131_072);
+      expect((row.modelDefaultReasoningEfforts as Record<string, string>)[id]).toBe("max");
+    }
+  });
+
+  test("an edited list or a custom destination keeps its roster", () => {
+    expect(refresh("zhipu-bigmodel-coding", { adapter: "openai-chat", baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4", models: [...glmBefore, "custom"] }).changed).toBe(false);
+    expect(refresh("zai", { adapter: "openai-responses", baseUrl: "https://gateway.example/v1", models: [...glmBefore] }).changed).toBe(false);
+  });
+
+  test("both BigModel Coding Plan rows declare GLM-5.4's 128K output cap and max default", () => {
+    for (const id of ["zhipu-bigmodel-coding", "zhipu-bigmodel-responses"]) {
+      const row = getProviderRegistryEntry(id)!;
+      for (const model of row.models!.filter(m => m.startsWith("glm-5.4"))) {
+        expect(row.modelMaxOutputTokens?.[model]).toBe(131_072);
+        expect(row.modelDefaultReasoningEfforts?.[model]).toBe("max");
+      }
+    }
   });
 });

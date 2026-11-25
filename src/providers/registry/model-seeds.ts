@@ -112,6 +112,12 @@ export const ZAI_GLM_5X_MODELS = [...ZAI_GLM_54_MODELS, ...ZAI_GLM_53_MODELS, ..
 export const ZAI_GLM_53_CONTRACT_MODELS = [...ZAI_GLM_54_MODELS, ...ZAI_GLM_53_MODELS];
 /** Native VLMs in the 5.x family: images go straight to the model, never through the sidecar. */
 export const ZAI_GLM_5X_NATIVE_VISION_MODELS = ["glm-5.3-flash", ...ZAI_GLM_54_MODELS];
+/** Static roster of the Z.ai and BigModel Chat Coding Plan rows (one list, two hosts). */
+export const ZAI_CODING_PLAN_MODELS = [...ZAI_GLM_54_MODELS, "glm-5.3", "glm-5.3[1m]", "glm-5.3-flash", "glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5", "glm-4.6"];
+/** Static roster of the BigModel Coding Plan Responses row. */
+export const BIGMODEL_RESPONSES_MODELS = ["glm-5.4", "glm-5.3", "glm-5.3-flash", "glm-5-turbo"];
+/** Static Gemini API (AI Studio) roster; see the google entry for the 2026-11-26 sources. */
+export const GOOGLE_GEMINI_API_MODELS = ["gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview"];
 /**
  * The 5.x rows whose images the PROXY has to describe, which is NOT the same set as
  * the 5.x rows themselves.
