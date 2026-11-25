@@ -24,6 +24,8 @@ export interface CodexWarmupOptions {
   timeoutMs?: number;
   /** Publish quota headers only after a completed inference, never on a failed stream. */
   onCompleted?: (headers: Headers) => void;
+  /** A pool account's route for this credentialed send (`codexAccountFetch`); absent uses the global fetch. */
+  transport?: typeof globalThis.fetch;
 }
 
 const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
@@ -247,7 +249,7 @@ async function tryWarmup(options: CodexWarmupOptions, model: string): Promise<vo
   try {
     let res: Response;
     try {
-      res = await fetch(CODEX_RESPONSES_URL, {
+      res = await (options.transport ?? fetch)(CODEX_RESPONSES_URL, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${options.accessToken}`,

@@ -2,6 +2,7 @@ import { lstatSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { OcxConfig } from "../../types";
+import { CONTEXT_BACKEND_PREFIX, contextExperimentalEnabled } from "../context-compat";
 import { nativeCompatibilityOwner, type NativeCompatibilityOwner } from "./routing-binding";
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -39,7 +40,9 @@ export function matchesNativeCompatibilityRouting(text: string, owner: NativeCom
     if (typeof effective.openai_base_url !== "string") return false;
     const url = new URL(effective.openai_base_url);
     if (url.protocol !== "http:" || !["127.0.0.1", "[::1]"].includes(url.hostname) || url.username || url.password
-      || url.search || url.hash || !["/v1", "/v1/"].includes(url.pathname) || !url.port) return false;
+      || url.search || url.hash || !url.port) return false;
+    const basePath = url.pathname.replace(/\/$/, "");
+    if (basePath !== "/v1" && (basePath !== CONTEXT_BACKEND_PREFIX || !contextExperimentalEnabled(text))) return false;
     const port = Number(url.port), matchesPort = (value: number | undefined) => Number.isInteger(value) && Number(value) > 0 && value === port;
     // The companion always binds IPv4. localhost can resolve to another address family.
     if (matchesPort(owner.loopbackPort) && url.hostname === "127.0.0.1") return true;

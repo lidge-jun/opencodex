@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,6 +52,7 @@ beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME; previousCodexHome = process.env.CODEX_HOME;
   home = mkdtempSync(join(tmpdir(), "ocx-credit-scoped-retry-"));
   process.env.OPENCODEX_HOME = home; process.env.CODEX_HOME = home;
+  bindStoredCodexPoolRoutingForTests();
   clock = spyOn(Date, "now").mockReturnValue(NOW);
   const ok = { success: true, exitCode: 0, timedOut: false, stdout: "", stderr: "" };
   setIcaclsRunnerForTests(() => ok); setAsyncIcaclsRunnerForTests(async () => ok);

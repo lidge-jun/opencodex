@@ -190,3 +190,14 @@ test("loopback metered consent is explicit on/off, survives partial edits and re
     expect(r.requests).toEqual([]);
   }
 });
+
+test("quota-only and same-model options are explicit on/off and failover-only", async () => {
+  quiet();
+  const saved = { ...original, strategy: "failover", quotaOnlyFallback: true, preserveFallbackModel: true };
+  const updated = runtime(saved);
+  expect(await handleComboCommand(["set", "auto", "--quota-only-fallback=off", "--preserve-fallback-model", "off"], updated.deps)).toBe(0);
+  expect(updated.body()?.combo).toMatchObject({ quotaOnlyFallback: false, preserveFallbackModel: false });
+  const rejected = runtime(saved);
+  expect(await handleComboCommand(["set", "auto", "--strategy", "random", "--quota-only-fallback", "on"], rejected.deps)).toBe(2);
+  expect(rejected.requests).toEqual([]);
+});

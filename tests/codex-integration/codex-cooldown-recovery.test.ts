@@ -1,5 +1,6 @@
 // Reserve fixtures here exercise routing state only; they do not authorize or dispatch Reserve.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import {
@@ -94,6 +95,7 @@ describe("Codex cooldown recovery worker", () => {
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_CODEX_HOME, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
+    bindStoredCodexPoolRoutingForTests();
     process.env.CODEX_HOME = TEST_CODEX_HOME;
     clearAccountQuota();
     clearCodexUpstreamHealth();

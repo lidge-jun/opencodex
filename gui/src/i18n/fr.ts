@@ -5,6 +5,7 @@ import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
+import { connectionsCopy } from "./connections-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
@@ -143,6 +144,7 @@ export const fr: Record<TKey, string> = {
   ...remoteLinkDiagnosticsCopy("fr"),
   ...remoteLinkChildCopy("fr"),
   ...gatewayClientsCopy("fr"),
+  ...connectionsCopy("fr"),
   ...modelsV2Copy("fr"),
   ...modelsOverallCopy("fr"),
   ...accountsV2Copy("fr"),
@@ -3607,6 +3609,27 @@ export const fr: Record<TKey, string> = {
   "cws.tabsLabel": "Sections des détails de la combinaison",
   "cws.tab.config": "Configuration",
   "cws.tab.about": "À propos",
+  "cws.quotaPreset.openai-first": "OpenAI en premier",
+  "cws.quotaPreset.claude-first": "Claude en premier",
+  "cws.quotaOnly": "Basculer uniquement si le quota est épuisé",
+  "cws.preserveModel": "Garder le même modèle lors de la bascule",
+  "cws.allowPaidLocal": "Autoriser les appels payants des clients locaux",
+  "cws.meteredTarget": "Cible API payante",
+  "cws.preview.title": "Aperçu de la bascule",
+  "cws.preview.note": "Cet aperçu suit les réglages de la combinaison. Les droits du client et le quota réel sont vérifiés à l’envoi.",
+  "cws.preview.unchecked": "Les routes ne sont pas vérifiées, l’aperçu affiche donc les cibles configurées. Les redirections, les droits du client et le quota réel sont vérifiés à l’envoi.",
+  "cws.preview.paid": "API payante",
+  "cws.preview.billingUnknown": "Facturation inconnue",
+  "cws.preview.consent": "Appels API payants non autorisés",
+  "cws.preview.model": "Modèle différent avec le verrou activé",
+  "cws.preview.provider": "Fournisseur indisponible",
+  "cws.preview.incomplete": "Cible incomplète",
+  "cws.preview.unreached": "Cible non atteinte",
+  "cws.preview.skipped": "Ignoré · {reason}",
+  "cws.preview.terminal": "Arrêt après la dernière cible si elle échoue aussi.",
+  "cws.preview.stopAt": "Arrêt à l’étape {step}.",
+  "cws.preview.quotaRule": "Passe à la cible suivante uniquement après confirmation d’un quota ou d’un crédit épuisé.",
+  "cws.preview.subscriptionsOnly": "Abonnements uniquement",
   "cws.strategy": "Stratégie",
   "cws.strategy.failover": "Basculement",
   "cws.strategy.roundRobin": "Rotation",
@@ -3639,6 +3662,7 @@ export const fr: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "Cet effort ne figure pas dans l’échelle commune des cibles — il sera ignoré ou ajusté lors de la requête.",
   "cws.field.defaultEffortUnsupportedOption": "absent de l’intersection",
   "cws.targets": "Cibles",
+  "cws.targets.order": "Ordre des cibles",
   "cws.targets.failoverHint": "L’ordre est important — la première est la cible principale.",
   "cws.targets.roundRobinHint": "Les pondérations contrôlent la sélection relative déterministe; l’ordre départage les égalités dans l’anneau de rotation.",
   "cws.targets.randomHint": "Les pondérations contrôlent les chances de chaque tirage ; l’ordre n’a pas d’importance.",

@@ -36,6 +36,7 @@ import {
   MINIMAX_MODELS,
   MINIMAX_MODELS_BEFORE_M31,
   MINIMAX_MODEL_CONTEXT_WINDOWS,
+  NEURALWATT_MODEL_HINTS,
 } from "./registry/model-seeds";
 import type { OcxConfig } from "../types";
 import { modelRecordValue } from "../reasoning-effort";
@@ -87,6 +88,20 @@ const ALIBABA_INTL_TOKEN_PLAN_MODELS_BEFORE_1017 = [
  * Flash, so live discovery cannot add it; the catalog keeps it only when it is configured.
  */
 export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
+  {
+    provider: "neuralwatt",
+    from: [
+      "glm-5.3", "glm-5.3-fast", "glm-5.3-short", "glm-5.3-short-fast", "glm-5.3-flash",
+      "glm-5.2", "glm-5.2-fast", "glm-5.2-short", "glm-5.2-short-fast",
+      "kimi-k2.6", "kimi-k2.6-fast", "kimi-k2.7-code",
+      "qwen3.5-397b", "qwen3.5-397b-fast", "qwen3.6-35b", "qwen3.6-35b-fast",
+    ],
+    to: NEURALWATT_MODEL_HINTS.models,
+    contextWindows: NEURALWATT_MODEL_HINTS.modelContextWindows,
+    maxOutputTokens: NEURALWATT_MODEL_HINTS.modelMaxOutputTokens,
+    defaultReasoningEfforts: NEURALWATT_MODEL_HINTS.modelDefaultReasoningEfforts,
+    destinationBaseUrls: ["https://api.neuralwatt.com/v1"],
+  },
   {
     provider: "meta-model",
     from: META_MUSE_MODELS,

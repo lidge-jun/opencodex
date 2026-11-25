@@ -10,6 +10,8 @@ type ComboInput = {
   jevEffortMode?: "decide" | "client";
   nativeAlias?: boolean;
   allowMeteredTargets?: boolean;
+  quotaOnlyFallback?: boolean;
+  preserveFallbackModel?: boolean;
 };
 const TARGET_KEYS = new Set(["provider", "model", "weight", "reasoningEfforts", "modelProfile", "lastResort", "metered"]);
 
@@ -69,6 +71,13 @@ function takeNativeAlias(args: string[]): boolean | undefined {
   return next === "on";
 }
 
+function takeOnOff(args: string[], flag: string): boolean | undefined {
+  const option = takeOptionWithSyntax(args, flag);
+  if (!option) return undefined;
+  if (option.value !== "on" && option.value !== "off") throw new CliUsageError(`${flag} must be on or off`);
+  return option.value === "on";
+}
+
 /** Consume only extension options, before the parent set flow resolves a target or reads HTTP. */
 export async function prepareComboInput(args: string[], deps: RuntimeApiDeps = {}): Promise<ComboInput> {
   const file = takeOptionWithSyntax(args, "--targets-file")?.value;
@@ -76,10 +85,9 @@ export async function prepareComboInput(args: string[], deps: RuntimeApiDeps = {
   const reasoning = takeOptionWithSyntax(args, "--reasoning-effort-mode")?.value;
   const jevEffort = takeOptionWithSyntax(args, "--jev-effort-mode")?.value;
   const nativeAlias = takeNativeAlias(args);
-  const metered = takeOptionWithSyntax(args, "--allow-metered-targets")?.value;
-  if (metered !== undefined && metered !== "on" && metered !== "off") {
-    throw new CliUsageError("--allow-metered-targets must be on or off");
-  }
+  const metered = takeOnOff(args, "--allow-metered-targets");
+  const quotaOnlyFallback = takeOnOff(args, "--quota-only-fallback");
+  const preserveFallbackModel = takeOnOff(args, "--preserve-fallback-model");
   if (file !== undefined && args.some(arg => arg === "--targets" || arg.startsWith("--targets="))) {
     throw new CliUsageError("--targets-file cannot be combined with --targets");
   }
@@ -98,6 +106,8 @@ export async function prepareComboInput(args: string[], deps: RuntimeApiDeps = {
     ...(reasoning === undefined ? {} : { reasoningEffortMode: reasoning }),
     ...(jevEffort === undefined ? {} : { jevEffortMode: jevEffort }),
     ...(nativeAlias === undefined ? {} : { nativeAlias }),
-    ...(metered === undefined ? {} : { allowMeteredTargets: metered === "on" }),
+    ...(metered === undefined ? {} : { allowMeteredTargets: metered }),
+    ...(quotaOnlyFallback === undefined ? {} : { quotaOnlyFallback }),
+    ...(preserveFallbackModel === undefined ? {} : { preserveFallbackModel }),
   };
 }

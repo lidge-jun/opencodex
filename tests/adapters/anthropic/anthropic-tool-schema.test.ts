@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import * as inputSchemas from "../../../src/adapters/anthropic-input-schema";
 import { createAnthropicAdapter } from "../../../src/adapters/anthropic";
 import type { OcxParsedRequest, OcxProviderConfig, OcxTool } from "../../../src/types";
 
@@ -40,6 +41,35 @@ function sharedRefGraph(depth: number): Record<string, unknown> {
 }
 
 describe("anthropic tool input_schema normalization", () => {
+  test("shares the reference allowance within a catalog and opens a fresh one for the next request", async () => {
+    const definition = { type: "object", properties: { city: { type: "string", description: "도시" } } };
+    const parameters = { $ref: "#/$defs/location", $defs: { location: definition } };
+    const first = { name: "weather", description: "Weather", parameters } as OcxTool;
+    const second = { ...first, name: "time" };
+    const limit = Buffer.byteLength(JSON.stringify(definition), "utf8");
+    const createNormalizer = inputSchemas.createAnthropicInputSchemaNormalizer;
+    expect(() => createNormalizer(limit - 1)(parameters)).toThrow("translator request_copies buffer exceeded");
+    const catalog = spyOn(inputSchemas, "createAnthropicInputSchemaNormalizer").mockImplementation(() => createNormalizer(limit));
+    try {
+      await expect(toolsOf([first, second])).rejects.toMatchObject({ code: "translation_buffer_limit", kind: "request_copies", limitBytes: limit });
+      const [tool] = await toolsOf([first]);
+      expect(tool.input_schema.properties).toEqual(definition.properties);
+    } finally {
+      catalog.mockRestore();
+    }
+  });
+
+  test("sizes a referenced schema nested deeper than the call stack", () => {
+    // Reserving a reference walks the inlined copy; a recursive walk overflowed the stack here.
+    let deep: Record<string, unknown> = { type: "string" };
+    for (let i = 0; i < 50_000; i++) deep = { not: deep };
+    const schema = inputSchemas.normalizeAnthropicInputSchema({ $ref: "#/$defs/deep", $defs: { deep } });
+    expect(schema.type).toBe("object");
+    let depth = 0;
+    for (let node = schema.not as Record<string, unknown> | undefined; node; node = node.not as typeof node) depth++;
+    expect(depth).toBe(50_000);
+  });
+
   test("parameterless and type-less tools become valid object schemas", async () => {
     expect(await toolSchema({})).toEqual({ type: "object", properties: {} });
     expect(await toolSchema({ properties: { query: { type: "string" } }, required: ["query"] })).toEqual({

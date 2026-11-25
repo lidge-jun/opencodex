@@ -697,6 +697,8 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       baseUrl,
       models,
       config,
+      // `baseUrl` is this server's own keyless listener whenever that listener is enabled (#9069).
+      ...(config.unauthenticatedLoopbackListener?.enabled === true ? { keylessInference: true } : {}),
       ...(modelNames === undefined ? {} : { modelNames }),
     });
     const document = built.document;
