@@ -171,6 +171,49 @@ export function hasUnverifiedJournalBaseline(config: string | null, profile: str
   return journal !== null && compareJournalState(journal, config, profile).unverified;
 }
 
+/** What a plain native restore's journal step would do to config.toml and the profile. */
+export type JournalRestorePreview =
+  | { kind: "none" }
+  | { kind: "unverified" }
+  | { kind: "profile-symlink" }
+  | {
+      kind: "planned";
+      /** Bytes the journal replay writes to config.toml, or null when it writes none. */
+      configWrite: string | null;
+      configRestored: boolean;
+      profileRestored: boolean;
+      profileChanged: boolean;
+      /** Profile after the step: bytes, null for removed, undefined for untouched. */
+      profileAfter: string | null | undefined;
+    };
+
+/**
+ * Read-only twin of {@link restoreJournalState} for the plain restore path (no field-level
+ * recovery, no client disconnect recovery): the same journal read and the same comparison,
+ * and no lock, write or journal cleanup. Used by the Connections restore preview.
+ */
+export function previewJournalRestore(currentConfig: string | null, currentProfile: string | null): JournalRestorePreview {
+  const journal = readJournal(false);
+  if (!journal) return { kind: "none" };
+  const comparison = compareJournalState(journal, currentConfig, currentProfile);
+  if (comparison.unverified) return { kind: "unverified" };
+  const { configUnchanged, profileUnchanged } = comparison;
+  if (profileUnchanged && (!comparison.profileAlreadyOriginal || comparison.originalProfile === null)) {
+    try { if (lstatSync(CODEX_PROFILE_PATH).isSymbolicLink()) return { kind: "profile-symlink" }; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { kind: "profile-symlink" }; }
+  }
+  const replay = configUnchanged && !comparison.configAlreadyOriginal;
+  const profileReplay = profileUnchanged && !comparison.profileAlreadyOriginal;
+  return {
+    kind: "planned",
+    configWrite: replay && comparison.originalConfig !== currentConfig ? comparison.originalConfig : null,
+    configRestored: comparison.configAlreadyOriginal || configUnchanged,
+    profileRestored: comparison.profileAlreadyOriginal || profileUnchanged,
+    profileChanged: !profileUnchanged,
+    profileAfter: profileReplay ? comparison.originalProfile : undefined,
+  };
+}
+
 export interface WriteJournalOptions {
   /**
    * The caller's verdict on the config it is about to transform: false when
