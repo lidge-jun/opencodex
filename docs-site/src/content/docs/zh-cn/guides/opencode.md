@@ -88,7 +88,7 @@ loopback 示例：
 
 真实值只会通过子进程环境传递。`OPENCODEX_API_AUTH_TOKEN` 优先，然后是加固后的服务 token 文件，最后才是配置的 API key - 而非 loopback 绑定正是需要这个 API key。
 
-loopback 绑定（`127.0.0.1`，默认值）不要求数据面 key。但 OpenCode 本身需要非空的 `apiKey`：未设置的 `{env:…}` 引用会在发送请求前以 `Missing auth credential: apiKey` 被拒绝。当托管集成或仪表盘的客户端配置指向无认证的 loopback 监听器时，会把非机密占位符 `opencodex-loopback` 写为 `apiKey`，无需导出任何内容。包括 `ocx export` 在内的其他路径保留该引用：在需要的地方导出 admission key，在不检查 key 的 loopback 绑定上把任意非空值导出为 `OPENCODEX_OPENCODE_API_KEY`。仅凭 loopback URL 无法确定不会检查 key：绑定在 `0.0.0.0` 的公开监听器即使经由 `127.0.0.1` 访问，仍然要求可接受的 key；经由 SSH 转发访问的已认证监听器也是如此。`hostname` 超出 loopback 范围时必须导出 key；参见 [Remote access](/zh-cn/reference/configuration/server/#远程访问)。这个 admission key 是 opencodex 自己的，与在 [Providers](/guides/providers/) 下配置的上游 provider keys 无关。
+loopback 绑定（`127.0.0.1`，默认值）不要求数据面 key。但 OpenCode 本身需要非空的 `apiKey`：未设置的 `{env:…}` 引用会在发送请求前以 `Missing auth credential: apiKey` 被拒绝。当托管集成或仪表盘的客户端配置指向无认证的 loopback 监听器时，会把非机密占位符 `opencodex-loopback` 写为 `apiKey`，无需导出任何内容。包括 `ocx export` 在内的其他路径保留该引用：在需要的地方导出 admission key，在不检查 key 的 loopback 绑定上把任意非空值导出为 `OPENCODEX_OPENCODE_API_KEY`。仅凭 loopback URL 无法确定不会检查 key：绑定在 `0.0.0.0` 的公开监听器即使经由 `127.0.0.1` 访问，仍然要求可接受的 key；经由 SSH 转发访问的已认证监听器也是如此。只要目标会检查 key 就必须导出，例如 `hostname` 超出 loopback 范围且客户端未指向无认证的 loopback 监听器时；参见 [Remote access](/zh-cn/reference/configuration/server/#远程访问)。这个 admission key 是 opencodex 自己的，与在 [Providers](/guides/providers/) 下配置的上游 provider keys 无关。
 
 ## 回滚
 

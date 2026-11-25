@@ -124,8 +124,8 @@ de bouclage sans authentification, elle écrit l'espace réservé non secret `op
 rien à exporter. Les autres chemins, dont `ocx export`, conservent la référence : exportez `OPENCODEX_OPENCODE_API_KEY`
 avec la clé d'admission là où elle est exigée, ou avec n'importe quelle valeur non vide sur une liaison de bouclage, qui ne la vérifie pas. Une URL de
 bouclage ne suffit pas à établir qu'aucune clé n'est vérifiée : un écouteur public lié à `0.0.0.0` exige toujours une
-clé acceptée lorsqu'on l'atteint via `127.0.0.1`, tout comme un écouteur authentifié atteint par une redirection SSH. La clé est
-exigée lorsque `hostname` est défini au-delà du bouclage ;
+clé acceptée lorsqu'on l'atteint via `127.0.0.1`, tout comme un écouteur authentifié atteint par une redirection SSH. Exportez la clé dès que la destination la vérifie, par exemple lorsque `hostname` est défini au-delà du bouclage
+et que le client ne cible pas l'écouteur de bouclage sans authentification ;
 voir [Accès à distance](/fr/reference/configuration/server/#accès-à-distance). Cette clé d'admission est celle de opencodex
 propre et n'est pas lié aux clés du fournisseur en amont configurées sous
 [Prestataires](/fr/guides/providers/).
