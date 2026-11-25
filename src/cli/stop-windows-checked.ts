@@ -197,6 +197,17 @@ export function windowsPartAHolds(record: StopRunRecord): boolean {
   return true;
 }
 
+/**
+ * A held snapshotless Part A that changed nothing (#8960): no manager stop, no terminate, and,
+ * because the hold skips it, no POST. A receipt this run claimed before Part A (an update
+ * handover claims first) then describes a stop that never happened and owes no teardown.
+ */
+export function windowsPartAHeldUnchanged(): boolean {
+  const result = state.result;
+  return windows() && state.snapshotless && result !== null
+    && result.outcome !== "stopped" && result.outcome !== "absent" && !result.changed;
+}
+
 /** Orphan discovery after a checked Windows stop is capped at 3 s (030 "Time budget"). */
 export function orphanDiscoveryCap(): { deadlineAt?: number } {
   return windowsPartBDue() ? { deadlineAt: Date.now() + ORPHAN_DISCOVERY_CAP_MS } : {};

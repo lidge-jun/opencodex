@@ -906,6 +906,9 @@ to refresh its XML before it can hand off to a newer install.
 
 ### `ocx service [install|repair|restart|start|stop|status|uninstall|remove]`
 
+If `ocx service start` reports that the Windows Task Scheduler service is not installed,
+run `ocx service install` to register it. `start` exits with status 1 when the registration is missing.
+
 On Windows Task Scheduler, the service wrapper restarts the proxy after five seconds
 even when an external tool terminates it with exit code 0. If another opencodex proxy
 already owns the port, the wrapper exits deliberately. Use `ocx stop` or

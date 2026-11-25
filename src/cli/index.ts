@@ -72,6 +72,7 @@ import {
 import { describeTrackedRuntimeTarget } from "../config/tracked-runtime-inspection";
 import {
   claimPendingTeardown,
+  clearPendingTeardown,
   isPendingTeardownAbandoned,
   listPendingTeardowns,
   pendingTeardownPathFor,
@@ -126,7 +127,7 @@ import {
   type StopApproval,
 } from "./stop-approval";
 import { summarizeStopRun, type StopOutcome, type StopRunRecord } from "./stop-report";
-import { confirmGuardedFreed, inspectGuardedTarget, noServiceStop, observeGuardedStopped, orphanDiscoveryCap, stopGuardedManager, stopServiceForOcxStop, stopServiceForUninstall, stopWindowFailed, verifyUninstallStopWindow, windowsChildStopHeld, windowsPartAFailureMessage, windowsPartAHolds, windowsPartAReceiptRecord, windowsPartBDue, windowsPartBOwnsPortWait, windowsStopRequiresReceipt } from "./stop-windows-checked";
+import { confirmGuardedFreed, inspectGuardedTarget, noServiceStop, observeGuardedStopped, orphanDiscoveryCap, stopGuardedManager, stopServiceForOcxStop, stopServiceForUninstall, stopWindowFailed, verifyUninstallStopWindow, windowsChildStopHeld, windowsPartAFailureMessage, windowsPartAHeldUnchanged, windowsPartAHolds, windowsPartAReceiptRecord, windowsPartBDue, windowsPartBOwnsPortWait, windowsStopRequiresReceipt } from "./stop-windows-checked";
 import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
 import { startupDataPlaneToken } from "../lib/service-secrets";
@@ -166,7 +167,7 @@ import { uninstallPrivilegeRefusal } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
-import { abandonedTeardownIsSafeToFinish, assertConnectedClientStopSupported, classifyStopRole, clearRestoredStopReceipts, configuredStopEndpoint, connectedClientStopSkipLine, isRegisteredServiceStopTarget, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, proveStandaloneStopRecord, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, stopOwnershipRefused, unclassifiedStopTarget, unsupportedConnectedStop, verifyConnectedStopTarget, type LinkStopPreflight, type StopTargetProof } from "./stop-restore";
+import { abandonedTeardownProbeOncePerEndpoint, assertConnectedClientStopSupported, classifyStopRole, clearRestoredStopReceipts, configuredStopEndpoint, connectedClientStopSkipLine, inheritedTeardownProbeCount, isRegisteredServiceStopTarget, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, proveStandaloneStopRecord, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, stopOwnershipRefused, unclassifiedStopTarget, unsupportedConnectedStop, verifyConnectedStopTarget, type LinkStopPreflight, type StopTargetProof } from "./stop-restore";
 import { stopRestoreWriteGuard } from "./stop-restore-guard";
 import { startConnectedClientWithOwnershipFence } from "./client-start-fence";
 import { recoverStartJournalAfterOwnerRecheck, recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
@@ -1198,7 +1199,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
           stopManager: () => {
             verifyStopTarget();
             if (approvedEndpoint) claimTeardown(approvedEndpoint, "exact");
-            return stopGuardedManager({ approvedPort: snapshot.approval.port, receiptNonce: () => teardownNonce, inheritedReceipts: inheritedTeardowns.length });
+            return stopGuardedManager({ approvedPort: snapshot.approval.port, receiptNonce: () => teardownNonce, inheritedReceipts: inheritedTeardownProbeCount(inheritedTeardowns) });
           },
           signalApproved: () => stopWithDeferral(snapshot.approval.pid, approvedEndpoint),
           settle: () => settleApprovedTarget(snapshot.approval),
@@ -1213,7 +1214,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
         const linkEndpoint = linkStop && endpointOf(linkStop.target);
         if (linkEndpoint) claimTeardown(linkEndpoint, "exact");
         else claimHandoverBeforeManager();
-        return stopServiceForOcxStop({ receiptNonce: () => teardownNonce, inheritedReceipts: inheritedTeardowns.length });
+        return stopServiceForOcxStop({ receiptNonce: () => teardownNonce, inheritedReceipts: inheritedTeardownProbeCount(inheritedTeardowns) });
       })();
     record.service = serviceStop;
     stoppedService = serviceStop === "stopped" || serviceStop === "stopped-respawnable";
@@ -1233,6 +1234,10 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
       stopFailed = true;
       if (!heldByWindows) console.error("❌ The service state could not be verified. Check 'ocx service status' for details.");
     }
+    // #8960: a held Part A that changed nothing owes no teardown, so the receipt this run claimed
+    // before it goes too. Kept, the next stop inherits it and budgets one more probe, so each
+    // refused retry needed more time than the last and an update could wedge for good.
+    if (teardownNonce && windowsPartAHeldUnchanged() && clearPendingTeardown(teardownNonce)) teardownNonce = undefined;
   } catch (err) {
     record.service = "error";
     if (err instanceof ProxyOwnershipRefusedError || isServiceOwnershipError(err) || windowsChildStopHeld()) {
@@ -1392,6 +1397,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
   const unreadable: { nonce: string }[] = [];
   let inheritedBlocks = false;
   if (inheritedTeardowns.length > 0 && !ownershipBlocked) {
+    const abandonedTeardownIsSafeToFinish = abandonedTeardownProbeOncePerEndpoint();
     for (const read of inheritedTeardowns) {
       if (read.state === "unscannable") {
         // No file, no nonce: nothing to quarantine and nothing to remove. The home itself

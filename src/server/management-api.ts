@@ -250,6 +250,13 @@ async function handleTelemetryRoutesOnDemand(ctx: ManagementContext): Promise<Re
   return handleTelemetryRoutes(ctx);
 }
 
+/** Lazy: the Connections projections read Codex and Claude state no other request needs. */
+async function handleConnectionStatusRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/connections", false)) return null;
+  const { handleConnectionStatusRoutes } = await import("./management/connection-status-routes");
+  return handleConnectionStatusRoutes(ctx);
+}
+
 export async function handleManagementAPI(
   req: Request,
   url: URL,
@@ -395,6 +402,7 @@ export async function handleManagementAPI(
     ??     (await handleModelRoutes(ctx))
     ??     (await handleIntegrationRoutes(ctx))
     ??     (await handleNativeIntegrationRoutes(ctx))
+    ??     (await handleConnectionStatusRoutesOnDemand(ctx))
     ??     (await handleCursorIntegrationRoutes(ctx))
     ??     (await handleClaudeDesktopPickerRoutes(ctx))
     ??     (await handleDesktopCompatibilityRoutes(ctx))
