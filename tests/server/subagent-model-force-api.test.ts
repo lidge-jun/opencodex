@@ -193,3 +193,48 @@ test("force API keeps genuine marked catalog entries and ordinary unmarked write
     expect(live.claudeCode?.subagentModelForce).toBe(force);
   }
 });
+
+test("force GET/PUT accepts bare combo alias and canonical combo/<id> for bare-aliased combos", async () => {
+  const bareComboConfig = (force?: string, disabledModels?: string[]): OcxConfig => ({
+    ...cfg(),
+    combos: {
+      "bare-combo": { alias: "bare-combo", targets: [{ provider: "ollama", model: "qwen3" }] },
+    },
+    ...(disabledModels ? { disabledModels } : {}),
+    claudeCode: { subagentEffort: "high", model: "keep", ...(force === undefined ? {} : { subagentModelForce: force }) },
+  });
+  const fetchBareCombo = async () => [{ provider: "combo", id: "bare-combo", alias: "bare-combo" }];
+
+  for (const force of ["bare-combo", "combo/bare-combo"]) {
+    const live = bareComboConfig();
+    const putCtx = context(live, { force });
+    putCtx.deps.fetchAllModels = fetchBareCombo;
+    const putRes = await handleSubagentModelRoutes(putCtx, apply);
+    expect(putRes?.status).toBe(200);
+    expect(await putRes!.json()).toMatchObject({ ok: true, force });
+    expect(live.claudeCode?.subagentModelForce).toBe(force);
+
+    const getUrl = new URL("http://localhost/api/subagent-models");
+    const getCtx: ManagementContext = {
+      ...putCtx,
+      url: getUrl,
+      req: new Request(getUrl, { method: "GET" }),
+    };
+    const getRes = await handleSubagentModelRoutes(getCtx, apply);
+    expect(getRes?.status).toBe(200);
+    const getBody = await getRes!.json() as { force: string | null; forceAvailable: string[]; forceStatus: { targetValid: boolean } | null };
+    expect(getBody.force).toBe(force);
+    expect(getBody.forceAvailable).toContain("bare-combo");
+    expect(getBody.forceStatus?.targetValid).toBe(true);
+  }
+
+  for (const disabled of [["bare-combo"], ["combo/bare-combo"]]) {
+    for (const force of ["bare-combo", "combo/bare-combo"]) {
+      const live = bareComboConfig(undefined, disabled);
+      const putCtx = context(live, { force });
+      putCtx.deps.fetchAllModels = fetchBareCombo;
+      expect((await handleSubagentModelRoutes(putCtx, apply))?.status).toBe(400);
+      expect(putCtx.deps.saveConfigPreservingClaudeCode).not.toHaveBeenCalled();
+    }
+  }
+});
