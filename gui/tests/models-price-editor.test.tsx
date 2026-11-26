@@ -764,6 +764,41 @@ describe("Models manual price editor", () => {
       expect(storedMultiplier).toBeNull();
     });
 
+    test("multiplier recovery reloads the catalog before enabling adoption and blocks adoption if reload fails", async () => {
+      setRows(AUTO);
+      await mount();
+      await open("xai-demo/vendor/custom");
+      await fill(["4", "5"]);
+      const field = () => container.querySelector<HTMLInputElement>('dialog input[id$="-multiplier"]')!;
+      const setField = async (value: string) => act(async () => {
+        Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(field(), value);
+        field().dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+      });
+      await setField("2");
+      multiplierReceiptLost = true;
+      await click("Save multiplier");
+      expect(container.querySelector('dialog [role="alert"]')!.textContent).toContain("may have changed");
+      expect(button("Adopt as manual").disabled).toBe(true);
+      // Server persisted multiplier=2, so the refreshed catalog reports scaled automatic rates.
+      setRows({ ...AUTO, input: 0.6, output: 2.4, cacheRead: 0.06, cacheWrite: 0, multiplier: 2 });
+      multiplierReceiptLost = false;
+      catalogFailure = true;
+      await click("Reload price");
+      expect(button("Adopt as manual").disabled).toBe(true);
+      expect(container.querySelector('dialog [role="alert"]')!.textContent).toContain("Editing stays locked");
+      expect(inputs().slice(0, 2).map(input => input.value)).toEqual(["4", "5"]);
+      catalogFailure = false;
+      const before = catalogReads;
+      await click("Reload price");
+      expect(catalogReads).toBeGreaterThan(before);
+      expect(field().value).toBe("2");
+      expect(inputs().slice(0, 2).map(input => input.value)).toEqual(["4", "5"]);
+      expect(button("Adopt as manual").disabled).toBe(false);
+      await click("Adopt as manual");
+      expect(mutations).toEqual([{ modelId: "vendor/custom", cost: { input: 0.6, output: 2.4, cacheRead: 0.06, cacheWrite: 0 } }]);
+      expect(container.querySelector("dialog")).toBeNull();
+    });
+
     test("relay multiplier loads from the GET, saves a number, clears with null, and rejects invalid text", async () => {
       storedMultiplier = 2;
       await mount();

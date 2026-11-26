@@ -598,7 +598,8 @@ A model with no manual price is priced, in this order, from a verified official 
 public models.dev list, then the public OpenRouter list. The lists refresh daily on dashboard reads,
 and seeing an unpriced model can trigger a background fetch. A confirmed miss can trigger another
 fetch after six hours; a failed source can retry after 60 seconds. No request waits on these
-fetches. Lists are cached in `price-catalog-cache.json` in the OpenCodex home, so the last snapshot
+automatic background fetches; only `POST /api/pricing/refresh` waits for both feeds to finish.
+Lists are cached in `price-catalog-cache.json` in the OpenCodex home, so the last snapshot
 remains available offline. Public-list prices are estimates and do not affect routing caps or
 ranking. A manual price always wins and is never scaled.
 
@@ -608,8 +609,8 @@ Each non-combo row of `GET /api/models` carries `price` when a price is known an
 `multiplier` appears when the provider's relay multiplier was applied, and `apiEquivalent: true` when
 the provider bills through a subscription, so the figure is what the same tokens would cost on the API.
 
-`POST /api/pricing/refresh` forces an immediate refresh of both public lists, clears the retry
-cooldowns for models that could not be priced, and returns
+`POST /api/pricing/refresh` forces an immediate refresh of both public lists, waits for both catalog
+fetches to finish, clears the retry cooldowns for models that could not be priced, and returns
 `{ ok: true, sources: { "models-dev": status, "openrouter": status } }`. A source `status` is
 `{ ok: true, fetchedAt, count }` or `{ ok: false, error }`, where `error` is a short code such as
 `fetch_failed`, `bad_json`, `empty` or `http_503`, never a response body.
@@ -903,9 +904,9 @@ When sent, the response is `{ applicable: true, sent: true, metered, provider, m
   rejects images". A baseline that completes without text still counts as accepted. `plannedRequests`
   counts the baseline.
 
-- `image.status` is `accepted` (the request completed), `rejected` (HTTP 400 or 422), or
-  `inconclusive` (timeout, network, 401/403/429/5xx, or an incomplete stream); `image.error`
-  carries only `{ code, status? }`.
+- `image.status` is `accepted` (the request completed with a text delta), `rejected` (HTTP 400 or 422), or
+  `inconclusive` (timeout, network, 401/403/429/5xx, an incomplete stream, or a completed response
+  with no text delta, which returns `no_content`); `image.error` carries only `{ code, status? }`.
 - `reasoning` lists efforts under `accepted`, `rejected`, and `inconclusive`. A reasoning probe that
   finishes without text still counts as accepted: the request was admitted and the small output cap
   can be spent entirely on reasoning.
@@ -923,8 +924,8 @@ no modalities. The reasoning ladder is written to
 `modelReasoningEfforts[model]` (accepted efforts in ladder order) only when every probed effort was
 conclusive. If the stored default is not among the accepted efforts, the probe removes
 `modelDefaultReasoningEfforts[model]`; this removal is not listed in `applied`. A configured alias uses the native model's ladder if efforts are omitted and writes
-under that native model ID; `model` in the response stays as submitted. If the provider's destination, auth mode, or the model's alias
-target changes while the probe runs, nothing is written and the response is 409 with the results.
+under that native model ID; `model` in the response stays as submitted. If the handler's authority check detects that the provider's destination, auth mode, or the model's alias
+target changed while the probe ran (before a later variant probe or before writing conclusive results), nothing is written and the response is 409 with the results; an inconclusive probe with nothing to write can still return 200 with an empty `applied` if no change was already detected.
 `applied` reports what was written. Each written axis is labeled in the provider's
 `modelCapabilityProbes` field; a later manual edit of that axis through `PATCH /api/providers`
 (`modelCapabilities`) or `PUT /api/model-settings` removes the label, as does a provider save that

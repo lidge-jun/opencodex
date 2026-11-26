@@ -44,6 +44,8 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
   const requestRef = useRef<BoundedFetch | null>(null);
   const mutationPendingRef = useRef(false);
   const recoveryRef = useRef<RecoverMutation | null>(null);
+  const onRefreshRef = useRef(onRefresh);
+  useEffect(() => { onRefreshRef.current = onRefresh; }, [onRefresh]);
   const [phase, setPhase] = useState<Phase>("loading");
   const [draft, setDraft] = useState<RateDraft>(EMPTY_RATES);
   const [pricingMode, setPricingMode] = useState<PricingMode>("automatic");
@@ -76,6 +78,15 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
       const cost = rawCost === undefined ? undefined : parseModelCost(rawCost);
       if (cost === INVALID) throw new Error("invalid model cost");
       if (requestRef.current !== bounded) return;
+      const rawMultiplier = result.priceMultiplier;
+      const loadedMultiplier = typeof rawMultiplier === "number" && Number.isFinite(rawMultiplier) && rawMultiplier > 0 ? rawMultiplier : null;
+      if (recover === "multiplier") {
+        // Reload the model catalog before re-enabling adoption so a persisted multiplier
+        // cannot pair with a stale automatic price.
+        if (!await onRefreshRef.current(bounded.signal)) throw new Error("catalog refresh failed");
+        bounded.signal.throwIfAborted();
+        if (requestRef.current !== bounded) return;
+      }
       if (recover !== "multiplier") {
         const loaded = loadDraft(cost);
         setDraft(loaded.rates);
@@ -83,8 +94,6 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
         setCustomDraft(loaded.custom);
         setHasOverride(cost !== undefined);
       }
-      const rawMultiplier = result.priceMultiplier;
-      const loadedMultiplier = typeof rawMultiplier === "number" && Number.isFinite(rawMultiplier) && rawMultiplier > 0 ? rawMultiplier : null;
       setMultiplier(loadedMultiplier);
       if (recover !== "modelCosts") setMultiplierDraft(loadedMultiplier === null ? "" : String(loadedMultiplier));
       setErrorKey(null);
