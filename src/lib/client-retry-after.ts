@@ -20,8 +20,9 @@ function utcMs(day: string, monthName: string, year: number, hour: string, minut
   const month = MONTHS.get(monthName.toLowerCase());
   const [d, h, m, s] = [Number(day), Number(hour), Number(minute), Number(second)];
   if (month === undefined || d < 1 || h > 23 || m > 59 || s > 60) return undefined;
-  const at = Date.UTC(year, month, d, h, m, s);
-  return new Date(at).getUTCDate() === d ? at : undefined;
+  // Validate the calendar before carrying a leap second into the following day.
+  const at = Date.UTC(year, month, d, h, m, Math.min(s, 59));
+  return new Date(at).getUTCDate() === d ? at + (s === 60 ? 1000 : 0) : undefined;
 }
 
 /** Milliseconds since the epoch for an RFC 9110 HTTP-date, or undefined. */
