@@ -393,6 +393,8 @@ HTTPS tunnels in `src/lib/socks5-fetch.ts` give the TLS handshake its own absolu
 30-second deadline after SOCKS CONNECT. Successful TLS clears that deadline before
 the response timer takes over; timeout, caller cancellation, error and premature
 close release the owned socket and listeners. Certificate verification stays enabled.
+After the handshake, a positive fetch `timeout` sets the tunnel's response idle timer in
+milliseconds. Otherwise the existing 200-second response idle limit applies.
 `tests/lib/socks5-tls-lifecycle.test.ts` exercises stalled and interrupted handshakes.
 
 `src/config/proxy-env.ts` activates configured SOCKS5 through `src/lib/proxy-env.ts`;

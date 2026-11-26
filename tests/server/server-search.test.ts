@@ -332,12 +332,17 @@ test("search uses the selected account or provider network route and refuses an 
   saveConfig(config);
   saveExactSearchCredentials();
 
-  const calls: Array<{ proxy: unknown; redirect?: RequestRedirect; account: string | null }> = [];
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const calls: Array<{
+    proxy: unknown; redirect?: RequestRedirect; account: string | null; timeout?: BunFetchRequestInit["timeout"];
+  }> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: BunFetchRequestInit) => {
     if (new URL(input instanceof Request ? input.url : input.toString()).pathname !== "/backend-api/codex/alpha/search") {
       return Response.json({});
     }
-    calls.push({ proxy: init?.proxy, redirect: init?.redirect, account: new Headers(init?.headers).get("chatgpt-account-id") });
+    calls.push({
+      proxy: init?.proxy, redirect: init?.redirect, account: new Headers(init?.headers).get("chatgpt-account-id"),
+      timeout: init?.timeout,
+    });
     return Response.json({ output: "ok" });
   }) as typeof fetch;
   const envKeys = ["NO_PROXY", "no_proxy"] as const;
@@ -354,15 +359,17 @@ test("search uses the selected account or provider network route and refuses an 
     expect(calls).toHaveLength(0);
     expect(getCodexUpstreamHealth("pool-a")).toEqual(poolHealth);
     delete process.env.NO_PROXY;
+    config.search = { timeoutMs: 450_000 };
     expect((await search("side/gpt-test")).status).toBe(200);
+    delete config.search;
     config.providers.openai!.codexAccountMode = "pool";
     expect((await search("gpt-test")).status).toBe(200);
     config.providers.openai!.codexAccountMode = "direct";
     expect((await search("gpt-test", { authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`, "chatgpt-account-id": "acct-123" })).status).toBe(200);
     expect(calls).toEqual([
-      { proxy: accountProxy, redirect: "manual", account: "acct-pool-a" },
-      { proxy: providerProxy, redirect: "manual", account: "acct-pool-b" },
-      { proxy: undefined, redirect: "manual", account: "acct-123" },
+      { proxy: accountProxy, redirect: "manual", account: "acct-pool-a", timeout: 450_000 },
+      { proxy: providerProxy, redirect: "manual", account: "acct-pool-b", timeout: undefined },
+      { proxy: undefined, redirect: "manual", account: "acct-123", timeout: undefined },
     ]);
   } finally {
     for (const [index, key] of envKeys.entries()) {

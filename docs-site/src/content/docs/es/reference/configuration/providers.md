@@ -924,6 +924,8 @@ Rotar entre cuentas de suscripción gasta la cuota de una segunda cuenta y puede
 
 En la búsqueda web alojada, cada cuenta secundaria usa su propio proxy o, si no tiene uno, el del proveedor. Una coincidencia con `noProxy` de la cuenta o del proveedor selecciona una conexión directa. Las búsquedas con la sesión principal, incluso si la selecciona el grupo, y las que usan la sesión aportada por el cliente conservan la ruta de red del proceso.
 
+Una búsqueda alojada puede tardar en enviar datos hasta que la respuesta esté lista. Ajusta `search.timeoutMs` para permitir más de 200 segundos, incluso si la cuenta usa SOCKS5. Este límite se aplica a toda la solicitud.
+
 ### `tokenGuardian` (`OcxTokenGuardianConfig`)
 
 | Campo | Tipo | Predeterminado | Descripción |

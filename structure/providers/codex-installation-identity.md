@@ -79,6 +79,8 @@ replace or remove mixed-case provider identity defaults; main and main-pool pres
 For hosted search, the selected pool account's network route takes precedence over the provider
 route. A caller's own bearer retains the process route. A local routing refusal releases the
 probe lease without recording an upstream connection failure.
+Hosted search passes a configured deadline over 200 seconds to the transport as an idle budget.
+The search signal still enforces the total deadline and caller cancellation.
 Vision, audio and sidecar credential selection share materialization.
 Dictation in `src/server/audio-dictation.ts` has a 600,000 ms recording budget and
 opts into a separate 60,000 ms finalization window after a validated `session.close`.

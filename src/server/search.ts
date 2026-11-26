@@ -218,6 +218,9 @@ export async function handleSearch(
         relayBody, upstream.authContext.kind === "pool" ? upstream.authContext.chatgptAccountId : undefined,
       )),
       signal: linkedSignal.signal,
+      // Hosted search may send no headers until it finishes. Keep a longer configured deadline
+      // from being cut short by the transport's idle timer. The linked signal owns total time.
+      ...(timeoutMs > SEARCH_UPSTREAM_TIMEOUT_MS ? { timeout: timeoutMs } : {}),
       // Credential-bearing: do not follow a cross-origin 3xx. Bun strips `Authorization`
       // across origins but forwards nonstandard headers such as `chatgpt-account-id`,
       // `session_id`, and `x-codex-turn-metadata` to the redirect target.
