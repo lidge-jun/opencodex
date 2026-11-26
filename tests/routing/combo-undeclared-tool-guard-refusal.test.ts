@@ -220,6 +220,49 @@ describe("undeclared-tool guard refusal", () => {
     expect(result.kind).toBe("accepted");
   });
 
+  test("a completed snapshot whose only output is the undeclared call still refuses", async () => {
+    // The guard rewrites this snapshot into response.failed before the client sees it, so its
+    // output array must not read as committed client-visible content (#9163) — requiredToolPrelude
+    // mode is where the snapshot commit check runs.
+    const result = await preflightComboStreamResponse(
+      sse(
+        { type: "response.created", response: { id: "r1", status: "in_progress" } },
+        {
+          type: "response.completed",
+          response: {
+            id: "r1", status: "completed",
+            output: [{ type: "function_call", id: "fc_2", call_id: "call_2", name: "code_runner/bash", arguments: "{}" }],
+          },
+        },
+      ),
+      logCtx(),
+      undefined,
+      { requiredToolPrelude: true, declaredWireTools: catalog },
+    );
+    expect(result.kind).toBe("failed");
+  });
+
+  test("a completed snapshot with declared output still commits the child", async () => {
+    // The gate is scoped to the suppressed call: a snapshot holding a declared item the
+    // client genuinely received keeps its commit meaning.
+    const result = await preflightComboStreamResponse(
+      sse(
+        { type: "response.created", response: { id: "r1", status: "in_progress" } },
+        {
+          type: "response.completed",
+          response: {
+            id: "r1", status: "completed",
+            output: [{ type: "function_call", id: "fc_3", call_id: "call_3", name: "exec", arguments: "{}" }],
+          },
+        },
+      ),
+      logCtx(),
+      undefined,
+      { requiredToolPrelude: true, declaredWireTools: catalog },
+    );
+    expect(result.kind).toBe("accepted");
+  });
+
   test("consumeComboFailure carries the code through unchanged", async () => {
     const body = JSON.stringify({
       error: { message: undeclaredToolCallMessage(), type: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE },

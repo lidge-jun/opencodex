@@ -884,7 +884,11 @@ export async function preflightComboStreamResponse(
               && ["message", "reasoning"].includes((item as { type: string }).type));
           // Other lifecycle/terminal snapshots can hide effects too. Only our checked contract
           // failure may discard a terminal-only text snapshot that was held in its entirety.
-          if (output !== undefined && (!Array.isArray(output) || output.length > 0) && !contractFailure && !degenerateTerminal) outputCommitted = true;
+          // A snapshot whose output holds only the guard's undeclared call is rewritten into
+          // the refusal terminal before the client sees it, so it is not client-visible
+          // output either — same gate as the per-frame commit above (#9163).
+          if (output !== undefined && (!Array.isArray(output) || output.length > 0) && !contractFailure && !degenerateTerminal
+            && !(undeclaredName !== undefined || suppressedContinuation)) outputCommitted = true;
         }
         if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
         if (retryable) retryableTerminalPayload = payload as Record<string, unknown>;
