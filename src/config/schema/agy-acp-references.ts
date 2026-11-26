@@ -41,7 +41,7 @@ export interface ConfigLike {
 export interface AgyAcpConfigIssue { path: (string | number)[]; message: string }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
-const GEMINI_ID = /^gemini[-.]/i;
+const GEMINI_ID = /^(?:gemini|claude)[-.]/i;
 const EFFORT_SUFFIX = /(?:[-@:](?:minimal|low|medium|high|xhigh|max|none))$/i;
 
 export function isAgyAcpProvider(name: string, provider: unknown): boolean {

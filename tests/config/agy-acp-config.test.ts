@@ -50,7 +50,7 @@ describe("antigravity-acp configuration", () => {
       const aliasKey = "sk-proj-" + "q".repeat(44);
       const key = "fixture.opaque-key";
       const raw = config({}, { "local-agy": {
-        ...acp, apiKey: key, defaultModel: "claude-opus", models: ["claude-opus", ...acp.models, "gpt-example"],
+        ...acp, apiKey: key, defaultModel: "gpt-example", models: ["gpt-example", ...acp.models, "deepseek-example"],
         modelAliases: { [aliasKey]: "ignored", "gemini-3.8-flash": "local-flash" },
       } });
       expect(messages(validateConfigCandidate(raw))).toContain("providers.local-agy.apiKey");
@@ -252,10 +252,10 @@ describe("antigravity-acp configuration", () => {
     expect(validateConfigCandidate(config({}, { "antigravity-acp": { ...acp, apiKey: "" } })).ok).toBe(true);
   });
 
-  test("Gemini models and aliases only, on the canonical row and on a custom agy-acp row", () => {
-    expect(messages(validateConfigCandidate(config({}, { "antigravity-acp": { ...acp, models: ["claude-opus-5-5"] } })))).toContain("Gemini models only");
+  test("Gemini and Claude models and aliases only, on the canonical row and on a custom agy-acp row", () => {
+    expect(validateConfigCandidate(config({}, { "antigravity-acp": { ...acp, models: ["claude-opus-5-5"] } })).ok).toBe(true);
     expect(messages(validateConfigCandidate(config({}, { "my-agy": { ...acp, models: ["gpt-6-sol"] } })))).toContain("Gemini models only");
-    expect(messages(validateConfigCandidate(config({}, { "antigravity-acp": { ...acp, modelAliases: { "claude-x": "cx" } } })))).toContain("Gemini models only");
+    expect(messages(validateConfigCandidate(config({}, { "antigravity-acp": { ...acp, modelAliases: { "gpt-x": "gx" } } })))).toContain("Gemini models only");
     // A stale canonical row saved with another adapter is still the ACP provider.
     expect(messages(validateConfigCandidate(config({}, { "antigravity-acp": { ...acp, adapter: "google", apiKey: "AIza-test" } })))).toContain("uses the CLI's own sign-in");
   });
@@ -408,7 +408,7 @@ describe("antigravity-acp configuration", () => {
       subagentModelFallback: ["gemini-9-extra"],
       customModels: [{ provider: "antigravity-acp", modelId: "gemini-9-extra" }],
     })))).toContain("cannot be a subagent fallback");
-    expect(messages(validateConfigCandidate(config({ customModels: [{ provider: "antigravity-acp", modelId: "claude-x" }] })))).toContain("Gemini models only");
+    expect(messages(validateConfigCandidate(config({ customModels: [{ provider: "antigravity-acp", modelId: "gpt-x" }] })))).toContain("Gemini models only");
     // Provider and model aliases are matched case-insensitively by the router.
     expect(messages(validateConfigCandidate(config({ subagentModelFallback: ["AGY/gemini-3.8-flash"] }, { "antigravity-acp": { ...acp, alias: "agy" } })))).toContain("cannot be a subagent fallback");
     expect(messages(validateConfigCandidate(config({ subagentModelFallback: ["Flash-ACP"] }, { "antigravity-acp": { ...acp, modelAliases: { "gemini-3.8-flash": "flash-acp" } } })))).toContain("cannot be a subagent fallback");

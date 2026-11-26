@@ -192,8 +192,8 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       if (incoming.abortSignal?.aborted) return;
 
       const requested = wireModelId(parsed.modelId);
-      if (!/^gemini[-.]/i.test(requested)) {
-        emit(invalidRequest("agy_acp_model_not_gemini", "The Antigravity CLI (ACP) provider serves Gemini models only."));
+      if (!/^(?:gemini|claude)[-.]/i.test(requested)) {
+        emit(invalidRequest("agy_acp_model_not_gemini", "The Antigravity CLI (ACP) provider serves Gemini and Claude models only."));
         return;
       }
       const effort = parsed.options.reasoning;
