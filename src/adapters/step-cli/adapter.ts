@@ -10,7 +10,6 @@ import {
   abortSignal,
   composePrompt,
   hasImageInput,
-  hasStartingUserText,
   latestToolResult,
   pendingUserText,
   stepModelId,
@@ -159,9 +158,10 @@ export function createStepCliAdapter(
         ? { handle: identified, sessionId: "" }
         : sessions.nextRef();
 
+      const userText = pendingUserText(parsed);
       let session!: StepConversationSession;
       try {
-        const acquired = await sessions.open(ref, { existingOnly: !hasStartingUserText(parsed) });
+        const acquired = await sessions.open(ref, { existingOnly: userText === undefined });
         if (!acquired) {
           emit(noUserText());
           return;
@@ -183,6 +183,7 @@ export function createStepCliAdapter(
             session,
             ref,
             tools,
+            userText,
             setTimer: deps.setTimeout ?? setTimeout,
             clearTimer: deps.clearTimeout ?? clearTimeout,
           }),
@@ -256,6 +257,7 @@ async function driveTurn(
     session: StepConversationSession;
     ref: StepConversationRef;
     tools: ReturnType<typeof buildStepSdkTools>;
+    userText: string | undefined;
     setTimer: typeof setTimeout;
     clearTimer: typeof clearTimeout;
   },
@@ -289,7 +291,7 @@ async function driveTurn(
 
       // Text is suppressed ONLY when this turn really is the answer to the held call; a turn that
       // abandoned the call still carries the user's message and must keep it.
-      const userText = continuedQuery ? undefined : pendingUserText(parsed);
+      const userText = continuedQuery ? undefined : context.userText;
       if (!continuedQuery && !userText) {
         // An empty replacement leaves the original call available for its result.
         if (held) sessions.rememberHeldTool(ref, held);

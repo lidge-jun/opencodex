@@ -91,7 +91,8 @@ export function projectToolResultContent(
 export function latestToolResult(
   parsed: OcxParsedRequest,
 ): { content: readonly unknown[]; isError?: boolean; toolCallId: string } | undefined {
-  for (let index = parsed.context.messages.length - 1; index >= 0; index -= 1) {
+  const start = currentTurnStart(parsed);
+  for (let index = parsed.context.messages.length - 1; index >= start; index -= 1) {
     const message = parsed.context.messages[index];
     if (!message || message.role !== "toolResult") continue;
     return {
@@ -190,22 +191,11 @@ export function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-/** A fresh StepCode process can consume text from the turn ending this transcript. */
-export function hasStartingUserText(parsed: OcxParsedRequest): boolean {
-  const messages = parsed.context.messages;
+function currentTurnStart(parsed: OcxParsedRequest): number {
   // The replay prefix counts wire items. The parser records the corresponding message boundary
   // only when the continuation has a new conversational item.
-  const start = parsed._continuationConversationMessageIndex
-    ?? ((parsed._replayPrefixLen ?? 0) > 0 ? messages.length : 0);
-  for (let index = messages.length - 1; index >= start; index--) {
-    const message = messages[index];
-    if (!message || message.role === "developer") continue;
-    if (message.role !== "user") return false;
-    return typeof message.content === "string"
-      ? /\S/.test(message.content)
-      : message.content.some(part => part.type === "text" && /\S/.test(part.text));
-  }
-  return false;
+  return parsed._continuationConversationMessageIndex
+    ?? ((parsed._replayPrefixLen ?? 0) > 0 ? parsed.context.messages.length : 0);
 }
 
 /**
@@ -215,9 +205,11 @@ export function hasStartingUserText(parsed: OcxParsedRequest): boolean {
  * because the wire reduces every message to text and images.
  */
 export function pendingUserText(parsed: OcxParsedRequest): string | undefined {
-  for (let index = parsed.context.messages.length - 1; index >= 0; index -= 1) {
+  const start = currentTurnStart(parsed);
+  for (let index = parsed.context.messages.length - 1; index >= start; index -= 1) {
     const message = parsed.context.messages[index];
-    if (!message || message.role !== "user") continue;
+    if (!message || message.role === "developer") continue;
+    if (message.role !== "user") return undefined;
     if (!Array.isArray(message.content)) {
       return typeof message.content === "string" && /\S/.test(message.content)
         ? message.content

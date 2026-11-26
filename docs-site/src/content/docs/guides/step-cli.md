@@ -60,7 +60,7 @@ StepCode:
   and can retry after a slot frees up. Idle sessions still count until
   cleanup after the ten-minute idle timeout completes. Send user text to start a conversation.
   A tool result on its own can resume its matching call in an existing conversation.
-  A blank user follow-up returns `step_cli_no_user_text` and leaves a pending tool call available to resume.
+  A blank follow-up or one containing only restored history returns `step_cli_no_user_text` and leaves a pending tool call available to resume.
 - **Two documented limits:** a tool that takes longer than two minutes to come back exceeds the
   CLI's own tool-result window and the turn reports `step_cli_tool_result_too_late`; and the CLI's
   session system prompt cannot be replaced through this protocol, so your instructions are prepended
