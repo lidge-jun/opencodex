@@ -102,6 +102,8 @@ function pickerEntry(metadata: Desktop3pMetadata): Desktop3pMetadataEntry | unde
   if (entries.length > 1) throw new Error("duplicate_picker_entries");
   const entry = entries[0];
   if (entry && !SAFE_DESKTOP_PROFILE_ID.test(entry.id)) throw new Error("unsafe_picker_id");
+  // A row sharing the picker's id would make a foreign profile file read as ours.
+  if (entry && metadata.entries.filter(other => other.id === entry.id).length > 1) throw new Error("shared_picker_id");
   return entry;
 }
 

@@ -10,6 +10,7 @@
 import { basename, join } from "node:path";
 import { getConfigDir, loadConfig } from "../config";
 import { readClaudeInterceptProxyToken } from "../claude/intercept/proxy-auth";
+import { inspectDesktopPickerProfile } from "../claude/desktop-picker-profile";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { PROXY_ENV_KEYS } from "../lib/proxy-env";
 
@@ -125,14 +126,34 @@ export function resolvedProxyEnv(
   ownClaudeInterceptProxy?: string | null,
 ): { name: string; value: string }[] {
   const token = ownClaudeInterceptProxy === undefined ? readClaudeInterceptProxyToken(getConfigDir()) : null;
+  const picker = ownClaudeInterceptProxy === undefined ? ownDesktopPickerProxy() : null;
   const resolved: { name: string; value: string }[] = [];
   for (const key of PROXY_ENV_KEYS) {
+    const outbound = key !== "NO_PROXY";
     const value = [env[key]?.trim(), env[key.toLowerCase()]?.trim()].find(v => v && (
-      ownClaudeInterceptProxy === undefined ? !isOwnedClaudeInterceptProxy(v, token) : v !== ownClaudeInterceptProxy
+      ownClaudeInterceptProxy === undefined
+        ? !isOwnedClaudeInterceptProxy(v, token) && !(outbound && v.replace(/\/$/, "") === picker)
+        : v !== ownClaudeInterceptProxy
     ));
     if (value) resolved.push({ name: key, value });
   }
   return resolved;
+}
+
+/**
+ * The egress URL of this install's applied Claude Desktop picker profile, read without writing.
+ * That profile points Desktop at the credential-less picker CONNECT proxy, and Desktop exports
+ * it as HTTP(S)_PROXY to everything it spawns, so a `service install`/`repair`/`restart` run
+ * from a Desktop Code session would otherwise bake it and the service would tunnel every
+ * provider request back into itself.
+ */
+function ownDesktopPickerProxy(): string | null {
+  try {
+    const profile = inspectDesktopPickerProfile();
+    return profile.kind === "applied" ? profile.proxyUrl.replace(/\/$/, "") : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
