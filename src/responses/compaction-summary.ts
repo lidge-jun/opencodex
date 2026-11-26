@@ -2,10 +2,11 @@ import type { AdapterEvent } from "../types";
 import { releaseTranslatedEvent, type TranslatorBudget } from "../lib/translator-budget";
 import { isTruncatedStopReason } from "./truncated-stop-reason";
 
-/** Keep client/hosted tool events out of a routed Anthropic summary's compaction item. */
+/** Keep only visible prose and terminal events in a routed summary. */
 export async function* guardCompactionSummary(
   events: AsyncIterable<AdapterEvent>,
   budget: TranslatorBudget,
+  policy: "anthropic" | "vertex" = "anthropic",
 ): AsyncGenerator<AdapterEvent> {
   let hasText = false;
   let attemptedTool = false;
@@ -23,13 +24,15 @@ export async function* guardCompactionSummary(
       if (!isTruncatedStopReason(event.stopReason)
         // An absent stop reason is accepted, as on every other completion path: some
         // Anthropic-compatible endpoints omit it. An explicit non-terminal reason is not.
-        && (attemptedTool || !hasText
+        && ((policy === "anthropic" && attemptedTool) || !hasText
           || (event.stopReason !== undefined && event.stopReason !== "end_turn" && event.stopReason !== "stop_sequence"))) {
         releaseTranslatedEvent(event, budget);
         yield {
           type: "error", status: 502, errorType: "upstream_error",
           code: "compaction_invalid_summary", retryable: false,
-          message: "Compaction requires a non-empty text summary without tool calls and a normal completion.",
+          message: policy === "anthropic"
+            ? "Compaction requires a non-empty text summary without tool calls and a normal completion."
+            : "Compaction requires a non-empty text summary and a normal completion.",
           usage: event.usage,
         };
       } else {

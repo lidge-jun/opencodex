@@ -3,6 +3,7 @@
   "turn-membership.test.ts": "responses",
   "turn-membership-ingress.test.ts": "responses",
   "responses-anthropic-compaction-prefix.test.ts": "responses",
+  "responses-vertex-compaction.test.ts": "responses",
   "ws-replay-refusal-attribution.test.ts": "responses",
   "combo-replay-refusal-attribution.test.ts": "responses",
   "responses-replay-metadata-principal.test.ts": "responses",

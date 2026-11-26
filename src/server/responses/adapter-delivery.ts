@@ -88,6 +88,9 @@ export async function deliverAdapterResponse(
     notifyResponseComplete,
   } = responseEffects;
   const { routedCompaction } = sidecarState;
+  const adapterName = transportState.activeAdapter.name;
+  const vertexCompaction = routedCompaction && adapterName === "google" && route.provider.googleMode === "vertex";
+  const summaryPolicy = vertexCompaction ? "vertex" : routedCompaction && adapterName === "anthropic" ? "anthropic" : undefined;
   const stallTimeoutSec = () => providerStallTimeoutSec(config, responsesTimeoutProvider(options, route.provider));
   const bodyInactivityMs = resolveStallTimeoutMs(stallTimeoutSec(), { localUpstream });
   const upstreamRequestsStream = parsed.stream || isCanonicalOpenAiForwardProvider(route.provider);
@@ -224,9 +227,11 @@ export async function deliverAdapterResponse(
           preserveRetryError: preserveEmptyCompletionRetryError,
         })
       : advisorStream;
-    const catalogGuardedEventStream = guardEmptyToolCatalogStream(completionGuardedEventStream, clientToolCatalog, translatorBudget);
-    const guardedEventStream = routedCompaction && transportState.activeAdapter.name === "anthropic"
-      ? guardCompactionSummary(catalogGuardedEventStream, translatorBudget) : catalogGuardedEventStream;
+    // Vertex summary validation discards all tool events before they can reach client delivery.
+    const catalogGuardedEventStream = vertexCompaction ? completionGuardedEventStream
+      : guardEmptyToolCatalogStream(completionGuardedEventStream, clientToolCatalog, translatorBudget);
+    const guardedEventStream = summaryPolicy
+      ? guardCompactionSummary(catalogGuardedEventStream, translatorBudget, summaryPolicy) : catalogGuardedEventStream;
     const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames } = deliveryToolBridgeMaps;
     // One completion owner for both deliveries: the bridge calls it from its terminal, the
     // direct client encoder from the fold of the same events.
@@ -382,9 +387,9 @@ export async function deliverAdapterResponse(
       } else {
         events = guardedEvents;
       }
-      if (routedCompaction && transportState.activeAdapter.name === "anthropic") {
+      if (summaryPolicy) {
         const summaryEvents: AdapterEvent[] = [];
-        for await (const event of guardCompactionSummary((async function* () { yield* events; })(), translatorBudget)) {
+        for await (const event of guardCompactionSummary((async function* () { yield* events; })(), translatorBudget, summaryPolicy)) {
           summaryEvents.push(event);
         }
         events = summaryEvents;
