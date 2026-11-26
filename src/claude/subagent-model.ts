@@ -72,9 +72,9 @@ function bareNativeAliasComboId(entry: string, config: OcxConfig): string | null
   return comboId && isNativeAliasCombo(config.combos?.[comboId] ?? {}) ? comboId : null;
 }
 
-function disabledEntryAlias(disabled: string, config: OcxConfig): string {
-  if (bareNativeAliasComboId(disabled, config)) return claudeCodeNativeAlias(disabled);
-  return entryParts(disabled, config).alias;
+function nativePreservingEntryAlias(value: string, config: OcxConfig): string {
+  if (bareNativeAliasComboId(value, config)) return claudeCodeNativeAlias(value);
+  return entryParts(value, config).alias;
 }
 
 export function entryParts(entry: string, config: OcxConfig): { alias: string; id: string; provider: string } {
@@ -126,16 +126,16 @@ export function resolveSubagentForceModel(config: OcxConfig, windows: Record<str
   try {
     let parts = entryParts(entry, config);
     const selectors = "selectors" in available ? available.selectors : available.entries.flatMap(candidate => {
-      try { return [entryParts(candidate, config).alias]; } catch { return []; }
+      try { return [nativePreservingEntryAlias(candidate, config)]; } catch { return []; }
     });
     const isExposed = (alias: string) => selectors.some(candidate => selectorIdentity(candidate) === selectorIdentity(alias));
-    if ("selectors" in available && !isExposed(parts.alias) && bareNativeAliasComboId(entry, config)) {
+    if (!isExposed(parts.alias) && bareNativeAliasComboId(entry, config)) {
       const nativeAlias = claudeCodeNativeAlias(entry);
       if (isExposed(nativeAlias)) parts = { alias: nativeAlias, id: entry, provider: "native" };
     }
     const targetIdentity = selectorIdentity(parts.alias);
     if ((config.disabledModels ?? []).some(disabled => {
-      try { return selectorIdentity(disabledEntryAlias(disabled, config)) === targetIdentity; } catch { return false; }
+      try { return selectorIdentity(nativePreservingEntryAlias(disabled, config)) === targetIdentity; } catch { return false; }
     })) return null;
     if (!isExposed(parts.alias)) return null;
     const bare = stripOneMillionMarker(parts.alias);

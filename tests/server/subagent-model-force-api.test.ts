@@ -237,4 +237,28 @@ test("force GET/PUT accepts bare combo alias and canonical combo/<id> for bare-a
       expect(putCtx.deps.saveConfigPreservingClaudeCode).not.toHaveBeenCalled();
     }
   }
+
+  // Omitted nativeAlias combo must stay invalid as canonical combo/<id> even when its native slug is exposed.
+  const omittedNativeAliasCfg: OcxConfig = {
+    ...cfg(),
+    combos: {
+      astra: { alias: "gpt-6.2-astra", nativeAlias: true, targets: [{ provider: "ollama", model: "qwen3" }] },
+    },
+    claudeCode: { subagentEffort: "high", model: "keep", subagentModelForce: "combo/astra" },
+  };
+  const omittedGetUrl = new URL("http://localhost/api/subagent-models");
+  const omittedGetCtx: ManagementContext = {
+    ...context(omittedNativeAliasCfg, {}),
+    url: omittedGetUrl,
+    req: new Request(omittedGetUrl, { method: "GET" }),
+  };
+  omittedGetCtx.deps.fetchAllModels = async () => [];
+  const omittedGetRes = await handleSubagentModelRoutes(omittedGetCtx, apply);
+  expect(omittedGetRes?.status).toBe(200);
+  const omittedGetBody = await omittedGetRes!.json() as { forceStatus: { targetValid: boolean } | null };
+  expect(omittedGetBody.forceStatus?.targetValid).toBe(false);
+
+  const omittedPutCtx = context({ ...omittedNativeAliasCfg, claudeCode: { subagentEffort: "high", model: "keep" } }, { force: "combo/astra" });
+  omittedPutCtx.deps.fetchAllModels = async () => [];
+  expect((await handleSubagentModelRoutes(omittedPutCtx, apply))?.status).toBe(400);
 });

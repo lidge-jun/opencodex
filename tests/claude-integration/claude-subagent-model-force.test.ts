@@ -339,4 +339,20 @@ test("nativeAlias combo disable and catalog omission preserve still-enabled nati
     {},
     { selectors: ["ocx-claude-native--gpt-6.2-astra"] },
   )).toBeNull();
+  // Same omission invariant through the entries exposure path (GET/PUT /api/subagent-models).
+  expect(resolveSubagentForceModel(
+    nativeAliasCfg("gpt-6.2-astra"),
+    {},
+    { entries: ["gpt-6.2-astra"] },
+  )).toBe("ocx-claude-native--gpt-6.2-astra");
+  expect(resolveSubagentForceModel(
+    nativeAliasCfg("gpt-6.2-astra", { disabledModels: ["gpt-6.2-astra"] }),
+    {},
+    { entries: ["gpt-6.2-astra"] },
+  )).toBeNull();
+  expect(resolveSubagentForceModel(
+    nativeAliasCfg("combo/astra"),
+    {},
+    { entries: ["gpt-6.2-astra"] },
+  )).toBeNull();
 });
