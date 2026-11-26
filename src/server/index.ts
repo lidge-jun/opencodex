@@ -419,12 +419,9 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     if (path === "/v1/audio/transcriptions") return req.method === "POST";
     if (path === "/v1/audio/transcriptions/stream") return req.headers.get("upgrade")?.toLowerCase() === "websocket";
     if (path === "/v1/alpha/search") return req.method === "POST";
-    // Live meter (#8735): numbers from the local request log; Codex++ reads it here (OPTIONS: its key-header preflight).
-    if (path === "/v1/usage/live") return req.method === "GET" || req.method === "OPTIONS";
+    if (path === "/v1/usage/live") return req.method === "GET" || req.method === "OPTIONS"; // Live meter (#8735)
     if (contextEndpoint(path)) return req.method === "POST";
-    if (path === "/v1/images/generations" || path === "/v1/images/edits") {
-      return req.method === "POST";
-    }
+    if (path === "/v1/images/generations" || path === "/v1/images/edits") return req.method === "POST";
     // Videos (#9110) mirror images: a direct-spawn client may create, poll and fetch through this socket; handles
     // minted here belong to the shared "loopback" principal, so every local process on it is one caller.
     if (path === "/v1/videos" || path.startsWith("/v1/videos/")) return matchVideoRoute(req.method, path) !== undefined;
