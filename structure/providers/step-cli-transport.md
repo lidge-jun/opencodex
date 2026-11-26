@@ -32,6 +32,7 @@ that query's declared catalog. Other permissions are denied. A
 `sdk_tool.invoke` is answered on the client's **next** request, with the original query and catalog.
 Changing the catalog while returning a held result closes the session. Abandoning a held call
 detaches its owner, interrupts it and confirms its input end before registering a replacement turn.
+An empty user follow-up returns `step_cli_no_user_text` and preserves the hold for a matching result.
 After acquiring the conversation lock, a cancelled turn leaves held state untouched. Cancellation
 also stops new query starts, busy retries and input that has yet to be sent.
 

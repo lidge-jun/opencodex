@@ -304,6 +304,39 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     expect(session.delivered).toHaveLength(0);
   });
 
+  test("blank follow-ups preserve a held call for its matching result", async () => {
+    const session = new FakeSession();
+    const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
+    session.stream = [
+      requestFrame("req_101", "permission.request", {
+        toolName: "ocx__shell", input: {}, toolUseId: "perm_100",
+        decisionReason: "tool execution requires approval", timeoutMs: 60_000,
+      }),
+      requestFrame("req_102", "sdk_tool.invoke", {
+        serverName: "ocx", toolName: "shell", input: {}, toolUseId: "call-9", timeoutMs: 120_000,
+      }),
+    ];
+    await adapter.runTurn!(parsed(USER_ASK), THREAD_META, () => {});
+    expect(session.queries).toHaveLength(1);
+    for (const content of [" \t ", [{ type: "text", text: " \n " }], []]) {
+      const events: AdapterEvent[] = [];
+      session.stream = [TURN_COMPLETE];
+      await adapter.runTurn!(parsed([...USER_ASK, { role: "user", content }]), THREAD_META, e => events.push(e));
+      expect(events).toMatchObject([{ type: "error", code: "step_cli_no_user_text" }]);
+      expect(session.queries).toHaveLength(1);
+      expect(session.inputs).toHaveLength(1);
+      expect(session.interrupts).toHaveLength(0);
+      expect(session.delivered).toHaveLength(0);
+    }
+    const result: AdapterEvent[] = [];
+    await adapter.runTurn!(parsed([
+      { role: "toolResult", toolCallId: "call-9", toolName: "shell", content: "done", isError: false, timestamp: 1 },
+    ]), THREAD_META, e => result.push(e));
+    expect(result.find(e => e.type === "done")).toMatchObject({ stopReason: "stop" });
+    expect(session.delivered).toHaveLength(1);
+    expect(session.queries).toHaveLength(1);
+  });
+
   test.each([true, false])("a matching tool result continues the same query (user history: %s)", async includeHistory => {
     const session = new FakeSession();
     const adapter = createStepCliAdapter(provider(), { openSession: host(session) });

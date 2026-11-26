@@ -291,6 +291,8 @@ async function driveTurn(
       // abandoned the call still carries the user's message and must keep it.
       const userText = continuedQuery ? undefined : pendingUserText(parsed);
       if (!continuedQuery && !userText) {
+        // An empty replacement leaves the original call available for its result.
+        if (held) sessions.rememberHeldTool(ref, held);
         emit(noUserText());
         return;
       }

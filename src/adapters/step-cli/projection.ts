@@ -219,7 +219,7 @@ export function pendingUserText(parsed: OcxParsedRequest): string | undefined {
     const message = parsed.context.messages[index];
     if (!message || message.role !== "user") continue;
     if (!Array.isArray(message.content)) {
-      return typeof message.content === "string" && message.content.length > 0
+      return typeof message.content === "string" && /\S/.test(message.content)
         ? message.content
         : undefined;
     }
@@ -228,7 +228,7 @@ export function pendingUserText(parsed: OcxParsedRequest): string | undefined {
       .map(part => (part as { text: string }).text)
       .join("")
       .trim();
-    if (text.length > 0) return text;
+    return text.length > 0 ? text : undefined;
   }
   return undefined;
 }
