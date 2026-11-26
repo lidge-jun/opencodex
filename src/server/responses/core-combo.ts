@@ -1594,8 +1594,13 @@ export async function executeComboResponses(
           declaredCustom?: ReadonlySet<string>;
         } | undefined;
         // The guard stands down for forward-auth targets: the child's own registry owns the
-        // catalog, so the preflight must not judge the child's calls undeclared either.
-        const catalogEligible = targetRoute.provider.authMode !== "forward";
+        // catalog, so the preflight must not judge the child's calls undeclared either. The
+        // bridge child can settle on a route other than the planned one (filled into
+        // `childRoute.route` by request-prepare before the child is dispatched), and the
+        // production guard reads that settled route — so the preflight must gate on the same
+        // effective route. A native child has no settled route and sends to the planned one.
+        const catalogRoute = childRoute.route ?? targetRoute;
+        const catalogEligible = catalogRoute.provider.authMode !== "forward";
         try {
           // The same current-turn catalog boundary the child's undeclared-tool guard will read
           // (#9163): caller-owned tools only, historical items of a replay excluded. Presenting
