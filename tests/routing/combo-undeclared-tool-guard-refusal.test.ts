@@ -187,6 +187,39 @@ describe("undeclared-tool guard refusal", () => {
     expect(result.kind).toBe("failed");
   });
 
+  test("an undeclared call and its argument delta in SEPARATE chunks still refuses", async () => {
+    // The guard trips at the item's addition and rewrites the stream, so the argument delta
+    // never reaches the client. Counting it as committed output would strand the combo on a
+    // target whose turn the guard refuses (#9163).
+    const withArgs = new Response(
+      `data: ${JSON.stringify({ type: "response.created", response: { id: "r1", status: "in_progress" } })}\n\n`
+      + `data: ${JSON.stringify({ type: "response.output_item.added", output_index: 0,
+        item: { type: "function_call", id: "fc_9", call_id: "call_9", name: "code_runner/bash", arguments: "" } })}\n\n`
+      + `data: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_9", output_index: 0, delta: "{\"cmd\":" })}\n\n`,
+      { headers: { "content-type": "text/event-stream" } },
+    );
+    const result = await preflightComboStreamResponse(withArgs, logCtx(), undefined, {
+      declaredWireTools: catalog,
+    });
+    expect(result.kind).toBe("failed");
+  });
+
+  test("an argument delta for a DECLARED call still commits the child", async () => {
+    // The exemption is scoped to the suppressed item's identity: an argument delta belongs to
+    // output the caller receives, so it keeps its commit meaning.
+    const declaredArgs = new Response(
+      `data: ${JSON.stringify({ type: "response.created", response: { id: "r1", status: "in_progress" } })}\n\n`
+      + `data: ${JSON.stringify({ type: "response.output_item.added", output_index: 0,
+        item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "exec", arguments: "" } })}\n\n`
+      + `data: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_1", output_index: 0, delta: "{}" })}\n\n`,
+      { headers: { "content-type": "text/event-stream" } },
+    );
+    const result = await preflightComboStreamResponse(declaredArgs, logCtx(), undefined, {
+      declaredWireTools: catalog,
+    });
+    expect(result.kind).toBe("accepted");
+  });
+
   test("consumeComboFailure carries the code through unchanged", async () => {
     const body = JSON.stringify({
       error: { message: undeclaredToolCallMessage(), type: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE },

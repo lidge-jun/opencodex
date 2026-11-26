@@ -23,6 +23,7 @@ import { createSseInspector, isNativePassthroughSseResponse } from "../relay";
 import { sseDataPayload } from "../sse-payload-rewrite";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { COMBO_DEGENERATE_COMPLETION_CODE, REQUIRED_TOOL_CONTRACT_CODE, responsesCompletionError, markUndeclaredToolCallRefusalResponse, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../lib/errors";
+import { isPlainObject } from "../../lib/plain-data";
 import { attachComboFailureEvidence, isPausedTurn } from "../../lib/client-error-body";
 import {
   undeclaredToolCallMessage,
@@ -785,6 +786,11 @@ export async function preflightComboStreamResponse(
   // only finalized when the whole stream proves the undeclared call is all the caller got, so
   // the decision waits for the stream's terminal, EOF or cap, never a chunk boundary.
   let undeclaredTerminalPayload: Record<string, unknown> | undefined;
+  // Argument-continuation frames (deltas and the nameless done) for an undeclared call the
+  // guard will suppress: the guard trips at the item's addition and rewrites the stream to the
+  // refusal terminal, so the client never receives them. Recording the item identity lets the
+  // commit check exempt them — text and declared calls stay commit evidence (#9163).
+  const suppressedCallItemIds = new Set<string>();
   const commentaryItemIds = new Set<string>();
   let holdTimer: ReturnType<typeof setTimeout> | undefined;
   let holdDeadline: Promise<"hold-expired"> | undefined;
@@ -833,8 +839,25 @@ export async function preflightComboStreamResponse(
             options.declaredWireTools.declaredNamelessClientCallTypes,
             options.declaredWireTools.providerExecutedCallTypes,
             options.declaredWireTools.declaredBare, options.declaredWireTools.declaredCustom);
+        if (undeclaredName !== undefined && undeclaredTerminalPayload === undefined) {
+          // The suppression set holds the offending call's identity so its argument
+          // continuation is not misread as client-visible output.
+          const item = (payload as { item?: { item_id?: unknown; id?: unknown } })?.item;
+          const itemId = item && typeof item.item_id === "string" ? item.item_id
+            : item && typeof item.id === "string" ? item.id : undefined;
+          if (itemId !== undefined) suppressedCallItemIds.add(itemId);
+        }
+        // An argument-continuation frame of a suppressed undeclared call: the guard's rewrite
+        // drops it with the call itself, so it is neither output the caller saw nor evidence
+        // against the refusal. Only frames referencing a recorded item identity are exempt —
+        // a delta for any other item still commits exactly as before.
+        const suppressedContinuation = options?.declaredWireTools !== undefined
+          && suppressedCallItemIds.size > 0 && isPlainObject(payload)
+          && (payload.type === "response.function_call_arguments.delta"
+            || payload.type === "response.function_call_arguments.done")
+          && typeof payload.item_id === "string" && suppressedCallItemIds.has(payload.item_id);
         if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError && !heldReasoning
-          && undeclaredName === undefined) outputCommitted = true;
+          && undeclaredName === undefined && !suppressedContinuation) outputCommitted = true;
         if (undeclaredName !== undefined) undeclaredTerminalPayload ??= {
           // The exact terminal the boundary guard will synthesize for this refusal, stated here
           // as the hop evidence so the combo loop sees a terminal it can classify. Only frames
