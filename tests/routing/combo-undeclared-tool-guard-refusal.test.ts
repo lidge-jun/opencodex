@@ -204,17 +204,19 @@ describe("undeclared-tool guard refusal", () => {
     expect(result.kind).toBe("failed");
   });
 
-  test("an argument delta for a DECLARED call still commits the child", async () => {
-    // The exemption is scoped to the suppressed item's identity: an argument delta belongs to
-    // output the caller receives, so it keeps its commit meaning.
-    const declaredArgs = new Response(
+  test("an argument delta for an item the catalog did not suppress still commits the child", async () => {
+    // The exemption is scoped to the suppressed item's identity: the delta below follows an
+    // UNDECLARED addition (fc_9) but carries a different item_id, so it is neither exempt nor
+    // matched by undeclaredToolCallName — it must still commit the child, proving the
+    // continuation exemption does not swallow every argument delta.
+    const unrelatedArgs = new Response(
       `data: ${JSON.stringify({ type: "response.created", response: { id: "r1", status: "in_progress" } })}\n\n`
       + `data: ${JSON.stringify({ type: "response.output_item.added", output_index: 0,
-        item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "exec", arguments: "" } })}\n\n`
+        item: { type: "function_call", id: "fc_9", call_id: "call_9", name: "code_runner/bash", arguments: "" } })}\n\n`
       + `data: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "fc_1", output_index: 0, delta: "{}" })}\n\n`,
       { headers: { "content-type": "text/event-stream" } },
     );
-    const result = await preflightComboStreamResponse(declaredArgs, logCtx(), undefined, {
+    const result = await preflightComboStreamResponse(unrelatedArgs, logCtx(), undefined, {
       declaredWireTools: catalog,
     });
     expect(result.kind).toBe("accepted");
