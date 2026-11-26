@@ -152,6 +152,16 @@ import {
   markEagerRelaySseResponse,
 } from "../relay";
 import { preflightComboStreamResponse } from "./combo-stream-preflight";
+import {
+  collectDeclaredBareCustomWireToolNames,
+  collectDeclaredBareWireToolNames,
+  collectDeclaredNamelessClientCallTypes,
+  collectDeclaredWireToolNames,
+  collectProviderExecutedCallTypes,
+  currentTurnWireToolCatalogBody,
+  hasExplicitWireToolCatalog,
+  type ProviderExecutedCallType,
+} from "../responses-undeclared-tool-guard";
 import { requiredToolContractOf } from "./combo-required-tool-contract";
 import {
   streamingContextOverflowResponse,
@@ -1576,10 +1586,45 @@ export async function executeComboResponses(
       const eagerRelay = isEagerRelaySseResponse(response);
       let preflight;
       try {
+        let childCatalog: {
+          declared: ReadonlySet<string>;
+          declaredNamelessClientCallTypes: ReadonlySet<string>;
+          providerExecutedCallTypes: ReadonlySet<ProviderExecutedCallType>;
+          declaredBare?: ReadonlySet<string>;
+          declaredCustom?: ReadonlySet<string>;
+        } | undefined;
+        // The guard stands down for forward-auth targets: the child's own registry owns the
+        // catalog, so the preflight must not judge the child's calls undeclared either.
+        const catalogEligible = targetRoute.provider.authMode !== "forward";
+        try {
+          // The same current-turn catalog boundary the child's undeclared-tool guard will read
+          // (#9163): caller-owned tools only, historical items of a replay excluded. Presenting
+          // it to the preflight lets an undeclared call frame count as the refusal the guard
+          // synthesizes rather than as committed client output, so the combo can advance.
+          const catalogBody = currentTurnWireToolCatalogBody(
+            childInput,
+            previousResponseRestoredPrefixLength(body),
+          );
+          const declared = collectDeclaredWireToolNames(catalogBody);
+          const nameless = collectDeclaredNamelessClientCallTypes(catalogBody);
+          // An explicit empty catalog is a deny-all the caller declared, same as the dispatch
+          // guard arms on: with no names at all the guard still refuses every client call.
+          if (catalogEligible && (declared.size > 0 || nameless.size > 0
+            || hasExplicitWireToolCatalog(catalogBody))) {
+            childCatalog = {
+              declared,
+              declaredNamelessClientCallTypes: nameless,
+              providerExecutedCallTypes: collectProviderExecutedCallTypes(catalogBody),
+              declaredBare: collectDeclaredBareWireToolNames(catalogBody),
+              declaredCustom: collectDeclaredBareCustomWireToolNames(catalogBody),
+            };
+          }
+        } catch { childCatalog = undefined; }
         preflight = await preflightComboStreamResponse(response, childLog, undefined, {
           signal: options.abortSignal,
           requiredToolPrelude: childLog.providerAdapter === "openai-responses" && requiredToolContractOf(rawBody) !== undefined,
           degeneratePrelude: true,
+          ...(childCatalog !== undefined ? { declaredWireTools: childCatalog } : {}),
         });
       } catch (error) {
         callbackGate.discard();
@@ -1748,6 +1793,7 @@ export async function executeComboResponses(
         malformedResponseFormat: failure.malformedResponseFormat,
         openRouterOpaque400: failure.openRouterOpaque400,
         unofferedToolCallRefusal: failure.unofferedToolCallRefusal,
+        undeclaredToolCallRefusal: failure.undeclaredToolCallRefusal,
         providerModerationRefusal: failure.providerModerationRefusal,
         providerIntakeRefusal: failure.providerIntakeRefusal,
         // The adapter the failed leg actually resolved: a configured `kiro` provider can route a
@@ -1836,6 +1882,7 @@ export async function executeComboResponses(
       malformedResponseFormat: failure.malformedResponseFormat,
       openRouterOpaque400: failure.openRouterOpaque400,
       unofferedToolCallRefusal: failure.unofferedToolCallRefusal,
+      undeclaredToolCallRefusal: failure.undeclaredToolCallRefusal,
       providerModerationRefusal: failure.providerModerationRefusal,
     });
     const failedTargetKey = targetKey(pick.target);
