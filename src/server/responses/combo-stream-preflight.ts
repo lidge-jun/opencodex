@@ -781,7 +781,9 @@ export async function preflightComboStreamResponse(
   // drops the offending item and refuses the turn after this preflight already committed it,
   // which left a multi-target combo no target to advance to. Anything the client genuinely
   // received (any earlier relayed text) still commits the child above; only this frame is read
-  // as the refusal it becomes, and the turn stays replayable on the next target.
+  // as the refusal it becomes, and the turn stays replayable on the next target. The refusal is
+  // only finalized when the whole stream proves the undeclared call is all the caller got, so
+  // the decision waits for the stream's terminal, EOF or cap, never a chunk boundary.
   let undeclaredTerminalPayload: Record<string, unknown> | undefined;
   const commentaryItemIds = new Set<string>();
   let holdTimer: ReturnType<typeof setTimeout> | undefined;
@@ -833,25 +835,23 @@ export async function preflightComboStreamResponse(
             options.declaredWireTools.declaredBare, options.declaredWireTools.declaredCustom);
         if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError && !heldReasoning
           && undeclaredName === undefined) outputCommitted = true;
-        if (undeclaredName !== undefined && undeclaredTerminalPayload === undefined) {
+        if (undeclaredName !== undefined) undeclaredTerminalPayload ??= {
           // The exact terminal the boundary guard will synthesize for this refusal, stated here
           // as the hop evidence so the combo loop sees a terminal it can classify. Only frames
           // the guard itself suppresses count as uncommitted; the commit check above already
           // kept every client-visible event authoritative.
-          undeclaredTerminalPayload = {
-            type: "response.failed",
-            response: {
-              status: "failed",
-              output: [],
-              error: {
-                type: "upstream_error",
-                code: UNDECLARED_TOOL_CALL_ERROR_CODE,
-                message: undeclaredToolCallMessage(),
-                retryable: true,
-              },
+          type: "response.failed",
+          response: {
+            status: "failed",
+            output: [],
+            error: {
+              type: "upstream_error",
+              code: UNDECLARED_TOOL_CALL_ERROR_CODE,
+              message: undeclaredToolCallMessage(),
+              retryable: true,
             },
-          };
-        }
+          },
+        };
         if (options?.requiredToolPrelude && payload && typeof payload === "object") {
           const event = payload as { type?: unknown; response?: { output?: unknown; error?: { code?: unknown; retryable?: unknown } } };
           const output = event.response?.output;
@@ -950,10 +950,14 @@ export async function preflightComboStreamResponse(
       // so its retryable classification doubles as the terminal evidence. A degenerate
       // terminal carries the same hop evidence: its buffered prelude never reached the
       // client, so discarding it cannot duplicate anything the caller already saw.
-      const hopEvidence = retryableTerminalPayload ?? degenerateTerminalPayload ?? undeclaredTerminalPayload;
+      // The undeclared-tool refusal is the one verdict that is NOT decided here: an
+      // undeclared call in an earlier chunk must not cancel the reader before later
+      // chunks are inspected, because a declared call later in the stream is output the
+      // caller could have executed and vetoes the hop (#9163). It waits for the stream's
+      // decision points below — terminal, EOF, or the byte/chunk caps.
+      const hopEvidence = retryableTerminalPayload ?? degenerateTerminalPayload;
       if ((terminalStatus === "failed" || terminalStatus === "incomplete"
-        || hopEvidence?.type === "error" || degenerateTerminalPayload !== undefined
-        || undeclaredTerminalPayload !== undefined)
+        || hopEvidence?.type === "error" || degenerateTerminalPayload !== undefined)
         && !outputCommitted && hopEvidence !== undefined) {
         await reader.cancel("retrying zero-output combo stream terminal").catch(() => undefined);
         const failed = failedTerminalResponse(response, hopEvidence, logCtx, collectUsage);
@@ -969,11 +973,24 @@ export async function preflightComboStreamResponse(
           }
         }
         return { kind: "failed", response: failed,
-          // The projected refusal is ours by construction, so the combo layer classifies it by
-          // marker rather than by prose (#9163); consumeComboFailure gates on this membership.
-          ...(() => { if (undeclaredTerminalPayload !== undefined) markUndeclaredToolCallRefusalResponse(failed); return {}; })(),
           ...(failed.status === 400
             ? { codexModelRefusal: terminalModelRefusal(failed.status, hopEvidence) } : {}) };
+      }
+      // The stream has reached a decision point with no committing evidence: terminal,
+      // EOF (clean or capped), or the buffered caps. An undeclared call was seen and never
+      // contradicted by a declared frame, and the guard's rewrite would have suppressed
+      // everything after its trip, so the caller received nothing it can execute. That is
+      // the guard's refusal, and the hop evidence is its projected terminal (#9163).
+      if (undeclaredTerminalPayload !== undefined && !outputCommitted
+        && (next.done || terminalStatus !== undefined
+          || bufferedBytes >= COMBO_STREAM_PREFLIGHT_MAX_BYTES
+          || buffered.length >= COMBO_STREAM_PREFLIGHT_MAX_CHUNKS)) {
+        await reader.cancel("retrying zero-output combo stream terminal").catch(() => undefined);
+        const failed = failedTerminalResponse(response, undeclaredTerminalPayload, logCtx, collectUsage);
+        return { kind: "failed", response: failed,
+          // The projected refusal is ours by construction, so the combo layer classifies it by
+          // marker rather than by prose (#9163); consumeComboFailure gates on this membership.
+          ...(() => { markUndeclaredToolCallRefusalResponse(failed); return {}; })() };
       }
       if (next.done || terminalStatus !== undefined || outputCommitted
         || bufferedBytes >= COMBO_STREAM_PREFLIGHT_MAX_BYTES

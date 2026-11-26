@@ -155,6 +155,38 @@ describe("undeclared-tool guard refusal", () => {
     expect(result.kind).toBe("accepted");
   });
 
+  test("an undeclared call and a later declared call in SEPARATE chunks commits the child", async () => {
+    // The undeclared call arrives in one SSE chunk and the declared call in the next. The
+    // refusal must be decided at the stream's end, never at a chunk boundary: hopping after
+    // the first chunk would duplicate the declared call on the next target (#9163).
+    const twoChunks = new Response(
+      `data: ${JSON.stringify({ type: "response.created", response: { id: "r1", status: "in_progress" } })}\n\n`
+      + `data: ${JSON.stringify(callAdded("code_runner/bash"))}\n\n`
+      + `data: ${JSON.stringify(callAdded("exec"))}\n\n`,
+      { headers: { "content-type": "text/event-stream" } },
+    );
+    const result = await preflightComboStreamResponse(twoChunks, logCtx(), undefined, {
+      declaredWireTools: catalog,
+    });
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("an undeclared call whose terminal arrives in a LATER chunk still hops", async () => {
+    // The terminal event lands after the offending call, in its own chunk: the refusal is
+    // proven at the stream's decision point, and the hop goes out with the projected
+    // terminal as evidence (#9163).
+    const terminalLater = new Response(
+      `data: ${JSON.stringify({ type: "response.created", response: { id: "r1", status: "in_progress" } })}\n\n`
+      + `data: ${JSON.stringify(callAdded("code_runner/bash"))}\n\n`
+      + `data: ${JSON.stringify({ type: "response.completed", response: { id: "r1", status: "completed", output: [] } })}\n\n`,
+      { headers: { "content-type": "text/event-stream" } },
+    );
+    const result = await preflightComboStreamResponse(terminalLater, logCtx(), undefined, {
+      declaredWireTools: catalog,
+    });
+    expect(result.kind).toBe("failed");
+  });
+
   test("consumeComboFailure carries the code through unchanged", async () => {
     const body = JSON.stringify({
       error: { message: undeclaredToolCallMessage(), type: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE },
