@@ -69,6 +69,14 @@ export {
 } from "./request";
 export { earliestQuotaResetAt, quotaResetRemainingMs } from "./reset-window";
 export {
+  comboAdvertisesEffortUnion,
+  comboAdvertisesMaxContextWindow,
+  comboContextWindowPolicy,
+  normalizeComboContextWindowPolicy,
+  unionEfforts,
+  unionStrings,
+} from "./capability-policy";
+export {
   buildJevRouteQuestion,
   buildJevState,
   JEV_API_URL,
@@ -79,6 +87,7 @@ export {
   jevRouteOptions,
   parseJevDecision,
   resolveJevDecision,
+  type BuildJevStateOptions,
   type JevCandidate,
   type JevDecision,
   type JevDecisionBackend,

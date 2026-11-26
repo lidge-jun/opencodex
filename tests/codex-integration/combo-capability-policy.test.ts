@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { comboCatalogOmissionReason, deriveComboCatalogModel } from "../../src/codex/catalog";
-import { unionEfforts } from "../../src/combos/capability-policy";
+import { comboContextWindowPolicy, normalizeComboContextWindowPolicy, unionEfforts } from "../../src/combos/capability-policy";
 import { normalizeComboConfig, type NormalizedComboConfig } from "../../src/combos/types";
+import { clampAutoCompactTokenLimit } from "../../src/providers/auto-compact-budget";
 
 const imageMember = {
   provider: "a",
@@ -118,5 +119,107 @@ describe("combo capabilityPolicy: catalog", () => {
   test("unionEfforts sorts known rungs by rank and keeps unknown rungs last in first-seen order", () => {
     expect(unionEfforts([["high", "custom-b"], ["low", "max", "custom-a"], ["medium"]]))
       .toEqual(["low", "medium", "high", "max", "custom-b", "custom-a"]);
+  });
+
+  test("union + contextWindowPolicy max advertises the largest member window, input limit, and auto-compact budget", () => {
+    const compactMember = {
+      ...textMember,
+      contextWindow: 131_072,
+      maxInputTokens: 120_000,
+      maxOutputTokens: 16_384,
+    };
+    const millionMember = {
+      ...imageMember,
+      contextWindow: 1_048_576,
+      maxInputTokens: 1_000_000,
+      maxOutputTokens: 64_000,
+    };
+
+    const unionMax = deriveComboCatalogModel(
+      "x",
+      combo({ capabilityPolicy: "union", contextWindowPolicy: "max" }),
+      [millionMember, compactMember],
+    );
+    expect(unionMax?.contextWindow).toBe(1_048_576);
+    expect(unionMax?.maxInputTokens).toBe(1_000_000);
+    expect(unionMax?.maxOutputTokens).toBe(16_384);
+    expect(unionMax?.autoCompactTokenLimit).toBe(
+      clampAutoCompactTokenLimit(1_048_576, 1_000_000, undefined),
+    );
+
+    // Explicit autoCompactTokenLimit on the largest member is respected and clamped.
+    const withCustomCompact = deriveComboCatalogModel(
+      "x",
+      combo({ capabilityPolicy: "union", contextWindowPolicy: "max" }),
+      [{ ...millionMember, autoCompactTokenLimit: 800_000 }, compactMember],
+    );
+    expect(withCustomCompact?.autoCompactTokenLimit).toBe(800_000);
+
+    // Partial maxInputTokens: undefined on the largest member falls back to its own contextWindow.
+    const millionWithoutMaxInput = {
+      ...imageMember,
+      contextWindow: 1_000_000,
+      maxInputTokens: undefined,
+      maxOutputTokens: 64_000,
+    };
+    const partialMaxInput = deriveComboCatalogModel(
+      "x",
+      combo({ capabilityPolicy: "union", contextWindowPolicy: "max" }),
+      [millionWithoutMaxInput, { ...compactMember, contextWindow: 128_000, maxInputTokens: 120_000 }],
+    );
+    expect(partialMaxInput?.contextWindow).toBe(1_000_000);
+    expect(partialMaxInput?.maxInputTokens).toBe(1_000_000);
+    expect(partialMaxInput?.autoCompactTokenLimit).toBe(
+      clampAutoCompactTokenLimit(1_000_000, undefined, undefined),
+    );
+
+    // Asymmetric largest-window member: contextWindow, maxInputTokens, and autoCompactTokenLimit
+    // all derive strictly from limitingMembers (never borrowing a smaller member's higher maxInputTokens).
+    const asymmetricLargest = {
+      ...imageMember,
+      contextWindow: 1_050_000,
+      maxInputTokens: 922_000,
+      autoCompactTokenLimit: 829_800,
+    };
+    const asymmetricSmaller = {
+      ...textMember,
+      contextWindow: 1_000_000,
+      maxInputTokens: undefined,
+    };
+    const asymmetric = deriveComboCatalogModel(
+      "x",
+      combo({ capabilityPolicy: "union", contextWindowPolicy: "max" }),
+      [asymmetricLargest, asymmetricSmaller],
+    );
+    expect(asymmetric?.contextWindow).toBe(1_050_000);
+    expect(asymmetric?.maxInputTokens).toBe(922_000);
+    expect(asymmetric?.autoCompactTokenLimit).toBe(829_800);
+
+    // Default union (omitted or explicit "min") and intersection (even with "max") keep Math.min.
+    for (const cfg of [
+      combo({ capabilityPolicy: "union" }),
+      combo({ capabilityPolicy: "union", contextWindowPolicy: "min" }),
+      combo({ capabilityPolicy: "intersection", contextWindowPolicy: "max" }),
+      combo({ contextWindowPolicy: "max" }),
+    ]) {
+      const row = deriveComboCatalogModel("x", cfg, [millionMember, compactMember]);
+      expect(row?.contextWindow).toBe(131_072);
+      expect(row?.maxInputTokens).toBe(120_000);
+      expect(row?.autoCompactTokenLimit).toBe(
+        clampAutoCompactTokenLimit(131_072, 120_000, undefined),
+      );
+    }
+  });
+
+  test("contextWindowPolicy helpers stay sparse at the min default", () => {
+    expect(normalizeComboContextWindowPolicy(undefined)).toBeUndefined();
+    expect(normalizeComboContextWindowPolicy("min")).toBeUndefined();
+    expect(normalizeComboContextWindowPolicy("max")).toBe("max");
+    expect(comboContextWindowPolicy(undefined)).toBe("min");
+    expect(comboContextWindowPolicy(combo())).toBe("min");
+    expect(comboContextWindowPolicy(combo({ contextWindowPolicy: "min" }))).toBe("min");
+    expect(comboContextWindowPolicy(combo({ contextWindowPolicy: "max" }))).toBe("max");
+    expect(combo({ contextWindowPolicy: "min" })).not.toHaveProperty("contextWindowPolicy");
+    expect(combo({ contextWindowPolicy: "max" }).contextWindowPolicy).toBe("max");
   });
 });

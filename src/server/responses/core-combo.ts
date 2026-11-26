@@ -76,7 +76,7 @@ import {
 } from "../../responses/state";
 import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
 import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
-import { clampComboCallerEffort, comboCapabilityGate } from "../../combos/request-capability";
+import { clampComboCallerEffort, comboCapabilityGate, resolveJevEstimatedInputTokens } from "../../combos/request-capability";
 import { comboAdvertisesEffortUnion } from "../../combos/capability-policy";
 import {
   comboTargetRequiresConsent, liveComboSendRequiresConsent, requestStartComboConfig, snapshotComboAdmission, snapshotComboAdmissionProvider,
@@ -889,6 +889,7 @@ export async function executeComboResponses(
           }
           : {}),
         ...(combo.decisionTimeoutMs !== undefined ? { timeoutMs: combo.decisionTimeoutMs } : {}),
+        estimatedInputTokens: resolveJevEstimatedInputTokens(config, combo, capability, body),
         signal: options.abortSignal,
       });
     let decision: JevDecision;

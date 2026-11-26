@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { clearComboSelectionState, getCombo, noteComboSuccess, pickComboTarget, targetKey } from "../../src/combos";
-import { clampComboCallerEffort, comboCapabilityGate, type ComboTargetRouter } from "../../src/combos/request-capability";
+import { clampComboCallerEffort, comboCapabilityGate, estimateComboInputTokens, resolveJevEstimatedInputTokens, type ComboTargetRouter } from "../../src/combos/request-capability";
+import * as responsesParser from "../../src/responses/parser";
 import { normalizeComboConfig } from "../../src/combos/types";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
@@ -219,5 +220,68 @@ describe("combo capabilityPolicy: context window", () => {
       combos: { u: { capabilityPolicy: "union", targets: [{ provider: "small", model: "s" }, { provider: "large", model: "l" }] } },
     });
     expect((await comboCapabilityGate(cfg, getCombo(cfg, "u")!, hugeBody, router(cfg))).eligible({ provider: "small", model: "s" })).toBe(true);
+  });
+
+  test("exposes positive estimatedInputTokens on union gate and helper, omitting compaction turns", async () => {
+    const cfg = contextConfig("failover", "union");
+    const gate = await comboCapabilityGate(cfg, getCombo(cfg, "u")!, longBody, router(cfg));
+    expect(gate.estimatedInputTokens).toBeGreaterThan(1_000);
+    expect(Number.isSafeInteger(gate.estimatedInputTokens)).toBe(true);
+    expect(estimateComboInputTokens(longBody)).toBe(gate.estimatedInputTokens);
+    const compaction = { ...hugeBody, input: [{ role: "user", content: "word ".repeat(2_000) }, { type: "compaction_trigger" }] };
+    expect(estimateComboInputTokens(compaction)).toBeUndefined();
+  });
+
+  test("union gate computes estimatedInputTokens once when all union targets have unknown windows", async () => {
+    const unknownCfg = config({
+      providers: {
+        small: { ...small, contextWindow: undefined },
+        large: { ...large, contextWindow: undefined },
+      },
+      combos: {
+        u: { capabilityPolicy: "union", targets: [{ provider: "small", model: "s" }, { provider: "large", model: "l" }] },
+      },
+    });
+    const parseSpy = spyOn(responsesParser, "parseRequest");
+    try {
+      const gate = await comboCapabilityGate(unknownCfg, getCombo(unknownCfg, "u")!, longBody, router(unknownCfg));
+      expect(gate.estimatedInputTokens).toBe(estimateComboInputTokens(longBody));
+      // 1 parse in comboCapabilityGate + 1 parse in the assertion helper above.
+      expect(parseSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
+
+  test("resolveJevEstimatedInputTokens avoids double-parsing union bodies and skips non-System-One or Vercel /decisions endpoints", () => {
+    const cfg = config({
+      providers: {
+        small,
+        large,
+        "ollama-tev1": { adapter: "jev-decision", baseUrl: "http://127.0.0.1:11434/v1/systemone", defaultModel: "tev1:4b" },
+        "vercel-decider": { adapter: "jev-decision", baseUrl: "https://ai-gateway.vercel.sh/v1/systemone", defaultModel: "tev1:4b" },
+      },
+    });
+    const parseSpy = spyOn(responsesParser, "parseRequest");
+    try {
+      // Non-systemone (TypeSafe default, explicit jev, or decisionModel) returns undefined without parsing.
+      expect(resolveJevEstimatedInputTokens(cfg, { capabilityPolicy: undefined }, {}, longBody)).toBeUndefined();
+      expect(resolveJevEstimatedInputTokens(cfg, { capabilityPolicy: undefined, decisionProvider: "jev" }, {}, longBody)).toBeUndefined();
+      expect(resolveJevEstimatedInputTokens(cfg, { capabilityPolicy: undefined, decisionProvider: "ollama-tev1", decisionModel: "small/s" }, {}, longBody)).toBeUndefined();
+      // Vercel /decisions returns undefined without parsing.
+      expect(resolveJevEstimatedInputTokens(cfg, { capabilityPolicy: undefined, decisionProvider: "vercel-decider" }, {}, longBody)).toBeUndefined();
+      expect(resolveJevEstimatedInputTokens(cfg, { capabilityPolicy: "union", decisionProvider: "vercel-decider" }, { estimatedInputTokens: 4_200 }, longBody)).toBeUndefined();
+      // Union combo reuses capability.estimatedInputTokens directly (never re-parsing, even when undefined).
+      expect(resolveJevEstimatedInputTokens(cfg, { capabilityPolicy: "union", decisionProvider: "ollama-tev1" }, { estimatedInputTokens: 4_200 }, longBody)).toBe(4_200);
+      expect(resolveJevEstimatedInputTokens(cfg, { capabilityPolicy: "union", decisionProvider: "ollama-tev1" }, {}, longBody)).toBeUndefined();
+      expect(parseSpy).toHaveBeenCalledTimes(0);
+
+      // Non-union combo targeting self-hosted System One estimates once from body.
+      const estimated = resolveJevEstimatedInputTokens(cfg, { capabilityPolicy: undefined, decisionProvider: "ollama-tev1" }, {}, longBody);
+      expect(estimated).toBeGreaterThan(1_000);
+      expect(parseSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      parseSpy.mockRestore();
+    }
   });
 });

@@ -95,8 +95,9 @@ function sparseComboConfig<T extends {
   defaultEffortMode?: "fallback" | "force";
   jevEffortMode?: "decide" | "client";
   capabilityPolicy?: "intersection" | "union";
+  contextWindowPolicy?: "min" | "max";
   onUnservable?: "degrade" | "reject";
-}>(combo: T): Omit<T, "cooldownMs" | "waitForCooldownMs" | "cooldownWaitPolicy" | "imageInput" | "reasoningEffortMode" | "defaultEffortMode" | "jevEffortMode" | "capabilityPolicy" | "onUnservable"> & {
+}>(combo: T): Omit<T, "cooldownMs" | "waitForCooldownMs" | "cooldownWaitPolicy" | "imageInput" | "reasoningEffortMode" | "defaultEffortMode" | "jevEffortMode" | "capabilityPolicy" | "contextWindowPolicy" | "onUnservable"> & {
   cooldownMs?: number;
   waitForCooldownMs?: number;
   cooldownWaitPolicy?: OcxComboCooldownWaitPolicy;
@@ -105,6 +106,7 @@ function sparseComboConfig<T extends {
   defaultEffortMode?: "force";
   jevEffortMode?: "client";
   capabilityPolicy?: "union";
+  contextWindowPolicy?: "max";
   onUnservable?: "reject";
 } {
   const {
@@ -116,6 +118,7 @@ function sparseComboConfig<T extends {
     defaultEffortMode,
     jevEffortMode,
     capabilityPolicy,
+    contextWindowPolicy,
     onUnservable,
     ...rest
   } = combo;
@@ -133,6 +136,7 @@ function sparseComboConfig<T extends {
     ...(defaultEffortMode === "force" ? { defaultEffortMode: "force" as const } : {}),
     ...(jevEffortMode === "client" ? { jevEffortMode: "client" as const } : {}),
     ...(capabilityPolicy === "union" ? { capabilityPolicy: "union" as const } : {}),
+    ...(contextWindowPolicy === "max" ? { contextWindowPolicy: "max" as const } : {}),
     ...(onUnservable === "reject" ? { onUnservable: "reject" as const } : {}),
   };
 }
@@ -310,6 +314,9 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
         : {}),
       ...(!Object.hasOwn(requestedCombo, "capabilityPolicy") && previous?.capabilityPolicy !== undefined
         ? { capabilityPolicy: previous.capabilityPolicy }
+        : {}),
+      ...(!Object.hasOwn(requestedCombo, "contextWindowPolicy") && previous?.contextWindowPolicy !== undefined
+        ? { contextWindowPolicy: previous.contextWindowPolicy }
         : {}),
       ...(!Object.hasOwn(requestedCombo, "onUnservable") && previous?.onUnservable !== undefined
         ? { onUnservable: previous.onUnservable }

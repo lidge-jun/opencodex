@@ -7,7 +7,8 @@ import {
 } from "./jev-session-pin-config";
 import { isCodexReasoningEffort, isDeclaredReasoningEffort } from "../reasoning-effort";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
-import type { OcxComboCapabilityPolicy, OcxComboConfig, OcxComboCooldownWaitPolicy, OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboJevEffortMode, OcxComboOnUnservable, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
+import type { OcxComboCapabilityPolicy, OcxComboConfig, OcxComboContextWindowPolicy, OcxComboCooldownWaitPolicy, OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboJevEffortMode, OcxComboOnUnservable, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
+import { normalizeComboContextWindowPolicy } from "./capability-policy";
 import { COMBO_NAMESPACE, isValidComboId, resolveComboId, targetKey } from "./identifiers";
 import {
   CANONICAL_JEV_DECISION_PROVIDER,
@@ -82,6 +83,8 @@ export interface NormalizedComboConfig {
   jevEffortMode: OcxComboJevEffortMode;
   /** Catalog derivation and per-request member filtering; absent means `intersection`, the legacy rule. */
   capabilityPolicy?: Extract<OcxComboCapabilityPolicy, "union">;
+  /** `union` only: catalog context-window aggregation; absent means `min`. */
+  contextWindowPolicy?: Extract<OcxComboContextWindowPolicy, "max">;
   /** `union` only: what to do when no member can serve the request; absent means `degrade`. */
   onUnservable?: Extract<OcxComboOnUnservable, "reject">;
   /** Disable image input; `auto` preserves the intersection derived from all targets. */
@@ -318,6 +321,9 @@ export function comboConfigIssues(
   }
   if (body.capabilityPolicy !== undefined && body.capabilityPolicy !== "intersection" && body.capabilityPolicy !== "union") {
     issues.push({ path: ["capabilityPolicy"], message: 'capabilityPolicy must be "intersection" or "union"' });
+  }
+  if (body.contextWindowPolicy !== undefined && body.contextWindowPolicy !== "min" && body.contextWindowPolicy !== "max") {
+    issues.push({ path: ["contextWindowPolicy"], message: 'contextWindowPolicy must be "min" or "max"' });
   }
   if (body.onUnservable !== undefined && body.onUnservable !== "degrade" && body.onUnservable !== "reject") {
     issues.push({ path: ["onUnservable"], message: 'onUnservable must be "degrade" or "reject"' });
@@ -608,6 +614,7 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     jevEffortMode: raw.jevEffortMode === "client" ? "client" : "decide",
     // Sparse like `allowMeteredTargets`: the default shape stays exactly what it was before the policy existed.
     ...(raw.capabilityPolicy === "union" ? { capabilityPolicy: "union" as const } : {}),
+    ...(normalizeComboContextWindowPolicy(raw.contextWindowPolicy) ? { contextWindowPolicy: "max" as const } : {}),
     ...(raw.onUnservable === "reject" ? { onUnservable: "reject" as const } : {}),
     imageInput: raw.imageInput === "disabled" ? "disabled" : "auto",
     alias: alias || null,

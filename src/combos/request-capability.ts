@@ -4,11 +4,13 @@ import { getModelMetadataCaseInsensitive, resolveMetadataProvider } from "../gen
 import { errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
 import { isCodexReasoningEffort, modelRecordValue, resolveEffortAtOrBelow } from "../reasoning-effort";
 import { parseRequest } from "../responses/parser";
-import { checkComboTargetInputAdmission } from "../server/responses/input-admission";
+import { checkComboTargetInputAdmission, estimateInputTokens } from "../server/responses/input-admission";
 import type { OcxComboTarget, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { requiresVisionPreprocessing } from "../vision/plan";
 import { customRowInputModalities } from "../vision/eligibility";
 import { comboRequestHasAudioInput, comboRequestHasImageInput } from "./request";
+import { jevDecisionBackendFor } from "./jev";
+import { isDecisionsEndpoint } from "./jev-decision-contract";
 import { targetKey, type NormalizedComboConfig } from "./types";
 
 /**
@@ -58,6 +60,8 @@ export interface ComboCapabilityGate {
   requiresVisionPlan: ComboCapabilityGate["eligible"];
   /** Members that fit and can serve the turn once the combo permits omission. */
   imageDegradationEligible: ComboCapabilityGate["eligible"];
+  /** Heuristic input-token estimate observed during capability admission, when available. */
+  estimatedInputTokens?: number;
 }
 
 const OPEN_GATE: ComboCapabilityGate = {
@@ -69,6 +73,12 @@ interface ContextFit {
   fits: boolean;
   /** Known context window, or null when the target publishes none (fail-open, like the child). */
   window: number | null;
+  /** Positive heuristic input-token count from admission, when computed. */
+  estimatedTokens?: number;
+}
+
+function positiveTokenCount(value: number): number | undefined {
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 /**
@@ -90,7 +100,12 @@ function comboTargetContextFit(
     { ...parsed, modelId: route.modelId }, route.provider, route.providerName, route.modelId, nativeContextLimits(config),
   );
   if (result.ceiling === null) return { fits: true, window: null };
-  return { fits: result.admitted && result.estimatedTokens <= result.ceiling, window: result.contextWindow ?? result.ceiling };
+  const estimatedTokens = positiveTokenCount(result.estimatedTokens);
+  return {
+    fits: result.admitted && result.estimatedTokens <= result.ceiling,
+    window: result.contextWindow ?? result.ceiling,
+    ...(estimatedTokens !== undefined ? { estimatedTokens } : {}),
+  };
 }
 
 /** The request as the child will parse it. */
@@ -102,9 +117,37 @@ function parseComboInput(body: unknown): OcxParsedRequest | undefined {
   }
 }
 
+/** Heuristic input-token estimate for an arbitrary combo body; returns undefined for unparseable or compaction turns. */
+export function estimateComboInputTokens(body: unknown, modelId = ""): number | undefined {
+  const parsed = parseComboInput(body);
+  if (!parsed || parsed._compactionRequest) return undefined;
+  return positiveTokenCount(estimateInputTokens(parsed, modelId));
+}
+
+/**
+ * Resolve the heuristic input-token estimate for a JEV decision turn without re-parsing a
+ * `union` body or doing estimation work for backends that omit `signals.estimated_tokens`.
+ */
+export function resolveJevEstimatedInputTokens(
+  config: Pick<OcxConfig, "providers">,
+  combo: Pick<NormalizedComboConfig, "capabilityPolicy" | "decisionProvider" | "decisionModel">,
+  capability: Pick<ComboCapabilityGate, "estimatedInputTokens">,
+  body: unknown,
+): number | undefined {
+  if (jevDecisionBackendFor(combo) !== "systemone") return undefined;
+  const providerId = combo.decisionProvider?.trim();
+  const baseUrl = providerId && Object.hasOwn(config.providers, providerId)
+    ? config.providers[providerId]?.baseUrl
+    : undefined;
+  if (typeof baseUrl === "string" && isDecisionsEndpoint(baseUrl)) return undefined;
+  if (combo.capabilityPolicy === "union") return capability.estimatedInputTokens;
+  return estimateComboInputTokens(body);
+}
+
 /**
  * Request-side half of `capabilityPolicy: "union"`. The catalog advertises the union of member
- * capabilities and the minimum member window. Dispatch can try the largest compatible member
+ * capabilities and the minimum member window (or the largest when `contextWindowPolicy: "max"`).
+ * Dispatch can try the largest compatible member
  * when context is unservable, so a request may need something only some members
  * have. Audio requires a member that accepts it. Members that can degrade an image stay
  * eligible (keeping the subscription order and the prompt cache); members that cannot take the
@@ -133,6 +176,7 @@ export async function comboCapabilityGate(
   const contextInput = parsed?._compactionRequest ? undefined : parsed;
   if (!hasImage && !hasAudio && !contextInput) return OPEN_GATE;
   let hasAdmittedTarget = false;
+  let estimatedInputTokens: number | undefined;
   const visionChecks = new Map<string, ComboTargetRoute>();
   const judged = new Map<string, { image: ComboTargetService; context: ContextFit }>();
   for (const target of combo.targets) {
@@ -144,6 +188,9 @@ export async function comboCapabilityGate(
     if (judged.has(key)) continue;
     if (hasAudio && !comboTargetAcceptsAudio(config, resolved)) continue;
     const context = comboTargetContextFit(config, contextInput, resolved);
+    if (estimatedInputTokens === undefined && context.estimatedTokens !== undefined) {
+      estimatedInputTokens = context.estimatedTokens;
+    }
     const needsDescription = hasImage && context.fits && resolved
       && requiresVisionPreprocessing(config, resolved.provider, resolved.modelId, resolved.providerName);
     judged.set(key, { image: needsDescription ? "unable" : "native", context });
@@ -157,8 +204,12 @@ export async function comboCapabilityGate(
     }
   }
   if (!hasAdmittedTarget) return OPEN_GATE;
+  if (estimatedInputTokens === undefined && contextInput) {
+    estimatedInputTokens = positiveTokenCount(estimateInputTokens(contextInput, ""));
+  }
   const verdicts = [...judged.values()];
-  if (verdicts.length === 0) return { ...OPEN_GATE, eligible: () => false, unservable: "audio" };
+  const estimated = estimatedInputTokens !== undefined ? { estimatedInputTokens } : {};
+  if (verdicts.length === 0) return { ...OPEN_GATE, ...estimated, eligible: () => false, unservable: "audio" };
   const filter = (keep: (verdict: { image: ComboTargetService; context: ContextFit }) => boolean): ComboCapabilityGate["eligible"] =>
     target => {
       const verdict = judged.get(targetKey(target));
@@ -170,13 +221,14 @@ export async function comboCapabilityGate(
       unservable: false,
       requiresVisionPlan: filter(v => v.image === "degraded"),
       imageDegradationEligible: filter(v => v.context.fits && v.image !== "native"),
+      ...estimated,
     };
   }
   if (verdicts.some(v => v.context.fits)) {
-    return { ...OPEN_GATE, eligible: filter(v => v.context.fits), unservable: "image" };
+    return { ...OPEN_GATE, ...estimated, eligible: filter(v => v.context.fits), unservable: "image" };
   }
   const largest = Math.max(...verdicts.map(v => v.context.window ?? 0));
-  return { ...OPEN_GATE, eligible: filter(v => (v.context.window ?? 0) === largest), unservable: "context" };
+  return { ...OPEN_GATE, ...estimated, eligible: filter(v => (v.context.window ?? 0) === largest), unservable: "context" };
 }
 
 /**

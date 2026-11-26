@@ -1200,4 +1200,90 @@ describe("JEV configurable decision provider", () => {
       post: recordingPost(calls, () => new Response("down", { status: 500 })),
     })).toMatchObject({ ok: false, error: "TypeSafe JEV decision probe failed (http)" });
   });
+
+  test("includes signals.estimated_tokens only on self-hosted System One endpoints and never on canonical TypeSafe", async () => {
+    expect(buildJevState(decisionBody, [], { includeEstimatedTokens: true, estimatedInputTokens: 42_000 }))
+      .toMatchObject({ signals: { has_image: false, tool_history: false, estimated_tokens: 42_000 } });
+    for (const invalid of [undefined, 0, -1, 12.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(buildJevState(decisionBody, [], { includeEstimatedTokens: true, estimatedInputTokens: invalid }))
+        .toEqual(buildJevState(decisionBody));
+    }
+    expect(buildJevState(decisionBody, [], { includeEstimatedTokens: false, estimatedInputTokens: 42_000 }))
+      .toEqual(buildJevState(decisionBody));
+
+    const calls: Call[] = [];
+    const post = recordingPost(calls);
+    await resolveJevDecision({
+      body: decisionBody,
+      candidates,
+      fallback,
+      config: selfHosted(),
+      decisionProvider: "ollama-tev1",
+      estimatedInputTokens: 180_000,
+      post,
+    });
+    await resolveJevDecision({
+      body: decisionBody,
+      candidates,
+      fallback,
+      config: jevConfig("typesafe-row-secret"),
+      estimatedInputTokens: 180_000,
+      post,
+    });
+
+    expect(calls).toHaveLength(2);
+    const selfHostedSent = JSON.parse(String(calls[0]!.init.body)) as { state: { signals: Record<string, unknown> } };
+    expect(selfHostedSent.state.signals).toEqual({
+      has_image: false,
+      tool_history: false,
+      estimated_tokens: 180_000,
+    });
+    const typesafeSent = JSON.parse(String(calls[1]!.init.body)) as { state: { signals: Record<string, unknown> } };
+    expect(typesafeSent.state.signals).toEqual({
+      has_image: false,
+      tool_history: false,
+    });
+    expect(typesafeSent.state.signals).not.toHaveProperty("estimated_tokens");
+  });
+
+  test("omits estimated_tokens and keeps the wire payload unchanged on Vercel /decisions endpoints", async () => {
+    const calls: Call[] = [];
+    const post = recordingPost(calls);
+    const vercelConfig: OcxConfig = {
+      port: 0,
+      defaultProvider: "openai",
+      providers: {
+        "vercel-decider": {
+          adapter: "jev-decision",
+          baseUrl: "https://ai-gateway.vercel.sh/v1/systemone",
+          defaultModel: "tev1:4b",
+          apiKey: "fixture-key",
+        },
+      },
+    };
+    await resolveJevDecision({
+      body: decisionBody,
+      candidates,
+      fallback,
+      config: vercelConfig,
+      decisionProvider: "vercel-decider",
+      post,
+    });
+    await resolveJevDecision({
+      body: decisionBody,
+      candidates,
+      fallback,
+      config: vercelConfig,
+      decisionProvider: "vercel-decider",
+      estimatedInputTokens: 180_000,
+      post,
+    });
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.url).toBe("https://ai-gateway.vercel.sh/v1/decisions");
+    expect(calls[1]!.url).toBe("https://ai-gateway.vercel.sh/v1/decisions");
+    expect(calls[1]!.init.body).toBe(calls[0]!.init.body);
+    expect(String(calls[1]!.init.body)).not.toContain("estimated_tokens");
+    expect(String(calls[1]!.init.body)).not.toContain("180000");
+  });
 });

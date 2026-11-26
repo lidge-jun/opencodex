@@ -32,6 +32,7 @@ describe("TypeSafe decision request golden", () => {
         candidates,
         fallback: { targetKey: candidates[0]!.key, effort: null },
         config,
+        estimatedInputTokens: 42_000,
         ...(decisionProvider ? { decisionProvider } : {}),
         post: (async (_name: string, _provider: unknown, url: string, init: RequestInit) => {
           sent.push({ url, body: String(init.body) });
