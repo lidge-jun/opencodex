@@ -25,7 +25,7 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 
 | Chapter | Declared capabilities |
 |---|---|
-| [lifecycle](01_surface_lifecycle.md) | 14 |
+| [lifecycle](01_surface_lifecycle.md) | 16 |
 | [providers-models](01_surface_providers-models.md) | 54 |
 | [accounts](01_surface_accounts.md) | 44 |
 | [agents-routing](01_surface_agents-routing.md) | 72 |
@@ -46,6 +46,14 @@ Check the chapter's flags, the requested authority and the operating skill's con
 ## Canonical invocation index
 
 Original invocation order. These headings preserve links to the previous single-file reference.
+
+### `ocx skills list`
+
+[Read-oriented task](01_surface_lifecycle.md#ocx-skills-list)
+
+### `ocx skills get`
+
+[Read-oriented task](01_surface_lifecycle.md#ocx-skills-get)
 
 ### `ocx codex-provider`
 
@@ -1673,6 +1681,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 406
+- declared capabilities: 408
 - of those, state-changing: 254
 - head-resolved invocations: 2

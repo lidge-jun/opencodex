@@ -45,6 +45,7 @@ export function renderRootHelp(): string {
   lines.push("", "More help:",
     "  ocx help <command>       Command usage and declared topics",
     "  ocx help --all           Complete command reference",
-    "  ocx capabilities --json  Declared capabilities for scripts");
+    "  ocx capabilities --json  Declared capabilities for scripts",
+    "  ocx skills get ocx       Bundled operating guide for agents");
   return lines.join("\n");
 }

@@ -8,7 +8,39 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 14.
+Declared capabilities: 16.
+
+### `ocx skills list`
+
+Usage: `ocx skills list [--json]`
+
+List the operating guides bundled with this CLI version.
+
+State-changing: no. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the CLI version and skill names as JSON. |
+
+### `ocx skills get`
+
+Usage: `ocx skills get ocx [--references | --reference <name>] [--json]`
+
+Read a bundled guide or one reference without contacting the proxy.
+
+State-changing: no. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--references` | boolean | List available reference files instead of printing the guide. |
+| `--reference` | string | Print one reference by filename or short name. |
+| `--json` | boolean | Emit the selected Markdown or reference list as JSON. |
+
+- Reads version-matched content. Does not install a skill in the agent harness.
 
 ### `ocx codex-provider`
 

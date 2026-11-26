@@ -149,7 +149,7 @@ ocx help models
 ocx help models preset show
 ```
 
-Lee el capítulo correspondiente en `skills/ocx/references/01_management_surface.md` o en las páginas públicas de familias de comandos anteriores. `ocx help --all` permite acceder a la referencia completa. El inventario amplio para lectura por máquinas es opcional:
+Usa `ocx skills get ocx` para leer la guía incluida con tu versión de la CLI, sin iniciar el proxy. `ocx skills get ocx --references` enumera las referencias y `ocx skills get ocx --reference 03_recipes` muestra una de ellas. Estos comandos no instalan la habilidad en el agente. `ocx help --all` permite acceder a la referencia completa. El inventario amplio para lectura por máquinas es opcional:
 
 ```bash
 ocx capabilities --json

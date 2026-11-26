@@ -4,7 +4,7 @@ import { isOrchestratedUpdateArgv } from "../update/orchestrated-arguments.mjs";
 export function skipsCodexShimAutoRestore(command: string | undefined, args: string[]): boolean {
   if (command === "uninstall" || command === "remove") return true;
   // Contract discovery and orchestrated update must validate before any repair.
-  if (command === "capabilities") return true;
+  if (command === "capabilities" || command === "skills") return true;
   // Reading the bounded link diagnostics file must not repair, harden or create anything first.
   if (command === "link" && args[1] === "diagnostics") return true;
   if (command === "update" && isOrchestratedUpdateArgv(args)) return true;

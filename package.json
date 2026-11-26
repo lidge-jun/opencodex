@@ -18,6 +18,7 @@
   "files": [
     "bin",
     "src",
+    "skills/ocx",
     "gui/dist",
     "assets/banner.png",
     "assets/architecture.png",

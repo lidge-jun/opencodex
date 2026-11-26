@@ -11,6 +11,12 @@ export interface CliCommandEntry {
 
 export const CLI_COMMANDS: CliCommandEntry[] = [
   {
+    name: "skills",
+    usage: "ocx skills <list|get> [options]",
+    summary: "Read version-matched operating guides bundled with this CLI.",
+    details: ["Try: ocx skills get ocx. Reads offline without starting the proxy or installing a harness skill."],
+  },
+  {
     name: "codex-provider",
     usage: "ocx codex-provider <status|allow <id> [--yes]|revoke <id>>",
     summary: "Explicitly allow or revoke local routing management for a custom Codex provider.",

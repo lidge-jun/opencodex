@@ -263,8 +263,18 @@ ocx help models
 ocx help models preset show
 ```
 
-Read the corresponding chapter in the repository's `skills/ocx/references/01_management_surface.md`
-or one of the public command-family pages above. Full `ocx help --all` is an
+Read the official operating skill directly from the installed CLI, without a checkout or running proxy:
+
+```bash
+ocx skills list
+ocx skills get ocx
+ocx skills get ocx --references
+ocx skills get ocx --reference 03_recipes
+```
+
+Add `--json` for structured output. These commands read the guide and references bundled with the
+CLI version that handles the command (including Desktop when it owns the terminal command).
+They do not register a skill in an agent harness. Full `ocx help --all` is an
 escape to the top-level reference. A broad machine inventory is optional:
 
 ```bash
