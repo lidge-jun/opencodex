@@ -201,7 +201,9 @@ export function parseTomlDocument(content: string): TomlDocument {
       current = section;
       continue;
     }
-    const kv = line.match(/^\s*([A-Za-z0-9_.-]+)\s*=\s*("(?:\\.|[^"\\])*"|'[^']*'|[^\s#]+)\s*(?:#.*)?$/);
+    // A single-line inline table without nesting (the provider table's capabilities line) is one value;
+    // quoted keys and strings inside it, including ones holding '#', stay part of the value.
+    const kv = line.match(/^\s*([A-Za-z0-9_.-]+)\s*=\s*("(?:\\.|[^"\\])*"|'[^']*'|\{(?:[^{}#"']|"(?:\\.|[^"\\])*"|'[^']*')*\}|[^\s#]+)\s*(?:#.*)?$/);
     if (kv) current[kv[1]!] = parseTomlString(kv[2]!);
   }
 

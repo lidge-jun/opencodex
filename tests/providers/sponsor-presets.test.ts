@@ -10,6 +10,18 @@ import { pinSponsorRows, pinSponsorsWithinKind } from "../../src/providers/spons
  * dashboard and `ocx provider presets` read, and that every sponsor entry carries a landing URL.
  */
 describe("sponsor presets", () => {
+  test("RunAPI exposes its Standard sponsor key preset", () => {
+    expect(deriveProviderPresets().find(preset => preset.id === "runapi")).toMatchObject({
+      label: "RunAPI",
+      adapter: "openai-chat",
+      auth: "key",
+      baseUrl: "https://runapi.co/v1",
+      sponsor: "standard",
+      sponsorUrl: "https://runapi.co",
+    });
+    expect(PROVIDER_REGISTRY.find(entry => entry.id === "runapi")?.defaultModel).toBeUndefined();
+  });
+
   test("registry sponsor entries surface tier and URL on the derived preset", () => {
     const sponsors = PROVIDER_REGISTRY.filter(entry => entry.sponsor);
     const presets = deriveProviderPresets();

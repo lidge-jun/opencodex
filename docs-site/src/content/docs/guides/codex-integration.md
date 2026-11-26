@@ -162,6 +162,19 @@ is a `POST` to the canonical Responses URL or a configured WebSocket route, and 
 falls back to it when the request cannot be prepared, the `response.create` frame exceeds its size
 limit, or the proxy route cannot carry the socket.
 
+The size limit also follows the ChatGPT backend's own advertisement. When the socket's handshake
+carries `x-codex-websocket-max-message-bytes`, a frame larger than that value is not sent on that
+socket. An opening `response.create` falls back to SSE before anything is uploaded, as Codex itself
+does. If an incremental delta was already sent and the backend asks for the full frame, a full frame
+above the limit also takes the SSE path. A turn that needs native steering or injection cannot use
+SSE: an oversized opening frame fails visibly, and an oversized steering or injection frame is
+refused so that the client can send a corrected one. Without an advertisement, the fixed ceiling
+just below 16 MiB applies, and that pre-dial check falls back to SSE. On this route the proxy also
+forwards Codex's `x-codex-exclude` and `x-codex-exclude-stream-fields` request headers unchanged,
+so the backend can leave out the fields Codex names in them. By default these are the echoed tool
+catalog, per-item usage attribution, delta sequence numbers and preliminary reasoning ciphertext.
+Other destinations never receive these headers.
+
 To keep the built-in ChatGPT provider on HTTP/SSE, set `providers.openai.upstreamWebsocket`
 to `false` in `~/.opencodex/config.json` and restart the proxy. Merge this field into the
 existing `openai` provider; preserve its account mode and other settings. Omit the field
@@ -422,7 +435,16 @@ wire_api = "responses"
 requires_openai_auth = true
 env_key = "OPENCODEX_API_AUTH_TOKEN"
 # supports_websockets = true   # only when config.websockets is true
+capabilities = { cyber_access_programs = true }
 ```
+
+The `capabilities` line lets Codex forward a Cyber access-program selection through this table. Codex
+turns that capability off by default for every provider id except its built-in `openai`, and the
+loopback form already uses that id. Codex releases that predate the field ignore it. A table written by an
+earlier OpenCodex release, without the line, is still recognized by `ocx restore` and uninstall. The
+`ocx codex` launcher trusts only the current shape: after upgrading, if `ocx codex` stops supplying
+credentials, run `ocx sync` once to rewrite the table. This needs the Codex integration on; while it is off,
+OpenCodex leaves your Codex config as it is, and neither `ocx sync` nor a restart rewrites the table.
 
 When OpenCodex owns routing, both modes write `$CODEX_HOME/opencodex.config.toml` as a
 reference/fallback config. On loopback it contains the root keys you can merge manually if automatic
@@ -597,6 +619,7 @@ name = "OpenCodex Proxy"
 base_url = "http://127.0.0.1:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
+capabilities = { cyber_access_programs = true }
 ```
 
 Codex then owns compaction and stores a portable plaintext summary rather than a new OpenCodeX
@@ -717,6 +740,7 @@ name = "OpenCodex Proxy"
 base_url = "http://127.0.0.1:10100/v1"
 wire_api = "responses"
 requires_openai_auth = false
+capabilities = { cyber_access_programs = true }
 ```
 
 Desktop then starts without a login and routes every turn through the proxy. The setting survives

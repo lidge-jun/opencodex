@@ -155,6 +155,10 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
 <td><a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a>의 후원에 감사합니다. TokenLab은 코딩 에이전트에게 주요 모델용 API 키 하나를 제공하며, OpenAI Responses와 Chat Completions, Anthropic Messages, Gemini 네이티브 API 형식을 스트리밍과 도구 호출까지 지원합니다. MCP 서버와 에이전트 Skills도 제공해 쉽게 연동할 수 있습니다. 전달 모드를 고르고 쓴 만큼 결제하세요. Add provider 선택기에서 <code>TokenLab</code>을 고르거나 <code>ocx provider add tokenlab</code>을 실행하세요.<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
 </tr>
+<tr>
+<td width="180"><a href="https://runapi.co"><img src="../assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
+<td>이 프로젝트를 후원해 주시는 <a href="https://runapi.co">RunAPI</a>에 감사합니다. RunAPI는 통합 AI API 게이트웨이로, API 키 하나로 OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot 등 200개 이상 모델의 카탈로그를 쓸 수 있으며, OpenAI Chat Completions와 Responses, Anthropic Messages, Gemini 네이티브 API 형식으로 제공됩니다(쓸 수 있는 형식은 모델마다 다릅니다). 스마트 라우팅이 요청마다 빠르고 안정적인 공급자 노드를 고르고 장애가 나면 자동으로 전환하며, 요금은 쓴 만큼 내는 방식으로 대개 표준 요금보다 훨씬 저렴합니다. Add provider 선택기에서 <code>RunAPI</code>를 고르거나 <code>ocx provider add runapi</code>를 실행하세요.</td>
+</tr>
 </tbody>
 </table>
 
