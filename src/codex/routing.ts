@@ -103,6 +103,7 @@ import {
   applyFailureFailover,
   applyQuotaAutoSwitch,
   codexAccountBlockReason,
+  codexPoolAccountNeedsCredits,
   getEligiblePoolAccounts,
   getPoolAccountPlanForSelection,
   hasCodexQuotaHeadroom,
@@ -352,6 +353,7 @@ function transientDetourAccount(
     && !hasUnrecoveredCodexQuotaRefusal(held, quotaScope)
     && !shouldFailover(config, held, now)
     && !isCodexAccountSoftAvoided(held, now)
+    && !pickIncludedUsageReplacement(config, held, now, quotaScope, selectionOptions)
   ) {
     return held;
   }
@@ -402,6 +404,7 @@ function lineageServingAccountId(
       && !hasUnrecoveredCodexQuotaRefusal(serving, quotaScope)
       && !shouldFailover(config, serving, now)
       && !isCodexAccountSoftAvoided(serving, now)
+      && !pickIncludedUsageReplacement(config, serving, now, quotaScope, selectionOptions)
     ? serving
     : null;
 }
@@ -540,6 +543,25 @@ function pickAffinityPriorityFailback(
   return pickLowestUsageAmong(config, candidates, selectionOptions, now);
 }
 
+/** Billing preference outranks cache affinity, but not an explicit selection or file ownership. */
+function pickIncludedUsageReplacement(
+  config: OcxConfig,
+  accountId: string,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): string | null {
+  if (!codexPoolAccountNeedsCredits(config, accountId, now, selectionOptions)
+    || selectionOptions?.retainAccountForUploadedFiles
+    || selectionOptions?.explicitAccountSelector
+    || (pinnedCodexAccountId(config) === accountId
+      && hasCodexQuotaHeadroom(config, accountId, selectionOptions, now))) return null;
+  const candidates = getEligiblePoolAccounts(config, accountId, now, quotaScope, selectionOptions, true, true)
+    .filter(id => !selectionOptions?.deniedModelAccountIds?.has(id)
+      && !hasUnrecoveredCodexQuotaRefusal(id, quotaScope));
+  return pickLowestUsageAmong(config, candidates, selectionOptions, now);
+}
+
 function previewReusableAffinityAccount(
   entry: ThreadAffinityEntry | undefined,
   config: OcxConfig,
@@ -573,6 +595,8 @@ function previewReusableAffinityAccount(
     }
     return null;
   }
+  const included = pickIncludedUsageReplacement(config, entry.accountId, now, quotaScope, selectionOptions);
+  if (included) return included;
   if (accountPoolStrategyForScope(config, quotaScope) === "reset-first") {
     return resetFirstAffinityReplacement(entry, config, now, quotaScope, selectionOptions) ?? entry.accountId;
   }
@@ -618,7 +642,8 @@ function resetFirstAffinityReplacement(
   if (threshold <= 0) return null;
   const usage = computeCodexUsageScore(getAccountQuota(entry.accountId), getPoolAccountPlanForSelection(config, entry.accountId, selectionOptions), now, codexAccountUsesCreditsAfterLimit(config, entry.accountId));
   if (!mayRebindAffinityForQuota(config, entry.accountId, usage, threshold, selectionOptions)) return null;
-  const candidates = getEligiblePoolAccounts(config, entry.accountId, now, quotaScope, selectionOptions, true)
+  const candidates = getEligiblePoolAccounts(config, entry.accountId, now, quotaScope, selectionOptions, true,
+    !codexPoolAccountNeedsCredits(config, entry.accountId, now, selectionOptions))
     // Headroom alone answers true for an UNMEASURED account, which is the right default for an
     // unbound request and the wrong bet for a bound one. The quota strategy already excludes
     // those through the strictly-cooler compare; reset ordering has no such compare, so it has
@@ -672,6 +697,7 @@ function pickCacheSafeQuotaReplacement(
     quotaScope,
     selectionOptions,
     true,
+    !codexPoolAccountNeedsCredits(config, boundAccountId, now, selectionOptions),
   ).filter(id => hasCodexQuotaHeadroom(config, id, selectionOptions, now));
   const best = pickLowestUsageAmong(config, candidates, selectionOptions, now);
   if (best === null || best === boundAccountId) return null;
@@ -694,6 +720,8 @@ function reevaluateAffinityQuota(
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | null {
+  const included = pickIncludedUsageReplacement(config, entry.accountId, now, quotaScope, selectionOptions);
+  if (included) return included;
   const strategy = accountPoolStrategyForScope(config, quotaScope);
   if (strategy === "reset-first") {
     const replacement = resetFirstAffinityReplacement(entry, config, now, quotaScope, selectionOptions);
@@ -1045,6 +1073,7 @@ export function resolveCodexAccountForThreadDetailed(
         && !hasUnrecoveredCodexQuotaRefusal(expiredDetour, quotaScope)
         && !shouldFailover(config, expiredDetour, now)
         && !isCodexAccountSoftAvoided(expiredDetour, now)
+        && !pickIncludedUsageReplacement(config, expiredDetour, now, quotaScope, selectionOptions)
       ) {
         if (!isIndependentCodexQuotaScope(quotaScope) && sharesActiveSelection(expiredDetour, selectionOptions)) {
           promoteActiveCodexAccount(config, expiredDetour);

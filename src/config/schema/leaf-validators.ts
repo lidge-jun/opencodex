@@ -1123,6 +1123,7 @@ export const clientConnectionSchema = z.object({
 export const codexAuthMethodSchema = z.enum(["auto", "device-only"]).optional();
 
 export const codexPoolSchema = z.object({
+  creditsLast: z.boolean().optional(),
   excludedPlans: z.array(z.string().trim().min(1)).optional(),
   startIdleWindows: z.boolean().optional(),
   requestOwnedAffinity: z.boolean().optional(),

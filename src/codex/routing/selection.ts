@@ -1,5 +1,5 @@
 import { getEffectiveCodexAutoSwitchThreshold } from "../account-auto-switch";
-import { codexAccountUsesCreditsAfterLimit, isCodexAccountHeldForCredits } from "../account-credit-use";
+import { codexAccountUsesCreditsAfterLimit, isCodexAccountHeldForCredits, isCodexUsageLimitReached } from "../account-credit-use";
 import { isCodexAccountPaused } from "../account-pause";
 import { pinnedCodexAccountId } from "../account-priority";
 import { codexSelectionPriorityLookup } from "../account-preservation";
@@ -207,6 +207,18 @@ export function withoutModelDeniedAccounts(
   return remaining.length > 0 ? remaining : ids;
 }
 
+/** In an already eligible list, a confirmed full window means serving requires credits. */
+export function codexPoolAccountNeedsCredits(
+  config: OcxConfig,
+  accountId: string,
+  now: number,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): boolean {
+  return config.codexPool?.creditsLast === true && isCodexUsageLimitReached(
+    getAccountQuota(accountId), getPoolAccountPlanForSelection(config, accountId, selectionOptions), now,
+  );
+}
+
 export function getEligiblePoolAccounts(
   config: OcxConfig,
   excludeId?: string,
@@ -214,6 +226,7 @@ export function getEligiblePoolAccounts(
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
   skipFailoverReadyCandidates = false,
+  includedOnly = false,
 ): readonly string[] {
   const excludedPlans = excludedCodexPoolPlanKeys(config);
   const ids = (config.codexAccounts ?? [])
@@ -260,8 +273,14 @@ export function getEligiblePoolAccounts(
   // question and an account that cannot serve the model at all should not be the reason a tier
   // is selected. Both steps narrow an already-eligible list and neither can empty it.
   const pinned = pinnedCodexAccountId(config);
+  let candidates = withoutModelDeniedAccounts(ids, selectionOptions?.deniedModelAccountIds, pinned);
+  if (config.codexPool?.creditsLast === true && (includedOnly || pinned === undefined
+    || !candidates.includes(pinned) || !hasCodexQuotaHeadroom(config, pinned, selectionOptions, now))) {
+    const included = candidates.filter(id => !codexPoolAccountNeedsCredits(config, id, now, selectionOptions));
+    if (includedOnly || included.length > 0) candidates = included;
+  }
   return selectPriorityTier(
-    withoutModelDeniedAccounts(ids, selectionOptions?.deniedModelAccountIds, pinned),
+    candidates,
     codexSelectionPriorityLookup(config),
     id => hasCodexQuotaHeadroom(config, id, selectionOptions, now),
     pinned,
@@ -658,6 +677,7 @@ export function pickLowerUsageAccount(
     quotaScope,
     selectionOptions,
     skipFailoverReadyCandidates,
+    !codexPoolAccountNeedsCredits(config, active, now, selectionOptions),
   )) {
     const usage = computeCodexUsageScore(
       getAccountQuota(id),
@@ -841,6 +861,10 @@ export function pickPriorityPreemption(
     && eligible.includes(pinned)
     && hasCodexQuotaHeadroom(config, pinned, selectionOptions, now)
   ) return null;
+  const activeNeedsCredits = codexPoolAccountNeedsCredits(config, active, now, selectionOptions);
+  const tierNeedsCredits = codexPoolAccountNeedsCredits(config, eligible[0]!, now, selectionOptions);
+  if (activeNeedsCredits && !tierNeedsCredits) return pickLowestUsageAmong(config, eligible, selectionOptions, now);
+  if (!activeNeedsCredits && tierNeedsCredits) return null;
   const priorityOf = codexSelectionPriorityLookup(config);
   if (priorityOf(eligible[0]!) <= priorityOf(active)) return null;
   // Members without headroom are in the tier only because a sibling has some;
