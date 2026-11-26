@@ -126,6 +126,27 @@ describe("readBoundedRegularFileSync", () => {
       .toBe("fixture");
   });
 
+  test("the symlink-following reader closes a descriptor whose identity differs from the pre-open stat", () => {
+    const path = join(root, "settings.json");
+    writeFileSync(path, "{}");
+    // Change only the metadata returned by the first stat. The fixture and its descriptor stay real.
+    const before = fs.statSync(path, { bigint: true });
+    before.ino += 1n;
+    const stat = spyOn(fs, "statSync").mockReturnValueOnce(before);
+    const open = spyOn(fs, "openSync");
+    const close = spyOn(fs, "closeSync");
+    try {
+      expect(() => readBoundedRegularFileSync(path, 64, { followFinalSymlink: true }))
+        .toThrow("file entry changed while opening");
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(close.mock.calls).toEqual([[open.mock.results[0]!.value]]);
+    } finally {
+      close.mockRestore();
+      open.mockRestore();
+      stat.mockRestore();
+    }
+  });
+
   test.skipIf(process.platform === "win32")("rejects a FIFO without blocking", () => {
     const fifo = join(root, "input.pipe");
     const created = spawnSync("mkfifo", [fifo], { timeout: 2_000 });
