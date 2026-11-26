@@ -3,7 +3,7 @@
  * config schema acceptance of `videoApi`, the persisted handle key, the real outbound policy against
  * a local fake upstream, and one usage.jsonl row per call. No paid API, no real credential.
  */
-import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +11,8 @@ import { getDefaultConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { VIDEO_HANDLE_KEY_FILE } from "../../src/server/video-handle";
 import { setVideoCreateBodyTimeoutForTests } from "../../src/server/videos";
-import { getActiveTurnCount } from "../../src/server/lifecycle";
+import * as lifecycle from "../../src/server/lifecycle";
+import { admitWorkflowTurn } from "../../src/lib/workflow-budget";
 import { inboundBodyBudget } from "../../src/server/inbound-body-budget";
 import { MAX_CONFIGURABLE_INBOUND_BODY_BYTES } from "../../src/server/request-decompress";
 import type { OcxProviderConfig } from "../../src/types";
@@ -59,13 +60,17 @@ afterEach(async () => {
   if (home) removeTreeWithRetry(home);
 });
 
-test("create, poll and content flow through the proxy to the row's own upstream and are each logged", async () => {
+function localVideoConfig() {
   const config = getDefaultConfig();
   config.providers.aistudio = {
     adapter: "openai-chat", baseUrl: `http://127.0.0.1:${upstream!.port}/v1`, apiKey: KEY, authMode: "key",
     allowPrivateNetwork: true, noProxy: "127.0.0.1", videoApi: "openai",
   } as OcxProviderConfig;
-  saveConfig(config);
+  return config;
+}
+
+test("create, poll and content flow through the proxy to the row's own upstream and are each logged", async () => {
+  saveConfig(localVideoConfig());
   const server = startServer(0);
   try {
     const created = await fetch(new URL("/v1/videos", server.url), {
@@ -106,12 +111,68 @@ test("create, poll and content flow through the proxy to the row's own upstream 
   }
 });
 
+test("authenticated job reads require an active turn and remain available after the creation workflow fills", async () => {
+  const config = localVideoConfig();
+  const rootId = "video-test-workflow";
+  const apiKey = "ocx_data_" + "a".repeat(40);
+  config.apiKeys = [{ id: "video-owner", name: "video", key: apiKey, createdAt: "2026-01-01T00:00:00.000Z" }];
+  config.workflowBudget = { maxConcurrentChildren: 2 };
+  saveConfig(config);
+  const headers = { authorization: "Bearer " + apiKey, "x-codex-parent-thread-id": rootId };
+  const server = startServer(0);
+  const createJob = () => fetch(new URL("/v1/videos", server.url), {
+    method: "POST", headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ model: "aistudio/m", prompt: "a heron" }),
+  });
+  try {
+    const created = await createJob();
+    expect(created.status).toBe(200);
+    const { id } = await created.json() as { id: string };
+    const pollUrl = new URL("/v1/videos/" + id, server.url);
+    const contentUrl = new URL(pollUrl.pathname + "/content", server.url);
+    const baseline = lifecycle.getActiveTurnCount();
+    const admit = lifecycle.tryAdmitTurn;
+    // Exercise a full gate with one real lease, independently of the production capacity.
+    const singleSlot = spyOn(lifecycle, "tryAdmitTurn").mockImplementation((...args) =>
+      lifecycle.getActiveTurnCount() === baseline ? admit(...args) : null);
+    const held = lifecycle.tryAdmitTurn();
+    try {
+      expect(held).not.toBeNull();
+      for (const url of [pollUrl, contentUrl]) {
+        const busy = await fetch(url, { headers });
+        expect(busy.status).toBe(503);
+        expect(busy.headers.get("retry-after")).toBe("1");
+        expect(await busy.json()).toMatchObject({ error: { code: "server_busy" } });
+      }
+      expect(seen.map(row => row.method)).toEqual(["POST"]);
+    } finally {
+      held?.release();
+      singleSlot.mockRestore();
+    }
+
+    const workflow = [admitWorkflowTurn(rootId, "interactive"), admitWorkflowTurn(rootId, "interactive")];
+    try {
+      expect(workflow.every(turn => turn?.admitted)).toBe(true);
+      const denied = await createJob();
+      expect(denied.status).toBe(429);
+      expect(await denied.json()).toMatchObject({ error: { code: "rate_limit_exceeded", message: expect.stringContaining("no free concurrency slot") } });
+      const poll = await fetch(pollUrl, { headers });
+      expect(poll.status).toBe(200);
+      expect(await poll.json()).toMatchObject({ id, status: "completed" });
+      const content = await fetch(contentUrl, { headers });
+      expect(content.status).toBe(200);
+      expect(new Uint8Array(await content.arrayBuffer())).toEqual(MP4);
+      expect(seen.map(row => row.method)).toEqual(["POST", "GET", "GET"]);
+    } finally {
+      for (const turn of workflow) if (turn?.admitted) turn.lease.release();
+    }
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("a trickling create upload through the real server is refused at the deadline and releases its turn and body slots", async () => {
-  const config = getDefaultConfig();
-  config.providers.aistudio = {
-    adapter: "openai-chat", baseUrl: `http://127.0.0.1:${upstream!.port}/v1`, apiKey: KEY, authMode: "key",
-    allowPrivateNetwork: true, noProxy: "127.0.0.1", videoApi: "openai",
-  } as OcxProviderConfig;
+  const config = localVideoConfig();
   // A raised body limit puts the create under the shared inbound body budget, so a reservation is taken.
   config.maxInboundBodyBytes = MAX_CONFIGURABLE_INBOUND_BODY_BYTES;
   saveConfig(config);
@@ -119,7 +180,7 @@ test("a trickling create upload through the real server is refused at the deadli
   const server = startServer(0);
   let tick: ReturnType<typeof setInterval> | undefined;
   try {
-    const baseline = getActiveTurnCount();
+    const baseline = lifecycle.getActiveTurnCount();
     const encoder = new TextEncoder();
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -134,7 +195,7 @@ test("a trickling create upload through the real server is refused at the deadli
     // While the upload trickles, the create holds one turn slot and one body reservation.
     let held = false;
     for (let i = 0; i < 100 && !held; i++) {
-      held = getActiveTurnCount() === baseline + 1 && inboundBodyBudget.snapshot().activeLeases === 1;
+      held = lifecycle.getActiveTurnCount() === baseline + 1 && inboundBodyBudget.snapshot().activeLeases === 1;
       if (!held) await Bun.sleep(10);
     }
     expect(held).toBe(true);
@@ -144,8 +205,8 @@ test("a trickling create upload through the real server is refused at the deadli
     await response.text();
     clearInterval(tick);
     // Settlement is asynchronous after the response; wait for the slots to come back, bounded.
-    for (let i = 0; i < 100 && (getActiveTurnCount() !== baseline || inboundBodyBudget.snapshot().activeLeases !== 0); i++) await Bun.sleep(10);
-    expect(getActiveTurnCount()).toBe(baseline);
+    for (let i = 0; i < 100 && (lifecycle.getActiveTurnCount() !== baseline || inboundBodyBudget.snapshot().activeLeases !== 0); i++) await Bun.sleep(10);
+    expect(lifecycle.getActiveTurnCount()).toBe(baseline);
     expect(inboundBodyBudget.snapshot()).toMatchObject({ activeLeases: 0, reservedBytes: 0 });
     expect(seen).toEqual([]);
   } finally {
