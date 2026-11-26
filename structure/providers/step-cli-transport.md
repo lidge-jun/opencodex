@@ -34,6 +34,8 @@ Changing the catalog while returning a held result closes the session. Abandonin
 detaches its owner, interrupts it and confirms its input end before registering a replacement turn.
 An empty user follow-up returns `step_cli_no_user_text` and preserves the hold for a matching result.
 Restored Responses history supplies neither replacement text nor an answer to a held call.
+The parser supplies the length of restored history in parsed messages so a fresh tool result
+can resume the call even when no user message follows it.
 After acquiring the conversation lock, a cancelled turn leaves held state untouched. Cancellation
 also stops new query starts, busy retries and input that has yet to be sent.
 

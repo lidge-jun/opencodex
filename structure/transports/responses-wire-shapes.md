@@ -529,6 +529,10 @@ request-log accounting without promoting a truncated repair candidate. Terminal 
 
 ## Inbound history and code-mode shell wire repairs
 
+For an expanded continuation, `src/responses/parser.ts` records where the new wire input starts
+in the parsed message list. This includes leading tool results. The insertion point for developer
+guidance remains after those results, before the next conversational message.
+
 OpenGateway result-array and image-detail projection follows the [OpenGateway transport contract](../providers/opengateway.md).
 Inbound function-call history with a missing JSON object prefix is repaired for every provider when restoring it produces an object. A terminal MiMo `</function></tool_call>` suffix is removed only when the remaining text parses as an object unchanged or after restoring a closing brace or quote and brace. Valid JSON containing these tags stays opaque; unrelated malformed arguments replay as `{}` without logging their content (`src/responses/parser.ts`). Regression coverage lives in `tests/responses/responses-mimo-envelope.test.ts`.
 Function-wrapper restoration supports `default.`-prefixed `exec` and `apply_patch` aliases while retaining the existing ambiguity and foreign-grammar boundaries.

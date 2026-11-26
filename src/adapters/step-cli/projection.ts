@@ -94,7 +94,8 @@ export function latestToolResult(
   const start = currentTurnStart(parsed);
   for (let index = parsed.context.messages.length - 1; index >= start; index -= 1) {
     const message = parsed.context.messages[index];
-    if (!message || message.role !== "toolResult") continue;
+    if (!message || message.role === "developer") continue;
+    if (message.role !== "toolResult") return undefined;
     return {
       content: projectToolResultContent(message.content),
       toolCallId: message.toolCallId,
@@ -192,10 +193,8 @@ export function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function currentTurnStart(parsed: OcxParsedRequest): number {
-  // The replay prefix counts wire items. The parser records the corresponding message boundary
-  // only when the continuation has a new conversational item.
-  return parsed._continuationConversationMessageIndex
-    ?? ((parsed._replayPrefixLen ?? 0) > 0 ? parsed.context.messages.length : 0);
+  if (!parsed._replayPrefixLen) return 0;
+  return parsed._replayedContextMessageCount ?? parsed.context.messages.length;
 }
 
 /**

@@ -29,6 +29,8 @@ import {
   runOptionalShutdownHooks,
 } from "../../src/lib/optional-shutdown-hooks";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
+import { parseRequest } from "../../src/responses/parser";
+import { expandPreviousResponseInput, rememberResponseState } from "../../src/responses/state";
 
 /**
  * A fake StepCode process.
@@ -233,7 +235,7 @@ test("fresh text after restored history can start a session even when developer 
     { role: "developer", content: "Answer briefly" },
   ]);
   // Three wire items produced one historical message.
-  expect(pendingUserText({ ...turn, _replayPrefixLen: 3, _continuationConversationMessageIndex: 1 })).toBe("Next question");
+  expect(pendingUserText({ ...turn, _replayPrefixLen: 3, _replayedContextMessageCount: 1 })).toBe("Next question");
 });
 
 describe("StepCode reverse requests are always answered", () => {
@@ -304,7 +306,7 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     expect(session.delivered).toHaveLength(0);
   });
 
-  test("blank and replay-only follow-ups preserve a held call for a fresh matching result", async () => {
+  test.each(["function_call_output", "custom_tool_call_output"])("blank and replay-only follow-ups preserve a held call for fresh %s", async outputType => {
     const session = new FakeSession();
     const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
     session.stream = [
@@ -325,7 +327,7 @@ describe("StepCode runTurn, two turns through one conversation", () => {
       ...blank.map(content => parsed([...USER_ASK, { role: "user", content }])),
       { ...parsed(USER_ASK), ...continuation },
       { ...parsed([...USER_ASK, heldResult]), ...continuation },
-      { ...parsed([...USER_ASK, { ...heldResult, toolCallId: "other" }]), ...continuation, _continuationConversationMessageIndex: 1 },
+      { ...parsed([...USER_ASK, { ...heldResult, toolCallId: "other" }]), ...continuation, _replayedContextMessageCount: 1 },
     ];
     for (const turn of unusable) {
       const events: AdapterEvent[] = [];
@@ -338,9 +340,30 @@ describe("StepCode runTurn, two turns through one conversation", () => {
       expect(session.delivered).toHaveLength(0);
     }
     const result: AdapterEvent[] = [];
-    await adapter.runTurn!({
-      ...parsed([...USER_ASK, heldResult]), ...continuation, _continuationConversationMessageIndex: 1,
-    }, THREAD_META, e => result.push(e));
+    const model = "step-5-preview";
+    const prior = `resp_${crypto.randomUUID()}`;
+    rememberResponseState(
+      { model, input: [{ role: "user", content: "run it" }] },
+      { id: prior, status: "completed", output: [{ type: "function_call", name: "shell", call_id: "call-9", arguments: "{}" }] },
+    );
+    const continuationBody = {
+      model, previous_response_id: prior,
+      tools: [{ type: "function", name: "shell", description: "run", parameters: { type: "object" } }],
+    };
+    const restored = parseRequest(expandPreviousResponseInput({ ...continuationBody, input: [] }));
+    expect(restored._replayPrefixLen).toBeGreaterThan(0);
+    restored._reasoningReplayScope = parsed(USER_ASK)._reasoningReplayScope;
+    const declined: AdapterEvent[] = [];
+    await adapter.runTurn!(restored, THREAD_META, e => declined.push(e));
+    expect(declined).toMatchObject([{ type: "error", code: "step_cli_no_user_text" }]);
+    const fresh = parseRequest(expandPreviousResponseInput({
+      ...continuationBody, input: [{ type: outputType, call_id: "call-9", output: "done" }],
+    }));
+    expect(fresh._replayPrefixLen).toBeGreaterThan(0);
+    expect(fresh.context.messages.slice(fresh._replayedContextMessageCount).map(m => m.role)).toEqual(["toolResult"]);
+    expect(fresh._continuationConversationMessageIndex).toBe(fresh.context.messages.length);
+    fresh._reasoningReplayScope = parsed(USER_ASK)._reasoningReplayScope;
+    await adapter.runTurn!(fresh, THREAD_META, e => result.push(e));
     expect(result.find(e => e.type === "done")).toMatchObject({ stopReason: "stop" });
     expect(session.delivered).toHaveLength(1);
     expect(session.queries).toHaveLength(1);
@@ -390,7 +413,7 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     expect(second.find(event => event.type === "done")).toMatchObject({ stopReason: "stop" });
   });
 
-  test("turn 2 that does NOT answer the held call refuses it and keeps the user's message", async () => {
+  test.each(["call-SOMEONE-ELSE", "call-9"])("new user text after result %s replaces the held call", async staleCall => {
     // Regression: the code set `continuedQuery = true` whenever a held call existed, so a client that
     // sent a new user message instead of the result had that message swallowed and its request
     // answered with `step_cli_turn_abandoned`.
@@ -415,7 +438,7 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     await adapter.runTurn!(
       parsed([
         ...USER_ASK,
-        { role: "toolResult", toolCallId: "call-SOMEONE-ELSE", toolName: "shell", content: "stale", isError: false, timestamp: 1 },
+        { role: "toolResult", toolCallId: staleCall, toolName: "shell", content: "stale", isError: false, timestamp: 1 },
         { role: "user", content: "actually do this instead", timestamp: 2 },
       ]),
       THREAD_META,
