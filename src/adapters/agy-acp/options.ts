@@ -96,8 +96,8 @@ export function matchValue(values: readonly AcpSelectValue[], wanted: readonly s
   return { ok: false, reason: loose.length > 1 ? "ambiguous" : "none" };
 }
 
-const GEMINI_MODEL = /^gemini[-\s.]/i;
-const NON_GEMINI_MODEL = /^(?:claude|gpt|o[134]|grok|deepseek|qwen|llama|gemma|mistral|mixtral)(?:[-\s./]|$)/i;
+const GEMINI_MODEL = /^(?:gemini|claude)[-\s.]/i;
+const NON_GEMINI_MODEL = /^(?:gpt|o[134]|grok|deepseek|qwen|llama|gemma|mistral|mixtral)(?:[-\s./]|$)/i;
 
 /** Either field can establish the family, unless the other explicitly contradicts it. */
 export function isGeminiValue(value: AcpSelectValue): boolean {

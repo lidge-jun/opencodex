@@ -216,12 +216,13 @@ describe("agy acp turn", () => {
   });
 
   test.each([
-    ["gemini-3.8-flash", "Claude Opus 5.5", false],
-    ["claude-opus-5-5", "Gemini 3.8 Flash", false],
-    ["gemini-3.8-flash", "Recommended", true],
-    ["opaque", "Gemini 3.8 Flash", true],
-  ] as const)("requires consistent Gemini evidence for %s / %s", async (value, name, allowed) => {
-    const h = await run(script(undefined, { initial: [modelOption(value, [], { options: [{ value, name }] })] }));
+    ["gemini-3.8-flash", "GPT-5", "gemini-3.8-flash", false],
+    ["gpt-5", "Gemini 3.8 Flash", "gemini-3.8-flash", false],
+    ["claude-opus-5-5", "Claude Opus 5.5", "claude-opus-5-5", true],
+    ["gemini-3.8-flash", "Recommended", "gemini-3.8-flash", true],
+    ["opaque", "Gemini 3.8 Flash", "gemini-3.8-flash", true],
+  ] as const)("requires consistent Gemini/Claude evidence for %s / %s", async (value, name, modelId, allowed) => {
+    const h = await run(script(undefined, { initial: [modelOption(value, [], { options: [{ value, name }] })] }), { parsed: parsed({ modelId }) });
     expect(methods(h).includes("session/prompt")).toBe(allowed);
     expect(terminal(h)).toEqual(allowed ? [{ type: "done" }] : [expect.objectContaining({ code: "agy_acp_model_not_offered" })]);
   });
@@ -962,10 +963,16 @@ describe("agy acp turn", () => {
     expect(terminal(h)).toEqual([{ type: "done" }]);
   });
 
-  test("Gemini only: a non-Gemini request never spawns and an unoffered model returns a fixed error", async () => {
-    const claude = await run(script(), { parsed: parsed({ modelId: "claude-opus-5-5" }) });
-    expect(claude.spawned).toBe(0);
-    expect(errorCode(claude)).toBe("agy_acp_model_not_gemini");
+  test("Gemini and Claude only: an unsupported model request never spawns, Claude succeeds, and an unoffered model returns a fixed error", async () => {
+    const gpt = await run(script(), { parsed: parsed({ modelId: "gpt-5" }) });
+    expect(gpt.spawned).toBe(0);
+    expect(errorCode(gpt)).toBe("agy_acp_model_not_gemini");
+    const claude = await run(
+      script(undefined, { initial: [modelOption("gemini-3.8-flash", OFFERED)] }),
+      { parsed: parsed({ modelId: "claude-opus-5-5" }) },
+    );
+    expect(claude.sent[2]!.params).toEqual({ sessionId: "s1", configId: "model", value: "claude-opus-5-5" });
+    expect(terminal(claude)).toEqual([{ type: "done" }]);
     const missing = await run(script(), { parsed: parsed({ modelId: "gemini-9-ultra" }) });
     const error = terminal(missing)[0] as { status: number; code: string; message: string };
     expect(error).toMatchObject({ status: 400, code: "agy_acp_model_not_offered" });
