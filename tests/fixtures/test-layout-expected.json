@@ -182,6 +182,7 @@
     "combo-stream-prelude-guards.test.ts": "routing",
     "combo-cooldown-persistence.test.ts": "routing",
     "combo-unoffered-tool-refusal.test.ts": "routing",
+    "combo-undeclared-tool-guard-refusal.test.ts": "routing",
   "anthropic-revoked-token.test.ts": "adapters/anthropic",
   "messages-revoked-token.test.ts": "claude-integration",
   "anthropic-revoked-token-continuation.test.ts": "adapters/anthropic",

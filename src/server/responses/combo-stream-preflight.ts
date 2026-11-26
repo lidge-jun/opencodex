@@ -22,8 +22,13 @@ import { responsesFrameIsReplayUnsafe } from "./codex-ws-wire";
 import { createSseInspector, isNativePassthroughSseResponse } from "../relay";
 import { sseDataPayload } from "../sse-payload-rewrite";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
-import { COMBO_DEGENERATE_COMPLETION_CODE, REQUIRED_TOOL_CONTRACT_CODE, responsesCompletionError } from "../../lib/errors";
+import { COMBO_DEGENERATE_COMPLETION_CODE, REQUIRED_TOOL_CONTRACT_CODE, responsesCompletionError, markUndeclaredToolCallRefusalResponse, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../lib/errors";
 import { attachComboFailureEvidence, isPausedTurn } from "../../lib/client-error-body";
+import {
+  undeclaredToolCallMessage,
+  undeclaredToolCallName,
+  type ProviderExecutedCallType,
+} from "../responses-undeclared-tool-guard";
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
 import { ProtocolPreOutputEof } from "../../lib/upstream-retry";
 import { carryPacedStream, pacedQueuingStrategy } from "../../lib/paced-stream";
@@ -456,7 +461,12 @@ function heldOnlyOutput(...outputs: unknown[]): boolean {
   });
 }
 
-function retryableZeroOutputTerminal(payload: unknown, context?: object): boolean {
+/**
+ * Whether a terminal payload reads as a zero-output failure a combo may replay on its next
+ * target. Exported for the refusal-classification tests; production callers reach it only
+ * through {@link preflightComboStreamResponse}.
+ */
+export function retryableZeroOutputTerminal(payload: unknown, context?: object): boolean {
   const event = recordValue(payload);
   if (!event) return false;
   if (bareErrorIsRetryable(event)) return true;
@@ -479,6 +489,16 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
         && (emptyOutput || heldOnlyOutput(target.output, event.output));
     }
     if (!emptyOutput) return false;
+    // The undeclared-tool guard synthesizes this terminal over an item it suppressed before the
+    // client saw it (#9163): the preflight reads the post-rewrite stream, so the offending call
+    // never appears here and nothing the caller can execute remains. Any text the client genuinely
+    // received already committed the child above, so an empty output is the uncommitted refusal.
+    if (code === UNDECLARED_TOOL_CALL_ERROR_CODE) {
+      // Unlike the required-tool sibling, the undeclared guard's own terminal repeats the
+      // refusal in `last_error`; that duplication is its shape, not disqualifying evidence.
+      return error?.retryable !== false && !incompleteCarriersVetoReplay(event, response)
+        && classifyIncompleteReplayReason(event, response) !== "veto";
+    }
     if (typeof code === "string" && NON_REPLAYABLE_FAILED_CODES.has(code)) return false;
     // A failed terminal that states 413 is judged on the whole frame, as a bare error is: a
     // terminal code or marker beside the record (a root code, metadata) keeps it on this target,
@@ -716,6 +736,19 @@ export async function preflightComboStreamResponse(
     replayCleanEof?: boolean;
     requiredToolPrelude?: boolean;
     degeneratePrelude?: boolean;
+    /**
+     * The child request's declared wire tool catalog, read from the same body the caller's
+     * undeclared-tool guard authorizes (#9163). Present only when that guard stands armed
+     * for this child; with it, an output frame naming an undeclared tool is read as the
+     * refusal the guard will synthesize instead of as committed client output.
+     */
+    declaredWireTools?: {
+      declared: ReadonlySet<string>;
+      declaredNamelessClientCallTypes: ReadonlySet<string>;
+      providerExecutedCallTypes: ReadonlySet<ProviderExecutedCallType>;
+      declaredBare?: ReadonlySet<string>;
+      declaredCustom?: ReadonlySet<string>;
+    };
     signal?: AbortSignal;
     onUpstreamActivity?: () => void;
   },
@@ -742,6 +775,14 @@ export async function preflightComboStreamResponse(
   let terminalStatus: ResponsesTerminalStatus | undefined;
   let retryableTerminalPayload: Record<string, unknown> | undefined;
   let degenerateTerminalPayload: Record<string, unknown> | undefined;
+  // A client-executed call to a tool the request never declared, seen in this stream (#9163).
+  // The caller supplies the same declared catalog its undeclared-tool guard will use, so the
+  // preflight can prove the child delivered nothing the caller can execute: the boundary guard
+  // drops the offending item and refuses the turn after this preflight already committed it,
+  // which left a multi-target combo no target to advance to. Anything the client genuinely
+  // received (any earlier relayed text) still commits the child above; only this frame is read
+  // as the refusal it becomes, and the turn stays replayable on the next target.
+  let undeclaredTerminalPayload: Record<string, unknown> | undefined;
   const commentaryItemIds = new Set<string>();
   let holdTimer: ReturnType<typeof setTimeout> | undefined;
   let holdDeadline: Promise<"hold-expired"> | undefined;
@@ -785,7 +826,32 @@ export async function preflightComboStreamResponse(
         });
         const degenerateTerminal = options?.degeneratePrelude === true
           && isDegenerateStreamTerminal(payload, logCtx);
-        if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError && !heldReasoning) outputCommitted = true;
+        const undeclaredName = options?.declaredWireTools === undefined ? undefined
+          : undeclaredToolCallName(payload, options.declaredWireTools.declared,
+            options.declaredWireTools.declaredNamelessClientCallTypes,
+            options.declaredWireTools.providerExecutedCallTypes,
+            options.declaredWireTools.declaredBare, options.declaredWireTools.declaredCustom);
+        if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError && !heldReasoning
+          && undeclaredName === undefined) outputCommitted = true;
+        if (undeclaredName !== undefined && undeclaredTerminalPayload === undefined) {
+          // The exact terminal the boundary guard will synthesize for this refusal, stated here
+          // as the hop evidence so the combo loop sees a terminal it can classify. Only frames
+          // the guard itself suppresses count as uncommitted; the commit check above already
+          // kept every client-visible event authoritative.
+          undeclaredTerminalPayload = {
+            type: "response.failed",
+            response: {
+              status: "failed",
+              output: [],
+              error: {
+                type: "upstream_error",
+                code: UNDECLARED_TOOL_CALL_ERROR_CODE,
+                message: undeclaredToolCallMessage(),
+                retryable: true,
+              },
+            },
+          };
+        }
         if (options?.requiredToolPrelude && payload && typeof payload === "object") {
           const event = payload as { type?: unknown; response?: { output?: unknown; error?: { code?: unknown; retryable?: unknown } } };
           const output = event.response?.output;
@@ -884,9 +950,10 @@ export async function preflightComboStreamResponse(
       // so its retryable classification doubles as the terminal evidence. A degenerate
       // terminal carries the same hop evidence: its buffered prelude never reached the
       // client, so discarding it cannot duplicate anything the caller already saw.
-      const hopEvidence = retryableTerminalPayload ?? degenerateTerminalPayload;
+      const hopEvidence = retryableTerminalPayload ?? degenerateTerminalPayload ?? undeclaredTerminalPayload;
       if ((terminalStatus === "failed" || terminalStatus === "incomplete"
-        || hopEvidence?.type === "error" || degenerateTerminalPayload !== undefined)
+        || hopEvidence?.type === "error" || degenerateTerminalPayload !== undefined
+        || undeclaredTerminalPayload !== undefined)
         && !outputCommitted && hopEvidence !== undefined) {
         await reader.cancel("retrying zero-output combo stream terminal").catch(() => undefined);
         const failed = failedTerminalResponse(response, hopEvidence, logCtx, collectUsage);
@@ -902,6 +969,9 @@ export async function preflightComboStreamResponse(
           }
         }
         return { kind: "failed", response: failed,
+          // The projected refusal is ours by construction, so the combo layer classifies it by
+          // marker rather than by prose (#9163); consumeComboFailure gates on this membership.
+          ...(() => { if (undeclaredTerminalPayload !== undefined) markUndeclaredToolCallRefusalResponse(failed); return {}; })(),
           ...(failed.status === 400
             ? { codexModelRefusal: terminalModelRefusal(failed.status, hopEvidence) } : {}) };
       }

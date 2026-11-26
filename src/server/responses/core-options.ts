@@ -79,6 +79,8 @@ export interface ConsumedComboFailure {
   nonReplayable?: boolean;
   /** The failed attempt was an adapter-normalized plan refusal; only this grants its combo hop. */
   verifiedPlanRefusal?: boolean;
+  /** The failed attempt is the undeclared-tool guard's own refusal; only this grants its combo hop (#9163). */
+  undeclaredToolCallRefusal?: boolean;
 }
 
 

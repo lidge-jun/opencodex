@@ -64,6 +64,22 @@ export function isVerifiedModelNotInPlanResponse(response: Response): boolean {
   return verifiedPlanRefusalResponses.has(response);
 }
 
+/**
+ * Responses this process built as the undeclared-tool guard's own refusal (#9163): the combo
+ * preflight's projected terminal for an output frame the boundary guard will suppress. Owned
+ * wrappers carry membership the way they carry non-replayability; a wrapper that drops it fails
+ * closed (no hop), exactly as an unverified plan refusal does.
+ */
+const undeclaredToolCallRefusalResponses = new WeakSet<Response>();
+
+export function markUndeclaredToolCallRefusalResponse(response: Response): void {
+  undeclaredToolCallRefusalResponses.add(response);
+}
+
+export function isUndeclaredToolCallRefusalResponse(response: Response): boolean {
+  return undeclaredToolCallRefusalResponses.has(response);
+}
+
 /** True for a verified plan refusal that still carries the canonical code in its 400 body. */
 export function isModelNotInPlanRefusal(response: Response, bodyCode: string | null | undefined): boolean {
   return response.status === 400 && bodyCode === MODEL_NOT_IN_PLAN_CODE && verifiedPlanRefusalResponses.has(response);

@@ -1575,6 +1575,8 @@ export function comboFailureCooldownScope(
     malformedResponseFormat?: boolean;
     openRouterOpaque400?: boolean;
     unofferedToolCallRefusal?: boolean;
+    /** The caller proved this is the undeclared-tool guard's own refusal (#9163). */
+    undeclaredToolCallRefusal?: boolean;
     /** Whole-body moderation verdict from a reader that saw the complete bounded body. */
     providerModerationRefusal?: boolean;
   },
@@ -1603,6 +1605,9 @@ export function comboFailureCooldownScope(
     || (options?.unofferedToolCallRefusal !== undefined
       ? options.unofferedToolCallRefusal
       : isUnofferedToolCallRefusal(status, message, rawCode))
+    // The guard-refused child's model invented the call (#9163): the request fit, the target is
+    // healthy, and only a caller with provenance states this verdict, so it must not cool one.
+    || options?.undeclaredToolCallRefusal === true
   ) return "none";
   if (isProviderScopedQuotaCap(status, message, rawCode)) return "provider";
   // A rejected or unpaid credential is provider-wide evidence: every target that routes
@@ -1802,6 +1807,13 @@ export function comboFailureDecision(
     malformedResponseFormat?: boolean;
     openRouterOpaque400?: boolean;
     unofferedToolCallRefusal?: boolean;
+    /**
+     * The caller proved this failure is the undeclared-tool guard's own refusal (#9163): the child
+     * answered with a call to a tool the request never declared, so the guard suppressed the item
+     * and synthesized the terminal. Target-local model behaviour on a healthy target, exactly as
+     * `unofferedToolCallRefusal` is for the upstream-400 verdict shape.
+     */
+    undeclaredToolCallRefusal?: boolean;
     /** Whole-body moderation verdict from a reader that saw the complete bounded body. */
     providerModerationRefusal?: boolean;
     /** Whole-body 413 intake verdict ({@link isProviderIntakeRefusalBody}); false vetoes the hop. */
@@ -1834,6 +1846,8 @@ function decideComboFailure(
     malformedResponseFormat?: boolean;
     openRouterOpaque400?: boolean;
     unofferedToolCallRefusal?: boolean;
+    /** The caller proved this is the undeclared-tool guard's own refusal (#9163). */
+    undeclaredToolCallRefusal?: boolean;
     /** Whole-body moderation verdict from a reader that saw the complete bounded body. */
     providerModerationRefusal?: boolean;
     /** Whole-body 413 intake verdict ({@link isProviderIntakeRefusalBody}); false vetoes the hop. */
@@ -1956,6 +1970,13 @@ function decideComboFailure(
   if (options?.unofferedToolCallRefusal !== undefined
     ? options.unofferedToolCallRefusal
     : isUnofferedToolCallRefusal(status, message, rawCode)) return "hop";
+  // The undeclared-tool guard refused this child after its model answered with a call to a tool
+  // the request never declared (#9163). Same family as the unoffered-tool verdict above, but the
+  // refusal is proxy-synthesized at the client boundary, so it never carries the upstream 400
+  // shape and only a caller with provenance (the guard's own structured code) reaches this arm:
+  // the bare words stay terminal for every quoted or reflected occurrence. Deterministic on this
+  // target, target-local in the combo: another model may know the tool or not hallucinate the name.
+  if (options?.undeclaredToolCallRefusal === true) return "hop";
   if (isAnthropicBillingFailure(status, message, rawCode)) return "hop";
   if (isAnthropicExtraUsageFailure(status, message, rawCode)) return "hop";
   // Kiro's body validator rejects the request for the identity it was routed under. The account
