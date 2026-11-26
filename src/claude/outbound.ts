@@ -18,7 +18,7 @@ import { ADVISOR_SERVER_TOOL_NAME, isAdvisorCallInput, isAdvisorResultContent } 
  */
 import { createHash } from "node:crypto";
 import { httpStatusFromTerminalError, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
-import { isTransientUpstreamStatus } from "../lib/upstream-retry";
+import { isReplayRefusalCode, isTransientUpstreamStatus, REPLAY_REFUSED_STATUS, withheldReplayStatus, type ReplayRefusalCode } from "../lib/upstream-retry";
 import {
   isTranslatorBudgetExceededError,
   TRANSLATOR_MAX_TURN_BYTES,
@@ -606,7 +606,7 @@ export function responsesSseToAnthropicSse(
       // (devlog/_plan/260716_claudecode_hardening/020). On win32 mid-stream socket
       // resets reach the reader catch (no failed-tail relay) and stay api_error —
       // same as today, deliberate residual.
-      const fail = (status: number, message: string, upstreamDerived = false, code?: string, local = false, contract?: "stream_incomplete" | "transport_failed", evidence?: UpstreamConditionEvidence) => {
+      const fail = (status: number, message: string, upstreamDerived = false, code?: string, local = false, contract?: "stream_incomplete" | "transport_failed", evidence?: UpstreamConditionEvidence, replayRefusalCode?: ReplayRefusalCode, replayVetoStatus?: number) => {
         // finish/fail sets terminated before closeOpenBlock. A closure-time
         // allocation failure must still emit one error, without retrying closure.
         if (terminated && (code !== "translation_buffer_limit" || terminalDelivered)) return;
@@ -614,12 +614,15 @@ export function responsesSseToAnthropicSse(
         const type = code === "translation_buffer_limit" ? "request_too_large"
           : upstreamDerived && isTransientUpstreamStatus(status) ? "overloaded_error" : anthropicErrorType(status);
         const legacy = anthropicErrorBody(status, message, type, code);
-        const payload = ownedAnthropicErrorPayload({ status, type, code, evidence: evidence ?? { status, message },
+        const payload = replayRefusalCode ? ownedAnthropicErrorPayload({
+          status: REPLAY_REFUSED_STATUS, code: replayRefusalCode, contract: "replay_refused",
+          evidence: { status: REPLAY_REFUSED_STATUS, code: replayRefusalCode },
+        }) : replayVetoStatus !== undefined ? { ...legacy, retryable: false } : ownedAnthropicErrorPayload({ status, type, code, evidence: evidence ?? { status, message },
           overflow: messagesOverflowPresentation((legacy.error as Rec).message),
           condition: code === "context_length_exceeded" && isThroughputLimitText(message) ? "rate_limited" : undefined, contract,
           ...(local ? { localError: markProxyError({ message }, proxyMessagePresentation(opts.proxyErrorContext, message, { type: evidence?.type, code: evidence?.code ?? code })) } : {}),
         });
-        const admitted = () => admitMessagesFailure(opts.failureVerdictSink, payload, legacy);
+        const admitted = () => admitMessagesFailure(opts.failureVerdictSink, payload, legacy, replayRefusalCode, replayVetoStatus);
         if (code === "translation_buffer_limit") {
           releaseThinkingBuffer(open);
           if (open?.callId) translatorBudget.closeCall(open.callId);
@@ -920,13 +923,16 @@ export function responsesSseToAnthropicSse(
             // The undeclared-tool refusal is deterministic and proxy-owned, not an upstream
             // condition: keep its api_error type and code instead of a retryable overload.
             const deterministic = code === UNDECLARED_TOOL_CALL_ERROR_CODE;
+            const replayRefusalCode = response.retryable === false && isReplayRefusalCode(code) ? code : undefined;
+            const replayVetoStatus = withheldReplayStatus(message, response.retryable);
             fail(
-              status,
+              replayVetoStatus ?? status,
               message,
-              !deterministic,
+              !deterministic && replayVetoStatus === undefined,
               deterministic ? code : isContextOverflowError(error, message) ? "context_length_exceeded" : undefined,
               hasProxyErrorMessage(opts.proxyErrorContext, message, { type: typeof error.type === "string" ? error.type : undefined, code }),
               undefined, { status, message, type: typeof error.type === "string" ? error.type : undefined, code },
+              replayRefusalCode, replayVetoStatus,
             );
             break;
           }

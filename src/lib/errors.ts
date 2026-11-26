@@ -1,3 +1,4 @@
+import { replayRefusalVerdict } from "./upstream-retry";
 import { formatRetryAfterAdvice, parseRetryAfterFromMessage } from "./retry-delay";
 import { isMetaMusePlanFailure, META_MUSE_PLAN_REFUSAL_MESSAGE } from "../providers/meta-muse-plan-refusal";
 
@@ -94,7 +95,10 @@ export function namesModelNotInPlanCode(code: string | null | undefined): boolea
 type CompletionError = { type?: string; code?: string; message?: string };
 
 /** Meaningful error evidence on either carrier overrides an SSE completion. */
-export function responsesCompletionError(payload: unknown): CompletionError | undefined {
+export function responsesCompletionError(
+  payload: unknown,
+  terminalType: "response.completed" | "response.incomplete" = "response.completed",
+): CompletionError | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
   const event = payload as {
     type?: unknown;
@@ -102,21 +106,28 @@ export function responsesCompletionError(payload: unknown): CompletionError | un
     last_error?: unknown;
     response?: { error?: unknown; last_error?: unknown };
   };
-  if (event.type !== "response.completed") return undefined;
+  if (event.type !== terminalType) return undefined;
+  const { refusalCode } = replayRefusalVerdict(event);
+  if (refusalCode !== undefined) return { code: refusalCode };
   const nonblank = (value: unknown): string | undefined =>
     typeof value === "string" && value.trim() ? value : undefined;
+  let firstError: CompletionError | undefined;
+  let carrierVeto = false;
   for (const candidate of [event.error, event.last_error, event.response?.error, event.response?.last_error]) {
     if (typeof candidate === "string") {
-      if (nonblank(candidate)) return { message: candidate };
+      if (nonblank(candidate)) firstError ??= { message: candidate };
     } else if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
       const record = candidate as Record<string, unknown>;
       const type = nonblank(record.type);
       const code = nonblank(record.code);
       const message = nonblank(record.message);
-      if (type || code || message) return { type, code, message };
+      if (type || code || message) firstError ??= { type, code, message };
+      else if (!carrierVeto) {
+        carrierVeto = replayRefusalVerdict({ error: record }).explicitVeto;
+      }
     }
   }
-  return undefined;
+  return firstError ?? (carrierVeto ? {} : undefined);
 }
 
 /** First nonblank string across the canonical upstream error paths, in priority order. */
@@ -796,6 +807,8 @@ export function httpStatusFromTerminalError(error: {
   if (!error) return 502;
   if (error.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE) return 503;
   if (error.code === "client_closed_request" || error.code === "client_cancelled") return 499;
+  // These fixed replay refusals retain their client HTTP policy across terminal-event decoding.
+  if (error.code === "upstream_response_refused" || error.code === "upstream_reset_replay_refused") return 429;
   if (isCyberPolicyCode(error.code) || (error.message ? isCyberPolicyMessage(error.message) : false)) {
     return 400;
   }

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { REPLAY_REFUSAL_MESSAGE } from '../../src/lib/upstream-retry';
 import { codexWsUpstreamFetch } from '../../src/server/responses/ws-upstream';
 import { codexWsPool } from '../../src/server/responses/codex-ws-pool';
 import { providerFetch } from '../../src/server/responses/fetch-helpers';
@@ -212,3 +213,21 @@ test('an oversized retained full create recovers over HTTP with its original com
   expect(sends).toBe(1); expect(Socket.all[0]!.frames).toHaveLength(2);
   expect(Socket.all[0]!.readyState).toBe(3);
 });
+
+test.each([{ error: { ...missing.error, cause: { code: 'upstream_response_refused' } } },
+  { error: { ...missing.error, cause: { retryable: false } } },
+  { incomplete_details: { retryable: false } }])(
+  'a cache miss with a nested replay veto stops after one charged send (%j)', async carrier => {
+    await seed();
+    respond = (socket, frame) => frame.previous_response_id
+      ? socket.emit({ ...missing, status: 400, ...carrier }) : socket.complete();
+    let sends = 0;
+    const response = await run(follow, 'principal:alice', {}, () => sends++);
+    const body = await response.text();
+    expect({ sends, status: response.status, veto: response.headers.get('x-should-retry') })
+      .toEqual({ sends: 1, status: 429, veto: 'false' });
+    expect(JSON.parse(body).error).toMatchObject({ code: 'upstream_response_refused', message: REPLAY_REFUSAL_MESSAGE });
+    expect(response.headers.get('retry-after')).toBeNull();
+    expect(body).not.toContain('expired');
+  },
+);

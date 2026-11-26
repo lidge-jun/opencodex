@@ -112,6 +112,39 @@ function vertexError(code: number, status: string, message: string): string {
 }
 
 describe("vertex retry fetch", () => {
+  test.each([false, true])("an inconclusive 503 probe blocks a second POST (raw=%s)", async returnRawErrors => {
+    const payload = JSON.stringify({ padding: "x".repeat(17_000), error: { message: "fixture diagnostic" } });
+    const upstream = new Response(payload, { status: 503, headers: { "retry-after": "7" } });
+    const { calls } = mockFetch([upstream, new Response("unexpected second send")]);
+    const wait = spyOn(retry, "sleepWithAbort").mockImplementation(async () => {});
+    try {
+      const response = await fetchVertexWithRetry(request, { returnRawErrors });
+      expect({ sends: calls.length, status: response.status }).toEqual({ sends: 1, status: 503 });
+      expect(calls[0]?.method).toBe("POST");
+      expect(wait).not.toHaveBeenCalled();
+      if (returnRawErrors) {
+        expect(response).toBe(upstream);
+        expect(retry.hasClientReplayVeto(response)).toBe(true);
+        expect(response.headers.get("retry-after")).toBe("7");
+        expect(response.headers.get("x-should-retry")).toBeNull();
+        expect(await response.text()).toBe(payload);
+      } else {
+        expect(response.headers.get("x-should-retry")).toBe("false");
+        expect(response.headers.get("retry-after")).toBeNull();
+        expect(await response.text()).toStartWith("Vertex AI");
+      }
+    } finally { wait.mockRestore(); }
+  });
+
+  test("a caller abort during the 503 probe takes precedence over a raw error", async () => {
+    const caller = new AbortController();
+    const reason = new DOMException("fixture caller cancelled", "AbortError");
+    const body = new ReadableStream<Uint8Array>({ pull() { caller.abort(reason); } }, { highWaterMark: 0 });
+    const { calls } = mockFetch([new Response(body, { status: 503 })]);
+    await expect(fetchVertexWithRetry(request, { abortSignal: caller.signal, returnRawErrors: true })).rejects.toBe(reason);
+    expect(calls).toHaveLength(1);
+  });
+
   test("Google preserves the executor TypeError after its header deadline", async () => {
     const original = new TypeError("google executor deadline rejection");
     let sends = 0;
@@ -269,6 +302,17 @@ describe("vertex retry fetch", () => {
     expect(mock.calls).toHaveLength(2);
   });
 
+  test("a headerless replay-refusal 503 never triggers a Google transient retry", async () => {
+    const body = { error: { code: "upstream_response_refused", message: "fixture diagnostic" } };
+    const upstream = Response.json(body, { status: 503, headers: { "retry-after": "0" } });
+    const mock = mockFetch([upstream, new Response("duplicate")]);
+    const response = await fetchVertexWithRetry(request, { timeoutMs: 5_000, returnRawErrors: true });
+    expect(mock.calls).toHaveLength(1);
+    expect(response).toBe(upstream);
+    expect(response.headers.get("retry-after")).toBe("0");
+    expect(await response.json()).toEqual(body);
+  });
+
   test("retries without waiting for retryable response body cancellation", async () => {
     const first = new Response("overloaded", { status: 503, headers: { "Retry-After": "0" } });
     const neverSettles = new Promise<void>(() => {});
@@ -280,8 +324,14 @@ describe("vertex retry fetch", () => {
         return originalCatch(onRejected);
       },
     });
-    Object.defineProperty(first.body!, "cancel", {
-      value: () => neverSettles,
+    const trackRejection = () => Object.defineProperty(first.body!, "cancel", { value: () => neverSettles });
+    trackRejection();
+    // Bun tees the response for the bounded peek and gives the original a new body branch.
+    const clone = first.clone.bind(first);
+    spyOn(first, "clone").mockImplementation(() => {
+      const peek = clone();
+      trackRejection();
+      return peek;
     });
     const mock = mockFetch([first, new Response("ok", { status: 200 })]);
     // Retry-After is a floor over the jittered backoff (#7802), so stub the backoff sleep: the
@@ -485,7 +535,7 @@ describe("vertex retry fetch", () => {
     expect(mock.calls).toHaveLength(1);
   });
 
-  test("replays one structurally repaired request after a provider schema 400", async () => {
+  test.each([false, true])("only a replayable provider schema 400 triggers a repair (no-retry %s)", async noRetry => {
     const repairableRequest: AdapterRequest = {
       ...request,
       body: JSON.stringify({
@@ -498,13 +548,19 @@ describe("vertex retry fetch", () => {
         },
       }),
     };
-    const mock = mockFetch([
-      new Response(vertexError(400, "INVALID_ARGUMENT", "tools.0.custom.input_schema: JSON schema is invalid"), { status: 400 }),
-      new Response("ok", { status: 200 }),
-    ]);
+    const refusal = new Response(vertexError(400, "INVALID_ARGUMENT", "tools.0.custom.input_schema: JSON schema is invalid"), {
+      status: 400, headers: noRetry ? { "x-should-retry": "false" } : {},
+    });
+    const mock = mockFetch([refusal, new Response("ok", { status: 200 })]);
 
     const res = await fetchAntigravityWithRetry(repairableRequest, { timeoutMs: 5_000 });
 
+    if (noRetry) {
+      expect(mock.calls).toHaveLength(1);
+      expect(res.status).toBe(400);
+      expect(res.headers.get("x-should-retry")).toBe("false");
+      return;
+    }
     expect(res.status).toBe(200);
     expect(mock.calls).toHaveLength(2);
     const replay = JSON.parse(mock.calls[1].body as string);
@@ -788,3 +844,63 @@ describe("Google Retry-After is a lower bound (#7802)", () => {
   }
 });
 
+
+test.each([false, true])("Antigravity does not resend a terminal 429 (local marker %s)", async marked => {
+  const first = new Response("fixture throttle", {
+    status: 429, headers: { "retry-after": "0", ...(marked ? {} : { "x-should-retry": "false" }) },
+  });
+  if (marked) retry.markResponseNonReplayable(first);
+  const fixture = mockFetch([first, new Response("unexpected resend")]);
+  const response = await fetchAntigravityWithRetry(request, { returnRawErrors: true });
+  expect(fixture.calls).toHaveLength(1);
+  expect(response).toBe(first);
+});
+
+test("Antigravity settles its own response-header deadline after one POST", async () => {
+  let sends = 0;
+  const executor = (async (_input, init) => {
+    expect(init?.method).toBe("POST");
+    sends++;
+    if (sends > 1) return new Response("unexpected resend");
+    const signal = init!.signal!;
+    return await new Promise<Response>((_, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  }) as typeof fetch;
+  const response = await fetchAntigravityWithRetry(request, { executor, timeoutMs: 10 });
+  expect(sends).toBe(1);
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(retry.isReplayRefusalResponse(response)).toBe(true);
+});
+
+test.each([false, true])("replay veto: Google keeps raw evidence only when requested (%s)", async raw => {
+  let sends = 0;
+  const upstream = new Response("provider-private-detail", {
+    status: 503, headers: { "x-should-retry": "false", "retry-after": "7" },
+  });
+  const response = await fetchVertexWithRetry(request, { returnRawErrors: raw,
+    executor: (async () => { sends++; return upstream; }) as typeof fetch,
+  });
+  expect(sends).toBe(1);
+  expect(response.status).toBe(503);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(response.headers.get("retry-after")).toBe(raw ? "7" : null);
+  expect(await response.text()).toBe(raw ? "provider-private-detail" : "Vertex AI server overloaded: provider-private-detail");
+});
+
+test.each(["root", "nested"])("replay veto: Google projects a %s refusal without exposing its diagnostic", async carrier => {
+  let sends = 0;
+  const code = "upstream_response_refused";
+  const response = await fetchVertexWithRetry(request, {
+    executor: (async () => { sends++; return Response.json(carrier === "root"
+      ? { code, error: { message: "private diagnostic" } }
+      : { error: { code, message: "private diagnostic" } }, { status: 503 }); }) as typeof fetch,
+  });
+  expect(sends).toBe(1);
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  const body = await response.json() as { error: { code: string; message: string } };
+  expect(body.error.code).toBe(code);
+  expect(body.error.message).not.toContain("private diagnostic");
+});

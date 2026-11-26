@@ -29,7 +29,7 @@ import { pacingHeaderDeadline } from "./header-deadline";
 import { redactSecretString } from "../lib/redact";
 import { recordLocalFailureDetail, type FailureDetail } from "../server/request-log-failure-detail";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, RESET_RETRY_MAX_ATTEMPTS, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isAutomaticReplayBlocked, isReplayRefusalCode, hasUpstreamReplayRefusal, observedReplayRefusalCode, replayRefusalBodyCode, isSameTargetRetryHold, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE, RESET_RETRY_MAX_ATTEMPTS, SendBudgetExhaustedError } from "../lib/upstream-retry";
 import { unwrapUpstreamRetryEvidenceError } from "../codex/auth-context";
 import { HostedAdvisorSpendRefusal } from "../server/responses/policy-request-scope";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
@@ -635,7 +635,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         const event = await deps.thinkingRecovery.projectHttpFailure(prepared.response, signal);
         throw new LoopError(event.status ?? prepared.response.status, event.message, event);
       }
-      let body: Awaited<ReturnType<typeof readBoundedResponseBody>>;
+      let body: Awaited<ReturnType<typeof readBoundedResponseBody>> | undefined;
       try {
         body = await readBoundedResponseBody(prepared.response, { signal });
       } catch {
@@ -644,32 +644,37 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // through the adapter formatter or the generic transport error, which could expose its
         // raw message. A parent/client cancellation still owns the request lifecycle as 499.
         if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
-        throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}`, undefined,
-          { nonReplayable: isNonReplayableResponse(prepared.response) });
       }
       let formatted = "";
-      let upstreamCode: string | undefined;
-      if (body.displaySafe && !body.truncated && body.text.trim() && prepared.responseAdapter.formatErrorBody) {
+      const safeText = body?.displaySafe && !body.truncated ? body.text : "";
+      const upstreamCode = replayRefusalBodyCode(safeText) ?? observedReplayRefusalCode(prepared.response)
+        ?? upstreamErrorCode(safeText);
+      if (isReplayRefusalCode(upstreamCode)) {
+        throw new LoopError(REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE, {
+          type: "error", status: REPLAY_REFUSED_STATUS, errorType: "upstream_error", code: upstreamCode,
+          message: REPLAY_REFUSAL_MESSAGE, retryable: false,
+        });
+      }
+      if (safeText.trim() && prepared.responseAdapter.formatErrorBody) {
         try {
           formatted = prepared.responseAdapter.formatErrorBody(
             prepared.response.status,
             prepared.response.headers,
-            body.text,
+            safeText,
           ).trim();
         } catch { /* formatter hooks are best-effort; unsafe raw text is never the fallback */ }
       }
-      if (body.displaySafe && !body.truncated) upstreamCode = upstreamErrorCode(body.text);
       // A verified plan refusal keeps its fixed copy, code and provenance through this envelope, so a
       // combo or policy can still move past it; an unverified echo of the code stays an ordinary failure.
-      const planMessage = body.displaySafe && !body.truncated ? verifiedPlanRefusalMessage(prepared.response, body.text) : undefined;
+      const planMessage = safeText ? verifiedPlanRefusalMessage(prepared.response, safeText) : undefined;
       if (planMessage !== undefined) {
         throw new LoopError(400, `Provider error 400: ${planMessage}`,
           { type: "error", status: 400, message: planMessage, errorType: "invalid_request_error", code: MODEL_NOT_IN_PLAN_CODE },
-          { upstreamCode: MODEL_NOT_IN_PLAN_CODE, nonReplayable: isNonReplayableResponse(prepared.response), verifiedPlanRefusal: true });
+          { upstreamCode: MODEL_NOT_IN_PLAN_CODE, nonReplayable: isAutomaticReplayBlocked(prepared.response), verifiedPlanRefusal: true });
       }
       const suffix = formatted ? `: ${formatted.slice(0, 400)}` : "";
       throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}${suffix}`, undefined,
-        { upstreamCode, nonReplayable: isNonReplayableResponse(prepared.response) });
+        { upstreamCode, nonReplayable: isAutomaticReplayBlocked(prepared.response) });
     }
   };
 
@@ -819,6 +824,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           awaitingHeaders = false;
           request.releaseBodyObservation?.();
         }
+        if (!response.ok) await hasUpstreamReplayRefusal(response, headerDeadline.signal,
+          { requireCompleteBody: [400, 401, 403, 413, 429].includes(response.status) });
+        signal.throwIfAborted();
         bindAnthropicRejectionResponse(request, response);
         const iterTools = iterParsed.context.tools ?? [];
         const declaredAdvisor = iterTools.find(tool => tool.advisor && tool.name === ADVISOR_TOOL_NAME);
@@ -832,7 +840,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       };
 
       const recover = async (error: WebSearchAdapterEventError): Promise<IterationResponse | undefined> => {
-        if (signal.aborted || !error.replaySafe || isNonReplayableResponse(prepared.response)
+        if (signal.aborted || !error.replaySafe || error.event.retryable === false || isReplayRefusalCode(error.event.code) || isAutomaticReplayBlocked(prepared.response)
           || !deps.thinkingRecovery?.prepareEvent(error.event.message, prepared.responseAdapter.name, iterParsed, prepared.response)) return;
         cachedRequest = undefined;
         cachedAdapter = undefined;
@@ -859,7 +867,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       // Same-target 429 wait-and-retry (opt-in `retryOn429`) BEFORE key rotation: a primary-key
       // rate-limit blip replays on the SAME key; rotation only runs after attempts exhaust.
       while (
-        prepared.response.status === 429 && !isSameTargetRetryHold(prepared.response)
+        prepared.response.status === 429 && !isAutomaticReplayBlocked(prepared.response) && !isSameTargetRetryHold(prepared.response)
         && rateLimitRetryPolicy !== null
         && rateLimitRetries < rateLimitRetryPolicy.attempts
       ) {
@@ -891,7 +899,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       }
       // 429 key-failover parity with the normal routed path: rotate pool keys until one responds
       // or the pool is exhausted (deps.on429 returns null — cooldown map guarantees termination).
-      while ((prepared.response.status === 429
+      while (!isAutomaticReplayBlocked(prepared.response) && (prepared.response.status === 429
         || (prepared.response.status === 401 && isAnthropicInstanceId(deps.incomingMeta?.providerName)
           && !accountRefusalOutputStarted)
         || (prepared.response.status === 403
@@ -931,7 +939,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       }
 
       let imageReplacement: AdapterRequest | undefined;
-      if (deps.imageRecovery && prepared.response.status === 413) {
+      if (!isAutomaticReplayBlocked(prepared.response) && deps.imageRecovery && prepared.response.status === 413) {
         headerDeadline.clear();
         const recovered = yield* withHeartbeats(deps.imageRecovery(prepared.response, iterParsed, prepared.responseAdapter, signal), signal);
         prepared.response = recovered.response;
@@ -942,7 +950,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           cachedRequest = imageReplacement;
         }
       }
-      if (!imageReplacement && await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
+      if (!imageReplacement && !isAutomaticReplayBlocked(prepared.response) && await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* closed */ }
         cachedRequest = undefined;
         cachedAdapter = undefined;
@@ -1003,7 +1011,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         signal,
         inactivityTimeoutMs: routedModelStallTimeoutMs,
         translatorBudget,
-        preserveAdapterError: deps.thinkingRecovery !== undefined,
+        preserveAdapterError: deps.thinkingRecovery !== undefined || isAutomaticReplayBlocked(prepared.response),
         // A pass that fails was still billed; the error path reports it with the hidden passes.
         onErrorUsage: usage => {
           errorUsage = usage;
@@ -1040,7 +1048,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       if (error instanceof WebSearchAdapterEventError) {
         const replacement = await prepared.recover?.(error);
         if (replacement) return yield* consumeIterationEvents(replacement);
-        const event = isNonReplayableResponse(prepared.response)
+        const event = isAutomaticReplayBlocked(prepared.response)
           ? { ...error.event, message: "Provider stream error: upstream diagnostic withheld for a non-replayable failure", retryable: false as const }
           : error.event;
         throw new LoopError(event.status ?? 502, event.message, event);
@@ -1263,7 +1271,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     if (e instanceof LoopError) {
       recordLocalLoopFailure(e);
       const failure = loopFailure(e);
-      const failed = markSidecarContextOverflow(jsonError(e.status, e.message, e.event), failure);
+      const event = e.event ?? (failure.nonReplayable ? sidecarLoopTerminalEvent(failure) : undefined);
+      const failed = markSidecarContextOverflow(jsonError(e.status, e.message, event), failure);
       if (failure.verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failed);
       return failed;
     }
@@ -1330,6 +1339,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               && !signal.aborted && !split.hasMalformedToolCall && !split.hasRealToolCall
               && split.streamedPassthroughCount === 0 && !hasVisibleAssistantText(split.passthrough)) {
               takeUsage(final.usage);
+              if (isAutomaticReplayBlocked(prepared.response)) throw new LoopError(502,
+                "Provider completed without usable output and automatic replay was refused",
+                { ...emptyCompletionRetryFailedEvent(), retryable: false,
+                  message: "Provider completed without usable output and automatic replay was refused" });
               if (completionRetries++ === 0) { yield { type: "heartbeat" }; continue; }
               throw new LoopError(502, "Provider completed without usable output after one retry", emptyCompletionRetryFailedEvent());
             }
@@ -1383,6 +1396,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                   eventTypes: [...new Set(split.passthrough.map(event => event.type))],
                 }));
                 takeUsage(terminalEvent.usage);
+                if (isAutomaticReplayBlocked(prepared.response)) throw new LoopError(502,
+                  "Provider completed without usable output and automatic replay was refused",
+                  { ...emptyCompletionRetryFailedEvent(), retryable: false,
+                    message: "Provider completed without usable output and automatic replay was refused" });
                 if (!split.hasMalformedToolCall && !split.hasRealToolCall && emptyAnswerRetries < forcedAnswerRetries) {
                   emptyAnswerRetries++;
                   console.warn("[web-search-loop] empty forced answer — retrying once with tool calls disabled");

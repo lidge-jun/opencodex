@@ -54,6 +54,7 @@ export async function runMessagesOverflowCase(
   lane: MessagesOverflowLane,
   fixture: MessagesOverflowFixture,
   acquireSpendHome: () => () => void = acquireOwnedSpendHome,
+  observeResponse?: (response: Response) => void,
 ) {
   const tail = (fixture.messageStop || fixture.id.startsWith("frame-complete-")) ? 'event: message_stop\ndata: {"type":"message_stop"}\n\n' : "";
   const prefix = fixture.prefix ? `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: fixture.prefix } })}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n` : "";
@@ -152,6 +153,7 @@ export async function runMessagesOverflowCase(
       if (fixture.fault?.startsWith("read") && lane.startsWith("translated")) { if (!replayCalls) throw new Error("Replay fixture did not exercise its response boundary"); }
       else if ((builtin || fixture.fault) && mockSends === 0) throw new Error("Builtin fixture did not use its local fetch callback");
     }
+    observeResponse?.(response);
     const { text, bodySha256, bodyLength } = await observeMessagesOverflowBody(response, lane, fixture);
     const stream = lane === "converter" || lane === "direct-stream";
     let payload: any;

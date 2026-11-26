@@ -6,7 +6,9 @@ import { fetchKiroWithRetry, resetKiroThrottleStateForTests } from "../../../src
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../../../src/lib/debug-log-buffer";
 import { clearDebugSetting, getDebugSettings, setDebugSettings } from "../../../src/lib/debug-settings";
 import { encodeMessage } from "../../../src/lib/eventstream-decoder";
+import { EXECUTOR_PHYSICAL_SEND_RECEIPT, markPhysicalSendReceiptExecutor } from "../../../src/lib/executor-physical-send-receipt";
 import { createRequestExecutionBudget } from "../../../src/lib/request-execution-budget";
+import { isReplayRefusalResponse } from "../../../src/lib/upstream-retry";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
 
@@ -238,19 +240,56 @@ test("account switch before alternate sends rebuilt account headers and body", a
   expect(bearers).toEqual(["Bearer old", "Bearer new"]);
 });
 
-test("header deadline becomes 504 without rotating; caller abort preserves its reason", async () => {
+test.each([false, true])("guarded POST header deadline with physical receipt = %s", async dispatched => {
+  const sendBudget = createRequestExecutionBudget();
+  const ordinals: number[] = [];
+  const urls: string[] = [];
+  const executor = markPhysicalSendReceiptExecutor((async (input, init) => {
+    if (dispatched) {
+      (init as RequestInit & { [EXECUTOR_PHYSICAL_SEND_RECEIPT]: () => void })[EXECUTOR_PHYSICAL_SEND_RECEIPT]();
+      urls.push(String(input));
+    }
+    const signal = init!.signal!;
+    return new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  }) as typeof fetch);
+  const result = await fetchKiroWithRetry(request, {
+    executor, timeoutMs: 1, sendBudget, onPhysicalSend: send => ordinals.push(send.ordinal),
+  });
+  expect(urls).toEqual(dispatched ? [request.url] : []);
+  expect(ordinals).toEqual(dispatched ? [1] : []);
+  expect(sendBudget.used).toBe(dispatched ? 1 : 0);
+  expect(result.status).toBe(dispatched ? 429 : 504);
+  expect(isReplayRefusalResponse(result)).toBe(dispatched);
+  expect(result.headers.get("x-should-retry")).toBe(dispatched ? "false" : null);
+});
+
+test.each([false, true])("dispatched Kiro POST deadline and caller abort with signal cause = %s", async useSignalCause => {
   const urls: string[] = [];
   const executor = (async (input: RequestInfo | URL, init?: RequestInit) => {
     urls.push(String(input));
     return await new Promise<Response>((_resolve, reject) => {
       const signal = init?.signal;
-      if (signal?.aborted) reject(new TypeError("transport abort wrapper"));
-      else signal?.addEventListener("abort", () => reject(new TypeError("transport abort wrapper")), { once: true });
+      const rejectWrapped = () => reject(new Error("transport abort wrapper", {
+        cause: useSignalCause ? signal?.reason : new Error("unrelated transport failure"),
+      }));
+      if (signal?.aborted) rejectWrapped();
+      else signal?.addEventListener("abort", rejectWrapped, { once: true });
     });
   }) as typeof fetch;
-  const timed = await fetchKiroWithRetry(request, { executor, timeoutMs: 1 });
-  expect(timed.status).toBe(504);
-  expect(await timed.text()).toBe("Kiro upstream gateway timeout");
+  const sendBudget = createRequestExecutionBudget();
+  const timed = await fetchKiroWithRetry(request, { executor, timeoutMs: 1, sendBudget });
+  expect(sendBudget.used).toBe(1);
+  expect(timed.status).toBe(429);
+  expect(isReplayRefusalResponse(timed)).toBe(true);
+  expect(timed.headers.get("x-should-retry")).toBe("false");
+  expect(timed.headers.get("retry-after")).toBeNull();
+  expect(await timed.json()).toEqual({ error: {
+    type: "upstream_error",
+    code: "upstream_reset_replay_refused",
+    message: "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.",
+  } });
   expect(urls).toEqual([request.url]);
   const caller = new AbortController();
   const reason = new DOMException("caller closed", "AbortError");

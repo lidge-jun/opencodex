@@ -88,9 +88,42 @@ test("Google 429 uses an explicit zero Retry-After as evidence and still applies
   expect(result.waits[0]).toBeGreaterThan(0);
 });
 
-test("Google 429 honors delta-seconds Retry-After even when the body exceeds the read limit", async () => {
-  const result = await send429("x".repeat(64 * 1024 + 1), "30");
+test("Google 429 honors delta-seconds Retry-After when the body is complete", async () => {
+  const result = await send429(neutralBody(), "30");
   expect(result).toEqual({ status: 200, sends: 2, waits: [30_000] });
+});
+
+test("Google 429 vetoes retry when the body exceeds the read limit despite Retry-After", async () => {
+  const result = await send429("x".repeat(64 * 1024 + 1), "30");
+  expect(result).toEqual({ status: 429, sends: 1, waits: [] });
+});
+
+test.each([false, true])("Google 429 does not replay an oversized body despite Retry-After (raw=%s)", async returnRawErrors => {
+  const payload = "x".repeat(64 * 1024 + 1);
+  const upstream = new Response(payload, { status: 429, headers: { "Retry-After": "30" } });
+  let sends = 0;
+  const waits: number[] = [];
+  const sleep = spyOn(retry, "sleepWithAbort").mockImplementation(async ms => { waits.push(ms); });
+  try {
+    const response = await fetchVertexWithRetry(request, {
+      returnRawErrors,
+      executor: (async () => ++sends === 1 ? upstream : new Response("unexpected second send")) as typeof fetch,
+    });
+    expect({ status: response.status, sends, waits }).toEqual({ status: 429, sends: 1, waits: [] });
+    if (returnRawErrors) {
+      expect(response).toBe(upstream);
+      expect(retry.hasClientReplayVeto(response)).toBe(true);
+      expect(response.headers.get("retry-after")).toBe("30");
+      expect(response.headers.get("x-should-retry")).toBeNull();
+      expect(await response.text()).toBe(payload);
+    } else {
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect(response.headers.get("retry-after")).toBeNull();
+      expect(await response.text()).toStartWith("Vertex AI");
+    }
+  } finally {
+    sleep.mockRestore();
+  }
 });
 
 test.each([undefined, "garbage", "-1", "+0", "0x0", "1e3", "5.0", ""])(

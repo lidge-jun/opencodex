@@ -20,6 +20,53 @@ response safety still happen at the proxy boundary. Configure the listener and a
 [Configuration](/reference/configuration/); use [Combos](/guides/combos/) when one public model id
 should select among several targets.
 
+## Replay refusals
+
+When an upstream failure carries `x-should-retry: false`, the proxy stops automatic retries and
+combo fallback. A Responses SSE error with `retryable: false` stops automatic recovery, including
+an opaque-state rebuild. A terminal refusal on an authorized Responses replacement uses fixed
+error text on both native and translated routes. Native Responses keeps an observed replacement
+refusal code even if the replacement body fails during delivery. Caller cancellation takes
+precedence. Native Responses stops on a recognized JSON refusal code even when the provider
+reports completion. A bare stream error carrying a veto ends the turn with one failure event.
+Direct and Combo routes use fixed error text for terminal replay refusals, including a veto in
+the incomplete details of a response that has no separate error record. Stream events carry
+`response.retryable: false`. Buffered responses include `x-should-retry: false` and omit
+`Retry-After`. Recognized replay-refusal codes use HTTP 429. Other explicit vetoes keep the
+existing status. Only recognized incomplete reason codes are exposed on these terminals.
+Native and translated Responses
+and native Messages honor recognized refusal codes in HTTP 429 bodies before retrying on the
+same key. Genuine upstream rate limits still inform the sending account's cooldown.
+Translated Responses also checks replacement errors for refusal codes before rotating credentials.
+
+When translated Messages receives a recognized refusal in `response.failed` with
+`response.retryable: false`, the SSE error includes the same fixed message and error code.
+The stream keeps the HTTP status already sent to the client.
+
+If the proxy cannot complete a retry-safety check on an upstream error body, it stops automatic
+retries for requests without an independent replay guarantee. This includes Compact account
+failover after HTTP 402.
+Responses, Compact, Chat Completions and routed Messages include `x-should-retry: false`
+and omit `Retry-After` on those errors. The original upstream headers still inform quota
+and cooldown tracking.
+
+If the proxy re-asks a provider to finish an incomplete turn, a replay refusal on that
+continuation also uses fixed error text. This applies to HTTP errors and to error events
+inside successful HTTP responses. Buffered Responses reports the failed turn and includes
+`x-should-retry: false`. Buffered Chat Completions and routed Messages return HTTP 429 for
+recognized refusal codes and preserve the error status for an uncoded veto.
+
+Native Anthropic Messages passthrough preserves an explicit upstream `x-should-retry: false`
+when its body guard returns HTTP 504 for a stall or HTTP 502 for exceeding the byte limit.
+
+When a non-streaming Messages request folds a Responses stream or direct provider events with
+a recognized replay refusal, it returns the same code and fixed message in an HTTP 429 Messages error.
+The response includes `x-should-retry: false` and omits `Retry-After`.
+
+If native Anthropic Messages inference was dispatched and its upstream response-header deadline
+expires, the proxy returns HTTP 429 with `error.code: "upstream_reset_replay_refused"` and
+`x-should-retry: false`. The inference may already have run upstream.
+
 ## Function tool strictness on Chat input
 
 When Chat Completions is translated to OpenAI's Responses API or the ChatGPT backend,
@@ -548,6 +595,8 @@ report those details:
 When available, `input_tokens_details` can also include `cache_write_tokens`. The always-present
 detail objects are a compatibility guarantee for strict Responses clients; zero can mean "not
 reported," not necessarily "the provider performed no such work."
+
+A failed continuation follows the [replay refusal policy](#replay-refusals).
 
 When the terminal continuation guard re-asks within a turn, a successful completion that reports
 usage shows the final leg's usage for that re-ask. In Chat Completions, this includes

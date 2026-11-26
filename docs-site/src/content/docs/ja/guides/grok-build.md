@@ -87,6 +87,11 @@ Grok Build では、ループバックでもカスタム モデルに対して�
 
 プロバイダー エントリに注入された `api_key` は、これらのモデルの Grok 資格情報チェーンの最初に位置するため、opencodex に対抗する場合は追加の Grok ログインは必要ありません。ネイティブ grok モデルおよび xAI に直接接続するハーネス機能については、通常の `grok login` / `XAI_API_KEY` セットアップを維持します。
 
+## Legacy プライバシーモードで xAI OAuth が 403 を返す
+
+`ocx provider test xai` や Grok のターンでアカウントが **Legacy (no storage)** を使用していると表示されたら、xAI/Grok のプライバシー設定を **Privacy Mode** に変更し、`ocx provider test xai` を再実行してください。モデル一覧の取得とクォータ確認もこの設定で拒否され、OpenCodex のサービスログに同じ案内が出ます。OAuth に再ログインする必要はありません。
+Grok の Responses ストリーム開始後に代替リクエストがこの 403 を受けると、ストリームは `permission_denied` と同じ Privacy Mode の案内で終了します。Responses コンボに含まれる Grok モデルなら、条件を満たす別のモデルを試せます。すべての候補を使い切った場合、確認済みのコンテキスト長エラーや該当するクォータ応答が Privacy Mode の案内より優先されます。
+
 ## 手動レシピ（自動登録なし）
 
 `~/.grok/config.toml` を自分で管理する場合、または opencodex が非ループバック バインド上にある場合は、`[model_providers.opencodex]` ブロックとそれを参照するモデルごとのテーブルを `# >>> opencodex managed block` マーカーの外側に追加します。

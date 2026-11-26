@@ -5,6 +5,7 @@ import {
   noteKiroTransientThrottle,
   resetKiroThrottleStateForTests,
 } from "../../../src/adapters/kiro-retry";
+import { hasClientReplayVeto, isReplayRefusalResponse, REPLAY_REFUSAL_MESSAGE } from "../../../src/lib/upstream-retry";
 
 const realFetch = globalThis.fetch;
 
@@ -19,6 +20,24 @@ const request: AdapterRequest = {
   headers: { authorization: "Bearer tok", accept: "application/vnd.amazon.eventstream" },
   body: "{}",
 };
+
+test("replay veto: Kiro's dispatched POST deadline ends after one send", async () => {
+  let sends = 0;
+  const response = await fetchKiroWithRetry(request, { timeoutMs: 10,
+    executor: (async (_input, init) => {
+      sends++;
+      const signal = init!.signal!;
+      if (signal.aborted) throw signal.reason;
+      return new Promise<Response>((_, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    }) as typeof fetch,
+  });
+  expect(sends).toBe(1);
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(await response.json()).toMatchObject({ error: { code: "upstream_reset_replay_refused" } });
+});
 
 function mockFetch(responses: Array<Response | Error>): { calls: RequestInit[]; urls: string[] } {
   const calls: RequestInit[] = [];
@@ -72,8 +91,9 @@ describe("kiro retry fetch", () => {
     }) as typeof fetch;
 
     const response = await fetchKiroWithRetry(request, { timeoutMs: 1 });
-    expect(response.status).toBe(504);
-    expect(await response.text()).toBe("Kiro upstream gateway timeout");
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(await response.json()).toMatchObject({ error: { code: "upstream_reset_replay_refused" } });
     expect(calls).toBe(1);
     expect(timeoutReasons).toHaveLength(1);
     expect((timeoutReasons[0] as Error).name).toBe("TimeoutError");
@@ -285,6 +305,94 @@ describe("kiro retry fetch", () => {
     expect(pathResponse.status).toBe(404);
     expect(pathMock.urls).toEqual([customPath.url]);
   });
+
+  test("hardening: Kiro keeps a no-retry gateway 503 without endpoint failover", async () => {
+    const upstream = () => new Response("provider-private-detail", {
+      status: 503, headers: { "x-should-retry": "false", "retry-after": "7" },
+    });
+    const raw = upstream();
+    const rawFetch = mockFetch([raw, new Response("duplicate")]);
+    const evidence = await fetchKiroWithRetry(request, { returnRawErrors: true });
+    expect(rawFetch.calls).toHaveLength(1);
+    expect(evidence).toBe(raw);
+    expect(evidence.status).toBe(503);
+    expect(evidence.headers.get("retry-after")).toBe("7");
+    expect(await evidence.text()).toBe("provider-private-detail");
+
+    const displayFetch = mockFetch([upstream(), new Response("duplicate")]);
+    const displayed = await fetchKiroWithRetry(request);
+    expect(displayFetch.calls).toHaveLength(1);
+    expect(displayed.status).toBe(503);
+    expect(displayed.headers.get("x-should-retry")).toBe("false");
+    expect(await displayed.text()).toBe("Kiro upstream service unavailable");
+  });
+
+  test("a headerless replay-refusal 503 never triggers Kiro endpoint fallback", async () => {
+    const body = { error: { code: "upstream_response_refused", message: "fixture diagnostic" } };
+    const upstream = Response.json(body, { status: 503, headers: { "retry-after": "7" } });
+    const mock = mockFetch([upstream, new Response("duplicate")]);
+    const response = await fetchKiroWithRetry(request, { returnRawErrors: true });
+    expect(mock.urls).toEqual([request.url]);
+    expect(response).toBe(upstream);
+    expect(response.headers.get("retry-after")).toBe("7");
+    expect(await response.json()).toEqual(body);
+
+    const displayFetch = mockFetch([Response.json(body, { status: 503 }), new Response("duplicate")]);
+    const displayed = await fetchKiroWithRetry(request);
+    expect(displayFetch.urls).toEqual([request.url]);
+    expect(displayed.status).toBe(429);
+    expect(displayed.headers.get("x-should-retry")).toBe("false");
+    expect(await displayed.json()).toEqual({ error: {
+      type: "upstream_error", code: "upstream_response_refused",
+      message: "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.",
+    } });
+  });
+
+  test.each([
+    { code: "upstream_response_refused", padding: "" },
+    { code: "upstream_reset_replay_refused", padding: "x".repeat(17_000) },
+  ])(
+    "a Kiro 503 with both a header veto and $code projects the exact refusal code",
+    async ({ code, padding }) => {
+      const payload = { padding, error: { code, message: "fixture diagnostic" } };
+      const upstream = Response.json(payload, {
+        status: 503, headers: { "x-should-retry": "false", "retry-after": "7" },
+      });
+      const mock = mockFetch([upstream, new Response("duplicate")]);
+      const displayed = await fetchKiroWithRetry(request);
+      expect(mock.urls).toEqual([request.url]);
+      expect(displayed.status).toBe(429);
+      expect(displayed.headers.get("x-should-retry")).toBe("false");
+      expect(displayed.headers.get("retry-after")).toBeNull();
+      expect(isReplayRefusalResponse(displayed)).toBe(false);
+      expect(await displayed.json()).toEqual({ error: { type: "upstream_error", code, message: REPLAY_REFUSAL_MESSAGE } });
+    },
+  );
+
+  for (const status of [429, 503]) for (const returnRawErrors of [true, false]) {
+    test(`an inconclusive replay probe stops Kiro recovery for ${status} (raw=${returnRawErrors})`, async () => {
+      const body = { padding: "x".repeat(17_000), error: {
+        code: "upstream_response_refused", message: "fixture diagnostic",
+      } };
+      const upstream = Response.json(body, { status, headers: { "retry-after": "0" } });
+      const mock = mockFetch([upstream, new Response("unexpected second send")]);
+      const response = await fetchKiroWithRetry(request, { returnRawErrors });
+      expect({ urls: mock.urls, status: response.status, veto: response.headers.get("x-should-retry"),
+        wait: response.headers.get("retry-after"), retained: hasClientReplayVeto(response),
+      }).toEqual({
+        urls: [request.url], status, veto: returnRawErrors ? null : "false",
+        wait: returnRawErrors ? "0" : null, retained: true,
+      });
+      if (returnRawErrors) {
+        expect(response).toBe(upstream);
+        expect(await response.json()).toEqual(body);
+      } else {
+        const displayed = await response.text();
+        expect(displayed).not.toContain("fixture diagnostic");
+        expect(displayed).not.toContain(body.padding);
+      }
+    });
+  }
 
   test("does not retry non-retryable 400", async () => {
     const mock = mockFetch([new Response("bad request", { status: 400 })]);

@@ -115,6 +115,31 @@ function post(config: OcxConfig, body: Record<string, unknown> = {}) {
   }), config, { model: "", provider: "" });
 }
 
+test.each(["directive", "quota-only directive", "recognized", "ordinary"] as const)("replay veto: an exhausted pool preserves a %s upstream verdict", async kind => {
+  const ids = await seed(2);
+  const config = configFor(true, () => {
+    for (const id of ids) holdOnQuota(config, id, 1800, Date.now());
+    const response = kind === "recognized" ? Response.json({ code: "upstream_response_refused",
+      error: { type: "rate_limit_error", message: "fixture quota" } }, { status: 429 }) : spent("5h", 1800);
+    if (kind !== "ordinary") response.headers.set("x-should-retry", "false");
+    return response;
+  });
+  if (kind === "quota-only directive") {
+    config.combos = { strict: { strategy: "failover", quotaOnlyFallback: true, allowMeteredTargets: true,
+      targets: [{ provider: "anthropic", model: "claude-sonnet-4-5" }] } };
+  }
+  const response = await post(config, kind === "quota-only directive" ? { model: "combo/strict" } : {});
+  const error = await errorOf(response);
+  expect(sent).toHaveLength(1);
+  expect(response.status).toBe(429);
+  if (kind === "ordinary") expect(error.code).toBe("usage_limit_reached");
+  else {
+    expect(error.code).not.toBe("usage_limit_reached");
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    if (kind === "recognized") expect(error.code).toBe("upstream_response_refused");
+  }
+});
+
 /**
  * Quota refusal recorded the way the dispatch path records it: a rejected window with its reset
  * and a Retry-After. Anthropic usually sets both to the same instant; `resetSeconds` lets a case

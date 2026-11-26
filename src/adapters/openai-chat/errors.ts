@@ -1,3 +1,4 @@
+import { replayRefusalProviderErrorVerdict } from "../../lib/upstream-retry";
 import { isCyberPolicyCode } from "../../lib/errors";
 import { redactSecretString } from "../../lib/redact";
 import type { AdapterEvent, OcxUsage } from "../../types";
@@ -76,6 +77,7 @@ export function safeUpstreamRequestId(metadata: unknown): string | undefined {
 export function upstreamErrorEvent(
   error: unknown,
   usage?: OcxUsage,
+  envelope: unknown = error,
 ): Extract<AdapterEvent, { type: "error" }> {
   const details = error !== null && typeof error === "object" && !Array.isArray(error)
     ? error as OpenAIChatError
@@ -105,6 +107,7 @@ export function upstreamErrorEvent(
     : typeof details?.status === "number" && Number.isInteger(details.status)
       ? details.status
       : codeStatus;
+  const { refusalCode, explicitVeto } = replayRefusalProviderErrorVerdict(envelope);
   return {
     type: "error",
     message,
@@ -112,5 +115,7 @@ export function upstreamErrorEvent(
     ...(code !== undefined ? { code } : {}),
     ...(errorType !== undefined ? { errorType } : {}),
     ...(status !== undefined ? { status } : {}),
+    ...(refusalCode === undefined ? {} : { code: refusalCode }),
+    ...(explicitVeto || refusalCode !== undefined ? { retryable: false } : {}),
   };
 }

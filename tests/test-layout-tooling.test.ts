@@ -349,6 +349,8 @@ describe("membership oracle", () => {
     // incorrectly on the day it is added.
     const pinnedOverrides = new Set([
       "openai-responses-passthrough.test.ts",
+      // Exercises native server handlers and TCP fallback; the native- seed names Codex integration.
+      "native-remote-local-fallback.test.ts",
       // Placed under routing/ by its author (#3523, restored by #3530): it exercises the oauth
       // routing quorum, not the Anthropic adapter, so the anthropic- seed is wrong for it.
       "anthropic-quorum-cache.test.ts",

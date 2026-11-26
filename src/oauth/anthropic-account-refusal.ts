@@ -3,7 +3,7 @@ import { anthropicModelFamily } from "./anthropic-model-quota";
 /** Narrow pre-output account recovery, fenced to the bearer that physically sent the turn. */
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { classifyAnthropic429, anthropicRetryAfterMs, anthropicRatePolicyFor, ANTHROPIC_SHORT_RETRY_MS, ANTHROPIC_MAX_INLINE_THROTTLE_MS } from "./anthropic-rate-limit-policy";
-import { isNonReplayableResponse, sleepWithAbort } from "../lib/upstream-retry";
+import { isAutomaticReplayBlocked, isNonReplayableResponse, sleepWithAbort } from "../lib/upstream-retry";
 import { credentialGeneration, getAccountCredentialWithStatus, markAccountNeedsReauthIfGeneration } from "./store";
 import type { OAuthAccessSnapshot } from "./index";
 import type { OcxConfig } from "../types";
@@ -117,15 +117,17 @@ export async function rotateAnthropicAccountOnResponseForInstance(
     currentDecision?: () => AnthropicRouteDecision | null;
   },
 ): Promise<string | null> {
-  if (options.signal?.aborted || isNonReplayableResponse(response)
+  if (options.signal?.aborted
     || configuredAnthropicInstance(options.config, instance) !== instance) return null;
+  const replayBlocked = isAutomaticReplayBlocked(response);
+  if (replayBlocked && response.status !== 401 && (response.status !== 429 || isNonReplayableResponse(response))) return null;
   const sent = responseCredentials.get(response);
   if (!sent || sent.provider !== instance || sent.accountId !== options.accountId) return null;
   const routing = anthropicRoutingFor(instance);
   const { pauseAnthropicRateAdmission, anthropicRatePauseUntil } = anthropicRatePolicyFor(instance);
   const { recordAnthropicAccountRefusal, rotateAnthropicAccountOnRefusal,
     hasAnthropicFailoverQuorum, isAnthropicAccountPoolEnabled, pickAlternateAnthropicAccount } = routing;
-  if (wasAccountAutoPaused(response)) {
+  if (!replayBlocked && wasAccountAutoPaused(response)) {
     routing.clearAnthropicSessionAffinityForAccount(sent.accountId);
     if (!options.canRetry || options.signal?.aborted) return null;
     return pickAlternateAnthropicAccount(options.config, sent.accountId, Date.now(),
@@ -157,13 +159,19 @@ export async function rotateAnthropicAccountOnResponseForInstance(
     if (!marked || configuredAnthropicInstance(options.config, instance) !== instance
       || !anthropicPhysicalSendOwnershipIsCurrent(sent)) return null;
     routing.clearAnthropicSessionAffinityForAccount(sent.accountId);
-    if (!options.canRetry || options.signal?.aborted) return null;
+    if (replayBlocked || !options.canRetry || options.signal?.aborted) return null;
     const decision = options.currentDecision ? options.currentDecision() : options.decision ?? null;
     return pickAlternateAnthropicAccount(options.config, sent.accountId, Date.now(), decision, options.model, options.excludedAccountIds);
   }
   if (response.status === 429) {
     const current = ownedCurrent();
     if (!current) return null;
+    if (replayBlocked) {
+      // A genuine 429 can update its sending account without consulting recovery routing.
+      recordAnthropicAccountRefusal(options.config, sent.accountId, 429,
+        response.headers.get("retry-after"), Date.now(), response.headers);
+      return null;
+    }
     options.currentDecision?.();
     const kind = classifyAnthropic429(response.headers);
     if (kind === "family-quota") {

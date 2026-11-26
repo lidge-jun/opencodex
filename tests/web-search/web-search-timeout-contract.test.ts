@@ -1,5 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import * as abortModule from "../../src/lib/abort";
+import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
 import type { AdapterFetchContext, ProviderAdapter } from "../../src/adapters/base";
 import { parseRequest } from "../../src/responses/parser";
 import { responseWithDeferredRequestLog, type RequestLogEntry } from "../../src/server";
@@ -373,71 +372,59 @@ describe("web-search timeout runtime contracts", () => {
     expect(entries[0].terminalStatus).toBeUndefined();
   }, 1_000);
 
-  test("a never-settling 429 body cancel cannot block rotation under the cumulative header deadline", async () => {
+  test("a confirmed ordinary 429 whose body cancel never settles cannot block rotation or renew the header deadline", async () => {
+    jest.useFakeTimers();
     const connectTimeoutMs = 45;
+    const caller = new AbortController();
+    const firstSendStarted = Promise.withResolvers<void>();
     let firstSignal: AbortSignal | undefined;
     let cancelCalls = 0;
     let rotations = 0;
     let rotatedFetches = 0;
-    let deadlineCreations = 0;
-    let deadlineClears = 0;
+    let cloned = false;
     let cancelSettled = false;
     let releaseCancel!: () => void;
     const cancelGate = new Promise<void>(resolve => { releaseCancel = resolve; })
       .then(() => { cancelSettled = true; });
     const events: string[] = [];
-    const deadlineController = new AbortController();
-    const timeoutReason = new DOMException("Timeout elapsed", "TimeoutError");
-    let expiryTimer: ReturnType<typeof setTimeout> | undefined;
-    let deadlineCleared = false;
-    const originalDeadline = abortModule.clearableDeadline;
-    const deadlineSpy = spyOn(abortModule, "clearableDeadline").mockImplementation((timeoutMs, parent) => {
-      if (timeoutMs !== connectTimeoutMs) return originalDeadline(timeoutMs, parent);
-      deadlineCreations++;
-      const signal = parent ? AbortSignal.any([parent, deadlineController.signal]) : deadlineController.signal;
-      return {
-        signal,
-        timeoutReason,
-        didExpire: () => signal.aborted && signal.reason === timeoutReason,
-        clear: () => {
-          deadlineClears++;
-          deadlineCleared = true;
-          events.push("deadline-cleared");
-          if (expiryTimer !== undefined) clearTimeout(expiryTimer);
-          expiryTimer = undefined;
-        },
-      };
-    });
+    let restoreCancel = () => {};
     let cleaned = false;
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
-      if (expiryTimer !== undefined) clearTimeout(expiryTimer);
-      expiryTimer = undefined;
+      caller.abort(new Error("fixture finished"));
       releaseCancel();
-      deadlineController.abort(timeoutReason);
-      deadlineSpy.mockRestore();
+      restoreCancel();
+      jest.useRealTimers();
     };
     cleanupDeadlineFixture = cleanup;
+    globalThis.fetch = (async () => { throw new Error("fixture forbids external fetch"); }) as typeof fetch;
     const firstAdapter: ProviderAdapter = {
       name: "rate-limited-never-cancelled",
       buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
       fetchResponse: async (_request, ctx) => {
         firstSignal = ctx?.abortSignal;
-        return new Response(new ReadableStream<Uint8Array>({
-          cancel() {
+        firstSignal!.addEventListener("abort", () => events.push("deadline-expired"), { once: true });
+        firstSendStarted.resolve();
+        await new Promise<void>(resolve => setTimeout(resolve, 20));
+        const response = Response.json({ error: { code: "rate_limit_exceeded", message: "ordinary quota" } }, { status: 429 });
+        const clone = response.clone.bind(response);
+        response.clone = () => {
+          cloned = true;
+          const copy = clone();
+          // Cloning may replace response.body. Hook the live original only after the tee,
+          // leaving the complete diagnostic clone readable by the production probe.
+          const body = response.body!;
+          const cancel = body.cancel.bind(body);
+          const cancelSpy = spyOn(body, "cancel").mockImplementation(() => {
             cancelCalls++;
             events.push("cancel-requested");
-            // Expire on the next timer task, after immediate rotation microtasks.
-            // An added timer wait or an awaited cancel cannot get a fresh budget.
-            if (!deadlineCleared) expiryTimer = setTimeout(() => {
-              expiryTimer = undefined;
-              events.push("deadline-expired");
-              deadlineController.abort(timeoutReason);
-            }, 0);
             return cancelGate;
-          },
-        }), { status: 429 });
+          });
+          restoreCancel = () => { cancelSpy.mockRestore(); void cancel().catch(() => {}); };
+          return copy;
+        };
+        return response;
       },
       async *parseStream() { yield { type: "done" }; },
       async parseResponse() { return [{ type: "done" }]; },
@@ -459,23 +446,37 @@ describe("web-search timeout runtime contracts", () => {
       async parseResponse() { return [{ type: "done" }]; },
     };
 
+    const pending = runWithWebSearch(deps(firstAdapter, {
+      connectTimeoutMs, abortSignal: caller.signal,
+      on429: () => {
+        rotations++;
+        return { adapter: rotatedAdapter, recoveryKind: "key-429" as const };
+      },
+    }));
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    const drain = async () => { for (let i = 0; i < 8; i++) await new Promise<void>(resolve => setImmediate(resolve)); };
     try {
-      const response = await runWithWebSearch(deps(firstAdapter, {
-        connectTimeoutMs,
-        on429: () => {
-          rotations++;
-          return { adapter: rotatedAdapter, recoveryKind: "key-429" as const };
-        },
-      }));
-
+      await firstSendStarted.promise;
+      jest.advanceTimersByTime(20);
+      await drain();
+      expect(cloned).toBe(true);
       expect(cancelCalls).toBe(1);
       expect(cancelSettled).toBe(false);
       expect(rotations).toBe(1);
       expect(rotatedFetches).toBe(1);
-      expect(deadlineCreations).toBe(1);
-      expect(deadlineClears).toBe(1);
-      expect(firstSignal?.reason).toBe(timeoutReason);
-      expect(events).toEqual(["cancel-requested", "rotated-fetch", "deadline-expired", "deadline-cleared"]);
+      // The first send spent 20ms: the hung replacement gets the remaining 25ms,
+      // even though diagnostic inspection paused the clock and cancellation is still pending.
+      jest.advanceTimersByTime(24);
+      await drain();
+      expect(firstSignal?.aborted).toBe(false);
+      expect(settled).toBe(false);
+      jest.advanceTimersByTime(1);
+      await drain();
+      expect(settled).toBe(true);
+      expect(firstSignal?.reason).toMatchObject({ name: "TimeoutError" });
+      expect(events).toEqual(["cancel-requested", "rotated-fetch", "deadline-expired"]);
+      const response = await pending;
       expect(response.status).toBe(504);
       expect(await response.json()).toEqual({
         error: {
@@ -486,6 +487,7 @@ describe("web-search timeout runtime contracts", () => {
       });
     } finally {
       cleanup();
+      await pending.catch(() => {});
       if (cleanupDeadlineFixture === cleanup) cleanupDeadlineFixture = undefined;
     }
   }, 1_000);

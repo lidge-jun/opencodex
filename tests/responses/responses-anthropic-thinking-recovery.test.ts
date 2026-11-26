@@ -4,7 +4,7 @@ import { afterEach, expect, test } from "bun:test";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 import { createAnthropicThinkingRecovery, isAnthropicThinkingSignatureBindingRejectionMessage } from "../../src/server/responses/anthropic-thinking-recovery";
 import { clearReasoningReplayCacheForTests, reasoningReplayOpaqueBlobRejectionMemoized } from "../../src/responses/reasoning-replay-cache";
-import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
+import { hasUpstreamReplayRefusal, markResponseNonReplayable } from "../../src/lib/upstream-retry";
 
 const MESSAGE = "Invalid `signature` in `thinking` block. The block is bound to a different conversation.";
 const rejection: AdapterEvent = { type: "error", status: 400, message: MESSAGE };
@@ -45,6 +45,42 @@ function fixture() {
   return { request, abort, guard, recovery };
 }
 afterEach(() => clearReasoningReplayCacheForTests());
+
+test.each(["directive", "code"] as const)("replay veto: thinking recovery honors an explicit %s event verdict", async kind => {
+  const { recovery, guard } = fixture();
+  const event: AdapterEvent = { ...rejection, ...(kind === "directive" ? { retryable: false } : { code: "upstream_response_refused" }) };
+  let retries = 0;
+  expect(await collect(recovery.wrap(stream([event]), () => { retries++; return stream(success); }, () => "anthropic"))).toEqual([event]);
+  expect(retries).toBe(0);
+  expect(guard.attempted).toBe(false);
+});
+
+test("replay veto: a body-only HTTP refusal cannot authorize thinking recovery", async () => {
+  const { recovery } = fixture();
+  const blocked = Response.json({ type: "error", code: "upstream_response_refused", error: { message: MESSAGE } }, { status: 400 });
+  const request = { url: "https://example.test", method: "POST", headers: {}, body: "" };
+  const budget = createTranslatorBudget();
+  captureAnthropicRejectionPayloads(request, { messages: [{ role: "assistant", content: [
+    { type: "thinking", signature: "SyntheticSignature123456==" },
+  ] }] }, budget);
+  bindAnthropicRejectionResponse(request, blocked);
+  budget.dispose();
+  expect(await recovery.prepareHttp(blocked, "anthropic")).toBe(false);
+});
+
+test.each(["root", "observed-unreadable", "ordinary"] as const)("replay veto: thinking recovery projects %s HTTP failure evidence", async kind => {
+  const { recovery, abort } = fixture();
+  const response = Response.json(kind === "root" ? { code: "upstream_response_refused", error: { message: MESSAGE } }
+    : { error: { ...(kind !== "ordinary" ? { code: "upstream_response_refused" } : {}), message: "fixture failure" } }, { status: 503 });
+  if (kind === "observed-unreadable") {
+    expect(await hasUpstreamReplayRefusal(response)).toBe(true);
+    Object.defineProperty(response, "body", { get() { throw new Error("fixture body unavailable after inspection"); } });
+  }
+  const event = await recovery.projectHttpFailure(response, abort.signal);
+  expect(event.status).toBe(kind === "ordinary" ? 503 : 429);
+  if (kind !== "ordinary") expect(event).toMatchObject({ code: "upstream_response_refused", retryable: false });
+  else expect(event.retryable).toBeUndefined();
+});
 
 test("classifier requires both exact validation phrases including backticks", () => {
   expect(isAnthropicThinkingSignatureBindingRejectionMessage(MESSAGE)).toBe(true);

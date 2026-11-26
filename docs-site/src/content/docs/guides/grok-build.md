@@ -130,6 +130,8 @@ If `ocx provider test xai` or a Grok turn tells you the account uses **Legacy (n
 the xAI/Grok privacy settings and switch the account to **Privacy Mode**. Then run
 `ocx provider test xai` again. This setting also blocks model discovery and quota checks, which
 report the same guidance in the OpenCodex service log. You can keep your existing OAuth login.
+If a Grok Responses stream has already started when a replacement request hits this 403,
+the stream ends with `permission_denied` and the same Privacy Mode guidance.
 If the Grok model is part of a Responses combo, the combo can try another eligible model.
 If the combo exhausts its eligible models, a confirmed context-window error or applicable quota
 response takes precedence over the Privacy Mode guidance.

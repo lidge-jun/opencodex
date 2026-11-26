@@ -352,6 +352,8 @@ export async function fetchBoundLinkRelay(
     selectBody?: (homeFeatures: readonly string[] | null) => { body: Uint8Array<ArrayBuffer>; headers: Record<string, string> };
     /** Called once the data request's body was flushed to the socket or the request was torn down. */
     onBodySettled?: () => void;
+    /** Marks the boundary after which a transport failure may have dispatched the turn. */
+    onDataRequestStarted?: () => void;
   } = {},
 ): Promise<Response> {
   const authTimeoutMs = options.authTimeoutMs ?? LINK_RELAY_AUTH_TIMEOUT_MS;
@@ -389,6 +391,7 @@ export async function fetchBoundLinkRelay(
       for (const [name, value] of Object.entries(chosen.headers)) headers.set(name, value);
     }
     dataRequestStarted = true;
+    options.onDataRequestStarted?.();
     flow = target.linkId ? untilBothSettled((options.traffic ?? childLinkTraffic).begin(target.linkId)) : undefined;
     const incoming = await requestOnConnection(url, { ...init, headers, body }, agent, socket, bytes => flow?.flow.toHome(bytes),
       finished => flow?.uploaded(finished), options.onBodySettled);

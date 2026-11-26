@@ -2,7 +2,7 @@ import { comboFailureDecision, isProviderModerationRefusal } from "../../combos/
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { isVerifiedModelNotInPlanResponse } from "../../lib/errors";
 import { isShadowSourceModel } from "../../lib/shadow-call";
-import { isNonReplayableResponse } from "../../lib/upstream-retry";
+import { isAutomaticReplayBlocked, replayRefusalBodyCode } from "../../lib/upstream-retry";
 import { finishRequestAttempt, type RequestLogContext } from "../request-log";
 import { restoreLocalFailureState, takeLocalFailureState, type LocalFailureState } from "../request-log-failure-detail";
 import { linkRequestSessionLane } from "../request-log-conversation";
@@ -131,12 +131,12 @@ function errorCodeFromText(text: string): string | undefined {
 async function shouldHopPolicyCandidate(response: Response, signal?: AbortSignal): Promise<boolean> {
   if (response.status < 400 || signal?.aborted) return false;
   // A response that must not be sent again cannot open a policy-candidate retry either.
-  if (isNonReplayableResponse(response)) return false;
+  if (isAutomaticReplayBlocked(response)) return false;
   if (isPolicyCandidateRefusal(response)) return true;
   try {
     const inspected = await readBoundedResponseBody(response.clone(), { signal });
-    const complete = inspected.displaySafe && !inspected.truncated;
-    const text = complete ? inspected.text : "";
+    if (!inspected.displaySafe || inspected.truncated || replayRefusalBodyCode(inspected.text)) return false;
+    const text = inspected.text;
     return comboFailureDecision(response.status, text, {
       code: upstreamCodeForComboFailure(response, errorCodeFromText(text)),
       // A passthrough candidate returns its upstream body unchanged, so the code is not provenance.

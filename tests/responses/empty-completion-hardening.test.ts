@@ -305,6 +305,23 @@ describe("empty-completion guard hardening", () => {
     expect(events.at(-1)).toMatchObject({ type: "done", usage: { inputTokens: 20, outputTokens: 3 } });
   });
 
+  test.each([
+    { retryable: false },
+    { code: "upstream_response_refused" },
+  ])("an adapter error veto outranks its pre-output retry hint (%j)", async veto => {
+    const error = { ...malformed(), ...veto };
+    let continuations = 0;
+    const events = await collect(guardEmptyCompletionEventStream({
+      firstEvents: eventsOf(error),
+      continuation: () => {
+        continuations++;
+        return eventsOf({ type: "text_delta", text: "unexpected retry" }, { type: "done" });
+      },
+    }));
+    expect(continuations).toBe(0);
+    expect(events).toEqual([error]);
+  });
+
   test("a replay-safe error that repeats surfaces its own message after one retry", async () => {
     let continuations = 0;
     const events = await collect(guardEmptyCompletionEventStream({

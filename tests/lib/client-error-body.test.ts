@@ -4,6 +4,12 @@ import { OPENAI_ERROR_TYPES, OPENAI_ERROR_CODES, ANTHROPIC_ERROR_TYPES, ANTHROPI
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 const KEY = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
+test("a relay response refusal uses the fixed replay-refusal message", () => {
+  const payload = ownedChatErrorPayload({ status: 429, code: "upstream_response_refused",
+    evidence: { status: 429, code: "upstream_response_refused", message: KEY } });
+  expect(payload.error.code).toBe("upstream_response_refused");
+  expect(payload.error.message).toBe(CLIENT_ERROR_CONTRACTS.replay_refused);
+});
 for (const token of ["constructor", "__proto__", "toString", KEY, "resource_exhausted"]) {
   for (const status of [400, 401, 404, 429, 502]) test(`closed defaults ${token} ${status}`, () => {
     const payload = ownedChatErrorPayload({ status, type: token, code: token, evidence: { status, type: token, code: token, message: KEY } });

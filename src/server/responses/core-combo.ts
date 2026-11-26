@@ -161,7 +161,7 @@ import {
   streamingIncompleteResponse,
 } from "./context-overflow";
 import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
-import { isReplayRefusalResponse, settleOperatorReplacement, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
+import { carryReplayRefusalToClient, isReplayRefusalCode, isReplayRefusalResponse, settleOperatorReplacement, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
 import { attributeFinalRequest } from "../request-log-failure-attribution";
 import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo-native";
 import { createJevModelInvoker } from "./jev-model-invoke";
@@ -1055,6 +1055,10 @@ export async function executeComboResponses(
   // is gone, so carry the loop's own classification decision instead of re-deriving a
   // weaker one from the status alone (#4149).
   let lastFailureClassifiesOverflow = false;
+  const clientOverflowResponse = (source: Response, message?: string): Response => carryReplayRefusalToClient(source,
+    (rawBody as { stream?: unknown } | null)?.stream === true
+      ? streamingContextOverflowResponse(responseModel, options.translatorBudget, message)
+      : jsonContextOverflowResponse(message));
   let zeroOutputLimitFailure: { childLog: RequestLogContext; usage?: OcxUsage } | undefined;
   let lastFailureUpstreamCode: string | undefined;
   const wantsStream = (rawBody as { stream?: unknown } | null)?.stream === true || (body as { stream?: unknown } | null)?.stream === true;
@@ -1697,7 +1701,7 @@ export async function executeComboResponses(
       // Numeric 429 is a client replay policy here, not an upstream quota observation.
       childLog.causeHint = "transport-ambiguous";
       childLog.terminalSource = "synthetic";
-      childLog.errorCode = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+      childLog.errorCode = isReplayRefusalCode(failure.upstreamCode) ? failure.upstreamCode : UPSTREAM_RESET_REPLAY_REFUSED_CODE;
       if (!sealedCredentialRefusals.has(attempt)) attempt.errorCode = childLog.errorCode;
     }
     if (failure.upstreamCode === "input_admission_refused" && attempt.sendCount === 0) {
@@ -1727,7 +1731,7 @@ export async function executeComboResponses(
     // client would resend becomes the refusal, and anything else reaches the client as it is.
     const spentReplacement = !failure.nonReplayable && comboSendScope?.ambiguousResendSpent === true;
     if (spentReplacement) {
-      const settled = settleOperatorReplacement(failure.response);
+      const settled = await settleOperatorReplacement(failure.response, req.signal);
       if (settled !== failure.response) {
         adoptFailedChildLog(childLog);
         return settled;
@@ -1787,9 +1791,7 @@ export async function executeComboResponses(
       // no later failure may reopen ordinary combo/native account hopping.
       adoptFailedChildLog(childLog);
       if (classifyOverflow && failureDecision === "stop") {
-        return wantsStream
-          ? streamingContextOverflowResponse(responseModel, options.translatorBudget)
-          : jsonContextOverflowResponse();
+        return clientOverflowResponse(failure.response);
       }
       return lastFailure;
     }
@@ -1799,9 +1801,7 @@ export async function executeComboResponses(
       }
       adoptFailedChildLog(childLog);
       if (classifyOverflow) {
-        return wantsStream
-          ? streamingContextOverflowResponse(responseModel, options.translatorBudget)
-          : jsonContextOverflowResponse();
+        return clientOverflowResponse(failure.response);
       }
       return lastFailure;
     }
@@ -1989,9 +1989,7 @@ export async function executeComboResponses(
       ? `opencodex refused this turn locally; nothing was sent upstream. No target of this combo `
         + `that was tried can fit its input: ${localAdmissionRefusals.join(" ")} Compact the conversation before retrying.`
       : undefined;
-    return (rawBody as { stream?: unknown } | null)?.stream === true
-      ? streamingContextOverflowResponse(responseModel, options.translatorBudget, localMessage)
-      : jsonContextOverflowResponse(localMessage);
+    return clientOverflowResponse(lastFailure, localMessage);
   }
   return failure;
 }

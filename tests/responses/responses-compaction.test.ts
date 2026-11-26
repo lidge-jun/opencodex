@@ -17,6 +17,7 @@ import type { AdapterEvent, OcxMessage } from "../../src/types";
 import { COMPACTION_IMAGE_NOTE, omitEarlierCompactionImages } from "../../src/responses/compaction-images";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 import { bufferCompactResponse, COMPACT_RESPONSE_MAX_BYTES } from "../../src/server/responses/compact";
+import { carryReplayRefusal, hasUpstreamReplayRefusal, isAutomaticReplayBlocked, observedReplayRefusalCode } from "../../src/lib/upstream-retry";
 
 const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
   withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
@@ -99,6 +100,37 @@ function compactBodySource(onCancel?: () => void) {
 }
 
 describe("native compact response body deadline", () => {
+  test("a known no-retry directive survives a compact body stall", () => withCompactBodyClock(async () => {
+    const source = compactBodySource();
+    const pending = bufferCompactResponse(new Response(source.body, {
+      status: 503, headers: { "x-should-retry": "false", "retry-after": "2" },
+    }), new AbortController().signal, 2);
+    try {
+      await source.waitingForRead();
+      jest.advanceTimersByTime(2_000);
+      const response = await pending;
+      expect(response.status).toBe(504);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect(response.headers.get("retry-after")).toBeNull();
+      expect(isAutomaticReplayBlocked(response)).toBe(true);
+      expect(source.cancellationReasons).toHaveLength(1);
+    } finally { source.close(); await pending; }
+  }));
+
+  test("an observed wire refusal survives a compact body read failure", async () => {
+    const code = "upstream_response_refused";
+    const observed = Response.json({ error: { code } }, { status: 503 });
+    expect(await hasUpstreamReplayRefusal(observed)).toBe(true);
+    const upstream = carryReplayRefusal(observed, new Response(new ReadableStream({
+      start(controller) { controller.error(new Error("fixture body broke")); },
+    }), { status: 503 }));
+    const response = await bufferCompactResponse(upstream, new AbortController().signal, 2);
+    expect(response.status).toBe(502);
+    expect(isAutomaticReplayBlocked(response)).toBe(true);
+    expect(observedReplayRefusalCode(response)).toBe(code);
+    void observed.body?.cancel();
+  });
+
   test("headers followed by silence expire at the default 300 seconds without waiting for cancel", () => withCompactBodyClock(async () => {
     const source = compactBodySource();
     const pending = bufferCompactResponse(new Response(source.body), new AbortController().signal);

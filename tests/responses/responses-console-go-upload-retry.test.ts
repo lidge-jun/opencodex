@@ -61,12 +61,14 @@ function config(): OcxConfig {
        baseUrl: "https://opencode.ai/zen/go/v1",
        authMode: "key",
        apiKey: "go-test-key",
+       proxy: "direct",
      },
       other: {
         adapter: "openai-responses",
         baseUrl: "https://other.example.test/v1",
         authMode: "key",
         apiKey: "other-test-key",
+        proxy: "direct",
       },
    },
  } as OcxConfig;
@@ -99,6 +101,20 @@ function success(id: string): Response {
 }
 
 describe("Console Go transient upload refusal recovery", () => {
+  test("a root replay-refusal code vetoes the nested upload diagnostic", async () => {
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends++;
+      return refusal(400, JSON.stringify({ ...JSON.parse(UPLOAD_REFUSAL), code: "upstream_response_refused" }));
+    }) as typeof fetch;
+    const cfg = config(); cfg.providers.go!.proxy = "direct";
+    const response = await handleResponses(request(), cfg, { model: "", provider: "" });
+    expect(sends).toBe(1);
+    expect(response.status).toBe(429);
+    expect((await response.json()).error.code).toBe("upstream_response_refused");
+    expect(response.headers.get("x-should-retry")).toBe("false");
+  });
+
   test("replays the refusal once and serves the retry with a byte-identical body", async () => {
     const outbound: string[] = [];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {

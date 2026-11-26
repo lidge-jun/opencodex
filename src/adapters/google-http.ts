@@ -21,6 +21,13 @@ import {
   SendBudgetExhaustedError,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
   isConnectionResetError,
+  hasClientReplayVeto,
+  hasUpstreamReplayRefusal,
+  observedReplayRefusalCode,
+  replayRefusalBodyCode,
+  projectReplayRefusal,
+  carryReplayRefusal,
+  carryReplayRefusalToClient,
 } from "../lib/upstream-retry";
 
 const GOOGLE_RETRY_BASE_MS = 250;
@@ -112,14 +119,30 @@ export async function fetchGoogleWithRetry(
           if (previous) cancelResponseBodyBestEffort(previous);
           if (retryDelayMs > 0) await sleepWithAbort(retryDelayMs, ctx.abortSignal);
         },
-        dispatch: executor => fetchWithAttemptDeadline(activeRequest.url, {
+        dispatch: (executor, wasDispatched) => fetchWithAttemptDeadline(activeRequest.url, {
           method: activeRequest.method, headers: activeRequest.headers, body: activeRequest.body,
-        }, timeoutMs, ctx.abortSignal, ctx.stream, executor),
+        }, timeoutMs, ctx.abortSignal, ctx.stream, executor, { wasDispatched }),
       });
       retryDelayMs = 0;
       sendClass = "transient";
       recovery = undefined;
-      if (res.status === 400 && repairInvalid400 && !compatibilityReplayUsed) {
+      const canRepair = res.status === 400 && repairInvalid400 && !compatibilityReplayUsed;
+      if (await hasUpstreamReplayRefusal(res, ctx.abortSignal, { requireCompleteBody: retryableGoogleStatus(res.status) || canRepair })) {
+        if (ctx.abortSignal?.aborted) {
+          cancelResponseBodyBestEffort(res);
+          throw abortError(ctx.abortSignal);
+        }
+        if (ctx.returnRawErrors) return res;
+        const code = observedReplayRefusalCode(res) ?? (hasClientReplayVeto(res) ? undefined
+          : replayRefusalBodyCode(await readDisplaySafeErrorPayloadText(res.clone(), ctx.abortSignal)));
+        if (code) {
+          cancelResponseBodyBestEffort(res);
+          return carryReplayRefusal(res, projectReplayRefusal(code));
+        }
+        return normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal)
+          .then(client => carryReplayRefusalToClient(res, client));
+      }
+      if (canRepair) {
         let payloadText = "";
         try {
           payloadText = await readDisplaySafeErrorPayloadText(res.clone(), ctx.abortSignal);

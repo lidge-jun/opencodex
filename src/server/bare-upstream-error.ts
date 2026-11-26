@@ -7,6 +7,8 @@ import {
   terminalRefusalFallbackMessage,
   upstreamErrorMessageFromPayload,
 } from "../lib/errors";
+import { replayRefusalVerdict } from "../lib/upstream-retry";
+import { projectNativeTerminalReplayVeto } from "./responses/native-terminal-replay";
 import { redactSecretString } from "../lib/redact";
 import { outboundCredentials } from "../lib/outbound-credential-registry";
 import { codexWsWrapperStatus } from "./responses/codex-ws-wire";
@@ -52,6 +54,8 @@ export function isUntypedBareUpstreamError(payload: unknown): boolean {
 }
 
 export interface BareUpstreamError {
+  /** A protocol-level veto ends the stream on this frame with a fixed diagnostic. */
+  replayProjection?: NonNullable<ReturnType<typeof projectNativeTerminalReplayVeto>>;
   message: string;
   refusalCode: string | undefined;
   /** The wire identity and status the client tail carries, derived once for every reader. */
@@ -94,11 +98,17 @@ export function bareUpstreamError(payload: unknown, mask?: BareCopyMask): BareUp
   // The envelope's own `type` is `error` or the terminal event name, never the error class.
   const errorType = (untyped ? candidates.slice(0, -1) : candidates.slice(1))
     .map(candidate => classField(candidate, "type")).find(value => value !== undefined);
+  const recognized = recognizedUpstreamError({ type: errorType, code });
+  const wrapped = wrappedServerErrorStatus(payload);
+  const replay = replayRefusalVerdict(root);
   // The message follows the same precedence as the class: a typed frame's own envelope copy is
   // the provider's verdict, while an untyped envelope's copy lives inside its error object.
   const rawMessage = untyped
     ? upstreamErrorMessageFromPayload(payload)
     : field(root, "message") ?? upstreamErrorMessageFromPayload(payload);
+  const configured = configuredCredentials();
+  const rowCopyAllowed = configured.complete
+    && ![rawMessage, code, errorType].some(text => text !== undefined && (configured.matches(text) || containsConfiguredCredentialExcerpt(text)));
   const message = rawMessage
     ? redactSecretString(guardBareCopy(rawMessage, mask)).slice(0, MAX_BARE_ERROR_MESSAGE_CHARS) : undefined;
   // The verdict is read from the provider's own words, not from the copy the guard may have
@@ -111,11 +121,15 @@ export function bareUpstreamError(payload: unknown, mask?: BareCopyMask): BareUp
   // delivery failure rather than the provider's verdict, so copy quoted inside its diagnostic
   // text is not evidence of a refusal.
   const refusalCode = isTerminalRefusalCode(code) ? code
-    : evidenceCopy === undefined || recognizedUpstreamError({ type: errorType, code }) !== undefined
+    : evidenceCopy === undefined || recognized !== undefined
       || (code !== undefined && isTransportFailureCode(code)) ? undefined
       : isCyberPolicyMessage(evidenceCopy) ? CYBER_POLICY_ERROR_CODE : safetyRefusalCodeFromMessage(evidenceCopy);
-  if (message === undefined && refusalCode === undefined && code === undefined && errorType === undefined && !untyped) return undefined;
-  const recognized = recognizedUpstreamError({ type: errorType, code });
+  // A veto stops another send while preserving the provider's independently established refusal class.
+  const policyCode = replay.explicitVeto && isBarePolicyTerminal(root, code) ? CYBER_POLICY_ERROR_CODE : refusalCode;
+  const projection = projectNativeTerminalReplayVeto(replay, "buffered",
+    policyCode ? { type: "invalid_request_error", code: policyCode } : { type: errorType, code }, {},
+    policyCode ? 400 : recognized?.httpStatus ?? wrapped ?? 502, value => redactSecretString(guardBareCopy(value, mask)));
+  if (!projection && message === undefined && refusalCode === undefined && code === undefined && errorType === undefined && !untyped) return undefined;
   const fallback = code ?? errorType;
   // A recognized class outranks an unknown code in the same verdict: the row records the class's
   // status, so the client must carry the class identity rather than a generic retryable code.
@@ -125,13 +139,10 @@ export function bareUpstreamError(payload: unknown, mask?: BareCopyMask): BareUp
   const terminalType = refusalCode !== undefined
     ? "invalid_request_error" : recognized?.type ?? "upstream_error";
   const terminalCode = refusalCode ?? recognized?.code ?? "upstream_server_error";
-  const wrapped = wrappedServerErrorStatus(payload);
   const httpStatus = refusalCode !== undefined ? 400 : recognized?.httpStatus ?? wrapped;
   const terminalStatus = httpStatus ?? 502;
-  const configured = configuredCredentials();
-  const rowCopyAllowed = configured.complete
-    && ![rawMessage, code, errorType].some(text => text !== undefined && (configured.matches(text) || containsConfiguredCredentialExcerpt(text)));
   return {
+    ...(projection && { replayProjection: projection }),
     message: message ?? (refusalCode ? terminalRefusalFallbackMessage(refusalCode)
       : fallback ? `Upstream error without a message (${redactSecretString(guardBareCopy(fallback, mask))})` : "The upstream reported an error."),
     refusalCode,
@@ -168,8 +179,8 @@ export interface BareUpstreamEvidence {
  * client rewrite: a typed `error` with a `cyber_policy` code or policy copy in any error
  * record, or an untyped envelope whose structured code is `cyber_policy`.
  */
-function isBarePolicyTerminal(payload: unknown, verdict: BareUpstreamError): boolean {
-  if (isUntypedBareUpstreamError(payload)) return verdict.errorCode === CYBER_POLICY_ERROR_CODE;
+function isBarePolicyTerminal(payload: unknown, code: string | undefined): boolean {
+  if (isUntypedBareUpstreamError(payload)) return code === CYBER_POLICY_ERROR_CODE;
   const root = record(payload);
   const response = record(root?.response);
   const candidates = [record(root?.error), record(root?.last_error), record(response?.error),
@@ -199,7 +210,7 @@ export function reduceBareUpstreamEvidence(
   const typed = !isUntypedBareUpstreamError(payload);
   // The stored verdict decides: an untyped frame may replace untyped evidence, never typed.
   if (!typed && previous?.typed === true) return previous;
-  if (!isBarePolicyTerminal(payload, verdict)) return { typed, verdict };
+  if (!isBarePolicyTerminal(payload, verdict.errorCode)) return { typed, ...(verdict.replayProjection && { terminal: true }), verdict };
   // The client receives this frame rewritten as the policy terminal, so every reader records
   // that refusal, even when the frame also names an unrelated class beside the policy copy.
   return { typed, terminal: true, verdict: { ...verdict, refusalCode: CYBER_POLICY_ERROR_CODE,

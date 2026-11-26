@@ -11,6 +11,7 @@ import {
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "../sse-payload-rewrite";
 import { isUntypedBareUpstreamError } from "../bare-upstream-error";
 import { CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, isCyberPolicyMessage, isTerminalRefusalCode, recognizedUpstreamError } from "../../lib/errors";
+import { isReplayRefusalCode } from "../../lib/upstream-retry";
 
 /**
  * A custom header carries a credential when a credential word is a whole segment of its name
@@ -43,7 +44,10 @@ function withEscapedSpelling(part: string): string[] {
  */
 function isPublicClassValue(key: string, value: unknown): boolean {
   if (typeof value !== "string") return false;
-  if (key === "code") return isTerminalRefusalCode(value) || isCyberPolicyCode(value) || recognizedUpstreamError({ code: value }) !== undefined;
+  if (key === "code") {
+    return isReplayRefusalCode(value) || isTerminalRefusalCode(value) || isCyberPolicyCode(value)
+      || recognizedUpstreamError({ code: value }) !== undefined;
+  }
   if (key === "type") return recognizedUpstreamError({ type: value }) !== undefined;
   return false;
 }

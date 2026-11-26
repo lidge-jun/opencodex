@@ -62,13 +62,16 @@ import {
   SendBudgetExhaustedError,
   fetchWithResetRetry,
   fetchWithTransientRetry,
+  hasUpstreamReplayRefusal,
   isNonReplayableResponse,
+  carryReplayRefusalToClient, isAutomaticReplayBlocked,
   isReplayRefusalResponse,
+  observedReplayRefusalCode,
   isTransientUpstreamStatus,
   markResponseNonReplayable,
   prepareSameTarget429Wait,
+  replayRefusalBodyCode,
   REPLAY_REFUSED_STATUS,
-  retainReplayRefusal,
   UpstreamRetryEvidenceError,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
   type UpstreamSendRecovery,
@@ -766,7 +769,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
     }
     const fetchWithPolicy = requestTransientPolicy ? fetchWithTransientRetry : fetchWithResetRetry;
     const request = activeRequest;
-    return await fetchWithPolicy(
+    const response = await fetchWithPolicy(
       (transportRecovery?: UpstreamSendRecovery) => fetchWithHeaderTimeout(
         request.url,
         applyUpstreamRecoveryInit({ method: "POST", headers: request.headers, body: request.body }, transportRecovery),
@@ -926,6 +929,9 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
           : {}),
       },
     );
+    // Reset-only sends and statuses outside the transient ladder can also reach rotation.
+    await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: true });
+    return response;
   };
   const discard = (response: Response) => {
     try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
@@ -943,7 +949,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
     const recoveryPasses = activeProvider._apiKeyAttempt?.distributed ? activeProvider.apiKeyPool?.length ?? 1 : 1;
     for (let pass = 0; ; pass++) {
       const priorResponse = response;
-      for (; wasAccountAutoPaused(response) && !oauthBinding && config.providers[route.providerName]?.apiKey && autoPauseMoves < 3 && keySendAvailable(); autoPauseMoves++) {
+      for (; !isAutomaticReplayBlocked(response) && wasAccountAutoPaused(response) && !oauthBinding && config.providers[route.providerName]?.apiKey && autoPauseMoves < 3 && keySendAvailable(); autoPauseMoves++) {
         const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...activeProvider, _apiKeyAttempt: undefined });
         const next = fresh && (selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh);
         if (!next) break;
@@ -954,7 +960,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       }
 
       // A credential-scoped 401 on a static key pool says nothing about the sibling keys.
-      while (response.status === 401 && distributedResponseOwnsKey && hasKeyPoolFailover(activeProvider) && keySendAvailable()) {
+      while (response.status === 401 && !isAutomaticReplayBlocked(response) && distributedResponseOwnsKey && hasKeyPoolFailover(activeProvider) && keySendAvailable()) {
         const rotated = rotateProviderTransportOn401(config, route.providerName, activeProvider, {
           now: Date.now(),
           attemptedKey: activeProvider.apiKey,
@@ -967,7 +973,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         rebuildFor(rotated);
         response = await send("key-401");
       }
-      while ((response.status === 400 || response.status === 402) && distributedResponseOwnsKey && hasKeyPoolFailover(activeProvider)) {
+      while ((response.status === 400 || response.status === 402) && !isAutomaticReplayBlocked(response) && distributedResponseOwnsKey && hasKeyPoolFailover(activeProvider)) {
         const rotated = await rotateAnthropicBillingKeyOnResponse(response, config, route.providerName, activeProvider, { signal: upstream.signal });
         if (!rotated) break;
         billingRecoveryActive = true;
@@ -982,7 +988,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       while (
         response.status === 429
         && distributedResponseOwnsKey
-        && !isNonReplayableResponse(response)
+        && !isAutomaticReplayBlocked(response)
         && retryPolicy && providerAffinityGenerationIsCurrent(config, route.providerName, activeProvider)
         && retries < retryPolicy.attempts
         && keySendAvailable()
@@ -996,7 +1002,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         if (upstream.signal.aborted) throw upstream.signal.reason;
         response = await send("rate-limit-429");
       }
-      while (response.status === 429 && distributedResponseOwnsKey && !isNonReplayableResponse(response) && hasKeyPoolFailover(activeProvider)) {
+      while (response.status === 429 && distributedResponseOwnsKey && !isAutomaticReplayBlocked(response) && hasKeyPoolFailover(activeProvider)) {
         const rotated = rotateProviderTransportOn429(config, route.providerName, activeProvider, {
           retryAfter: response.headers.get("retry-after"),
           now: Date.now(),
@@ -1012,7 +1018,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         rebuildFor(rotated);
         response = await send("key-429");
       }
-      if (response === priorResponse || isNonReplayableResponse(response) || !keySendAvailable()) break;
+      if (response === priorResponse || isAutomaticReplayBlocked(response) || !keySendAvailable()) break;
       // Billing class transitions share the physical-send ceiling; distributed-only
       // transitions additionally retain their original bounded pool-pass allowance.
       if (wasAccountAutoPaused(response) && autoPauseMoves < 3) continue;
@@ -1102,7 +1108,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
 
   // The last pool account refused on spent quota and rotation found no replacement: answer the
   // usage limit with its reset (#6991), as the bridge lane does, not the upstream "try again later".
-  const poolUsageLimit = response.status === 429 && oauthBinding
+  const poolUsageLimit = response.status === 429 && oauthBinding && !isAutomaticReplayBlocked(response)
     ? anthropicRoutingFor(nativeInstance!).anthropicPoolUsageLimitAfterRefusal(Date.now(), oauthBinding.routeDecision, route.modelId)
     : null;
   if (poolUsageLimit) {
@@ -1386,7 +1392,9 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
     message,
   );
   const safeMessage = redactSecretString(classified.message);
-  const replayRefusal = isReplayRefusalResponse(response);
+  const replayCode = observedReplayRefusalCode(response) ?? replayRefusalBodyCode(bodyText)
+    ?? (isReplayRefusalResponse(response) ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : undefined);
+  const replayRefusal = replayCode !== undefined;
   const transient = !replayRefusal && isTransientUpstreamStatus(response.status);
   const status = replayRefusal ? REPLAY_REFUSED_STATUS : transient ? 529 : response.status;
   const upstreamRetryAfter = response.headers.get("retry-after");
@@ -1411,18 +1419,18 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
   const legacy = anthropicErrorBody(status,
     legacyOverflow ? claudePromptTooLongMessage(safeMessage) : safeMessage,
     transient ? "overloaded_error" : upstreamType,
-    replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : undefined,
+    replayCode,
   );
-  const overflow = messagesOverflowPresentation((legacy.error as Rec).message);
+  const overflow = !replayRefusal && messagesOverflowPresentation((legacy.error as Rec).message);
   const out = new Response(JSON.stringify(ownedAnthropicErrorPayload({
     status, type: transient ? "overloaded_error" : upstreamType,
-    code: replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : undefined,
+    code: replayCode,
     evidence: { status: response.status, type: upstreamType, code: upstreamCode, message: safeMessage }, overflow,
     ...(replayRefusal ? { contract: "replay_refused" as const } : {}),
     ...(clientZenMessage === undefined ? {} : { localError: markProxyError({ message: clientZenMessage }) }),
   })), { status, headers });
   attachComboFailureEvidence(out, JSON.stringify(legacy));
-  return replayRefusal ? retainReplayRefusal(out) : out;
+  return carryReplayRefusalToClient(response, out);
 }
 
 /**

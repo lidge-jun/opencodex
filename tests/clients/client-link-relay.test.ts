@@ -19,11 +19,20 @@ import {
   type LinkTunnelGate,
   type LinkAdmissionResult,
 } from "../../src/client/link-relay";
-import { LinkRelayAuthenticationError, LinkRelayAuthTimeoutError } from "../../src/client/link-relay-transport";
+import { LinkRelayAuthTimeoutError } from "../../src/client/link-relay-transport";
 import type { LinkDiagnosticRecord } from "../../src/link/diagnostics";
 import { LINK_RELAY_AUTH_PATH } from "../../src/link/relay-auth";
 import { HUB_RELAY_REQUEST_BODY_MAX_BYTES, HUB_RELAY_RESPONSE_BODY_MAX_BYTES } from "../../src/client/hub-relay";
 import { HOME_UNREACHABLE_MESSAGE } from "../../src/client/home-unreachable";
+import { formatErrorResponse } from "../../src/bridge/errors";
+import {
+  isNonReplayableResponse,
+  isNonReplayableUpstreamCode,
+  REPLAY_REFUSAL_NO_RETRY_HEADER,
+  REPLAY_REFUSED_STATUS,
+  UPSTREAM_RESPONSE_REFUSED_CODE,
+  UPSTREAM_RESET_REPLAY_REFUSED_CODE,
+} from "../../src/lib/upstream-retry";
 import { startMachineListener } from "../../src/client/machine-listener";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import type { OcxClientConnectionConfig } from "../../src/types";
@@ -376,8 +385,12 @@ describe("client link HTTP relay", () => {
         return Response.json({ unreachable: true });
       }) as typeof fetch,
     });
-    expect(refused.status).toBe(503);
-    expect(refused.headers.get("retry-after")).toBe("1");
+    // The deadline fired while the dispatch was in flight: the turn may already run on Home,
+    // so the abort settles as the non-replayable refusal, never a hop-authorizing unreachable.
+    expect(refused.status).toBe(REPLAY_REFUSED_STATUS);
+    expect(refused.headers.get("retry-after")).toBeNull();
+    expect(refused.headers.get(REPLAY_REFUSAL_NO_RETRY_HEADER)).toBe("false");
+    expect(isNonReplayableResponse(refused)).toBe(true);
   });
 
   test("returns a retryable JSON 503 when the tunnel is refused, without echoing the key", async () => {
@@ -386,14 +399,34 @@ describe("client link HTTP relay", () => {
       headers: { "X-OpenCodex-API-Key": "ocx_data_caller", "Content-Type": "application/json" },
       body: JSON.stringify({ input: "private" }),
     }), target, {
-      fetchImpl: (async () => { throw new Error(`connection refused ${LINK_KEY}`); }) as typeof fetch,
+      fetchImpl: (async () => { throw Object.assign(new Error(`connection refused ${LINK_KEY}`), { code: "ECONNREFUSED" }); }) as typeof fetch,
     });
     expect(response.status).toBe(503);
     expect(response.headers.get("retry-after")).toBe("1");
+    expect((await response.clone().json()).code).toBe("home_unreachable");
     const body = await response.text();
     expect(body).not.toContain(LINK_KEY);
     expect(body).not.toContain("ocx_data_caller");
     expect(body).not.toContain("private");
+  });
+
+  test("a refused connection keeps home_unreachable when the streamed body was already consumed", async () => {
+    let calls = 0;
+    const response = await relayLinkDataRequest(relayRequest({ method: "POST", body: "{}" }), target, {
+      fetchImpl: (async (_input, init) => {
+        calls += 1;
+        // The transport may already hold the body reader when the socket answers refused.
+        // Nothing left the device, so the verdict stays home_unreachable even though this
+        // relay can no longer stream the same body again itself.
+        await init!.body!.getReader().read();
+        throw Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" });
+      }) as typeof fetch,
+    });
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("1");
+    expect((await response.clone().json()).code).toBe("home_unreachable");
+    expect(isNonReplayableResponse(response)).toBe(false);
+    expect(calls).toBe(1);
   });
 
   test("applies the response byte cap to non-SSE responses", async () => {
@@ -403,7 +436,30 @@ describe("client link HTTP relay", () => {
         headers: { "Content-Length": "1025" },
       })) as typeof fetch,
     });
-    expect(response.status).toBe(502);
+    // The Home already ran the turn: a retryable 5xx would send it again, so the refused
+    // answer settles as the shared non-replayable refusal.
+    expect(response.status).toBe(REPLAY_REFUSED_STATUS);
+    expect(response.headers.get(REPLAY_REFUSAL_NO_RETRY_HEADER)).toBe("false");
+    expect(response.headers.get("x-opencodex-link-request-id")).not.toBeNull();
+    expect(isNonReplayableResponse(response)).toBe(true);
+    const code = ((await response.json()) as { error?: { code?: string } }).error?.code;
+    expect(code).toBe(UPSTREAM_RESPONSE_REFUSED_CODE);
+    expect(isNonReplayableUpstreamCode(code)).toBe(true);
+  });
+
+  test("refuses a Home answer whose headers exceed the relay limit without inviting replay", async () => {
+    const response = await relayLinkDataRequest(relayRequest({ method: "POST" }), target, {
+      fetchImpl: (async () => new Response("ok", {
+        headers: { "x-pad": "x".repeat(100 * 1024) },
+      })) as typeof fetch,
+    });
+    expect(response.status).toBe(REPLAY_REFUSED_STATUS);
+    expect(response.headers.get(REPLAY_REFUSAL_NO_RETRY_HEADER)).toBe("false");
+    expect(response.headers.get("x-opencodex-link-request-id")).not.toBeNull();
+    expect(isNonReplayableResponse(response)).toBe(true);
+    const code = ((await response.json()) as { error?: { code?: string } }).error?.code;
+    expect(code).toBe(UPSTREAM_RESPONSE_REFUSED_CODE);
+    expect(isNonReplayableUpstreamCode(code)).toBe(true);
   });
 
   test("propagates caller abort to the upstream SSE and cancels its body", async () => {
@@ -575,7 +631,7 @@ describe("client link relay while the tunnel reconnects", () => {
     expect(sends).toBe(1);
     const refused = await relayLinkDataRequestImpl(relayRequest({ method: "POST", body: "{}" }), target, {
       tunnel: HOME_INITIATED_LINK_TUNNEL,
-      fetchImpl: (async () => { sends += 1; throw new Error("connection refused"); }) as typeof fetch,
+      fetchImpl: (async () => { sends += 1; throw Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" }); }) as typeof fetch,
     });
     expect(refused.status).toBe(503);
     expect(sends).toBe(2);
@@ -677,10 +733,46 @@ describe("client link relay while the tunnel reconnects", () => {
         throw Object.assign(new Error("socket reset"), { code: "ECONNRESET" });
       }) as typeof fetch,
     });
-    expect(response.status).toBe(503);
-    expect(response.headers.get("retry-after")).toBe("1");
+    // The reset is ambiguous: the send may already have run on Home. A home_unreachable verdict
+    // would authorize a second dispatch to another target, so the relay answers the shared
+    // non-replayable refusal instead — no wait, no SDK resend, and the code survives re-wrapping.
+    expect(response.status).toBe(REPLAY_REFUSED_STATUS);
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(response.headers.get(REPLAY_REFUSAL_NO_RETRY_HEADER)).toBe("false");
+    expect(response.headers.get("x-opencodex-link-request-id")).not.toBeNull();
+    expect(isNonReplayableResponse(response)).toBe(true);
+    const code = ((await response.json()) as { error?: { code?: string } }).error?.code;
+    expect(code).toBe(UPSTREAM_RESET_REPLAY_REFUSED_CODE);
+    expect(isNonReplayableUpstreamCode(code)).toBe(true);
     expect(calls).toBe(1);
     expect(waited).toBe(0);
+  });
+
+  test("marks the answer non-replayable when the caller vanishes after upstream resolved", async () => {
+    const caller = new AbortController();
+    let calls = 0;
+    const response = await relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}", signal: caller.signal,
+    }), target, {
+      fetchImpl: (async () => {
+        calls += 1;
+        caller.abort(new Error("caller gone"));
+        return new Response("data: {}\n\n", { status: 200, headers: { "content-type": "text/event-stream" } });
+      }) as typeof fetch,
+    });
+    // The dispatch resolved, so nothing may claim the Home was unreachable: the abort only
+    // closed the caller-facing exchange of a turn that may already be running.
+    expect(response.status).toBe(REPLAY_REFUSED_STATUS);
+    expect(response.headers.get(REPLAY_REFUSAL_NO_RETRY_HEADER)).toBe("false");
+    expect(isNonReplayableResponse(response)).toBe(true);
+    const code = ((await response.json()) as { error?: { code?: string } }).error?.code;
+    expect(code).toBe(UPSTREAM_RESPONSE_REFUSED_CODE);
+    expect(isNonReplayableUpstreamCode(code)).toBe(true);
+    const rewrapped = formatErrorResponse(response.status, "upstream_error", "relay refused delivery", { code });
+    expect(rewrapped.status).toBe(REPLAY_REFUSED_STATUS);
+    expect(rewrapped.headers.get(REPLAY_REFUSAL_NO_RETRY_HEADER)).toBe("false");
+    expect(rewrapped.headers.get("retry-after")).toBeNull();
+    expect(calls).toBe(1);
   });
 
   test("resends a refused request once the tunnel is back, inside the same hold window", async () => {
@@ -895,17 +987,37 @@ test.each([false, true])("owner and auth deadlines share a single recovery budge
   expect(attempts).toBe(1);
 });
 
-test.each([new LinkRelayAuthenticationError(), new Error("socket reset after dispatch")])(
-  "never retries authentication refusal or ambiguous transport failure: %s", async failure => {
+test("never retries an ambiguous post-dispatch transport failure", async () => {
     const { gate, checks } = observedGate(["match"]);
     let attempts = 0;
     const response = await relayLinkDataRequestImpl(relayRequest({ method: "POST" }), target, {
-      tunnel: gate, fetchImpl: (async () => { attempts++; throw failure; }) as typeof fetch,
+      tunnel: gate, fetchImpl: (async () => { attempts++; throw new Error("socket reset after dispatch"); }) as typeof fetch,
     });
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(REPLAY_REFUSED_STATUS);
     expect(checks()).toBe(1);
     expect(attempts).toBe(1);
-  });
+});
+
+test("a failed credential-free proof refuses authentication before data dispatch", async () => {
+  let challenges = 0, dispatches = 0;
+  const home = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    if (new URL(request.url).pathname === LINK_RELAY_AUTH_PATH) {
+      challenges++;
+      expect(request.headers.has("authorization")).toBe(false);
+      return new Response(null, { status: 204, headers: { "x-opencodex-link-proof": "0".repeat(64) } });
+    }
+    dispatches++;
+    return new Response("unexpected data request");
+  } });
+  servers.push(home);
+  const { gate, checks } = observedGate(["match"]);
+  const response = await relayLinkDataRequestImpl(relayRequest({ method: "POST", body: "must remain unsent" }), {
+    ...target, tunnelPort: home.port!, linkId: `lnk_${"a".repeat(16)}`, apiKeyId: "ocx_data_fixture",
+  }, { tunnel: gate });
+  expect(response.status).toBe(503);
+  expect((await response.json()).code).toBe("link_relay_auth_failed");
+  expect({ challenges, dispatches, checks: checks() }).toEqual({ challenges: 1, dispatches: 0, checks: 1 });
+});
 
 test("caller cancellation during an owner deadline prevents both recovery and dispatch", async () => {
   const abort = new AbortController();

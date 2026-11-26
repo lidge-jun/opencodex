@@ -98,6 +98,34 @@ test("quota-only failover returns a transient rate limit without sending to a me
   expect(sent).toEqual(["subscription"]);
 });
 
+test.each([
+  { status: 413, stream: false }, { status: 413, stream: true }, { status: 429, stream: false },
+])("quota-only same-model failover preserves a terminal retry veto %j", async ({ status, stream }) => {
+  const cfg = config(true);
+  cfg.combos!.chain = {
+    ...cfg.combos!.chain!, quotaOnlyFallback: true, preserveFallbackModel: true,
+    targets: [{ provider: "subscription", model: "m" }, { provider: "paid", model: "m", metered: true }],
+  };
+  cfg.providers.subscription!.fetch = (async () => {
+    sent.push("subscription");
+    const code = status === 413 ? "context_length_exceeded" : "insufficient_quota";
+    return Response.json({ error: { code, message: code } }, {
+      status, headers: { "x-should-retry": "false", "retry-after": "60" },
+    });
+  }) as typeof fetch;
+  const req = new Request("http://localhost:16389/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "combo/chain", input: "hi", stream }),
+  });
+  const response = await handleResponses(req, cfg, { model: "", provider: "" }, { admission: local });
+  const text = await response.text();
+  expect(sent, `HTTP ${response.status}: ${text.slice(0, 300)}`).toEqual(["subscription"]);
+  expect(response.status).toBe(stream ? 200 : status);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(response.headers.get("retry-after")).toBeNull();
+  if (status === 413) expect(text).toContain("context_length_exceeded");
+});
+
 test("quota-only failover never treats a preexisting transient cooldown as exhausted quota", async () => {
   const cfg = config(true);
   cfg.combos!.chain = {

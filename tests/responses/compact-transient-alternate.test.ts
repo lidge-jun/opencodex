@@ -9,7 +9,9 @@ import { clearPoolRotationState } from "../../src/codex/pool-rotation";
 import { clearAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth } from "../../src/codex/routing";
 import { clearUpstreamHostHealth } from "../../src/codex/upstream-host-health";
+import { handleResponses } from "../../src/server/responses";
 import { COMPACT_RESPONSE_MAX_BYTES, handleResponsesCompact } from "../../src/server/responses/compact";
+import { CLIENT_ERROR_CONTRACTS } from "../../src/lib/client-error-body";
 import {
   createRequestExecutionBudget,
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
@@ -157,6 +159,60 @@ async function compact(options?: Parameters<typeof compactResponse>[0]) {
 function failures(accountId: string): number {
   return getCodexUpstreamHealth(accountId)?.consecutiveFailures ?? 0;
 }
+
+test("round 4: pooled compact records a coded 429 without selecting an alternate", async () => {
+  upstream(() => Response.json({ error: { code: "upstream_response_refused", message: "provider-private-detail" } }, {
+    status: 429, headers: { "retry-after": "30" },
+  }), compacted);
+  const { response, body } = await compact();
+  expect(sends).toEqual(["Bearer work-access"]);
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(response.headers.get("retry-after")).toBeNull();
+  expect(JSON.parse(body)).toEqual({ error: {
+    type: "upstream_error", code: "upstream_response_refused", message: CLIENT_ERROR_CONTRACTS.replay_refused,
+  } });
+  const health = getCodexUpstreamHealth(WORK);
+  expect(health?.lastFailureStatus).toBe(429);
+  expect(health?.cooldownUntil).toBeGreaterThan(Date.now());
+  expect(getCodexUpstreamHealth(OTHER)?.lastFailureStatus).toBeUndefined();
+});
+
+test("pooled compact keeps quota evidence when an inconclusive 429 vetoes client retries", async () => {
+  const raw = Response.json({ padding: "x".repeat(17_000), error: { code: "rate_limit_exceeded" } }, {
+    status: 429, headers: { "retry-after": "30" },
+  });
+  upstream(() => raw, compacted);
+  const { response } = await compact();
+  expect(sends).toEqual(["Bearer work-access"]);
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(response.headers.get("retry-after")).toBeNull();
+  expect(raw.headers.get("retry-after")).toBe("30");
+  expect(getCodexUpstreamHealth(WORK)?.lastFailureStatus).toBe(429);
+  expect(getCodexUpstreamHealth(WORK)?.cooldownUntil).toBeGreaterThan(Date.now());
+  expect(getCodexUpstreamHealth(OTHER)?.lastFailureStatus).toBeUndefined();
+});
+
+test.each([false, true])("pooled compact keeps a coded 402 without switching accounts (inconclusive=%s)", async inconclusive => {
+  const raw = Response.json({
+    ...(inconclusive ? { padding: "x".repeat(17_000) } : {}),
+    error: { code: "upstream_response_refused", message: "fixture diagnostic" },
+  }, { status: 402, headers: { "retry-after": "30" } });
+  upstream(() => raw, compacted);
+  const { response, body } = await compact();
+  expect(sends).toEqual(["Bearer work-access"]);
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(response.headers.get("retry-after")).toBeNull();
+  expect(JSON.parse(body).error).toEqual({
+    type: "upstream_error", code: "upstream_response_refused", message: CLIENT_ERROR_CONTRACTS.replay_refused,
+  });
+  expect(raw.headers.get("retry-after")).toBe("30");
+  expect(getCodexUpstreamHealth(WORK)?.lastFailureStatus).toBe(402);
+  expect(getCodexUpstreamHealth(WORK)?.cooldownUntil).toBeGreaterThan(Date.now());
+  expect(getCodexUpstreamHealth(OTHER)?.lastFailureStatus).toBeUndefined();
+});
 
 test("malformed retained compact input does not poison pooled account health", async () => {
   const config = poolConfig();
@@ -612,3 +668,24 @@ test("caller-owned compact main 429 releases only its conversation binding", asy
   expect(next.affinityDecision?.move).toBe("rebound");
   expect(next.affinityDecision?.reason).toBe("quota_refusal");
 });
+
+for (const path of ["/v1/responses", "/v1/responses/compact"] as const) {
+  test.each([429, 503])(`pooled ${path} keeps a header-only no-retry %i on the first account`, async status => {
+    upstream(() => Response.json({ error: { message: "fixture upstream refusal" } }, {
+      status, headers: { "x-should-retry": "false", "retry-after": "30" },
+    }), compacted);
+    const config = poolConfig();
+    const { response, body } = path.endsWith("/compact") ? await compact({ config }) : await (async () => {
+      const response = await handleResponses(new Request(`http://localhost${path}`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.5", input: "fixture", stream: true, store: false }),
+      }), config, { model: "", provider: "" });
+      return { response, body: await response.text() };
+    })();
+    expect(sends).toEqual(["Bearer work-access"]);
+    expect(response.status).toBe(status);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(body).toContain("fixture upstream refusal");
+  });
+}

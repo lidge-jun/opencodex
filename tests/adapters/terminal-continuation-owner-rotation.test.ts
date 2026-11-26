@@ -148,7 +148,7 @@ describe("terminal continuation provider-owner rotation", () => {
     removeTreeWithRetry(testHome);
   });
 
-  test("429 rotation fences inherited state and persists the rotated owner", async () => {
+  test.each([false, true])("continuation 429 rotation obeys the no-retry directive (no-retry %s)", async noRetry => {
     const keyA = "key-alpha-000111222333";
     const keyB = "key-beta-444555666777";
     const config: OcxConfig = {
@@ -158,6 +158,8 @@ describe("terminal continuation provider-owner rotation", () => {
         owned: {
           adapter: "test-terminal-owned",
           baseUrl: "https://owned-terminal.test/v1",
+          // Keep this owned in-memory fetch fixture independent of inherited proxy settings.
+          proxy: "direct",
           authMode: "key",
           apiKey: keyA,
           apiKeyPool: [
@@ -179,7 +181,7 @@ describe("terminal continuation provider-owner rotation", () => {
       if (phase === "rate-limit") {
         return Response.json(
           { error: { message: "rotate" } },
-          { status: 429, headers: { "retry-after": "30" } },
+          { status: 429, headers: { "retry-after": "30", ...(noRetry ? { "x-should-retry": "false" } : {}) } },
         );
       }
       return new Response("", { headers: { "x-test-phase": phase } });
@@ -222,7 +224,13 @@ describe("terminal continuation provider-owner rotation", () => {
       }],
     });
     expect(rotated.status).toBe(200);
-    const rotatedJson = await rotated.json() as { id: string };
+    const rotatedJson = await rotated.json() as { id: string; status?: string };
+    if (noRetry) {
+      expect(seenAuthorization).toEqual(Array<string>(3).fill(`Bearer ${keyA}`));
+      expect(rotatedJson.status).toBe("failed");
+      expect(phases).toEqual(["rotated", "follow"]);
+      return;
+    }
     const keyBIdentity = reasoningReplayKeyCredentialIdentity(config.providers.owned!);
     expect(keyBIdentity).toBeDefined();
     expect(keyBIdentity).not.toBe(keyAIdentity);
@@ -287,6 +295,8 @@ describe("terminal continuation provider-owner rotation", () => {
         anthropic: {
           adapter: "test-terminal-owned",
           baseUrl: "https://owned-terminal.test/v1",
+          // Keep this owned in-memory fetch fixture independent of inherited proxy settings.
+          proxy: "direct",
           authMode: "oauth",
           models: ["model"],
         },

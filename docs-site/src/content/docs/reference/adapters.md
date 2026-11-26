@@ -497,6 +497,8 @@ a JEV combo's `decisionProvider` (see [Combos](/guides/combos/)).
   bridges when their send accounting can admit recovery. Under an enforced spend ceiling, each
   send in the recovery flow uses its own reported usage, including HTTP errors. When the provider
   reports no usage, the send's reservation estimate continues to count toward the limit.
+  A recognized replay refusal from the summary ends recovery before the smaller resend and
+  returns `x-should-retry: false` to the client.
 - Translated Anthropic Messages reasoning replay shares the request translation budget, including
   encoding/decoding copy overhead. Requests exceeding it return HTTP 413 with
   `translation_buffer_limit`; signatures and opaque reasoning data are never truncated to fit.
@@ -770,11 +772,15 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   `runtime.{region}.kiro.dev` URL follows the imported credential's API region; only that canonical
   shape is eligible for one budgeted fallback to `q.{region}.amazonaws.com` after an endpoint,
   signature, DNS, or connection failure, or HTTP 502/503/504 received before output.
+  After an HTTP error, Kiro requires a conclusive replay-safety check before endpoint fallback
+  or throttle recovery. An inconclusive check yields `x-should-retry: false` without `Retry-After`.
 - Owns replay-safe connection-reset recovery, that single eligible endpoint fallback, one OAuth
   refresh/replay after HTTP 401, and bounded recovery for transient Kiro 429s. A shared cooldown and
   single post-cooldown probe prevent concurrent requests from exhausting independent retry budgets;
   hard quota failures are not retried on that same account, and other service errors are not replayed. Every Kiro physical send uses
-  configured provider egress. A header deadline returns 504; caller cancellation stops the turn.
+  configured provider egress. A header deadline before the physical send returns HTTP 504. After a
+  POST is sent, a header deadline returns HTTP 429 with `upstream_reset_replay_refused` and
+  `x-should-retry: false`. Caller cancellation stops the turn.
   Final HTTP 5xx bodies use fixed public text without upstream detail.
 - Its non-streaming parser drains the same event stream for the web-search loop.
 - Reports per-account usage. `AmazonCodeWhispererService.GetUsageLimits` on

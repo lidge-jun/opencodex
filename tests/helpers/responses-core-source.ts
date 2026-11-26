@@ -106,6 +106,7 @@ export const RESPONSES_CORE_MODULES = [
   "buffered-sse-json.ts",
   "terminal-error-redaction.ts",
   "non-replayable-error.ts",
+  "native-terminal-replay.ts",
   "sidecar-execution.ts",
   "sidecar-send-budget.ts",
   "completion-policy.ts",

@@ -1,3 +1,7 @@
+import {
+  replayRefusalVerdict, projectReplayRefusal, REPLAY_REFUSAL_NO_RETRY_HEADER,
+  REPLAY_REFUSAL_NO_RETRY_VALUE, retainReplayRefusal, UPSTREAM_RESPONSE_REFUSED_CODE,
+} from "../../lib/upstream-retry";
 import { completeIncrementalFrame, recordIncrementalDispatch, type IncrementalPlan } from "./codex-ws-incremental";
 import { NativeSteeringError } from "./native-steering";
 import { NativeContinuationRefusalError } from "./native-continuation-refusal";
@@ -115,6 +119,19 @@ function wrappedRejectionResponse(payload: Record<string, unknown>, prelude: Hea
   return new Response(JSON.stringify({
     error: error ?? { type: "upstream_error", message: "Upstream rejected the request" },
   }), { status, headers });
+}
+
+/** Inspect the original cache-miss envelope before dropping fields in HTTP projection. */
+function cacheMissReplayRefusal(payload: Record<string, unknown>, prelude: Headers) {
+  const { refusalCode, explicitVeto } = replayRefusalVerdict(payload);
+  if (refusalCode !== undefined) return refusalCode;
+  const headers = record(payload.headers) ? payload.headers : {};
+  if (explicitVeto
+    || prelude.get(REPLAY_REFUSAL_NO_RETRY_HEADER) === REPLAY_REFUSAL_NO_RETRY_VALUE
+    || Object.entries(headers).some(([name, value]) =>
+      name.toLowerCase() === REPLAY_REFUSAL_NO_RETRY_HEADER
+      && (value === false || value === REPLAY_REFUSAL_NO_RETRY_VALUE))) return UPSTREAM_RESPONSE_REFUSED_CODE;
+  return undefined;
 }
 
 /** The client-facing error of a pre-output refusal projection, from the refusal's own error object. */
@@ -718,12 +735,33 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         // not accepted. The retained full create belongs to this exchange's admitted caller.
         // Never replay caller-owned IDs, committed output, foreign identities or unknown sends.
         const cacheMissStatus = codexWsWrapperStatus(normalized.payload);
-        if (incrementalPlan?.delta && sent && !responseCommitted && !deferredCommit && relayedEvents === 0
+        const cacheMiss = incrementalPlan?.delta && sent && !responseCommitted && !deferredCommit && relayedEvents === 0
           && type === "error" && normalized.payload.stream_id === undefined
-          && normalized.payload.response_id === undefined && normalized.payload.response === undefined
+          && normalized.payload.response_id === undefined
           && record(normalized.payload.error) && normalized.payload.error.code === "previous_response_not_found"
           && ((!Object.hasOwn(normalized.payload, "status") && !Object.hasOwn(normalized.payload, "status_code"))
-            || (cacheMissStatus !== undefined && cacheMissStatus >= 400 && cacheMissStatus < 500))) {
+            || (cacheMissStatus !== undefined && cacheMissStatus >= 400 && cacheMissStatus < 500));
+        if (cacheMiss) {
+          const refusal = cacheMissReplayRefusal(normalized.payload, metadata?.snapshot() ?? new Headers());
+          if (refusal) {
+            terminal = true;
+            cleanup();
+            controller.close();
+            session.dispose();
+            const projection = projectReplayRefusal(refusal);
+            const declared = normalized.payload.headers;
+            const rejection = cacheMissStatus === 429
+              ? new Response(projection.body, { status: 429, headers: rejectionHeaders(
+                record(declared) ? declared : {}, metadata?.snapshot() ?? new Headers(), metadataContext,
+              ) })
+              : retainReplayRefusal(projection);
+            if (cacheMissStatus === 429) rejection.headers.set(REPLAY_REFUSAL_NO_RETRY_HEADER, REPLAY_REFUSAL_NO_RETRY_VALUE);
+            markCodexWsPreludeProjection(rejection);
+            resolve(rejection);
+            return;
+          }
+        }
+        if (cacheMiss && incrementalPlan && normalized.payload.response === undefined) {
           frameText = incrementalPlan.fullFrameText;
           incrementalPlan = { ...incrementalPlan, frameText, delta: false, sentBytes: incrementalPlan.fullBytes };
           if (signal?.aborted) { onAbort(); return; }

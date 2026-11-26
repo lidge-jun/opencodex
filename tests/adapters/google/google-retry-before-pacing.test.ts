@@ -2,8 +2,9 @@ import { describe, expect, spyOn, test } from "bun:test";
 import type { AdapterRequest } from "../../../src/adapters/base";
 import { fetchGoogleWithRetry } from "../../../src/adapters/google-http";
 import { createAdapterPhysicalSend } from "../../../src/adapters/physical-send";
+import { EXECUTOR_PHYSICAL_SEND_RECEIPT, markPhysicalSendReceiptExecutor } from "../../../src/lib/executor-physical-send-receipt";
 import { createRequestExecutionBudget } from "../../../src/lib/request-execution-budget";
-import { SendBudgetExhaustedError } from "../../../src/lib/upstream-retry";
+import { hasClientReplayVeto, SendBudgetExhaustedError } from "../../../src/lib/upstream-retry";
 import {
   providerRequestPacingStatus, resetProviderRequestPacingForTest,
   setProviderRequestPacingRuntimeForTest, waitForProviderRequestSlot,
@@ -27,9 +28,65 @@ const repairable = (): AdapterRequest => ({
 const schemaError = JSON.stringify({ error: { code: 400, status: "INVALID_ARGUMENT",
   message: "tools.0.custom.input_schema: JSON schema is invalid" } });
 
+test("Google retries a guarded header deadline before the physical receipt", async () => {
+  const sendBudget = budgetOf(1);
+  const ordinals: number[] = [];
+  let calls = 0;
+  const executor = markPhysicalSendReceiptExecutor(fakeFetch(async (_input, init) => {
+    if (++calls === 1) {
+      const signal = init!.signal!;
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    }
+    (init as RequestInit & { [EXECUTOR_PHYSICAL_SEND_RECEIPT]: () => void })[EXECUTOR_PHYSICAL_SEND_RECEIPT]();
+    return new Response("ok");
+  }));
+  const response = await fetchGoogleWithRetry("Antigravity", request(), {
+    executor, sendBudget, timeoutMs: 1, onPhysicalSend: send => ordinals.push(send.ordinal),
+  });
+  expect(response.status).toBe(200);
+  expect(calls).toBe(2);
+  expect(ordinals).toEqual([1]);
+  expect(sendBudget.used).toBe(1);
+});
+
+test.each(["owned", "unrelated", "caller"] as const)("Google POST abort wrapper with %s cause", async kind => {
+  const caller = new AbortController();
+  const callerReason = new Error("caller closed");
+  const unrelatedReason = new Error("unrelated transport failure");
+  const sendBudget = budgetOf(2);
+  let sends = 0;
+  const executor = fakeFetch(async (_input, init) => {
+    if (++sends > 1) return new Response("ok");
+    const signal = init!.signal!;
+    return new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        reject(new Error("transport abort wrapper", { cause: kind === "unrelated" ? unrelatedReason : signal.reason }));
+      }, { once: true });
+      if (kind === "caller") caller.abort(callerReason);
+    });
+  });
+  const pending = fetchGoogleWithRetry("Antigravity", request(), {
+    executor, sendBudget, abortSignal: caller.signal, timeoutMs: 1,
+  });
+  if (kind === "caller") {
+    await expect(pending).rejects.toBe(callerReason);
+  } else {
+    const response = await pending;
+    expect({ status: response.status, sends, charges: sendBudget.used }).toEqual(
+      kind === "owned" ? { status: 429, sends: 1, charges: 1 } : { status: 200, sends: 2, charges: 2 },
+    );
+    expect(response.headers.get("x-should-retry")).toBe(kind === "owned" ? "false" : null);
+    expect(response.headers.get("retry-after")).toBeNull();
+  }
+  expect(sends).toBe(kind === "unrelated" ? 2 : 1);
+  expect(sendBudget.used).toBe(sends);
+});
+
 describe("Google retry ownership and repair counterexamples", () => {
   test("abort just after retry classification cleans up the still-owned response", () => withClock(async clock => {
-    const first = unread(503);
+    const first = finiteBody(503);
     let sends = 0;
     const reason = new Error("fixture classification abort");
     // Abort synchronously during backoff calculation, before pendingResponse is set.
@@ -40,14 +97,14 @@ describe("Google retry ownership and repair counterexamples", () => {
         executor: paced(fakeFetch(async () => { sends++; return first.response; })),
         abortSignal: clock.controller.signal,
       })).rejects.toBe(reason);
-      expect(sends).toBe(1); expect(first.counts.cancels).toBe(1);
+      expect(sends).toBe(1); expect(first.counts).toEqual({ cancels: 0, pulls: 1 });
       expect(status()).toMatchObject({ inFlight: 0, queued: 0 });
       expect(clock.timers.size).toBe(0);
     } finally { random.mockRestore(); }
   }));
 
   test("abort while the retry queues behind another owner refunds and never dispatches", () => withClock(async clock => {
-    const first = unread(503);
+    const first = finiteBody(503);
     const budget = budgetOf(3);
     let sends = 0;
     const completion = clock.watch(fetchGoogleWithRetry("Antigravity", request(), {
@@ -63,7 +120,7 @@ describe("Google retry ownership and repair counterexamples", () => {
       clock.controller.abort(reason);
       await expect(completion).rejects.toBe(reason);
       expect(status()).toMatchObject({ inFlight: 1, queued: 0 });
-      expect(budget.used).toBe(1); expect(first.counts.cancels).toBe(1);
+      expect(budget.used).toBe(1); expect(first.counts).toEqual({ cancels: 0, pulls: 1 });
     } finally { other.release(); }
     await clock.advance(1000);
     expect(sends).toBe(1); expect(status()).toMatchObject({ inFlight: 0, queued: 0 });
@@ -97,7 +154,7 @@ describe("Google retry ownership and repair counterexamples", () => {
     const executor = paced(fakeFetch(async (input, init) => {
       calls.push({ url: String(input), auth: new Headers(init?.headers).get("authorization"), body: String(init?.body), at: clock.now() });
       if (calls.length === 1) return new Response(schemaError, { status: 400 });
-      if (calls.length === 2) return unread(503).response;
+      if (calls.length === 2) return finiteBody(503).response;
       return new Response("ok");
     }));
     const completion = clock.watch(fetchGoogleWithRetry("Antigravity", original, {
@@ -126,7 +183,7 @@ describe("Google retry ownership and repair counterexamples", () => {
       if (calls.length === 2) {
         original.url = "https://retry-fixture.invalid/refreshed";
         original.headers = { authorization: "Bearer fixture-A-new" };
-        return unread(503).response;
+        return finiteBody(503).response;
       }
       return new Response("ok");
     }));
@@ -143,7 +200,7 @@ describe("Google retry ownership and repair counterexamples", () => {
   }));
 
   test("late physical budget refusal cannot return the response already cancelled for replay", () => withClock(async clock => {
-    const first = unread(503);
+    const first = finiteBody(503);
     let physicalStarts = 0, sends = 0;
     const budget = createRequestExecutionBudget(undefined, undefined, {
       charge: () => true, refund() {}, beforePhysicalSend: () => ++physicalStarts === 1,
@@ -154,7 +211,7 @@ describe("Google retry ownership and repair counterexamples", () => {
     }));
     await clock.advance(200);
     await expect(completion).rejects.toBeInstanceOf(SendBudgetExhaustedError);
-    expect(sends).toBe(1); expect(first.counts.cancels).toBe(1);
+    expect(sends).toBe(1); expect(first.counts).toEqual({ cancels: 0, pulls: 1 });
     expect(budget.used).toBe(1); expect(status()).toMatchObject({ inFlight: 0, queued: 0 });
     expect(clock.timers.size).toBe(0);
   }));
@@ -186,7 +243,9 @@ const paced = (execute: typeof fetch) => providerFetch({ ...configured, fetch: e
 const fakeFetch = (run: (input: Parameters<typeof fetch>[0], init?: RequestInit) => Promise<Response>) =>
   Object.assign(run, { preconnect() {} }) as typeof fetch;
 
-function unread(statusCode: number, headers: HeadersInit = {}, cancellation?: () => void | Promise<void>) {
+// Retry classification consumes a clone to EOF. The caller still owns its unread
+// branch, but EOF releases the physical response lease without cancelling the source.
+function finiteBody(statusCode: number, headers: HeadersInit = {}) {
   const counts = { cancels: 0, pulls: 0 };
   const response = new Response(new ReadableStream<Uint8Array>({
     pull(controller) {
@@ -194,7 +253,7 @@ function unread(statusCode: number, headers: HeadersInit = {}, cancellation?: ()
       controller.enqueue(new TextEncoder().encode("upstream-original"));
       controller.close();
     },
-    cancel() { counts.cancels++; return cancellation?.(); },
+    cancel() { counts.cancels++; },
   }, { highWaterMark: 0 }), { status: statusCode, headers });
   return { response, counts };
 }
@@ -267,7 +326,7 @@ describe("Google retry admission redteam", () => {
   }));
 
   test.each([true, false])("real budget denial transfers the original 503 body (raw=%s)", raw => withClock(async clock => {
-    const first = unread(503, { "Retry-After": "3", "x-upstream-proof": "original" });
+    const first = finiteBody(503, { "Retry-After": "3", "x-upstream-proof": "original" });
     const budget = budgetOf(1);
     let sends = 0;
     const withheld: string[] = [];
@@ -284,8 +343,8 @@ describe("Google retry admission redteam", () => {
     expect(first.counts.cancels).toBe(0);
     if (raw) {
       expect(response.bodyUsed).toBe(false);
-      expect(first.counts.pulls).toBe(0);
-      expect(status()).toMatchObject({ inFlight: 1, queued: 0 });
+      expect(first.counts.pulls).toBe(1);
+      expect(status()).toMatchObject({ inFlight: 0, queued: 0 });
       expect(await response.text()).toBe("upstream-original");
     } else expect(await response.text()).toContain("upstream-original");
     expect(status()).toMatchObject({ inFlight: 0, queued: 0 });
@@ -304,28 +363,44 @@ describe("Google retry admission redteam", () => {
     expect(clock.timers.size).toBe(0);
   }));
 
-  test.each(["reject", "never"] as const)("retry releases its own lease even when source cancellation is %s", kind => withClock(async clock => {
-    const first = unread(503, {}, () => kind === "reject"
-      ? Promise.reject(new Error("fixture cancellation rejection")) : new Promise<void>(() => {}));
+  test.each(["reject", "never"] as const)("incomplete 503 veto releases its lease on caller cancellation even when source cancellation is %s", kind => withClock(async clock => {
+    let cancels = 0, delivered = false;
+    const first = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!delivered) {
+          delivered = true;
+          controller.enqueue(new Uint8Array(64 * 1024 + 1).fill(120));
+        }
+        // No EOF: the response cannot establish that replay is safe.
+      },
+      cancel() {
+        cancels++;
+        return kind === "reject" ? Promise.reject(new Error("fixture cancellation rejection"))
+          : new Promise<void>(() => {});
+      },
+    }, { highWaterMark: 0 }), { status: 503, headers: { "Retry-After": "3" } });
     const sends: number[] = [];
-    const executor = paced(fakeFetch(async () => {
-      sends.push(clock.now()); return sends.length === 1 ? first.response : new Response("ok");
-    }));
-    const completion = clock.watch(fetchGoogleWithRetry("Antigravity", request(), {
-      executor, abortSignal: clock.controller.signal,
-    }).then(res => res.text()));
+    const budget = budgetOf(3);
+    const executor = paced(fakeFetch(async () => { sends.push(clock.now()); return first; }));
+    const response = await fetchGoogleWithRetry("Antigravity", request(), {
+      executor, sendBudget: budget, abortSignal: clock.controller.signal, returnRawErrors: true,
+    });
+    expect(response.status).toBe(503); expect(hasClientReplayVeto(response)).toBe(true);
+    expect(response.bodyUsed).toBe(false); expect(response.headers.get("retry-after")).toBe("3");
+    expect(cancels).toBe(0); expect(budget.used).toBe(1);
+    expect(status()).toMatchObject({ inFlight: 1, queued: 0 });
+    // The caller relinquishes the retained body; a broken source cancellation must
+    // not retain the pacing lease or authorize another inference send.
+    void response.body!.cancel().catch(() => {});
     await clock.flush();
-    expect(first.counts).toEqual({ cancels: 1, pulls: 0 });
+    expect(cancels).toBe(1);
     expect(status()).toMatchObject({ inFlight: 0, queued: 0 });
-    await clock.advance(199); expect(sends).toEqual([0]);
-    await clock.advance(200); expect(sends).toEqual([0, 200]);
-    expect(await completion).toBe("ok");
-    expect(status()).toMatchObject({ inFlight: 0, queued: 0 });
+    await clock.advance(3000); expect(sends).toEqual([0]); expect(budget.used).toBe(1);
     expect(clock.timers.size).toBe(0);
   }));
 
   test("abort during backoff refunds only the unsent reservation", () => withClock(async clock => {
-    const first = unread(503);
+    const first = finiteBody(503);
     const budget = budgetOf(3);
     let sends = 0;
     const executor = paced(fakeFetch(async () => { sends++; return first.response; }));
@@ -334,17 +409,17 @@ describe("Google retry admission redteam", () => {
     }));
     await clock.flush();
     expect(budget.used).toBe(2); // Initial send plus the open retry reservation.
-    expect(first.counts.cancels).toBe(1);
+    expect(first.counts).toEqual({ cancels: 0, pulls: 1 });
     expect(status()).toMatchObject({ inFlight: 0, queued: 0 });
     const reason = new Error("fixture backoff abort");
     clock.controller.abort(reason);
     await expect(completion).rejects.toBe(reason);
     expect(sends).toBe(1); expect(budget.used).toBe(1);
-    expect(first.counts.cancels).toBe(1); expect(clock.timers.size).toBe(0);
+    expect(first.counts).toEqual({ cancels: 0, pulls: 1 }); expect(clock.timers.size).toBe(0);
   }));
 
   test.each(["3", "Thu, 01 Jan 1970 00:00:03 GMT"])("Retry-After floor survives early lease release: %s", retryAfter => withClock(async clock => {
-    const first = unread(503, { "Retry-After": retryAfter });
+    const first = finiteBody(503, { "Retry-After": retryAfter });
     const calls: Array<{ at: number; url: string; auth: string | null; body: string }> = [];
     const original = request();
     const executor = paced(fakeFetch(async (input, init) => {
@@ -355,7 +430,7 @@ describe("Google retry admission redteam", () => {
       executor, abortSignal: clock.controller.signal,
     }).then(res => res.text()));
     await clock.flush();
-    expect(first.counts.cancels).toBe(1);
+    expect(first.counts).toEqual({ cancels: 0, pulls: 1 });
     expect(status()).toMatchObject({ inFlight: 0, queued: 0 });
     await clock.advance(2999); expect(calls).toHaveLength(1);
     await clock.advance(3000); expect(await completion).toBe("ok");
@@ -365,7 +440,7 @@ describe("Google retry admission redteam", () => {
   }));
 
   test("Retry-After above the wait ceiling returns a readable original, not a retry", () => withClock(async clock => {
-    const first = unread(503, { "Retry-After": "61" });
+    const first = finiteBody(503, { "Retry-After": "61" });
     let sends = 0;
     const budget = budgetOf(3);
     const response = await fetchGoogleWithRetry("Antigravity", request(), {

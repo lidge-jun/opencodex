@@ -7,19 +7,22 @@ import { createWebsocketHandler } from "../../src/server/index/websocket-handler
 import type { ServeOptionsContext } from "../../src/server/index/serve-options";
 import { clearRequestLogsForTests, getRequestLogEntries, noteAttemptSend, type RequestLogContext } from "../../src/server/request-log";
 import type { WsData } from "../../src/server/ws-bridge";
-import type { OcxConfig } from "../../src/types";
+import { OPENAI_PROVIDER_TIER_VERSION, type OcxConfig } from "../../src/types";
 import { clearComboSelectionState, clearComboTargetCooldowns, isComboTargetInCooldown } from "../../src/combos";
 import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth } from "../../src/codex/routing";
 import { clearAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { resendPermission } from "../../src/lib/request-failure-model";
-import { isReplayRefusalResponse, markResponseNonReplayable, retainReplayRefusal } from "../../src/lib/upstream-retry";
+import { hasUpstreamReplayRefusal, isReplayRefusalResponse, markResponseNonReplayable, retainReplayRefusal } from "../../src/lib/upstream-retry";
+import { attachComboFailureEvidence } from "../../src/lib/client-error-body";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { executeComboResponses } from "../../src/server/responses/core-combo";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
+import type { ManagementAuthState } from "../../src/server/management-auth";
+import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 
 const originalFetch = globalThis.fetch;
 let home: TempHome;
@@ -66,17 +69,20 @@ async function turn(ingress: "HTTP" | "WebSocket", pool: boolean, reset: boolean
   const target = { provider, model: "gpt-5.5" };
   const fallback = { provider: "fallback", model: "model-b" };
   const fallbackBaseUrl = "https://combo-fallback.invalid/v1";
-  const config = { port: 0, defaultProvider: provider, websockets: true, autoSwitchThreshold: 0,
+  const config = { port: 0, openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION, defaultProvider: provider, websockets: true, autoSwitchThreshold: 0,
     activeCodexAccountId: "fixture-pool", codexAccounts: pool ? [{ id: "fixture-pool", isMain: false,
       email: "fixture@example.test", chatgptAccountId: "fixture-chatgpt" }] : [],
+    // No local Codex client needs startup convergence. The configured account pool and
+    // real data-plane routing remain active without unrelated service ownership probes.
+    clientIntegrations: { codex: false },
     providers: {
-      [provider]: { adapter: "openai-responses", upstreamWebsocket: false, retryOn429: { enabled: false },
+      [provider]: { adapter: "openai-responses", proxy: "direct", upstreamWebsocket: false, retryOn429: { enabled: false },
         ...(pool
           ? { baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool" }
           : { baseUrl: "https://combo-fixture.invalid/v1", authMode: "key", apiKey: "synthetic-fixture" }),
       },
       ...(withFallback ? {
-        [fallback.provider]: { adapter: "openai-responses", upstreamWebsocket: false, retryOn429: { enabled: false },
+        [fallback.provider]: { adapter: "openai-responses", proxy: "direct", upstreamWebsocket: false, retryOn429: { enabled: false },
           baseUrl: fallbackBaseUrl, authMode: "key", apiKey: "synthetic-fallback", models: [fallback.model] },
       } : {}),
     },
@@ -111,7 +117,12 @@ async function turn(ingress: "HTTP" | "WebSocket", pool: boolean, reset: boolean
   let code: string;
   if (ingress === "HTTP") {
     saveConfig(config);
-    const server = startServer(0);
+    // Management-token storage is outside this data-plane fixture's assertions.
+    const managementAuthState: ManagementAuthState = {
+      available: true, token: "combo-refusal-fixture-management-token", source: "environment",
+      sessions: new Map(), pairingGrants: new Map(),
+    };
+    const server = startServer(0, { managementAuthState });
     finishClient = async () => { await server.stop(true); };
     const response = await originalFetch(new URL("/v1/responses", server.url), {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
@@ -157,6 +168,20 @@ async function turn(ingress: "HTTP" | "WebSocket", pool: boolean, reset: boolean
   }
   return { row, status, code, fallbackSends };
 }
+
+test("a wire replay refusal keeps its identity over legacy cyber evidence", async () => {
+  const code = "upstream_response_refused";
+  const upstream = Response.json({ error: { code, message: "private fixture diagnostic" } }, { status: 503 });
+  expect(await hasUpstreamReplayRefusal(upstream)).toBe(true);
+  attachComboFailureEvidence(upstream, JSON.stringify({ error: {
+    code: "cyber_policy", message: "This request was flagged for possible cybersecurity risk.",
+  } }));
+  const failure = await consumeComboFailure(upstream);
+  expect(failure.upstreamCode).toBe(code);
+  expect(failure.nonReplayable).toBe(true);
+  expect((await failure.response.json()).error.code).toBe(code);
+  expect(failure.response.headers.get("x-should-retry")).toBe("false");
+});
 
 test("combo rebuild carries a replay-refusal marker even without a parseable error code", async () => {
   const source = retainReplayRefusal(new Response("opaque fixture", { status: 429,
@@ -237,6 +262,9 @@ test("HTTP two-target combo stops before the fallback on replay refusal", async 
 });
 
 for (const ingress of ["HTTP", "WebSocket"] as const) {
+  // HTTP assertions cross a real listener and persisted account/log state. Keep the
+  // handler-only WebSocket cases on the default budget.
+  const budget = ingress === "HTTP" ? SERVER_BUDGET_MS : undefined;
   for (const pool of [false, true]) {
     test(`${ingress} combo ${pool ? "pool" : "gateway"} reset keeps synthetic replay-refusal attribution`, async () => {
       const { row, status, code } = await turn(ingress, pool, true);
@@ -250,7 +278,7 @@ for (const ingress of ["HTTP", "WebSocket"] as const) {
       expect(row.attempts![0]!.failureCause).toBe("transport-ambiguous");
       expect(row.attempts![0]!.failureStage).toBe("headers-only");
       expect(resendPermission(row.failureStage!, row.failureCause!)).toBe("refused-ambiguous");
-    });
+    }, budget);
 
     test(`${ingress} combo ${pool ? "pool" : "gateway"} genuine upstream 429 remains rate-limit evidence`, async () => {
       const { row, status, code } = await turn(ingress, pool, false);
@@ -260,6 +288,6 @@ for (const ingress of ["HTTP", "WebSocket"] as const) {
       expect(row.failureCause).toBe("rate-limit");
       expect(row.attempts![0]!.failureCause).toBe("rate-limit");
       expect(row.terminalSource).not.toBe("synthetic");
-    });
+    }, budget);
   }
 }

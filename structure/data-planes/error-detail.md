@@ -16,9 +16,8 @@ through the disk reader. A row keeps:
   keeps Meta's Muse Code subscription refusal in `subscription_required` rather than
   `permission_denied`: a 403 whose whole `error.message` is that sentence names a plan restriction on
   a valid key, so the row must not read as an expired credential that needs a re-login.
-  For the [xAI OAuth Legacy privacy mode refusal](../providers/xai-grok.md#legacy-privacy-mode-403),
-  the proved account policy supplies the `policy-refusal` failure cause. The client-facing
-  privacy refusal uses a fixed HTTP 403 `permission_denied` envelope.
+  The [xAI OAuth Legacy privacy mode refusal](../providers/xai-grok.md#legacy-privacy-mode-403)
+  records `policy-refusal` and returns a fixed HTTP 403 `permission_denied` envelope.
 - `upstreamCondition`, a member of the closed set in `src/lib/upstream-condition.ts`, derived only for a
   failed row with upstream evidence; a client close (499, `client_closed_request`, `client_cancelled`) gets
   none, and a stored condition is kept only under the same rules. Text set through
@@ -40,7 +39,7 @@ through the disk reader. A row keeps:
   upstream error and stores only the member on the context (`upstreamCondition`), so a native Anthropic
   overflow is recorded as `context_overflow`. `classifyUpstreamCondition` reads status, bounded structured
   tokens and, for 4xx only, fixed lowercase keyword sets. HTTP 401 is authoritative. The exact transport
-  codes `upstream_reset_replay_refused`, `upstream_closed_before_response` and `upstream_no_response`
+  codes `upstream_reset_replay_refused`, `upstream_response_refused`, `upstream_closed_before_response` and `upstream_no_response`
   then take precedence over other structured evidence, including Chat's generic `rate_limit_error`
   type, and map to `upstream_failed`. Other structured tokens come next, including the account
   usage-limit codes `usage_limit_exceeded` and `1308`, which map to billing exhaustion. Context overflow
@@ -228,12 +227,13 @@ invalid request). Unknown codes use `invalid_api_key` for 401, `model_not_found`
 are prototype-safe. Model identifiers are never extracted from error text. A provider annotation
 accepts only the configured provider id with the shared 1–64 character id grammar.
 
-Explicit client contracts take precedence over diagnostic-sentence matching. In particular, an
-upstream incomplete event cannot select structural diagnostic wording by copying a sentence; only
+Explicit client contracts take precedence over diagnostic-sentence matching. See
+[Replay Refusals](replay-refusals.md) for terminal projection and resend policy.
+An upstream incomplete event cannot select structural diagnostic wording by copying a sentence; only
 producer provenance selects the legacy message path. Fixed contracts cover context overflow, cyber policy, terminal refusals, replay refusal, translation
 buffer limits, inconsistent refusal representations, undeclared tools, unsatisfied required tools,
-transport failure and incomplete streams. Context overflow uses the fixed context-window sentence;
-cyber policy uses `CYBER_POLICY_FALLBACK_MESSAGE`. No contract interpolates upstream fields.
+transport failure and incomplete streams. Context overflow uses the fixed context-window sentence; cyber policy uses `CYBER_POLICY_FALLBACK_MESSAGE`. No contract interpolates upstream fields.
+
 `src/lib/error-destination.ts` bounds any destination named by a local send-budget error. The
 constructor accepts an opaque branded label and revalidates it while building the message. URL
 labels contain only a parsed supported scheme, hostname and optional port; userinfo, path, query
@@ -270,16 +270,7 @@ rows to client or catalog model identities and validated provider ids, omitting 
 is interpolated into those local messages. No serialized flag, code or header mints identity. The combo ladder checks the resolved child route against both the ingress model scope and the current configured-key scope. A refused member is skipped for an eligible sibling first; when none remains, the local scope refusal uses the original client selector. Locally generated combo exhaustion returns HTTP 503 across all three wires. Chat Completions uses `server_error` with code `server_is_overloaded`. Messages uses `api_error` with code `combo_unavailable`, and Responses uses `server_error` with code `combo_unavailable`.
 The shared builders live in `src/combos/resolve.ts`, `src/server/admission-model-scope.ts`,
 `src/server/responses/input-admission.ts` and `src/oauth/generic-account-failover.ts`. See [combo output headroom](../transports/responses-failover.md#combo-output-headroom) for the strict pre-dispatch gate, including the input margin and reserve when `max_output_tokens` is omitted. Its `estimateInputTokens` charges media by decoded size from the string length: images at the tile proxy, audio at its own rate, and video at about 1,250 bytes per token (Gemini's ~100 tokens per second at roughly 1 Mbit/s), with a fetched video URL charged as one minute (6,000 tokens). Video size comes from the shared decoder in `src/lib/media-data-url.ts`; a data URL it refuses is charged its conservative upper bound, because native Responses passthrough forwards such a clip. The 50 MiB inline video cap is enforced at the [adapter guard](../adapters/registry.md#untranslated-input-media), not here.
-`src/lib/upstream-retry.ts` accepts finite numeric Retry-After seconds, including fractions, or dates
-accepted by `Date.parse`. Negative delays and past dates give zero.
-`fetchWithTransientRetry` stops on a transient 5xx whose bounded body prefix proves context overflow. It reads at most 16,384
-bytes from a clone within 250 ms or until cancellation, leaving the original body intact. Event streams and bodies without a
-verdict retain the normal retry. An observed verdict still stops retry if the body later stalls. Hypothetical, negated, question-form
-and configuration-failure mentions are excluded per sentence in the unwrapped provider message. A throttle worded only as "too
-many tokens" is insufficient. An explicit "prompt is too long" suffices in the absence of a throughput signal.
-Body inspection time does not count toward the upstream slow-attempt budget, and empty chunks cannot
-starve the deadline or cancellation. `tests/lib/upstream-retry.test.ts` covers retry and cancellation.
-Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader. The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status. The shared detector folds negation asides without repartitioning whitespace across optional patterns; `tests/lib/definite-overflow-verdict.test.ts` checks bounded-response classification and abort-timer responsiveness through the retry helper.
+`src/lib/upstream-retry.ts` owns [transient retry and bounded error inspection](replay-refusals.md#transient-retry-and-bounded-error-inspection).
 `InvalidSendBudgetError` displays only a finite non-negative number or `invalid`.
 `UpstreamRetryEvidenceError` uses fixed retry-evidence wording and retains the original rejection
 only as `Error.cause`. Chat request-read failures keep typed local size/encoding messages; other
@@ -397,9 +388,9 @@ terminal objects retain their prior decisions. Tests cover these boundaries in
 | Table | Proxy literal members |
 | --- | --- |
 | OpenAI types | `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `rate_limit_error`, `server_error`, `upstream_error`, `insufficient_quota`, `client_cancelled`, `cyber_policy`, `model_not_allowed_for_key`, `api_error`, `overloaded_error` |
-| OpenAI codes | `spend_ledger_storage_unavailable`, `previous_response_not_found`, `client_cancelled`, `client_closed_request`, `cyber_policy`, `input_admission_refused`, `inbound_body_too_large`, `context_length_exceeded`, `tool_catalog_too_large`, `rate_limit_exceeded`, `insufficient_quota`, `request_send_budget_exhausted`, `origin_rejected`, `upstream_server_error`, `invalid_api_key`, `permission_denied`, `location_not_supported`, `subscription_required`, `server_is_overloaded`, `invalid_request_error`, `usage_limit_reached`, `slow_down`, `misalignment_policy_violation`, `invalid_prompt`, `bio_policy`, `model_not_in_plan`, `upstream_reset_replay_refused`, `upstream_no_response`, `upstream_closed_before_response`, `claude_subscription_cooldown`, `model_not_found`, `model_not_allowed_for_key`, `undeclared_tool_call`, `required_tool_contract_unsatisfied`, `translation_buffer_limit`, `invalid_refusal`, `unsupported_feature`, `agent_assertion_unsupported`, `upstream_error`, `upstream_sse_truncated`, `upstream_sse_error`, `upstream_sse_unterminated`, `upstream_sse_invalid`, `upstream_stream_incomplete`, `upstream_stream_error`, `upstream_stall_timeout`, `upstream_incomplete`, `server_busy`, `outbound_body_too_large`, `codex_no_account`, `memory_model_target_unavailable`, `intercept_target_unavailable`, `observation_barrier_timeout`, `claude_thread_unsupported`, `claude_compatibility_configuration`, `claude_compatibility_unsupported`, `unsupported_credential_domain`, `unsupported_synthetic_selector`, `unsupported_shadow_rewrite`, `workflow_sends_exhausted`, `workflow_children_exhausted`, `workflow_concurrency_exhausted`, `workflow_spend_exhausted`, `workflow_tracking_exhausted`, `workflow_send_replayed`, `workflow_pool_history_unresolved`, `workflow_spend_undurable` |
+| OpenAI codes | `spend_ledger_storage_unavailable`, `previous_response_not_found`, `client_cancelled`, `client_closed_request`, `cyber_policy`, `input_admission_refused`, `inbound_body_too_large`, `context_length_exceeded`, `tool_catalog_too_large`, `rate_limit_exceeded`, `insufficient_quota`, `request_send_budget_exhausted`, `origin_rejected`, `upstream_server_error`, `invalid_api_key`, `permission_denied`, `location_not_supported`, `subscription_required`, `server_is_overloaded`, `invalid_request_error`, `usage_limit_reached`, `slow_down`, `misalignment_policy_violation`, `invalid_prompt`, `bio_policy`, `model_not_in_plan`, `upstream_reset_replay_refused`, `upstream_no_response`, `upstream_closed_before_response`, `upstream_response_refused`, `claude_subscription_cooldown`, `model_not_found`, `model_not_allowed_for_key`, `undeclared_tool_call`, `required_tool_contract_unsatisfied`, `translation_buffer_limit`, `invalid_refusal`, `unsupported_feature`, `agent_assertion_unsupported`, `upstream_error`, `upstream_sse_truncated`, `upstream_sse_error`, `upstream_sse_unterminated`, `upstream_sse_invalid`, `upstream_stream_incomplete`, `upstream_stream_error`, `upstream_stall_timeout`, `upstream_incomplete`, `server_busy`, `outbound_body_too_large`, `codex_no_account`, `memory_model_target_unavailable`, `intercept_target_unavailable`, `observation_barrier_timeout`, `claude_thread_unsupported`, `claude_compatibility_configuration`, `claude_compatibility_unsupported`, `unsupported_credential_domain`, `unsupported_synthetic_selector`, `unsupported_shadow_rewrite`, `workflow_sends_exhausted`, `workflow_children_exhausted`, `workflow_concurrency_exhausted`, `workflow_spend_exhausted`, `workflow_tracking_exhausted`, `workflow_send_replayed`, `workflow_pool_history_unresolved`, `workflow_spend_undurable` |
 | Anthropic types | `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `request_too_large`, `rate_limit_error`, `api_error`, `overloaded_error`, `billing_error`, `timeout_error`, `conflict_error`, `send_budget_exhausted` |
-| Anthropic codes | `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `request_too_large`, `rate_limit_error`, `api_error`, `overloaded_error`, `billing_error`, `timeout_error`, `conflict_error`, `send_budget_exhausted`, `spend_ledger_storage_unavailable`, `previous_response_not_found`, `client_cancelled`, `client_closed_request`, `cyber_policy`, `input_admission_refused`, `inbound_body_too_large`, `context_length_exceeded`, `tool_catalog_too_large`, `rate_limit_exceeded`, `insufficient_quota`, `request_send_budget_exhausted`, `origin_rejected`, `upstream_server_error`, `invalid_api_key`, `permission_denied`, `location_not_supported`, `subscription_required`, `server_is_overloaded`, `usage_limit_reached`, `slow_down`, `misalignment_policy_violation`, `invalid_prompt`, `bio_policy`, `model_not_in_plan`, `upstream_reset_replay_refused`, `upstream_no_response`, `upstream_closed_before_response`, `claude_subscription_cooldown`, `model_not_found`, `model_not_allowed_for_key`, `undeclared_tool_call`, `required_tool_contract_unsatisfied`, `translation_buffer_limit`, `invalid_refusal`, `unsupported_feature`, `agent_assertion_unsupported`, `upstream_error`, `upstream_sse_truncated`, `upstream_sse_error`, `upstream_sse_unterminated`, `upstream_sse_invalid`, `upstream_stream_incomplete`, `upstream_stream_error`, `upstream_stall_timeout`, `upstream_incomplete`, `server_busy`, `outbound_body_too_large`, `codex_no_account`, `memory_model_target_unavailable`, `intercept_target_unavailable`, `observation_barrier_timeout`, `claude_thread_unsupported`, `claude_compatibility_configuration`, `claude_compatibility_unsupported`, `unsupported_credential_domain`, `unsupported_synthetic_selector`, `unsupported_shadow_rewrite`, `workflow_sends_exhausted`, `workflow_children_exhausted`, `workflow_concurrency_exhausted`, `workflow_spend_exhausted`, `workflow_tracking_exhausted`, `workflow_send_replayed`, `workflow_pool_history_unresolved`, `workflow_spend_undurable`, `desktop_model_mapping_unavailable`, `thread_unsupported_request` |
+| Anthropic codes | `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `request_too_large`, `rate_limit_error`, `api_error`, `overloaded_error`, `billing_error`, `timeout_error`, `conflict_error`, `send_budget_exhausted`, `spend_ledger_storage_unavailable`, `previous_response_not_found`, `client_cancelled`, `client_closed_request`, `cyber_policy`, `input_admission_refused`, `inbound_body_too_large`, `context_length_exceeded`, `tool_catalog_too_large`, `rate_limit_exceeded`, `insufficient_quota`, `request_send_budget_exhausted`, `origin_rejected`, `upstream_server_error`, `invalid_api_key`, `permission_denied`, `location_not_supported`, `subscription_required`, `server_is_overloaded`, `usage_limit_reached`, `slow_down`, `misalignment_policy_violation`, `invalid_prompt`, `bio_policy`, `model_not_in_plan`, `upstream_reset_replay_refused`, `upstream_no_response`, `upstream_closed_before_response`, `upstream_response_refused`, `claude_subscription_cooldown`, `model_not_found`, `model_not_allowed_for_key`, `undeclared_tool_call`, `required_tool_contract_unsatisfied`, `translation_buffer_limit`, `invalid_refusal`, `unsupported_feature`, `agent_assertion_unsupported`, `upstream_error`, `upstream_sse_truncated`, `upstream_sse_error`, `upstream_sse_unterminated`, `upstream_sse_invalid`, `upstream_stream_incomplete`, `upstream_stream_error`, `upstream_stall_timeout`, `upstream_incomplete`, `server_busy`, `outbound_body_too_large`, `codex_no_account`, `memory_model_target_unavailable`, `intercept_target_unavailable`, `observation_barrier_timeout`, `claude_thread_unsupported`, `claude_compatibility_configuration`, `claude_compatibility_unsupported`, `unsupported_credential_domain`, `unsupported_synthetic_selector`, `unsupported_shadow_rewrite`, `workflow_sends_exhausted`, `workflow_children_exhausted`, `workflow_concurrency_exhausted`, `workflow_spend_exhausted`, `workflow_tracking_exhausted`, `workflow_send_replayed`, `workflow_pool_history_unresolved`, `workflow_spend_undurable`, `desktop_model_mapping_unavailable`, `thread_unsupported_request` |
 
 The Anthropic code set is the union of Anthropic types, OpenAI codes,
 `desktop_model_mapping_unavailable` and `thread_unsupported_request`. The locally constructed
@@ -439,25 +430,27 @@ records, by the collector's recorded event identity rather than the payload shap
 and non-object payloads keep their original collector/status result as internal evidence; their
 client envelope is rebuilt too. A record's original client-visible message or serialized payload
 selects recovery wording even when its status is 200. Incomplete translated JSON uses its original
-formatter message
-before selecting the fixed incomplete or compaction sentence. Internal overflow decisions and HTTP
-status stay separate
-from this client-message check: a coded raw-collector throughput refusal still answers 400 without
+formatter message before selecting the fixed incomplete or compaction sentence. Internal overflow
+decisions and HTTP status stay separate from this client-message check. A coded raw-collector throughput refusal still answers 400 without
 selecting the compaction sentence. The shared `isContextOverflowError` adds `upstream_server_error`
 to the generic codes and ignores conditional context-window matches while still checking later matches;
 its remaining source and the #8128 suite stay byte-identical, enforced by
 `tests/claude-integration/messages-overflow-baseline-contract.test.ts`. The executable overflow golden compares actual client recovery-phrase recognition,
 HTTP status and the original internal decisions independently on every fixture/path row.
-The direct Messages writer also applies that shared verdict to the emitted code: a definite generic-coded overflow carries `context_length_exceeded`, the fixed compaction sentence and HTTP 400 on collection, even with `retryable: true`; original error evidence and proxy/transport metadata remain separate. `tests/helpers/messages-overflow-assertions.ts` records the affected fixture ids only on direct-stream/direct-fold as explicit expected changes to the immutable golden. All other paths keep their baseline comparisons; the fixture data is not regenerated.
+The direct Messages writer applies the shared verdict to the emitted code. A definite generic-coded overflow carries `context_length_exceeded`, the fixed compaction sentence and HTTP 400 on collection even with `retryable: true`. Original error evidence and proxy/transport metadata remain separate.
+`tests/helpers/messages-overflow-assertions.ts` specifies the direct-stream and direct-fold changes in the immutable golden. Reviewed deltas also cover generic 5xx/plain-text overflow and the three explicit replay-refusal fixtures on passthrough, count_tokens, native-http, translated-http, translated-json, translated-fold, direct-stream and direct-fold.
+Each delta verifies the original baseline before asserting the current contract. Replay-refusal rows require the fixed sentence and exact code; buffered replies require HTTP 429 and the no-retry header, while committed streams retain HTTP 200. For translated and direct folding, head-only observers record the terminal branch's actual `overflow: false` decision. Missing observations fail. All other rows and golden data stay intact.
 The translated non-2xx plain-text path classifies up to 16,384 characters before selecting the bounded
 400-character display text, so an overflow visible to the retry peek is not lost to display truncation.
 Adapter response-body inactivity emits the guard's bounded duration sentence and `upstream_stall_timeout` code for streamed initial, recovery and continuation errors. Terminal status classification records 504 for that code, while the duration sentence supplies the closed `body_stall` failure detail. A request-local continuation marker survives event spreads and empty-completion retry handling, and selects HTTP 504 for a buffered continuation stall; other buffered failures and provider-supplied codes retain their prior HTTP status. Initial buffered adapter timeouts also return 504 and the same detail sentence. `tests/server/terminal-guard-server.test.ts` covers stream, buffered continuation and marker isolation; `tests/server/error-fidelity.test.ts` distinguishes a stall from a 502.
+
+Terminal continuation failures with an explicit or inconclusive replay veto use the fixed diagnostic and client retry policy described in [Terminal continuation delivery](replay-refusals.md#terminal-continuation-delivery). Both Messages collectors retain the error status when their admitted stream terminal carries that uncoded veto.
 The direct encoder retains original adapter fields by terminal identity independently of shared
-classification. Buffered passthrough and count_tokens preserve the upstream status and closed
-type/code. The type chosen
+classification. Buffered passthrough and count_tokens preserve the upstream status and closed type/code, with an exception for recognized replay refusals.
+Those carry the exact refusal code, fixed wording and HTTP 429 with `x-should-retry: false` and no `Retry-After`. The type chosen
 by that writer survives collection independently of the final HTTP status: a converted rate-limit
 error can retain `rate_limit_error` inside a 502. `src/claude/failure-verdict.ts` carries delivered legacy
-records into the collector without serializing them; publication follows successful frame admission. The sink records error-event dispatch independently
+records into the collector without serializing them; publication follows successful frame admission. A matching admitted direct refusal carries its code and veto into the HTTP 429 collector response. Other legacy mappings remain. The sink records error-event dispatch independently
 of JSON parsing, so scalar, array, malformed and empty payloads cannot suppress projection.
 The direct sink in `src/protocols/encoders/adapter-events.ts` acknowledges successful enqueue through an
 optional callback. Failure admission charges the legacy frame size, keeping buffer-limit decisions
@@ -589,7 +582,7 @@ media types use application/octet-stream. Rebuilt error bodies always use litera
 `tests/fixtures/messages-overflow-decisions.json`. Its explicit baseline generator observes the
 existing branch verdicts without changing their results or client bytes. Normal tests run head only
 and require no git history; client recovery-phrase recognition, HTTP status and internal decisions
-must each match the baseline.
+must each match the baseline or its explicitly reviewed fixture/path delta.
 
 The overflow comparison is divided among six sibling test files using
 `tests/helpers/messages-overflow-assertions.ts`. Each test executes at most 64 rows in one child;

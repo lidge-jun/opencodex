@@ -361,21 +361,30 @@ describe("modular Responses model-family forwarding", () => {
     expect(source).toContain("preferredInitialAccount(config, route.providerName, Date.now(), route.modelId)");
   });
 
-  for (const [owner, retryAfter] of [
-    ["passthrough-dispatch.ts", 'upstreamResponse.headers.get("retry-after")'],
-    ["adapter-dispatch.ts", 'upstreamResponse.headers.get("retry-after")'],
-    ["adapter-continuation.ts", 'response.headers.get("retry-after")'],
-    ["sidecar-execution.ts", "retryAfter"],
-    ["run-turn-execution.ts", "null"],
+  // Native and adapter dispatch also record a vetoed 429's cooldown on the issuing
+  // account without committing a rotation; that passive call forwards the model too.
+  for (const [owner, retryAfter, passive] of [
+    ["passthrough-dispatch.ts", 'upstreamResponse.headers.get("retry-after")', true],
+    ["adapter-dispatch.ts", 'upstreamResponse.headers.get("retry-after")', true],
+    ["adapter-continuation.ts", 'response.headers.get("retry-after")', false],
+    ["sidecar-execution.ts", "retryAfter", false],
+    ["run-turn-execution.ts", "null", false],
   ] as const) {
     test(owner + " forwards the routed model on account rotation", () => {
       const source = readFileSync(repoPath("src/server/responses", owner), "utf8");
-      expect(source.match(/\brotateGenericOAuthAccountOn429\s*\(/g)).toHaveLength(1);
-      expect(source.replace(/\s+/g, " ")).toContain(
+      expect(source.match(/\brotateGenericOAuthAccountOn429\s*\(/g)).toHaveLength(passive ? 2 : 1);
+      const flat = source.replace(/\s+/g, " ");
+      expect(flat).toContain(
         "rotateGenericOAuthAccountOn429( config, route.providerName, "
           + "transportState.genericFailoverAccountId, " + retryAfter
           + ", Date.now(), route.modelId, )",
       );
+      if (passive) {
+        expect(flat).toContain(
+          "rotateGenericOAuthAccountOn429(config, route.providerName, transportState.genericFailoverAccountId, "
+            + retryAfter + ", Date.now(), route.modelId, false)",
+        );
+      }
     });
   }
 });

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { EMPTY_COMPLETION_MAX_BUFFERED_BYTES } from "../../src/server/responses/empty-completion-guard";
 import { guardOpenGatewayCompletion } from "../../src/server/responses/opengateway-completion-guard";
+import { deferProtocolSafeResetRecovery } from "../../src/server/responses/combo-stream-preflight";
+import { isAutomaticReplayBlocked } from "../../src/lib/upstream-retry";
 import { attachResponseToolOwnership, responseToolOwnership } from "../../src/server/responses/response-tool-ownership";
 
 const url = "https://apis.opengateway.ai/v1/responses";
@@ -51,6 +53,42 @@ function head(text: string): { event: string; data: { type: string; response: Re
 }
 
 describe("OpenGateway completion exact-head receipts", () => {
+  test("review: a late-selected no-retry empty completion never opens another retry", async () => {
+    let replacementSends = 0;
+    const original = new Response(new ReadableStream({ pull(controller) {
+      controller.error(Object.assign(new Error("fixture reset"), { code: "ECONNRESET" }));
+    } }), { headers: { "content-type": "text/event-stream" } });
+    const replacement = sse([{ type: "response.completed", response: snapshot() }]);
+    replacement.headers.set("x-should-retry", "false");
+    const held = deferProtocolSafeResetRecovery(original, { model: "fixture", provider: "opengateway" },
+      async () => { replacementSends++; return replacement; });
+    // The veto arrives only while the completion guard reads the held stream.
+    expect(isAutomaticReplayBlocked(held)).toBe(false);
+    const f = await run(held);
+    expect(replacementSends).toBe(1);
+    expect(f.retries).toBe(0);
+    expect(isAutomaticReplayBlocked(held)).toBe(true);
+    expect(f.result.headers.get("x-should-retry")).toBe("false");
+    const parsed = head(await f.result.text());
+    expect(parsed.data.response.error).toMatchObject({ code: "empty_completion" });
+    expect(f.usages).toEqual([snapshot().usage]);
+  });
+
+  test.each([false, true])("review: a header-only no-retry empty completion sends no replacement (stream %s)", async stream => {
+    const source = stream ? sse([{ type: "response.completed", response: snapshot() }]) : Response.json(snapshot());
+    source.headers.set("x-should-retry", "false");
+    const f = await run(source);
+    const text = await f.result.text();
+    expect(f.retries).toBe(0);
+    expect(f.result.headers.get("x-should-retry")).toBe("false");
+    expect(f.usages).toEqual([snapshot().usage]);
+    if (stream) expect(head(text)).toMatchObject({ event: "response.failed", data: { type: "response.failed", response: { error: { code: "empty_completion" } } } });
+    else {
+      expect(f.result.status).toBe(502);
+      expect(JSON.parse(text)).toMatchObject({ status: "failed", error: { code: "empty_completion" } });
+    }
+  });
+
   test("lifecycle output_text evidence keeps the original stream (#8333)", async () => {
     const created = { type: "response.created", response: { id: "resp_1", object: "response", status: "in_progress", output: [], output_text: "already produced" } };
     const f = await run(sse([created, { type: "response.completed", response: snapshot() }]));

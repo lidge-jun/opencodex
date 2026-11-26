@@ -47,6 +47,12 @@ that combination alone does not establish exhausted quota. `headers-only` is a
 response-progress stage, not proof that the provider returned headers. Correct
 attribution does not diagnose or repair the original connection reset.
 
+The historical `upstream_reset_replay_refused` name also covers an inference POST
+whose own response-header deadline expires before a response arrives. The request
+may already have been processed, so this refusal stops automatic resends, key
+rotation and combo hops. It is not a quota refusal. Caller cancellation takes
+precedence, and safe GET/HEAD timeouts retain their existing behavior.
+
 A locked main credential closes request admission; it does not reserve the
 account's remaining quota, and a predicted reset never releases the block on
 its own. The thresholds (by default `short` 90, `long` 98) are visible in the

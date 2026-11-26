@@ -94,7 +94,7 @@ async function accounts() {
   return { a, b };
 }
 /** Return an Auto provider config and send ledger; options drive refusal, expiry, rotation, and tool events through both inference wires. */
-function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeExpiry?: boolean; nativeFirst?: boolean; renewedOrigin?: boolean; native429?: boolean; onNativeCancel?: () => void; chatRefresh?: boolean; closedNativeBody?: boolean; renewedChatRefusal?: boolean; rotate?: boolean; rotateAt?: number; tool?: boolean; key?: boolean; refusal?: number; negotiationRefusal?: number; negotiationRefusalAt?: number; alwaysRefuse?: boolean; advanceAfterIntent?: () => void | Promise<void>; onSession?: (count: number) => void | Promise<void>; malformedSessionAt?: number; negotiationRetryAfter?: string; replyText?: string; reasoningText?: string; onInference?: (count: number) => void | Promise<void> } = {}) {
+function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeExpiry?: boolean; nativeFirst?: boolean; renewedOrigin?: boolean; native429?: boolean; onNativeCancel?: () => void; chatRefresh?: boolean; inconclusiveNativeBody?: boolean; renewedChatRefusal?: boolean; rotate?: boolean; rotateAt?: number; tool?: boolean; key?: boolean; refusal?: number; negotiationRefusal?: number; negotiationRefusalAt?: number; alwaysRefuse?: boolean; advanceAfterIntent?: () => void | Promise<void>; onSession?: (count: number) => void | Promise<void>; malformedSessionAt?: number; negotiationRetryAfter?: string; replyText?: string; reasoningText?: string; onInference?: (count: number) => void | Promise<void> } = {}) {
   const sent: Array<{ host: string; path: string; token: string | null; body: any; signal?: AbortSignal | null }> = [];
   let inferenceCount = 0;
   let sessionCount = 0;
@@ -144,12 +144,34 @@ function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeEx
     if (options.pauseRefusal && inferenceCount === 1) return Response.json({ error: {
       type: "permission_error", message: "OAuth authentication is currently not allowed for this organization",
     } }, { status: 403 });
-    if (options.nativeFirst && options.closedNativeBody && inferenceCount === 1)
-      return Response.json({ error: { message: "native-inference-secret" } }, { status: 401 });
-    if (options.nativeFirst && inferenceCount === 1) return new Response(new ReadableStream({
-      start(controller) { controller.enqueue(new TextEncoder().encode('{"error":{"message":"native-inference-secret"}}')); },
-      cancel() { cancelledNativeBodies++; options.onNativeCancel?.(); },
-    }), { status: options.native429 ? 429 : 401, headers: { "content-type": "application/json", "retry-after": "1" } });
+    if (options.nativeFirst && inferenceCount === 1) {
+      const refusal = Response.json({
+        error: { message: "native-inference-secret" },
+        ...(options.inconclusiveNativeBody ? { detail: "x".repeat(20_000) } : {}),
+      }, { status: options.native429 ? 429 : 401, headers: { "retry-after": "1" } });
+      // The refusal probe clones the response, which can replace the original body stream.
+      // Track cancellation on the current original stream, leaving probe clones unobserved.
+      const clone = refusal.clone.bind(refusal);
+      let trackedBody: ReadableStream | null = null;
+      const trackOriginalCancellation = () => {
+        const body = refusal.body;
+        if (!body || body === trackedBody) return;
+        trackedBody = body;
+        const cancel = body.cancel.bind(body);
+        body.cancel = reason => {
+          cancelledNativeBodies++;
+          options.onNativeCancel?.();
+          return cancel(reason);
+        };
+      };
+      refusal.clone = () => {
+        const copy = clone();
+        trackOriginalCancellation();
+        return copy;
+      };
+      trackOriginalCancellation();
+      return refusal;
+    }
     if (options.chatRefresh && inferenceCount === 1) return Response.json({ error: { message: "refresh" } }, { status: 401 });
     if (options.rotate && inferenceCount === (options.rotateAt ?? 1)) return Response.json({ error: { message: "limited" } }, { status: options.refusal ?? 429, headers: { "retry-after": "1" } });
     if (destination.pathname === "/responses") return Response.json({ id: "resp-fixture", model, object: "response", status: "completed",
@@ -760,13 +782,27 @@ describe("Copilot Auto through the Responses pipeline", () => {
   });
   test.each([1, 2])("wire handoff retains a total send ceiling of %s", async limit => {
     await accounts();
-    const f = fixture({ nativeFirst: true, closedNativeBody: limit === 1 });
+    const f = fixture({ nativeFirst: true });
     const budget = createRequestExecutionBudget({ maxTotalModelSends: limit, baseSendAllowance: limit, finalRecoveryAllowance: 0 });
     const response = await handleResponses(request("hello", false), f.config, { model: "", provider: "" }, { sendBudget: budget });
     expect(response.status).toBe(limit === 1 ? 401 : 200);
     await response.text();
     expect(f.sent.filter(call => ["/responses", "/chat/completions"].includes(call.path))).toHaveLength(limit);
     expect(f.refreshCount).toBe(limit - 1);
+  });
+  test("inconclusive native OAuth refusal vetoes replay and charges only the dispatched send", async () => {
+    await accounts();
+    const f = fixture({ nativeFirst: true, inconclusiveNativeBody: true });
+    const budget = createRequestExecutionBudget();
+    const log: RequestLogContext = {};
+    const response = await handleResponses(request("hello", false), f.config, log, { sendBudget: budget });
+    expect(response.status).toBe(401);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(await response.text()).not.toContain("native-inference-secret");
+    expect(f.refreshCount).toBe(0);
+    expect(f.sent.filter(call => ["/responses", "/chat/completions"].includes(call.path))).toHaveLength(1);
+    expect(budget.used).toBe(1);
+    expect(log.attempts?.map(attempt => attempt.sendCount)).toEqual([1]);
   });
   test("passthrough refresh discards unsafe retry metadata and malformed session secrets", async () => {
     await accounts();

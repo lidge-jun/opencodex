@@ -34,6 +34,10 @@ function replaceOnce(source: string, needle: string, replacement: string): strin
     if (path === "src/server/claude-messages.ts") source = replaceOnce(source,
       "body = await readAnthropicBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));",
       "if (globalThis.__messagesReadFailure) throw globalThis.__messagesReadFailure.value;\n    body = await readAnthropicBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));") + "\nexport { desktopMappingUnavailableResponse as __messagesSweepDesktop, translationFailure as __messagesSweepTranslation, claudeInboundDisabled as __messagesSweepDisabled };\n";
+    // The fixed translated refusal bypasses the legacy writer at the HTTP boundary.
+    if (path === "src/server/claude-messages.ts" && !base) source = replaceOnce(source,
+      'status: REPLAY_REFUSED_STATUS, code, contract: "replay_refused", overflow: false,',
+      'status: REPLAY_REFUSED_STATUS, code, contract: "replay_refused", overflow: globalThis.__messagesOverflowRecord("translated-refusal", false),');
     if (path === "src/claude/outbound.ts") {
       source = replaceOnce(source, "  const text = overflow ? claudePromptTooLongMessage(message) : message;",
         '  globalThis.__messagesOverflowRecord("writer", overflow);\n  const text = overflow ? claudePromptTooLongMessage(message) : message;');
@@ -52,12 +56,17 @@ function replaceOnce(source: string, needle: string, replacement: string): strin
     if (path === "src/server/messages-native.ts" && !base) {
       source = replaceOnce(source, "const baselineOverflow = isNativeOverflowError(error, text);",
         'const baselineOverflow = globalThis.__messagesOverflowRecord("native-fold", isNativeOverflowError(error, text));');
-      source = replaceOnce(source, "\n  const overflow = messagesOverflowPresentation((legacy.error as Rec).message);",
-        '\n  globalThis.__messagesOverflowRecord("native-http", legacyOverflow);\n  const overflow = messagesOverflowPresentation((legacy.error as Rec).message);');
+      source = replaceOnce(source, "\n  const overflow = !replayRefusal && messagesOverflowPresentation((legacy.error as Rec).message);",
+        '\n  globalThis.__messagesOverflowRecord("native-http", legacyOverflow);\n  const overflow = !replayRefusal && messagesOverflowPresentation((legacy.error as Rec).message);');
     }
-    if (path === "src/protocols/encoders/messages.ts" && !base) source = replaceOnce(source,
-      '  const status = isError ? (baselineOverflow ? 400 : 502) : 200;',
-      '  const status = isError ? (baselineOverflow ? 400 : 502) : 200;\n  globalThis.__messagesOverflowRecord("direct-collector", baselineOverflow);');
+    if (path === "src/protocols/encoders/messages.ts" && !base) {
+      source = replaceOnce(source,
+        '  const status = isError ? (baselineOverflow ? 400 : 502) : 200;',
+        '  const status = isError ? (baselineOverflow ? 400 : 502) : 200;\n  globalThis.__messagesOverflowRecord("direct-collector", baselineOverflow);');
+      source = replaceOnce(source,
+        'status: REPLAY_REFUSED_STATUS, code, contract: "replay_refused", overflow: false,',
+        'status: REPLAY_REFUSED_STATUS, code, contract: "replay_refused", overflow: globalThis.__messagesOverflowRecord("direct-refusal", false),');
+    }
     const target = join(scratch, base ? "baseline" : "head", path); mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, source); overlays.set(repoPath(path), target);
   }
   const filter = new RegExp(`^(?:${[...overlays.keys()].map(path => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})$`);
@@ -69,6 +78,8 @@ function replaceOnce(source: string, needle: string, replacement: string): strin
 // after requesting termination cannot hide its still-live PowerShell child.
 const spawnTracker = base ? undefined : (await import("./messages-overflow-spawn-tracker")).trackOverflowAsyncSpawns();
 const { runMessagesOverflowCase } = await import("./messages-overflow-case");
+// Head-only diagnostics must not add exports to the immutable baseline module graph.
+const replayPolicy = base ? undefined : await import("../../src/lib/upstream-retry");
 const { acquireOwnedSpendHome } = await import("./owned-spend-home");
 const { upstreamMessagesRequestIdHeaders } = await import("../../src/server/messages-response-headers");
 if (base && upstreamMessagesRequestIdHeaders(new Headers({ "request-id": "req_fixture" }))["request-id"] !== "req_fixture") throw new Error("Baseline modules were not loaded");
@@ -100,7 +111,15 @@ try {
       return value;
     };
     if (input.fault) process.stderr.write(`fixture ${lane}/${input.id}\n`);
-    const result = await runMessagesOverflowCase(lane, input, acquireSliceSpendHome);
+    let replayObservation: Record<string, unknown> | undefined;
+    const result = await runMessagesOverflowCase(lane, input, acquireSliceSpendHome, response => {
+      if (replayPolicy) replayObservation = {
+        retryHeader: response.headers.get("x-should-retry"), retryAfter: response.headers.get("retry-after"),
+        proxyOwned: replayPolicy.isReplayRefusalResponse(response),
+        nonReplayable: replayPolicy.isNonReplayableResponse(response),
+        automaticReplayBlocked: replayPolicy.isAutomaticReplayBlocked(response),
+      };
+    });
     const passthrough = lane === "passthrough" || lane === "count_tokens";
     if (!passthrough && input.rawBody === undefined && !input.fault && !input.localBranch && observations.size === 0) throw new Error(`Missing baseline observation for ${lane}/${input.id}`);
     const internalDecisions: Record<string, boolean> = {};
@@ -119,7 +138,7 @@ try {
         outcome.push(result.bodySha256, result.bodyLength);
       }
       outcomes[id] = outcome;
-    } else rows.push({ lane, input, head: { ...result, internalDecisions } });
+    } else rows.push({ lane, input, head: { ...result, internalDecisions, replayPolicy: replayObservation } });
   }
 } finally {
   delete (globalThis as any).__messagesOverflowRecord;

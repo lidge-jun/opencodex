@@ -148,6 +148,21 @@ function fakeUpstream(answer: (index: number) => Response | Promise<Response>): 
   return bodies;
 }
 
+test.each(["thinking", "continuation"] as const)("replay veto: %s replacement keeps the root refusal ahead of overflow wording", async kind => {
+  const bodies = fakeUpstream(index => index === 1 ? kind === "thinking" ? streamRejection() : success(true, "")
+    : Response.json({ code: "upstream_response_refused", error: { message: "maximum context length exceeded" } },
+      { status: 503, headers: { "x-should-retry": "false" } }));
+  const cfg = config(); cfg.emptyCompletionRetry = kind === "continuation";
+  const response = await handleResponses(request(true), cfg, { model: "", provider: "" });
+  const text = await response.text();
+  const failure = streamedFailure(text);
+  expect(bodies).toHaveLength(2);
+  expect(failure.error.code).toBe("upstream_response_refused");
+  expect(failure.retryable).toBe(false);
+  expect(httpStatusFromTerminalError(failure.error)).toBe(429);
+  expect(text).not.toContain("maximum context length exceeded");
+});
+
 async function send(stream: boolean, threadId?: string, options: Parameters<typeof handleResponses>[3] = {}) {
   const log: RequestLogContext = { model: "", provider: "" };
   const response = await handleResponses(request(stream, threadId), config(), log, options);

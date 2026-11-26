@@ -20,6 +20,15 @@ fallback and transport fallbacks keep their target and are not hops. Claude Code
 `classifierFallbacks` (`src/claude/inbound-model-options.ts`) is a static mapping with no
 availability check, so it never hops.
 
+An explicit upstream replay refusal stops both retries and combo hops, including in quota-only mode with a matching backup model. A converted context-limit response retains the client retry veto. A zero-output
+`response.failed` with `response.retryable: false` stays on the original target. Routed
+compaction applies the same veto to a buffered failed Responses JSON result before reserving
+a fallback send. Native Chat, pooled native Compact and the web-search sidecar check a bounded
+copy of the upstream error body before recovery so a recognized refusal code can stop a resend
+even without `x-should-retry: false`. Native Messages and native Responses apply the same check
+before same-key 429 recovery, including when Messages uses the reset-only helper. These paths
+retain the original response for quota observation.
+
 ## Configuration and precedence
 
 `fallback` in config.json (`src/types/fallback.ts`, read schema `src/config/schema/fallback-policy.ts`):
@@ -175,10 +184,14 @@ path from it to Responses dispatch, the router or adapter resolution. When the H
 the Child's data relay (`src/client/link-relay.ts`) answers a retryable 503 and the Hub client's
 management relay (`src/client/hub-relay.ts`) a 502; both bodies keep their legacy `error` string and add
 `code: "home_unreachable"` and the message from `src/client/home-unreachable.ts`. That code means the
-connection is unavailable and nothing else: a failed connection-bound relay authentication answers
-`code: "link_relay_auth_failed"`, so an upgrade or re-link problem never reads as Home down to GOAT.
-A tunnel that drops after forwarding started also answers `home_unreachable`, and the Home may have
-received that request.
+connection is unavailable. A connection-bound authentication failure before data dispatch answers
+`code: "link_relay_auth_failed"`. A transport failure after dispatch, including an unexpected
+protocol upgrade in the data exchange, uses the shared non-replayable refusal: 429 with `x-should-retry: false`
+and `code: "upstream_reset_replay_refused"` for a transport failure after dispatch, or
+`"upstream_response_refused"` when delivery is refused after the upstream call resolved (a caller abort or a relay response limit).
+Only a failure that provably sent nothing (the tunnel gate, the credential-free challenge or a
+refused connection) keeps `home_unreachable`; inside the hold window the relay may also send a
+refused request again itself, but only while its streamed body was never read.
 `devices.<id>.localFallback` is a permission GOAT reads (goat-si/goat ADR-0021 §1.6, "local fallback
 opt-in per device"); OpenCodex never acts on it and keeps answering `home_unreachable`.
 

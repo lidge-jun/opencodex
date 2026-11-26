@@ -21,6 +21,13 @@ import {
 } from "./link-request-compression";
 import type { InboundBodyBudget } from "../server/inbound-body-budget";
 import { linkChildRelayWaitObserver } from "./link-websocket-limits";
+import {
+  REPLAY_REFUSAL_CLIENT_HEADERS,
+  REPLAY_REFUSED_STATUS,
+  retainReplayRefusal,
+  UPSTREAM_RESPONSE_REFUSED_CODE,
+  UPSTREAM_RESET_REPLAY_REFUSED_CODE,
+} from "../lib/upstream-retry";
 
 export interface LinkRelayTarget {
   tunnelPort: number;
@@ -171,6 +178,28 @@ function relayAuthenticationFailed(error: string): Response {
     status: 503,
     headers: { "Retry-After": String(LINK_RELAY_RETRY_AFTER_SECONDS) },
   });
+}
+
+/**
+ * The fetch seam may already have carried the turn to Home when it failed ambiguously. A
+ * `home_unreachable` verdict there is a false "nothing was sent": GOAT's device-local
+ * fallback and a combo hop both key on that code, and either would dispatch the same turn
+ * to a second target while the first may still be running. The answer restates the
+ * send-budget refusal contract instead — a status the published clients do not
+ * auto-retry, the header they read before the status table, a non-replayable code that
+ * survives JSON re-wrapping, and the in-process markers for relay-internal re-wraps.
+ */
+function linkReplayRefusal(code: string): Response {
+  const response = new Response(JSON.stringify({ error: {
+    type: "upstream_error",
+    code,
+    message: "The link exchange did not complete reliably. "
+      + "The request may already have been processed; automatic replay was stopped.",
+  } }), {
+    status: REPLAY_REFUSED_STATUS,
+    headers: { "content-type": "application/json", ...REPLAY_REFUSAL_CLIENT_HEADERS },
+  });
+  return retainReplayRefusal(response);
 }
 
 /** Preserve path/query on a fixed IPv4 loopback origin; throw when the tunnel port is invalid. */
@@ -555,14 +584,27 @@ export async function relayLinkDataRequest(
     reason: LinkDiagnosticRecord["outcome"] = admission.kind === "match" ? "unavailable" : admission.kind,
     message = "link tunnel unavailable",
     elapsedMs?: number,
+    dispatched = false,
   ): Promise<Response> => {
     diagnostic("relay_failure", relayAbort.signal.aborted
       ? req.signal.aborted ? "client_abort" : "header_timeout" : reason, elapsedMs);
     cleanup();
     try { await body?.cancel(); } catch { /* best effort */ }
-    const response = reason === "auth_failed" ? relayAuthenticationFailed(message) : homeUnreachable(message);
+    // dispatched marks the failures that can no longer prove nothing reached Home: a
+    // home_unreachable label would authorize a second send of a possibly-running turn,
+    // so the ambiguous failure settles as the shared non-replayable refusal instead.
+    const response = dispatched
+      ? linkReplayRefusal(reason === "transport_error" ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : UPSTREAM_RESPONSE_REFUSED_CODE)
+      : reason === "auth_failed" ? relayAuthenticationFailed(message) : homeUnreachable(message);
     response.headers.set("x-opencodex-link-request-id", requestId);
     return response;
+  };
+  // A Home answer the relay refuses to carry (over a relay limit) is already-run work: a
+  // retryable 5xx would send the same turn again, so it settles as the non-replayable refusal.
+  const relayResponseRefusal = (): Response => {
+    const refused = linkReplayRefusal(UPSTREAM_RESPONSE_REFUSED_CODE);
+    refused.headers.set("x-opencodex-link-request-id", requestId);
+    return refused;
   };
   const retryPreflight = (reason: "deadline" | "auth_timeout", elapsedMs?: number): boolean => {
     if (recoveryAttempts >= 1 || relayAbort.signal.aborted || bodyOverflow || bodyCancelled || body?.locked) return false;
@@ -590,6 +632,7 @@ export async function relayLinkDataRequest(
   while (!upstream) {
     if (!await readyForFetch()) return await tunnelUnavailable();
     const fetchStartedAt = performance.now();
+    let dataRequestStarted = deps.fetchImpl !== undefined;
     try {
       const init: RequestInit & { duplex?: "half" } = {
         method: req.method,
@@ -602,10 +645,11 @@ export async function relayLinkDataRequest(
       upstream = await (deps.fetchImpl
         ? deps.fetchImpl(destination, seamInit(init, selectBody, target.linkId))
         : fetchBoundLinkRelay(target, destination, init, {
+          onDataRequestStarted: () => { dataRequestStarted = true; },
           traffic: deps.traffic, ...(selectBody ? { selectBody, onBodySettled: () => { uploadSettled = true; releaseWhenSent(); } } : {}),
         }));
     } catch (error) {
-      if (error instanceof LinkRelayAuthenticationError) {
+      if (!dataRequestStarted && error instanceof LinkRelayAuthenticationError) {
         return await tunnelUnavailable("auth_failed", error.message);
       }
       if (bodyOverflow) {
@@ -619,10 +663,14 @@ export async function relayLinkDataRequest(
         if (retryPreflight("auth_timeout", elapsedMs)) continue;
         return await tunnelUnavailable("auth_timeout", "link tunnel unavailable", elapsedMs);
       }
-      // A refused connection sent nothing, and an untouched body can go again once the tunnel
-      // is back inside the same hold window. Anything else is never replayed.
-      const resendable = connectionRefused(error) && (body === null || (!body.locked && !bodyCancelled));
-      if (!tunnel || !resendable || !tunnel.pending() || !await holdForTunnel(tunnel)) return await tunnelUnavailable("transport_error");
+      // A refused connection or failed credential-free challenge never carried the turn, so home_unreachable stays the honest verdict
+      // whether or not this relay can still stream the body again; an untouched body can also go
+      // again once the tunnel is back inside the same hold window. Anything else may already
+      // have carried the turn: answering home_unreachable would authorize a second send to
+      // another target while the first may still be running, so it settles as the replay refusal.
+      if (dataRequestStarted && !connectionRefused(error)) return await tunnelUnavailable("transport_error", "link tunnel unavailable", undefined, true);
+      const resendable = body === null || (!body.locked && !bodyCancelled);
+      if (!resendable || !tunnel || !tunnel.pending() || !await holdForTunnel(tunnel)) return await tunnelUnavailable("transport_error");
     }
   }
   // The fetch seam has no socket to wait for; the transport settles the upload itself.
@@ -631,7 +679,8 @@ export async function relayLinkDataRequest(
   releaseWhenSent();
   if (relayAbort.signal.aborted) {
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
-    return await tunnelUnavailable();
+    // The dispatch already resolved; the abort only closed the caller-facing exchange.
+    return await tunnelUnavailable(undefined, undefined, undefined, true);
   }
 
   const sse = isSse(upstream.headers);
@@ -639,14 +688,16 @@ export async function relayLinkDataRequest(
   if (!headersWithinLimit(responseHeaders)) {
     cleanup();
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
-    return jsonError(502, "link relay response headers too large");
+    // The Home answered, so the turn already ran: a retryable 5xx would send it again.
+    return relayResponseRefusal();
   }
   const responseLength = upstream.headers.get("content-length");
   if (!sse && responseLength !== null && (!/^\d+$/.test(responseLength)
     || Number(responseLength) > bodyLimit)) {
     cleanup();
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
-    return jsonError(502, "link relay response body too large");
+    // The Home answered, so the turn already ran: a retryable 5xx would send it again.
+    return relayResponseRefusal();
   }
   if (recoveryAttempts > 0 && upstream.ok) diagnostic("relay_recovered", "recovered");
   if (req.method === "HEAD" || !upstream.body) {

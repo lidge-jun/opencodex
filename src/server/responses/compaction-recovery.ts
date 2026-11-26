@@ -1,4 +1,5 @@
 import { clientFacingModelText } from "../../lib/error-destination";
+import { isProxyError, ownedChatErrorPayload } from "../../lib/client-error-body";
 import type { AdapterEvent, OcxConfig } from "../../types";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
 import { routeConcreteModel, type RouteResult } from "../../router";
@@ -8,8 +9,12 @@ import type { TranslatorBudget } from "../../lib/translator-budget";
 import { readBoundedResponseBytes } from "../../lib/bounded-body";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import { isRequestExecutionBudget, type RequestExecutionBudget, type SingleUseDispatchPermit } from "../../lib/request-execution-budget";
-import { isNonReplayableResponse, isNonReplayableUpstreamCode, markResponseNonReplayable, TRANSIENT_RETRY_MAX_ATTEMPTS } from "../../lib/upstream-retry";
-import { isCyberPolicyCode, isTerminalRefusalCode } from "../../lib/errors";
+import {
+  applyReplayRefusalClientHeaders, carryReplayRefusal, isAutomaticReplayBlocked, isNonReplayableUpstreamCode,
+  isReplayRefusalCode, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal,
+  REPLAY_REFUSAL_CLIENT_HEADERS, requireClientReplayVeto, TRANSIENT_RETRY_MAX_ATTEMPTS,
+} from "../../lib/upstream-retry";
+import { httpStatusFromTerminalError, isCyberPolicyCode, isTerminalRefusalCode } from "../../lib/errors";
 import { isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint, supportsNativeResponsesCompactionTrigger } from "../../providers/openai-tiers";
 import { bridgeToResponsesSSE, formatErrorResponse } from "../../bridge";
 import { buildCompactV1Output, decodeCompactionSummary, encodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
@@ -21,10 +26,11 @@ import { linkRequestSessionLane } from "../request-log-conversation";
 import { isNativePassthroughSseResponse, markNativePassthroughSseResponse, isEagerRelaySseResponse, markEagerRelaySseResponse } from "../relay";
 import type { HandleResponsesOptions } from "./core-options";
 import { consumeComboFailure, createChildPassthroughCallbackGate } from "./core-combo-failure";
-import { preflightComboStreamResponse } from "./combo-stream-preflight";
+import { failedTerminalReplayVerdict, preflightComboStreamResponse } from "./combo-stream-preflight";
 import { conversationCarriesUploadedFiles } from "./account-change-state";
 import { selfContainedResponsesBody } from "./reset-replay";
 import { decideCompactionRecovery, readCompactionRecoveryConfig } from "./compaction-recovery-policy";
+import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 
 type Options = HandleResponsesOptions & { translatorBudget: TranslatorBudget };
 type Dispatch = (req: Request, config: OcxConfig, log: RequestLogContext, options: Options) => Promise<Response>;
@@ -83,7 +89,7 @@ async function bufferedJson(response: Response, signal: AbortSignal): Promise<{ 
   headers.delete("content-encoding");
   const replacement = new Response(bytes.bytes, { status: response.status, statusText: response.statusText, headers });
   carryResponseToolOwnership(response, replacement);
-  if (isNonReplayableResponse(response)) markResponseNonReplayable(replacement);
+  carryReplayRefusal(response, replacement);
   try {
     const json: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.bytes));
     return { response: replacement, ...(record(json) ? { json } : {}) };
@@ -158,7 +164,7 @@ export async function runWithCompactionRecovery(
   try {
     let response = await dispatch(req, config, logCtx, firstOptions);
     const keep = (value: Response) => { gate.commit(); return value; };
-    if (!snapshot || !sourceRoute || signal.aborted || req.signal.aborted || isNonReplayableResponse(response)) return keep(response);
+    if (!snapshot || !sourceRoute || signal.aborted || req.signal.aborted || isAutomaticReplayBlocked(response)) return keep(response);
     let target: RouteResult;
     try { target = routeConcreteModel(config, recovery.model); } catch { return keep(response); }
     if (!routed(target, kind) || identity(sourceRoute) === identity(target)) return keep(response);
@@ -183,12 +189,14 @@ export async function runWithCompactionRecovery(
       if (!json || json.status !== "failed" || (Array.isArray(json.output) && json.output.length > 0)) return keep(response);
       // HTTP 200 can carry a failed terminal. The original structured error remains intact.
       response = Response.json({ error: json.error, response: json }, { status: adapterError?.status ?? 502 });
+      if (failedTerminalReplayVerdict(json)) applyReplayRefusalClientHeaders(response.headers);
     }
     if (response.ok || replayUnsafe || partialOutput || signal.aborted || req.signal.aborted) {
       if (replayUnsafe) markResponseNonReplayable(response);
       return keep(response);
     }
-    const failure = await consumeComboFailure(response, signal);
+    if (adapterError?.retryable === false) requireClientReplayVeto(response);
+    const failure = await consumeComboFailure(response, signal, Date.now(), undefined, !isProxyError(response));
     response = failure.response;
     const code = token(adapterError?.code) ?? token(failure.upstreamCode);
     const errorType = token(adapterError?.errorType) ?? token(failure.upstreamType);
@@ -296,12 +304,30 @@ export async function runWithCompactionRecovery(
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     }
     if (!fallback.ok) {
+      // A terminal replacement describes the last physical attempt. Publishing the earlier
+      // retryable source failure would lose its veto and invite another send of the turn.
+      if (isAutomaticReplayBlocked(fallback)) {
+        void response.body?.cancel().catch(() => undefined);
+        requireClientReplayVeto(fallback);
+        return carryResponseToolOwnership(fallback, await sanitizeNonReplayableUpstreamError(fallback, signal));
+      }
       void fallback.body?.cancel().catch(() => undefined);
       restoreSourceLog?.(fallback.status);
       return response;
     }
     const completed = await bufferedJson(fallback, signal);
     const json = completed.json;
+    if (json?.status === "failed") {
+      const errors = [json.error, json.last_error, json].filter(record);
+      const refusalCode = errors.map(error => error.code).find(isReplayRefusalCode)
+        ?? observedReplayRefusalCode(completed.response);
+      if (refusalCode || isAutomaticReplayBlocked(completed.response) || failedTerminalReplayVerdict(json)) {
+        void response.body?.cancel().catch(() => undefined);
+        void completed.response.body?.cancel().catch(() => undefined);
+        const safe = refusalCode ? projectReplayRefusal(refusalCode) : projectBufferedFallbackFailure(completed.response.status, errors);
+        return carryResponseToolOwnership(completed.response, carryReplayRefusal(completed.response, safe));
+      }
+    }
     const items = json && Array.isArray(json.output) ? json.output : [];
     const compactions = items.filter(value => record(value) && value.type === "compaction");
     const permitted = items.every(value => record(value) && (value.type === "compaction" || value.type === "reasoning"));
@@ -347,4 +373,20 @@ export async function runWithCompactionRecovery(
     recoveryPermit?.release();
     snapshot = undefined;
   }
+}
+
+function projectBufferedFallbackFailure(httpStatus: number, errors: Record<string, unknown>[]): Response {
+  const upstream = errors.find(error => isNonReplayableUpstreamCode(error.code)) ?? errors[0];
+  const type = typeof upstream?.type === "string" ? upstream.type : undefined;
+  const code = typeof upstream?.code === "string" ? upstream.code : undefined;
+  const status = httpStatusFromTerminalError({ type, code });
+  const { error: { type: safeType, code: safeCode, message } } = ownedChatErrorPayload({
+    status, type, code, evidence: { status, type, code },
+  });
+  const error = { type: safeType, code: safeCode === code ? safeCode : null, message };
+  const safe = Response.json({ status: "failed", retryable: false, output: [], error, last_error: error }, {
+    status: httpStatus, headers: REPLAY_REFUSAL_CLIENT_HEADERS,
+  });
+  markResponseNonReplayable(safe);
+  return safe;
 }

@@ -3,6 +3,9 @@
 Opt-in policy (with one Cloud Code Assist default), credential ownership, durable pause metadata, and bounded recovery for
 permanent account refusals. Counters are process-local; persisted pauses require explicit resume.
 
+Native Chat records permanent credential refusals before considering recovery. An upstream
+replay veto leaves the pause in effect and blocks replacement selection for the current turn.
+
 ## Opt-in account refusal observation
 
 `src/server/responses/fetch-helpers.ts` accepts an optional caller-owned observer factory for physical

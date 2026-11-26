@@ -1,4 +1,4 @@
-import { isNonReplayableResponse } from "../../lib/upstream-retry";
+import { isAutomaticReplayBlocked } from "../../lib/upstream-retry";
 import { hasKeyPoolFailover, rotateProviderTransportOn429 } from "../../providers/key-failover";
 import type { RouteResult } from "../../router";
 import type { OcxConfig, OcxParsedRequest } from "../../types";
@@ -25,7 +25,7 @@ export async function rotatePassthroughKeyOn429<T>(options: {
   refetch: () => Promise<T>;
 }): Promise<T | undefined> {
   const { config, route, parsed, response, adapterName, refetch } = options;
-  if (response.status !== 429 || isNonReplayableResponse(response) || !hasKeyPoolFailover(route.provider)
+  if (response.status !== 429 || isAutomaticReplayBlocked(response) || !hasKeyPoolFailover(route.provider)
     || route.provider._apiKeyAttempt?.distributed || options.budgetSpent()) return;
   const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
     retryAfter: response.headers.get("retry-after"),

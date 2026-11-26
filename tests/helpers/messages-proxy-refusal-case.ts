@@ -59,7 +59,7 @@ Bun.plugin({ name: "Messages refusal boundary fixture", setup(build) {
   });
   build.onLoad({ filter: filters.verdict }, ({ path }) => {
     hooks.verdictLoads++;
-    const admission = "  if (sink) (sink.delivered ??= []).push({ client: JSON.stringify(client), legacy });";
+    const admission = "  if (sink) (sink.delivered ??= []).push({ client: JSON.stringify(client), legacy, replayRefusalCode, replayVetoStatus });";
     const observed = replaceOnce(readOriginal(path), admission,
       "  globalThis.__fixtureHooks.admissions.push(Boolean(sink));\n  if (sink) (globalThis.__observedSinks ??= []).push(sink);\n" + admission
       + "\n  if (sink) globalThis.__fixtureHooks.admittedRecords += sink.delivered?.length ?? 0;");

@@ -17,7 +17,7 @@ import { chatSuccess } from "../helpers/combo-failover-upstream";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
 
-// These configs contain only synthetic providers; use their fetch stubs on the pinned transport too.
+// These synthetic providers own their fetch executor, so leave production egress overrides unset.
 const handleResponses: typeof dispatchResponses = (request, config, ...args) =>
   dispatchResponses(request, withStubbedProviderFetch(config), ...args);
 
@@ -314,6 +314,22 @@ describe("rejected reasoning rungs", () => {
     expect(outbound).toHaveLength(2);
     expect(outbound[1]?.reasoning_effort).toBe("high");
     expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["reasoning-effort-downgrade"]);
+  });
+
+  test("native no-retry refusal learns the unsupported effort without resending", async () => {
+    writeSnapshot(["low", "high", "max"]);
+    const cfg = passthroughConfig();
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends++;
+      return new Response(REFUSAL, { status: 400,
+        headers: { "content-type": "application/json", "x-should-retry": "false" } });
+    }) as typeof fetch;
+    const response = await handleResponses(request(true), cfg, { model: "", provider: "" });
+    await response.text();
+    expect(sends).toBe(1);
+    expect(response.status).toBe(400);
+    expect(isReasoningEffortLearnedUnsupported(cfg.providers.first, MODEL, "max")).toBe(true);
   });
 
   test("replays once on the Responses passthrough path", async () => {

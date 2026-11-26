@@ -80,6 +80,8 @@ abre los ajustes de privacidad de xAI/Grok y selecciona **Privacy Mode**. Despu�
 ejecutar `ocx provider test xai`. Este ajuste también bloquea la detección de modelos y las
 consultas de cuota. El registro del servicio OpenCodex muestra las mismas indicaciones. Puedes
 seguir usando la sesión OAuth actual.
+Si una solicitud de reemplazo recibe este error 403 después de iniciarse un flujo de Grok
+Responses, el flujo termina con `permission_denied` y la misma indicación sobre Privacy Mode.
 Si el modelo Grok forma parte de un combo de Responses, el combo puede probar otro modelo
 elegible. Si se agotan los modelos elegibles, un error confirmado de ventana de contexto o
 una respuesta de cuota aplicable tiene prioridad sobre la indicación de Privacy Mode.

@@ -3,12 +3,47 @@ import { expect, test } from "bun:test";
 import { attachComboFailureEvidence } from "../../src/lib/client-error-body";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { markVerifiedModelNotInPlanResponse } from "../../src/lib/errors";
-import { markResponseNonReplayable, markReplayRefusalResponse } from "../../src/lib/upstream-retry";
+import { markResponseNonReplayable, retainReplayRefusal } from "../../src/lib/upstream-retry";
 import { responseWithDeferredRequestLog, markPreinspectedJsonResponse } from "../../src/server/relay";
 import { createBoundedResponseLogBody } from "../../src/server/response-log-body";
 import type { RequestLogContext } from "../../src/server/request-log";
+import { rewriteNonRetryableFailurePayload, sanitizeNonReplayableUpstreamError } from "../../src/server/responses/non-replayable-error";
+import { markTerminalResetReplacement, REPLAY_REFUSAL_MESSAGE, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../src/lib/upstream-retry";
 
 const KEY = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
+for (const status of [413, 503]) test(`review: a directive-only spent replacement projects terminal ${status}`, async () => {
+  const upstream = Response.json({ error: { type: "server_error", message: KEY } }, {
+    status, headers: { "x-should-retry": "false", "retry-after": "3", "x-codex-primary-reset-at": "1900000000" },
+  });
+  markTerminalResetReplacement(upstream);
+  const response = await sanitizeNonReplayableUpstreamError(upstream, new AbortController().signal, { terminalReplacement: true });
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(response.headers.get("retry-after")).toBeNull();
+  expect(upstream.headers.get("x-codex-primary-reset-at")).toBe("1900000000");
+  expect(await response.json()).toMatchObject({ error: { code: UPSTREAM_RESET_REPLAY_REFUSED_CODE, message: REPLAY_REFUSAL_MESSAGE } });
+});
+for (const escaped of [false, true]) for (const carrier of ["error", "last_error", "response.error", "response.last_error"]) {
+  test(`review: refusal projection reads decoded type and every carrier ${escaped}/${carrier}`, () => {
+    const event: Record<string, unknown> = { type: "response.failed", response: { id: "retained", error: { type: "server_error", message: KEY } } };
+    const error = { type: "upstream_error", code: "upstream_response_refused", message: KEY };
+    if (carrier.startsWith("response.")) (event.response as Record<string, unknown>)[carrier.slice(9)] = error;
+    else event[carrier] = error;
+    const ordinary = JSON.stringify(event);
+    const payload = escaped ? ordinary.replace("response.failed", "response\\u002efailed") : ordinary;
+    const rewritten = rewriteNonRetryableFailurePayload(payload, false);
+    expect(rewritten).not.toContain(KEY);
+    expect(JSON.parse(rewritten)).toMatchObject({ type: "response.failed", response: {
+      id: "retained", retryable: false,
+      error: { code: "upstream_response_refused", message: REPLAY_REFUSAL_MESSAGE },
+      last_error: { code: "upstream_response_refused", message: REPLAY_REFUSAL_MESSAGE },
+    } });
+  });
+}
+test("review: ordinary direct failure keeps its established wire precedence", () => {
+  const payload = JSON.stringify({ type: "response.failed", response: { error: { code: "server_error", message: "ordinary" } }, last_error: { code: "rate_limit_exceeded" } });
+  expect(rewriteNonRetryableFailurePayload(payload, false)).toBe(payload);
+});
 for (const [status, code, message] of [[429, "rate_limit_exceeded", "rate limit"], [500, "insufficient_quota", "quota exhausted"],
   [400, "cyber_policy", "cyber policy"], [400, "model_not_in_plan", "plan refusal"], [429, "upstream_reset_replay_refused", "connection closed"],
   [403, "model_not_allowed_for_key", "not allowed"], [400, "usage_limit_reached", "usage limit reached"], [401, "invalid_api_key", "invalid api key"]] as const) {
@@ -18,7 +53,7 @@ for (const [status, code, message] of [[429, "rate_limit_exceeded", "rate limit"
     const make = (text: string) => {
       const response = new Response(text, { status, headers: { "retry-after": "7", "x-codex-primary-reset-at": "2000000000" } });
       if (code === "model_not_in_plan") markVerifiedModelNotInPlanResponse(response);
-      if (code === "upstream_reset_replay_refused") markReplayRefusalResponse(response);
+      if (code === "upstream_reset_replay_refused") retainReplayRefusal(response);
       if (code === "model_not_allowed_for_key") markResponseNonReplayable(response);
       return response;
     };

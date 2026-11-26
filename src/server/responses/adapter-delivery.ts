@@ -27,7 +27,7 @@ import { noteKiroServedSuccess } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
 import { readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
-import { isNonReplayableResponse } from "../../lib/upstream-retry";
+import { applyReplayRefusalClientHeaders, isAutomaticReplayBlocked, isReplayRefusalCode, withheldReplayStatus, isNonReplayableResponse, observedReplayRefusalCode, replayRefusalBodyCode, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE } from "../../lib/upstream-retry";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { currentTurnToolBridgeMaps, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 import { guardCompactionSummary } from "../../responses/compaction-summary";
@@ -72,6 +72,7 @@ export async function deliverAdapterResponse(
     responseStateOptions,
   } = requestState;
   const { upstreamResponse, upstream, cleanupUpstreamAbort, localUpstream, thinkingSignatureRecovery, refetchThinkingSignature } = adapterExchange;
+  const replayAllowed = !isAutomaticReplayBlocked(upstreamResponse);
   const {
     terminalGuardEnabled,
     fetchTerminalGuardContinuation,
@@ -79,7 +80,7 @@ export async function deliverAdapterResponse(
     isContinuationBodyStall,
   } = continuationState;
   const preserveEmptyCompletionRetryError = (event: AdapterEvent) =>
-    (event.type === "error" && event.code === UNDECLARED_TOOL_CALL_ERROR_CODE) || isContinuationBodyStall(event);
+    (event.type === "error" && (event.retryable === false || event.code === UNDECLARED_TOOL_CALL_ERROR_CODE)) || isContinuationBodyStall(event);
   const { emptyCompletionGuardEnabled } = completionPolicy;
   const {
     cancelResponseCompletion,
@@ -104,11 +105,17 @@ export async function deliverAdapterResponse(
         const nonReplayable = isNonReplayableResponse(response);
         if (nonReplayable) response = await sanitizeNonReplayableUpstreamError(response, errorSignal);
         const body = await readDisplaySafeErrorText(response, errorSignal, "Upstream recovery failed");
+        const refusalCode = replayRefusalBodyCode(body) ?? observedReplayRefusalCode(response);
+        if (refusalCode) {
+          yield { type: "error", status: REPLAY_REFUSED_STATUS, errorType: "upstream_error", code: refusalCode,
+            message: REPLAY_REFUSAL_MESSAGE, retryable: false };
+          return;
+        }
         const error = normalizeUpstreamErrorText(body, "Upstream recovery failed");
         if (isProxyError(response)) rememberProxyErrorMessage(logCtx, error.message ?? error.safeText, { status: response.status, type: error.type ?? "upstream_error", code: error.code, presentation: proxyErrorPresentation(response) });
         yield { type: "error", status: response.status, message: error.message ?? error.safeText,
           errorType: error.type ?? "upstream_error", ...(error.code ? { code: error.code } : {}),
-          ...(nonReplayable ? { retryable: false } : {}) };
+          ...(isAutomaticReplayBlocked(response) ? { retryable: false } : {}) };
         return;
       }
       try {
@@ -131,7 +138,7 @@ export async function deliverAdapterResponse(
         yield { type: "error", message: error.message,
           status: 504, errorType: "upstream_error", code: "upstream_stall_timeout" };
       }
-    }, () => transportState.activeAdapter.name, !isNonReplayableResponse(upstreamResponse), upstreamResponse);
+    }, () => transportState.activeAdapter.name, !isAutomaticReplayBlocked(upstreamResponse), upstreamResponse);
 
   const clientToolCatalog = requestState.clientToolCatalogRestriction && route.provider.authMode !== "forward"
     ? requestState.clientToolCatalogRestriction : undefined;
@@ -190,7 +197,7 @@ export async function deliverAdapterResponse(
       }
     })();
     const recoveredEvents = recoverThinkingSignature(initialEventStream);
-    const eventStream = terminalGuardEnabled
+    const eventStream = terminalGuardEnabled && replayAllowed
       ? guardTerminalEventStream({
           parsed,
           firstEvents: recoveredEvents,
@@ -205,7 +212,7 @@ export async function deliverAdapterResponse(
     // expert model, and re-dispatches the worker. Sits inside the empty-completion guard so an
     // advisor-only turn never reads as an empty completion, and outside the bridge so the
     // synthetic call never reaches the client.
-    const advisorStream = parsed._advisorGuard
+    const advisorStream = replayAllowed && parsed._advisorGuard
       ? parsed._advisorGuard({
           parsed,
           translatorBudget,
@@ -222,6 +229,7 @@ export async function deliverAdapterResponse(
           firstEvents: advisorStream,
           continuation: () => fetchGuardedEmptyCompletionRetry(onHiddenUsage),
           preserveRetryError: preserveEmptyCompletionRetryError,
+          replayAllowed,
         })
       : advisorStream;
     const catalogGuardedEventStream = guardEmptyToolCatalogStream(completionGuardedEventStream, clientToolCatalog, translatorBudget);
@@ -348,7 +356,7 @@ export async function deliverAdapterResponse(
         recoveredEvents.push(event);
       }
       let guardedEvents: AdapterEvent[];
-      if (terminalGuardEnabled) {
+      if (terminalGuardEnabled && replayAllowed) {
         guardedEvents = [];
         for await (const event of guardTerminalEventStream({
           parsed,
@@ -362,7 +370,7 @@ export async function deliverAdapterResponse(
         guardedEvents = recoveredEvents;
       }
       // Optional advisor guard — same semantics as the streaming branch above.
-      if (parsed._advisorGuard) {
+      if (replayAllowed && parsed._advisorGuard) {
         const advisorEvents: AdapterEvent[] = [];
         for await (const event of parsed._advisorGuard({
           parsed,
@@ -378,6 +386,7 @@ export async function deliverAdapterResponse(
           firstEvents: (async function* () { yield* guardedEvents; })(),
           continuation: () => fetchGuardedEmptyCompletionRetry(onHiddenUsage),
           preserveRetryError: preserveEmptyCompletionRetryError,
+          replayAllowed,
         })) events.push(event);
       } else {
         events = guardedEvents;
@@ -443,7 +452,11 @@ export async function deliverAdapterResponse(
     notifyResponseComplete(json);
     const lastError = events.findLast(event => event.type === "error");
     const status = json.status === "failed" && lastError && isContinuationBodyStall(lastError) ? 504 : 200;
-    return new Response(JSON.stringify(json), { status, headers: { "Content-Type": "application/json" } });
+    const headers = new Headers({ "Content-Type": "application/json" });
+    if (json.status === "failed" && lastError && (isReplayRefusalCode(lastError.code) || withheldReplayStatus(lastError.message, lastError.retryable) !== undefined)) {
+      applyReplayRefusalClientHeaders(headers);
+    }
+    return new Response(JSON.stringify(json), { status, headers });
   }
 
   return formatErrorResponse(400, "invalid_request_error", "Non-streaming not supported by this adapter");

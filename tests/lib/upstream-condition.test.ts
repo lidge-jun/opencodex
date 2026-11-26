@@ -118,3 +118,11 @@ describe("classifyUpstreamCondition", () => {
     expect(isUpstreamCondition("constructor")).toBe(false);
   });
 });
+
+test("hardening: relay response refusal is a transport failure even on quota or unavailable statuses", () => {
+  for (const status of [429, 503]) {
+    expect(classifyUpstreamCondition({
+      status, type: "rate_limit_error", code: "upstream_response_refused", message: "quota exceeded",
+    })).toBe("upstream_failed");
+  }
+});

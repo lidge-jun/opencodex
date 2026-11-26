@@ -18,6 +18,8 @@ import type { RouteResult } from "../../router";
 import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { clearCodexModelDenialEvidence, recordCodexModelDenialEvidence } from "../../codex/model-entitlements";
+import { observeCodexPoolAccountModel400Denial } from "./core-codex-account";
 import { isFixedCodexAccount } from "./core-codex-account";
 
 export function capturePassthroughAffinity(response: Response, inboundHeaders: Headers, outboundHeaders: Record<string, string>,
@@ -35,4 +37,19 @@ export function capturePassthroughAffinity(response: Response, inboundHeaders: H
     wireModelNormalized: parsedModelId !== route.modelId,
     status: response.status,
   });
+}
+
+/** Preserve fresh entitlement evidence while leaving replay authority with the dispatch owner. */
+export async function observePassthroughCodexModelDenial(response: Response,
+  authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>,
+  routeModelId: string, wireModelId: string, signal?: AbortSignal): Promise<string | undefined> {
+  const generation = authCtx.kind === "pool" ? authCtx.generation : undefined;
+  if (response.ok) {
+    // Success clears both identities because the wire model can differ from the routed one.
+    clearCodexModelDenialEvidence(authCtx.accountId, routeModelId, generation);
+    clearCodexModelDenialEvidence(authCtx.accountId, wireModelId, generation);
+  }
+  const denied = await observeCodexPoolAccountModel400Denial(response, routeModelId, signal, wireModelId);
+  if (denied !== undefined) recordCodexModelDenialEvidence(authCtx.accountId, denied, generation);
+  return denied;
 }
