@@ -78,7 +78,7 @@ Kapsanan POST uç noktaları `/v1/responses`, `/v1/responses/compact`,
 `/v1/chat/completions`, `/v1/messages`, `/v1/messages/count_tokens`,
 `/v1/images/generations`, `/v1/images/edits` ve `/v1/alpha/search` yollarıdır.
 Görseller, arama ve belirteç sayımı mevcut yapılandırılabilir gövde başı
-sınırlarını korur. İç doğrudan çeviri ve kombo çağrıları ikinci bir HTTP alanı
+sınırlarını korur. xAI köprüsünden geçen görsel düzenleme istekleri için ayrıca 100 MiB sabit sınır vardır. İki sınırdan küçük olanı uygulanır. İç doğrudan çeviri ve kombo çağrıları ikinci bir HTTP alanı
 ayırmaz. Yönetim, ses, bağlam geçmişi ve WebSocket sınırları değişmez.
 
 Bu ek eşzamanlılık kapısı yalnızca etkin `maxInboundBodyBytes` 256 MiB'ı aştığında uygulanır.

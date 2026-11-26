@@ -51,8 +51,9 @@ checks it before resolving credentials or sending a request. The relay refuses t
 supplied source, an explicit `null` included, is not an https URL or a canonical base64 PNG/JPEG/WebP
 data URL (for example a `file_id` or plain text) instead of dropping it. It checks the base64 alphabet
 and padding directly in the supplied text. An xAI bridge edit has a 100 MiB decompressed JSON request
-cap even when the deployment raises the general inbound limit. Each inline source retains the shared
-50 MiB decoded-image ceiling (about 66.7 MiB encoded), and unique inline payloads have a 100 MiB
+cap even when the deployment raises the general inbound limit. At this fixed cap the refusal asks
+for a smaller edit payload. Canonical base64 padding determines each source's exact decoded length
+against the 50 MiB ceiling (about 66.7 MiB encoded), and unique inline payloads have a 100 MiB
 aggregate encoded ceiling. Those bounds are checked before credentials are resolved or the outbound
 JSON is serialized; HTTPS sources do not consume the inline-data budget. Generations, explicit Images
 providers and non-xAI edit routes retain the configured general inbound limit. Every URL-bearing

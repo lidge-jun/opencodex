@@ -138,7 +138,7 @@ export class DecompressedBodyTooLargeError extends Error {
  * wording deliberately avoids "context window"/"context length", which `classifyError` treats
  * as evidence of an upstream context verdict.
  */
-export function describeInboundBodyRefusal(error: DecompressedBodyTooLargeError): string {
+export function describeInboundBodyRefusal(error: DecompressedBodyTooLargeError, limitSource?: "xai-edit"): string {
   if (error instanceof CompressionRatioExceededError) return error.message;
   // A lower-bound measurement stopped counting at the cap; reporting it as exact would be a lie.
   const approximate = error.measurement === "declared_wire" || error.measurement === "decoded_exact"
@@ -150,6 +150,9 @@ export function describeInboundBodyRefusal(error: DecompressedBodyTooLargeError)
     : observed === null
       ? `the body is above the ${limit} MB inbound admission limit`
       : `the body is ${approximate}${observed} MB, above the ${limit} MB inbound admission limit`;
+  if (limitSource === "xai-edit") {
+    return `OpenCodex refused this xAI image edit: ${sizes}. Reduce the edit payload to fit the fixed per-request limit.`;
+  }
   return `OpenCodex refused this request before reading it: ${sizes}. `
     + "This is a local proxy limit, not a provider refusal. Raise \"maxInboundBodyBytes\" in "
     + `config.json (ceiling ${INBOUND_CEILING_MB} MB) and restart the proxy, or compact the `

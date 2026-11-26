@@ -36,7 +36,7 @@ description: 提高请求体上限如何影响并发 HTTP 请求、重试和内�
 
 减少后的预留量在异步处理及等待提供商响应期间仍会保留，直到响应流 EOF、发生错误或取消处理完成。仅完成解析不会释放预留量。客户端断开连接时，也要等待响应生成端的取消处理完成后才释放。即使错误、中止和取消同时发生，释放也只执行一次。
 
-受约束的 POST 端点包括 `/v1/responses`、`/v1/responses/compact`、`/v1/chat/completions`、`/v1/messages`、`/v1/messages/count_tokens`、`/v1/images/generations`、`/v1/images/edits` 和 `/v1/alpha/search`。图像、搜索和 token 计数仍遵守各自现有的可配置单请求体上限。内部直接转换和 combo 调用不会再次预留 HTTP 额度。管理、音频、上下文历史和 WebSocket 的上限不变。
+受约束的 POST 端点包括 `/v1/responses`、`/v1/responses/compact`、`/v1/chat/completions`、`/v1/messages`、`/v1/messages/count_tokens`、`/v1/images/generations`、`/v1/images/edits` 和 `/v1/alpha/search`。图像、搜索和 token 计数仍遵守各自现有的可配置单请求体上限。经 xAI 桥接的图像编辑请求还受 100 MiB 固定上限约束，取两者中的较小值。内部直接转换和 combo 调用不会再次预留 HTTP 额度。管理、音频、上下文历史和 WebSocket 的上限不变。
 
 这一额外的并发门槛仅在最终生效的 `maxInboundBodyBytes` 大于 256 MiB 时启用。省略该单请求设置或设为 `0` 会保留其 256 MiB 默认值，因此不会启用门槛。省略 `maxConcurrentInboundBodyBytes` 或设为 `0` 则会选择 512 MiB 共享默认值，不会关闭已启用的门槛。现有请求数量及其他资源限制仍然适用。
 

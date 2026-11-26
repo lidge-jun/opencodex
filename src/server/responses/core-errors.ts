@@ -83,7 +83,7 @@ export function normalizeUpstreamErrorText(text: string, fallback: string): Norm
 
 
 
-export function decodeRequestErrorResponse(err: unknown, label: string): Response {
+export function decodeRequestErrorResponse(err: unknown, label: string, limitSource?: "xai-edit"): Response {
   if (isTranslatorBudgetExceededError(err)) {
     return markProxyError(formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
       code: "translation_buffer_limit",
@@ -93,7 +93,7 @@ export function decodeRequestErrorResponse(err: unknown, label: string): Respons
     return markProxyError(formatErrorResponse(415, "invalid_request_error", err.message));
   }
   if (err instanceof DecompressedBodyTooLargeError) {
-    return markProxyError(formatErrorResponse(413, "inbound_body_too_large", describeInboundBodyRefusal(err)), "inbound");
+    return markProxyError(formatErrorResponse(413, "inbound_body_too_large", describeInboundBodyRefusal(err, limitSource)), "inbound");
   }
   console.warn(`[${label}] request body decode/parse failed: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
   return markProxyError(formatErrorResponse(400, "invalid_request_error", "Invalid JSON body"));

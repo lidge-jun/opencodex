@@ -50,6 +50,7 @@ import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import {
   decodeValidatedImageBase64,
   fetchPublicHttpsImage,
+  MAX_DECODED_BYTES_PER_IMAGE,
   MAX_ENCODED_BYTES_PER_IMAGE,
   sniffImageExtension,
   type PinnedDownloadFn,
@@ -164,8 +165,8 @@ function isXaiEditSourceUrl(value: string, start: number): boolean {
 /** Collect every caller-supplied source before authentication or outbound serialization. */
 export function collectXaiEditSources(
   obj: Record<string, unknown>,
-  limits: { maxEncodedBytesPerImage: number; maxAggregateEncodedBytes: number } = {
-    maxEncodedBytesPerImage: MAX_ENCODED_BYTES_PER_IMAGE,
+  limits: { maxDecodedBytesPerImage: number; maxAggregateEncodedBytes: number } = {
+    maxDecodedBytesPerImage: MAX_DECODED_BYTES_PER_IMAGE,
     maxAggregateEncodedBytes: XAI_EDIT_MAX_REQUEST_BYTES,
   },
 ): { sources: string[]; unusable: boolean; oversized: boolean } {
@@ -177,9 +178,13 @@ export function collectXaiEditSources(
     const url = typeof value === "string" ? value.trim() : "";
     const headerLength = /^data:image\/(?:png|jpeg|jpg|webp);base64,/i.exec(url)?.[0].length ?? 0;
     const encodedBytes = headerLength ? url.length - headerLength : 0;
-    if (encodedBytes > limits.maxEncodedBytesPerImage) { oversized = true; return; }
+    if (encodedBytes > 4 * Math.ceil(limits.maxDecodedBytesPerImage / 3)) { oversized = true; return; }
     if (sources.has(url)) return;
     if (!isXaiEditSourceUrl(url, headerLength)) { unusable = true; return; }
+    if (headerLength) {
+      const padding = url.endsWith("==") ? 2 : url.endsWith("=") ? 1 : 0;
+      if (encodedBytes / 4 * 3 - padding > limits.maxDecodedBytesPerImage) { oversized = true; return; }
+    }
     if (encodedBytes > limits.maxAggregateEncodedBytes - aggregateEncodedBytes) {
       oversized = true;
       return;
@@ -734,12 +739,13 @@ export async function handleImages(
   const xai = config.images?.provider === undefined && config.images?.bridgeEnabled === true
     ? findXaiProvider(config) : undefined;
   const configuredLimit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
-  const bodyLimit = xai && endpoint === "edits" ? Math.min(configuredLimit, XAI_EDIT_MAX_REQUEST_BYTES) : configuredLimit;
+  const fixedEditLimit = !!xai && endpoint === "edits" && configuredLimit >= XAI_EDIT_MAX_REQUEST_BYTES;
+  const bodyLimit = fixedEditLimit ? XAI_EDIT_MAX_REQUEST_BYTES : configuredLimit;
   let body: unknown;
   try {
     body = await readJsonRequestBody(req, undefined, bodyLimit);
   } catch (err) {
-    return decodeRequestErrorResponse(err, "images");
+    return decodeRequestErrorResponse(err, "images", fixedEditLimit ? "xai-edit" : undefined);
   }
   const model = (body as { model?: unknown } | null)?.model;
   if (typeof model === "string" && model) logCtx.model = model;
