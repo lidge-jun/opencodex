@@ -161,7 +161,7 @@ function OverviewCard({
   /** Aside only: one plan names one profile, so the aggregate card cannot replace. */
   onChooseProfile: (() => void) | null;
   /** Present only for an applied client whose file drifted: the "Update needed" pill re-applies it. */
-  onReapply: (() => void) | null;
+  onReapply: ((fallbackFocus: () => HTMLElement | null) => void) | null;
 }) {
   const t = useT();
   const detail = row.detail ?? (row.detailKey ? t(row.detailKey, row.detailVars ?? undefined) : null);
@@ -193,7 +193,7 @@ function OverviewCard({
     if (!active || active === document.body) titleRef.current?.focus();
   }, [canReapplyNow]);
   const activateReapply = onReapply
-    ? () => { reapplyActivated.current = true; onReapply(); }
+    ? () => { reapplyActivated.current = true; onReapply(() => titleRef.current); }
     : undefined;
   const removableKiloIssue = row.status !== null && canDisableKiloWithCandidateIssue(row.status);
   // One of three readings a glance needs: connected, not yet, needs attention.
@@ -333,6 +333,7 @@ export default function IntegrationsOverview({
     loading: boolean;
     failure: string | null;
     recovery: PreviewRecovery | null;
+    fallbackFocus?: () => HTMLElement | null;
   } | null>(null);
   const [bulkPlans, setBulkPlans] = useState<BulkDisableState | null>(null);
   const cardPreviewAbortRef = useRef<AbortController | null>(null);
@@ -744,6 +745,7 @@ export default function IntegrationsOverview({
     operation: Exclude<IntegrationPlanOperation, "restore">,
     /** Recovery replaces the failed plan it is retrying; the first request never does. */
     replacing = false,
+    fallbackFocus?: () => HTMLElement | null,
   ) => {
     if (!row.status || (plannedCard && !replacing)) return;
     const controller = new AbortController();
@@ -751,12 +753,12 @@ export default function IntegrationsOverview({
     cardPreviewGenerationRef.current = generation;
     cardPreviewAbortRef.current?.abort();
     cardPreviewAbortRef.current = controller;
-    setPlannedCard({ row, operation, plan: null, loading: true, failure: null, recovery: null });
+    setPlannedCard({ row, operation, plan: null, loading: true, failure: null, recovery: null, fallbackFocus });
     try {
       const plan = await previewIntegrationMutation(apiBase, row.status.clientId, operation, controller.signal);
       if (controller.signal.aborted || generation !== cardPreviewGenerationRef.current) return;
       cardPreviewAbortRef.current = null;
-      setPlannedCard({ row, operation, plan, loading: false, failure: null, recovery: null });
+      setPlannedCard({ row, operation, plan, loading: false, failure: null, recovery: null, fallbackFocus });
     } catch (error) {
       if (controller.signal.aborted || generation !== cardPreviewGenerationRef.current) return;
       cardPreviewAbortRef.current = null;
@@ -769,6 +771,7 @@ export default function IntegrationsOverview({
       setPlannedCard({
         row, operation, plan: null, loading: false, recovery,
         failure: recovery === null ? t("integrations.preview.failed") : null,
+        fallbackFocus,
       });
     }
   };
@@ -794,7 +797,7 @@ export default function IntegrationsOverview({
     }
     if (generation !== cardPreviewGenerationRef.current) return;
     refresh();
-    await requestFilePlan(planned.row, planned.operation, true);
+    await requestFilePlan(planned.row, planned.operation, true, planned.fallbackFocus);
   };
 
   const closePlannedCard = () => {
@@ -834,9 +837,9 @@ export default function IntegrationsOverview({
    *
    * Errors propagate so the dialog can show them while the user still has cancel.
    */
-  const reapplyCard = (row: OverviewRow) => {
+  const reapplyCard = (row: OverviewRow, fallbackFocus?: () => HTMLElement | null) => {
     // File clients keep their consequence dialog; native clients re-run the same PUT the switch sends.
-    if (row.status) void requestFilePlan(row, "apply");
+    if (row.status) void requestFilePlan(row, "apply", false, fallbackFocus);
     else void toggleCard(row, true, undefined, true);
   };
   const presentRows = rows.filter(row => !elsewhere(row));
@@ -855,7 +858,7 @@ export default function IntegrationsOverview({
       onChooseProfile={row.status?.clientId === "aside" && row.status.state === "conflict" && row.status.reason !== "candidate-conflict" && row.installed
         ? () => navigateHash(row.hash)
         : null}
-      onReapply={canReapply(row, desktopNativeOff) ? () => reapplyCard(row) : null}
+      onReapply={canReapply(row, desktopNativeOff) ? fallbackFocus => reapplyCard(row, fallbackFocus) : null}
     />
   );
 
@@ -1076,6 +1079,7 @@ export default function IntegrationsOverview({
           planFailure={plannedCard.failure}
           previewRecovery={plannedCard.recovery}
           onPreviewRecovery={recoverPlannedCard}
+          fallbackFocus={plannedCard.fallbackFocus}
           onClose={closePlannedCard}
           onConfirm={async plan => {
             if (!plan) return;

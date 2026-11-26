@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useT, type TKey } from "../../i18n/shared";
 import { Notice } from "../../ui";
 import IntegrationPlanDetails, { type LabeledIntegrationPlan } from "./IntegrationPlanDetails";
@@ -39,6 +39,7 @@ export default function ConsequenceDialog({
   previewRecovery = null,
   onPreviewRecovery,
   missingStorePath,
+  fallbackFocus,
   onConfirm,
   onClose,
 }: {
@@ -58,13 +59,19 @@ export default function ConsequenceDialog({
   onPreviewRecovery?: () => Promise<void> | void;
   /** Passed through to the plan details; see IntegrationPlanDetails. */
   missingStorePath?: string;
+  /** Used on close when the original trigger button was removed while the dialog was open. */
+  fallbackFocus?: () => HTMLElement | null;
   onConfirm: (plan?: IntegrationMutationPlan) => Promise<void> | void;
   onClose: () => void;
 }) {
   const t = useT();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
+  const fallbackFocusRef = useRef(fallbackFocus);
   const closeRef = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    fallbackFocusRef.current = fallbackFocus;
+  }, [fallbackFocus]);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [recovering, setRecovering] = useState(false);
@@ -97,7 +104,12 @@ export default function ConsequenceDialog({
     closeRef.current?.focus();
     return () => {
       if (dialog?.open) dialog.close();
-      if (triggerRef.current?.isConnected) triggerRef.current.focus?.();
+      if (triggerRef.current?.isConnected) {
+        triggerRef.current.focus?.();
+      } else {
+        const fallback = fallbackFocusRef.current?.();
+        if (fallback?.isConnected) fallback.focus?.();
+      }
     };
   }, []);
 
