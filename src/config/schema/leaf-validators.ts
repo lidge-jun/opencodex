@@ -29,6 +29,7 @@ import { providerEgressConfigError } from "../../lib/provider-egress";
 import { redactSecretString } from "../../lib/redact";
 import {
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
+  OCX_VIDEO_APIS,
   pinnedWireAdapter,
   PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS,
   THINKING_DISPLAY_VALUES,
@@ -434,6 +435,7 @@ export const providerConfigSchema = z.object({
   supportsNativeCompactEndpoint: z.boolean().optional(),
   allowEncryptedV2AgentTasks: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
+  videoApi: z.enum(OCX_VIDEO_APIS).optional(),
   // Per-provider egress (#2894): absent inherits the global proxy decision, "direct"/null
   // refuses it, and an http(s) or socks5 URL replaces it for this provider only.
   proxy: providerProxySchema.optional(),

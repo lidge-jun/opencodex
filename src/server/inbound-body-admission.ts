@@ -27,6 +27,7 @@ export const CONFIGURABLE_JSON_BODY_ROUTES: ReadonlySet<string> = new Set([
   "/v1/messages/count_tokens",
   "/v1/images/generations",
   "/v1/images/edits",
+  "/v1/videos",
   "/v1/alpha/search",
 ]);
 
@@ -42,6 +43,7 @@ export const UNGATED_LOOPBACK_ROUTES: ReadonlySet<string> = new Set([
   "/v1/realtime",
   "/v1/realtime/calls",
   "/v1/live",
+  "/v1/live/sessions",
 ]);
 
 export class InboundBodyCapacityError extends Error {

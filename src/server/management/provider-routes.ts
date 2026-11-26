@@ -440,6 +440,13 @@ function applyProviderPatchFields(
     next.allowPrivateNetwork = rawBody.allowPrivateNetwork;
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "videoApi")) {
+    const value = rawBody.videoApi;
+    if (value === null || value === "") delete next.videoApi;
+    else if (value === "xai" || value === "openai") next.videoApi = value;
+    else return { error: "videoApi must be xai, openai, or null to clear" };
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "liveModels")) {
     if (typeof rawBody.liveModels !== "boolean") return { error: "liveModels must be a boolean" };
     next.liveModels = rawBody.liveModels;
@@ -904,6 +911,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // Presence only (#959 review): header names and values never leave the process.
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
+      ...(p.videoApi ? { videoApi: p.videoApi } : {}),
       preserveResponsesReasoningContent: p.preserveResponsesReasoningContent,
       promoteAdditionalTools: p.promoteAdditionalTools,
       forwardAdvisorTool: p.forwardAdvisorTool,

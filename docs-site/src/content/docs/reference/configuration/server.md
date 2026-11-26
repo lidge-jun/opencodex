@@ -1114,7 +1114,7 @@ interception.
 | --- | --- | --- | --- |
 | `provider?` | `string` | automatic OpenAI selection | Explicit custom API-key `openai-responses` provider for `/v1/images/generations` and `/v1/images/edits`. Registry-managed ids are rejected. |
 | `timeoutMs?` | `number` | `300000` | Whole-request timeout for one standalone Images request. |
-| `videoProvider?` | `string` | xAI | API-key provider that serves the in-turn `video_gen` bridge with its own `baseUrl` and key. `xai` stays pinned to `https://api.x.ai/v1`; other registry ids are rejected. See [Video Bridge](/guides/video-bridge/#choosing-the-video-provider). |
+| `videoProvider?` | `string` | xAI | API-key provider that serves the in-turn `video_gen` bridge with its own `baseUrl` and key, on the wire its `videoApi` names. `xai` stays pinned to `https://api.x.ai/v1`; other registry ids are rejected. It is also the destination of a public `/v1/videos` request whose `model` names no provider. See [Video Bridge](/guides/video-bridge/#choosing-the-video-provider). |
 
 Explicit selection fails closed when the provider is missing, disabled, incompatible, or lacks a
 usable key; it never falls back to another paid upstream. The endpoint must implement the OpenAI

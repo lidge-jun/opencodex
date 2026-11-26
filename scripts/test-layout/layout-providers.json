@@ -31,5 +31,7 @@
   "claude-cli-fixture-stdout-flush.test.ts": "providers",
   "alibaba-token-plan-developer-role.test.ts": "providers",
   "provider-quota-probe-isolation.test.ts": "providers",
-  "api-key-cooldown-store.test.ts": "providers"
+  "api-key-cooldown-store.test.ts": "providers",
+  "registry-default-in-seed.test.ts": "providers",
+  "vendor-catalog-refresh.test.ts": "providers"
 }

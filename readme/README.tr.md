@@ -159,6 +159,10 @@ Her yukarı akış protokol değişiminde opencodex'in bakımını sürdürebilm
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
 <td>Bu projeye sponsor olduğu için <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a>'a teşekkürler! TokenLab, kodlama ajanlarına önde gelen modeller için tek bir API anahtarı sunar; OpenAI Responses ve Chat Completions, Anthropic Messages ve Gemini'nin yerel API biçimleri, akış ve araç çağırma ile desteklenir. Kolay entegrasyon için bir MCP sunucusu ve ajan Skills'i de sağlar. Teslimat modunuzu seçin, kullandıkça ödeyin. Add provider seçicisinden <code>TokenLab</code> seçin ya da <code>ocx provider add tokenlab</code> çalıştırın.<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
 </tr>
+<tr>
+<td width="180"><a href="https://runapi.co"><img src="../assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
+<td>Bu projeye sponsor olduğu için <a href="https://runapi.co">RunAPI</a>'ye teşekkürler! RunAPI birleşik bir yapay zekâ API ağ geçididir: tek bir API anahtarı OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot ve diğerlerinden 200'den fazla modellik bir kataloğu açar; modeller OpenAI Chat Completions ve Responses, Anthropic Messages ve Gemini'nin yerel API biçimleriyle sunulur ve kullanılabilen biçimler modele göre değişir. Akıllı yönlendirme her isteği hızlı ve kararlı bir sağlayıcı düğümüne gönderir ve arızada otomatik olarak geçiş yapar; ücretlendirme kullandıkça öde şeklindedir ve genellikle standart fiyatların epey altındadır. Add provider seçicisinden <code>RunAPI</code> seçin ya da <code>ocx provider add runapi</code> çalıştırın.</td>
+</tr>
 </tbody>
 </table>
 

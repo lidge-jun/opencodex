@@ -20,6 +20,10 @@ export type RefreshPolicy = "proactive" | "lazy-only" | "disabled";
  */
 export type CacheAffinityMode = "auto" | "session" | "turn" | "off";
 
+/** Video job wires a provider row can speak (see `OcxProviderConfig.videoApi`). */
+export const OCX_VIDEO_APIS = ["xai", "openai"] as const;
+export type OcxVideoApi = typeof OCX_VIDEO_APIS[number];
+
 /** Provider cache-affinity outcome recorded on a request-log row. */
 export type CacheAffinityOutcome = "kept" | "bound" | "released";
 /** Why that outcome happened; mirrors the store's keep reasons plus lifecycle outcomes. */
@@ -561,6 +565,15 @@ export interface OcxProviderConfig {
    * link-local, or unique-local upstreams. Metadata endpoints remain blocked.
    */
   allowPrivateNetwork?: boolean;
+  /**
+   * Video job API this row speaks when it serves video (`images.videoProvider` or a public
+   * `/v1/videos` request). Absent or `"xai"` keeps the xAI wire (`POST /videos/generations`,
+   * poll `GET /videos/{id}`, public `video.url`). `"openai"` selects the OpenAI Videos wire
+   * (`POST /videos`, poll `GET /videos/{id}`, bytes from `GET /videos/{id}/content`) and is the
+   * opt-in that lets the row serve the public `/v1/videos` routes. The registry `xai` row always
+   * uses the xAI wire.
+   */
+  videoApi?: OcxVideoApi;
   /**
    * Outbound egress for THIS provider, overriding the process-wide `proxy` decision.
    *

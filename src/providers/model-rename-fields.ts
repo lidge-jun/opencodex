@@ -44,6 +44,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   supportsNativeCompactEndpoint: "none",
   allowEncryptedV2AgentTasks: "none",
   allowPrivateNetwork: "none",
+  videoApi: "none",
   proxy: "none",
   noProxy: "none",
   upstreamHttpVersion: "none",

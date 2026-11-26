@@ -126,6 +126,7 @@ export type {
 export type {
   RefreshPolicy,
   CacheAffinityMode,
+  OcxVideoApi,
   CacheAffinityOutcome,
   CacheAffinityLogReason,
   OpenRouterProviderRouting,
@@ -150,7 +151,7 @@ export type {
   ReasoningCapabilities,
 } from "./types/provider";
 
-export { PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS } from "./types/provider";
+export { OCX_VIDEO_APIS, PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS } from "./types/provider";
 
 export type {
   CodexAccount,

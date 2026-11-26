@@ -74,6 +74,8 @@ Las solicitudes enrutadas a través de opencodex por el inicio de sesión canón
 
 Solo algunos giros toman el transporte websocket ChatGPT, el mismo carril `responses_websockets` Codex CLI predeterminado. Un turno es elegible cuando el entorno de ejecución Bun soporta el relé limitado, la solicitud es un `POST` a la URL canónica Responses o una ruta WebSocket configurada, y su cuerpo JSON establece `stream` a `true` en la raíz. Todo lo demás permanece en SSE sobre HTTP, y un giro elegible sigue cayendo de nuevo a él cuando la solicitud no se puede preparar, la trama `response.create` excede su límite de tamaño, o la ruta proxy no puede llevar el socket.
 
+El límite de tamaño también sigue el anuncio del propio backend de ChatGPT. Cuando el handshake del socket trae `x-codex-websocket-max-message-bytes`, una trama mayor que ese valor no se envía por ese socket. Un `response.create` inicial vuelve a SSE antes de subir nada, igual que hace Codex. Si ya se envió un delta incremental y el backend pide la trama completa, una trama completa por encima del límite también toma la ruta SSE. Un giro que necesita direccionamiento o inyección nativos no puede usar SSE: una trama inicial demasiado grande falla de forma visible, y una trama de direccionamiento o inyección demasiado grande se rechaza para que el cliente pueda enviar una corregida. Sin anuncio se aplica el techo fijo, justo por debajo de 16 MiB, y esa comprobación previa a la conexión vuelve a SSE. En esta ruta el proxy también reenvía sin cambios los encabezados de solicitud `x-codex-exclude` y `x-codex-exclude-stream-fields` de Codex, de modo que el backend puede omitir los campos que Codex nombra en ellos. De forma predeterminada son el catálogo de herramientas repetido, la atribución de uso por elemento, los números de secuencia de los deltas y el texto cifrado preliminar del razonamiento. Los demás destinos nunca reciben estos encabezados.
+
 Para mantener el proveedor ChatGPT incorporado en HTTP / SSE, configure `providers.openai.upstreamWebsocket` a `false` en `~/.opencodex/config.json` y reinicie el proxy. Fusione este campo en el proveedor `openai` existente; conserve su modo de cuenta y otras configuraciones. Omite el campo para restaurar la selección predeterminada de aguas arriba WebSocket. Esta configuración no cambia el conmutador `websockets` orientado al cliente ni la cuenta ChatGPT utilizada para la solicitud. La dirección y la inyección nativas a mitad de giro necesitan corriente arriba WebSocket y no están disponibles mientras están apagadas.
 
 **Metadatos de uso del razonamiento (disponibles desde la versión 2.90.0).** Para los clientes HTTP/SSE de la ruta canónica de ChatGPT, el relé WebSocket conserva el encabezado real de respuesta de conexión `x-reasoning-included` cuando Bun lo expone, también al reutilizar una conexión. Este encabezado indica a Codex que el uso informado por el servidor ya incluye el razonamiento anterior. Los metadatos recibidos antes del primer evento de Responses tienen prioridad; los posteriores permanecen en el flujo, pero no pueden modificar los encabezados ya enviados. El relé no inventa esta señal ni altera las cifras de uso. La ausencia de la señal del servidor y el ciclo de contabilización propio de Codex son problemas distintos: este cambio por sí solo no demuestra que se haya corregido la compactación anticipada. Las conexiones WebSocket del cliente ya completaron su actualización de protocolo antes de la respuesta del servidor de origen y no pueden recibir la señal retroactivamente como encabezado de esa actualización.
@@ -187,7 +189,10 @@ wire_api = "responses"
 requires_openai_auth = true
 env_key = "OPENCODEX_API_AUTH_TOKEN"
 # supports_websockets = true   # only when config.websockets is true
+capabilities = { cyber_access_programs = true }
 ```
+
+La línea `capabilities` permite que Codex reenvíe una selección de programa de acceso Cyber a través de esta tabla. Codex desactiva esa capacidad de forma predeterminada para todo identificador de proveedor distinto de su `openai` integrado, y la forma loopback ya usa ese identificador. Las versiones de Codex anteriores al campo lo ignoran. Una tabla escrita por una versión anterior de OpenCodex, sin la línea, sigue reconociéndose en `ocx restore` y en la desinstalación. El lanzador `ocx codex` solo confía en la forma actual: después de actualizar, si `ocx codex` deja de proporcionar credenciales, ejecute `ocx sync` una vez para reescribir la tabla. Esto requiere la integración de Codex activada; mientras está desactivada, OpenCodex deja su configuración de Codex tal como está, y ni `ocx sync` ni un reinicio reescriben la tabla.
 
 Cuando OpenCodex posee enrutamiento, ambos modos escriben `$CODEX_HOME/opencodex.config.toml` como una configuración de referencia/retroceso. En loopback contiene las claves de raíz que puede combinar manualmente si se eliminó la inyección automática; en non-loopback contiene el formulario de proveedor dedicado. El modo de proveedor externo deja este perfil intacto.
 
@@ -269,6 +274,7 @@ name = "OpenCodex Proxy"
 base_url = "http://127.0.0.1:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
+capabilities = { cyber_access_programs = true }
 ```
 
 Codex luego posee compactación y almacena un resumen de texto plano portátil en lugar de un nuevo sobre OpenCodeX. La solicitud de compactación sigue enrutando a través de OpenCodeX y puede consumir cuota en el proveedor seleccionado. Las solicitudes de subagentes V2 mantienen su selección de proveedores existente y la contabilidad de cuotas. La compactación del lado del cliente no cambia la entrega de texto sin formato, el paso de tareas encriptadas a través de `allowEncryptedV2AgentTasks` o el comportamiento de recuperación y recuperación configurado.
@@ -332,6 +338,7 @@ name = "OpenCodex Proxy"
 base_url = "http://127.0.0.1:10100/v1"
 wire_api = "responses"
 requires_openai_auth = false
+capabilities = { cyber_access_programs = true }
 ```
 
 El escritorio se inicia sin un inicio de sesión y las rutas de cada turno a través del proxy. La configuración sobrevive `ocx start`, reinicio, `ocx sync` y `ocx ensure`; al apagarlo (`--desktop-authless off`) hace que la siguiente sincronización restaure la forma de bucle de retorno predeterminada y `ocx restore` la despoja como cualquier otro enrutamiento inyectado. Qué esperar mientras está encendido:
