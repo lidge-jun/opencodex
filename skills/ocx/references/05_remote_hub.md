@@ -15,6 +15,10 @@ local admin token admits the CLI read, and the Hub verifies the enrolled relay c
 The relayed dashboard can sign out its own Hub GUI session. Use the Hub dashboard
 directly for other management writes and reads outside the allowlist.
 Local config and local Lab commands still refer to this machine's files.
+`ocx config show --source` explains the local config load. Check `source`,
+`error`, and `warnings` rather than treating exit 0 as validation success;
+it is not a dump of effective live settings on the Home. Use the feature's own
+read command on the intended management host for that question.
 
 Read connection status again after an authorized connect, rotation or disconnect.
 A saved connection, completed catalog transfer, client-file rewrite and healthy
