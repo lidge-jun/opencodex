@@ -249,6 +249,53 @@ function packageFixture() {
 }
 const posixTest = process.platform === "win32" ? test.skip : test;
 const launcher = repoPath("bin", "ocx.mjs");
+posixTest("skills read through the selected Desktop CLI without using the package Bun fallback", () => {
+  const { home, target, env } = packageFixture();
+  writeFileSync(target, '#!/bin/sh\nexec "$OCX_TEST_BUN" "$OCX_TEST_CLI" "$@"\n');
+  chmodSync(target, 0o700);
+  const desktopEnv = { ...env, OCX_TEST_BUN: process.execPath, OCX_TEST_CLI: repoPath("src", "cli", "index.ts") };
+  const version = spawnSync("node", [launcher, "--version"], { cwd: home, env: desktopEnv, encoding: "utf8", timeout: 20_000 });
+  const guide = spawnSync("node", [launcher, "skills", "get", "ocx", "--json"], { cwd: home, env: desktopEnv, encoding: "utf8", timeout: 20_000 });
+  expect(version.status).toBe(0);
+  expect(guide.status).toBe(0);
+  expect(guide.stderr).toBe("");
+  expect(JSON.parse(guide.stdout)).toMatchObject({
+    name: "ocx", version: version.stdout.trim().replace(/^opencodex /, ""), file: "SKILL.md",
+    markdown: readFileSync(repoPath("skills", "ocx", "SKILL.md"), "utf8"),
+  });
+  for (const name of ["opencodex", "codex", "grok"]) expect(readdirSync(join(home, name))).toEqual([]);
+}, 45_000);
+
+posixTest("skills do not fall back to package documentation when the selected older CLI rejects the command", () => {
+  const { home, target, env } = packageFixture();
+  writeFileSync(target, '#!/bin/sh\nprintf "Unknown command: skills\\n" >&2\nexit 1\n');
+  chmodSync(target, 0o700);
+  const guide = spawnSync("node", [launcher, "skills", "get", "ocx"], { cwd: home, env, encoding: "utf8", timeout: 20_000 });
+  expect(guide.status).toBe(1);
+  expect(guide.stdout).toBe("");
+  expect(guide.stderr).toBe("Unknown command: skills\n");
+});
+
+posixTest("a piped Desktop skill read emits the full reference in Markdown and JSON", () => {
+  const { home, target, env } = packageFixture();
+  writeFileSync(target, '#!/bin/sh\nexec "$OCX_TEST_BUN" "$OCX_TEST_CLI" "$@"\n');
+  chmodSync(target, 0o700);
+  const file = "references/01_surface_observe-system.md";
+  const expected = readFileSync(repoPath("skills", "ocx", file), "utf8");
+  expect(Buffer.byteLength(expected)).toBeGreaterThan(65_536);
+  for (const flags of [[], ["--json"]]) {
+    // spawnSync captures to a socket; the inner pipe exercises backpressure before exit.
+    const guide = spawnSync("sh", ["-c", 'node "$@" | (sleep 1; cat)', "sh", launcher,
+      "skills", "get", "ocx", "--reference", file, ...flags], {
+      cwd: home, encoding: "utf8", timeout: 20_000,
+      env: { ...env, OCX_TEST_BUN: process.execPath, OCX_TEST_CLI: repoPath("src", "cli", "index.ts") },
+    });
+    expect(guide.status).toBe(0);
+    expect(guide.stderr).toBe("");
+    expect(flags.length ? JSON.parse(guide.stdout).markdown : guide.stdout).toBe(expected);
+  }
+}, 45_000);
+
 posixTest("sync Desktop handoff refuses an update before executing the target", () => {
   const fixture = packageFixture(), ran = join(fixture.home, "ran");
   writeFileSync(fixture.target, `#!/bin/sh\necho ran > '${ran}'\n`); chmodSync(fixture.target, 0o700);

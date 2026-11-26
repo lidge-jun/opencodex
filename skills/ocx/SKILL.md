@@ -25,6 +25,8 @@ ocx help --all                   # full top-level reference, when needed
 ```
 
 Then read only the matching [task chapter](references/01_management_surface.md).
+If you loaded this guide from the CLI, list references with `ocx skills get ocx --references`
+and read one with `ocx skills get ocx --reference 03_recipes` (replace the name as needed).
 For example, use [providers/models](references/01_surface_providers-models.md)
 for catalog work or [Lab](references/01_surface_lab.md) for local evidence.
 Use `ocx help <family> <leaf>` or appended `--help`, not a trailing bare `help`

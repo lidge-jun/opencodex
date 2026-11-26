@@ -1410,7 +1410,7 @@ if (orchestratedArgs?.ok && orchestratedArgs.mode === "apply" && process.env.OCX
   await new Promise(resolveOutput => process.stdout.write(`${JSON.stringify(result.result)}\n`, resolveOutput));
   process.exit(result.exitCode);
 }
-const passiveCapabilities = process.argv[2] === "capabilities";
+const passiveDiscovery = process.argv[2] === "capabilities" || process.argv[2] === "skills";
 const codexCliUpdateInspection = isCodexCliUpdateInspectionArgv(process.argv);
 // Windows inspection currently refuses before candidate I/O, so a long-lived
 // Windows server does not duplicate PATH into its inherited environment block.
@@ -1490,7 +1490,7 @@ if (!orchestratedUpdate && process.argv[2] === "update" && isNodeModulesInstall(
 // #1849 boot probe: a prior update that lost power (or double-faulted) mid-swap leaves a
 // backup sibling and a broken live tree. Restore before anything tries to run from the
 // broken tree; reap stale backups once the live tree verifies healthy.
-if (process.argv[2] !== "sync" && !orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection && installMethod === "npm" && isNodeModulesInstall() && !isBunGlobalInstall()) {
+if (process.argv[2] !== "sync" && !orchestratedUpdate && !passiveDiscovery && !codexCliUpdateInspection && installMethod === "npm" && isNodeModulesInstall() && !isBunGlobalInstall()) {
   try {
     const probe = bootRestoreProbe(resolve(here, ".."));
     if (probe.action === "restored") {
@@ -1502,7 +1502,7 @@ if (process.argv[2] !== "sync" && !orchestratedUpdate && !passiveCapabilities &&
 }
 
 const passiveSync = process.argv[2] === "sync";
-const bunRuntime = resolveBun({ allowInstall: !passiveSync && !orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection, allowMissing: orchestratedUpdate || passiveSync });
+const bunRuntime = resolveBun({ allowInstall: !passiveSync && !orchestratedUpdate && !passiveDiscovery && !codexCliUpdateInspection, allowMissing: orchestratedUpdate || passiveSync });
 if (!bunRuntime && passiveSync) fail("Bun is unavailable; install Bun before running sync.");
 if (!bunRuntime && orchestratedArgs?.ok) {
   const currentVersion = String(currentPackageVersion()), cliRoot = resolve(here, "..");

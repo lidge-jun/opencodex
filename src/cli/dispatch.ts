@@ -729,6 +729,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { runCapabilities } = await import("./capabilities-command");
     return await runCapabilities(deps.args.slice(1));
   },
+  skills: async deps => {
+    const { runBundledSkills } = await import("./bundled-skills");
+    return runBundledSkills(deps.args.slice(1));
+  },
   health: async deps => {
     const healthArgs = deps.args.slice(1);
     if (healthArgs.length > 1 || (healthArgs.length === 1 && healthArgs[0] !== "--json")) {

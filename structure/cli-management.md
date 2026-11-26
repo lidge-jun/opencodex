@@ -91,6 +91,8 @@ The generator checks its closed expected file map and exact contents, including 
 
 `skills/ocx/SKILL.md` is the operating guide, distinct from development instructions and installation consent. The index describes declared capabilities; it does not establish full runtime grammar, target-version compatibility, safe autonomous permission or free upstream execution. Handwritten task recipes provide target/readiness checks, command-level authority and read-back guidance.
 
+`ocx skills list` and `ocx skills get ocx` read the guide bundled with the CLI that handles the command. The npm package ships the canonical Markdown tree and the standalone build embeds those same text imports. Reference selection is limited to bundled IDs; it never reads a caller-selected path. This discovery path does not open management connections, repair the Codex shim, or bootstrap Bun. The npm launcher retains ordinary Desktop handoff: an older selected Desktop CLI can reject the command, and its failure never falls back to the package's guide.
+
 Management route declarations describe actual HTTP calls only; local Lab automation, config and data-plane probes retain empty management routes with explicit transport and side-effect notes. Task-family metadata preserves confirmation, human-only secret handoffs and per-handler JSON support. Leaf usage is derived from the existing parser; an indexed command does not gain new runtime behavior.
 
 ## Provider live operations and bounded editor input

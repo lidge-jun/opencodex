@@ -1,6 +1,6 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { printSubcommandUsage, printUsage } from "../../src/cli/help";
@@ -42,6 +42,37 @@ function run(args: string[], columns = "80") {
 }
 
 describe("CLI help navigation", () => {
+  test("discovers the bundled operating skill and reads its guide offline", () => {
+    expect(capture(printUsage)).toContain("ocx skills get ocx");
+    const list = run(["skills", "list", "--json"]);
+    expect(list.status).toBe(0);
+    expect(list.stderr).toBe("");
+    expect(JSON.parse(list.stdout).skills).toEqual([expect.objectContaining({ name: "ocx" })]);
+    const guide = run(["skills", "get", "ocx"]);
+    expect(guide.status).toBe(0);
+    expect(guide.stderr).toBe("");
+    expect(guide.stdout).toBe(readFileSync(repoPath("skills", "ocx", "SKILL.md"), "utf8"));
+  });
+
+  test("lists every bundled reference and returns a selected Markdown file without a checkout lookup", () => {
+    const result = run(["skills", "get", "ocx", "--references", "--json"]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout).references).toEqual(
+      readdirSync(repoPath("skills", "ocx", "references")).sort().map(name => `references/${name}`),
+    );
+    const ref = run(["skills", "get", "ocx", "--reference", "03_recipes", "--json"]);
+    expect(ref.status).toBe(0);
+    expect(JSON.parse(ref.stdout)).toMatchObject({
+      name: "ocx", file: "references/03_recipes.md",
+      markdown: readFileSync(repoPath("skills", "ocx", "references", "03_recipes.md"), "utf8"),
+    });
+    const invalid = run(["skills", "get", "ocx", "--reference", "../AGENTS.md"]);
+    expect(invalid.status).toBe(2);
+    expect(invalid.stdout).toBe("");
+    expect(invalid.stderr).toContain("ocx skills get ocx --references");
+  });
+
   test("compact root fits 28 lines and provides the three discovery escapes", () => {
     const output = capture(printUsage);
     expect(output.split("\n").length).toBeLessThanOrEqual(28);

@@ -20,6 +20,25 @@ export const HEAD_CAPABILITIES: readonly HeadCapability[] = [
  */
 export const CAPABILITIES: readonly Capability[] = [
   {
+    command: ["skills", "list"],
+    summary: "List the operating guides bundled with this CLI version.",
+    usage: "ocx skills list [--json]",
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the CLI version and skill names as JSON." }],
+    routes: [], mutates: false, json: "envelope",
+  },
+  {
+    command: ["skills", "get"],
+    summary: "Read a bundled guide or one reference without contacting the proxy.",
+    usage: "ocx skills get ocx [--references | --reference <name>] [--json]",
+    flags: [
+      { name: "--references", value: "boolean", summary: "List available reference files instead of printing the guide." },
+      { name: "--reference", value: "string", summary: "Print one reference by filename or short name." },
+      { name: "--json", value: "boolean", summary: "Emit the selected Markdown or reference list as JSON." },
+    ],
+    routes: [], mutates: false, json: "envelope",
+    details: ["Reads version-matched content. Does not install a skill in the agent harness."],
+  },
+  {
     command: ["codex-provider"],
     bannerLines: ["ocx codex-provider <sub>    Confirm custom Codex provider routing: status|allow|revoke"],
     summary: "Inspect, allow or revoke custom Codex provider routing consent.",
