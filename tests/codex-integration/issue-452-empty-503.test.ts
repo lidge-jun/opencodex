@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
@@ -186,6 +187,7 @@ async function withPoolPassthrough(
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
+  bindStoredCodexPoolRoutingForTests();
   delete process.env.OPENCODEX_API_AUTH_TOKEN;
   clearCodexUpstreamHealth();
   clearThreadAccountMap();

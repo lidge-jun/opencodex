@@ -1,4 +1,6 @@
 {
+  "media-data-url.test.ts": "lib",
+  "video-input-guard.test.ts": "adapters",
   "anthropic-oauth-caller-system-shape.test.ts": "adapters/anthropic",
   "anthropic-oauth-internal-system-wire.test.ts": "adapters/anthropic",
   "anthropic-per-message-effort.test.ts": "adapters/anthropic",
@@ -49,5 +51,6 @@
   "google-retry-structured.test.ts": "adapters/google",
   "google-finish-fidelity.test.ts": "adapters/google",
   "google-request-fidelity.test.ts": "adapters/google",
+  "json-byte-size.test.ts": "lib",
   "zai-input.test.ts": "adapters/openai"
 }

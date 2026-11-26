@@ -6208,6 +6208,7 @@ describe("Codex catalog routed normalization", () => {
     };
     enrichProviderFromRegistry("GLM", opinionated);
     expect(opinionated.modelSupportsReasoningSummaries).toEqual({
+      "glm-5.4": true, "glm-5.4[1m]": true,
       "glm-5.2": false,
       "glm-5.2[1m]": true,
       "glm-5.3": true,

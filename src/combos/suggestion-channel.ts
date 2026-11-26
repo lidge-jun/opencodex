@@ -2,6 +2,7 @@ import { isCanonicalOpenAiForwardProvider, normalizedBaseUrl } from "../provider
 
 export interface SuggestionProvider {
   name: string;
+  alias?: string;
   disabled?: boolean;
   hiddenFromPicker?: boolean;
   authMode?: string;

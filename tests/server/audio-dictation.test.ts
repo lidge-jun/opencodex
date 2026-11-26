@@ -47,6 +47,7 @@ const scribeStart = {
 
 function createFixture(options: { failDictation?: boolean; finalOnClose?: boolean; answer?: "invalid" | "ok200" } = {}) {
   const creates: Headers[] = [];
+  const createRequests: Request[] = [];
   const handshakes: Array<{ url: string; headers: Headers; protocols?: string[] }> = [];
   const frames: string[] = [];
   const upstreamClosed = Promise.withResolvers<void>();
@@ -85,6 +86,7 @@ function createFixture(options: { failDictation?: boolean; finalOnClose?: boolea
     if (["chatgpt.com", "api.openai.com"].includes(new URL(req.url).hostname)) {
       if (new URL(req.url).pathname.endsWith("/realtime/calls") || new URL(req.url).pathname === "/v1/live") {
         creates.push(new Headers(req.headers));
+        createRequests.push(req.clone());
         if (options.answer === "invalid") return new Response("", { status: 200 });
         if (options.answer === "ok200") return new Response("v=0\r\n", { status: 200, headers: { "content-type": "application/sdp", location: `https://api.openai.com/v1/live/rtc_upstream_${creates.length}` } });
         return new Response("v=0\r\n", { status: 201, headers: { "content-type": "application/sdp", location: `https://api.openai.com/v1/live/rtc_upstream_${creates.length}` } });
@@ -102,7 +104,7 @@ function createFixture(options: { failDictation?: boolean; finalOnClose?: boolea
       return socket;
     },
   });
-  return { server, upstream, creates, handshakes, frames, upstreamClosed: upstreamClosed.promise };
+  return { server, upstream, creates, createRequests, handshakes, frames, upstreamClosed: upstreamClosed.promise };
 }
 
 beforeEach(() => {
@@ -375,8 +377,47 @@ describe("external audio sockets", () => {
     fixture = createFixture();
     const ws = socket("/v1/live");
     expect(await receive(ws, "fixture-echo", "fixture-echo")).toBe("fixture-echo");
-    expect(fixture.handshakes[0]!.url).toBe("wss://api.openai.com/v1/live?model=gpt-live-1-codex");
+    expect(fixture.handshakes[0]!.url).toBe("wss://api.openai.com/v1/live?model=gpt-live-1.1-codex");
     expect(fixture.handshakes[0]!.headers.get("openai-alpha")).toBe("quicksilver=v2");
+  });
+  test("Frameless aliases name Codex live models while Realtime queries pass unchanged", async () => {
+    fixture = createFixture();
+    for (const path of ["/v1/live?model=gpt-live-1", "/v1/live?model=gpt-live-1.1", "/v1/realtime?model=gpt-live-1.1"]) {
+      await receive(socket(path), "alias-echo", "alias-echo");
+    }
+    expect(fixture.handshakes.map(handshake => handshake.url)).toEqual([
+      "wss://api.openai.com/v1/live?model=gpt-live-1-codex",
+      "wss://api.openai.com/v1/live?model=gpt-live-1.1-codex",
+      "wss://api.openai.com/v1/realtime?model=gpt-live-1.1",
+    ]);
+  });
+  test("a session the proxy synthesizes uses the ChatGPT voice default", async () => {
+    fixture = createFixture();
+    await createCall();
+    const body = await fixture.createRequests[0]!.json() as { session: Record<string, unknown> };
+    expect(body.session).toEqual({ model: "gpt-live-1.1-codex", instructions: "", audio: { output: { voice: "cove" } }, delegation: { type: "client" } });
+  });
+  test("a session the proxy synthesizes for an API key uses the API voice default", async () => {
+    saveConfig({ port: 0, hostname: "127.0.0.1", defaultProvider: "openai-apikey", openaiProviderTierVersion: 2,
+      providers: { "openai-apikey": { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", apiKey: "sk-fixture-keyed", authMode: "key" } },
+      apiKeys: [{ id: "one", name: "one", key: KEY, createdAt: "2026-09-12T00:00:00Z" }],
+    });
+    fixture = createFixture();
+    await createCall();
+    expect(fixture.createRequests[0]!.url).toBe("https://api.openai.com/v1/live");
+    const form = await fixture.createRequests[0]!.formData();
+    expect(JSON.parse(String(form.get("session")))).toEqual({ model: "gpt-live-1.1-codex", instructions: "", audio: { output: { voice: "marin" } }, delegation: { type: "client" } });
+  });
+  test("a client session keeps its own fields while its Frameless alias is resolved", async () => {
+    fixture = createFixture();
+    const response = await fetchOriginal(new URL("/v1/live", fixture.server.url), {
+      method: "POST", headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
+      body: JSON.stringify({ sdp: "v=0\r\n", session: { model: "gpt-live-1.1", instructions: "client" } }),
+    });
+    expect(response.status).toBe(201);
+    await response.text();
+    const body = await fixture.createRequests[0]!.json() as { session: Record<string, unknown> };
+    expect(body.session).toEqual({ model: "gpt-live-1.1-codex", instructions: "client" });
   });
   test("connectivity-only completion does not claim inference recovery", async () => {
     fixture = createFixture();

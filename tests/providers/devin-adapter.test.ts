@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createDevinAdapter, mapDevinToolCallStartForTests, mapOcxMessagesToDevin, mapOcxToolsToDevin, resolveWireModelUidForTests } from "../../src/adapters/devin";
 import { buildGetChatMessageRequestForTests, sanitizeTextForCognitionForTests, sanitizeToolDescriptionForCognitionForTests, streamChatEvents, type ChatHistoryItem } from "../../src/adapters/devin/cloud-direct/chat";
 import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_STATIC_MODELS, collapseDevinModelUid } from "../../src/adapters/devin/live-models";
-import { parseCatalogBuffer } from "../../src/adapters/devin/cloud-direct/catalog";
+import { parseCatalogBuffer, type CacheEntry, type ModelCatalogEntry } from "../../src/adapters/devin/cloud-direct/catalog";
 import { encodeMessage, encodeString, encodeVarintField, frameConnectStream, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
 import { encodeDevinSignature } from "../../src/adapters/devin/reasoning-signature";
 import { parseRequest } from "../../src/responses/parser";
@@ -881,6 +881,72 @@ describe("SWE-2 wire effort selection", () => {
     for (const model of ["claude-opus-5-medium", "gpt-5-6-sol-high", "swe-1-7-high", "swe-20-high"]) {
       expect(await resolveWireModelUidForTests(model, "unused", "unused", "max", null)).toBe(model);
     }
+  });
+});
+
+describe("SWE-2.1 wire effort selection without a catalog", () => {
+  // SWE-2.1 has five lanes where SWE-2 has three, so the degraded path must not
+  // borrow SWE-2's table, and must never invent a lane the catalog lacks
+  // (`swe-2-1-none`) or turn a top request down to the default.
+  test.each(["low", "medium", "high", "xhigh", "max"])("an explicit %s effort names that SWE-2.1 lane", async (effort) => {
+    for (const model of ["swe-2-1", "swe-2.1", "swe-2-1-low", "swe-2-1-high", "swe-2-1-max"]) {
+      expect(await resolveWireModelUidForTests(model, "unused", "unused", effort, null)).toBe(`swe-2-1-${effort}`);
+    }
+  });
+
+  test.each([
+    ["none", "low"], ["off", "low"], ["minimal", "low"], ["ultra", "max"], ["XHIGH", "xhigh"],
+  ])("maps %s to the SWE-2.1 %s lane", async (effort, expected) => {
+    expect(await resolveWireModelUidForTests("swe-2-1", "unused", "unused", effort, null)).toBe(`swe-2-1-${expected}`);
+  });
+
+  test("no effort keeps an explicit lane and gives the bare family its Medium default", async () => {
+    expect(await resolveWireModelUidForTests("swe-2-1", "unused", "unused", undefined, null)).toBe("swe-2-1-medium");
+    expect(await resolveWireModelUidForTests("swe-2-1-xhigh", "unused", "unused", undefined, null)).toBe("swe-2-1-xhigh");
+    expect(await resolveWireModelUidForTests("swe-2-1-high", "unused", "unused", "future-effort", null)).toBe("swe-2-1-high");
+  });
+
+  // Ultrafast is a `-lightning` suffix on the lane, never `-fast`, and the bare
+  // `swe-2-1-lightning` row is the Low lane. Appending an effort after it
+  // (`swe-2-1-lightning-medium`) names nothing in the catalog.
+  test.each([
+    ["swe-2-1", "fast", "swe-2-1-medium-lightning"],
+    ["swe-2-1-high", "fast", "swe-2-1-high-lightning"],
+    ["swe-2-1-lightning", undefined, "swe-2-1-low-lightning"],
+    ["swe-2-1-lightning", "max", "swe-2-1-max-lightning"],
+    ["swe-2-1-high-lightning", undefined, "swe-2-1-high-lightning"],
+    ["swe-2-1-high-lightning", "low", "swe-2-1-low-lightning"],
+    ["swe-2-1-xhigh-lightning", "fast", "swe-2-1-xhigh-lightning"],
+    ["swe-2", "fast", "swe-2-high-lightning"],
+    ["swe-2-max-lightning", "medium", "swe-2-medium-lightning"],
+  ])("%s at %s resolves to the Ultrafast lane %s", async (model, effort, expected) => {
+    expect(await resolveWireModelUidForTests(model, "unused", "unused", effort, null)).toBe(expected);
+  });
+
+  test("a catalog without family metadata still sends the bare family to Medium, not its Low row", async () => {
+    const uids = ["swe-2-1", "swe-2-1-low", "swe-2-1-medium", "swe-2-1-high", "swe-2-1-xhigh", "swe-2-1-max"];
+    const catalog: CacheEntry = {
+      byUid: new Map(uids.map((modelUid) => [modelUid, { modelUid, disabled: false } as ModelCatalogEntry])),
+      fetchedAt: Date.now(), apiKey: "unused", host: "unused",
+    };
+    expect(await resolveWireModelUidForTests("swe-2-1", "unused", "unused", undefined, catalog)).toBe("swe-2-1-medium");
+    expect(await resolveWireModelUidForTests("swe-2-1", "unused", "unused", "xhigh", catalog)).toBe("swe-2-1-xhigh");
+  });
+
+  test("a metadata-free catalog missing the Medium row still names Medium instead of quietly running Low", async () => {
+    const catalog: CacheEntry = {
+      byUid: new Map(["swe-2-1", "swe-2-1-high"].map((modelUid) => [modelUid, { modelUid, disabled: false } as ModelCatalogEntry])),
+      fetchedAt: Date.now(), apiKey: "unused", host: "unused",
+    };
+    expect(await resolveWireModelUidForTests("swe-2-1", "unused", "unused", undefined, catalog)).toBe("swe-2-1-medium");
+  });
+
+  test("a metadata-free catalog listing a bare swe-2 row keeps it: only SWE-2.1's bare row is a measured non-default lane", async () => {
+    const catalog: CacheEntry = {
+      byUid: new Map([["swe-2", { modelUid: "swe-2", disabled: false } as ModelCatalogEntry]]),
+      fetchedAt: Date.now(), apiKey: "unused", host: "unused",
+    };
+    expect(await resolveWireModelUidForTests("swe-2", "unused", "unused", undefined, catalog)).toBe("swe-2");
   });
 });
 

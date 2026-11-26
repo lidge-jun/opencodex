@@ -28,7 +28,7 @@ import { parseDataUrl } from "./image";
 import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
 import { normalizeAnthropicImages } from "./anthropic-image-normalize";
 import { normalizeAnthropicOutputSchema } from "./anthropic-output-schema";
-import { normalizeAnthropicInputSchema } from "./anthropic-input-schema";
+import { createAnthropicInputSchemaNormalizer } from "./anthropic-input-schema";
 import { identifyRoutedModel } from "./identity";
 import { redactSecretString } from "../lib/redact";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
@@ -1015,10 +1015,11 @@ function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (
   if (!parsed.context.tools || parsed.context.tools.length === 0) return undefined;
   const tools = anthropicDeclaredTools(parsed);
   if (tools.length === 0) return undefined;
+  const normalizeInputSchema = createAnthropicInputSchemaNormalizer();
   const converted = tools.map(t => ({
     name: toolNames.toWire(namespacedToolName(t.namespace, t.name)),
     description: t.description,
-    input_schema: normalizeAnthropicInputSchema(t.parameters),
+    input_schema: normalizeInputSchema(t.parameters),
     // Anthropic is the target that DEFINES both of these, and both were dropped while the
     // OpenAI Chat adapter already forwarded strict (#5210). Only an explicit `true` is
     // emitted: the Messages inbound records an absent strict as `false`, so a false here

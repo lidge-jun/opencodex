@@ -162,6 +162,19 @@ is a `POST` to the canonical Responses URL or a configured WebSocket route, and 
 falls back to it when the request cannot be prepared, the `response.create` frame exceeds its size
 limit, or the proxy route cannot carry the socket.
 
+The size limit also follows the ChatGPT backend's own advertisement. When the socket's handshake
+carries `x-codex-websocket-max-message-bytes`, a frame larger than that value is not sent on that
+socket. An opening `response.create` falls back to SSE before anything is uploaded, as Codex itself
+does. If an incremental delta was already sent and the backend asks for the full frame, a full frame
+above the limit also takes the SSE path. A turn that needs native steering or injection cannot use
+SSE: an oversized opening frame fails visibly, and an oversized steering or injection frame is
+refused so that the client can send a corrected one. Without an advertisement, the fixed ceiling
+just below 16 MiB applies, and that pre-dial check falls back to SSE. On this route the proxy also
+forwards Codex's `x-codex-exclude` and `x-codex-exclude-stream-fields` request headers unchanged,
+so the backend can leave out the fields Codex names in them. By default these are the echoed tool
+catalog, per-item usage attribution, delta sequence numbers and preliminary reasoning ciphertext.
+Other destinations never receive these headers.
+
 To keep the built-in ChatGPT provider on HTTP/SSE, set `providers.openai.upstreamWebsocket`
 to `false` in `~/.opencodex/config.json` and restart the proxy. Merge this field into the
 existing `openai` provider; preserve its account mode and other settings. Omit the field
@@ -422,7 +435,16 @@ wire_api = "responses"
 requires_openai_auth = true
 env_key = "OPENCODEX_API_AUTH_TOKEN"
 # supports_websockets = true   # only when config.websockets is true
+capabilities = { cyber_access_programs = true }
 ```
+
+The `capabilities` line lets Codex forward a Cyber access-program selection through this table. Codex
+turns that capability off by default for every provider id except its built-in `openai`, and the
+loopback form already uses that id. Codex releases that predate the field ignore it. A table written by an
+earlier OpenCodex release, without the line, is still recognized by `ocx restore` and uninstall. The
+`ocx codex` launcher trusts only the current shape: after upgrading, if `ocx codex` stops supplying
+credentials, run `ocx sync` once to rewrite the table. This needs the Codex integration on; while it is off,
+OpenCodex leaves your Codex config as it is, and neither `ocx sync` nor a restart rewrites the table.
 
 When OpenCodex owns routing, both modes write `$CODEX_HOME/opencodex.config.toml` as a
 reference/fallback config. On loopback it contains the root keys you can merge manually if automatic
@@ -597,6 +619,7 @@ name = "OpenCodex Proxy"
 base_url = "http://127.0.0.1:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
+capabilities = { cyber_access_programs = true }
 ```
 
 Codex then owns compaction and stores a portable plaintext summary rather than a new OpenCodeX
@@ -720,6 +743,7 @@ name = "OpenCodex Proxy"
 base_url = "http://127.0.0.1:10100/v1"
 wire_api = "responses"
 requires_openai_auth = false
+capabilities = { cyber_access_programs = true }
 ```
 
 Desktop then starts without a login and routes every turn through the proxy. The setting survives
@@ -1551,7 +1575,7 @@ When an affected history store supports paginated records, a provider transition
 
 When returning to the root-override form, OpenCodex retains an existing `[model_providers.opencodex]` definition before committing the configuration, even if history preflight currently passes. This keeps older `opencodex` conversations resolvable if Codex migrates history after that commit or while the background worker starts. New conversations still use the selected root provider; explicit restore keeps its separate removal guards.
 
-`ocx restore`, `ocx stop` and `ocx uninstall` no longer refuse on `history_paginated_requires_native_writer`. They take every OpenCodex root routing key out and keep the `[model_providers.opencodex]` definition on disk, so conversations whose rows still name that provider keep resolving while plain `codex` stops pointing at the proxy. The result is reported as a partial restore that names the retained lines, and `ocx restore --remove-codex-provider-table` removes them too, after which those conversations stop opening.
+`ocx restore`, `ocx stop` and `ocx uninstall` no longer refuse on `history_paginated_requires_native_writer`. They remove OpenCodex's root routing keys, so `codex` stops using the proxy by default. They keep the `[model_providers.opencodex]` definition so conversations that still name it keep a provider that exists. Codex 0.166 and later open such a conversation only while `opencodex` is the current provider, so after the restore it reopens only once `opencodex` is selected as the provider again. If the retained table still points to the proxy, sending new requests from those conversations still requires the proxy to be reachable. The result is reported as a partial restore that names the retained lines, and `ocx restore --remove-codex-provider-table` removes them too, after which those conversations stop opening.
 
 Enabling the integration in its provider-table form on a home whose `openai`-tagged conversations Codex has already paginated used to be refused outright with `history_paginated_openai_requires_native_writer`: nothing was written and the integration stayed disabled. OpenCodex now completes that transition by keeping the managed root `openai_base_url` override beside the `[model_providers.opencodex]` table. Codex merges the override onto its built-in `openai` provider, so those conversations keep reaching the proxy without being relabeled and no rollout byte or thread row is touched. Only a routing form that requires the `x-opencodex-api-key` admission header still refuses, because Codex's built-in provider cannot carry that header; its message names the two settings that resolve it — route Codex through the loopback listener so the override can be retained, or set `syncResumeHistory` to `false` to accept that those conversations resume against Codex's own OpenAI endpoint.
 

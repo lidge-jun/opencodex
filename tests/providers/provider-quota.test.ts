@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { tmpdir } from "node:os";
@@ -87,6 +88,7 @@ beforeEach(() => {
   opencodexHome = mkdtempSync(join(tmpdir(), "ocx-quota-"));
   codexHome = mkdtempSync(join(tmpdir(), "codex-quota-"));
   process.env.OPENCODEX_HOME = opencodexHome;
+  bindStoredCodexPoolRoutingForTests();
   process.env.CODEX_HOME = codexHome;
   mkdirSync(codexHome, { recursive: true });
   writeFileSync(join(codexHome, "auth.json"), JSON.stringify({

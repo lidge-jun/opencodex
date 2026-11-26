@@ -253,3 +253,28 @@ describe("French language switch on the real GUI surface", () => {
     expect(Object.getOwnPropertyDescriptor(smokeNavigator, "language")).toEqual(expectedSmokeLanguageDescriptor);
   });
 });
+
+describe("Spanish language switch on the real GUI surface", () => {
+  test("updates the mounted surface, persists across remount, and switches back", async () => {
+    await mountSurface();
+    expect(navLabels()).toContain("Dashboard");
+    await choose(["Español"]);
+    expect(navLabels()).toEqual([
+      "Panel", "Enrutamiento", "Codex", "Proveedores", "Modelos", "Subagentes",
+      "Uso y registros", "Enlace remoto",
+    ]);
+    expect(localStorage.getItem("ocx-lang")).toBe("es");
+    expect(testWindow.document.documentElement.lang).toBe("es");
+
+    await act(async () => mountedRoot?.unmount());
+    mountedRoot = null;
+    await mountSurface();
+    expect(navLabels()).toContain("Proveedores");
+    expect(testWindow.document.documentElement.lang).toBe("es");
+
+    await choose(["English"]);
+    expect(navLabels()).toContain("Providers");
+    expect(localStorage.getItem("ocx-lang")).toBe("en");
+    expect(testWindow.document.documentElement.lang).toBe("en");
+  });
+});

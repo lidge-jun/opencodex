@@ -78,7 +78,7 @@ Sol oturumu yürütüyor ve bir Kimi K3 alt ajanını çağırıyor.
 </table>
 
 <p align="center">
-  <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <b>Türkçe</b> · 📖 <a href="https://opencodex.me/tr/"><b>Tüm dokümantasyon →</b></a>
+  <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <b>Türkçe</b> · <a href="README.es.md">Español</a> · 📖 <a href="https://opencodex.me/tr/"><b>Tüm dokümantasyon →</b></a>
 </p>
 
 opencodex, kodlama araçlarınızla model sağlayıcılarınız arasında çalışan hafif bir yerel ağ geçididir. Responses, Chat Completions ve Anthropic Messages API isteklerini kabul edip sağlayıcınızın protokolüne çevirir; istemci, model ve sağlayıcı desteklediğinde akış, araç çağrıları, akıl yürütme ve görselleri aktarır. Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama ve diğer sağlayıcıları Codex, Claude Code, Claude Desktop, Grok Build ve [istemci desteği sayfasındaki](https://opencodex.me/tr/reference/client-support/) araçlarla kullanın.
@@ -104,11 +104,11 @@ Zaten kullandığınız aracı bağlayın:
 
 | Araç | Bağlantı yöntemi |
 |---|---|
-| Codex | Panelin **Connect** sayfasındaki Codex anahtarını açın, ardından `codex` komutunu her zamanki gibi çalıştırın. Yerel dinleyicide bu, Codex’in yerleşik sağlayıcısını proxy’ye yönlendirir. Terminalden, panelde sağlayıcı eklemeden önce `ocx init` çalıştırın ve Codex istemini kabul edin. |
+| Codex | Panelin **Rota** sayfasındaki Codex anahtarını açın, ardından `codex` komutunu her zamanki gibi çalıştırın. Yerel dinleyicide bu, Codex’in yerleşik sağlayıcısını proxy’ye yönlendirir. Terminalden, panelde sağlayıcı eklemeden önce `ocx init` çalıştırın ve Codex istemini kabul edin. |
 | Claude Code | `claude` CLI kuruluysa `ocx claude` çalıştırın. Gerekirse proxy’yi başlatır ve Claude Code’u onun üzerinden açar. |
 | Claude Desktop | `ocx claude desktop` çalıştırın. Yeni kurulumda tüm uygulama için ağ geçidi profilini ayarlar; mevcut first-party yapılandırması korunur ve `ocx claude desktop apply --gateway` açıkça geçiş yapar. [Claude Code kılavuzuna](https://opencodex.me/tr/guides/claude-code/) bakın. Geçişten sonra Claude Desktop’tan tamamen çıkıp yeniden açın. |
 | Grok Build | Yerel bir dinleyicide Grok entegrasyonu etkinse ve `~/.grok` mevcutsa, `ocx start` modelleri kaydeder; Grok Build içinde bir `ocx-*` modeli seçin. Uzak kurulumlar için [Grok Build kılavuzuna](https://opencodex.me/tr/guides/grok-build/) bakın. Sağlayıcı ekledikten sonra listeyi yenilemek için proxy’yi yeniden başlatın (veya Codex otomatik başlatma etkinse `ocx ensure` çalıştırın). |
-| Yönetilen entegrasyonu olan araçlar | Panelin **Connect** sayfasını veya `ocx integration client enable --client <id>` komutunu kullanın. |
+| Yönetilen entegrasyonu olan araçlar | Panelin **Rota** sayfasını veya `ocx integration client enable --client <id>` komutunu kullanın. |
 | Diğer tüm araçlar | Özel OpenAI uyumlu temel URL’yi `http://localhost:10100/v1` veya Anthropic temel URL’sini `http://localhost:10100` olarak ayarlayın. |
 
 [İstemci desteği sayfası](https://opencodex.me/tr/reference/client-support/), her aracın bağlantı yolunu ve kullandığı protokolü listeler.
@@ -158,6 +158,10 @@ Her yukarı akış protokol değişiminde opencodex'in bakımını sürdürebilm
 <tr>
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
 <td>Bu projeye sponsor olduğu için <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a>'a teşekkürler! TokenLab, kodlama ajanlarına önde gelen modeller için tek bir API anahtarı sunar; OpenAI Responses ve Chat Completions, Anthropic Messages ve Gemini'nin yerel API biçimleri, akış ve araç çağırma ile desteklenir. Kolay entegrasyon için bir MCP sunucusu ve ajan Skills'i de sağlar. Teslimat modunuzu seçin, kullandıkça ödeyin. Add provider seçicisinden <code>TokenLab</code> seçin ya da <code>ocx provider add tokenlab</code> çalıştırın.<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
+</tr>
+<tr>
+<td width="180"><a href="https://runapi.co"><img src="../assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
+<td>Bu projeye sponsor olduğu için <a href="https://runapi.co">RunAPI</a>'ye teşekkürler! RunAPI birleşik bir yapay zekâ API ağ geçididir: tek bir API anahtarı OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot ve diğerlerinden 200'den fazla modellik bir kataloğu açar; modeller OpenAI Chat Completions ve Responses, Anthropic Messages ve Gemini'nin yerel API biçimleriyle sunulur ve kullanılabilen biçimler modele göre değişir. Akıllı yönlendirme her isteği hızlı ve kararlı bir sağlayıcı düğümüne gönderir ve arızada otomatik olarak geçiş yapar; ücretlendirme kullandıkça öde şeklindedir ve genellikle standart fiyatların epey altındadır. Add provider seçicisinden <code>RunAPI</code> seçin ya da <code>ocx provider add runapi</code> çalıştırın.</td>
 </tr>
 </tbody>
 </table>
@@ -253,10 +257,12 @@ ocx start     # ya da `ocx service`
 ocx init      # etkileşimli kurulum: ~/.opencodex/config.json yazar ve Codex'i bağlar
 ```
 
-`ocx init` proxy'yi hiçbir zaman başlatmaz; önce onu başlatın (ya da sonra — sıra fark etmez, ancak
-`ocx provider add` ve `ocx combo set` gibi başsız komutlar **çalışan** proxy ile konuşur ve ona
-ulaşamadıklarında sıfırdan farklı bir kodla çıkar). `ocx status` / `ocx doctor` / `ocx health`
-çalışma durumunu bildirir.
+Proxy'yi `ocx init` komutundan önce veya sonra başlatabilirsiniz. `ocx init` proxy'yi başlatmaz.
+`ocx provider add`, çalışan bir proxy olmadan yerel yapılandırmayı kaydeder. `--sync` ile
+önce sağlayıcı kaydedilir, ardından modelleri Codex ile eşitlemek için çalışan proxy kullanılır.
+Proxy'ye ulaşılamazsa sağlayıcı kayıtlı kalır, ancak komut sıfırdan farklı bir kodla çıkar.
+Proxy çalışmaya başladığında `ocx sync` komutunu çalıştırın. `ocx provider add --live` ve
+`ocx combo set` çalışan bir proxy gerektirir. `ocx status` / `ocx doctor` / `ocx health` çalışma durumunu bildirir.
 
 > **opencodex'i kuran ya da çalıştıran ajanlar:**
 > [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md) dosyasını okuyun. Etkileşimli bir `ocx start` bu depoya
@@ -429,11 +435,13 @@ npm uninstall -g @bitkyc08/opencodex
 
 ## Uzaktan erişim
 
-opencodex varsayılan olarak `127.0.0.1` adresine bağlanır ve ek bir kimlik doğrulaması gerektirmez.
-Geri döngünün dışına bağlanmak (`"hostname": "0.0.0.0"`) bir bearer belirteci **gerektirir**: proxy
-`OPENCODEX_API_AUTH_TOKEN` olmadan başlamayı reddeder ve her istemci isteği bu belirteci
-`x-opencodex-api-key` olarak taşımalıdır. Ayrıntılar:
-[yapılandırma başvurusu](https://opencodex.me/tr/reference/configuration/).
+opencodex varsayılan olarak `127.0.0.1` adresini dinler ve veri istekleri için ek kimlik
+doğrulaması gerekmez. Geri döngü dışındaki bir adreste dinlemek (örneğin `"hostname": "0.0.0.0"`)
+**yapılandırılmış bir istemci API anahtarı veya paylaşılan bir veri belirteci gerektirir**.
+Paylaşılan belirteç `OPENCODEX_API_AUTH_TOKEN`, `OCX_API_TOKEN_FILE` veya kurulumla gelen ve
+yalnızca sahibinin erişebildiği `service-api-token` dosyasından alınır. Model istemcileri kabul
+edilen kimlik bilgisini `x-opencodex-api-key` başlığında gönderir. Yönetim için ayrı bir yönetici
+kimlik bilgisi kullanılır. Bkz. [yapılandırma başvurusu](https://opencodex.me/tr/reference/configuration/).
 
 ## Gelişmiş kullanım
 

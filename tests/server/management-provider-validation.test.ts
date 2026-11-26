@@ -1,4 +1,5 @@
 import { config, registerRelativeSendPathTests } from "../helpers/management-relative-send-paths";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { managementFetch as fetch, ManagementRequest as Request } from "../helpers/management-auth";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -1088,6 +1089,7 @@ describe("provider management validation", () => {
       expiresAt: now + 60_000,
       chatgptAccountId: "chatgpt-entitlement-diagnostic",
     });
+    bindStoredCodexPoolRoutingForTests();
     const generation = readCodexAccountRecord(accountId)!.generation;
     const storedCredential: CodexModelEntitlementCredentialSnapshot = {
       accountId,

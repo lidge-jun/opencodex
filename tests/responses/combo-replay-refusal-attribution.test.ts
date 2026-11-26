@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import type { ServerWebSocket } from "bun";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
@@ -46,6 +47,7 @@ function clearRouting(): void {
 
 beforeEach(() => {
   home = createTempHome("ocx-combo-refusal-");
+  bindStoredCodexPoolRoutingForTests();
   release = acquireOwnedSpendHome();
   clearRouting();
   clearRequestLogsForTests();
