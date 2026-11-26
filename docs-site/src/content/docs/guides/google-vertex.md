@@ -30,6 +30,11 @@ Reasoning levels follow the preset: Gemini 4 Hydrogen and Neon offer low, medium
 xhigh; Gemini 4 Carbon and Argon offer low, medium and high. A model the preset gives no levels
 to, such as `gemini-3-pro`, shows none, because requests to it carry no thinking level.
 
+The preset's default model stays `gemini-3-pro` until Vertex AI's own model lifecycle is verified for
+it. Google's [Gemini API deprecation schedule](https://ai.google.dev/gemini-api/docs/deprecations)
+covers AI Studio, not Vertex AI, so it does not move this default. Live discovery lists the models
+your project can use; pick one of them as your default if `gemini-3-pro` is not among them.
+
 ## Tool images on Gemini 3+
 
 On Vertex AI, Gemini 3 and later models (including `gemini-3.8-flash`, `gemini-4-argon`,

@@ -142,7 +142,7 @@ describe("buildApiAccessEndpoints", () => {
       dictationStreamEndpoint: "wss://[2001:db8::1]:8443/v1/audio/transcriptions/stream",
       liveEndpoint: "wss://[2001:db8::1]:8443/v1/live",
       realtimeCallsEndpoint: "https://[2001:db8::1]:8443/v1/realtime/calls",
-      transcriptionModel: "gpt-4o-transcribe", liveModel: "gpt-live-1-codex",
+      transcriptionModel: "gpt-4o-transcribe", liveModel: "gpt-live-1.1-codex",
       transcriptionConfigured: false, dictationConfigured: false, liveConfigured: false,
     });
     const companion = buildApiAccessEndpoints({ hostname: "0.0.0.0", port: 10100, unauthenticatedLoopbackListener: { enabled: true, port: 10104 } });

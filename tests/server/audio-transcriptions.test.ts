@@ -466,3 +466,89 @@ describe("standalone transcription API", () => {
     } finally { fault.mockRestore(); release.mockRestore(); }
   });
 });
+
+describe("gpt-transcribe fields and upload naming", () => {
+  function transcribeForm(model: string, extra: Array<[string, string]> = []): FormData {
+    const data = new FormData();
+    data.append("file", new File([new Uint8Array([82, 73, 70, 70, 0, 0])], "sample.wav", { type: "audio/wav" }));
+    data.append("model", model);
+    for (const [name, value] of extra) data.append(name, value);
+    return data;
+  }
+
+  test("keyed relay forwards gpt-transcribe with repeated keywords and languages and returns detected languages", async () => {
+    respond = () => Response.json({ text: "bonjour", languages: [{ code: "fr", extra: 1 }, { code: 7 }, "en"], usage: { seconds: 1 } });
+    const response = await request(transcribeForm("gpt-transcribe", [
+      ["keywords[]", "AC-42"], ["keywords[]", "premium plan"], ["languages[]", "fr"], ["languages[]", "en"], ["prompt", "support call"],
+    ]));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ text: "bonjour", languages: [{ code: "fr" }] });
+    const data = await captured[0]!.formData();
+    expect(data.get("model")).toBe("gpt-transcribe");
+    expect(data.getAll("keywords[]")).toEqual(["AC-42", "premium plan"]);
+    expect(data.getAll("languages[]")).toEqual(["fr", "en"]);
+    expect(data.get("language")).toBeNull();
+    expect(data.get("prompt")).toBe("support call");
+  });
+
+  test("a response without a languages array keeps the text-only result", async () => {
+    respond = () => Response.json({ text: "plain", languages: "fr" });
+    const response = await request(transcribeForm("gpt-transcribe"));
+    expect(await response.json()).toEqual({ text: "plain" });
+    respond = () => Response.json({ text: "plain", languages: [] });
+    expect(await (await request(transcribeForm("gpt-transcribe"))).json()).toEqual({ text: "plain", languages: [] });
+    const text = await request(transcribeForm("gpt-transcribe", [["response_format", "text"]]));
+    expect(await text.text()).toBe("plain");
+  });
+
+  test("list fields are refused where the model or destination cannot take them", async () => {
+    const cases: FormData[] = [
+      transcribeForm("gpt-transcribe", [["language", "fr"]]),
+      transcribeForm("gpt-transcribe", [["language", "fr"], ["languages[]", "fr"]]),
+      transcribeForm("gpt-4o-transcribe", [["keywords[]", "AC-42"]]),
+      transcribeForm("gpt-4o-transcribe", [["languages[]", "fr"]]),
+      transcribeForm("gpt-transcribe", [["keywords[]", "bad<term"]]),
+      transcribeForm("gpt-transcribe", [["keywords[]", "line\nbreak"]]),
+      transcribeForm("gpt-transcribe", [["languages[]", "not a code"]]),
+      transcribeForm("gpt-transcribe", Array.from({ length: 101 }, (_, i) => ["keywords[]", "k" + i] as [string, string])),
+      transcribeForm("gpt-transcribe", [["keywords", "AC-42"]]),
+    ];
+    for (const body of cases) expect((await request(body)).status).toBe(400);
+    expect(captured).toHaveLength(0);
+  });
+
+  test("ChatGPT subscription refuses gpt-transcribe and its list fields", async () => {
+    savePoolConfig();
+    for (const body of [transcribeForm("gpt-transcribe"), transcribeForm("gpt-4o-transcribe", [["languages[]", "fr"]])]) {
+      expect((await request(body)).status).toBe(400);
+    }
+    expect(captured).toHaveLength(0);
+  });
+
+  test("subscription uploads without an extension are named and typed from their content", async () => {
+    savePoolConfig();
+    const bytes = (...parts: Array<string | number[]>) => new Uint8Array(parts.flatMap(part => typeof part === "string" ? [...part].map(char => char.charCodeAt(0)) : part));
+    const cases: Array<[string, Uint8Array, string, string | null]> = [
+      ["blob", bytes("RIFF", [0, 0, 0, 0], "WAVE"), "audio.wav", "audio/wav"],
+      ["clip", bytes("ID3", [3, 0, 0]), "audio.mp3", "audio/mpeg"],
+      ["clip", bytes([0xff, 0xfb, 0x90, 0x00]), "audio.mp3", "audio/mpeg"],
+      ["clip", bytes([0, 0, 0, 0x20], "ftypM4A "), "audio.m4a", "audio/mp4"],
+      ["clip", bytes("OggS", [0, 2]), "audio.ogg", "audio/ogg"],
+      ["clip", bytes([0x1a, 0x45, 0xdf, 0xa3, 1]), "audio.webm", "audio/webm"],
+      ["clip", bytes("fLaC", [0]), "audio.flac", "audio/flac"],
+      ["clip", bytes([0xff, 0xf1, 0x50, 0x80]), "audio.webm", null],
+      ["voice.flac", bytes("RIFF", [0, 0, 0, 0], "WAVE"), "audio.flac", "audio/wav"],
+    ];
+    for (const [name, content, expected, type] of cases) {
+      captured = [];
+      const data = new FormData();
+      data.append("file", new File([content], name));
+      data.append("model", "gpt-4o-transcribe");
+      expect((await request(data)).status).toBe(200);
+      const raw = await captured[0]!.text();
+      expect(raw).toContain(`filename="${expected}"`);
+      if (type) expect(raw).toContain(`Content-Type: ${type}`);
+    }
+  });
+});
+

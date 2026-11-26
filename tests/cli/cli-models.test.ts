@@ -554,7 +554,7 @@ describe("ocx models", () => {
       const result = runCli(["models", "--json"], { OPENCODEX_HOME: dir });
       expect(result.status).toBe(0);
       const rows = JSON.parse(result.stdout).models as Array<{ provider: string; model: string }>;
-      expect(rows.filter(row => row.provider === "deepseek").map(row => row.model)).toContain("deepseek-chat");
+      expect(rows.filter(row => row.provider === "deepseek").map(row => row.model)).toContain("deepseek-flash");
       expect(rows.filter(row => row.provider === "mimo-free").map(row => row.model)).toEqual(["my-model"]);
     } finally { removeTreeWithRetry(dir); }
     const matching = freshConfig({ providers: { "mimo-free": { adapter: "mimo-free",
