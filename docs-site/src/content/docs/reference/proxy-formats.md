@@ -63,6 +63,10 @@ OpenCodex records the failure and any reported usage without saving the response
 `previous_response_id` replay.
 Auto/none, incomplete results and unknown contracts retain their existing rules.
 
+Refusal text alone preserves a completed response. OpenCodex masks provider credentials in individual
+refusal fields as they arrive, including refusal parts in message items. Ordinary output and tool
+arguments keep their original content.
+
 ## Required tools on translated Chat routes
 
 Before sending, the proxy rejects a mandatory tool choice that the selected Chat destination cannot

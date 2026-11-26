@@ -42,6 +42,10 @@ Los clientes que esperan una respuesta completa reciben un error JSON con el est
 correspondiente. OpenCodex registra el fallo y el uso declarado sin guardar la respuesta para
 reutilizarla mediante `previous_response_id`.
 
+El texto de rechazo por sí solo conserva el estado completado. OpenCodex enmascara las credenciales
+del proveedor en cada campo de rechazo al recibirlo, incluidas las partes de rechazo de los mensajes.
+La salida normal y los argumentos de las herramientas conservan su contenido original.
+
 <a id="required-tools-on-translated-chat-routes"></a>
 
 ## Herramientas obligatorias en rutas Chat traducidas

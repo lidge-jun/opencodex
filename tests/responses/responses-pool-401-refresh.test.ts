@@ -553,6 +553,25 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     expect(JSON.stringify(logCtx)).not.toContain("rejected-access");
   });
 
+  test("a buffered completion with a provider error masks the selected credential in its JSON response", async () => {
+    const harness = installHarness({
+      responseForSend(authorization) {
+        const event = { type: "response.completed", response: { id: "resp_buffered_verdict", status: "completed", output: [],
+          error: { type: "rate_limit_error", code: "rate_limit_exceeded", message: "fixture " + authorization.slice(7) } } };
+        return new Response("event: response.completed\ndata: " + JSON.stringify(event) + "\n\n", {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    });
+    const response = await handleResponses(request("/v1/responses"), config(), { model: "", provider: "" } as RequestLogContext);
+    expect(harness.sends).toEqual(["Bearer rejected-access"]);
+    expect(response.status).toBe(429);
+    const body = await response.text();
+    expect(JSON.parse(body)).toMatchObject({ error: { code: "rate_limit_exceeded" } });
+    expect(body).toContain("[REDACTED]");
+    expect(body).not.toContain("rejected-access");
+  });
+
   test("disconnect during buffered replay does not record a pool conversation-state issuer", async () => {
     const abort = new AbortController();
     const headers = { "thread-id": "fixture-pool-disconnect", "x-codex-parent-thread-id": "fixture-pool-parent" };

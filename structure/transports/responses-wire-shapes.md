@@ -437,7 +437,7 @@ Deferred inspection checks cancellation after each yield and commits serving-rou
 after the final abort check; a disconnect returns 499 without publishing that state or a terminal.
 This buffered path makes no tee/eager choice. Failed and incomplete terminals mask selected outbound
 credentials across the full event, including nested output and metadata, before JSON or SSE delivery;
-synthetic stream failures use the same credential mask in both streaming relays.
+synthetic stream failures use the same credential mask in both streaming relays. Refusal delta, part and item events are masked field by field before delivery. Buffered error-bearing completions use `deliverFailedCompletion` in `src/server/responses/passthrough-delivery.ts` to mask their JSON error.
 
 > Decision record: [ADR-6162](../decisions/ADR-6162-responses-http-sse.md)
 

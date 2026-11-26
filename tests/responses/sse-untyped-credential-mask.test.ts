@@ -64,6 +64,35 @@ describe("completed response diagnostics", () => {
     ]);
   });
 
+  test.each(["response.refusal.delta", "response.refusal.done", "response.content_part.added",
+    "response.content_part.done", "response.output_item.added", "response.output_item.done"])(
+    "%s masks the refusal field and preserves its envelope", type => {
+      const event = (value: string) => {
+        const part = { type: "refusal", refusal: value };
+        const identity = { type, sequence_number: 3, output_index: 0, content_index: 1 };
+        if (type === "response.refusal.delta") return { ...identity, delta: value };
+        if (type === "response.refusal.done") return { ...identity, refusal: value };
+        if (type.startsWith("response.content_part.")) return { ...identity, part };
+        return { ...identity, item: { ...message, content: [...message.content, part] } };
+      };
+      const block = "event: " + type + "\ndata: " + JSON.stringify(event(marker));
+      expect(read(block)).toEqual(event(REDACTED_SECRET));
+      const safe = "event: " + type + "\r\ndata:   " + JSON.stringify(event("ordinary refusal"));
+      expect(rewrite(safe)).toEqual([safe]);
+    },
+  );
+
+  test("early ordinary text and function arguments keep their original wire bytes", () => {
+    for (const event of [
+      { type: "response.output_text.delta", delta: marker },
+      { type: "response.content_part.done", part: { type: "output_text", text: marker } },
+      { type: "response.output_item.done", item: { type: "function_call", arguments: marker } },
+    ]) {
+      const block = "event: " + event.type + "\r\ndata:   " + JSON.stringify(event);
+      expect(rewrite(block)).toEqual([block]);
+    }
+  });
+
   test("tee and eager delivery retain the completed verdict and masked diagnostic", async () => {
     const original = { type: "response.completed", response: { status: "completed", last_error: marker, output: [message] } };
     for (const mode of ["tee", "eager"] as const) {
