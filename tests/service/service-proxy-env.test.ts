@@ -10,18 +10,33 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 const token = "a".repeat(43);
 let home: string;
 let previousHome: string | undefined;
+let previousLibrary: string | undefined;
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
+  previousLibrary = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
   home = mkdtempSync(join(tmpdir(), "service-proxy-env-"));
   process.env.OPENCODEX_HOME = home;
+  process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = join(home, "desktop-library");
 });
 
 afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
+  if (previousLibrary === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousLibrary;
   removeTreeWithRetry(home);
 });
+
+function storePickerProfile(egressProxyUrl: string, applied = true): void {
+  const library = join(home, "desktop-library");
+  mkdirSync(library, { recursive: true });
+  writeFileSync(join(library, "picker.json"), `${JSON.stringify({ egressProxyUrl })}\n`);
+  writeFileSync(join(library, "_meta.json"), JSON.stringify({
+    appliedId: applied ? "picker" : "personal",
+    entries: [{ id: "picker", name: "opencodex-picker" }, { id: "personal", name: "Personal" }],
+  }));
+}
 
 function storeToken(value = token): void {
   mkdirSync(join(home, "claude-intercept"), { mode: 0o700 });
@@ -74,6 +89,36 @@ describe("service proxy environment ownership", () => {
     ]) {
       expect(resolvedProxyEnv({ HTTPS_PROXY: value })).toEqual([{ name: "HTTPS_PROXY", value }]);
     }
+  });
+
+  test("excludes the egress URL of the applied Desktop picker profile from outbound keys only", () => {
+    const picker = "http://127.0.0.1:13101";
+    storePickerProfile(picker);
+    expect(resolvedProxyEnv({ HTTPS_PROXY: picker, HTTP_PROXY: `${picker}/`, ALL_PROXY: picker })).toEqual([]);
+    expect(resolvedProxyEnv({ HTTPS_PROXY: picker, https_proxy: "http://127.0.0.1:7897" }))
+      .toEqual([{ name: "HTTPS_PROXY", value: "http://127.0.0.1:7897" }]);
+    expect(resolvedProxyEnv({ NO_PROXY: picker })).toEqual([{ name: "NO_PROXY", value: picker }]);
+    for (const value of ["http://127.0.0.1:10201", "http://127.0.0.1:13100", "http://localhost:13101"]) {
+      expect(resolvedProxyEnv({ HTTPS_PROXY: value })).toEqual([{ name: "HTTPS_PROXY", value }]);
+    }
+    expect(existsSync(join(home, "config.json"))).toBe(false);
+  });
+
+  test("keeps a loopback proxy when no picker profile is applied", () => {
+    const value = "http://127.0.0.1:10201";
+    expect(resolvedProxyEnv({ HTTPS_PROXY: value })).toEqual([{ name: "HTTPS_PROXY", value }]);
+    storePickerProfile(value, false);
+    expect(resolvedProxyEnv({ HTTPS_PROXY: value })).toEqual([{ name: "HTTPS_PROXY", value }]);
+  });
+
+  test("keeps the proxy when a foreign row shares the picker's id", () => {
+    const value = "http://127.0.0.1:12450";
+    storePickerProfile(value);
+    writeFileSync(join(home, "desktop-library", "_meta.json"), JSON.stringify({
+      appliedId: "picker",
+      entries: [{ id: "picker", name: "Personal" }, { id: "picker", name: "opencodex-picker" }],
+    }));
+    expect(resolvedProxyEnv({ HTTPS_PROXY: value })).toEqual([{ name: "HTTPS_PROXY", value }]);
   });
 
   test("an absent or unusable stored token cannot claim a proxy or create a credential", () => {
