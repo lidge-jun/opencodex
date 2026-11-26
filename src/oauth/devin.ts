@@ -5,7 +5,7 @@
  * its credentials.toml session is adopted without opening a browser (the kiro
  * shape). Only when no CLI credential exists does login fall back to the Auth0
  * browser sign-in flow (windsurf.com/windsurf/signin with
- * redirect_uri=show-auth-token), which exchanges the pasted Firebase ID token
+ * redirect_uri=show-auth-token and no_redirect=true), which exchanges the pasted Firebase ID token
  * via Cognition's RegisterUser for a long-lived API key. The browser path is
  * kept because it is the only login route for a user without the CLI.
  *
@@ -141,13 +141,26 @@ function credentialsFromApiKey(
   };
 }
 
-function buildSignInUrl(region: WindsurfRegion): string {
+/**
+ * The Windsurf sign-in URL that shows the pasteable token.
+ *
+ * `no_redirect=true` is load-bearing. Without it, windsurf.com's sign-in page
+ * probes Devin's `/api/healthz` in the browser and, when it answers, replaces
+ * itself with `app.devin.ai/auth/windsurf/continue?prompt=select_account&…`,
+ * dropping `client_id`, `response_type`, and `prompt=login` on the way. That is
+ * the Devin account flow, not the Windsurf token page this login reads from.
+ * The page skips the hand-off only when `no_redirect` is the string "true"
+ * (observed in the windsurf.com sign-in bundle and in a headless load,
+ * 2026-11-26).
+ */
+export function buildSignInUrl(region: WindsurfRegion): string {
   const params = new URLSearchParams({
     response_type: "token",
     client_id: region.oauthClientId,
     redirect_uri: "show-auth-token",
     state: randomUUID(),
     prompt: "login",
+    no_redirect: "true",
   });
   return region.website + "/windsurf/signin?" + params.toString();
 }
