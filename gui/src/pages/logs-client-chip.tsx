@@ -1,19 +1,8 @@
 import { normalizeRecordedClient, type UsageClient } from "../../../src/usage/client";
 import type { TFn } from "../i18n/shared";
+import { CLIENT_LABELS } from "./logs-client-label";
 import { clientIconClass } from "../client-icon";
 
-const CLIENT_LABELS = {
-  codex_cli: "Codex",
-  codex_desktop: "Codex",
-  codex_ide: "Codex",
-  claude_code: "Claude Code",
-  claude_desktop: "Claude Desktop",
-  grok: "Grok",
-  opencode: "OpenCode",
-  aside: "Aside",
-  other: "logsV2.clientOther",
-  unknown: "logsV2.clientUnknown",
-} as const satisfies Record<UsageClient, string>;
 
 const CLIENT_ICONS: Record<UsageClient, string | null> = {
   codex_cli: "openai.svg", codex_desktop: "openai.svg", codex_ide: "openai.svg",

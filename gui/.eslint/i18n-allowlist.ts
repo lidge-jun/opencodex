@@ -62,6 +62,9 @@ export function isTechnicalLiteral(value: string): boolean {
   // Internal Models session-cache suffix, never rendered as user-facing copy.
   if (trimmed === ":picker-order") return true;
 
+  // Opaque id tags of the Live routing view model (never rendered).
+  if (/^(session|key|admission|attempt|decision|roster):$/.test(trimmed)) return true;
+
   // Absolute/relative URLs and localhost endpoints
   if (/^https?:\/\//i.test(trimmed)) return true;
   if (/^https?:\/\/[^\s]+$/i.test(trimmed)) return true;

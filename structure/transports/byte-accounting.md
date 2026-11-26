@@ -130,6 +130,7 @@ combo/translation calls share their HTTP owner's reservation rather than reservi
 The exact POST routes are Responses, compact, Chat Completions, Messages, count_tokens, image
 generations/edits and alpha search. Image/search/count_tokens retain their configured per-body
 limits. Management, audio, context relay and WebSocket frames retain their independent contracts.
+The read-only `GET /v1/usage/live` route and its preflight do not read a JSON body or use the upload budget.
 Capacity pressure queues at most 32 unread uploads in FIFO order for at most 120 seconds.
 Returning unused allowance or settling a lease wakes eligible waiters; abort and timeout detach
 their timers/listeners without changing another owner's reservation. A disconnect after a grant

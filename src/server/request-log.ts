@@ -4,6 +4,7 @@ import { normalizeRecordedClient, type UsageClient } from "../usage/client";
 import { anthropicAccountTagField, stampApiKeyAccountLabel, usesApiKeyAccount } from "../providers/label";
 import { finalizeProviderCacheAffinity } from "./request-log-cache-affinity";
 import { aggregateAttemptUsage } from "./request-log-attempt-usage";
+import { accountRosterField, contextBreakdownField, routeLiveTimingField, type AccountRosterEntryField, type ContextBreakdownContext, type ContextBreakdownEntryField, type RouteLiveTimingContext, type RouteLiveTimingEntryField } from "./request-log-route-live";
 export { aggregateAttemptUsage } from "./request-log-attempt-usage";
 
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
@@ -127,7 +128,7 @@ export function cacheDiagnosticsObserving(): boolean {
   return cacheDiagnosticHooks()?.enabled() === true;
 }
 
-export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyLogContext, CommittedComboLogFields {
+export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyLogContext, CommittedComboLogFields, RouteLiveTimingContext, ContextBreakdownContext {
   model: string;
   provider: string;
   client?: UsageClient;
@@ -336,7 +337,7 @@ export function rebindCacheDiagnosticBody(
   cacheDiagnosticHooks()?.rebind(body, draft);
 }
 
-export interface RequestLogEntry extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyEntryField {
+export interface RequestLogEntry extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyEntryField, AccountRosterEntryField, RouteLiveTimingEntryField, ContextBreakdownEntryField {
   requestId: string;
   client?: UsageClient;
   /** The logical request this row belongs to (#4546); absent on rows written without a budget. */
@@ -1697,6 +1698,9 @@ function writeFinalRequestLog(
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
     ...(logCtx.routeDecision ? { routeDecision: logCtx.routeDecision } : {}),
+    ...accountRosterField(isCombo ? attempts?.at(-1) : logCtx),
+    ...(isCombo ? {} : routeLiveTimingField(logCtx, start)),
+    ...contextBreakdownField(logCtx, isCombo ? attempts?.at(-1) : { adapter: logCtx.providerAdapter ?? logCtx.provider, model: logCtx.model }, contextWindowForModel),
     ...(jevDecision ? { jevDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
     ...(protocolTrace ? { protocolTrace } : {}),

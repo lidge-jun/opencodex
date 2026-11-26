@@ -252,3 +252,13 @@ Remote Link rows may carry an optional `link` object (transport, continuation, h
 Opted-in native Gemini delivery uses `src/server/gemini-native-log.ts` for client and admission attribution,
 status and latency. It does not inspect source payloads or report token usage; see
 [Native Gemini Inbound](data-planes/gemini-native.md).
+
+## Live meter
+
+The client families (`codex_*`, `claude_*`, other) also scope the live meter. `src/server/live-meter-handler.ts` serves `GET /v1/usage/live`, the newest completed conversation row projected by `src/usage/live-meter.ts`. Unavailable values are `null` with a reason, never a guess:
+
+- Speed requires a successful, complete request, reported output usage, and a single recorded generation window of at least one second.
+- Cache hit rate requires usable input usage and an observed cache-read count; an observed zero is valid.
+- Context fill requires reported usage from a single attempt and the model's `context_window` in the persisted Codex catalog (cached by mtime). Aggregate retry usage cannot fill one model window.
+
+The body is numbers, model/provider names and reason codes only, and a `conversation` filter is never echoed. Admission is `resolveApiAuth` (the `/v1/models` set, never the admin token), and Origin `app://-` (the Codex desktop renderer) is additionally allowed for this GET and its preflight only, behind the same loopback Host gate; `isAllowedRequestOrigin` and every other route are unchanged. The unauthenticated data-loopback listener admits it as GET only, because that socket is where the Codex++ footer dials on a host whose public listener binds a non-loopback address. The route reads the in-process request log, so it adds no management route, CLI verb or ledger read. Covered by `tests/server/live-meter-handler.test.ts` and the `AUTH_MATRIX` row.

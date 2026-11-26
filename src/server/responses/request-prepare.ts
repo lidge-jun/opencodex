@@ -103,6 +103,7 @@ import { anthropicSessionKeyFromParts } from "../../oauth/anthropic-routing";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../responses/turn-termination";
+import { isLiveRoutingRecentlyObserved, observeContextBreakdown } from "../context-breakdown";
 import { beginRequestAttempt, finishRequestAttempt, markLocalRequestLogRefusal, noteAttemptSend, noteCodexSelectionAffinity, observeCacheDiagnosticInbound, rebindCacheDiagnosticBody, requestLogSpeedLabel, readConfiguredCodexServiceTier, usageFromResponsesPayload } from "../request-log";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import type { RouteResult } from "../../router";
@@ -291,14 +292,13 @@ export async function prepareResponsesRequest(
   options.clientModelLabel ??= clientFacingModelLabel(originalSelector);
   redactHostedImageDisplayPaths(body);
   observeCacheDiagnosticInbound(
-    logCtx,
-    body,
-    req.headers,
+    logCtx, body, req.headers,
     options.promptCacheKeyIsSharedCohort === true
       ? "system-derived"
       : options.promptCacheKeyIsSharedCohort === false ? "metadata-derived" : "caller",
     contextPrincipalIdOf(options.admission),
   );
+  if (isLiveRoutingRecentlyObserved()) observeContextBreakdown(logCtx, body, "responses");
   if (!concreteSelection && !options.compactionRoutingOverride && inboundWire === "responses") {
     options.compactionRoutingOverride = applyCompactionRoutingOverride(body, req.headers, config, {
       endpoint: "responses",
