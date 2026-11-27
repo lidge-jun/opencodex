@@ -29,7 +29,7 @@ Una credencial principal bloqueada cierra la solicitud de admisión; no reserva 
 
 Un rechazo de bloqueo duro se informa como `usage_limit_reached`, por lo que Codex termina el turno y marca un objetivo activo como limitado al uso en lugar de esperar días en un reintento. El tiempo de reintento sugerido es el restablecimiento de la cuenta principal o, para una solicitud de que el grupo de cuentas enrutado a la cuenta principal, el primer momento conocido en que se recupera otra cuenta del grupo, lo que ocurra primero (nunca antes de un minuto). Reanudar el objetivo después de ese tiempo; enrutamiento a continuación, recoge una cuenta de estado fresco.
 
-El mismo rechazo se devuelve cuando otra cuenta del grupo se probó primero y respondió que no admite el modelo solicitado. El cliente ve el límite y el restablecimiento de la cuenta principal en lugar del error de modelo de esa cuenta. Un rechazo de cuota de la otra cuenta se sigue devolviendo como antes.
+El mismo rechazo se devuelve cuando otra cuenta del grupo se probó primero y respondió que no admite el modelo solicitado. El cliente ve el límite de la cuenta principal, con el tiempo de reintento sugerido descrito arriba, en lugar del error de modelo de esa cuenta. Un rechazo de cuota de la otra cuenta se sigue devolviendo como antes.
 
 <a id="stored-account-credit-metadata-retries"></a>
 
