@@ -10,7 +10,12 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { createAgyAcpAdapter, AGY_ACP_ARGS, type AgyAcpDeps } from "../../src/adapters/agy-acp/adapter";
 import { clearAgyVersionCacheForTests } from "../../src/adapters/agy-acp/binary";
-import { MAX_ACP_PROMPT_CHARS, MAX_ACP_LINE_BYTES } from "../../src/adapters/agy-acp/acp";
+import {
+  MAX_ACP_IMAGE_ENCODED_BYTES,
+  MAX_ACP_LINE_BYTES,
+  MAX_ACP_PROMPT_CHARS,
+  MAX_ACP_TOTAL_IMAGE_ENCODED_BYTES,
+} from "../../src/adapters/agy-acp/acp";
 import { AgyAcpTreeCleanupError, createTurnWorkspace, reapProcessTree, type AgyAcpChild } from "../../src/adapters/agy-acp/process";
 import * as windowsAcl from "../../src/lib/windows-secret-acl";
 import { runWithRequestPeer } from "../../src/lib/request-peer-scope";
@@ -1237,5 +1242,75 @@ describe("host tools and multimodal replay", () => {
       expect(index).toBeGreaterThanOrEqual(end);
       end = index + marker.length;
     }
+  });
+
+  test("drops a pending tool call when the same stdout batch reports it failed or non-permission cancelled", async () => {
+    for (const status of ["failed", "cancelled"] as const) {
+      const result = await run(script((frame, api) => {
+        if (frame.method !== "session/prompt") return;
+        api.batch([
+          { jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call", ...call } } },
+          // ACP tool_call_update frequently carries only toolCallId + status.
+          { jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call_update", toolCallId: call.toolCallId, status } } },
+          { jsonrpc: "2.0", id: frame.id, result: { stopReason: "end_turn" } },
+        ]);
+        return true;
+      }), { parsed: withTool(), deps: { createWorkspace: () => createTurnWorkspace(tmpdir() + "/test-home") } });
+      expect(result.events.some(event => event.type === "tool_call_start")).toBe(false);
+      expect(terminal(result)).toMatchObject([{ type: "done" }]);
+    }
+  });
+
+  test("drops a permission-captured call on same-batch failure, but preserves it on adapter-triggered cancellation", async () => {
+    const failed = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.batch([
+        { jsonrpc: "2.0", id: 101, method: "session/request_permission", params: { sessionId: "s1", toolCall: call } },
+        { jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call_update", toolCallId: call.toolCallId, status: "failed" } } },
+        { jsonrpc: "2.0", id: frame.id, result: { stopReason: "cancelled" } },
+      ]);
+      return true;
+    }), { parsed: withTool(), deps: { createWorkspace: () => createTurnWorkspace(tmpdir() + "/test-home") } });
+    expect(failed.events.some(event => event.type === "tool_call_start")).toBe(false);
+    expect(errorCode(failed)).toBe("agy_acp_cancelled");
+
+    const cancelledAfterPermission = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.batch([
+        { jsonrpc: "2.0", id: 102, method: "session/request_permission", params: { sessionId: "s1", toolCall: call } },
+        { jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call_update", toolCallId: call.toolCallId, status: "cancelled" } } },
+        { jsonrpc: "2.0", id: frame.id, result: { stopReason: "cancelled" } },
+      ]);
+      return true;
+    }), { parsed: withTool(), deps: { createWorkspace: () => createTurnWorkspace(tmpdir() + "/test-home") } });
+    expect(cancelledAfterPermission.events.filter(event => event.type === "tool_call_start")).toHaveLength(1);
+    expect(terminal(cancelledAfterPermission)).toMatchObject([{ type: "done", stopReason: "tool_use" }]);
+  });
+
+  test("bounds per-image and aggregate encoded image bytes before sending session/prompt", async () => {
+    const oversizedSingle = parsed();
+    oversizedSingle.context.messages = [{
+      role: "user",
+      timestamp: 0,
+      content: [{ type: "image", imageUrl: "data:image/png;base64," + "A".repeat(MAX_ACP_IMAGE_ENCODED_BYTES + 4) }],
+    }];
+    const singleResult = await run(script(undefined, { image: true }), { parsed: oversizedSingle });
+    expect(errorCode(singleResult)).toBe("unsupported_input_modality");
+    expect(methods(singleResult)).not.toContain("session/prompt");
+
+    const halfOverAggregate = Math.floor(MAX_ACP_TOTAL_IMAGE_ENCODED_BYTES / 2) + 4;
+    expect(halfOverAggregate).toBeLessThanOrEqual(MAX_ACP_IMAGE_ENCODED_BYTES);
+    const oversizedTotal = parsed();
+    oversizedTotal.context.messages = [{
+      role: "user",
+      timestamp: 0,
+      content: [
+        { type: "image", imageUrl: "data:image/png;base64," + "A".repeat(halfOverAggregate) },
+        { type: "image", imageUrl: "data:image/png;base64," + "B".repeat(halfOverAggregate) },
+      ],
+    }];
+    const totalResult = await run(script(undefined, { image: true }), { parsed: oversizedTotal });
+    expect(errorCode(totalResult)).toBe("unsupported_input_modality");
+    expect(methods(totalResult)).not.toContain("session/prompt");
   });
 });

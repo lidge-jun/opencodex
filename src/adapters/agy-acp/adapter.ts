@@ -280,7 +280,13 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     let prompting = false;
     let usage: OcxUsage | undefined;
     let pendingTool: ReturnType<typeof tools.capture>;
-    let cancelledCapturedPermission = false;
+    let pendingToolSettleScheduled = false;
+    const permissionCancelledCalls = new Set<string>();
+    const rejectedToolCalls = new Set<string>();
+    type DeferredPromptOutcome =
+      | { kind: "done"; stopReason?: Extract<ReturnType<typeof acpTerminal>, { kind: "done" }>["stopReason"]; usage?: OcxUsage }
+      | { kind: "cancelled" };
+    let deferredPromptOutcome: DeferredPromptOutcome | undefined;
     let sawFrame = false;
     let buffer = "";
     let totalBytes = 0;
@@ -479,26 +485,63 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       if (terminal.kind === "aborted") return finish(undefined, true);
       if (terminal.kind === "error") {
         // agy can acknowledge our cancelled permission in the same read as its captured call.
-        if (cancelledCapturedPermission && terminal.code === "agy_acp_cancelled") return;
+        if (terminal.code === "agy_acp_cancelled" && pendingTool && permissionCancelledCalls.has(pendingTool.id)) {
+          deferredPromptOutcome = { kind: "cancelled" };
+          return;
+        }
         return fail(terminal.code);
       }
       if (terminal.kind === "refusal") return finish({ type: "incomplete", reason: "content_filter", retryable: false, usage });
-      if (pendingTool) return; // The captured call settles after this batch of frames.
+      if (pendingTool) {
+        deferredPromptOutcome = { kind: "done", stopReason: terminal.stopReason, usage };
+        return; // The captured call settles after this batch of frames.
+      }
       if (tools.required) return fail("agy_acp_protocol", "required client tool was not called");
       finish({ type: "done", ...(usage ? { usage } : {}), ...(terminal.stopReason ? { stopReason: terminal.stopReason } : {}) });
     }
 
+    function schedulePendingToolSettle(): void {
+      if (pendingToolSettleScheduled) return;
+      pendingToolSettleScheduled = true;
+      queueMicrotask(() => {
+        pendingToolSettleScheduled = false;
+        if (settled || incoming.abortSignal?.aborted) return;
+        if (pendingTool) {
+          if (!checkSelectedModel() || !checkSelectedThinking()) return;
+          finish({ type: "done", stopReason: "tool_use", endTurn: false, usage });
+          return;
+        }
+        const deferred = deferredPromptOutcome;
+        deferredPromptOutcome = undefined;
+        if (!deferred) return;
+        if (deferred.kind === "cancelled") return fail("agy_acp_cancelled");
+        if (tools.required) return fail("agy_acp_protocol", "required client tool was not called");
+        finish({ type: "done", ...(deferred.usage ? { usage: deferred.usage } : {}), ...(deferred.stopReason ? { stopReason: deferred.stopReason } : {}) });
+      });
+    }
+
     function captureClientCall(call: unknown, permission = false): boolean {
       if (!prompting || settled || incoming.abortSignal?.aborted) return false;
+      const record = call && typeof call === "object" ? call as Record<string, unknown> : undefined;
+      const id = typeof record?.toolCallId === "string" ? record.toolCallId : undefined;
+      const status = record?.status;
+      if (id) {
+        if (status === "failed" || (status === "cancelled" && !permissionCancelledCalls.has(id))) {
+          rejectedToolCalls.add(id);
+          permissionCancelledCalls.delete(id);
+          if (pendingTool?.id === id) pendingTool = undefined;
+          return true;
+        }
+        if (rejectedToolCalls.has(id)) return true;
+      }
       const captured = tools.capture(call);
       if (!captured || !checkSelectedModel()) return false;
-      if (permission && (!pendingTool || pendingTool.id === captured.id)) cancelledCapturedPermission = true;
+      if (permission && (!pendingTool || pendingTool.id === captured.id)) {
+        permissionCancelledCalls.add(captured.id);
+      }
       if (pendingTool) return true;
       pendingTool = captured;
-      queueMicrotask(() => {
-        if (settled || incoming.abortSignal?.aborted || !checkSelectedModel() || !checkSelectedThinking()) return;
-        finish({ type: "done", stopReason: "tool_use", endTurn: false, usage });
-      });
+      schedulePendingToolSettle();
       return true;
     }
 

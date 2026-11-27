@@ -21,6 +21,10 @@ export const MAX_ACP_LINE_BYTES = 8 * 1024 * 1024;
 export const MAX_ACP_TOTAL_BYTES = 64 * 1024 * 1024;
 /** Ceiling on the flattened conversation handed to one ACP prompt. */
 export const MAX_ACP_PROMPT_CHARS = 200_000;
+/** Hard ceiling on base64-encoded bytes for one inline ACP image block. */
+export const MAX_ACP_IMAGE_ENCODED_BYTES = 4 * 1024 * 1024;
+/** Hard ceiling on aggregate base64-encoded bytes across all inline ACP image blocks in one prompt. */
+export const MAX_ACP_TOTAL_IMAGE_ENCODED_BYTES = 6 * 1024 * 1024;
 /** ACP v1 "Authentication required". */
 export const ACP_AUTH_REQUIRED = -32000;
 /** JSON-RPC "Method not found". */
@@ -200,6 +204,7 @@ export class UnsupportedAcpMedia extends Error {}
  */
 export function acpPromptBlocks(parsed: OcxParsedRequest, includeSystem: boolean, prefix?: string): AcpPromptBlock[] {
   const images: AcpPromptBlock[] = [];
+  let totalImageBytes = 0;
   const marker = crypto.randomUUID();
   const messages = parsed.context.messages.map(message => {
     if (message.role === "assistant" || typeof message.content === "string") return message;
@@ -209,6 +214,14 @@ export function acpPromptBlocks(parsed: OcxParsedRequest, includeSystem: boolean
       const image = parseDataUrl(part.imageUrl);
       if (message.role === "developer" || !image || !image.mediaType.startsWith("image/") || !image.base64) {
         throw new UnsupportedAcpMedia("Gemini ACP requires inline image attachments in user messages or tool results.");
+      }
+      const encodedBytes = Buffer.byteLength(image.base64, "utf8");
+      if (encodedBytes > MAX_ACP_IMAGE_ENCODED_BYTES) {
+        throw new UnsupportedAcpMedia("An inline image exceeds the ACP per-image encoded byte limit.");
+      }
+      totalImageBytes += encodedBytes;
+      if (totalImageBytes > MAX_ACP_TOTAL_IMAGE_ENCODED_BYTES) {
+        throw new UnsupportedAcpMedia("Inline images exceed the ACP aggregate encoded byte limit.");
       }
       const index = images.push({ type: "image", data: image.base64, mimeType: image.mediaType }) - 1;
       return { type: "text" as const, text: marker + index + marker };
