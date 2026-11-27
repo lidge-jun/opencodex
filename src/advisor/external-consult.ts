@@ -668,7 +668,7 @@ export async function runExternalAdvisorConsult(
     return errorResponse(
       409,
       "advisor_consent_required",
-      "Advisor context-sharing consent (v1) is required. Run `ocx advisor consent --ack`.",
+      "Advisor context-sharing consent (v1) is required. Run `ocx advisor consent`.",
       formatAdvisorUnavailable("consent", "advisor_context_sharing_consent_required"),
     );
   }

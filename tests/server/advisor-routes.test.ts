@@ -955,6 +955,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
     const qOnlyDenied = await runExternalAdvisorConsult(noConsentCfg, { question: "Standalone?" });
     expect(qOnlyDenied.status).toBe(409);
     expect((qOnlyDenied.body.error as { code: string }).code).toBe("advisor_consent_required");
+    expect((qOnlyDenied.body.error as { message: string }).message).toContain("ocx advisor consent`");
 
     // 2. waitMs > 240000 is rejected to stay below Bun's 255s idle timeout; afterElapsedMs > 1h is accepted.
     const cfg = baseConfig();
