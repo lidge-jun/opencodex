@@ -100,7 +100,9 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   until it has a session ID and accepts updates only for that session. Permission requests are answered `cancelled`.
   Caller-advertised tools use the capture-only CodeBuddy MCP helper. Each leg returns at most one
   matching call to the host after child cleanup; the host executes it under its own tool permissions.
-  Inline user and tool-result images require ACP image capability. Text replay under pressure keeps
+  Updates are tracked by call ID so a same-batch failure or non-permission cancellation drops a pending call.
+  Inline user and tool-result images require ACP image capability and enforce per-image and aggregate
+  encoded byte limits before sending `session/prompt`. Text replay under pressure keeps
   the latest request, preceding proposal and paired tool result within the prompt limit.
   Selection errors use fixed text. Answer and reasoning
   deltas each pass through a bounded streaming redactor for minted OpenCodex credentials, Bearer values,
