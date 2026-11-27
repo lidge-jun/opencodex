@@ -87,6 +87,12 @@ export interface OcxParsedRequest {
    */
   _summaryProhibitsToolCalls?: boolean;
   /**
+   * Routed Anthropic compaction summary: the caller's hosted web_search, kept aside from
+   * `_webSearch` so the summary declares the synthetic tool the ordinary request would declare
+   * without ever running the sidecar (#7307).
+   */
+  _summaryWebSearch?: Record<string, unknown>;
+  /**
    * Completed server-tool exchanges from the Claude client's history, keyed by the block that
    * followed them (`call:<tool_use id>` / `text:<text>`). Same audience as `_anthropicServerTools`.
    */
