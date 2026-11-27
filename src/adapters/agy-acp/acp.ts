@@ -199,6 +199,10 @@ export function buildAcpPrompt(parsed: OcxParsedRequest, includeSystem: boolean,
 export type AcpPromptBlock = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 export class UnsupportedAcpMedia extends Error {}
 
+const SAFE_ACP_IMAGE_MIME = /^image\/[a-z0-9.+-]+$/i;
+const MAX_ACP_IMAGE_MIME_LENGTH = 64;
+const VALID_ACP_IMAGE_BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
 /** Preserve the transcript positions of images, including MCP tool results.
  * Compact text with the existing history policy before substituting image bytes.
  */
@@ -212,7 +216,16 @@ export function acpPromptBlocks(parsed: OcxParsedRequest, includeSystem: boolean
       if (part.type === "document") return { type: "text" as const, text: part.text };
       if (part.type !== "image") return part;
       const image = parseDataUrl(part.imageUrl);
-      if (message.role === "developer" || !image || !image.mediaType.startsWith("image/") || !image.base64) {
+      if (
+        message.role === "developer"
+        || !image
+        || image.mediaType.length > MAX_ACP_IMAGE_MIME_LENGTH
+        || !SAFE_ACP_IMAGE_MIME.test(image.mediaType)
+        || !image.base64
+        || image.base64.length % 4 === 1
+        || (image.base64.includes("=") && image.base64.length % 4 !== 0)
+        || !VALID_ACP_IMAGE_BASE64.test(image.base64)
+      ) {
         throw new UnsupportedAcpMedia("Gemini ACP requires inline image attachments in user messages or tool results.");
       }
       const encodedBytes = Buffer.byteLength(image.base64, "utf8");

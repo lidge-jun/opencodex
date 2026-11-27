@@ -1312,5 +1312,32 @@ describe("host tools and multimodal replay", () => {
     const totalResult = await run(script(undefined, { image: true }), { parsed: oversizedTotal });
     expect(errorCode(totalResult)).toBe("unsupported_input_modality");
     expect(methods(totalResult)).not.toContain("session/prompt");
+
+    for (const badUrl of [
+      "data:image/png;base64," + "\\".repeat(128),
+      `data:image/${"a".repeat(100)};base64,AQ==`,
+    ]) {
+      const invalid = parsed();
+      invalid.context.messages = [{ role: "user", timestamp: 0, content: [{ type: "image", imageUrl: badUrl }] }];
+      const res = await run(script(undefined, { image: true }), { parsed: invalid });
+      expect(errorCode(res)).toBe("unsupported_input_modality");
+      expect(methods(res)).not.toContain("session/prompt");
+    }
+  });
+
+  test("ignores a new tool call after a deferred prompt reply when the first pending call fails in the same batch", async () => {
+    const secondCall = { ...call, toolCallId: "local-2" };
+    const result = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.batch([
+        { jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call", ...call } } },
+        { jsonrpc: "2.0", id: frame.id, result: { stopReason: "end_turn" } },
+        { jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call_update", toolCallId: call.toolCallId, status: "failed" } } },
+        { jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call", ...secondCall } } },
+      ]);
+      return true;
+    }), { parsed: withTool(), deps: { createWorkspace: () => createTurnWorkspace(tmpdir() + "/test-home") } });
+    expect(result.events.some(event => event.type === "tool_call_start")).toBe(false);
+    expect(terminal(result)).toMatchObject([{ type: "done" }]);
   });
 });
