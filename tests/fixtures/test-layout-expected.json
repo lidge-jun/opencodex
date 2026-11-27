@@ -1107,7 +1107,7 @@
   "lab-public-route-registry.test.ts": "lab", "lab-public-security-regressions.test.ts": "lab",
   "lab-public-surfaces.test.ts": "lab", "lab-public-wire-contract.test.ts": "lab",
   "lab-read-filter-validation.test.ts": "lab", "lab-read-surfaces.test.ts": "lab",
-  "launchd-port-fallback.test.ts": "service", "launchd-repair.test.ts": "service", "legacy-shell-compat.test.ts": "responses",
+  "launchd-port-fallback.test.ts": "service", "launchd-repair.test.ts": "service", "foreground-start-service-advisory.test.ts": "service", "legacy-shell-compat.test.ts": "responses",
   "live-call-bindings.test.ts": "server", "live-native-calls.test.ts": "server",
   "usage-telemetry-profile-contract.test.ts": "usage", "usage-telemetry-profile-sync.test.ts": "usage", "usage-telemetry-profile-collector.test.ts": "usage", "usage-telemetry-profile-lifecycle.test.ts": "usage", "server-telemetry-profile-routes.test.ts": "server", "cli-telemetry-profile.test.ts": "cli", "docs-telemetry-leaderboard.test.ts": "ci-workflows",
   "live-service-manager-guard.test.ts": "service",

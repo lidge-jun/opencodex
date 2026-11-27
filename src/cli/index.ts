@@ -214,6 +214,7 @@ async function refreshOwnedRaycastCatalog(
   }
 }
 
+if (process.argv[2] === "__foreground-service-advisory") process.exit(await (await import("../service/foreground-advisory-process")).runForegroundAdvisoryEntrypoint());
 if (process.argv[2] === "__update-orchestrated-identity") process.exit(await (await import("../update/orchestrated-identity-probe-entry")).runIdentityProbe(process.argv.slice(2)));
 if (process.argv[2] === "start" && process.env.OCX_SERVICE) startServiceLogging(join(getConfigDir(), "service.log"));
 const updateRestartChild = admitUpdateRestartChild(process.argv.slice(2));
@@ -641,11 +642,13 @@ async function handleStart(options: { block?: boolean } = {}) {
   let routingHealer: { stop(): void } | undefined; // routing-healer.ts; stopped first in syncCleanup
   let catalogHealer: { stop(): void } | undefined;
 
+  let stopForegroundAdvisory: ((sync?: boolean) => void) | undefined;
   let cleaned = false;
   let cleanupSucceeded = true;
   const syncCleanup = () => {
     if (cleaned) return cleanupSucceeded;
     cleaned = true;
+    stopForegroundAdvisory?.(true);
     try { catalogHealer?.stop(); } catch { /* best-effort */ }
     try { routingHealer?.stop(); } catch { /* best-effort */ }
     try { guardian.stop(); } catch { /* best-effort */ }
@@ -702,7 +705,7 @@ async function handleStart(options: { block?: boolean } = {}) {
       try { syncCleanup(); } catch { /* best-effort */ }
       process.exit(130);
     }
-    shuttingDown = true;
+    shuttingDown = true; stopForegroundAdvisory?.();
     shutdownStartedAt = now;
     noteExplicitShutdownRequested(); // an automatic package restart must not hand off after this
     console.log("\n🛑 Shutting down opencodex proxy...");
@@ -797,6 +800,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     console.error(`⚠️  ${grokSyncFailureMessage(err)}`);
   }
   console.log("Client startup work complete.");
+  stopForegroundAdvisory = (await import("../service/foreground-advisory-process")).maybeStartForegroundAdvisory({ cleaned, shuttingDown, siblingStart, ownerLive: Boolean(owner.live), supervisedServiceChild, restartParentPid: restartParent.restartParentPid, stderrIsTTY: process.stderr?.isTTY }, line => console.warn(line));
   if (options.block ?? true) {
     setInterval(() => {}, 60_000);
     await new Promise<void>(() => {});

@@ -61,6 +61,8 @@ export interface ServiceDiagnostic {
   conflict: boolean;
   backend: ServiceBackend | "launchd" | "systemd" | null;
   summary: string;
+  /** Set only by a backend that positively verified a stopped registration. */
+  confirmedStopped?: boolean;
 }
 
 /** Windows tray may restart a healthy-but-stopped native service; stale/conflicting installs remain blocked. */
@@ -236,6 +238,7 @@ export function deriveLaunchdServiceDiagnostic(inputs: LaunchdServiceDiagnosticI
     conflict: false,
     backend: "launchd",
     summary,
+    ...(installed && load.state === "not-loaded" ? { confirmedStopped: true } : {}),
   };
 }
 
@@ -285,6 +288,36 @@ export function diagnoseService(): ServiceDiagnostic {
     return deriveSystemdServiceDiagnostic({ installed, enabled, running, stale, diagnostics });
   }
   return { supported: false, installed: false, enabled: false, running: false, viable: false, startable: false, stale: false, conflict: false, backend: null, summary: `unsupported on ${process.platform}` };
+}
+
+/**
+ * Only verified stops may suggest repair. Inconclusive backend diagnostics can include
+ * recovery instructions themselves; never echo that summary in the unknown branch.
+ */
+export function foregroundStartServiceAdvisoryLines(service: ServiceDiagnostic): readonly string[] {
+  if (!service.supported || !service.installed || service.running || service.conflict) return [];
+  if (!service.confirmedStopped) {
+    return [
+      "⚠️  Could not confirm that the managed background service is serving.",
+      "   This foreground proxy does not verify supervision; check 'ocx status' for service details.",
+    ];
+  }
+  return [
+    `⚠️  The managed background service is not loaded (${service.summary}).`,
+    "   This foreground proxy ends with this terminal and nothing restarts it. After stopping it, consider 'ocx service repair' to restore the supervised service.",
+  ];
+}
+
+/** Best effort, not asynchronous: a diagnostic or warning failure must not affect the foreground proxy. */
+export function warnForegroundStartService(
+  probe: () => ServiceDiagnostic,
+  warn: (line: string) => void,
+): void {
+  try {
+    for (const line of foregroundStartServiceAdvisoryLines(probe())) warn(line);
+  } catch {
+    // Diagnostics are advisory only.
+  }
 }
 
 export interface SystemdServiceDiagnosticInputs {

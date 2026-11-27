@@ -271,6 +271,7 @@ describe("routing cleanup before listener release", () => {
       );
       const bindings = {
         server, config: { shutdownTimeoutMs: 0 }, drainAndShutdown,
+        stopForegroundAdvisory: undefined,
         syncCleanup: () => {
           if (!cleaned) { cleaned = true; events.push("native-restore", "grok-strip"); }
           return restoreSucceeded;

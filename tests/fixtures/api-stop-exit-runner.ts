@@ -59,6 +59,7 @@ const from = source.indexOf("  const syncCleanup = () => {");
 const to = source.indexOf("\n  let shuttingDown", from);
 if (from < 0 || to < 0) throw new Error("CLI exit cleanup missing");
 const bindings = {
+  stopForegroundAdvisory: undefined,
   catalogHealer: null, routingHealer: null, guardian: { stop() {} }, historyGuardian: null, healthSentinel: null,
   siblingStart: false, isRecyclingForExit, decideStartExitTeardown, preserveConnectedClientRoutingOnExit, stopRestoreWriteGuard,
   revertSystemEnv() { calls.env++; }, removePid() { calls.pid++; }, removeRuntimePort() { calls.runtime++; },
