@@ -66,6 +66,15 @@ describe("renderYaml", () => {
     expect(renderYaml({ a: {}, b: [] })).toBe("a: {}\nb: []\n");
   });
 
+  test.each([".5", ".0", ".5e2", ".5e-2"])("preserves numeric-looking string %s in keys and values", value => {
+    const doc = { [value]: value, nested: { value }, items: [value, { [value]: value }] };
+    expect(Bun.YAML.parse(serializeDocument(doc, "yaml"))).toEqual(doc);
+  });
+
+  test("keeps leading-dot paths readable and actual fractions numeric", () => {
+    expect(renderYaml({ path: ".config", fraction: 0.5 })).toBe("path: .config\nfraction: 0.5\n");
+  });
+
   test("renders the values YAML actually allows", () => {
     /*
      * These renderers used to see only our own builder output, so anything
