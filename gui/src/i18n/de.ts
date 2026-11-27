@@ -4527,6 +4527,7 @@ export const de: Record<TKey, string> = {
   "remoteLink.child.ownerAction.mise-managed": "mise verwaltet OpenCodex auf diesem Child; über mise aktualisieren",
   "remoteLink.child.ownerAction.source-checkout": "Dieser Child läuft aus einem Quellcode-Checkout; von Hand aktualisieren",
   "remoteLink.child.ownerAction.installer-unknown": "Die Installationsart dieses Child ist unbekannt; dort aktualisieren",
+  "remoteLink.child.ownerAction.windows-apply": "Remote-Updates werden für dieses Windows-Gerät nicht unterstützt. Aktualisieren Sie OpenCodex direkt auf dem Windows-Computer.",
   "remoteLink.child.check": "Prüfen",
   "remoteLink.child.checkAll": "Alle prüfen",
   "remoteLink.child.syncNow": "Jetzt synchronisieren",

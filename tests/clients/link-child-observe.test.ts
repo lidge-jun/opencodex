@@ -107,13 +107,23 @@ describe("observeChild", () => {
     expect(ephemeralVerdict).toMatchObject({ state: "succeeded", observation: { installKind: "ocx-child", updateInFlight: null, runtimeOwner: null, targetVersion: null } });
   });
 
-  test("Windows plan without an entry marker is classified with platform windows", async () => {
+  test("Windows plan without an entry marker is classified with platform windows and recorded as a local update (#9172)", async () => {
     const spy = spyOn(gated, "classifyUpdatePlanProbe");
     try {
       const outcome = await observeChild(record({ remotePlatform: undefined }), deps(ran(plan(), "ocx-fanout:selected:2.97.0\n"), { platformOf: async () => "windows" }).value);
       expect(spy.mock.calls[0]?.[1]).toEqual({ homeVersion: "2.100.0", desktopUpdateRequest: false, platform: "windows" });
-      expect(outcome).toMatchObject({ state: "succeeded", probe: { platform: "windows" }, observation: { updateRoute: "orchestrated" } });
+      // The probe keeps the plan's route for the runner; the observation the dashboard reads says the Home cannot apply it.
+      expect(outcome).toMatchObject({ state: "succeeded", probe: { platform: "windows", classification: { updateRoute: "orchestrated" } },
+        observation: { installKind: "npm", updateRoute: "owner-action", updateReason: "windows-apply" } });
     } finally { spy.mockRestore(); }
+  });
+
+  test("a Windows Desktop request and a POSIX npm plan keep their routes (#9172)", async () => {
+    const desktop = await observeChild(record({ remotePlatform: "windows" }), deps(ran(plan({ installer: "desktop-app", canApply: false, reason: "desktop-app-owned" })), {
+      platformOf: async () => "windows", peer: () => peer("2.97.0", ["desktop-update-request/1"]) }).value);
+    expect(desktop.observation).toMatchObject({ installKind: "desktop-app", updateRoute: "desktop-request", updateReason: "desktop-app-owned" });
+    const posix = await observeChild(record(), deps(ran(plan())).value);
+    expect(posix.observation).toMatchObject({ installKind: "npm", updateRoute: "orchestrated", updateReason: null });
   });
 
   test("a Windows argv over the budget is failed windows-command-too-long with no SSH", async () => {

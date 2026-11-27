@@ -40,7 +40,7 @@ const ACTIVE_KEY: Record<ChildOp, TKey> = {
   update: "remoteLink.job.active.update",
 };
 
-/** The eight owner-action reasons 020 emits; any other token prints as code instead of a guessed sentence. */
+/** The owner-action reasons the Home records; any other token prints as code instead of a guessed sentence. */
 const OWNER_ACTION_KEYS: Record<string, TKey> = {
   "legacy-ocx": "remoteLink.child.ownerAction.legacy-ocx",
   "desktop-app-owned": "remoteLink.child.ownerAction.desktop-app-owned",
@@ -50,6 +50,8 @@ const OWNER_ACTION_KEYS: Record<string, TKey> = {
   "mise-managed": "remoteLink.child.ownerAction.mise-managed",
   "source-checkout": "remoteLink.child.ownerAction.source-checkout",
   "installer-unknown": "remoteLink.child.ownerAction.installer-unknown",
+  // #9172: the Home never applies an orchestrated update on Windows; the Child updates locally.
+  "windows-apply": "remoteLink.child.ownerAction.windows-apply",
 };
 
 const JOB_STATE_KEYS: Record<string, TKey> = {

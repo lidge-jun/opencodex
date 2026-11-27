@@ -4549,6 +4549,7 @@ export const ja: Record<TKey, string> = {
   "remoteLink.child.ownerAction.mise-managed": "この Child の OpenCodex は mise が管理しています。mise で更新してください",
   "remoteLink.child.ownerAction.source-checkout": "この Child はソースチェックアウトから実行されています。手動で更新してください",
   "remoteLink.child.ownerAction.installer-unknown": "この Child のインストール方法は不明です。そこで更新してください",
+  "remoteLink.child.ownerAction.windows-apply": "この Windows デバイスではリモート更新に対応していません。Windows コンピューター上で OpenCodex を直接更新してください。",
   "remoteLink.child.check": "確認",
   "remoteLink.child.checkAll": "すべて確認",
   "remoteLink.child.syncNow": "今すぐ同期",

@@ -4522,6 +4522,7 @@ export const es = {
   "remoteLink.child.ownerAction.mise-managed": "mise gestiona OpenCodex en este Child. Actualízalo con mise.",
   "remoteLink.child.ownerAction.source-checkout": "Este Child se ejecuta desde una copia del código fuente. Actualízalo manualmente.",
   "remoteLink.child.ownerAction.installer-unknown": "Se desconoce el método de instalación de este Child. Actualízalo desde el propio equipo.",
+  "remoteLink.child.ownerAction.windows-apply": "Las actualizaciones remotas no son compatibles con este dispositivo Windows. Actualiza OpenCodex directamente en el equipo Windows.",
   "remoteLink.child.check": "Comprobar",
   "remoteLink.child.checkAll": "Comprobar todos",
   "remoteLink.child.syncNow": "Sincronizar ahora",

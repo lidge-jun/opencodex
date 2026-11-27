@@ -91,10 +91,14 @@ export async function observeChild(record: LinkRecord, deps: ObserveDeps): Promi
   switch (verdict.kind) {
     case "plan": {
       const { classification } = verdict;
+      // The Home never applies an orchestrated update on Windows (runUpdateItem refuses windows-apply, D20), so the
+      // dashboard must not offer one: record a local update instead. The probe keeps the plan's own route for the runner.
+      const windowsLocal = platform === "windows" && classification.updateRoute === "orchestrated";
       return { state: "succeeded", reason: null, probe: { classification, childNowMs: verdict.childNowMs, startedAt, platform },
         observation: observation({ source: "plan", installedVersion: strictVersion(classification.installedVersion),
-          installKind: classification.installKind, runtimeOwner: classification.runtimeOwner, updateRoute: classification.updateRoute,
-          updateReason: classification.updateReason, targetVersion: strictVersion(classification.targetVersion),
+          installKind: classification.installKind, runtimeOwner: classification.runtimeOwner,
+          updateRoute: windowsLocal ? "owner-action" : classification.updateRoute,
+          updateReason: windowsLocal ? "windows-apply" : classification.updateReason, targetVersion: strictVersion(classification.targetVersion),
           updateInFlight: classification.updateInFlight }, deps.now()) };
     }
     case "ephemeral": return ephemeral(deps.now());
