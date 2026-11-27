@@ -13,7 +13,9 @@
   note to every summary in the parser, which also changes routes that do not preserve the prefix
   and gains nothing there.
 - Choice: a remote `compaction_trigger` summary gets the historical framing of the ordinary request
-  it extends, on every route. The parser still excludes the note from every summary and sets
+  it extends wherever the proxy projects history (the parser's adapter context and non-OpenAI-operated
+  outbound bodies); native OpenAI passthrough input is unchanged by checkpoint framing. The parser
+  still excludes the note from every summary and sets
   `_summaryCheckpointNote` after a decoded checkpoint; only the prefix-preserving Anthropic route
   appends `CHECKPOINT_CONTINUATION_NOTE` at the ordinary request's position. Client-side summarizer
   turns ending in `COMPACT_PROMPT` keep the ADR-7003 exclusion, and plaintext framing still adds no
