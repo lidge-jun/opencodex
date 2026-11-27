@@ -66,7 +66,7 @@ export const AGENT_ROUTING_CAPABILITIES: readonly Capability[] = [
       { name: "--consultation-id", value: "string", summary: "With consult: poll an in-progress consultation." },
       { name: "--wait-ms", value: "number", summary: "With consult: bound each long-poll round trip (0-240000 ms)." },
       { name: "--context-mode", value: "string", summary: "With set: context (default), full (expanded bounded caps and explicit-ID client session transcripts), or question-only." },
-      { name: "--auto-mount-mcp", value: "string", summary: "With set: on (default) or off to auto-mount opencodex-advisor MCP for compatible active routes." },
+      { name: "--auto-mount-mcp", value: "string", summary: "With set: on or off (default) to auto-mount opencodex-advisor MCP for compatible active routes." },
       { name: "--mcp-clients", value: "string", summary: "With set: comma-separated client ids, auto (follow active routes), or none." },
     ],
     mutates: true,

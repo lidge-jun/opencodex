@@ -242,7 +242,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--consultation-id` | string | With consult: poll an in-progress consultation. |
 | `--wait-ms` | number | With consult: bound each long-poll round trip (0-240000 ms). |
 | `--context-mode` | string | With set: context (default), full (expanded bounded caps and explicit-ID client session transcripts), or question-only. |
-| `--auto-mount-mcp` | string | With set: on (default) or off to auto-mount opencodex-advisor MCP for compatible active routes. |
+| `--auto-mount-mcp` | string | With set: on or off (default) to auto-mount opencodex-advisor MCP for compatible active routes. |
 | `--mcp-clients` | string | With set: comma-separated client ids, auto (follow active routes), or none. |
 
 - `status` (the default) reads the resolved settings; `consult` queries the advisor via `POST /api/advisor/consult` (supports `waitMs` + `202` `consultationId` polling); `mcp` serves `consult_advisor` over stdio MCP for external harnesses; `on`/`off` toggle the sidecar; `consent` records or revokes context-sharing consent; `set` updates model, effort, policy, context mode, task limit, MCP linkage, or timeout.
