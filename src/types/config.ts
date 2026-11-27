@@ -1730,9 +1730,9 @@ export interface OcxAdvisorConfig {
    * send task context. `enabled: true` does not grant this, and upgrades do not write it.
    */
   contextSharingConsent?: "v1";
-  /** Auto-mount `opencodex-advisor` MCP + hooks/skills for compatible active client routes. Default: true. */
+  /** Auto-mount `opencodex-advisor` MCP + hooks/skills for compatible active client routes. Default: false. */
   autoMountMcp?: boolean;
-  /** Optional explicit client MCP mount selection; absent follows active routed clients. */
+  /** Explicit client selection works independently of auto-mount; absent follows active routes only when auto-mount is enabled. */
   mcpClients?: string[];
 }
 

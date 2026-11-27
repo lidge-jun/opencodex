@@ -425,7 +425,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Inspect, invoke and configure the advisor sidecar (expert consultation for workers and MCP hosts).",
     details: [
       "ocx advisor and ocx advisor status read the resolved settings; use --json for machine-readable output.",
-      "ocx advisor consult calls POST /api/advisor/consult with --question and optional --context, --worker-model, --task-id, --consultation-id, --wait-ms; ocx advisor mcp exposes consult_advisor over stdio MCP.",
+      "Start with ocx advisor consult --question <text> [--context <text>] [--worker-model <model>] [--task-id <id>] [--wait-ms <ms>]; poll with ocx advisor consult --consultation-id <id> [--wait-ms <ms>]. ocx advisor mcp exposes consult_advisor over stdio MCP.",
       "ocx advisor on requires current context-sharing consent. Pass --ack-context-sharing to record consent v1 and enable. ocx advisor off disables the sidecar without granting consent.",
       "ocx advisor consent records consent v1 after printing the disclosure. ocx advisor consent --revoke removes it: consultations not yet dispatched are blocked, while a dispatched consultation cannot be cancelled and task content already sent cannot be retracted.",
       "ocx advisor set updates --model, --effort, --policy, --context-mode (<context|full|question-only>), --max-consultations, --timeout-ms, --auto-mount-mcp (<on|off>) and --mcp-clients (<comma-list|auto|none>); the model may be any routable model string (bare native, provider/model, or account-qualified). set does not grant consent.",

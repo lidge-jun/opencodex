@@ -238,12 +238,12 @@ State-changing: yes. JSON mode: `payload`.
 | `--question` | string | With consult: focused question for the advisor model. |
 | `--context` | string | With consult: optional background summary or failing evidence. |
 | `--worker-model` | string | With consult: caller model label for activity attribution. |
-| `--task-id` | string | With consult: stable task id used by adaptive budget (adaptive policy requires --task-id). |
+| `--task-id` | string | With consult: stable task id required when starting a new consultation under adaptive policy; not needed for polling. |
 | `--consultation-id` | string | With consult: poll an in-progress consultation. |
 | `--wait-ms` | number | With consult: bound each long-poll round trip (0-240000 ms). |
 | `--context-mode` | string | With set: context (default), full (expanded bounded caps and explicit-ID client session transcripts), or question-only. |
 | `--auto-mount-mcp` | string | With set: on or off (default) to auto-mount opencodex-advisor MCP for compatible active routes. |
-| `--mcp-clients` | string | With set: comma-separated client ids, auto (follow active routes), or none. |
+| `--mcp-clients` | string | With set: comma-separated client ids, auto (clear the explicit list; following active routes also requires --auto-mount-mcp on), or none. |
 
 - `status` (the default) reads the resolved settings; `consult` queries the advisor via `POST /api/advisor/consult` (supports `waitMs` + `202` `consultationId` polling); `mcp` serves `consult_advisor` over stdio MCP for external harnesses; `on`/`off` toggle the sidecar; `consent` records or revokes context-sharing consent; `set` updates model, effort, policy, context mode, task limit, MCP linkage, or timeout.
 - `on` does not grant consent. Without current consent it refuses and prints the disclosure. `on --ack-context-sharing` records consent v1 and enables. `consent --revoke` removes consent: consultations not yet dispatched are blocked, but it cannot cancel a dispatched consultation or retract task context already sent.

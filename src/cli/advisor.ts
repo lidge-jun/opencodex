@@ -15,7 +15,8 @@ import {
 const USAGE = `Usage:
   ocx advisor status [--json]
   ocx advisor activity [--json]
-  ocx advisor consult [--question <text>] [--context <text>] [--worker-model <model>] [--task-id <id>] [--consultation-id <id>] [--wait-ms <ms>] [--json]
+  ocx advisor consult --question <text> [--context <text>] [--worker-model <model>] [--task-id <id>] [--wait-ms <ms>] [--json]
+  ocx advisor consult --consultation-id <id> [--wait-ms <ms>] [--json]
   ocx advisor mcp
   ocx advisor on [--ack-context-sharing] [--json]
   ocx advisor off [--json]
