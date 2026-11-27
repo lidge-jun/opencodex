@@ -765,7 +765,7 @@ export function parseRequest(
     _rawBody: body,
     ...(replayedInputPrefixLength > 0 ? {
       _replayPrefixLen: replayedInputPrefixLength,
-      _replayedContextMessageCount: replayedContextMessageCount ?? messages.length,
+      _currentInputMessageStart: replayedContextMessageCount ?? messages.length,
     } : {}),
     ...(continuationConversationMessageIndex !== undefined
       ? { _continuationConversationMessageIndex: continuationConversationMessageIndex }

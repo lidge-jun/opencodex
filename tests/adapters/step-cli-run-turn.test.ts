@@ -31,6 +31,7 @@ import {
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 import { parseRequest } from "../../src/responses/parser";
 import { expandPreviousResponseInput, rememberResponseState } from "../../src/responses/state";
+import { stripReplayedSearchPairs } from "../../src/web-search/sidecar-search-replay";
 
 /**
  * A fake StepCode process.
@@ -229,13 +230,48 @@ test("starting a conversation without user text refuses before preparing a StepC
   } finally { await pool.closeAll(); }
 });
 
-test("fresh text after restored history can start a session even when developer guidance follows", () => {
-  const turn = parsed([...USER_ASK,
-    { role: "user", content: [{ type: "text", text: "  " }, { type: "text", text: "Next question" }] },
-    { role: "developer", content: "Answer briefly" },
-  ]);
-  // Three wire items produced one historical message.
-  expect(pendingUserText({ ...turn, _replayPrefixLen: 3, _replayedContextMessageCount: 1 })).toBe("Next question");
+function hostedSearchHistory() {
+  return { type: "web_search_call", id: "ws_history", status: "completed", action: { type: "search", query: "old search" } };
+}
+
+test("fresh user input survives stripping restored search history and copying the remaining messages", () => {
+  const model = "step-5-preview";
+  const prior = `resp_${crypto.randomUUID()}`;
+  rememberResponseState({ model, input: [{ role: "user", content: "Old question" }] },
+    { id: prior, status: "completed", output: [hostedSearchHistory()] });
+  const body = expandPreviousResponseInput({
+    model, previous_response_id: prior, tools: [{ type: "web_search" }],
+    input: [{ role: "user", content: "Next question" }, { role: "developer", content: "Answer briefly" }],
+  });
+  const turn = parseRequest(body);
+  expect(turn._replayedWebSearchCells).toHaveLength(1);
+  expect(pendingUserText(turn)).toBe("Next question");
+  stripReplayedSearchPairs(turn);
+  expect(turn.context.messages.map(m => m.role)).toEqual(["user", "user", "developer"]);
+  const copied = { ...turn, context: { ...turn.context, messages: turn.context.messages.map(m => ({ ...m })) } };
+  expect(pendingUserText(copied)).toBe("Next question");
+  // A later sidecar iteration appends an actual, current tool result to the parsed context.
+  copied.context.messages.push({ role: "toolResult", toolCallId: "sidecar-1", toolName: "web_search", content: "found", isError: false, timestamp: 1 });
+  expect(latestToolResult(copied)?.toolCallId).toBe("sidecar-1");
+});
+
+test.each([false, true])("stateless hosted search history never shadows fresh input (stripped=%s)", strip => {
+  const tools = [{ type: "function", name: "shell", parameters: { type: "object" } }, { type: "web_search" }];
+  const withResult = parseRequest({ model: "step-5-preview", tools, input: [
+    { role: "user", content: "run it" },
+    { type: "function_call", name: "shell", call_id: "call-1", arguments: "{}" },
+    hostedSearchHistory(),
+    { type: "function_call_output", call_id: "call-1", output: "done" },
+  ] });
+  const searchOnly = parseRequest({ model: "step-5-preview", tools, input: [
+    { role: "user", content: "Old question" }, hostedSearchHistory(),
+  ] });
+  expect(withResult._replayedWebSearchCells).toHaveLength(1);
+  expect(searchOnly._replayedWebSearchCells).toHaveLength(1);
+  if (strip) { stripReplayedSearchPairs(withResult); stripReplayedSearchPairs(searchOnly); }
+  expect(latestToolResult(withResult)?.toolCallId).toBe("call-1");
+  // The answered question sits before the search the model already ran; it is not pending input.
+  expect(pendingUserText(searchOnly)).toBeUndefined();
 });
 
 describe("StepCode reverse requests are always answered", () => {
@@ -306,7 +342,10 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     expect(session.delivered).toHaveLength(0);
   });
 
-  test.each(["function_call_output", "custom_tool_call_output"])("blank and replay-only follow-ups preserve a held call for fresh %s", async outputType => {
+  test.each([
+    ["function_call_output", false], ["function_call_output", true],
+    ["custom_tool_call_output", false], ["custom_tool_call_output", true],
+  ] as const)("fresh %s resumes the held query with stripped hosted search=%s", async (outputType, strip) => {
     const session = new FakeSession();
     const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
     session.stream = [
@@ -327,7 +366,7 @@ describe("StepCode runTurn, two turns through one conversation", () => {
       ...blank.map(content => parsed([...USER_ASK, { role: "user", content }])),
       { ...parsed(USER_ASK), ...continuation },
       { ...parsed([...USER_ASK, heldResult]), ...continuation },
-      { ...parsed([...USER_ASK, { ...heldResult, toolCallId: "other" }]), ...continuation, _replayedContextMessageCount: 1 },
+      { ...parsed([...USER_ASK, { ...heldResult, toolCallId: "other" }]), ...continuation, _currentInputMessageStart: 1 },
     ];
     for (const turn of unusable) {
       const events: AdapterEvent[] = [];
@@ -344,11 +383,13 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     const prior = `resp_${crypto.randomUUID()}`;
     rememberResponseState(
       { model, input: [{ role: "user", content: "run it" }] },
-      { id: prior, status: "completed", output: [{ type: "function_call", name: "shell", call_id: "call-9", arguments: "{}" }] },
+      { id: prior, status: "completed", output: [
+        { type: "function_call", name: "shell", call_id: "call-9", arguments: "{}" }, hostedSearchHistory(),
+      ] },
     );
     const continuationBody = {
       model, previous_response_id: prior,
-      tools: [{ type: "function", name: "shell", description: "run", parameters: { type: "object" } }],
+      tools: [{ type: "function", name: "shell", description: "run", parameters: { type: "object" } }, { type: "web_search" }],
     };
     const restored = parseRequest(expandPreviousResponseInput({ ...continuationBody, input: [] }));
     expect(restored._replayPrefixLen).toBeGreaterThan(0);
@@ -360,8 +401,12 @@ describe("StepCode runTurn, two turns through one conversation", () => {
       ...continuationBody, input: [{ type: outputType, call_id: "call-9", output: "done" }],
     }));
     expect(fresh._replayPrefixLen).toBeGreaterThan(0);
-    expect(fresh.context.messages.slice(fresh._replayedContextMessageCount).map(m => m.role)).toEqual(["toolResult"]);
+    expect(fresh._replayedWebSearchCells).toHaveLength(1);
+    expect(fresh.context.messages.filter(m => m.role === "toolResult").map(m => m.toolCallId)).toEqual([
+      "call-9", fresh._replayedWebSearchCells![0]!.callId,
+    ]);
     expect(fresh._continuationConversationMessageIndex).toBe(fresh.context.messages.length);
+    if (strip) stripReplayedSearchPairs(fresh);
     fresh._reasoningReplayScope = parsed(USER_ASK)._reasoningReplayScope;
     await adapter.runTurn!(fresh, THREAD_META, e => result.push(e));
     expect(result.find(e => e.type === "done")).toMatchObject({ stopReason: "stop" });
