@@ -1449,6 +1449,7 @@ export const vi: Record<TKey, string> = {
   "logs.detail.estimate.expected_price_overlay": "Một giá niêm yết kỳ vọng (expected list price) đã xác minh được sử dụng.",
   "logs.detail.estimate.provider_cost_overlay": "Sử dụng giá tuỳ chỉnh do provider cấu hình.",
   "logs.detail.estimate.priority_lower_bound": "Giá Ưu tiên (Priority price) đã xác nhận không khả dụng; ước tính hiển thị là giới hạn dưới đã biết.",
+  "logs.detail.estimate.service_tier_transmitted": "Tính theo giá Ultrafast mà proxy đã gửi; phản hồi từ upstream không xác nhận cấp này.",
   "logs.col.error": "Lỗi",
   "logs.col.upstreamReason": "Lý do upstream",
   "logs.col.failureDetail": "Chi tiết lỗi",

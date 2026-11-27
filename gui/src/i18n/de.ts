@@ -1411,6 +1411,7 @@ export const de: Record<TKey, string> = {
   "logs.detail.estimate.expected_price_overlay": "Ein verifizierter Expected-Listenpreis wurde verwendet.",
   "logs.detail.estimate.provider_cost_overlay": "Ein vom Anbieter konfiguriertes Preis-Overlay wurde verwendet.",
   "logs.detail.estimate.priority_lower_bound": "Der bestätigte Priority-Preis ist nicht verfügbar; die angezeigte Schätzung ist eine bekannte Untergrenze.",
+  "logs.detail.estimate.service_tier_transmitted": "Zum Ultrafast-Preis berechnet, den der Proxy gesendet hat; die Upstream-Antwort hat die Stufe nicht bestätigt.",
   "logs.col.error": "Fehler",
   "logs.col.upstreamReason": "Upstream-Grund",
   "logs.col.failureDetail": "Fehlerdetail",

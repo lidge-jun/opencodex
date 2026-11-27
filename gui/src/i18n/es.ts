@@ -1456,6 +1456,7 @@ export const es = {
   "logs.detail.estimate.expected_price_overlay": "Se utilizó un precio de lista esperado verificado.",
   "logs.detail.estimate.provider_cost_overlay": "Se utilizó una superposición de precios configurada por el proveedor.",
   "logs.detail.estimate.priority_lower_bound": "El precio Prioridad confirmado no está disponible; la estimación mostrada es un límite inferior conocido.",
+  "logs.detail.estimate.service_tier_transmitted": "Calculado con la tarifa Ultrafast que envió el proxy; la respuesta del proveedor no confirmó el nivel.",
   "logs.col.error": "Error",
   "logs.col.upstreamReason": "Razón ascendente",
   "logs.col.failureDetail": "Detalle del fallo",

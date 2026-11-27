@@ -10,7 +10,8 @@ export type CostEstimateReason =
   | "cache_detail_missing"
   | "expected_price_overlay"
   | "provider_cost_overlay"
-  | "priority_lower_bound";
+  | "priority_lower_bound"
+  | "service_tier_transmitted";
 
 /**
  * What a billed estimate can say about itself.
@@ -40,7 +41,7 @@ export function effectivePriorityLowerBound(estimate: BillingBasis & { priorityL
  * credits-only total keeps none of them.
  */
 const TOKEN_PRICE_REASONS: ReadonlySet<CostEstimateReason> = new Set([
-  "cache_detail_missing", "expected_price_overlay", "provider_cost_overlay", "priority_lower_bound",
+  "cache_detail_missing", "expected_price_overlay", "provider_cost_overlay", "priority_lower_bound", "service_tier_transmitted",
 ]);
 
 export function estimateReasonsForBilling(

@@ -345,6 +345,7 @@ const ESTIMATE_REASON_KEYS = {
   expected_price_overlay: "logs.detail.estimate.expected_price_overlay",
   provider_cost_overlay: "logs.detail.estimate.provider_cost_overlay",
   priority_lower_bound: "logs.detail.estimate.priority_lower_bound",
+  service_tier_transmitted: "logs.detail.estimate.service_tier_transmitted",
 } as const satisfies Record<CostEstimateReason, string>;
 
 /**

@@ -1469,6 +1469,7 @@ export const en = {
   "logs.detail.estimate.expected_price_overlay": "A verified expected list price was used.",
   "logs.detail.estimate.provider_cost_overlay": "A provider-configured price overlay was used.",
   "logs.detail.estimate.priority_lower_bound": "The confirmed Priority price is unavailable; the displayed estimate is a known lower bound.",
+  "logs.detail.estimate.service_tier_transmitted": "Priced at the Ultrafast rate the proxy sent; the upstream response did not confirm the tier.",
   "logs.col.error": "Error",
   "logs.col.upstreamReason": "Upstream reason",
   "logs.col.failureDetail": "Failure detail",

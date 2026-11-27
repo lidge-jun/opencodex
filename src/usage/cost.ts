@@ -35,6 +35,7 @@ import {
   findContextTier,
   isLongContext,
   pricingFamilyProvider,
+  ultrafastPriceMultiplier,
   type Cost4,
   type ExpectedPriceOverlay,
   type ExpectedPriceStatus,
@@ -61,6 +62,8 @@ export interface ServiceTierContext {
   requestedServiceTier?: string;
   configuredServiceTier?: string;
   tierOutcome?: AttemptTierOutcome;
+  /** Request time in epoch ms; selects a dated tier schedule. Absent prices at the current time. */
+  pricedAt?: number;
 }
 
 export interface CostTokens {
@@ -108,6 +111,8 @@ export interface AttemptCostEstimate {
   customThresholdApplied?: true;
   /** The numeric estimate is a known floor because the exact Priority price is unavailable. */
   priorityLowerBound?: boolean;
+  /** Set when the Ultrafast schedule priced this attempt (#9138). */
+  serviceTierPricing?: ServiceTierPricing;
   /**
    * How this attempt was billed. Present only when provider credits priced it: `cost` is then
    * `providerCredits x creditPriceUsd` and its four token fields carry no allocation.
@@ -129,6 +134,8 @@ export interface CostEstimate {
   customThresholdApplied?: true;
   /** The aggregate satisfies the lower-bound rule for its billing basis. */
   priorityLowerBound?: boolean;
+  /** Ultrafast pricing applied to the request or, for a combo, to at least one attempt. */
+  serviceTierPricing?: ServiceTierPricing;
   /**
    * Billing basis for the aggregate. `provider-credits` means every priced attempt shared one
    * credit price and the credits are summed; `mixed` means the attempts were not all billed the
@@ -472,14 +479,16 @@ export type ServiceTierInput = string | ServiceTierContext;
  * distinguish a response-confirmed Fast request from a merely requested one,
  * and long-context exclusivity depends on that distinction.
  */
-export function serviceTierContext(entry: ServiceTierContext): ServiceTierContext {
+export function serviceTierContext(entry: ServiceTierContext & { timestamp?: number }): ServiceTierContext {
+  const pricedAt = typeof entry.timestamp === "number" && Number.isFinite(entry.timestamp) ? { pricedAt: entry.timestamp } : {};
   if (entry.tierOutcome) {
-    return { ...serviceTierContextFromOutcome(entry.tierOutcome), tierOutcome: entry.tierOutcome };
+    return { ...serviceTierContextFromOutcome(entry.tierOutcome), tierOutcome: entry.tierOutcome, ...pricedAt };
   }
   return {
     responseServiceTier: entry.responseServiceTier,
     requestedServiceTier: entry.requestedServiceTier,
     configuredServiceTier: entry.configuredServiceTier,
+    ...pricedAt,
   };
 }
 
@@ -609,6 +618,66 @@ function applyPriorityMultiplier(
  * definite standard cost for a request that may well have been billed as priority, which is the
  * one thing a cost estimate must never do.
  */
+/**
+ * How Ultrafast pricing was established. `confirmed`: an authoritative response echoed Ultrafast.
+ * `transmitted`: the adapter serialized Ultrafast on the wire and no authoritative echo or
+ * explicit refusal contradicts it, so the price is an estimate.
+ */
+export interface ServiceTierPricing {
+  tier: "ultrafast";
+  multiplier: number;
+  basis: "confirmed" | "transmitted";
+}
+
+/**
+ * Ultrafast evidence, strongest first: an authoritative response tier decides; an explicit
+ * refusal rules Ultrafast out; otherwise the serialized wire value counts. A tier the caller only
+ * requested proves nothing about what was sent, so it never selects the Ultrafast price.
+ */
+function ultrafastBasis(tier: ServiceTierInput | undefined, outcome: AttemptTierOutcome | undefined): ServiceTierPricing["basis"] | undefined {
+  const evidence = outcome ?? (typeof tier === "object" ? tier.tierOutcome : undefined);
+  if (evidence) {
+    if (evidence.responseTierAuthoritative !== false && evidence.responseServiceTier !== undefined) {
+      return canonicalFastTierMarker(evidence.responseServiceTier) === "ultrafast" ? "confirmed" : undefined;
+    }
+    if (evidence.fastDowngradeReason === "response-declined") return undefined;
+    return evidence.wireKind === "service-tier"
+      && typeof evidence.wireValue === "string"
+      && canonicalFastTierMarker(evidence.wireValue) === "ultrafast"
+      ? "transmitted"
+      : undefined;
+  }
+  return typeof tier === "object" && canonicalFastTierMarker(tier.responseServiceTier) === "ultrafast" ? "confirmed" : undefined;
+}
+
+/**
+ * Apply the dated Ultrafast multiplier. A long-context band stacks only where the provider
+ * declares Fast stacking; otherwise the Standard long-context price is reported as a floor.
+ */
+function applyUltrafastMultiplier(
+  cost4: Cost4,
+  provider: string,
+  modelId: string,
+  tier: ServiceTierInput | undefined,
+  outcome: AttemptTierOutcome | undefined,
+  contextTier: ContextTierName | undefined,
+): { cost4: Cost4; pricing?: ServiceTierPricing; lowerBound?: true } {
+  const basis = ultrafastBasis(tier, outcome);
+  if (!basis) return { cost4 };
+  const pricedAt = typeof tier === "object" && tier.pricedAt !== undefined ? tier.pricedAt : Date.now();
+  const multiplier = ultrafastPriceMultiplier(provider, modelId, pricedAt);
+  if (multiplier === undefined) return { cost4 };
+  if (contextTier && findContextTier(provider, modelId)?.confirmedPriorityRelation !== "stack") return { cost4, lowerBound: true };
+  return {
+    cost4: {
+      input: cost4.input * multiplier,
+      output: cost4.output * multiplier,
+      cacheRead: cost4.cacheRead * multiplier,
+      cacheWrite: cost4.cacheWrite * multiplier,
+    },
+    pricing: { tier: "ultrafast", multiplier, basis },
+  };
+}
 function isOpenRouterPriorityLowerBound(
   provider: string,
   outcome: AttemptTierOutcome | undefined,
@@ -748,14 +817,19 @@ export function estimateAttemptCost(
   const [effectiveCost4, multiplier] = applyPriorityMultiplier(
     tieredCost4, price.provider, attempt.model, attemptServiceTier, contextTier, customThresholdApplied,
   );
-  const billed = resolveAttemptCost(attempt.provider, attempt.usage, creditPrices, tokens, effectiveCost4);
+  // The attempt's own outcome is its evidence; the request context supplies the timestamp.
+  const ultrafast = applyUltrafastMultiplier(
+    effectiveCost4, price.provider, attempt.model, serviceTier, attempt.tierOutcome, contextTier,
+  );
+  const billed = resolveAttemptCost(attempt.provider, attempt.usage, creditPrices, tokens, ultrafast.cost4);
   if (!billed) return null;
   // A credit charge is `providerCredits x creditPriceUsd`. The token rates were still resolved to
   // decide whether this row falls back to them, but they did not produce the amount, so the
   // `priorityLowerBound` they imply is a statement about a price nobody was charged. A lower bound
   // is only honest for the rate that actually priced the row.
   const priorityLowerBound = billed.billing === undefined
-    && (contextPriorityLowerBound || isOpenRouterPriorityLowerBound(price.provider, attempt.tierOutcome));
+    && (contextPriorityLowerBound || ultrafast.lowerBound === true || isOpenRouterPriorityLowerBound(price.provider, attempt.tierOutcome));
+  const serviceTierPricing = billed.billing === undefined ? ultrafast.pricing : undefined;
   return {
     ordinal: attempt.ordinal,
     provider: attempt.provider,
@@ -763,11 +837,13 @@ export function estimateAttemptCost(
     tokens,
     price,
     cost: billed.cost,
-    estimated: isEstimated(attempt.usage, attempt.usageStatus, billed.billing ? "verified" : price.status),
+    estimated: isEstimated(attempt.usage, attempt.usageStatus, billed.billing ? "verified" : price.status)
+      || serviceTierPricing?.basis === "transmitted",
     ...(multiplier !== 1 ? { priorityMultiplier: multiplier } : {}),
     ...(contextTier ? { contextTier } : {}),
     ...(customThresholdApplied ? { customThresholdApplied } : {}),
     ...(priorityLowerBound ? { priorityLowerBound: true } : {}),
+    ...(serviceTierPricing ? { serviceTierPricing } : {}),
     ...(billed.billing ? { billing: billed.billing } : {}),
   };
 }
@@ -825,6 +901,15 @@ function comboIsLowerBound(
     });
 }
 
+/** A combo is `transmitted` when any Ultrafast attempt is an estimate; multipliers can differ per attempt. */
+function comboServiceTierPricing(estimates: readonly AttemptCostEstimate[]): ServiceTierPricing {
+  const priced = estimates.flatMap(est => est.serviceTierPricing ?? []);
+  return {
+    tier: "ultrafast",
+    multiplier: Math.max(...priced.map(pricing => pricing.multiplier)),
+    basis: priced.some(pricing => pricing.basis === "transmitted") ? "transmitted" : "confirmed",
+  };
+}
 /**
  * Combo: price every attempt with its own rate and sum. Fail closed — if ANY
  * attempt is unpriced, return null rather than a partial sum.
@@ -875,6 +960,9 @@ export function estimateComboCost(
     ...(estimates.some(est => est.contextTier) ? { contextTier: "long" as const } : {}),
     ...(estimates.some(est => est.customThresholdApplied) ? { customThresholdApplied: true as const } : {}),
     ...(comboIsLowerBound(attempts, estimates, billing) ? { priorityLowerBound: true as const } : {}),
+    ...(estimates.some(est => est.serviceTierPricing)
+      ? { serviceTierPricing: comboServiceTierPricing(estimates) }
+      : {}),
   };
 }
 
@@ -902,23 +990,29 @@ export function estimateRequestCost(
   const [effectiveCost4, multiplier] = applyPriorityMultiplier(
     tieredCost4, price.provider, input.model, input.serviceTier, contextTier, customThresholdApplied,
   );
-  const billed = resolveAttemptCost(input.provider, input.usage, creditPrices, tokens, effectiveCost4);
+  const ultrafast = applyUltrafastMultiplier(
+    effectiveCost4, price.provider, input.model, input.serviceTier, undefined, contextTier,
+  );
+  const billed = resolveAttemptCost(input.provider, input.usage, creditPrices, tokens, ultrafast.cost4);
   if (!billed) return null;
   // See `estimateAttemptCost`: a credit charge is exact for its configured price, so it must not
   // inherit the token-rate floor that the fallback path resolved on the way in.
-  const priorityLowerBound = billed.billing === undefined && (contextPriorityLowerBound || isOpenRouterPriorityLowerBound(
+  const priorityLowerBound = billed.billing === undefined && (contextPriorityLowerBound || ultrafast.lowerBound === true || isOpenRouterPriorityLowerBound(
     price.provider,
     typeof input.serviceTier === "object" ? input.serviceTier.tierOutcome : undefined,
   ));
+  const serviceTierPricing = billed.billing === undefined ? ultrafast.pricing : undefined;
   return {
     tokens,
     price,
     cost: billed.cost,
-    estimated: isEstimated(input.usage, input.usageStatus, billed.billing ? "verified" : price.status),
+    estimated: isEstimated(input.usage, input.usageStatus, billed.billing ? "verified" : price.status)
+      || serviceTierPricing?.basis === "transmitted",
     ...(multiplier !== 1 ? { priorityMultiplier: multiplier } : {}),
     ...(contextTier ? { contextTier } : {}),
     ...(customThresholdApplied ? { customThresholdApplied } : {}),
     ...(priorityLowerBound ? { priorityLowerBound: true } : {}),
+    ...(serviceTierPricing ? { serviceTierPricing } : {}),
     ...(billed.billing ? { billing: billed.billing } : {}),
   };
 }
