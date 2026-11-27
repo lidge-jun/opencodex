@@ -24,3 +24,10 @@
   instructions and the note, plus negative controls; the coding-agent shared prompt builder is
   checked separately. No live model behavior, Cursor/Devin runTurn transport, or per-CLI runTurn
   acceptance is established by these construction tests.
+- Amendment (#7307): on the prefix-preserving Anthropic compaction route, a remote
+  `compaction_trigger` summary after a decoded checkpoint repeats the note at the ordinary request's
+  position, and every remote summary repeats its historical framing. A summary that differs from the
+  ordinary request before its appended tail rewrites the whole cached prompt. The appended summary
+  prompt ("Return only the handoff summary. Do not call tools or continue the task.") and the
+  compaction summary guard keep the turn a summary. Other routes and client-side summarizer turns
+  keep this exclusion.

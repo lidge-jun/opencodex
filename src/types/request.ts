@@ -93,6 +93,12 @@ export interface OcxParsedRequest {
    */
   _summaryWebSearch?: Record<string, unknown>;
   /**
+   * Compaction request after a decoded checkpoint. The parser withholds the continuation note from
+   * every summary; a prefix-preserving route adds it back where the ordinary request carries it,
+   * so the summary keeps that request's system prompt (#7307).
+   */
+  _summaryCheckpointNote?: boolean;
+  /**
    * Completed server-tool exchanges from the Claude client's history, keyed by the block that
    * followed them (`call:<tool_use id>` / `text:<text>`). Same audience as `_anthropicServerTools`.
    */

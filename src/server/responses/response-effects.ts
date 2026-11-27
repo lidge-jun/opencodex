@@ -11,7 +11,7 @@ import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { contextRelayActivated } from "../../codex/context-compat";
 import { recordContextSessionOwner } from "../../codex/context-owner";
 import { resolveContextPrincipal } from "../auth-cors";
-import { COMPACT_PROMPT } from "../../responses/compaction";
+import { CHECKPOINT_CONTINUATION_NOTE, COMPACT_PROMPT } from "../../responses/compaction";
 import type { RoutedNamespaceToolAliases } from "../../responses/namespace-tool-compat";
 import type { MuseToolNameAliases } from "../../responses/muse-tool-name-alias";
 import type { AdapterRequest } from "../../adapters/base";
@@ -89,6 +89,16 @@ export function createResponsesEffects(
         route.provider.baseUrl, admissionState.authCtx, new Headers(outboundHeaders), substituteMainCredential);
     }
   };
+  if (routedCompaction && preserveCompactionPrefix && parsed._summaryCheckpointNote) {
+    // The ordinary request after a checkpoint ends its system prompt with this note (parser.ts).
+    // Repeat it so Anthropic reads that request's cached prefix; the appended summary prompt below,
+    // not this note, decides that the turn summarizes and does not continue (#7307).
+    const systemPrompt = parsed.context.systemPrompt ?? [];
+    parsed.context.proxySystemPrompt = [...(parsed.context.proxySystemPrompt ?? []),
+      { blockIndex: systemPrompt.length, suffix: CHECKPOINT_CONTINUATION_NOTE }];
+    parsed.context.systemPrompt = [...systemPrompt, CHECKPOINT_CONTINUATION_NOTE];
+  }
+  delete parsed._summaryCheckpointNote;
   if (routedCompaction) {
     // The summary never searches. With a preserved prefix it still declares the synthetic tool an
     // ordinary turn declares; the sidecar step decides that from the same plan (#7307).
