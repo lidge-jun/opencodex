@@ -20,8 +20,10 @@
   note to a remote summary.
 - Why the note on that summary is acceptable: the appended summary prompt ("Return only the handoff
   summary. Do not call tools or continue the task.") asks for a handoff summary, and the note itself
-  is conditional. The compaction summary guard rejects tool calls, empty summaries and abnormal
-  endings; it does not check that the text is a summary.
+  is conditional. For a summary that is not truncated, the compaction summary guard rejects tool
+  calls, empty text and explicit non-terminal stop reasons. A truncated summary passes the guard;
+  the response bridges then withhold its compaction item and report the turn incomplete (#422).
+  Neither checks that the text is a summary.
 - Consequences: from the second compaction on, the Anthropic summary reads the ordinary request's
   cached prefix instead of rewriting it. A plaintext `SUMMARY_PREFIX` checkpoint followed by a
   remote trigger still differs by the note, which plaintext framing places in `instructions`.
