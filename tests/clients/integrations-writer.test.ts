@@ -1083,6 +1083,50 @@ describe("Kimi source preservation (#9152)", () => {
     if (!result.ok) expect(result.reason).toBe("unsafe");
     expect(readFileSync(configPath, "utf8")).toBe(inline);
   });
+
+  test("refuses refresh or disable when a user added a comment inside a managed table", () => {
+    const configPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const commented = readFileSync(configPath, "utf8").replace(
+      "[providers.opencodex]\n",
+      "[providers.opencodex]\n# keep my note\n",
+    );
+    writeFileSync(configPath, commented);
+    const refreshed = refreshIntegration(input({ clientId: "kimi", models: MODELS.slice(1) }));
+    expect(refreshed.ok).toBe(false);
+    if (!refreshed.ok) expect(refreshed.reason).toBe("unsafe");
+    expect(readFileSync(configPath, "utf8")).toBe(commented);
+    const disabled = disableIntegration(input({ clientId: "kimi" }));
+    expect(disabled.ok).toBe(false);
+    if (!disabled.ok) expect(disabled.reason).toBe("unsafe");
+    expect(readFileSync(configPath, "utf8")).toBe(commented);
+  });
+
+  test("preserves CRLF line endings, absent trailing newline, and surrounding blank lines", () => {
+    const crlf = original.replace(/\n/g, "\r\n");
+    const crlfPath = installKimi(crlf);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const appliedCrlf = readFileSync(crlfPath, "utf8");
+    expect(appliedCrlf.startsWith(crlf)).toBe(true);
+    expect(appliedCrlf.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(crlfPath, "utf8")).toBe(crlf);
+
+    const noNewline = 'default_model = "kimi-k3"';
+    const noNewlinePath = installKimi(noNewline);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(noNewlinePath, "utf8")).toBe(noNewline);
+
+    const sibling = "# >>> late-tool >>>\n[[hooks]]\nevent = \"Stop\"\n# <<< late-tool <<<\n";
+    const blankPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    writeFileSync(blankPath, `${readFileSync(blankPath, "utf8")}\n\n${sibling}`);
+    expect(refreshIntegration(input({ clientId: "kimi", models: MODELS.slice(1) })).ok).toBe(true);
+    expect(readFileSync(blankPath, "utf8").endsWith(`\n\n\n${sibling}`)).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(blankPath, "utf8")).toBe(`${original}\n\n${sibling}`);
+  });
 });
 
 describe("OMP source preservation", () => {
