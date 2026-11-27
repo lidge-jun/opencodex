@@ -335,6 +335,30 @@ async function fetchProviderModelsUncached(
     }
     return observed(configured, "authoritative");
   }
+  if (prov.adapter === "agy-acp") {
+    const project = (rows: CatalogModel[]) => withConfiguredRetention(
+      applyConfigHintsToCachedModels(name, prov, rows, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false),
+    );
+    const fresh = getFreshCached(name, ttlMs);
+    if (fresh) return observed(project(fresh), "authoritative");
+    if (!isModelsFetchCoolingDown(name)) {
+      try {
+        const { agyModelIds, readAgyMetadata } = await import("../../adapters/agy-acp/metadata");
+        const ids = agyModelIds(await readAgyMetadata("models"));
+        if (ids.length) {
+          const rows = ids.map(id => ({ id, provider: name }));
+          if (!publishCache(rows)) return supersededSuccess(project(rows));
+          markProviderDiscoveryOk(name, rows.length);
+          return observed(project(rows), "authoritative");
+        }
+      } catch { /* A missing CLI or sign-in leaves the last known catalog usable. */ }
+      if (claimPublication()) {
+        markModelsFetchFailure(name);
+        markProviderDiscoveryFailed(name, { reason: "invalid_response" });
+      }
+    }
+    return observed(project(getStaleCached(name) ?? configured), "degraded");
+  }
   // One Vertex deadline covers ADC, the first request and every follow-up page.
   const vertexDeadline = effectiveGoogleMode(name, prov) === "vertex" ? vertexDiscoveryDeadline() : undefined;
   let vertexAuth: VertexDiscoveryAuth | undefined;

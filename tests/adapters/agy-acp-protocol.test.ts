@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, realpathSync, statSync, writeFileSync, chmodSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acpTerminal, buildAcpPrompt, classifyFrame, permissionCancelledFrame } from "../../src/adapters/agy-acp/acp";
+import { agyModelIds, agyQuotaWindows } from "../../src/adapters/agy-acp/metadata";
 import { matchValue, parseConfigOptions, proveModel } from "../../src/adapters/agy-acp/options";
 import { AcpTurnOutput } from "../../src/adapters/agy-acp/output-redaction";
 import { clearAgyVersionCacheForTests, parseAgyVersion, probeAgyVersion, resolveAgyBinary, versionAtLeast } from "../../src/adapters/agy-acp/binary";
@@ -364,4 +365,12 @@ describe("workspace and reaping", () => {
     await done;
     expect(signals).toEqual(["99:SIGTERM", "99:SIGKILL", "99:0", "99:0"]);
   });
+});
+
+test("CLI discovery groups only Gemini effort variants and quota reports percent used", () => {
+  expect(agyModelIds("gemini-4-neon-high\tNeon High\ngemini-4-neon-xhigh\tNeon Extra\nclaude-x\tClaude")).toEqual(["gemini-4-neon"]);
+  const reset = "2026-01-01T00:00:00Z";
+  expect(agyQuotaWindows(`Gemini Models\tWeekly Limit Remaining\t74%\t${reset}\ninvalid`)).toEqual([
+    { label: "Gemini Models (Weekly)", percent: 26, resetAt: Date.parse(reset) },
+  ]);
 });
