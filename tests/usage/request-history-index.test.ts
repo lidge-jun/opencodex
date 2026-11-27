@@ -296,6 +296,58 @@ describe("request-history index (RI-02)", () => {
     expect(page.meta.lastError).toContain("rebuilt");
   });
 
+  test("API key, conversation and profile pages read their index in order without a sort (#9103)", async () => {
+    // Equal timestamps check that request_id DESC still breaks ties across cursor pages.
+    for (const [id, timestamp, key] of [["k1", 1000, "key-a"], ["k2", 2000, "key-b"], ["k3", 3000, "key-a"], ["k4", 3000, "key-a"], ["k5", 4000, "key-a"]] as const) {
+      appendUsageEntry(entry(id, timestamp, "a", "m1", { apiKeyId: key, conversationId: `conv-${key}` }));
+    }
+    const first = await queryRequestHistory({ apiKeyId: "key-a", from: 1000, to: 4000 }, undefined, 2);
+    expect(first.rows.map(row => row.requestId)).toEqual(["k5", "k4"]);
+    const second = await queryRequestHistory({ apiKeyId: "key-a", from: 1000, to: 4000 }, first.nextCursor, 2);
+    expect(second.rows.map(row => row.requestId)).toEqual(["k3", "k1"]);
+    expect(second.hasMore).toBe(false);
+    const byConversation = await queryRequestHistory({ conversationId: "conv-key-a" }, undefined, 10);
+    expect(byConversation.rows.map(row => row.requestId)).toEqual(["k5", "k4", "k3", "k1"]);
+
+    const db = new Database(join(getConfigDir(), HISTORY_DB_FILENAME), { readonly: true });
+    try {
+      for (const [column, index] of [["api_key_id", "idx_requests_api_key"], ["conversation_id", "idx_requests_conversation"], ["profile_id", "idx_requests_profile"]]) {
+        for (const extra of ["", " AND timestamp >= 0 AND timestamp <= 9999", " AND (timestamp < 3000 OR (timestamp = 3000 AND request_id < 'k4'))"]) {
+          const plan = (db.query(
+            `EXPLAIN QUERY PLAN SELECT row_json, timestamp, request_id FROM requests WHERE ${column} = ?${extra} ORDER BY timestamp DESC, request_id DESC LIMIT ?`,
+          ).all("x", 51) as Array<{ detail: string }>).map(row => row.detail).join("\n");
+          expect(plan).toContain(`USING INDEX ${index} (${column}=?`);
+          expect(plan).not.toContain("TEMP B-TREE");
+        }
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  test("upgrading a version-two index rebuilds the single-column filter indexes in timestamp order", async () => {
+    appendUsageEntry(entry("v2-row", 1000, "a", "m1", { apiKeyId: "key-a" }));
+    await queryRequestHistory({}, undefined, 10);
+    closeRequestHistoryIndex();
+    const dbFile = join(getConfigDir(), HISTORY_DB_FILENAME);
+    const legacy = new Database(dbFile);
+    legacy.exec("DROP INDEX idx_requests_api_key; CREATE INDEX idx_requests_api_key ON requests(api_key_id);");
+    legacy.query("UPDATE schema_meta SET value = '2' WHERE key = 'schema_version'").run();
+    legacy.close();
+
+    const page = await queryRequestHistory({ apiKeyId: "key-a" }, undefined, 10);
+    expect(page.rows.map(row => row.requestId)).toEqual(["v2-row"]);
+    expect(page.meta.schemaVersion).toBe(HISTORY_SCHEMA_VERSION);
+    expect(page.meta.lastError).toContain("rebuilt");
+    const upgraded = new Database(dbFile, { readonly: true });
+    try {
+      const { sql } = upgraded.query("SELECT sql FROM sqlite_master WHERE name = 'idx_requests_api_key'").get() as { sql: string };
+      expect(sql).toContain("api_key_id, timestamp DESC, request_id DESC");
+    } finally {
+      upgraded.close();
+    }
+  });
+
   test("partial final JSONL line is skipped until it completes", async () => {
     for (const row of seedRows(3)) appendUsageEntry(row);
     const completeOffset = statSync(usageLogPath()).size;
