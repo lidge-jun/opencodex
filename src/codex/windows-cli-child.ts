@@ -186,7 +186,7 @@ export function startWindowsCliChildWithNative(invocation: WindowsCliChildInvoca
   validate(invocation);
   const child = new WindowsCliChild(native, invocation.policy), k = native.k;
   let stdin = 0n, stderr = 0n, thread = 0n, attributes: Buffer | undefined, initialized = false;
-  let inheritedHandles: Buffer | undefined;
+  let inheritedHandles: Buffer | undefined, jobList: Buffer | undefined;
   try {
     if (invocation.recoveryJobName) {
       const name = wide(invocation.recoveryJobName), descriptor = native.privateDescriptor();
@@ -209,15 +209,26 @@ export function startWindowsCliChildWithNative(invocation: WindowsCliChildInvoca
     stderr = native.keep(k.CreateFileW!(ptr(nul), 0x40000000, 3, ptr(inheritable), 3, 0, 0n));
     const handles = inheritedHandles = Buffer.alloc(24);
     [stdin, child.pipe.child, stderr].forEach((handle, index) => handles.writeBigUInt64LE(handle, index * 8));
+    const attrCount = invocation.killOnJobClose ? 2 : 1;
     const size = Buffer.alloc(8);
-    k.InitializeProcThreadAttributeList!(null, 1, 0, ptr(size));
+    k.InitializeProcThreadAttributeList!(null, attrCount, 0, ptr(size));
     const length = Number(size.readBigUInt64LE());
     if (length < 24 || length > 1024 * 1024) throw new Error("attribute_size");
     attributes = Buffer.alloc(length);
     native.borrowedMemory.add(attributes); native.borrowedMemory.add(handles);
-    if (!k.InitializeProcThreadAttributeList!(ptr(attributes), 1, 0, ptr(size))) throw new Error("attribute_init");
+    if (!k.InitializeProcThreadAttributeList!(ptr(attributes), attrCount, 0, ptr(size))) throw new Error("attribute_init");
     initialized = true;
     if (!k.UpdateProcThreadAttribute!(ptr(attributes), 0, 0x20002n, ptr(handles), 24n, null, null)) throw new Error("attribute_handles");
+    if (invocation.killOnJobClose) {
+      jobList = Buffer.alloc(8);
+      jobList.writeBigUInt64LE(child.job, 0);
+      native.borrowedMemory.add(jobList);
+      // PROC_THREAD_ATTRIBUTE_JOB_LIST (0x2000D): atomically assigns the process to child.job
+      // inside CreateProcessW so no unassigned process can ever exist even if later setup fails.
+      if (!k.UpdateProcThreadAttribute!(ptr(attributes), 0, 0x2000dn, ptr(jobList), 8n, null, null)) {
+        throw new Error("attribute_job_list");
+      }
+    }
     const startup = Buffer.alloc(WIN64_CHILD_ABI.startupInfoEx), info = Buffer.alloc(WIN64_CHILD_ABI.processInformation);
     startup.writeUInt32LE(startup.length); startup.writeUInt32LE(0x100, 60);
     [stdin, child.pipe.child, stderr].forEach((handle, index) => startup.writeBigUInt64LE(handle, 80 + index * 8));
@@ -238,7 +249,7 @@ export function startWindowsCliChildWithNative(invocation: WindowsCliChildInvoca
     if (!k.GetProcessTimes!(child.process, ptr(creation), ptr(exit), ptr(kernel), ptr(user))) throw new Error("process_times");
     child.creationTime = creation.readBigUInt64LE().toString();
     if (child.creationTime === "0") throw new Error("process_creation_time_unknown");
-    if (!k.AssignProcessToJobObject!(child.job, child.process)) throw new Error("job_assignment");
+    if (!invocation.killOnJobClose && !k.AssignProcessToJobObject!(child.job, child.process)) throw new Error("job_assignment");
     if (invocation.recoveryProof) child.recoveryGuardian = startWindowsCliRecoveryGuardian(native, child.job, invocation.recoveryProof, invocation.cwd);
     if (Number(k.ResumeThread!(thread)) !== 1) throw new Error("resume_thread");
   } catch (error) {
@@ -248,6 +259,7 @@ export function startWindowsCliChildWithNative(invocation: WindowsCliChildInvoca
     if (initialized) k.DeleteProcThreadAttributeList!(ptr(attributes!));
     if (attributes) native.borrowedMemory.delete(attributes);
     if (inheritedHandles) native.borrowedMemory.delete(inheritedHandles);
+    if (jobList) native.borrowedMemory.delete(jobList);
     child.pipe.closeChild();
     if (stdin) native.close(stdin); if (stderr) native.close(stderr); if (thread) native.close(thread);
   }

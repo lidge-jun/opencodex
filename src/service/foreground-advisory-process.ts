@@ -47,9 +47,9 @@ export interface ForegroundAdvisoryDeps {
   /**
    * Windows pre-resume Job-contained launcher override for tests. Defaults to
    * `startWindowsCliChild` with `killOnJobClose: true`, which configures
-   * `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` before `CreateProcessW`, creates the probe
-   * `CREATE_SUSPENDED`, assigns it to the Job Object before `ResumeThread`, and fails
-   * closed if containment cannot be established.
+   * `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and `PROC_THREAD_ATTRIBUTE_JOB_LIST` before
+   * `CreateProcessW` (atomic job assignment at process creation) so no unassigned or
+   * unprotected process can exist even if setup fails before `ResumeThread`.
    */
   launchWindows?: () => ContainedWindowsAdvisoryChild;
   timeoutMs?: number;
@@ -152,6 +152,10 @@ function reapFailedSetupWindowsChild(
     if (disposed) return true;
     if (isWindowsProcessSignaled(child)) return true;
     try { child.reapUnstarted(); } catch { /* retry until process handle signals */ }
+    if (isWindowsProcessSignaled(child)) return true;
+    if (child.job) {
+      try { child.native.k.TerminateJobObject?.(child.job, 1); } catch { /* kernel kill-on-close backs up exit */ }
+    }
     return isWindowsProcessSignaled(child);
   };
 

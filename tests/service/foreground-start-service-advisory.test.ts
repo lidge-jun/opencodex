@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { read } from "bun:ffi";
+import { read, toArrayBuffer } from "bun:ffi";
 import { startWindowsCliChildWithNative } from "../../src/codex/windows-cli-child";
 import { WIN64_CHILD_ABI, type WindowsChildNative } from "../../src/codex/windows-cli-child-native";
 import {
@@ -453,15 +453,17 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
     expect(alreadyReaped.state().nativeDisposed).toBe(1);
     alreadyReapedStop(true);
 
-    // Setup failure (AssignProcessToJobObject failed after CreateProcessW) combined with failed
-    // TerminateProcess: original process handle stays retained and unclosed while unsignaled,
-    // backoff polling retries reapUnstarted(), and handles are disposed only once WaitForSingleObject === 0.
+    // Setup failure (ResumeThread failed after CreateProcessW) combined with failed
+    // TerminateProcess & TerminateJobObject: original process/job handles stay retained while
+    // unsignaled, backoff polling retries reapUnstarted(), and handles are disposed only once
+    // WaitForSingleObject === 0.
     let allowUnstartedReap = false;
     const failedReapSetup = createFakeContainedWindowsChild({
-      setupFailure: "job_assignment",
+      setupFailure: "resume_thread",
       processHandle: 0x200n,
       processSignaled: false,
       onReapUnstarted: () => allowUnstartedReap,
+      onTerminateJob: () => allowUnstartedReap ? undefined : false,
     });
     const failedReapStop = startForegroundAdvisory(line => warnings.push(line), {
       platform: "win32",
@@ -496,20 +498,34 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
 
     const failedStop = alreadyReapedStop;
 
-    // Real startWindowsCliChildWithNative fault injection: SetInformationJobObject fails BEFORE
-    // CreateProcessW/ResumeThread even run, and TerminateJobObject also returns 0. Verify no process
-    // is ever created or resumed and production shutdown (stop(false) then single stop(true)) stays clean.
-    const calls: string[] = [];
-    const observedLimits: Array<{ job: bigint; infoClass: number; flags: number; length: number }> = [];
-    const makeMockNative = (setLimitResult: number) => {
+    // Real startWindowsCliChildWithNative fault injection proving atomic containment:
+    // (1) SetInformationJobObject(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE) runs BEFORE CreateProcessW;
+    // (2) PROC_THREAD_ATTRIBUTE_JOB_LIST (0x2000D) attaches child.job atomically inside CreateProcessW;
+    // (3) If either pre-create step fails, CreateProcessW never runs (process === 0n);
+    // (4) If post-create setup (ResumeThread) AND termination both fail through shutdown -> syncCleanup,
+    //     child.job (already armed with kill-on-close & bound atomically to child.process) stays open
+    //     until parent exit so the Windows kernel reaps the suspended process on exit.
+    const makeMockNative = (opts: {
+      setLimitResult: number;
+      jobListAttrResult?: number;
+      resumeResult?: number;
+      terminateProcessResult?: number;
+      terminateJobResult?: number;
+    }) => {
+      const calls: string[] = [];
+      const observedLimits: Array<{ job: bigint; infoClass: number; flags: number; length: number }> = [];
+      const observedJobList: Array<{ attr: bigint; job: bigint; size: bigint }> = [];
+      const attrCounts: number[] = [];
       const handles = new Set<bigint>();
       const borrowedMemory = new Set<Buffer>();
       const closed: bigint[] = [];
       let disposed = 0;
+      let nextHandle = 0x300n;
       const native = {
         handles,
         borrowedMemory,
         closeErrors: [] as bigint[],
+        privateDescriptor: () => 0x50n,
         k: {
           CreateJobObjectW: () => { calls.push("CreateJobObjectW"); return 0x100n; },
           SetInformationJobObject: (job: bigint, infoClass: number, infoPtr: number, length: number) => {
@@ -520,11 +536,49 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
               flags: read.u32(infoPtr as never, WIN64_CHILD_ABI.jobLimitFlags),
               length,
             });
-            return setLimitResult;
+            return opts.setLimitResult;
           },
-          CreateProcessW: () => { calls.push("CreateProcessW"); return 0; },
-          ResumeThread: () => { calls.push("ResumeThread"); return 1; },
-          TerminateJobObject: () => { calls.push("TerminateJobObject"); return 0; },
+          CreateNamedPipeW: () => ++nextHandle,
+          CreateEventW: () => ++nextHandle,
+          CreateFileW: () => ++nextHandle,
+          ConnectNamedPipe: () => 1,
+          LocalFree: () => 0,
+          InitializeProcThreadAttributeList: (listPtr: number | null, count: number, _flags: number, sizePtr: number) => {
+            attrCounts.push(count);
+            if (!listPtr) {
+              new DataView(toArrayBuffer(sizePtr as never, 0, 8)).setBigUint64(0, 64n, true);
+              return 0;
+            }
+            calls.push(`InitializeProcThreadAttributeList:${count}`);
+            return 1;
+          },
+          UpdateProcThreadAttribute: (_listPtr: number, _flags: number, attr: bigint, valuePtr: number, size: bigint) => {
+            calls.push(`UpdateProcThreadAttribute:0x${attr.toString(16)}`);
+            if (attr === 0x2000dn) {
+              observedJobList.push({ attr, job: read.u64(valuePtr as never, 0), size });
+              return opts.jobListAttrResult ?? 1;
+            }
+            return 1;
+          },
+          DeleteProcThreadAttributeList: () => { calls.push("DeleteProcThreadAttributeList"); },
+          CompareStringOrdinal: () => 2,
+          CreateProcessW: (_e: number, _c: number, _pa: unknown, _ta: unknown, _inh: number, _cf: number, _env: number, _cwd: number, _si: number, piPtr: number) => {
+            calls.push("CreateProcessW");
+            const pi = new DataView(toArrayBuffer(piPtr as never, 0, WIN64_CHILD_ABI.processInformation));
+            pi.setBigUint64(0, 0x200n, true); // hProcess
+            pi.setBigUint64(8, 0x201n, true); // hThread
+            pi.setUint32(16, 4242, true); // dwProcessId
+            return 1;
+          },
+          GetProcessTimes: (_h: bigint, creationPtr: number) => {
+            new DataView(toArrayBuffer(creationPtr as never, 0, 8)).setBigUint64(0, 1337000000n, true);
+            return 1;
+          },
+          AssignProcessToJobObject: () => { calls.push("AssignProcessToJobObject"); return 1; },
+          ResumeThread: () => { calls.push("ResumeThread"); return opts.resumeResult ?? 1; },
+          TerminateProcess: () => { calls.push("TerminateProcess"); return opts.terminateProcessResult ?? 0; },
+          TerminateJobObject: () => { calls.push("TerminateJobObject"); return opts.terminateJobResult ?? 0; },
+          WaitForSingleObject: () => 258,
           GetLastError: () => 5,
           CloseHandle: (handle: bigint) => { closed.push(handle); return 1; },
         },
@@ -544,10 +598,19 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
           return true;
         },
       };
-      return { native: native as unknown as WindowsChildNative, closed, getDisposed: () => disposed };
+      return {
+        native: native as unknown as WindowsChildNative,
+        calls,
+        observedLimits,
+        observedJobList,
+        attrCounts,
+        closed,
+        getDisposed: () => disposed,
+      };
     };
 
-    const failMock = makeMockNative(0);
+    // (1) SetInformationJobObject fails -> no process ever created.
+    const failLimitMock = makeMockNative({ setLimitResult: 0 });
     const killOnCloseFailChild = startWindowsCliChildWithNative({
       executable: "C:\\Program Files\\bun\\bun.exe",
       args: [FOREGROUND_ADVISORY_ARG],
@@ -555,48 +618,90 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
       env: {},
       policy: "version",
       killOnJobClose: true,
-    }, failMock.native);
+    }, failLimitMock.native);
     expect(killOnCloseFailChild.setupFailure).toBe("job_kill_on_close");
     expect(killOnCloseFailChild.process).toBe(0n);
-    expect(calls).toEqual(["CreateJobObjectW", "SetInformationJobObject"]);
-    expect(observedLimits).toEqual([{
+    expect(failLimitMock.calls).toEqual(["CreateJobObjectW", "SetInformationJobObject"]);
+    expect(failLimitMock.observedLimits).toEqual([{
       job: 0x100n,
       infoClass: 9,
       flags: 0x2000,
       length: WIN64_CHILD_ABI.jobExtendedLimit,
     }]);
-
-    // Route that failed-setup child through startForegroundAdvisory and the production
-    // shutdown -> single syncCleanup lifecycle (no probe ever created; handles disposed cleanly).
-    const abortedStop = startForegroundAdvisory(line => warnings.push(line), {
+    const abortedLimitStop = startForegroundAdvisory(line => warnings.push(line), {
       platform: "win32",
       launchWindows: () => killOnCloseFailChild,
     });
-    abortedStop(false);
-    abortedStop(true);
+    abortedLimitStop(false);
+    abortedLimitStop(true);
     await Bun.sleep(20);
-    expect(failMock.closed).toEqual([0x100n]);
-    expect(failMock.getDisposed()).toBe(1);
-    expect(calls).toEqual(["CreateJobObjectW", "SetInformationJobObject"]);
+    expect(failLimitMock.closed).toEqual([0x100n]);
+    expect(failLimitMock.getDisposed()).toBe(1);
 
-    // When kill-on-close is armed before CreateProcessW and TerminateJobObject later fails through
-    // production shutdown (stop(false)) and a single syncCleanup (stop(true)), the job handle stays
-    // open until parent exit so Windows JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE reaps the probe tree.
-    const unkillable = createFakeContainedWindowsChild({
-      terminal: false,
-      onTerminateJob: () => false,
+    // (2) PROC_THREAD_ATTRIBUTE_JOB_LIST fails -> no process ever created.
+    const failJobAttrMock = makeMockNative({ setLimitResult: 1, jobListAttrResult: 0 });
+    const jobAttrFailChild = startWindowsCliChildWithNative({
+      executable: "C:\\Program Files\\bun\\bun.exe",
+      args: [FOREGROUND_ADVISORY_ARG],
+      cwd: "C:\\Users\\tester",
+      env: {},
+      policy: "version",
+      killOnJobClose: true,
+    }, failJobAttrMock.native);
+    expect(jobAttrFailChild.setupFailure).toBe("attribute_job_list");
+    expect(jobAttrFailChild.process).toBe(0n);
+    expect(failJobAttrMock.calls).not.toContain("CreateProcessW");
+    expect(failJobAttrMock.observedJobList).toEqual([{ attr: 0x2000dn, job: 0x100n, size: 8n }]);
+    const abortedAttrStop = startForegroundAdvisory(line => warnings.push(line), {
+      platform: "win32",
+      launchWindows: () => jobAttrFailChild,
     });
-    const unkillableStop = startForegroundAdvisory(line => warnings.push(line), {
+    abortedAttrStop(true);
+    await Bun.sleep(20);
+    expect(failJobAttrMock.getDisposed()).toBe(1);
+
+    // (3) Atomic CreateProcessW containment + post-create ResumeThread failure + continuous
+    // TerminateProcess & TerminateJobObject failures through the entire production exit lifecycle
+    // (shutdown stop(false) -> single syncCleanup stop(true)): process was already assigned to
+    // child.job atomically via PROC_THREAD_ATTRIBUTE_JOB_LIST (never AssignProcessToJobObject),
+    // kill-on-close was armed beforehand, and child.job + child.process remain open until parent
+    // exit so Windows kernel JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE reaps the suspended process.
+    const postCreateFailMock = makeMockNative({
+      setLimitResult: 1,
+      jobListAttrResult: 1,
+      resumeResult: 0,
+      terminateProcessResult: 0,
+      terminateJobResult: 0,
+    });
+    const postCreateFailChild = startWindowsCliChildWithNative({
+      executable: "C:\\Program Files\\bun\\bun.exe",
+      args: [FOREGROUND_ADVISORY_ARG],
+      cwd: "C:\\Users\\tester",
+      env: {},
+      policy: "version",
+      killOnJobClose: true,
+    }, postCreateFailMock.native);
+    expect(postCreateFailChild.setupFailure).toBe("resume_thread");
+    expect(postCreateFailChild.process).toBe(0x200n);
+    expect(postCreateFailMock.calls).not.toContain("AssignProcessToJobObject");
+    expect(postCreateFailMock.calls.indexOf("SetInformationJobObject")).toBeLessThan(postCreateFailMock.calls.indexOf("CreateProcessW"));
+    expect(postCreateFailMock.calls.indexOf("UpdateProcThreadAttribute:0x2000d")).toBeLessThan(postCreateFailMock.calls.indexOf("CreateProcessW"));
+    expect(postCreateFailMock.observedJobList).toEqual([{ attr: 0x2000dn, job: 0x100n, size: 8n }]);
+
+    const postCreateFailStop = startForegroundAdvisory(line => warnings.push(line), {
       platform: "win32",
       pollMs: 5,
-      launchWindows: () => unkillable.child,
+      launchWindows: () => postCreateFailChild,
     });
-    unkillableStop(false);
-    unkillableStop(true);
+    postCreateFailStop(false);
+    postCreateFailStop(true);
     await Bun.sleep(25);
-    expect(unkillable.state().terminatedJobs.length).toBeGreaterThanOrEqual(2);
-    expect(unkillable.state().closedHandles).toEqual([]);
-    expect(unkillable.state().pipeDisposed).toBe(0);
+    // Both child.job (with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE) and child.process stay open until exit.
+    expect(postCreateFailMock.native.handles.has(0x100n)).toBe(true);
+    expect(postCreateFailMock.native.handles.has(0x200n)).toBe(true);
+    expect(postCreateFailMock.getDisposed()).toBe(0);
+    expect(postCreateFailMock.calls.filter(call => call === "TerminateProcess").length).toBeGreaterThanOrEqual(3);
+    expect(postCreateFailMock.calls.filter(call => call === "TerminateJobObject").length).toBeGreaterThanOrEqual(2);
 
     // Durable recovery jobs remain incompatible with killOnJobClose.
     expect(() => startWindowsCliChildWithNative({
@@ -607,7 +712,7 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
       policy: "installer",
       recoveryJobName: "Global\\ocx-cli-12345678-1234-1234-1234-123456789abc",
       killOnJobClose: true,
-    }, makeMockNative(1).native)).toThrow("windows_child_invalid_invocation");
+    }, makeMockNative({ setLimitResult: 1 }).native)).toThrow("windows_child_invalid_invocation");
 
     expect(warnings).toEqual([]);
     failedStop(true);
