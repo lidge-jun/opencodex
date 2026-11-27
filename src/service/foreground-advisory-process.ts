@@ -160,7 +160,7 @@ function startWindowsContainedAdvisory(
   };
 
   const terminateJob = () => {
-    if (terminated) return;
+    if (terminated || disposed) return;
     terminated = true;
     try { child.native.k.TerminateJobObject?.(child.job, 1); } catch { /* best-effort job termination */ }
   };
@@ -172,6 +172,7 @@ function startWindowsContainedAdvisory(
   };
 
   const stop: StopForegroundAdvisory = (sync = false) => {
+    if (disposed) return;
     settled = true;
     terminateJob();
     if (sync) {

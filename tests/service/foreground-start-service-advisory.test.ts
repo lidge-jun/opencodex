@@ -291,6 +291,10 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
     try {
       await Bun.sleep(40);
       expect(warnings).toEqual(["windows advisory"]);
+      // Later CLI shutdown (both async and synchronous exit paths) must not call
+      // TerminateJobObject with an already-closed job handle that Windows could reuse.
+      stop(false);
+      stop(true);
       expect(fake.state().terminatedJobs).toEqual([]);
       expect(fake.state().pipeDisposed).toBe(1);
       expect(fake.state().closedHandles).toEqual([0x200n, 0x100n]);
