@@ -712,11 +712,14 @@ export async function runExternalAdvisorConsult(
   }
 
   if (!ensureStoreCapacity(store, now())) {
+    const expiries = [...store.values()].flatMap(entry => entry.finishedAt === undefined ? [] : [entry.finishedAt + COMPLETED_TTL_MS]);
+    const expiryHint = expiries.length > 0 ? ` The earliest expiry is in ${Math.max(0, Math.ceil((Math.min(...expiries) - now()) / 1000))} seconds.` : " No expiry is known yet.";
+    const capacityMessage = `Maximum retained consultations (${MAX_STORE_ENTRIES}) reached.${expiryHint}`;
     return errorResponse(
       429,
       "advisor_capacity_exceeded",
-      `Maximum concurrent advisor consultations (${MAX_STORE_ENTRIES}) reached. Retry after an active consultation completes or a completed result's retention expires.`,
-      formatAdvisorUnavailable("limit", "maximum concurrent advisor consultations reached"),
+      capacityMessage,
+      formatAdvisorUnavailable("limit", capacityMessage),
     );
   }
 

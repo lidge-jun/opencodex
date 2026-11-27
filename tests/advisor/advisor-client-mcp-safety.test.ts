@@ -155,6 +155,10 @@ test("completed consultations stay pollable for their retention; a full store re
   const full = await runExternalAdvisorConsult(config, { question: "one more", waitMs: 240_000 }, { consultFn });
   expect(full.status).toBe(429);
   expect((full.body.error as { code: string }).code).toBe("advisor_capacity_exceeded");
+  const message = (full.body.error as { message: string }).message;
+  expect(message).toContain("retained consultations");
+  expect(message).toContain("earliest expiry");
+  expect(message).not.toContain("active consultation completes");
   const first = await runExternalAdvisorConsult(config, { consultationId: ids[0], waitMs: 0 }, { consultFn });
   expect(first.status).toBe(200);
 });
