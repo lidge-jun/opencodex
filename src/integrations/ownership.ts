@@ -99,6 +99,12 @@ export interface OwnershipRecord {
    * this field existed simply prune nothing, which is the old behavior.
    */
   createdContainers?: readonly string[];
+  /**
+   * True when a source-preserving writer first appended to a non-empty file
+   * that lacked a trailing newline, so disable can restore that exact EOF byte
+   * layout without guessing from blank lines.
+   */
+  sourceMissingTrailingNewline?: boolean;
   appliedAt: string;
   opId: string;
 }
@@ -121,7 +127,8 @@ export function isOwnershipRecord(value: unknown): value is OwnershipRecord {
       .every(key => record[key] === undefined || hash(record[key]))
     && (record.refreshablePaths === undefined || paths(record.refreshablePaths))
     && (record.createdContainers === undefined || (Array.isArray(record.createdContainers)
-      && record.createdContainers.every(path => typeof path === "string")));
+      && record.createdContainers.every(path => typeof path === "string")))
+    && (record.sourceMissingTrailingNewline === undefined || typeof record.sourceMissingTrailingNewline === "boolean");
 }
 
 /** Missing is empty; corrupt/unreadable ownership is uncertainty and must abort recovery. */

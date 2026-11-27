@@ -24,6 +24,7 @@ export function patchTomlTablesSource(
   remove: readonly (readonly string[])[],
   upsert: readonly { path: readonly string[]; value: unknown }[],
   expected: unknown,
+  options: { restoreAbsentTrailingNewline?: boolean } = {},
 ): string | null {
   if ([...remove, ...upsert.map(item => item.path)].some(path => !path.every(isPlainKey))) return null;
   if (upsert.some(item => !isPlainRecord(item.value))) return null;
@@ -62,13 +63,15 @@ export function patchTomlTablesSource(
   const blocks = upsert.map(item => renderTable(item.path, item.value as Record<string, unknown>, eol));
   let text: string;
   if (blocks.length === 0) {
-    // Removing an appended managed block that had no blank separator above it (a file that
-    // originally ended without a trailing newline) restores the absent trailing newline.
-    if (insertKept !== undefined && insertKept === kept.length && kept.length > 0 && !droppedFirstSeparator) {
+    // Restore an absent EOF newline only from explicit ownership provenance, never by guessing
+    // from whether a blank separator remained above the removed table.
+    if (options.restoreAbsentTrailingNewline === true
+      && insertKept !== undefined && insertKept === kept.length
+      && kept.length > 0 && kept[kept.length - 1]!.text.trim() !== "") {
       kept[kept.length - 1]!.eol = "";
     }
     text = joinLines(kept);
-  } else if (insertKept !== undefined && kept.slice(insertKept).some(line => line.text.trim() !== "")) {
+  } else if (insertKept !== undefined) {
     const head = kept.slice(0, insertKept);
     const tail = kept.slice(insertKept);
     const headText = joinLines(head);
@@ -81,7 +84,9 @@ export function patchTomlTablesSource(
     text = `${headText}${lead}${blocks.join(eol)}${tailText}`;
   } else {
     const body = joinLines(kept);
-    const separator = body.length === 0 ? "" : eol;
+    const separator = body.length === 0
+      ? ""
+      : kept[kept.length - 1]!.eol === "" ? `${eol}${eol}` : eol;
     text = `${body}${separator}${blocks.join(eol)}`;
   }
   try {
