@@ -37,6 +37,7 @@ import {
 } from "../codex/subagent-model-fallback";
 import { readCatalog, readCodexCatalogPath, readConfiguredDefaultModel } from "../codex/catalog/parsing";
 import { diagnoseCodexShim, findCodexOnPath, isWindowsInteropDir, type CodexShimDiagnostic } from "../codex/shim";
+import { findFirstCodexOnPath, type CodexPathCandidate } from "../codex/shim-path-resolution";
 import { overlayActivationHint } from "../codex/shim-overlay";
 import { providerTableString, rootTomlString } from "../codex/injected-marker";
 import { countPendingOpencodexHistory } from "../codex/history-provider";
@@ -605,11 +606,23 @@ export function collectCodexEnvKeyReadiness(
   shim: CodexShimDiagnostic,
   serviceTokenPresent: boolean,
   shimActivationShown = false,
+  firstPathCommand?: CodexPathCandidate | null,
 ): CodexEnvKeyReadinessDiagnostic | null {
   if (!configText || rootTomlString(configText, "model_provider") !== "opencodex") return null;
   const envName = providerTableString(configText, "opencodex", "env_key")?.trim();
   const envValue = envName ? ownEnvValue(env, envName) : undefined;
-  if (!envName || envValue?.trim() || shim.healthy || !serviceTokenPresent) return null;
+  if (!envName || envValue?.trim() || !serviceTokenPresent) return null;
+  const legacyPathShadowed = shim.healthy && shim.runnable === undefined
+    && firstPathCommand !== undefined && firstPathCommand !== null && !firstPathCommand.isShim;
+  if (shim.healthy && !legacyPathShadowed) return null;
+  if (legacyPathShadowed) {
+    return {
+      envName,
+      shimState: "inactive",
+      detail: `Codex uses env_key ${envName}, but that variable is unset and PATH resolves 'codex' to ${firstPathCommand.path} instead of the OpenCodex shim; the service token file exists but plain Codex does not load it`,
+      action: `Put the OpenCodex shim ahead of ${firstPathCommand.path} on PATH, run 'ocx codex-shim install' to migrate to the overlay shim, or export ${envName} in the process that starts Codex`,
+    };
+  }
   const shimState = shim.runnable && shim.active === false ? "inactive" : shim.installed ? "unhealthy" : "missing";
   return {
     envName,
@@ -624,23 +637,21 @@ export function collectCodexEnvKeyReadiness(
 }
 
 /**
- * Notice for GUI/direct-binary launchers (such as Codex Desktop) when config.toml requires
- * `env_key`, the variable is unset in this process, and the CLI shim is healthy (#9171).
+ * Conditional notice for GUI/direct-binary launchers (such as Codex Desktop) whenever
+ * `config.toml` selects `model_provider = "opencodex"` with `env_key` (#9171). Doctor's own
+ * shell environment and CLI shim state cannot establish whether an independently launched GUI
+ * app inherits the variable.
  */
 export function collectCodexDesktopEnvKeyNotice(
   configText: string | null,
-  env: EnvMap,
-  shim: CodexShimDiagnostic,
-  serviceTokenPresent: boolean,
   clientRole = false,
 ): CodexDesktopEnvKeyNotice | null {
   if (!configText || rootTomlString(configText, "model_provider") !== "opencodex") return null;
   const envName = providerTableString(configText, "opencodex", "env_key")?.trim();
-  const envValue = envName ? ownEnvValue(env, envName) : undefined;
-  if (!envName || envValue?.trim() || !shim.healthy || !serviceTokenPresent) return null;
+  if (!envName) return null;
   return {
     envName,
-    detail: `Codex uses env_key ${envName}; the CLI shim is healthy for PATH-resolved CLI launches, but Codex Desktop and other direct-binary GUI launchers bypass the shim and will fail with "Missing environment variable: ${envName}"`,
+    detail: `Codex uses env_key ${envName}; independently launched GUI apps such as Codex Desktop bypass the CLI shim and do not inherit a shell-only ${envName}, so they fail with "Missing environment variable: ${envName}" unless that app's environment provides it`,
     action: clientRole
       ? `Supply ${envName} in the GUI launcher's environment (from service-api-token), or connect via Remote Link (local loopback relay with no env var; --desktop-authless is inert on a connected client)`
       : `Supply ${envName} in the GUI launcher's environment (from service-api-token), or keep Codex on a loopback listener so no env_key is required`,
@@ -1509,18 +1520,19 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   const serviceTokenPresent = Boolean(readInstalledServiceToken()?.trim());
   const codexShim = diagnoseCodexShim();
   const codexShimLines = formatCodexShimDoctorLines(codexShim);
+  const legacyPathCommand = codexShim.healthy && codexShim.runnable === undefined
+    ? (() => { try { return findFirstCodexOnPath(); } catch { return null; } })()
+    : undefined;
   const codexEnvKeyReadiness = collectCodexEnvKeyReadiness(
     codexConfigText,
     process.env,
     codexShim,
     serviceTokenPresent,
     codexShimLines.length > 0,
+    legacyPathCommand,
   );
   const codexDesktopEnvKeyNotice = collectCodexDesktopEnvKeyNotice(
     codexConfigText,
-    process.env,
-    codexShim,
-    serviceTokenPresent,
     doctorConfig.runtimeRole === "client",
   );
   // Use the same attested live startup verdict as `ocx status` when the proxy is already
@@ -1635,12 +1647,12 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   if (codexEnvKeyReadiness) {
     console.log(`  !!     ${codexEnvKeyReadiness.detail}`);
     console.log(`         Action: ${codexEnvKeyReadiness.action}`);
-  } else if (codexDesktopEnvKeyNotice) {
-    console.log("  ok     CLI shim launch path is healthy for PATH-resolved Codex CLI");
-    console.log(`  note   ${codexDesktopEnvKeyNotice.detail}`);
-    console.log(`         Action: ${codexDesktopEnvKeyNotice.action}`);
   } else {
     console.log("  ok     no broken OpenCodex env_key launch path detected");
+  }
+  if (codexDesktopEnvKeyNotice) {
+    console.log(`  note   ${codexDesktopEnvKeyNotice.detail}`);
+    console.log(`         Action: ${codexDesktopEnvKeyNotice.action}`);
   }
 
   console.log("\nRunning proxy process proxy env (presence only)");

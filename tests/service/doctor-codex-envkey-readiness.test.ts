@@ -86,32 +86,46 @@ describe("doctor Codex env_key launch readiness", () => {
     expect(JSON.stringify(row)).not.toContain(token);
   });
 
-  test("notes Codex Desktop / GUI shim bypass when env_key is unset and CLI shim is healthy (#9171)", () => {
-    const clientNotice = collectCodexDesktopEnvKeyNotice(config, {}, healthyShim, true, true);
+  test("notes Codex Desktop / GUI shim bypass whenever config.toml requires env_key, even if set in the doctor shell (#9171)", () => {
+    // Doctor's own shell environment cannot establish what an independently launched GUI app sees.
+    expect(collectCodexEnvKeyReadiness(config, { OPENCODEX_API_AUTH_TOKEN: "secret" }, healthyShim, true)).toBeNull();
+    const clientNotice = collectCodexDesktopEnvKeyNotice(config, true);
     expect(clientNotice).not.toBeNull();
     expect(clientNotice?.envName).toBe("OPENCODEX_API_AUTH_TOKEN");
     expect(clientNotice?.detail).toContain("Codex Desktop");
     expect(clientNotice?.detail).toContain("bypass");
-    expect(clientNotice?.detail).toContain('Missing environment variable: OPENCODEX_API_AUTH_TOKEN');
+    expect(clientNotice?.detail).toContain("do not inherit a shell-only OPENCODEX_API_AUTH_TOKEN");
+    expect(clientNotice?.detail).toContain("Missing environment variable: OPENCODEX_API_AUTH_TOKEN");
     expect(clientNotice?.action).toContain("Remote Link");
     expect(clientNotice?.action).toContain("--desktop-authless");
     expect(JSON.stringify(clientNotice)).not.toContain("ocx_data_");
 
-    const nonClientNotice = collectCodexDesktopEnvKeyNotice(config, {}, healthyShim, true, false);
+    const nonClientNotice = collectCodexDesktopEnvKeyNotice(config, false);
     expect(nonClientNotice?.action).toContain("loopback");
     expect(nonClientNotice?.action).not.toContain("--desktop-authless");
 
-    // Stays silent when the env var is set, shim is unhealthy (already warned above), token is
-    // absent, or Codex uses loopback without env_key (including Remote Link Child).
-    expect(collectCodexDesktopEnvKeyNotice(config, { OPENCODEX_API_AUTH_TOKEN: "secret" }, healthyShim, true, true)).toBeNull();
-    expect(collectCodexDesktopEnvKeyNotice(config, {}, missingShim, true, true)).toBeNull();
-    expect(collectCodexDesktopEnvKeyNotice(config, {}, healthyShim, false, true)).toBeNull();
-    expect(collectCodexDesktopEnvKeyNotice('openai_base_url = "http://127.0.0.1:10100/v1"\n', {}, healthyShim, true, true)).toBeNull();
+    // Stays silent when Codex uses loopback without env_key (including Remote Link Child),
+    // another active provider, or no config.
+    expect(collectCodexDesktopEnvKeyNotice('openai_base_url = "http://127.0.0.1:10100/v1"\n', true)).toBeNull();
+    expect(collectCodexDesktopEnvKeyNotice(config.replace('model_provider = "opencodex"', 'model_provider = "openai"'), true)).toBeNull();
+    expect(collectCodexDesktopEnvKeyNotice(null, true)).toBeNull();
+  });
 
-    // Prototype keys are not treated as set env vars.
-    const prototypeNameConfig = config.replace("OPENCODEX_API_AUTH_TOKEN", "toString");
-    expect(collectCodexDesktopEnvKeyNotice(prototypeNameConfig, {}, healthyShim, true, true)?.envName).toBe("toString");
-    expect(collectCodexDesktopEnvKeyNotice(prototypeNameConfig, { toString: "set" }, healthyShim, true, true)).toBeNull();
+  test("warns when a healthy legacy in-place shim is shadowed by another executable first on PATH (#9171)", () => {
+    const shadowed = collectCodexEnvKeyReadiness(config, {}, healthyShim, true, false, {
+      path: "/usr/local/bin/codex",
+      isShim: false,
+    });
+    expect(shadowed?.shimState).toBe("inactive");
+    expect(shadowed?.detail).toContain("/usr/local/bin/codex");
+    expect(shadowed?.detail).toContain("OPENCODEX_API_AUTH_TOKEN");
+    expect(shadowed?.action).toContain("ahead of /usr/local/bin/codex on PATH");
+
+    const activeLegacy = collectCodexEnvKeyReadiness(config, {}, healthyShim, true, false, {
+      path: "/opt/homebrew/bin/codex",
+      isShim: true,
+    });
+    expect(activeLegacy).toBeNull();
   });
 });
 
