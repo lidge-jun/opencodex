@@ -528,6 +528,9 @@ function applyOrRefreshIntegration(
         refreshablePaths,
       } : {}),
       fragmentPaths: fragmentPathsOf(contribution), createdContainers: created,
+      ...(record?.sourceMissingTrailingNewline === true
+        || (!record && target.sourcePreservingToml && before !== null && before.length > 0 && !before.endsWith("\n"))
+        ? { sourceMissingTrailingNewline: true } : {}),
       appliedAt: at, opId,
     },
     entry,
@@ -638,7 +641,9 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
       }
       text = patched;
     } else if (target.sourcePreservingToml && before !== null) {
-      const patched = patchTomlTablesSource(before, record!.fragmentPaths, [], doc);
+      const patched = patchTomlTablesSource(before, record!.fragmentPaths, [], doc, {
+        restoreAbsentTrailingNewline: record!.sourceMissingTrailingNewline === true,
+      });
       if (patched === null) return refuse(clientId, "unsafe", "unsafe", tomlRefusalReason(configPath, "nothing was removed"));
       text = patched;
     } else {

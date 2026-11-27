@@ -1115,8 +1115,28 @@ describe("Kimi source preservation (#9152)", () => {
     const noNewline = 'default_model = "kimi-k3"';
     const noNewlinePath = installKimi(noNewline);
     expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(refreshIntegration(input({ clientId: "kimi", models: MODELS.slice(1) })).ok).toBe(true);
     expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
     expect(readFileSync(noNewlinePath, "utf8")).toBe(noNewline);
+
+    // Removing the blank separator before the managed block after apply must NOT strip
+    // the preceding user line's trailing newline on disable when the file originally had one.
+    const compactPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    writeFileSync(compactPath, readFileSync(compactPath, "utf8").replace(`${original}\n[providers.opencodex]`, `${original}[providers.opencodex]`));
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(compactPath, "utf8")).toBe(original);
+
+    // Trailing blank lines added after the final managed table stay after it on refresh.
+    const trailingPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    writeFileSync(trailingPath, `${readFileSync(trailingPath, "utf8")}\n\n`);
+    expect(refreshIntegration(input({ clientId: "kimi", models: MODELS.slice(1) })).ok).toBe(true);
+    const refreshedTrailing = readFileSync(trailingPath, "utf8");
+    expect(refreshedTrailing.startsWith(`${original}\n[providers.opencodex]`)).toBe(true);
+    expect(refreshedTrailing.endsWith("\n\n\n")).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(trailingPath, "utf8")).toBe(`${original}\n\n`);
 
     const sibling = "# >>> late-tool >>>\n[[hooks]]\nevent = \"Stop\"\n# <<< late-tool <<<\n";
     const blankPath = installKimi(original);
