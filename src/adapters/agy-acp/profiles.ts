@@ -56,10 +56,17 @@ export function selectedName(config = getConfigDir()): string {
   }
 }
 
-export function agyCatalogSelection(config = getConfigDir()) {
+export function agyCatalogSelection(config = getConfigDir(), root = profileRoot()) {
   try {
     const name = selectedName(config);
-    return { name, authority: JSON.stringify(["agy-acp", config, name]) };
+    const scope = ["agy-acp", config, name];
+    if (name !== "default") {
+      const dir = join(root, name);
+      if (!privateDirectory(root) || !signedInProfile(dir)) return undefined;
+      const stat = lstatSync(dir, { bigint: true });
+      scope.push(String(stat.dev), String(stat.ino), String(stat.birthtimeNs));
+    }
+    return { name, authority: JSON.stringify(scope) };
   }
   catch { return undefined; }
 }

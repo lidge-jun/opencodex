@@ -1122,7 +1122,7 @@ describe.skipIf(process.platform === "win32")("manually selected agy accounts", 
   test("add, select and reset keep each CLI-owned login separate", async () => {
     const { mkdirSync } = await import("node:fs");
     const { addProfile } = await import("../../src/cli/account-agy");
-    const { profileNames, selectedLaunch, selectProfile } = await import("../../src/adapters/agy-acp/profiles");
+    const { agyCatalogSelection, profileNames, removeProfile, selectedLaunch, selectProfile } = await import("../../src/adapters/agy-acp/profiles");
     const root = mkdtempSync(join(tmpdir(), "ocx-agy-account-test-"));
     const config = join(root, "config");
     const profiles = join(root, "profiles");
@@ -1145,6 +1145,12 @@ describe.skipIf(process.platform === "win32")("manually selected agy accounts", 
         expect(launch.args).toContain(join(profiles, name));
         expect(launch.env).toMatchObject({ GEMINI_HOME: join(profiles, name), AGY_CLI_FORCE_FILE_TOKEN_STORAGE: "true" });
       }
+      const previousCatalog = agyCatalogSelection(config, profiles)?.authority;
+      expect(previousCatalog).toBeDefined();
+      removeProfile("work", config, profiles);
+      addProfile(profiles, "work", signIn);
+      selectProfile("work", config, profiles);
+      expect(agyCatalogSelection(config, profiles)?.authority).not.toBe(previousCatalog);
       expect(() => selectProfile("missing", config, profiles)).toThrow();
       expect(() => selectedLaunch("1.5.3", config, profiles)).toThrow();
       renameSync(join(profiles, "work"), join(profiles, ".away"));
