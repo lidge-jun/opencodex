@@ -350,11 +350,20 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       return true;
     }
 
+    let fixedThinking = false;
+    const hasThoughtOption = () => state.some(option => option.id === "thought_level" || option.category === "thought_level");
+
     function afterModelSelected(): void {
       if (!checkSelectedModel()) return;
       if (thoughtWanted) {
         const found = findSelector(state, "thought_level");
         if (!found.ok) {
+          // Codex can send its global effort even when model/list has an empty ladder.
+          if (!hasThoughtOption()) {
+            fixedThinking = true;
+            sendPrompt();
+            return;
+          }
           finish(invalidRequest("agy_acp_effort_not_offered", "This Antigravity CLI offers no thinking level selector."));
           return;
         }
@@ -372,7 +381,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     }
 
     function checkSelectedThinking(): boolean {
-      if (!thoughtWanted) return true;
+      if (!thoughtWanted || (fixedThinking && !hasThoughtOption())) return true;
       const thought = findSelector(state, "thought_level");
       if (thought.ok) {
         const desired = matchValue(thought.selector.values, thoughtWanted);

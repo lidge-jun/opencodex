@@ -181,6 +181,22 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
     }
   });
 
+  test("a Codex global effort does not block a model with no thought selector", async () => {
+    saveConfig(config());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...responsesBody, reasoning: { effort: "high" } }),
+      });
+      const text = await response.text();
+      expect(text).toContain("fake acp answer for gemini-4-argon");
+      expect(text).toContain("response.completed");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("an interactive turn publishes one attempt for its one guarded prompt send", async () => {
     saveConfig(config());
     const server = startServer(0);
