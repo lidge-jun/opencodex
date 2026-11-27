@@ -1265,7 +1265,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
       expect(readFileSync(join(fakeHome, ".workbuddy", "hooks", "opencodex-advisor-notice.sh"), "utf8")).toContain(ADVISOR_HOOK_MARKER);
 
       const revokedCfg = baseConfig();
-      (revokedCfg as { advisor?: unknown }).advisor = { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: null };
+      (revokedCfg as { advisor?: unknown }).advisor = { ...enabledCfg.advisor, contextSharingConsent: null };
       const revokeSync = syncAdvisorMcpClients(revokedCfg, { homeDir: fakeHome, configDir: customConfigDir, env: {} });
       expect(revokeSync.unmounted).toContain("workbuddy");
       expect(existsSync(join(userSkillDir, "SKILL.md"))).toBe(false);
