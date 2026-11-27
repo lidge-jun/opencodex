@@ -19,6 +19,7 @@ const MIN_MCP_CONSULT_WAIT_MS = 5_000;
 // Stay safely below Bun's HTTP listener idleTimeout (255s).
 const MAX_MCP_CONSULT_WAIT_MS = 240_000;
 const DEFAULT_PROGRESS_INTERVAL_MS = 5_000;
+const MCP_TRANSPORT_MARGIN_MS = 1_000;
 
 export function resolveDefaultMcpWaitMs(rawEnv: string | undefined = process.env.OCX_ADVISOR_MCP_WAIT_MS): number {
   if (!rawEnv) return MCP_CONSULT_WAIT_MS;
@@ -97,6 +98,9 @@ export async function callAdvisorConsultApi(
         ...(input.sessionId?.trim() ? { sessionId: input.sessionId.trim() } : {}),
         waitMs: effectiveWaitMs,
       };
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), Math.max(0, effectiveWaitMs) + MCP_TRANSPORT_MARGIN_MS);
+  const requestSignal = signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal;
   try {
     const res = await runtimeRequest<Record<string, unknown>>(
       "/api/advisor/consult",
@@ -104,7 +108,7 @@ export async function callAdvisorConsultApi(
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
-        ...(signal ? { signal } : {}),
+        signal: requestSignal,
       },
       options,
     );
@@ -136,6 +140,11 @@ export async function callAdvisorConsultApi(
         });
     return { content: [{ type: "text", text }] };
   } catch (error) {
+    if (deadline.signal.aborted && !signal?.aborted) {
+      return { isError: true, content: [{ type: "text", text: formatAdvisorUnavailable("manual", consultationId
+        ? "The local Advisor request timed out. Poll the same consultationId again."
+        : "The local Advisor request timed out; the consultation may still be running.") }] };
+    }
     if (error instanceof RuntimeApiError) {
       const detail = errorMessageFromBody(error.body, error.message);
       const formatted = error.body && typeof error.body === "object" && typeof (error.body as { content?: unknown }).content === "string"
@@ -145,6 +154,8 @@ export async function callAdvisorConsultApi(
     }
     const msg = error instanceof Error ? error.message : String(error);
     return { isError: true, content: [{ type: "text", text: formatAdvisorUnavailable("manual", msg) }] };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

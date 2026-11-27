@@ -12,6 +12,7 @@ import {
   unmountAdvisorMcpForClient,
 } from "../../src/advisor/client-mcp";
 import { consultAdvisor } from "../../src/advisor/consult";
+import { callAdvisorConsultApi } from "../../src/advisor/mcp-server";
 import { loadWorkBuddySessionMessages, runExternalAdvisorConsult } from "../../src/advisor/external-consult";
 import { resolveAdvisorSettings } from "../../src/advisor/settings";
 import type { OcxConfig } from "../../src/types";
@@ -27,6 +28,35 @@ function tempHome(prefix: string): string {
 }
 
 describe("Advisor client MCP safety", () => {
+  test("MCP call bounds a stalled local HTTP response body", async () => {
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) { init?.signal?.addEventListener("abort", () => controller.error(new Error("aborted")), { once: true }); },
+      });
+      return new Response(body, { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const result = await Promise.race([
+      callAdvisorConsultApi({ consultationId: "existing" }, { baseUrl: "http://proxy.test", fetchImpl, waitMs: 0 }),
+      Bun.sleep(1500).then(() => null),
+    ]);
+    expect(result?.isError).toBe(true);
+    expect(result?.content[0]?.text).toContain("timed out");
+  });
+  test("MCP call bounds a stalled fetch and preserves caller cancellation", async () => {
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        if (init?.signal?.aborted) reject(new Error("cancelled"));
+        else init?.signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+      })) as typeof fetch;
+    const result = await callAdvisorConsultApi({ question: "test" }, { baseUrl: "http://proxy.test", fetchImpl, waitMs: 0 });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("timed out");
+    const caller = new AbortController();
+    caller.abort();
+    const cancelled = await callAdvisorConsultApi({ question: "test" }, { baseUrl: "http://proxy.test", fetchImpl, waitMs: 0 }, caller.signal);
+    expect(cancelled.isError).toBe(true);
+    expect(cancelled.content[0]?.text).not.toContain("timed out");
+  });
   test("transcript selection prefers the session over a newer task fallback and filters direct advisor calls", () => {
     const root = tempHome("ocx-advisor-transcript-priority-");
     writeFileSync(join(root, "session.jsonl"), [

@@ -520,6 +520,7 @@ API, CLI (`ocx advisor consult`), and stdio MCP (`src/advisor/mcp-server.ts`, `o
 annotated `readOnlyHint: false, openWorldHint: true`)
 to stay below the 255s HTTP listener idle timeout; `nextCallArguments` (`{ consultationId, afterElapsedMs }`)
 accepts any nonnegative integer cursor alongside `notifications/progress` heartbeats.
+The MCP client bounds the local HTTP request and body read to `waitMs` plus one second, combines caller cancellation, and advises polling the same ID after a transport deadline.
 Advisor CLI settings output reports MCP reconciliation errors separately from mounted-client trust status; JSON retains the management response.
 The dashboard keeps a failed MCP reconciliation retry available across edits and failed saves, until a response confirms successful reconciliation.
 Choosing automatic client sync enables auto-mount and clears manual selection together; client checkboxes use their client names as accessible labels.
