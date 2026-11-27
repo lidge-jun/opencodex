@@ -289,7 +289,7 @@ export const de: Record<TKey, string> = {
   "nav.subagents": "Sub-Agenten",
 
   "nav.advisor": "Berater",
-  "advisor.description": "Ein stärkeres zweites Modell, das Ihre Coding-KI bei Blockaden oder kniffligen Entscheidungen um Rat fragen kann. Im Standardmodus Manuell wird es nur bei Bedarf gerufen. Bei Modellen über OpenCodex laufen Auto-Modi nie bei jeder Nachricht — sie greifen höchstens einmal pro Aufgabe erst nach Tool-Aufrufen zum Lesen von Dateien/Fehlern (nie bei reinem Chat) oder bei wiederholten Reparaturfehlschlägen. Clients mit eigenen Modellen wie Qoder oder WorkBuddy nutzen opencodex-advisor per MCP.",
+  "advisor.description": "Ein Expertenmodell für Ihre Coding-KI. Manuell erfolgt die Beratung auf Anfrage. Für geroutete Modelle folgt die Vorprüfung auf Tool-Nutzung und adaptive Hilfe auf wiederholte Reparaturfehler; externe Clients können MCP nutzen.",
   "advisor.enabled": "Berater aktiviert",
   "advisor.model": "Expertenmodell",
   "advisor.modelClear": "Modell entfernen",
@@ -302,7 +302,7 @@ export const de: Record<TKey, string> = {
   "advisor.questionOnly": "Nur die Frage des Workers senden",
   "advisor.questionOnlyNote": "Gesendet werden nur die Frage des Workers (bis zu 2000 Zeichen; bei Kürzung mit einem Hinweis) und eine feste Berateranweisung. Verlauf, Werkzeugergebnisse und Aufgabenkontext werden nicht angehängt. Der Worker muss nötige Hintergrundinformationen ergänzen. Automatische Beratungen pausieren; bestehende Limits gelten weiter.",
   "advisor.policy.manual": "Manuell (Standard) — nur wenn die KI fragt oder Sie es wünschen",
-  "advisor.policy.preflight": "Auto nach Tool-Nutzung — 1× pro Aufgabe nach Datei-/Log-Reads (kein reiner Chat)",
+  "advisor.policy.preflight": "Auto nach Tool-Nutzung",
   "advisor.policy.adaptive": "Auto nach Tools + Rettung — 1× nach Tool-Reads + Hilfe bei Fehler-Schleifen",
   "advisor.taskLimit": "Beratungen pro Aufgabe",
   "advisor.adaptiveNote": "Auslösung: Auto-Modi starten nie bei der ersten Eingabe oder reinen Textfragen. Nachdem die KI per Tool Dateien oder Logs gelesen hat, läuft die automatische Prüfung einmal pro Aufgabe mit stabiler Sitzungs-ID (sonst einmal pro Anfrage); Auto-Rettung greift erst bei der Schleife Prüfung fehlgeschlagen → Datei bearbeitet → erneut fehlgeschlagen. Manuelle Aufrufe teilen das Aufgabenlimit nur bei stabiler Sitzungs-ID; der adaptive Modus benötigt eine stabile Sitzungs-ID für sein Aufgabenbudget.",

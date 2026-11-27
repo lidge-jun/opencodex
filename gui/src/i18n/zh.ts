@@ -289,7 +289,7 @@ export const zh: Record<TKey, string> = {
   "nav.subagents": "子代理",
 
   "nav.advisor": "顾问",
-  "advisor.description": "给当前编程 AI 配一位更强的专家顾问。默认只在 AI 主动求助或你要求时调用；对走 OpenCodex 转发的模型也可开启自动模式——不会每次发消息都问，仅在 AI 调工具查过代码或报错后每任务最多自动补充 1 次（纯对话不触发），或在连续改错失败时介入。自带官方模型的 Qoder、WorkBuddy 等客户端则通过 opencodex-advisor MCP 主动调用。",
+  "advisor.description": "供编程 AI 咨询的专家模型。手动模式按需调用。路由模型的预检在使用工具后触发，自适应补救在重复修复失败后触发；外部客户端可使用 MCP。",
   "advisor.enabled": "启用顾问",
   "advisor.model": "专家模型",
   "advisor.modelClear": "清除模型",
@@ -302,7 +302,7 @@ export const zh: Record<TKey, string> = {
   "advisor.questionOnly": "仅发送主模型的问题",
   "advisor.questionOnlyNote": "仅发送主模型填写的问题（最多保留 2000 字符，超出时附加截断提示）和固定顾问指令，不自动附带对话历史、工具结果或任务上下文。主模型需要自行补充必要背景。自动咨询暂停，现有咨询次数限制仍然生效。",
   "advisor.policy.manual": "手动（默认）— 仅在 AI 主动求助或你要求时调用",
-  "advisor.policy.preflight": "调工具后自动问 1 次 — 查过文件/日志后每任务自动咨询 1 次（纯问答不触发）",
+  "advisor.policy.preflight": "使用工具后自动",
   "advisor.policy.adaptive": "调工具后问 1 次 + 防卡死 — 查完线索后问 1 次，连续改错失败时自动救场",
   "advisor.taskLimit": "每任务咨询上限",
   "advisor.adaptiveNote": "说明：自动模式不会在第一句话发出时就调用顾问，纯文本聊天也不会触发。当 AI 调用工具读取文件或命令输出后，客户端提供稳定会话 ID 时每任务最多自动触发 1 次，无稳定 ID 时仅在单次请求内去重（每次请求最多 1 次）；防卡死救场仅在「命令报错 → 修改文件 → 重跑依然报错」的循环出现时介入。手动调用仅在存在稳定会话 ID 时计入每任务共享上限，自适应模式需要稳定会话 ID 来维护任务预算。",

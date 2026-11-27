@@ -289,7 +289,7 @@ export const ko: Record<TKey, string> = {
   "nav.subagents": "서브에이전트",
 
   "nav.advisor": "어드바이저",
-  "advisor.description": "코딩 AI가 막히거나 어려운 결정을 내릴 때 상의할 수 있는 더 강력한 전문가 모델입니다. 기본값인 수동 모드에서는 필요할 때만 호출됩니다. OpenCodex 프록시를 거치는 모델은 자동 모드도 사용할 수 있으며, 매 메시지마다 무조건 묻지 않고 AI가 도구로 파일이나 오류를 조회한 뒤 작업당 최대 1회만(일반 질문·대화 제외), 그리고 수정 실패가 반복될 때만 개입합니다. 자체 내장 모델을 쓰는 Qoder·WorkBuddy는 opencodex-advisor MCP로 직접 호출합니다.",
+  "advisor.description": "코딩 AI가 상의할 수 있는 전문가 모델입니다. 수동 모드는 요청 시 호출합니다. 라우팅 모델의 사전 확인은 도구 사용 후, 적응형 구조는 반복된 수정 실패 후 실행됩니다. 외부 클라이언트는 MCP를 사용할 수 있습니다.",
   "advisor.enabled": "어드바이저 사용",
   "advisor.model": "전문가 모델",
   "advisor.modelClear": "모델 지우기",
@@ -302,7 +302,7 @@ export const ko: Record<TKey, string> = {
   "advisor.questionOnly": "워커의 질문만 전송",
   "advisor.questionOnlyNote": "워커의 질문(최대 2000자를 유지하며, 초과하면 잘림 안내 추가)과 고정된 자문 지침만 전송합니다. 대화 기록, 도구 결과, 작업 맥락은 자동으로 첨부하지 않습니다. 워커가 필요한 배경을 질문에 포함해야 합니다. 자동 자문은 일시 중지되며 기존 횟수 제한은 유지됩니다.",
   "advisor.policy.manual": "수동(기본값) — AI가 요청하거나 사용자가 지시할 때만 호출",
-  "advisor.policy.preflight": "도구 사용 후 자동 1회 — 파일/로그 조회 후 작업당 1회(일반 질의 제외)",
+  "advisor.policy.preflight": "도구 사용 후 자동",
   "advisor.policy.adaptive": "도구 후 1회 + 자동 구조 — 도구 조회 후 1회 + 반복 수정 실패 시 개입",
   "advisor.taskLimit": "작업별 상담 한도",
   "advisor.adaptiveNote": "동작 조건: 자동 모드는 첫 메시지 직후나 일반 텍스트 문답에서는 실행되지 않습니다. AI가 도구로 파일이나 명령 출력을 확인한 뒤 안정적인 세션 ID가 있으면 작업당 1회, 없으면 요청당 1회 자동으로 실행되며, 자동 구조는 검증 실패 → 파일 수정 → 재실행 실패가 이어질 때만 개입합니다. 수동 호출은 안정적인 세션 ID가 있을 때만 작업 한도를 공유하며, 적응형 모드는 작업 예산을 위해 안정적인 세션 ID가 필요합니다.",
