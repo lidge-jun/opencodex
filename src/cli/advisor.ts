@@ -88,6 +88,14 @@ function summarizeMcpTrustLines(payload: unknown): string[] {
   return lines;
 }
 
+function summarizeMcpErrors(payload: unknown): string[] {
+  if (!payload || typeof payload !== "object") return [];
+  const sync = (payload as { mcpSync?: { errors?: unknown } }).mcpSync;
+  if (!Array.isArray(sync?.errors)) return [];
+  return sync.errors.flatMap(item => item && typeof item === "object" && typeof item.clientId === "string" && typeof item.message === "string"
+    ? [`MCP connection not applied for ${item.clientId}: ${item.message}`] : []);
+}
+
 async function status(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -134,7 +142,7 @@ async function setEnabled(enabled: boolean, argv: string[], deps: RuntimeApiDeps
         contextSharingConsent: ADVISOR_CONTEXT_SHARING_CONSENT_VERSION,
       }),
     }, deps);
-    printData(res, wantsJson, ["Advisor enabled with context-sharing consent v1.", ...summarizeMcpTrustLines(res)]);
+    printData(res, wantsJson, ["Advisor enabled with context-sharing consent v1.", ...summarizeMcpErrors(res), ...summarizeMcpTrustLines(res)]);
     return;
   }
   if (consent !== ADVISOR_CONTEXT_SHARING_CONSENT_VERSION) {
@@ -149,7 +157,7 @@ async function setEnabled(enabled: boolean, argv: string[], deps: RuntimeApiDeps
     method: "PUT",
     body: JSON.stringify({ enabled: true }),
   }, deps);
-  printData(res, wantsJson, ["Advisor enabled.", ...summarizeMcpTrustLines(res)]);
+  printData(res, wantsJson, ["Advisor enabled.", ...summarizeMcpErrors(res), ...summarizeMcpTrustLines(res)]);
 }
 
 async function consent(argv: string[], deps: RuntimeApiDeps): Promise<void> {
@@ -213,7 +221,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     method: "PUT",
     body: JSON.stringify(patch),
   }, deps);
-  printData(res, wantsJson, ["Advisor settings saved.", ...summarizeMcpTrustLines(res)]);
+  printData(res, wantsJson, ["Advisor settings saved.", ...summarizeMcpErrors(res), ...summarizeMcpTrustLines(res)]);
 }
 
 const MAX_CLI_POLL_ATTEMPTS = 20;

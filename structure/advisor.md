@@ -520,6 +520,7 @@ API, CLI (`ocx advisor consult`), and stdio MCP (`src/advisor/mcp-server.ts`, `o
 annotated `readOnlyHint: false, openWorldHint: true`)
 to stay below the 255s HTTP listener idle timeout; `nextCallArguments` (`{ consultationId, afterElapsedMs }`)
 accepts any nonnegative integer cursor alongside `notifications/progress` heartbeats.
+Advisor CLI settings output reports MCP reconciliation errors separately from mounted-client trust status; JSON retains the management response.
 `contextMode: "full"` expands bounded per-message/transcript caps (128k/512k chars) and strips
 `<system-reminder>` wrappers before clipping.
 

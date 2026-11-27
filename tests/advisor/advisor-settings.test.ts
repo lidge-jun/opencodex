@@ -219,6 +219,21 @@ describe("ocx advisor consent", () => {
 });
 
 describe("ocx advisor set — clearing the model", () => {
+  test("text output reports failed MCP reconciliation while JSON retains the payload", async () => {
+    const payload = { mcpSync: { errors: [{ clientId: "workbuddy", message: "permission denied" }] }, mcpClients: [] };
+    const deps = { baseUrl: "http://proxy.test", fetchImpl: (async () => Response.json(payload)) as typeof fetch };
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line?: unknown) => { lines.push(String(line)); };
+    try {
+      expect(await handleAdvisorCommand(["set", "--mcp-clients", "workbuddy"], deps)).toBe(0);
+      expect(lines.join("\n")).toContain("workbuddy");
+      expect(lines.join("\n")).toContain("permission denied");
+      lines.length = 0;
+      expect(await handleAdvisorCommand(["set", "--mcp-clients", "workbuddy", "--json"], deps)).toBe(0);
+      expect(JSON.parse(lines.join("\n"))).toEqual(payload);
+    } finally { console.log = original; }
+  });
   const depsWith = (requests: Array<{ path: string; method: string; body: unknown }>) => ({
     baseUrl: "http://proxy.test",
     fetchImpl: async (input: RequestInfo | URL, init?: RequestInit) => {
