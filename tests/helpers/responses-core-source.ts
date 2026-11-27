@@ -40,6 +40,8 @@ export const RESPONSES_CORE_MODULES = [
   "core-auth.ts",
   "core-normalize.ts",
   "core-combo.ts",
+  // Reached from core-combo.ts: the per-target send-budget scope moved out of it (#9163).
+  "combo-send-budget-scope.ts",
   // Reached from core.ts: the keepalive head a slow streaming combo selection commits (#8326).
   "combo-selection-keepalive.ts",
   "deferred-send-reporter.ts",
