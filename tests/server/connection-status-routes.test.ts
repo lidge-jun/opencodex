@@ -360,8 +360,12 @@ describe("security bounds", () => {
     expect(response!.status).toBe(500);
     expect(await response!.json()).toMatchObject({ code: "unreadable" });
     mkdirSync(join(root, "library"), { recursive: true });
-    const views = await connections(baseConfig({ claudeCode: { desktopMode: "first-party" } }));
-    expect(views.find(row => row.client === "claude-desktop")).toMatchObject({ observed: "unknown", owner: "unknown" });
+    const pinnedViews = await connections(baseConfig({ claudeCode: { desktopMode: "first-party" } }));
+    expect(pinnedViews.find(row => row.client === "claude-desktop")).toMatchObject({ observed: "unknown", owner: "unknown" });
+    const unpinnedViews = await connections(baseConfig());
+    expect(unpinnedViews.find(row => row.client === "claude-desktop")).toMatchObject({ observed: "unknown", owner: "unknown", driftReasons: [] });
+    const pinnedGatewayViews = await connections(baseConfig({ claudeCode: { desktopMode: "gateway" } }));
+    expect(pinnedGatewayViews.find(row => row.client === "claude-desktop")).toMatchObject({ observed: "native", owner: "none" });
   });
 
   test("registered homes are capped", async () => {

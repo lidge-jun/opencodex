@@ -55,6 +55,8 @@ export interface ClaudeDesktopModeObservation {
   ownedGatewaySelected?: boolean;
   /** Claude Code's settings carry first-party env that opencodex wrote (applied or stale). */
   ownedFirstPartySettings?: boolean;
+  /** Claude Code's settings could not be read, so first-party mode could not be ruled out. */
+  firstPartySettingsUnreadable?: boolean;
 }
 
 /**
@@ -209,8 +211,10 @@ export function observeClaudeDesktopMode(
     const kind = inspectDesktopFirstParty(config, options).settings.kind;
     observed.ownedFirstPartySettings = config.claudeCode?.cliFirstParty === true
       ? false : kind === "applied" || kind === "stale";
+    observed.firstPartySettingsUnreadable = kind === "unreadable";
   } catch { // no-excuse-ok: catch -- unreadable settings are no first-party evidence.
     observed.ownedFirstPartySettings = false;
+    observed.firstPartySettingsUnreadable = true;
   }
   return observed;
 }

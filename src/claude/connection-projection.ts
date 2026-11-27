@@ -13,7 +13,7 @@ import { displayPath } from "../lib/display-path";
 import type { OcxConfig } from "../types";
 import { registeredClaudeConfigDirs } from "./auth-detect";
 import { inspectDesktop3pConfigLibrary } from "./desktop-3p";
-import { inspectDesktopFirstParty, observeClaudeDesktopMode, resolveClaudeDesktopMode } from "./desktop-first-party";
+import { inspectDesktopFirstParty, isClaudeDesktopMode, observeClaudeDesktopMode, resolveClaudeDesktopMode } from "./desktop-first-party";
 import { previewClaudeFirstPartySettings } from "./first-party-preview";
 import { firstPartyDesired, firstPartyProxyStatus } from "./first-party-settings";
 import { claudeInterceptEnabled } from "./intercept/runtime";
@@ -98,6 +98,14 @@ function claudeDesktopRow(input: ClaudeConnectionInput): ConnectionView {
     case "foreign": observed = "foreign"; break;
     case "broken": case "unsafe": observed = "unknown"; break;
     case "standard": case "no_owned_state": {
+      const unresolvedFirstParty = !isClaudeDesktopMode(live.claudeCode?.desktopMode)
+        && !live.claudeCode?.desktopProfile?.appliedFingerprint
+        && live.claudeCode?.cliFirstParty !== true
+        && observation.firstPartySettingsUnreadable === true;
+      if (unresolvedFirstParty) {
+        observed = "unknown";
+        break;
+      }
       const settings = mode === "first-party" ? inspectDesktopFirstParty(live, options).settings : null;
       observed = settings?.kind === "unreadable" ? "unknown"
         : settings?.kind === "applied" || settings?.kind === "stale" ? "proxy" : "native";
