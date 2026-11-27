@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { buildClaudeEnv, buildNativeClaudeEnv } from "../../src/cli/claude";
+import { buildClaudeAgentDefs } from "../../src/claude/agents-inject";
 import { entryParts, resolveSubagentForceModel, withSubagentContextMarker } from "../../src/claude/subagent-model";
 import { inspectSubagentForceStatus, probeInstalledClaudeCodeVersion, subagentForceSupport } from "../../src/claude/subagent-force-status";
 import { extractOcxRouteDirective } from "../../src/claude/inbound-model-options";
@@ -180,4 +181,178 @@ test("force preserves exact advertised genuine marked models and legacy alias id
   expect(resolveSubagentForceModel(c, { [marked]: 350000 }, { entries: ["kimi/k3[1m]"] })).toBe(marked);
   expect(resolveSubagentForceModel(config("mock/model[1m]"), { "ocx-claude-mock--model[1m]": 200000, "ocx-claude-mock--model": 1000000 }, { entries: ["mock/model"] })).toBeNull();
   expect(withSubagentContextMarker("ocx-claude-mock--legacy[1m]", {})).toBe("ocx-claude-mock--legacy[1m]");
+});
+
+test("bare combo aliases resolve to canonical combo selectors across entryParts, force, [1m], disabledModels and agents-inject", () => {
+  const comboCfg = (force?: string, overrides: Partial<OcxConfig> = {}): OcxConfig => ({
+    ...config(force),
+    combos: {
+      "bare-combo": { alias: "bare-combo", targets: [{ provider: "ollama", model: "qwen3" }] },
+      "combo-id": { alias: "aliased-combo", targets: [{ provider: "ollama", model: "qwen3" }] },
+      fast: { alias: "team/fast", targets: [{ provider: "ollama", model: "qwen3" }] },
+    },
+    ...overrides,
+  });
+
+  expect(entryParts("bare-combo", comboCfg())).toEqual({ alias: "ocx-claude-combo--bare-combo", id: "bare-combo", provider: "combo" });
+  expect(entryParts("combo/bare-combo", comboCfg())).toEqual({ alias: "ocx-claude-combo--bare-combo", id: "bare-combo", provider: "combo" });
+  expect(entryParts("bare-combo[1m]", comboCfg())).toEqual({ alias: "ocx-claude-combo--bare-combo[1m]", id: "bare-combo[1m]", provider: "combo" });
+  expect(entryParts("bare-combo[1M]", comboCfg())).toEqual({ alias: "ocx-claude-combo--bare-combo[1M]", id: "bare-combo[1M]", provider: "combo" });
+  expect(entryParts("aliased-combo", comboCfg())).toEqual({ alias: "ocx-claude-combo--combo-id", id: "combo-id", provider: "combo" });
+  expect(entryParts("combo/combo-id", comboCfg())).toEqual({ alias: "ocx-claude-combo--combo-id", id: "combo-id", provider: "combo" });
+  expect(entryParts("team/fast", comboCfg())).toEqual({ alias: "ocx-claude-combo--fast", id: "fast", provider: "combo" });
+
+  const selector = "ocx-claude-combo--bare-combo";
+  for (const force of ["bare-combo", "combo/bare-combo"]) {
+    const c = comboCfg(force);
+    expect(resolveSubagentForceModel(c, {}, { entries: ["bare-combo"] })).toBe(selector);
+    expect(resolveSubagentForceModel(c, {}, { selectors: [selector] })).toBe(selector);
+    expect(resolveSubagentForceModel(c, { [selector]: 829_799 }, { entries: ["bare-combo"] })).toBe(selector);
+    expect(resolveSubagentForceModel(c, { [selector]: 829_800 }, { entries: ["bare-combo"] })).toBe(`${selector}[1m]`);
+    expect(resolveSubagentForceModel(c, { [selector]: 1_000_000 }, { selectors: [selector] })).toBe(`${selector}[1m]`);
+  }
+
+  expect(resolveSubagentForceModel(comboCfg("bare-combo[1m]"), {}, { entries: ["bare-combo"] })).toBeNull();
+  expect(resolveSubagentForceModel(comboCfg("bare-combo[1m]"), { [selector]: 1_000_000 }, { entries: ["bare-combo"] })).toBe(`${selector}[1m]`);
+  expect(resolveSubagentForceModel(comboCfg("bare-combo[1M]"), {}, { entries: ["bare-combo"] })).toBeNull();
+  expect(resolveSubagentForceModel(comboCfg("bare-combo[1M]"), { [selector]: 1_000_000 }, { entries: ["bare-combo"] })).toBe(`${selector}[1M]`);
+  expect(resolveSubagentForceModel(comboCfg("aliased-combo"), {}, { entries: ["aliased-combo"] })).toBe("ocx-claude-combo--combo-id");
+  expect(resolveSubagentForceModel(comboCfg("combo/combo-id"), {}, { entries: ["aliased-combo"] })).toBe("ocx-claude-combo--combo-id");
+  expect(resolveSubagentForceModel(comboCfg("aliased-combo"), {}, { selectors: ["ocx-claude-combo--combo-id"] })).toBe("ocx-claude-combo--combo-id");
+  expect(resolveSubagentForceModel(comboCfg("team/fast"), {}, { entries: ["team/fast"] })).toBe("ocx-claude-combo--fast");
+  expect(resolveSubagentForceModel(comboCfg("team/fast"), {}, { selectors: ["ocx-claude-combo--fast"] })).toBe("ocx-claude-combo--fast");
+
+  expect(resolveSubagentForceModel(comboCfg("bare-combo", { disabledModels: ["combo/bare-combo"] }), {}, { entries: ["bare-combo"] })).toBeNull();
+  expect(resolveSubagentForceModel(comboCfg("combo/bare-combo", { disabledModels: ["bare-combo"] }), {}, { selectors: [selector] })).toBeNull();
+
+  const localEnv = buildClaudeEnv(comboCfg("bare-combo"), 10100, {}, { [selector]: 1_000_000 }, { ...deps, forceAvailable: ["bare-combo"] });
+  expect(localEnv[MODEL]).toBe(`${selector}[1m]`);
+  expect(localEnv[FORCE]).toBe("1");
+  const connectedEnv = buildClaudeEnv(comboCfg("bare-combo"), 10100, {}, { [selector]: 1_000_000 }, { ...deps, forceAvailable: undefined, forceAvailableSelectors: [selector] });
+  expect(connectedEnv[MODEL]).toBe(`${selector}[1m]`);
+  expect(connectedEnv[FORCE]).toBe("1");
+
+  const dir = mkdtempSync(join(tmpdir(), "ocx-bare-combo-agents-"));
+  try {
+    const defs = buildClaudeAgentDefs(comboCfg(undefined, { subagentModels: ["bare-combo", "combo/bare-combo", "aliased-combo"] }), { [selector]: 1_000_000 }, dir);
+    expect(defs.map(d => ({ name: d.name, model: d.model, file: d.file }))).toEqual([
+      { name: "ocx-bare-combo", model: `${selector}[1m]`, file: "ocx-bare-combo.md" },
+      { name: "ocx-combo-id", model: "ocx-claude-combo--combo-id", file: "ocx-combo-id.md" },
+    ]);
+    expect(defs[0]?.description).toContain("bare-combo (combo)");
+    expect(defs[1]?.description).toContain("combo-id (combo)");
+  } finally {
+    removeTreeWithRetry(dir);
+  }
+});
+
+test("physical combo provider without configured combos preserves routed decoding", () => {
+  const physicalCfg: OcxConfig = {
+    ...config("combo/vendor-model"),
+    providers: {
+      combo: { baseUrl: "https://example.invalid", apiKey: "k", api: "openai-completions", models: ["vendor/model"] },
+    },
+    combos: {},
+  };
+  expect(entryParts("combo/vendor-model", physicalCfg)).toEqual({
+    alias: "ocx-claude2-combo--vendor~smodel",
+    id: "vendor/model",
+    provider: "combo",
+  });
+  expect(resolveSubagentForceModel(physicalCfg, {}, { entries: ["combo/vendor-model"] }))
+    .toBe("ocx-claude2-combo--vendor~smodel");
+  expect(resolveSubagentForceModel(physicalCfg, {}, { selectors: ["ocx-claude2-combo--vendor~smodel"] }))
+    .toBe("ocx-claude2-combo--vendor~smodel");
+});
+
+test("nativeAlias combo disable and catalog omission preserve still-enabled native OpenAI slug", () => {
+  const nativeAliasCfg = (force?: string, overrides: Partial<OcxConfig> = {}): OcxConfig => ({
+    ...config(force),
+    combos: {
+      astra: { alias: "gpt-6.2-astra", nativeAlias: true, targets: [{ provider: "ollama", model: "qwen3" }] },
+    },
+    ...overrides,
+  });
+
+  // Native disabled: combo remains forceable via canonical combo/astra.
+  expect(resolveSubagentForceModel(
+    nativeAliasCfg("combo/astra", { disabledModels: ["gpt-6.2-astra"] }),
+    {},
+    { selectors: ["ocx-claude-combo--astra"] },
+  )).toBe("ocx-claude-combo--astra");
+  expect(resolveSubagentForceModel(
+    nativeAliasCfg("combo/astra", { disabledModels: ["gpt-6.2-astra"] }),
+    {},
+    { entries: ["combo/astra"] },
+  )).toBe("ocx-claude-combo--astra");
+
+  // Combo disabled: bare native slug falls back to native OpenAI model across entryParts, force, and agents-inject.
+  const disabledComboCfg = nativeAliasCfg("gpt-6.2-astra", { disabledModels: ["combo/astra"] });
+  expect(entryParts("gpt-6.2-astra", disabledComboCfg)).toEqual({
+    alias: "ocx-claude-native--gpt-6.2-astra",
+    id: "gpt-6.2-astra",
+    provider: "native",
+  });
+  expect(resolveSubagentForceModel(disabledComboCfg, {}, { entries: ["gpt-6.2-astra"] }))
+    .toBe("ocx-claude-native--gpt-6.2-astra");
+  expect(resolveSubagentForceModel(disabledComboCfg, {}, { selectors: ["ocx-claude-native--gpt-6.2-astra"] }))
+    .toBe("ocx-claude-native--gpt-6.2-astra");
+  expect(resolveSubagentForceModel(
+    nativeAliasCfg("combo/astra", { disabledModels: ["combo/astra"] }),
+    {},
+    { selectors: ["ocx-claude-combo--astra", "ocx-claude-native--gpt-6.2-astra"] },
+  )).toBeNull();
+  expect(resolveSubagentForceModel(
+    nativeAliasCfg("gpt-6.2-astra", { disabledModels: ["combo/astra", "gpt-6.2-astra"] }),
+    {},
+    { selectors: ["ocx-claude-native--gpt-6.2-astra"] },
+  )).toBeNull();
+
+  const dir = mkdtempSync(join(tmpdir(), "ocx-native-alias-disabled-"));
+  try {
+    const defs = buildClaudeAgentDefs(
+      nativeAliasCfg(undefined, { disabledModels: ["combo/astra"], subagentModels: ["gpt-6.2-astra"] }),
+      {},
+      dir,
+    );
+    expect(defs.map(d => ({ name: d.name, model: d.model, file: d.file }))).toEqual([
+      { name: "ocx-gpt-6-2-astra", model: "ocx-claude-native--gpt-6.2-astra", file: "ocx-gpt-6-2-astra.md" },
+    ]);
+    expect(defs[0]?.description).toContain("gpt-6.2-astra (native)");
+  } finally {
+    removeTreeWithRetry(dir);
+  }
+
+  // Unhealthy nativeAlias combo omitted from catalog while native OpenAI model is exposed.
+  expect(resolveSubagentForceModel(
+    nativeAliasCfg("gpt-6.2-astra"),
+    {},
+    { selectors: ["ocx-claude-native--gpt-6.2-astra"] },
+  )).toBe("ocx-claude-native--gpt-6.2-astra");
+  expect(resolveSubagentForceModel(
+    nativeAliasCfg("gpt-6.2-astra", { disabledModels: ["gpt-6.2-astra"] }),
+    {},
+    { selectors: ["ocx-claude-native--gpt-6.2-astra"] },
+  )).toBeNull();
+  expect(resolveSubagentForceModel(
+    nativeAliasCfg("combo/astra"),
+    {},
+    { selectors: ["ocx-claude-native--gpt-6.2-astra"] },
+  )).toBeNull();
+  // Same omission invariant through the entries exposure path (GET/PUT /api/subagent-models).
+  expect(resolveSubagentForceModel(
+    nativeAliasCfg("gpt-6.2-astra"),
+    {},
+    { entries: ["gpt-6.2-astra"] },
+  )).toBe("ocx-claude-native--gpt-6.2-astra");
+  expect(resolveSubagentForceModel(
+    nativeAliasCfg("gpt-6.2-astra", { disabledModels: ["gpt-6.2-astra"] }),
+    {},
+    { entries: ["gpt-6.2-astra"] },
+  )).toBeNull();
+  expect(resolveSubagentForceModel(
+    nativeAliasCfg("combo/astra"),
+    {},
+    { entries: ["gpt-6.2-astra"] },
+  )).toBeNull();
 });

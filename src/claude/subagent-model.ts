@@ -7,11 +7,12 @@ import { knownModelIdsForProvider } from "../router";
 import { decodeRoutedModelIdOrThrow } from "../providers/slug-codec";
 import { SAFE_AGENT_MODEL_ID } from "../config/subagent-models";
 import { resolveDesktop3pAlias } from "./desktop-3p";
+import { COMBO_NAMESPACE, isNativeAliasCombo, preservesPhysicalComboProvider, resolveComboId } from "../combos/identifiers";
 export { SAFE_AGENT_MODEL_ID } from "../config/subagent-models";
 
-/** Roster entry -> alias + display parts. Entries are bare native slugs or "provider/id".
- * Codex-facing encoded ids (`provider/vendor-model`) decode to the native slash id first
- * so the alias joins the raw-native context-window map (context-windows.ts). */
+/** Roster entry -> alias + display parts. Entries are bare native slugs, configured combo aliases,
+ * or "provider/id". Codex-facing encoded ids (`provider/vendor-model`) decode to the native slash
+ * id first so the alias joins the raw-native context-window map (context-windows.ts). */
 
 /**
  * Generated subagent defs cannot rely on the parent's auto-context compaction
@@ -56,7 +57,40 @@ export function withSubagentContextMarker(selector: string, windows: Record<stri
   }
   return wasMarked ? selector : bare;
 }
+function isComboDisabled(config: OcxConfig, comboId: string): boolean {
+  const canonical = `${COMBO_NAMESPACE}/${comboId}`.toLowerCase();
+  return (config.disabledModels ?? []).some(disabled =>
+    stripOneMillionMarker(disabled).toLowerCase() === canonical,
+  );
+}
+
+function bareNativeAliasComboId(entry: string, config: OcxConfig): string | null {
+  if (preservesPhysicalComboProvider(config)) return null;
+  const bare = stripOneMillionMarker(entry);
+  if (bare.startsWith(`${COMBO_NAMESPACE}/`)) return null;
+  const comboId = resolveComboId(config, bare);
+  return comboId && isNativeAliasCombo(config.combos?.[comboId] ?? {}) ? comboId : null;
+}
+
+function nativePreservingEntryAlias(value: string, config: OcxConfig): string {
+  if (bareNativeAliasComboId(value, config)) return claudeCodeNativeAlias(value);
+  return entryParts(value, config).alias;
+}
+
 export function entryParts(entry: string, config: OcxConfig): { alias: string; id: string; provider: string } {
+  const bare = stripOneMillionMarker(entry);
+  const suffix = entry.slice(bare.length);
+  if (!preservesPhysicalComboProvider(config)) {
+    const comboId = resolveComboId(config, bare);
+    if (comboId) {
+      const bareNativeAlias = !bare.startsWith(`${COMBO_NAMESPACE}/`)
+        && isNativeAliasCombo(config.combos?.[comboId] ?? {});
+      if (!bareNativeAlias || !isComboDisabled(config, comboId)) {
+        const id = `${comboId}${suffix}`;
+        return { alias: claudeCodeAlias(COMBO_NAMESPACE, id), id, provider: COMBO_NAMESPACE };
+      }
+    }
+  }
   const slash = entry.indexOf("/");
   if (slash > 0) {
     const provider = entry.slice(0, slash);
@@ -90,15 +124,20 @@ export function resolveSubagentForceModel(config: OcxConfig, windows: Record<str
   const entry = config.claudeCode?.subagentModelForce;
   if (typeof entry !== "string" || !SAFE_AGENT_MODEL_ID.test(entry)) return null;
   try {
-    const parts = entryParts(entry, config);
-    if ((config.disabledModels ?? []).some(disabled => {
-      try { return selectorIdentity(entryParts(disabled, config).alias) === selectorIdentity(parts.alias); } catch { return false; }
-    })) return null;
+    let parts = entryParts(entry, config);
     const selectors = "selectors" in available ? available.selectors : available.entries.flatMap(candidate => {
-      try { return [entryParts(candidate, config).alias]; } catch { return []; }
+      try { return [nativePreservingEntryAlias(candidate, config)]; } catch { return []; }
     });
-    const exposed = selectors.some(candidate => selectorIdentity(candidate) === selectorIdentity(parts.alias));
-    if (!exposed) return null;
+    const isExposed = (alias: string) => selectors.some(candidate => selectorIdentity(candidate) === selectorIdentity(alias));
+    if (!isExposed(parts.alias) && bareNativeAliasComboId(entry, config)) {
+      const nativeAlias = claudeCodeNativeAlias(entry);
+      if (isExposed(nativeAlias)) parts = { alias: nativeAlias, id: entry, provider: "native" };
+    }
+    const targetIdentity = selectorIdentity(parts.alias);
+    if ((config.disabledModels ?? []).some(disabled => {
+      try { return selectorIdentity(nativePreservingEntryAlias(disabled, config)) === targetIdentity; } catch { return false; }
+    })) return null;
+    if (!isExposed(parts.alias)) return null;
     const bare = stripOneMillionMarker(parts.alias);
     const requestedMarker = bare !== parts.alias;
     const exactMarkedExposure = requestedMarker && selectors.some(candidate =>
