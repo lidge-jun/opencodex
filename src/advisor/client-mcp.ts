@@ -980,6 +980,11 @@ export function unmountAdvisorMcpForClient(
   const paths = spec.resolvePaths(home, env);
 
   let changed = false;
+  const recordedPath = readOwnedAdvisorEntries(configDir)[clientId]?.configPath;
+  if (recordedPath && canonicalClientPath(recordedPath) !== canonicalClientPath(paths.mcpConfigPath)) {
+    if (protectedPaths?.mcpPaths.has(canonicalClientPath(recordedPath))) return { ok: true, changed: false };
+    return { ok: false, changed: false, error: `Advisor MCP cleanup needs attention at previously recorded path ${recordedPath}` };
+  }
   if (!protectedPaths?.mcpPaths.has(canonicalClientPath(paths.mcpConfigPath)) && existsSync(paths.mcpConfigPath)) {
     const read = readJsonObject(paths.mcpConfigPath);
     if (read.parseError || !read.doc) {
@@ -1132,8 +1137,11 @@ export function syncAdvisorMcpClients(
     try {
       const paths = CLIENT_SPECS[id].resolvePaths(home, env);
       const status = inspectAdvisorMcpClientStatus(id, config, options, routedSet);
+      const recordedPath = readOwnedAdvisorEntries(configDir)[id]?.configPath;
       const hasUnprotectedMounted =
-        (status.mounted && !protectedPaths.mcpPaths.has(canonicalClientPath(paths.mcpConfigPath)))
+        (!!recordedPath && canonicalClientPath(recordedPath) !== canonicalClientPath(paths.mcpConfigPath)
+          && !protectedPaths.mcpPaths.has(canonicalClientPath(recordedPath)))
+        || (status.mounted && !protectedPaths.mcpPaths.has(canonicalClientPath(paths.mcpConfigPath)))
         || (status.hooksMounted && (!paths.hookConfigPath || !protectedPaths.hookConfigPaths.has(canonicalClientPath(paths.hookConfigPath))))
         || (status.skillMounted && (!paths.skillPath || !protectedPaths.skillPaths.has(canonicalClientPath(paths.skillPath))));
       if (hasUnprotectedMounted) {

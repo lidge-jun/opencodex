@@ -183,6 +183,25 @@ describe("Advisor client MCP safety", () => {
     expect(syncAdvisorMcpClients(config, opts).errors).toEqual([]);
     expect(JSON.parse(readFileSync(join(realDir, "settings.json"), "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeDefined();
   });
+  test("deselecting after a config-path change reports and retains the old record", () => {
+    const home = tempHome("ocx-advisor-stale-path-");
+    const configDir = join(home, ".opencodex");
+    const oldDir = join(home, "old-qoder");
+    const newDir = join(home, "new-qoder");
+    const oldOpts = { homeDir: home, configDir, env: { QODER_CONFIG_DIR: oldDir } };
+    const newOpts = { homeDir: home, configDir, env: { QODER_CONFIG_DIR: newDir } };
+    expect(mountAdvisorMcpForClient("qoder", oldOpts).ok).toBe(true);
+    mkdirSync(newDir, { recursive: true });
+    writeFileSync(join(newDir, "settings.json"), '{"mcpServers":{}}');
+    const record = join(configDir, "advisor-mcp-entries.json");
+    const before = readFileSync(record, "utf8");
+    expect(unmountAdvisorMcpForClient("qoder", newOpts).ok).toBe(false);
+    expect(readFileSync(record, "utf8")).toBe(before);
+    const sync = syncAdvisorMcpClients({ advisor: { enabled: false } }, newOpts);
+    expect(sync.errors.some(error => error.clientId === "qoder" && error.message.includes(oldDir))).toBe(true);
+    expect(readFileSync(record, "utf8")).toBe(before);
+    expect(readFileSync(join(oldDir, "settings.json"), "utf8")).toContain(ADVISOR_MCP_SERVER_NAME);
+  });
   test("an identical opencodex-advisor entry OpenCodex never recorded is used but never deleted", () => {
     const home = tempHome("ocx-advisor-identical-");
     const configDir = join(home, ".opencodex");
