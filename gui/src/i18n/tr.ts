@@ -3503,7 +3503,7 @@ export const tr: Record<TKey, string> = {
   "cws.saved": "Kombo kaydedildi.",
   "cws.created": "{model} oluşturuldu.",
   "cws.removed": "combo/{id} kaldırıldı.",
-  "cws.removedOnServer": "Siz düzenlerken bu kombo bu sunucuda kaldırıldı. Taslağınız korunuyor: Kimlik hâlâ boştaysa Yeniden oluştur onu yeni bir kombo olarak kaydeder; atmak için geri dönün.",
+  "cws.removedOnServer": "Siz düzenlerken bu kombo bu sunucuda kaldırıldı. Taslağınız korunuyor: Kimlik hâlâ kullanılmıyorsa Yeniden oluştur onu yeni bir kombo olarak kaydeder; atmak için geri dönün.",
   "cws.recreate": "Yeniden oluştur",
   "cws.renamed": "{from}, {to} olarak yeniden adlandırıldı.",
   "cws.add": "Kombo ekle",

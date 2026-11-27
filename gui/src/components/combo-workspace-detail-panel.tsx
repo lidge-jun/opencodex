@@ -80,7 +80,8 @@ export function DetailPanel({
   onBack?: () => void;
   onSaved: (item: ComboItem) => void;
   onRequestRemove?: () => void;
-  onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null, createOnly?: boolean) => Promise<{ ok: boolean; error?: string; item?: ComboItem }>;
+  /** `isCreate` saves create-only: the server refuses an id that is already taken. */
+  onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null) => Promise<{ ok: boolean; error?: string; item?: ComboItem }>;
   onDirtyChange: (dirty: boolean) => void;
   /** The server no longer has this combo while the draft is kept; Recreate creates it from the draft only if the id is still free. */
   storedRemoved?: boolean;
@@ -214,7 +215,7 @@ export function DetailPanel({
     const recreate = !isCreate && storedRemoved;
     const renameFrom = !isCreate && !recreate && trimmedId !== baseline.id ? baseline.id : undefined;
     try {
-      const res = await onSave(item, isCreate || recreate, renameFrom, isCreate || recreate ? null : draftBaseline.current, recreate);
+      const res = await onSave(item, isCreate || recreate, renameFrom, isCreate || recreate ? null : draftBaseline.current);
       if (!res.ok) {
         setMsg({ ok: false, text: res.error || t("cws.saveFailed") });
         return;

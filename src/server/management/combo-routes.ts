@@ -160,15 +160,43 @@ class ComboRevisionConflict extends Error {
  * dashboard's refresh after a durable conflict would read the same stale combo and
  * every retry would conflict again. Adopt the stored source and destination combos;
  * the next rebasing save would have adopted these unedited disk values anyway.
+ * One disk edit can move a public model id (alias) between combos, so a live row that
+ * would share an adopted row's public id is adopted too when its stored value differs;
+ * otherwise two combos would advertise the same model and routing would pick the first.
  * Returns the ids whose live combo changed.
  */
 function adoptStoredCombos(config: OcxConfig, stored: Readonly<Record<string, OcxComboConfig>>, ids: readonly string[]): string[] {
-  const changed = [...new Set(ids)].filter((comboId) => {
+  const differs = (comboId: string): boolean => {
     const durable = Object.hasOwn(stored, comboId) ? stored[comboId] : undefined;
     const live = config.combos?.[comboId];
     if (durable === undefined) return live !== undefined;
     return live === undefined || comboRevision(live) !== comboRevision(durable);
-  });
+  };
+  const publicId = (comboId: string, combo: OcxComboConfig): string =>
+    (typeof combo.alias === "string" ? combo.alias.trim() : "") || `combo/${comboId}`;
+  const adopt = new Set([...new Set(ids)].filter(differs));
+  for (let grew = adopt.size > 0; grew;) {
+    grew = false;
+    const prospective: Record<string, OcxComboConfig> = { ...config.combos };
+    for (const comboId of adopt) {
+      if (Object.hasOwn(stored, comboId)) prospective[comboId] = stored[comboId]!;
+      else delete prospective[comboId];
+    }
+    const owners = new Map<string, string[]>();
+    for (const [comboId, combo] of Object.entries(prospective)) {
+      const key = publicId(comboId, combo);
+      owners.set(key, [...(owners.get(key) ?? []), comboId]);
+    }
+    for (const sharing of owners.values()) {
+      if (sharing.length < 2 || !sharing.some(comboId => adopt.has(comboId))) continue;
+      for (const comboId of sharing) {
+        if (adopt.has(comboId) || !differs(comboId)) continue;
+        adopt.add(comboId);
+        grew = true;
+      }
+    }
+  }
+  const changed = [...adopt];
   if (changed.length > 0) adoptPersistedCombos(config, stored, changed);
   return changed;
 }
@@ -311,6 +339,10 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       return jsonResponse({ error: "combo revision conflict", code: "combo_revision_conflict" }, 409);
     }
     if (renameFrom && Object.hasOwn(config.combos ?? {}, id)) {
+      // A conditional rename reports an occupied destination as a conflict wherever it was seen.
+      if (body.ifRevision !== undefined) {
+        return jsonResponse({ error: "combo revision conflict", code: "combo_revision_conflict" }, 409);
+      }
       return jsonResponse({ error: `combo "${id}" already exists` }, 400);
     }
     if (!isPlainRecord(body.combo)) {

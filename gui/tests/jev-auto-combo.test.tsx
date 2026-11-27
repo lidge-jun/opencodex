@@ -474,5 +474,5 @@ test("configured JEV deep-link opens the shared editable Combo modal and submits
       { provider: "openai", model: "gpt-5.6-sol" },
       { provider: "anthropic", model: "claude-sonnet-5" },
     ],
-  })]);
+  }, { ifAbsent: true })]);
 });

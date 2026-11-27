@@ -222,3 +222,64 @@ test("a create-only save refuses a combo that exists in the live or stored confi
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("a conditional rename onto a live combo is a revision conflict, an unconditional one stays a 400", async () => {
+  const config: OcxConfig = { port: 10100, defaultProvider: "fixture", providers: {
+    fixture: { adapter: "openai-chat", baseUrl: "https://fixture.example/v1", apiKey: "fixture", models: ["m", "n"], liveModels: false },
+  } };
+  const call = async (method: string, body?: unknown) => {
+    const req = new Request("http://localhost/api/combos", { method, headers: { host: "localhost", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    return (await handleManagementAPI(req, new URL(req.url), config, {
+      createManagementConvergeCodex: catalogConvergenceFactory(), saveConfigPreservingClaudeCode: () => {},
+    }))!;
+  };
+  const m = { strategy: "failover", targets: [{ provider: "fixture", model: "m" }] };
+  expect((await call("PUT", { id: "c", combo: m })).status).toBe(200);
+  expect((await call("PUT", { id: "d", combo: m })).status).toBe(200);
+  const source = ((await (await call("GET")).json()).combos as any[]).find(combo => combo.id === "c");
+  const conditional = await call("PUT", { id: "d", renameFrom: "c", ifRevision: source.revision, combo: m });
+  expect(conditional.status).toBe(409);
+  expect(await conditional.json()).toMatchObject({ code: "combo_revision_conflict" });
+  const unconditional = await call("PUT", { id: "d", renameFrom: "c", combo: m });
+  expect(unconditional.status).toBe(400);
+  expect(Object.keys(config.combos ?? {}).sort()).toEqual(["c", "d"]);
+});
+
+test("adopting a stored combo also adopts the combo whose alias the same disk edit moved", async () => {
+  const home = mkdtempSync(join(tmpdir(), "combo-adopt-alias-"));
+  const oldHome = process.env.OPENCODEX_HOME;
+  process.env.OPENCODEX_HOME = home;
+  try {
+    const target = [{ provider: "fixture", model: "m" }];
+    const config: OcxConfig = { port: 10100, defaultProvider: "fixture", providers: {
+      fixture: { adapter: "openai-chat", baseUrl: "https://fixture.example/v1", apiKey: "fixture", models: ["m", "n"], liveModels: false },
+    }, combos: {
+      c: { strategy: "failover", alias: "alpha", targets: target },
+      d: { strategy: "failover", alias: "beta", targets: target },
+      e: { strategy: "failover", alias: "delta", targets: target },
+    } };
+    saveConfig(config);
+    armClaudeCodeBaseline(config);
+    const call = async (method: string, body?: unknown) => {
+      const req = new Request("http://localhost/api/combos", { method, headers: { host: "localhost", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      return (await handleManagementAPI(req, new URL(req.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() }))!;
+    };
+    const draft = ((await (await call("GET")).json()).combos as any[]).find(combo => combo.id === "c");
+    const disk = structuredClone(config);
+    disk.combos!.c!.alias = "beta";
+    disk.combos!.d!.alias = "gamma";
+    disk.combos!.e!.strategy = "round-robin";
+    saveConfig(disk);
+    const response = await call("PUT", { id: "c", ifRevision: draft.revision, combo: { strategy: "failover", alias: "alpha", targets: target } });
+    expect(response.status).toBe(409);
+    const listed = (await (await call("GET")).json()).combos as any[];
+    const models = Object.fromEntries(listed.map(combo => [combo.id, combo.model]));
+    expect(models).toEqual({ c: "beta", d: "gamma", e: "delta" });
+    // A row the alias swap did not touch keeps its live value.
+    expect(config.combos?.e?.strategy).toBe("failover");
+  } finally {
+    if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = oldHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
