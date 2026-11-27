@@ -1,12 +1,19 @@
 import { spawn } from "node:child_process";
+import { join } from "node:path";
 import { startWindowsCliChild, type WindowsCliChild } from "../codex/windows-cli-child";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
+import { resolveTrustedWindowsSystemDirectory } from "../lib/windows-elevation";
 
 export const FOREGROUND_ADVISORY_ARG = "__foreground-service-advisory";
 const TIMEOUT_MS = 3_000;
 const REAP_MS = 1_000;
 const POLL_MS = 5;
+const SETTLE_POLL_MS = 250;
 const MAX_BYTES = 8_192;
+const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9;
+const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x0000_2000;
+const JOB_EXTENDED_LIMIT_BYTES = 144;
+const JOB_LIMIT_FLAGS_OFFSET = 16;
 
 export interface ForegroundAdvisoryEligibility {
   cleaned: boolean;
@@ -48,9 +55,12 @@ export interface ForegroundAdvisoryDeps {
    * unnamed Job Object before `ResumeThread`, and fails closed if containment cannot be established.
    */
   launchWindows?: () => ContainedWindowsAdvisoryChild;
+  /** Override for applying `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` to the Windows job in tests. */
+  setKillOnJobClose?: (job: bigint) => boolean;
   timeoutMs?: number;
   reapMs?: number;
   pollMs?: number;
+  settlePollMs?: number;
   platform?: NodeJS.Platform;
 }
 
@@ -97,6 +107,44 @@ function publishAdvisoryOutput(raw: string, warn: (line: string) => void): void 
   } catch { /* optional output */ }
 }
 
+let winJobLimitApi: {
+  readonly lib: { close(): void };
+  setInformationJobObject: (job: bigint, infoClass: number, infoPtr: number, length: number) => number;
+  ptr: typeof import("bun:ffi").ptr;
+} | null | undefined;
+
+function enableWindowsKillOnJobClose(job: bigint): boolean {
+  if (winJobLimitApi === undefined) {
+    winJobLimitApi = null;
+    if (process.platform === "win32" && process.arch === "x64") {
+      try {
+        const ffi = require("bun:ffi") as typeof import("bun:ffi");
+        const lib = ffi.dlopen(join(resolveTrustedWindowsSystemDirectory(), "kernel32.dll"), {
+          SetInformationJobObject: { args: ["u64", "i32", "ptr", "u32"], returns: "i32" },
+        });
+        winJobLimitApi = {
+          lib,
+          setInformationJobObject: (handle, cls, infoPtr, len) => lib.symbols.SetInformationJobObject(handle, cls, infoPtr, len),
+          ptr: ffi.ptr,
+        };
+      } catch { /* kernel32 SetInformationJobObject unavailable */ }
+    }
+  }
+  if (!winJobLimitApi) return false;
+  try {
+    const info = Buffer.alloc(JOB_EXTENDED_LIMIT_BYTES);
+    info.writeUInt32LE(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_LIMIT_FLAGS_OFFSET);
+    return Boolean(winJobLimitApi.setInformationJobObject(
+      job,
+      JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+      winJobLimitApi.ptr(info),
+      JOB_EXTENDED_LIMIT_BYTES,
+    ));
+  } catch {
+    return false;
+  }
+}
+
 function disposeWindowsHandlesAsync(child: ContainedWindowsAdvisoryChild): void {
   void child.pipe.dispose().then(() => {
     if (child.process) child.native.close(child.process);
@@ -112,6 +160,7 @@ function startWindowsContainedAdvisory(
   const timeoutMs = deps.timeoutMs ?? TIMEOUT_MS;
   const reapMs = deps.reapMs ?? REAP_MS;
   const pollMs = deps.pollMs ?? POLL_MS;
+  const settlePollMs = deps.settlePollMs ?? SETTLE_POLL_MS;
   const expires = performance.now() + timeoutMs;
 
   let child: ContainedWindowsAdvisoryChild;
@@ -130,10 +179,10 @@ function startWindowsContainedAdvisory(
   }
 
   if (child.setupFailure || !child.process || !child.job) {
-    if (child.process) {
-      try { child.reapUnstarted(); } catch { /* best-effort unstarted reap */ }
-    }
-    disposeWindowsHandlesAsync(child);
+    const reaped = !child.process || (() => {
+      try { return child.reapUnstarted(); } catch { return false; }
+    })();
+    if (reaped) disposeWindowsHandlesAsync(child);
     return () => { /* setup failed before ResumeThread; nothing running */ };
   }
 
@@ -167,9 +216,10 @@ function startWindowsContainedAdvisory(
     return ok;
   };
 
-  const schedulePoll = () => {
+  const schedulePoll = (delayMs = pollMs) => {
     if (disposed) return;
-    pollTimer = setTimeout(tick, pollMs);
+    clearPoll();
+    pollTimer = setTimeout(tick, delayMs);
     pollTimer.unref();
   };
 
@@ -178,8 +228,9 @@ function startWindowsContainedAdvisory(
     settled = true;
     const ok = terminateJob();
     if (sync) {
-      // Synchronous exit path: stop any pending timer; only mark disposed if TerminateJobObject
-      // succeeded, otherwise retain the job handle so another sync retry can still terminate it.
+      // Synchronous exit path: stop any pending timer. JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+      // guarantees the kernel terminates the probe tree on parent exit even if TerminateJobObject
+      // returned false; retain the job handle until process exit when termination was not confirmed.
       clearPoll();
       if (ok) disposed = true;
       return;
@@ -230,15 +281,27 @@ function startWindowsContainedAdvisory(
     if (!settled && now >= expires) {
       stop(false);
     }
-    if (stopAt !== null && now - stopAt >= reapMs) {
-      // Never close child.job while the job is nonterminal or termination failed: stop polling
-      // and retain handle ownership so a later shutdown/exit stop() can retry TerminateJobObject.
+    if (stopAt !== null) {
+      // Slow-to-settle job or failed termination: never leak handles by abandoning polling, and
+      // never close child.job while nonterminal. Retry TerminateJobObject if needed, backing off
+      // to an unreferenced poll interval after reapMs until the job is observed terminal.
       if (!terminated) terminateJob();
-      clearPoll();
+      schedulePoll(now - stopAt >= reapMs ? settlePollMs : pollMs);
       return;
     }
-    schedulePoll();
+    schedulePoll(pollMs);
   };
+
+  // Enforce JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE on the probe's job so even if TerminateJobObject
+  // fails during shutdown or the parent crashes, Windows terminates the entire probe tree on exit.
+  const killOnCloseApplied = (() => {
+    try { return (deps.setKillOnJobClose ?? enableWindowsKillOnJobClose)(child.job); }
+    catch { return false; }
+  })();
+  if (!killOnCloseApplied) {
+    stop(false);
+    return stop;
+  }
 
   schedulePoll();
   return stop;

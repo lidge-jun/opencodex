@@ -279,6 +279,7 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
 
   test("normal Windows completion publishes advisory and releases handles without TerminateJobObject", async () => {
     const warnings: string[] = [];
+    const killOnCloseJobs: bigint[] = [];
     const fake = createFakeContainedWindowsChild({
       outputChunks: [Buffer.from(JSON.stringify(["windows advisory"]))],
       terminal: true,
@@ -288,10 +289,12 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
       platform: "win32",
       pollMs: 5,
       launchWindows: () => fake.child,
+      setKillOnJobClose: job => { killOnCloseJobs.push(job); return true; },
     });
     try {
       await Bun.sleep(40);
       expect(warnings).toEqual(["windows advisory"]);
+      expect(killOnCloseJobs).toEqual([0x100n]);
       // Later CLI shutdown (both async and synchronous exit paths) must not call
       // TerminateJobObject with an already-closed job handle that Windows could reuse.
       stop(false);
@@ -317,6 +320,7 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
       timeoutMs: 30,
       pollMs: 5,
       launchWindows: () => fake.child,
+      setKillOnJobClose: () => true,
     });
     try {
       await Bun.sleep(90);
@@ -338,45 +342,66 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
       timeoutMs: 10_000,
       pollMs: 50,
       launchWindows: () => fake.child,
+      setKillOnJobClose: () => true,
     });
     stop(true);
     expect(fake.state().terminatedJobs).toEqual([{ job: 0x100n, code: 1 }]);
     expect(warnings).toEqual([]);
   });
 
-  test("failed TerminateJobObject retains job handle ownership for later retry instead of closing handles", async () => {
+  test("slow-to-settle job and failed TerminateJobObject keep backoff polling until terminal so handles never leak", async () => {
     let allowTerminate = false;
+    let stayNonterminalAfterTerminate = true;
     const fake = createFakeContainedWindowsChild({
       terminal: false,
-      onTerminateJob: () => allowTerminate,
+      onTerminateJob: () => {
+        if (!allowTerminate) return false;
+        if (stayNonterminalAfterTerminate) return undefined;
+        return undefined;
+      },
     });
+    // Override observe so we can simulate a job that takes longer than reapMs to settle even after
+    // TerminateJobObject succeeds.
+    let externallyTerminal = false;
+    const originalObserve = fake.child.observe.bind(fake.child);
+    const wrappedChild: ContainedWindowsAdvisoryChild = {
+      ...fake.child,
+      observe: () => externallyTerminal ? originalObserve() : { terminal: false, exitCode: null, unknown: false },
+    };
+
     const stop = startForegroundAdvisory(() => {}, {
       platform: "win32",
-      timeoutMs: 20,
-      reapMs: 30,
+      timeoutMs: 15,
+      reapMs: 25,
       pollMs: 5,
-      launchWindows: () => fake.child,
+      settlePollMs: 15,
+      launchWindows: () => wrappedChild,
+      setKillOnJobClose: () => true,
     });
-    // Wait past timeoutMs + reapMs while TerminateJobObject returns 0 (failure).
-    await Bun.sleep(90);
-    expect(fake.state().terminatedJobs.length).toBeGreaterThanOrEqual(1);
-    // Handles must NOT be released while the job remains nonterminal / termination failed.
-    expect(fake.state().closedHandles).toEqual([]);
-    expect(fake.state().pipeDisposed).toBe(0);
-    expect(fake.state().nativeDisposed).toBe(0);
+    try {
+      // Wait past timeoutMs + reapMs while TerminateJobObject fails: handles stay owned and retry continues.
+      await Bun.sleep(70);
+      const attemptsAfterFail = fake.state().terminatedJobs.length;
+      expect(attemptsAfterFail).toBeGreaterThanOrEqual(2);
+      expect(fake.state().closedHandles).toEqual([]);
+      expect(fake.state().pipeDisposed).toBe(0);
 
-    // A failed synchronous exit attempt also retains ownership for a subsequent retry.
-    const beforeSyncFail = fake.state().terminatedJobs.length;
-    stop(true);
-    expect(fake.state().terminatedJobs.length).toBe(beforeSyncFail + 1);
+      // TerminateJobObject succeeds, but job still takes time past reapMs to become terminal.
+      allowTerminate = true;
+      await Bun.sleep(40);
+      expect(fake.state().terminatedJobs.length).toBeGreaterThanOrEqual(attemptsAfterFail + 1);
+      expect(fake.state().closedHandles).toEqual([]);
 
-    // Once TerminateJobObject succeeds, the retained handle completes termination cleanly.
-    allowTerminate = true;
-    stop(true);
-    expect(fake.state().terminatedJobs.length).toBe(beforeSyncFail + 2);
-    // Further stops after successful termination are no-ops.
-    stop(true);
-    expect(fake.state().terminatedJobs.length).toBe(beforeSyncFail + 2);
+      // Once the slow job finally becomes terminal, backoff polling disposes all handles cleanly.
+      stayNonterminalAfterTerminate = false;
+      externallyTerminal = true;
+      await Bun.sleep(50);
+      expect(fake.state().pipeDisposed).toBe(1);
+      expect(fake.state().closedHandles).toEqual([0x200n, 0x100n]);
+      expect(fake.state().nativeDisposed).toBe(1);
+    } finally {
+      stop(true);
+    }
   });
 
   test("Windows output overflow terminates the Job Object and suppresses advisory output", async () => {
@@ -390,6 +415,7 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
       timeoutMs: 10_000,
       pollMs: 5,
       launchWindows: () => fake.child,
+      setKillOnJobClose: () => true,
     });
     try {
       await Bun.sleep(60);
@@ -400,7 +426,7 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
     }
   });
 
-  test("Windows fails closed when pre-resume Job containment cannot be established", async () => {
+  test("Windows fails closed when pre-resume Job containment or kill-on-close cannot be established", async () => {
     const warnings: string[] = [];
     const unsupportedStop = startForegroundAdvisory(line => warnings.push(line), {
       platform: "win32",
@@ -420,8 +446,20 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
     expect(failedSetup.state().reapedUnstarted).toBe(1);
     expect(failedSetup.state().pipeDisposed).toBe(1);
     expect(failedSetup.state().closedHandles).toEqual([0x200n, 0x100n]);
+
+    const failedKillOnClose = createFakeContainedWindowsChild({ terminal: false });
+    const abortedStop = startForegroundAdvisory(line => warnings.push(line), {
+      platform: "win32",
+      launchWindows: () => failedKillOnClose.child,
+      setKillOnJobClose: () => false,
+    });
+    await Bun.sleep(20);
+    expect(failedKillOnClose.state().terminatedJobs).toEqual([{ job: 0x100n, code: 1 }]);
+    expect(failedKillOnClose.state().pipeDisposed).toBe(1);
+    expect(failedKillOnClose.state().closedHandles).toEqual([0x200n, 0x100n]);
     expect(warnings).toEqual([]);
     failedStop(true);
+    abortedStop(true);
   });
 
   test("timeout still terminates a living descendant holding stdout after the probe root exits on POSIX", async () => {
