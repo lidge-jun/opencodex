@@ -286,7 +286,7 @@ test("revision conflict reloads and keeps the dashboard draft", async () => {
   expect(container.textContent).toContain("The saved settings changed on this server while you were editing");
 });
 
-test("a combo removed on the server keeps the draft and the next save recreates it", async () => {
+test("a combo removed on the server keeps the draft and Recreate creates it only if the id is free", async () => {
   const visible = { ...hiddenImage, id: "visible", disabled: false };
   mockCatalog([hiddenImage, visible], [target(visible)], { revision: "old" });
   const fetchCatalog = globalThis.fetch;
@@ -308,12 +308,14 @@ test("a combo removed on the server keeps the draft and the next save recreates 
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0)); });
   expect(bodies[0]!.ifRevision).toBe("old");
   expect(selectValue(selectTrigger(container, MODEL))).toBe("hidden");
-  expect(container.textContent).toContain("The saved settings changed on this server while you were editing");
+  expect(container.textContent).toContain("This combo was removed on this server while you were editing");
+  expect(container.querySelector("#cwi-edit-save")?.textContent).toBe("Recreate");
   await act(async () => { container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.click(); });
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0)); });
   expect(bodies).toHaveLength(2);
   expect(bodies[1]).not.toHaveProperty("ifRevision");
   expect(bodies[1]).not.toHaveProperty("renameFrom");
+  expect(bodies[1]!.ifAbsent).toBe(true);
   expect((bodies[1]!.combo as { targets: Array<{ model: string }> }).targets.map(t => t.model)).toEqual(["hidden"]);
 });
 

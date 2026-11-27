@@ -540,10 +540,13 @@ export function toPutBody(
      * value the CLI or API changed in the meantime.
      */
     stored?: ComboItem | null;
+    /** Create only: the server refuses when a combo with this id exists. */
+    ifAbsent?: true;
   } = {},
 ): {
   id: string;
   ifRevision?: string;
+  ifAbsent?: true;
   renameFrom?: string;
   visionSidecarTargets?: Array<{ provider: string; model: string }>;
   combo: {
@@ -576,6 +579,7 @@ export function toPutBody(
   return {
     id: item.id.trim(),
     ...(stored?.revision !== undefined ? { ifRevision: stored.revision } : {}),
+    ...(options.ifAbsent ? { ifAbsent: true as const } : {}),
     ...(options.renameFrom ? { renameFrom: options.renameFrom } : {}),
     ...(options.visionSidecarTargets?.length ? { visionSidecarTargets: options.visionSidecarTargets } : {}),
     combo: {

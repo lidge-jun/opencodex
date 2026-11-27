@@ -80,9 +80,9 @@ export function DetailPanel({
   onBack?: () => void;
   onSaved: (item: ComboItem) => void;
   onRequestRemove?: () => void;
-  onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null) => Promise<{ ok: boolean; error?: string; item?: ComboItem }>;
+  onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null, createOnly?: boolean) => Promise<{ ok: boolean; error?: string; item?: ComboItem }>;
   onDirtyChange: (dirty: boolean) => void;
-  /** The server no longer has this combo while the draft is kept; saving recreates it from the draft. */
+  /** The server no longer has this combo while the draft is kept; Recreate creates it from the draft only if the id is still free. */
   storedRemoved?: boolean;
 }) {
   const t = useT();
@@ -156,9 +156,9 @@ export function DetailPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: key captures baseline payload
   }, [baselineSyncKey]);
 
-  // A removed combo has no revision to check against: say so, and let the next Save recreate it.
+  // A removed combo has no revision to check against: say so, and offer Recreate instead of Save.
   useEffect(() => {
-    if (storedRemoved) setMsg({ ok: false, text: t("pws.draftConflict") });
+    if (storedRemoved) setMsg({ ok: false, text: t("cws.removedOnServer") });
   }, [storedRemoved, t]);
 
   const copyModel = async () => {
@@ -214,7 +214,7 @@ export function DetailPanel({
     const recreate = !isCreate && storedRemoved;
     const renameFrom = !isCreate && !recreate && trimmedId !== baseline.id ? baseline.id : undefined;
     try {
-      const res = await onSave(item, isCreate || recreate, renameFrom, isCreate || recreate ? null : draftBaseline.current);
+      const res = await onSave(item, isCreate || recreate, renameFrom, isCreate || recreate ? null : draftBaseline.current, recreate);
       if (!res.ok) {
         setMsg({ ok: false, text: res.error || t("cws.saveFailed") });
         return;
@@ -260,7 +260,7 @@ export function DetailPanel({
             </button>
           )}
           <button id={isCreate ? "cwi-edit-create" : "cwi-edit-save"} type="button" className="btn btn-primary btn-sm" disabled={(!isCreate && !dirty) || busy || allTargetsExhausted || conflicts.length > 0} onClick={() => { void save(); }}>
-            {busy ? t("common.saving") : t(isCreate ? "cws.create" : "common.save")}
+            {busy ? t("common.saving") : t(isCreate ? "cws.create" : storedRemoved ? "cws.recreate" : "common.save")}
           </button>
         </div>
       </div>

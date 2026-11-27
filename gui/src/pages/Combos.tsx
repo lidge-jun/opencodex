@@ -365,13 +365,14 @@ export default function Combos({
   const capabilityModels = data?.capabilityModels ?? models;
   const cataloguedComboIds = new Set(data?.cataloguedComboIds ?? []);
 
-  const saveCombo = async (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null) => {
+  const saveCombo = async (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null, createOnly?: boolean) => {
     try {
       const res = await fetch(`${apiBase}/api/combos`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(toPutBody(item, {
           ...(renameFrom ? { renameFrom } : {}),
+          ...(createOnly ? { ifAbsent: true as const } : {}),
           stored,
           // Enabling images declares text-only members for the Vision Sidecar so the
           // operator never has to hand-edit provider config for a multimodal combo.

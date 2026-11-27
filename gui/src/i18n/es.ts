@@ -3540,6 +3540,8 @@ export const es = {
   "cws.saved": "Combo guardado.",
   "cws.created": "Creado {model}.",
   "cws.removed": "Eliminado combo/{id}.",
+  "cws.removedOnServer": "Este combo se eliminó en este servidor mientras editabas. Tu borrador se conserva: Volver a crear lo guarda como un combo nuevo si el id sigue libre, o vuelve atrás para descartarlo.",
+  "cws.recreate": "Volver a crear",
   "cws.renamed": "Se cambió el nombre de {from} a {to}.",
   "cws.add": "Añadir combo",
   "cws.addTitle": "Añadir combo",

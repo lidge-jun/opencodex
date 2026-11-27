@@ -272,6 +272,14 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     if (body.ifRevision !== undefined && typeof body.ifRevision !== "string") {
       return jsonResponse({ error: "ifRevision must be a string" }, 400);
     }
+    if (body.ifAbsent !== undefined && body.ifAbsent !== true) {
+      return jsonResponse({ error: "ifAbsent must be true when present" }, 400);
+    }
+    // Create-only: refuse instead of replacing a combo another writer created under this id.
+    const ifAbsent = body.ifAbsent === true;
+    if (ifAbsent && (body.ifRevision !== undefined || body.renameFrom !== undefined)) {
+      return jsonResponse({ error: "ifAbsent cannot be combined with ifRevision or renameFrom" }, 400);
+    }
     let renameFrom: string | undefined;
     if (body.renameFrom !== undefined) {
       if (typeof body.renameFrom !== "string" || !body.renameFrom.trim()) {
@@ -297,6 +305,9 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const sourceId = renameFrom ?? id;
     const previous = config.combos?.[sourceId];
     if (body.ifRevision !== undefined && (!previous || comboRevision(previous) !== body.ifRevision)) {
+      return jsonResponse({ error: "combo revision conflict", code: "combo_revision_conflict" }, 409);
+    }
+    if (ifAbsent && previous) {
       return jsonResponse({ error: "combo revision conflict", code: "combo_revision_conflict" }, 409);
     }
     if (renameFrom && Object.hasOwn(config.combos ?? {}, id)) {
@@ -568,14 +579,19 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       commitProviderPatch(config, () => {
         const current = config.combos?.[sourceId];
         if (body.ifRevision !== undefined && (!current || comboRevision(current) !== body.ifRevision)) throw new ComboRevisionConflict();
-        if (body.ifRevision !== undefined && !deps.saveConfigPreservingClaudeCode) {
+        if (ifAbsent && current) throw new ComboRevisionConflict();
+        if ((body.ifRevision !== undefined || ifAbsent) && !deps.saveConfigPreservingClaudeCode) {
           const persisted = readConfigFileSnapshot({ passive: true }).diagnostics;
           if (persisted.source !== "file") throw new Error("config unavailable");
           const storedCombos = persisted.config.combos ?? {};
-          const durable = persisted.config.combos?.[sourceId];
-          if (!durable || comboRevision(durable) !== body.ifRevision) throw new ComboRevisionConflict(storedCombos);
-          // A conditional rename also needs the destination to be free in the stored config.
-          if (renameFrom && Object.hasOwn(storedCombos, id)) throw new ComboRevisionConflict(storedCombos);
+          if (ifAbsent) {
+            if (Object.hasOwn(storedCombos, id)) throw new ComboRevisionConflict(storedCombos);
+          } else {
+            const durable = storedCombos[sourceId];
+            if (!durable || comboRevision(durable) !== body.ifRevision) throw new ComboRevisionConflict(storedCombos);
+            // A conditional rename also needs the destination to be free in the stored config.
+            if (renameFrom && Object.hasOwn(storedCombos, id)) throw new ComboRevisionConflict(storedCombos);
+          }
         }
         config.combos = nextCombos;
         if (migratedModels.size > 0) {

@@ -3565,6 +3565,8 @@ export const en = {
   "cws.saved": "Combo saved.",
   "cws.created": "Created {model}.",
   "cws.removed": "Removed combo/{id}.",
+  "cws.removedOnServer": "This combo was removed on this server while you were editing. Your draft is kept: Recreate saves it as a new combo if the id is still free, or go back to discard it.",
+  "cws.recreate": "Recreate",
   "cws.renamed": "Renamed {from} to {to}.",
   "cws.add": "Add combo",
   "cws.addTitle": "Add combo",

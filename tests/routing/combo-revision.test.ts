@@ -184,3 +184,41 @@ test("an adopted stored combo does not override a later disk edit on an unrelate
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("a create-only save refuses a combo that exists in the live or stored config", async () => {
+  const home = mkdtempSync(join(tmpdir(), "combo-if-absent-"));
+  const oldHome = process.env.OPENCODEX_HOME;
+  process.env.OPENCODEX_HOME = home;
+  try {
+    const config: OcxConfig = { port: 10100, defaultProvider: "fixture", providers: {
+      fixture: { adapter: "openai-chat", baseUrl: "https://fixture.example/v1", apiKey: "fixture", models: ["m", "n"], liveModels: false },
+    } };
+    saveConfig(config);
+    armClaudeCodeBaseline(config);
+    const call = async (method: string, body?: unknown) => {
+      const req = new Request("http://localhost/api/combos", { method, headers: { host: "localhost", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      return (await handleManagementAPI(req, new URL(req.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() }))!;
+    };
+    const m = { strategy: "failover", targets: [{ provider: "fixture", model: "m" }] };
+    const n = { strategy: "failover", targets: [{ provider: "fixture", model: "n" }] };
+    expect((await call("PUT", { id: "c", ifAbsent: true, combo: m })).status).toBe(200);
+    const live = await call("PUT", { id: "c", ifAbsent: true, combo: n });
+    expect(live.status).toBe(409);
+    expect(await live.json()).toMatchObject({ code: "combo_revision_conflict" });
+    expect(JSON.parse(readFileSync(getConfigPath(), "utf8")).combos.c.targets[0].model).toBe("m");
+    const disk = JSON.parse(readFileSync(getConfigPath(), "utf8"));
+    disk.combos.e = n;
+    saveConfig(disk);
+    const before = readFileSync(getConfigPath(), "utf8");
+    expect((await call("PUT", { id: "e", ifAbsent: true, combo: m })).status).toBe(409);
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+    const listed = ((await (await call("GET")).json()).combos as any[]).find(combo => combo.id === "e");
+    expect(listed.targets.map((target: { model: string }) => target.model)).toEqual(["n"]);
+    expect((await call("PUT", { id: "f", ifAbsent: false, combo: m })).status).toBe(400);
+    expect((await call("PUT", { id: "f", renameFrom: "c", ifAbsent: true, combo: m })).status).toBe(400);
+  } finally {
+    if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = oldHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
