@@ -5,7 +5,15 @@ description: 獨立專家諮詢，支援 manual、preflight 與依據證據的 a
 
 顧問是一個獨立的專家模型，審閱 Worker 的任務並返回建議。OpenCodex 端到端地擁有整個諮詢過程：代理向 Worker 的回合注入合成的 `advisor` 工具，自己透過正常路由權威執行諮詢，並回注建議使原 Worker 繼續。Worker 無需委託、無需 spawn 任何東西、也不攜帶 provider 憑證。
 
-這與子代理面（見[代理設定](/zh-tw/reference/configuration/agents/)）不同：子代理是透過 Codex 協作工具由 Worker 發起的委託。顧問是客户端完全不可見的代理側 sidecar —— 即使從不 spawn 的 Worker 也能獲得建議。
+這與子代理面（見[代理設定](/zh-tw/reference/configuration/agents/)）不同：子代理是透過 Codex 協作工具由 Worker 發起的委託。對經代理路由的 Worker，顧問是用戶端不可見的代理側 sidecar —— 即使從不 spawn 的 Worker 也能獲得建議。
+
+## 外部用戶端與完整上下文
+
+`autoMountMcp` 預設為 `false`。使用 `ocx advisor set --auto-mount-mcp on` 跟隨相容路由，或以 `--mcp-clients <ids>` 指定用戶端。`auto` 清除明確清單，`none` 不選擇用戶端。外部用戶端可透過 `ocx advisor mcp` 使用 `consult_advisor`，或以 `ocx advisor consult --question "..."` 啟動並用 `--consultation-id <id>` 查詢。需要目前版本的同意。
+
+`context` 分享受限上下文；`question-only` 只傳送問題並暫停自動諮詢；`full` 擴大限制，並可在提供工作階段、任務 ID 或允許路徑時附加相符的本機紀錄。紀錄和工具結果可能傳送給顧問供應商，不能保證找到紀錄。
+
+`timeoutMs` 是無資料逾時，收到資料會重設計時器。總上限為 `max(4 × timeoutMs, 600000 ms)`；預設 600000 ms，可設定最大值 1800000 ms。
 
 ## 僅傳送問題
 
@@ -39,9 +47,9 @@ ocx advisor set --context-mode question-only
 | `model?` | `string` | — | 專家模型。任何路由權威接受的模型字串：裸原生模型（`gpt-6-astra`）、明確 `provider/model`（`anthropic/claude-sonnet-4-6`、`xai/grok-...`）或帳戶限定的原生模型。完整支援跨 provider：Worker 與 Advisor 無需同屬一個 provider。 |
 | `effort?` | `string` | `"max"` | Advisor 呼叫的推理強度（`low` 至 `ultra`）。 |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | 何時諮詢顧問。 |
-| `contextMode?` | `"context" \| "question-only"` | `"context"` | 上下文共享方式。`question-only` 要求主模型主動提問，並暫停自動諮詢。 |
+| `contextMode?` | `"context" \| "full" \| "question-only"` | `"context"` | 上下文共享方式。`question-only` 要求主模型主動提問，並暫停自動諮詢。 |
 | `maxConsultationsPerTask?` | `integer` | `3` | 自適應任務諮詢上限（1–3 次嘗試），包含手動呼叫。 |
-| `timeoutMs?` | `number` | `120000` | 回環諮詢逾時。 |
+| `timeoutMs?` | `number` | `600000` | 回環諮詢逾時。 |
 | `contextSharingConsent?` | `"v1"` | 缺省 | 操作者同意把任務上下文傳送給所設定的顧問 provider。只有 `"v1"` 是目前版本。缺省、過期或其他值都表示不傳送任務內容。`enabled: true` 本身不是同意。 |
 
 透過儀表板的 **Advisor** 頁面或 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>` 管理。

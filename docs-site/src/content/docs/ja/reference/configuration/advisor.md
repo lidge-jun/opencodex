@@ -5,7 +5,15 @@ description: manual、preflight、証拠に基づく adaptive ポリシーによ
 
 アドバイザーはワーカーのタスクをレビューし助言を返す独立したエキスパートモデルです。相談は OpenCodex がエンドツーエンドで所有します。プロキシはワーカーのターンに合成 `advisor` ツールを注入し、通常のルーティング権威を通じて相談を自ら実行し、助言を再注入して元のワーカーを継続させます。ワーカーは委譲も spawn もせず、プロバイダー資格情報も持ちません。
 
-これはサブエージェントサーフェス（[エージェント設定](/ja/reference/configuration/agents/)を参照）とは異なります。サブエージェントは Codex のコラボレーションツールによるワーカー主導の委譲です。アドバイザーはクライアントから見えないプロキシ側のサイドカーです — 何も spawn しないワーカーでも助言を受けられます。
+これはサブエージェントサーフェス（[エージェント設定](/ja/reference/configuration/agents/)を参照）とは異なります。サブエージェントは Codex のコラボレーションツールによるワーカー主導の委譲です。ルーティングされたワーカーでは、アドバイザーはクライアントから見えないプロキシ側のサイドカーです — 何も spawn しないワーカーでも助言を受けられます。
+
+## 外部クライアントと全コンテキスト
+
+`autoMountMcp` の既定値は `false` です。`ocx advisor set --auto-mount-mcp on` で対応ルートに自動接続するか、`--mcp-clients <ids>` で選択します。`auto` は明示リストを解除し、`none` は選択を空にします。外部クライアントは `ocx advisor mcp` の `consult_advisor`、または `ocx advisor consult --question "..."` と `--consultation-id <id>` による取得を使えます。現在の同意が必要です。
+
+`context` は制限されたコンテキスト、`question-only` は質問のみを送り自動相談を停止します。`full` は上限を拡張し、セッション・タスクIDまたは許可パスがあれば一致するローカル記録を添付できる場合があります。記録やツール結果は相談先プロバイダーへ送信されることがあり、記録の発見は保証されません。
+
+`timeoutMs` は無通信の制限で、受信データによりリセットされます。全体の上限は `max(4 × timeoutMs, 600000 ms)`、既定値は 600000 ms、設定可能な最大値は 1800000 ms です。
 
 ## 質問のみ送信
 
@@ -39,9 +47,9 @@ ocx advisor set --context-mode question-only
 | `model?` | `string` | — | エキスパートモデル。ルーターが受け付ける任意のモデル文字列：ネイティブモデル（`gpt-6-astra`）、明示的な `provider/model`（`anthropic/claude-sonnet-4-6`、`xai/grok-...`）、アカウント修飾ネイティブモデル。クロスプロバイダーを完全にサポートします。 |
 | `effort?` | `string` | `"max"` | アドバイザー呼び出しの推論強度（`low`〜`ultra`）。 |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | 相談のタイミング。 |
-| `contextMode?` | `"context" \| "question-only"` | `"context"` | コンテキスト共有。`question-only` はワーカーの明示的な質問を必要とし、自動相談を停止します。 |
+| `contextMode?` | `"context" \| "full" \| "question-only"` | `"context"` | コンテキスト共有。`question-only` はワーカーの明示的な質問を必要とし、自動相談を停止します。 |
 | `maxConsultationsPerTask?` | `integer` | `3` | 適応型タスクの相談上限（1〜3回、手動呼び出しを含む）。 |
-| `timeoutMs?` | `number` | `120000` | ループバック相談のタイムアウト。 |
+| `timeoutMs?` | `number` | `600000` | ループバック相談のタイムアウト。 |
 | `contextSharingConsent?` | `"v1"` | なし | 設定されたアドバイザーのプロバイダーへタスク文脈を送ることへの操作者の同意。現在有効な値は `"v1"` だけです。欠落、古い値、その他の値ではタスク内容は送られません。`enabled: true` だけでは同意になりません。 |
 
 ダッシュボードの **Advisor** ページまたは `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>` で管理します。

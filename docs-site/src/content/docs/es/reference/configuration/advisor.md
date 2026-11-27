@@ -5,9 +5,17 @@ description: "Consulta independiente a un modelo experto, con políticas manuale
 
 El asesor es un modelo experto independiente que revisa la tarea del modelo principal y devuelve recomendaciones. OpenCodex controla toda la consulta: el proxy incorpora una herramienta sintética `advisor` al turno, la ejecuta mediante el enrutamiento habitual y entrega las recomendaciones al modelo principal para que continúe. Este no delega, no crea subagentes ni maneja credenciales del proveedor para consultar al asesor.
 
-Es distinto de los [subagentes](/es/reference/configuration/agents/), que el modelo principal inicia mediante las herramientas de colaboración de Codex. El asesor es un sidecar del proxy que el cliente no ve como herramienta; también puede asesorar a un modelo que nunca cree subagentes.
+Es distinto de los [subagentes](/es/reference/configuration/agents/), que el modelo principal inicia mediante las herramientas de colaboración de Codex. Para agentes enrutados, el asesor es un sidecar del proxy que el cliente no ve como herramienta; también puede asesorar a un modelo que nunca cree subagentes.
 
 <a id="question-only-mode"></a>
+
+## Clientes externos y contexto completo
+
+`autoMountMcp` está desactivado por defecto. Actívalo con `ocx advisor set --auto-mount-mcp on` para seguir rutas compatibles, o elige clientes con `--mcp-clients <ids>`. `auto` borra la lista explícita y `none` no selecciona clientes. Los clientes externos pueden usar `consult_advisor` mediante `ocx advisor mcp`, o `ocx advisor consult --question "..."` y consultar el resultado con `--consultation-id <id>`. Se exige consentimiento vigente.
+
+`context` comparte contexto limitado; `question-only` envía solo la pregunta y pausa consultas automáticas; `full` amplía los límites y puede adjuntar una transcripción local coincidente si se indica una sesión, tarea o ruta permitida. El texto y los resultados de herramientas pueden enviarse al proveedor asesor; no se garantiza encontrar la transcripción.
+
+`timeoutMs` mide inactividad y los datos recibidos reinician el temporizador. El límite total es `max(4 × timeoutMs, 600000 ms)`; el valor predeterminado es 600000 ms y el máximo configurable es 1800000 ms.
 
 ## Modo de solo pregunta
 
@@ -43,9 +51,9 @@ En **Advisor**, bajo **Subagentes** en la barra lateral del dashboard, elige el 
 | `model?` | `string` | — | Modelo experto. Admite un modelo nativo sin prefijo (`gpt-6-astra`), un `provider/model` explícito (`anthropic/claude-sonnet-4-6`, `xai/grok-...`) o un modelo nativo de una cuenta concreta. El asesor y el modelo principal pueden usar proveedores distintos. |
 | `effort?` | `string` | `"max"` | Esfuerzo de razonamiento de la consulta (`low` a `ultra`). |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | Cuándo se consulta al asesor. |
-| `contextMode?` | `"context" \| "question-only"` | `"context"` | Intercambio de contexto. `question-only` exige una pregunta explícita del agente y suspende consultas automáticas. |
+| `contextMode?` | `"context" \| "full" \| "question-only"` | `"context"` | Intercambio de contexto. `question-only` exige una pregunta explícita del agente y suspende consultas automáticas. |
 | `maxConsultationsPerTask?` | `integer` | `3` | Límite de intentos por tarea adaptativa, de 1 a 3, incluidas las consultas manuales. |
-| `timeoutMs?` | `number` | `120000` | Plazo de la consulta mediante loopback. |
+| `timeoutMs?` | `number` | `600000` | Plazo de la consulta mediante loopback. |
 | `contextSharingConsent?` | `"v1"` | Ausente | Consentimiento del operador para enviar el contexto al proveedor del asesor. Solo `"v1"` es vigente. Un valor ausente, obsoleto o diferente impide enviar el contexto. |
 
 Puedes administrarlo en **Advisor** —la casilla para compartir contexto empieza desmarcada— o con `ocx advisor status`, `ocx advisor on --ack-context-sharing`, `ocx advisor consent`, `ocx advisor consent --revoke`, `ocx advisor off` y `ocx advisor set --model <model> --effort <effort> --policy <manual|preflight|adaptive>`. Si falta consentimiento, `ocx advisor on` sin `--ack-context-sharing` muestra la explicación y se detiene sin habilitar el intercambio entre proveedores. `ocx advisor set` no concede consentimiento.

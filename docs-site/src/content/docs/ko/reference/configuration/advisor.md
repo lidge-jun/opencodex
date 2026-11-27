@@ -5,7 +5,15 @@ description: manual, preflight 및 증거 기반 adaptive 정책을 제공하는
 
 어드바이저는 워커의 작업을 검토하고 조언을 반환하는 독립 전문가 모델입니다. 상담은 OpenCodex가 엔드투엔드로 소유합니다. 프록시가 워커 턴에 합성 `advisor` 도구를 주입하고, 정상적인 라우팅 권위를 통해 상담을 직접 실행하며, 조언을 재주입해 원래 워커가 계속 진행하게 합니다. 워커는 위임하지 않고, 아무것도 spawn하지 않으며, 제공자 자격 증명도 가지지 않습니다.
 
-이는 서브에이전트 서피스([에이전트 구성](/ko/reference/configuration/agents/) 참조)와 다릅니다. 서브에이전트는 Codex 협업 도구를 통한 워커 주도 위임입니다. 어드바이저는 클라이언트에게 보이지 않는 프록시 측 사이드카입니다 — 아무것도 spawn하지 않는 워커도 조언을 받을 수 있습니다.
+이는 서브에이전트 서피스([에이전트 구성](/ko/reference/configuration/agents/) 참조)와 다릅니다. 서브에이전트는 Codex 협업 도구를 통한 워커 주도 위임입니다. 라우팅된 워커의 어드바이저는 클라이언트에게 보이지 않는 프록시 측 사이드카입니다 — 아무것도 spawn하지 않는 워커도 조언을 받을 수 있습니다.
+
+## 외부 클라이언트와 전체 맥락
+
+`autoMountMcp` 기본값은 `false`입니다. `ocx advisor set --auto-mount-mcp on`으로 호환 라우트를 자동 연결하거나 `--mcp-clients <ids>`로 직접 선택합니다. `auto`는 명시적 목록을 지우고 `none`은 아무 클라이언트도 선택하지 않습니다. 외부 클라이언트는 `ocx advisor mcp`의 `consult_advisor` 도구를 쓰거나 `ocx advisor consult --question "..."`로 시작하고 `--consultation-id <id>`로 결과를 확인할 수 있습니다. 현재 버전의 동의가 필요합니다.
+
+`context`는 제한된 맥락을 공유하고, `question-only`는 질문만 보내며 자동 상담을 중지합니다. `full`은 제한을 늘리고 세션·작업 ID 또는 허용된 경로가 제공되면 일치하는 로컬 기록을 첨부할 수 있습니다. 기록과 도구 결과가 어드바이저 제공자에게 전송될 수 있으며 기록을 찾는다고 보장하지 않습니다.
+
+`timeoutMs`는 무응답 제한이며 데이터를 받으면 타이머가 초기화됩니다. 전체 상한은 `max(4 × timeoutMs, 600000 ms)`입니다. 기본값은 600000 ms, 설정 가능한 최대값은 1800000 ms입니다.
 
 ## 질문만 전송
 
@@ -39,9 +47,9 @@ ocx advisor set --context-mode question-only
 | `model?` | `string` | — | 전문가 모델. 라우터가 허용하는 모든 모델 문자열: 네이티브 모델(`gpt-6-astra`), 명시적 `provider/model`(`anthropic/claude-sonnet-4-6`, `xai/grok-...`), 계정 한정 네이티브 모델. 크로스 프로바이더를 완전히 지원합니다. |
 | `effort?` | `string` | `"max"` | 어드바이저 호출의 추론 강도(`low`~`ultra`). |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | 상담 시점. |
-| `contextMode?` | `"context" \| "question-only"` | `"context"` | 맥락 공유. `question-only`는 워커의 명시적 질문을 요구하며 자동 자문을 중지합니다. |
+| `contextMode?` | `"context" \| "full" \| "question-only"` | `"context"` | 맥락 공유. `question-only`는 워커의 명시적 질문을 요구하며 자동 자문을 중지합니다. |
 | `maxConsultationsPerTask?` | `integer` | `3` | 적응형 작업 상담 한도(1–3회 시도, 수동 호출 포함). |
-| `timeoutMs?` | `number` | `120000` | 루프백 상담 타임아웃. |
+| `timeoutMs?` | `number` | `600000` | 루프백 상담 타임아웃. |
 | `contextSharingConsent?` | `"v1"` | 없음 | 설정된 어드바이저 프로바이더로 작업 맥락을 보내는 운영자 동의. 현재 값은 `"v1"`뿐입니다. 없거나, 오래되었거나, 다른 값이면 작업 내용을 보내지 않습니다. `enabled: true`만으로는 동의가 아닙니다. |
 
 대시보드 **Advisor** 페이지 또는 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>`로 관리합니다.
