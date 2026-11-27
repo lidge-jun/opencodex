@@ -516,7 +516,7 @@ if [ -f "$CFG_PATH" ] && [ -x "$BUN_BIN" ]; then
   [ "$ADVISOR_OK" = "1" ] || exit 0
 fi
 
-curl -sS --noproxy '*' --max-time 0.3 "http://127.0.0.1:\${PROXY_PORT}/healthz" >/dev/null 2>&1 || exit 0
+curl -fsS --noproxy '*' --max-time 0.3 "http://127.0.0.1:\${PROXY_PORT}/healthz" >/dev/null 2>&1 || exit 0
 
 cat <<'EOF'
 [opencodex-advisor] The stronger OpenCodex expert advisor MCP tool \`consult_advisor\` (MCP server \`opencodex-advisor\` / lazy tool \`mcp__opencodex_advisor__consult_advisor\` or \`mcp__opencodex-advisor__consult_advisor\`) is active and ready.
@@ -680,7 +680,10 @@ function scriptPathOfCommand(command: string): string {
 /** Any hook item that invokes the script, quoted or not, or as part of a longer command. */
 function hookItemRunsScript(item: unknown, command: string): boolean {
   if (!isPlainObject(item) || typeof item.command !== "string") return false;
-  return item.command === command || item.command.includes(scriptPathOfCommand(command));
+  const scriptPath = scriptPathOfCommand(command);
+  if (item.command === command || item.command.includes(scriptPath)) return true;
+  // The same script reached through another spelling, such as a symlinked config directory.
+  return canonicalClientPath(scriptPathOfCommand(item.command)) === canonicalClientPath(scriptPath);
 }
 
 function locateHookCommand(entries: readonly unknown[], command: string): { exact: number[]; other: number } {
@@ -1176,10 +1179,18 @@ function writeOwnedAdvisorEntries(configDir: string, owned: OwnedAdvisorEntries)
 }
 
 /** An existing entry is ours only when we recorded writing exactly these bytes at this path. Matching content alone is not ownership. */
-function ownsAdvisorEntry(owned: OwnedAdvisorEntries, clientId: string, configPath: string, currentText: string, includeShared = false): boolean {
+/**
+ * `sharesEntryWith` admits another client's record for the same slot, but only for a client whose entry OpenCodex
+ * would write identically: a client with a different entry format never takes over (and so rewrites) another's entry.
+ */
+function ownsAdvisorEntry(
+  owned: OwnedAdvisorEntries, clientId: string, configPath: string, currentText: string,
+  sharesEntryWith?: (otherClient: string) => boolean,
+): boolean {
   const slot = CLIENT_SPECS[clientId as AdvisorMcpClientId]?.mcpContainer;
   return Object.entries(owned).some(([recordClient, record]) =>
-    (recordClient === clientId || (includeShared && CLIENT_SPECS[recordClient as AdvisorMcpClientId]?.mcpContainer === slot))
+    (recordClient === clientId
+      || (!!sharesEntryWith && CLIENT_SPECS[recordClient as AdvisorMcpClientId]?.mcpContainer === slot && sharesEntryWith(recordClient)))
     && canonicalClientPath(record.configPath) === canonicalClientPath(configPath) && record.entry === currentText);
 }
 
@@ -1228,11 +1239,19 @@ export function mountAdvisorMcpForClient(
   const desiredText = JSON.stringify(desired);
   let changed = false;
   const owned = readOwnedAdvisorEntries(configDir);
-  const ownedEntry = Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) && ownsAdvisorEntry(owned, clientId, paths.mcpConfigPath, currentText, true);
+  const sameEntryFormat = (otherClient: string) =>
+    JSON.stringify(buildMcpEntry(CLIENT_SPECS[otherClient as AdvisorMcpClientId], configDir, options)) === desiredText;
+  const ownedEntry = Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME)
+    && ownsAdvisorEntry(owned, clientId, paths.mcpConfigPath, currentText, sameEntryFormat);
   // An unrecorded entry is the user's. If it already says exactly what we would write it serves Advisor as it is, but
   // it stays unrecorded so OpenCodex never deletes it; any other content is refused.
   const userEntry = Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) && !ownedEntry;
   if (userEntry && currentText !== desiredText) {
+    const writer = Object.entries(owned).find(([otherId, record]) => otherId !== clientId
+      && canonicalClientPath(record.configPath) === canonicalClientPath(paths.mcpConfigPath) && record.entry === currentText)?.[0];
+    if (writer) {
+      return { ok: false, changed: false, error: `Refused to replace the ${ADVISOR_MCP_SERVER_NAME} MCP entry in ${paths.mcpConfigPath}: OpenCodex wrote it for ${writer}, whose entry differs` };
+    }
     return { ok: false, changed: false, error: `Refused to replace the ${ADVISOR_MCP_SERVER_NAME} MCP entry in ${paths.mcpConfigPath}: OpenCodex did not write it` };
   }
   // The destination is acceptable. Anything this client recorded under a config directory it no longer uses is

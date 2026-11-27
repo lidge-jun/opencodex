@@ -98,7 +98,8 @@ describe("Advisor client MCP safety", () => {
     expect(existsSync(join(home, ".qoder", "settings.json"))).toBe(true);
   });
 
-  test("hook paths stay literal in the script and in the registered command", () => {
+  // These run generated POSIX shell and a POSIX PATH; native Windows has neither.
+  test.skipIf(process.platform === "win32")("hook paths stay literal in the script and in the registered command", () => {
     const root = tempHome("ocx-advisor-quote-");
     const marker = join(root, "substituted");
     const backtick = String.fromCharCode(96);
@@ -119,16 +120,18 @@ describe("Advisor client MCP safety", () => {
     expect(advisorHookCommand(scriptPath)).toBe(shellQuote(scriptPath));
   });
 
-  test("hook stays quiet when its settings or runtime are unavailable", () => {
+  test.skipIf(process.platform === "win32")("hook stays quiet when its settings or runtime are unavailable, or the proxy answers with an error", () => {
     const home = tempHome("ocx-advisor-hook-ready-");
     const bin = join(home, "bin");
     mkdirSync(bin);
-    writeFileSync(join(bin, "curl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    const env = { PATH: `${bin}:/usr/bin:/bin`, HOME: home, USERPROFILE: home };
-    const run = (execPath: string) => spawnSync("sh", ["-c", buildNoticeHookScript(home, execPath)], { encoding: "utf8", env, input: "{}" });
+    // A curl stand-in: an HTTP error status fails only when the caller asked for --fail, as real curl does.
+    writeFileSync(join(bin, "curl"), "#!/bin/sh\ncase \" $* \" in *\" -f\"*) [ \"$HEALTH_STATUS\" = 404 ] && exit 22;; esac\nexit 0\n", { mode: 0o755 });
+    const run = (execPath: string, status = "200") => spawnSync("sh", ["-c", buildNoticeHookScript(home, execPath)],
+      { encoding: "utf8", env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home, USERPROFILE: home, HEALTH_STATUS: status }, input: "{}" });
     expect(run(process.execPath).stdout).toBe("");
     writeFileSync(join(home, "config.json"), JSON.stringify({ advisor: { enabled: true, model: "expert", contextSharingConsent: "v1" } }));
     expect(run(join(home, "missing-bun")).stdout).toBe("");
+    expect(run(process.execPath, "404").stdout).toBe("");
     expect(run(process.execPath).stdout).toContain("active and ready");
   });
 
@@ -401,6 +404,30 @@ describe("Advisor client MCP safety", () => {
     expect(leftovers).toEqual([]);
     const queue = join(configDir, "advisor-pending-cleanup.json");
     expect(existsSync(queue) ? JSON.parse(readFileSync(queue, "utf8")) : []).toEqual([]);
+  });
+  test("a client with a different entry format never replaces another client's entry in a shared file", () => {
+    const home = tempHome("ocx-advisor-shared-format-");
+    const configDir = join(home, ".opencodex");
+    const shared = join(home, "shared");
+    const opts = { homeDir: home, configDir, env: { WORKBUDDY_CONFIG_DIR: shared, COMMANDCODE_CONFIG_DIR: shared } };
+    expect(mountAdvisorMcpForClient("workbuddy", opts).ok).toBe(true);
+    const before = readFileSync(join(shared, "mcp.json"), "utf8");
+    const second = mountAdvisorMcpForClient("commandcode", opts);
+    expect(second.ok).toBe(false);
+    expect(second.error).toContain("OpenCodex wrote it for workbuddy");
+    expect(readFileSync(join(shared, "mcp.json"), "utf8")).toBe(before);
+  });
+  test("a hook already registered through another spelling of the same script is not registered twice", () => {
+    const home = tempHome("ocx-advisor-hook-alias-");
+    const configDir = join(home, ".opencodex");
+    const real = join(home, "qoder-real");
+    const alias = join(home, "qoder-alias");
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, alias, "dir");
+    expect(mountAdvisorMcpForClient("qoder", { homeDir: home, configDir, env: { QODER_CONFIG_DIR: real } }).ok).toBe(true);
+    expect(mountAdvisorMcpForClient("qoder-cn", { homeDir: home, configDir, env: { QODERCN_CONFIG_DIR: alias } }).ok).toBe(true);
+    const groups = JSON.parse(readFileSync(join(real, "settings.json"), "utf8")).hooks.UserPromptSubmit;
+    expect(groups).toHaveLength(1);
   });
   test("a user edit at the old recorded path is kept, and a removed old file only drops the record", () => {
     const home = tempHome("ocx-advisor-stale-path-edited-");
