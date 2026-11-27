@@ -47,6 +47,50 @@ test("upstream failures record the error code and request id without the body", 
   expect(warnings.join("\n")).not.toContain("req_abc123");
 });
 
+test("upstream failure warning includes provider, model, and valid account label", () => {
+  const log: RequestLogContext = { model: "grok-4.7", provider: "xai", accountLogLabel: "o1a2b3c" };
+  const warnings: string[] = [];
+  const warn = console.warn;
+  console.warn = ((line: string) => { warnings.push(String(line)); }) as typeof console.warn;
+  try {
+    inspectResponseLogJson(log, JSON.stringify({
+      error: { type: "rate_limit_error", code: "rate_limit_exceeded", message: "rate limited" },
+    }));
+  } finally {
+    console.warn = warn;
+  }
+  const line = warnings.find(w => w.includes("[opencodex] upstream failure")) ?? "";
+  expect(line).toContain("provider=xai");
+  expect(line).toContain("model=grok-4.7");
+  expect(line).toContain("account=o1a2b3c");
+});
+
+
+test.each([
+  { model: "model\ninjected", provider: "bad\nprovider" },
+  { model: "x".repeat(129), provider: "x".repeat(129) },
+  { model: "sk-" + "a".repeat(48), provider: "sk-" + "a".repeat(48) },
+])("unsafe warning identifiers are omitted", fields => {
+  const warnings: string[] = [];
+  const warn = console.warn;
+  console.warn = ((line: string) => { warnings.push(String(line)); }) as typeof console.warn;
+  try { inspectResponseLogJson(fields, JSON.stringify({ error: { type: "server_error" } })); }
+  finally { console.warn = warn; }
+  expect(warnings.length).toBeGreaterThan(0);
+  expect(warnings.join("\n")).not.toContain(" provider=");
+  expect(warnings.join("\n")).not.toContain(" model=");
+});
+
+test("upstream warning identifies a rewritten wire model and distinct selector", () => {
+  const log: RequestLogContext = { provider: "gateway", model: "alias", wireModel: "vendor/model" };
+  const warnings: string[] = [];
+  const warn = console.warn;
+  console.warn = ((line: string) => { warnings.push(String(line)); }) as typeof console.warn;
+  try { inspectResponseLogJson(log, JSON.stringify({ error: { type: "server_error" } })); }
+  finally { console.warn = warn; }
+  expect(warnings.join("\n")).toContain(" model=vendor/model selector=alias");
+});
+
 
 for (const shape of ["error", "last_error", "response"] as const) {
   test.each([

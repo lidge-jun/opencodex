@@ -12,6 +12,7 @@ import {
   upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
+import { ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { SENT_VALUE_GUARD_SCAN_CHARS, outboundCredentials, type OutboundCredentialRegistry } from "../lib/outbound-credential-registry";
 import { configuredCredentials, containsConfiguredCredentialExcerpt, type ConfiguredCredentials } from "./configured-credentials";
 import { isUntypedBareUpstreamError, reduceBareUpstreamEvidence, wrappedServerErrorStatus, type BareUpstreamError, type BareUpstreamEvidence } from "./bare-upstream-error";
@@ -32,6 +33,10 @@ interface TerminalStatusContext extends UpstreamErrorDiagnostics {
   terminalErrorCode?: typeof CYBER_POLICY_ERROR_CODE;
   committedIncompleteReason?: CommittedIncompleteReason | null;
   upstreamError?: string;
+  provider?: string;
+  model?: string;
+  wireModel?: string;
+  accountLogLabel?: string;
 }
 
 export interface UpstreamErrorPayload {
@@ -105,7 +110,19 @@ function noteBoundedDiagnostic(
     // Service logs persist too: print only closed-vocabulary values, never an upstream id or code.
     const { upstreamErrorCode: rawCode, upstreamErrorType: type } = upstreamDiagnosticLogFields(logCtx);
     const code = rawCode !== undefined && KNOWN_BARE_ERROR_CODES.has(rawCode) ? rawCode : undefined;
-    console.warn(`[opencodex] upstream failure${status ? ` status=${status}` : ""}${type ? ` type=${type}` : ""}${code ? ` code=${code}` : ""}`);
+    const account = logCtx.accountLogLabel !== undefined && (logCtx.accountLogLabel === "main" || ACCOUNT_LOG_LABEL_RE.test(logCtx.accountLogLabel))
+      ? logCtx.accountLogLabel
+      : undefined;
+    const safeIdentifier = (value: string | undefined): string | undefined =>
+      value && /^[A-Za-z0-9._:\/@+-]{1,128}$/.test(value) && redactSecretString(value) === value
+        && diagnosticValueAllowed(value) && !repeatsRequestSentValue(logCtx, value) ? value : undefined;
+    const provider = safeIdentifier(logCtx.provider);
+    const model = safeIdentifier(logCtx.wireModel ?? logCtx.model);
+    const selector = logCtx.wireModel !== undefined && logCtx.model !== logCtx.wireModel ? safeIdentifier(logCtx.model) : undefined;
+    console.warn(
+      `[opencodex] upstream failure${status ? ` status=${status}` : ""}${type ? ` type=${type}` : ""}${code ? ` code=${code}` : ""}`
+      + `${provider ? ` provider=${provider}` : ""}${model ? ` model=${model}` : ""}${selector ? ` selector=${selector}` : ""}${account ? ` account=${account}` : ""}`,
+    );
   }
 }
 

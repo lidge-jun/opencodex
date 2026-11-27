@@ -81,3 +81,5 @@ leaves, controlled identity replacements, exclusive archive creation, parent
 aliases, and partial-copy/flush failures.
 
 Union routing checks whether a destination can forward a named hosted Advisor before it counts that target toward the request’s media capability.
+
+Upstream failure warnings from `src/server/request-log-terminal-status.ts` include provider and model identifiers only when bounded, identifier-shaped and credential-safe. The wire model is preferred; a distinct client selector is labeled separately and subject to the same checks.
