@@ -109,6 +109,31 @@ async function responsesWebSocketTurn(base: string | URL, payload: unknown, head
 }
 
 describe.skipIf(process.platform === "win32")("antigravity-acp through the server", () => {
+  test("discovery replaces the static seed, scopes the cache, and renews it on manual refresh", async () => {
+    const { fetchProviderModels } = await import("../../src/codex/catalog/provider-models");
+    const { clearModelCache, expireModelCache } = await import("../../src/codex/model-cache");
+    const name = "antigravity-acp";
+    const prov = { ...config().providers[name]!, liveModels: true, models: ["gemini-stale"] };
+    saveConfig(config());
+    clearModelCache(name);
+    try {
+      const list = async () => (await fetchProviderModels(name, prov, 60_000)).map(row => row.id);
+      expect(await list()).toEqual(["gemini-3.8-flash", "gemini-4-argon"]);
+      const initial = recordedLaunches().length;
+      expect(await list()).toEqual(["gemini-3.8-flash", "gemini-4-argon"]);
+      expect(recordedLaunches()).toHaveLength(initial);
+      expect(expireModelCache(name)).toBe(true);
+      expect(await list()).toEqual(["gemini-3.8-flash", "gemini-4-argon"]);
+      expect(recordedLaunches()).toHaveLength(initial + 1);
+      // Fail closed on a missing named login, even with a fresh default-login roster.
+      writeFileSync(join(process.env.OPENCODEX_HOME!, "agy-acp-selected-account"), "missing-fixture-account");
+      expect(await list()).toEqual(["gemini-stale"]);
+      expect(recordedLaunches()).toHaveLength(initial + 1);
+    } finally {
+      clearModelCache(name);
+    }
+  });
+
   test.each([
     ["old version", "1.5.2\n", 0, "found 1.5.2"],
     ["unparseable version", "unknown\n", 0, "version could not be read"],

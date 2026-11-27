@@ -920,6 +920,12 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
 - **No credential stored:** the CLI owns its Google sign-in. OpenCodex never reads, stores or forwards it, and the row
   refuses an API key, a key pool, account failover or an OAuth setting. New turns use the host CLI login unless you manually select a named login.
   Selecting this preset in `ocx init` skips the API key prompt. Running `ocx login antigravity-acp` prints the host sign-in command.
+- **Refresh models:** In the provider settings, enable **Discover models from provider** and click
+  **Discover now**, or run `ocx provider edit antigravity-acp --live-models on` followed by
+  `ocx models discover antigravity-acp`. OpenCodex opens a sandboxed ACP session using the selected
+  login and reads its advertised Gemini model IDs before sending a prompt. A successful manual refresh
+  also syncs the Codex catalog. An unsuccessful discovery falls back to the last successful list for
+  that login or the configured seed. The model selection and new-model visibility settings still apply.
 - **Manual account selection (macOS and Linux, agy 1.5.18+):** On the machine that runs the proxy, use
   `ocx account agy add personal` and `ocx account agy add work`. Complete Google's terminal sign-in
   for each label. List them with `ocx account agy list` and select one with `ocx account agy use work`.

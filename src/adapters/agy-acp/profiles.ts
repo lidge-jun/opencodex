@@ -57,6 +57,14 @@ export function selectedName(config = getConfigDir()): string {
   }
 }
 
+export function agyCatalogSelection(config = getConfigDir()) {
+  try {
+    const name = selectedName(config);
+    return { name, authority: JSON.stringify(["agy-acp", config, name]) };
+  }
+  catch { return undefined; }
+}
+
 export function selectProfile(name: string, config: string, root: string): void {
   if (name !== "default" && !profileNames(root).includes(name)) throw new Error("Unknown or signed-out Antigravity account.");
   mkdirSync(config, { recursive: true, mode: 0o700 });
@@ -71,8 +79,12 @@ export function selectProfile(name: string, config: string, root: string): void 
 }
 
 export function selectedLaunch(version: string, config = getConfigDir(), root = profileRoot()) {
-  const name = selectedName(config);
+  return launchForProfile(selectedName(config), version, root);
+}
+
+export function launchForProfile(name: string, version: string, root = profileRoot()) {
   if (name === "default") return { args: [], env: {} };
+  if (!validProfileName(name)) throw new Error("Invalid Antigravity account label.");
   requireProfileVersion(version);
   const dir = join(root, name);
   if (!privateDirectory(root) || !signedInProfile(dir)) throw new Error("Selected Antigravity account is unavailable.");
