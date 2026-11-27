@@ -282,7 +282,7 @@ Search/media sidecar execution stays disabled; Anthropic server-tool declaration
 with wire `tool_choice: none` when server tools exist, preventing upstream execution.
 [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching#what-invalidates-the-cache)
 orders the prefix as tools, system, messages: changing tool definitions invalidates all three;
-changing tool choice invalidates message cache only. Client-only summaries keep an optional choice unchanged; a mandatory choice (required, named, or required allowed tools) keeps the caller's choice for catalog derivation and sets `_summaryProhibitsToolCalls`; `src/adapters/anthropic.ts` builds tools and system from that choice, provider name transforms included, then sends `tool_choice: none`, so tools and system stay byte-identical. Search sidecar declarations are not injected for summaries, so a request whose ordinary turn advertised a sidecar search tool still changes its tool prefix.
+changing tool choice invalidates message cache only. Client-only summaries keep an optional choice unchanged; a mandatory choice (required, named, or required allowed tools) keeps the caller's choice for catalog derivation and sets `_summaryProhibitsToolCalls`; `src/adapters/anthropic.ts` builds tools and system from that choice, provider name transforms included, then sends `tool_choice: none`, so tools and system stay byte-identical. A summary plans the search sidecar exactly as the ordinary turn would (`src/server/responses/sidecar-execution.ts`, helper resolved by `request-sidecar-auth.ts`): with a plan it declares the same synthetic `web_search` tool and restores replayed search pairs instead of stripping them, then releases the helper probe lease without searching. A proxy advisor's tool is not declared for summaries, so an advisor turn still changes its tool prefix.
 `src/responses/compaction-summary.ts` suppresses tool/search events and rejects tool attempts,
 empty summaries and abnormal completions before delivery;
 only successful prose reaches the single synthetic compaction item. Truncated completions retain the existing incomplete outcome.
@@ -555,6 +555,8 @@ Precommit Codex model refusals use bounded account recovery for HTTP `detail` an
 `error.message` bodies. Only an exact HTTP 400 refusal naming the requested or wire model establishes
 denial evidence; ordinary malformed requests and committed stream errors do not authorize another
 send. Account selectors, uploaded files and send budgets retain their existing restrictions.
+When the only alternate is a main login refused by its hard lock or credits-off hold, the client
+receives that policy refusal with its reset instead of the first account's model 400.
 
 OpenCode Go inference POSTs obey the same operator gate; the destination itself does not authorize
 replay. A granted pre-header replacement that returns transient 5xx has its body cancelled and returns

@@ -50,7 +50,14 @@ source URLs in caller order; both drop duplicate URLs first and then apply the l
 checks it before resolving credentials or sending a request. The relay refuses the request when any
 supplied source, an explicit `null` included, is not an https URL or a canonical base64 PNG/JPEG/WebP
 data URL (for example a `file_id` or plain text) instead of dropping it. It checks the base64 alphabet
-and padding directly in the supplied text. Every URL-bearing property of an `images[]` entry
+and padding directly in the supplied text. An xAI bridge edit has a 100 MiB decompressed JSON request
+cap even when the deployment raises the general inbound limit. At this fixed cap the refusal asks
+for a smaller edit payload. Canonical base64 padding determines each source's exact decoded length
+against the 50 MiB ceiling (about 66.7 MiB encoded), and unique inline payloads have a 100 MiB
+aggregate encoded ceiling. Those bounds are checked before credentials are resolved or the outbound
+JSON is serialized; HTTPS sources do not consume the inline-data budget. Generations, explicit Images
+providers and non-xAI edit routes retain the configured general inbound limit. Every URL-bearing
+property of an `images[]` entry
 (`image_url`, `image_url.url`, `url`) counts as a source. The `image_gen` bridge tool sends one
 source. Safe upstream validation details are reconstructed from a
 closed vocabulary of quality, field, resolution and bounded keyframe tokens;
@@ -127,9 +134,14 @@ collapse onto another path of the same host. Bridge arguments map to `seconds`, 
 `src/server/videos.ts` serves `POST /v1/videos`, `GET /v1/videos/{id}` and `GET /v1/videos/{id}/content`
 (`src/lib/video-routes.ts` matches them; other methods and subpaths reach the JSON `/v1/*` 404).
 The dispatcher applies the Images admission: draining refusal, `resolveApiAuth`, origin policy and a
-request-log row (`usage.jsonl`); only the paid create takes an admitted turn slot and the inbound body gate
-(`/v1/videos` is in `CONFIGURABLE_JSON_BODY_ROUTES`). Its upstream POST is bound to that turn lease, so shutdown aborts
-it with a 503, and it keeps the listener request timeout until its body is read. The body read also has a 60 s
+request-log row (`usage.jsonl`). Every create, retrieve and content request takes an active turn slot.
+Creation also passes model workflow admission and the inbound body gate (`/v1/videos` is in
+`CONFIGURABLE_JSON_BODY_ROUTES`). Reads of an existing job use the slot without reserving model workflow capacity. Each
+credentialed upstream operation is bound to its turn, so shutdown aborts work before response headers with a
+503. A retrieve releases the turn after its bounded upstream JSON is parsed, while content transfers the turn to
+the capped response body. EOF, an upstream error, the download deadline, or cancellation releases its slot,
+including when the client has paused reads. The create keeps the
+listener request timeout until its body is read. The body read also has a 60 s
 whole-body deadline (the idle timeout alone bounds only silence), after which the reader is cancelled and the
 create answers 408 before any send, so neither a stalled nor a trickling upload can hold either slot. The loopback listener and Remote Link admit
 the same three shapes.

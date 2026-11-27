@@ -15,7 +15,7 @@ import { formatErrorResponse } from "../bridge";
 import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
 import {
   createOpenAiVideo,
-  fetchOpenAiVideoContent,
+  fetchOpenAiVideoContentWithDeadline,
   OPENAI_VIDEO_CONTENT_VARIANTS,
   retrieveOpenAiVideo,
   VideoUpstreamError,
@@ -146,7 +146,7 @@ export function setVideoCreateBodyTimeoutForTests(ms: number | undefined): void 
 }
 
 export interface VideoRouteOptions {
-  /** The create's turn lease: shutdown aborts the upstream create through it. */
+  /** The route's turn lease: shutdown aborts upstream work and content retains it while streaming. */
   lease?: AdmissionLease;
   /** Called once the create body is read, when the listener timeout may be lifted. */
   onRequestBodyRead?: () => void;
@@ -273,57 +273,122 @@ async function openHandle(
   return { claims, auth: row.auth };
 }
 
-async function handleRetrieve(req: Request, config: OcxConfig, handle: string, logCtx: RequestLogContext, admission: DataPlaneAdmission): Promise<Response> {
+async function handleRetrieve(req: Request, config: OcxConfig, handle: string, logCtx: RequestLogContext, admission: DataPlaneAdmission, options: VideoRouteOptions): Promise<Response> {
   const opened = await openHandle(req, config, handle, logCtx, admission);
   if (opened instanceof Response) return opened;
+  const operation = new AbortController();
+  if (options.lease) registerTurn(operation, options.lease);
   try {
-    const job = await retrieveOpenAiVideo(opened.claims.upstreamId, opened.auth, req.signal, outboundDependencies);
+    const job = await retrieveOpenAiVideo(opened.claims.upstreamId, opened.auth, AbortSignal.any([req.signal, operation.signal]), outboundDependencies);
     return Response.json(publicVideoJob(job, handle, opened.claims.model));
   } catch (error) {
+    if (operation.signal.aborted && !req.signal.aborted) return formatErrorResponse(503, "server_draining", "video retrieve stopped during shutdown");
     return failureResponse(error, req, "video retrieve");
+  } finally {
+    if (options.lease) unregisterTurn(operation);
   }
 }
 
-function cappedBody(body: ReadableStream<Uint8Array>, maxBytes: number): ReadableStream<Uint8Array> {
+function cappedBody(
+  body: ReadableStream<Uint8Array>, signal: AbortSignal, operation: AbortController, release: () => void,
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  let output: ReadableStreamDefaultController<Uint8Array>;
   let total = 0;
-  return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      total += chunk.byteLength;
-      if (total > maxBytes) {
-        controller.error(new Error("video content exceeds size cap"));
-        return;
-      }
-      controller.enqueue(chunk);
+  let reading = false;
+  let ended = false;
+  let settled = false;
+
+  function finish() {
+    settled = true;
+    signal.removeEventListener("abort", onAbort);
+    release();
+  }
+  function stop(reason: unknown) {
+    if (settled) return;
+    finish();
+    output.error(reason);
+    operation.abort(reason);
+    void reader.cancel(reason).catch(() => {});
+  }
+  function onAbort() { stop(signal.reason); }
+  function close() {
+    if (settled) return;
+    finish();
+    output.close();
+  }
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      output = controller;
+      signal.addEventListener("abort", onAbort, { once: true });
+      // The source can fail while the consumer is idle. Its final read can also close the
+      // reader before that read's last chunk has been handed to the consumer.
+      void reader.closed.then(() => { ended = true; if (!reading) close(); }, stop);
+      if (signal.aborted) onAbort();
     },
-  }));
+    async pull() {
+      reading = true;
+      try {
+        const { value, done } = await reader.read();
+        if (settled) return;
+        if (!done) {
+          total += value.byteLength;
+          if (total > VIDEO_CONTENT_MAX_BYTES) { stop(new Error("video content exceeds size cap")); return; }
+          output.enqueue(value);
+        }
+        if (done || ended) close();
+      } catch (error) { stop(error); }
+      finally { reading = false; }
+    },
+    cancel: stop,
+  }, { highWaterMark: 0 });
 }
 
-async function handleContent(req: Request, url: URL, config: OcxConfig, handle: string, logCtx: RequestLogContext, admission: DataPlaneAdmission): Promise<Response> {
+async function handleContent(req: Request, url: URL, config: OcxConfig, handle: string, logCtx: RequestLogContext, admission: DataPlaneAdmission, options: VideoRouteOptions): Promise<Response> {
   const variant = url.searchParams.get("variant") ?? undefined;
   if (variant !== undefined && !OPENAI_VIDEO_CONTENT_VARIANTS.has(variant)) return invalid("variant must be video, thumbnail or spritesheet");
   const opened = await openHandle(req, config, handle, logCtx, admission);
   if (opened instanceof Response) return opened;
-  let upstream: Response;
+  const operation = new AbortController();
+  if (options.lease) registerTurn(operation, options.lease);
+  const finishOperation = () => { if (options.lease) unregisterTurn(operation); };
+  let upstream: Response | undefined;
+  let streaming = false;
   try {
-    upstream = await fetchOpenAiVideoContent(opened.claims.upstreamId, opened.auth, {
-      signal: req.signal, ...(variant !== undefined ? { variant } : {}),
+    const download = await fetchOpenAiVideoContentWithDeadline(opened.claims.upstreamId, opened.auth, {
+      signal: AbortSignal.any([req.signal, operation.signal]), ...(variant !== undefined ? { variant } : {}),
     }, outboundDependencies);
+    upstream = download.response;
+    download.signal.throwIfAborted();
+    const declared = upstream.headers.get("content-length");
+    if (declared !== null && /^\d+$/.test(declared) && Number(declared) > VIDEO_CONTENT_MAX_BYTES) {
+      return formatErrorResponse(502, "upstream_error", "video content exceeds size cap");
+    }
+    const type = (upstream.headers.get("content-type") ?? "").toLowerCase().split(";")[0]!.trim();
+    const headers: Record<string, string> = {
+      "content-type": CONTENT_TYPES.has(type) && type !== "application/json" ? type : "application/octet-stream",
+      "cache-control": "private, no-store",
+      "x-content-type-options": "nosniff",
+    };
+    if (declared !== null && /^\d+$/.test(declared)) headers["content-length"] = declared;
+    if (!upstream.body) return new Response(null, { status: 200, headers });
+    const body = cappedBody(upstream.body, download.signal, operation, finishOperation);
+    const response = new Response(body, { status: 200, headers });
+    streaming = true;
+    return response;
   } catch (error) {
+    if (operation.signal.aborted && !req.signal.aborted) return formatErrorResponse(503, "server_draining", "video content stopped during shutdown");
     return failureResponse(error, req, "video content");
+  } finally {
+    if (!streaming) {
+      finishOperation();
+      if (upstream?.body) {
+        operation.abort();
+        if (!upstream.body.locked) void upstream.body.cancel().catch(() => {});
+      }
+    }
   }
-  const declared = upstream.headers.get("content-length");
-  if (declared !== null && /^\d+$/.test(declared) && Number(declared) > VIDEO_CONTENT_MAX_BYTES) {
-    try { await upstream.body?.cancel(); } catch { /* ignore */ }
-    return formatErrorResponse(502, "upstream_error", "video content exceeds size cap");
-  }
-  const type = (upstream.headers.get("content-type") ?? "").toLowerCase().split(";")[0]!.trim();
-  const headers: Record<string, string> = {
-    "content-type": CONTENT_TYPES.has(type) && type !== "application/json" ? type : "application/octet-stream",
-    "cache-control": "private, no-store",
-    "x-content-type-options": "nosniff",
-  };
-  if (declared !== null && /^\d+$/.test(declared)) headers["content-length"] = declared;
-  return new Response(upstream.body ? cappedBody(upstream.body, VIDEO_CONTENT_MAX_BYTES) : null, { status: 200, headers });
 }
 
 export async function handleVideos(
@@ -337,8 +402,8 @@ export async function handleVideos(
 ): Promise<Response> {
   try {
     if (route.kind === "create") return await handleCreate(req, config, logCtx, admission, options);
-    if (route.kind === "retrieve") return await handleRetrieve(req, config, route.handle, logCtx, admission);
-    return await handleContent(req, url, config, route.handle, logCtx, admission);
+    if (route.kind === "retrieve") return await handleRetrieve(req, config, route.handle, logCtx, admission, options);
+    return await handleContent(req, url, config, route.handle, logCtx, admission, options);
   } catch (error) {
     // The handle key file is the one local failure left; it names no secret.
     if (isVideoHandleKeyError(error)) {

@@ -41,7 +41,7 @@ export interface ConfigLike {
 export interface AgyAcpConfigIssue { path: (string | number)[]; message: string }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
-const GEMINI_ID = /^gemini[-.]/i;
+const GEMINI_ID = /^(?:gemini|claude)[-.]/i;
 const EFFORT_SUFFIX = /(?:[-@:](?:minimal|low|medium|high|xhigh|max|none))$/i;
 
 export function isAgyAcpProvider(name: string, provider: unknown): boolean {
@@ -173,17 +173,17 @@ export function agyAcpProviderFieldIssues(config: ConfigLike): AgyAcpConfigIssue
     if (Array.isArray(provider.models)) {
       provider.models.forEach((model, i) => {
         if (typeof model !== "string" || !GEMINI_ID.test(model)) {
-          issues.push({ path: ["providers", name, "models", i], message: "The Antigravity CLI (ACP) provider serves Gemini models only." });
+          issues.push({ path: ["providers", name, "models", i], message: "The Antigravity CLI (ACP) provider serves Gemini and Claude models only." });
         }
       });
     }
     if (isRecord(provider.modelAliases)) {
       for (const native of Object.keys(provider.modelAliases)) {
-        if (!GEMINI_ID.test(native)) issues.push({ path: ["providers", name, "modelAliases", native], message: "The Antigravity CLI (ACP) provider serves Gemini models only." });
+        if (!GEMINI_ID.test(native)) issues.push({ path: ["providers", name, "modelAliases", native], message: "The Antigravity CLI (ACP) provider serves Gemini and Claude models only." });
       }
     }
     if (provider.defaultModel !== undefined && (typeof provider.defaultModel !== "string" || !GEMINI_ID.test(provider.defaultModel))) {
-      issues.push({ path: at("defaultModel"), message: "The Antigravity CLI (ACP) provider serves Gemini models only." });
+      issues.push({ path: at("defaultModel"), message: "The Antigravity CLI (ACP) provider serves Gemini and Claude models only." });
     }
   }
   return issues;
@@ -196,7 +196,7 @@ export function agyAcpConfigIssues(config: ConfigLike): AgyAcpConfigIssue[] {
   const issues = agyAcpProviderFieldIssues(config);
   for (const row of customModelEntries(config)) {
     if (acp.has(row.provider) && (typeof row.modelId !== "string" || !GEMINI_ID.test(row.modelId))) {
-      issues.push({ path: ["customModels", row.index, "modelId"], message: "The Antigravity CLI (ACP) provider serves Gemini models only." });
+      issues.push({ path: ["customModels", row.index, "modelId"], message: "The Antigravity CLI (ACP) provider serves Gemini and Claude models only." });
     }
   }
   for (const [id, combo] of comboEntries(config)) {

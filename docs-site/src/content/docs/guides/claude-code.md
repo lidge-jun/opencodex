@@ -1260,7 +1260,7 @@ on the schema to reject a malformed argument.
 **Error taxonomy:** 400 `invalid_request_error`, 401 `authentication_error`,
 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409 `conflict_error`,
 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`,
-other 5xx `api_error`. `Retry-After` is sent as whole seconds (an HTTP date becomes the remaining seconds), capped at eight days.
+other 5xx `api_error`. `Retry-After` is sent as whole seconds (an HTTP date becomes the remaining seconds, carrying a month-end `23:59:60` leap second into the following UTC day), capped at eight days.
 
 ## Prompt caching and token usage
 

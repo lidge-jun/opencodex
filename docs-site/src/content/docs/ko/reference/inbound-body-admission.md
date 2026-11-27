@@ -36,7 +36,7 @@ description: 요청 본문 한도를 높였을 때 동시 HTTP 요청, 재시도
 
 줄어든 예약량은 비동기 작업과 프로바이더 응답 대기 중에도 유지되며, 응답 스트림의 끝(EOF), 오류 또는 취소 완료 시점에 해제됩니다. 파싱만 끝났다고 해제하지 않습니다. 클라이언트 연결이 끊겨도 응답 생산자의 취소 처리가 끝날 때까지 유지합니다. 오류·요청 중단·취소가 겹치더라도 해제는 정확히 한 번만 일어납니다.
 
-적용 대상 POST 엔드포인트는 `/v1/responses`, `/v1/responses/compact`, `/v1/chat/completions`, `/v1/messages`, `/v1/messages/count_tokens`, `/v1/images/generations`, `/v1/images/edits`, `/v1/alpha/search`입니다. 이미지, 검색, 토큰 계산에는 기존의 설정 가능한 본문별 한도가 계속 적용됩니다. 내부 직접 변환 호출과 콤보 호출은 HTTP 허용량을 두 번 예약하지 않습니다. 관리 API, 오디오, 컨텍스트 기록, WebSocket의 한도는 그대로입니다.
+적용 대상 POST 엔드포인트는 `/v1/responses`, `/v1/responses/compact`, `/v1/chat/completions`, `/v1/messages`, `/v1/messages/count_tokens`, `/v1/images/generations`, `/v1/images/edits`, `/v1/alpha/search`입니다. 이미지, 검색, 토큰 계산에는 기존의 설정 가능한 본문별 한도가 계속 적용됩니다. xAI 브리지를 거치는 이미지 편집 요청에는 100 MiB 고정 한도도 적용되며, 두 한도 중 작은 값이 우선합니다. 내부 직접 변환 호출과 콤보 호출은 HTTP 허용량을 두 번 예약하지 않습니다. 관리 API, 오디오, 컨텍스트 기록, WebSocket의 한도는 그대로입니다.
 
 이 추가 동시 처리 게이트는 적용된 `maxInboundBodyBytes`가 256 MiB를 넘을 때만 켜집니다. 이 요청별 설정을 생략하거나 `0`으로 두면 기본값인 256 MiB가 유지되어 게이트가 꺼져 있습니다. 반면 `maxConcurrentInboundBodyBytes`를 생략하거나 `0`으로 두면 공유 기본값인 512 MiB를 선택하며, 이미 켜진 게이트를 끄지는 않습니다. 기존 요청 수 제한과 다른 자원 제한은 계속 적용됩니다.
 

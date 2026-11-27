@@ -30,6 +30,7 @@ passthrough, including native WebSocket output, retain their existing stop behav
 | `oauthOpenBrowser?` | `boolean` | `true` | Whether a login may open a browser on the machine running the proxy. Absent and `true` both open, so an existing install is unchanged; only an explicit `false` declines. Decline when you need the authorization link in a different browser profile, or when the dashboard is not on the proxy's machine — the login still starts and the URL is still returned and displayed. `POST /api/oauth/login` and `POST /api/codex-auth/login` accept a per-request `openBrowser` boolean that overrides this, and the dashboard exposes the same choice beside the login button. Both routes report the outcome as `browserLaunch`: `started`, `failed` (nothing could be opened; the dashboard says so), or `skipped`. Device-code flows never open a browser either way. |
 | `codexAuthMethod?` | `"auto" \| "device-only"` | `"auto"` | How ChatGPT/Codex pool account logins (`POST /api/codex-auth/login`: the dashboard's add and Re-authenticate actions and `ocx account login openai`) authorize. Absent and `"auto"` keep the existing behavior: a browser login with a localhost callback unless the caller asks for the device flow. `"device-only"` makes every such login use the device-code flow even when the caller did not ask for it, so a headless hub never starts a localhost callback login; the response then carries `authMethod: "device-only"`, and the dashboard and CLI say that the proxy requires it. Reauthentication keeps its same-account identity checks. Other providers' logins and the native main-account login are not affected. Restart the proxy to apply a change. If the file contains an invalid value, startup and `ocx config validate` warn that the proxy will use `"auto"`. |
 | `connectTimeoutMs?` | `number` | `200000` (public) / disabled (local) | Per-attempt deadline from dispatch until the upstream returns its first response header (DNS/TCP/TLS and the header wait); it ends before body generation and is unrelated to `stallTimeoutSec`, which governs the body stream. Unset, a **local** upstream (loopback, private, or a `.local`/`.lan` name) defaults to disabled and a public upstream to 200 s; a positive value applies to both; `0` (or any non-positive value) disables the header deadline everywhere. Disabled is what lets a local model spend minutes in prompt prefill on a large prompt without the first-header clock cutting a healthy turn. |
+| `search.timeoutMs?` | `number` | `200000` | Whole-request deadline in milliseconds for hosted `/v1/alpha/search`. A longer budget also allows the upstream to stay silent beyond 200 seconds, including over SOCKS5. |
 | `offlineResendWaitSec?` | `number` | off | Opt-in wait after the provider's name fails to resolve (DNS `ENOTFOUND` or `EAI_AGAIN`), for example while a laptop wakes or changes Wi-Fi. OpenCodex checks DNS once a second for the name the request resolves (the provider's, or the outbound proxy's when one carries the request) for up to this many seconds (maximum 300) and then resends the request once. Nothing reached the provider, so the resend cannot repeat its work, and it counts against the request's existing send budget. Only the first send of a `/v1/responses` request waits: a combo moves on to its next member instead, and a refused or unreachable connection, an IP-literal provider or proxy address, a failure on a later retry, a second DNS failure, an exhausted wait or a cancelled request returns the original error at once. Each DNS check is itself bounded by the wait and by client cancellation. Vertex AI and Antigravity (Google Cloud Code Assist), Kiro, Cursor, Zed, Command Code and MiMo Free own their transport and keep their own retry behavior; direct Google AI Studio uses the wait. Unset or `0` keeps today's immediate 502. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Graceful drain deadline before active turns are aborted. |
 | `websockets?` | `boolean` | `false` | Advertise and admit the client-facing Responses WebSocket path. False keeps clients on HTTP/SSE; it does not disable an eligible canonical ChatGPT upstream WS optimization. Complete-input requests may reuse an upstream connection within the same selected credential, account, thread and turn; changed handshake policy or missing identity keeps requests on separate connections. This does not trim HTTP input or create previous-response IDs. |
@@ -318,6 +319,26 @@ decision is made against the address actually used on the wire, so it still appl
 transport rewrites the destination after credential selection. Per-request latency rises slightly
 for those hosts, since each request pays a fresh TCP and TLS handshake; name only the hosts that
 need it.
+
+## TLS compatibility for specific upstream hosts
+
+Some upstream network paths reset connections when the TLS handshake offers a hybrid
+post-quantum key exchange. To try a classical-only key exchange for named hosts on the
+Responses and native Chat HTTP paths, set this environment variable before starting OpenCodex:
+
+```bash
+OCX_TLS_CLASSICAL_GROUPS_HOSTS="api.example.com" ocx start
+```
+
+The value is a comma-separated list of hostnames. Matching is case-insensitive and includes
+subdomains, ignoring a trailing DNS root dot; omit schemes, ports and paths. The option affects HTTPS requests to matching hosts
+only and preserves certificate verification. It removes the hybrid post-quantum group for
+those connections, so use it only for endpoints that need this compatibility workaround.
+Unset or empty means the runtime's default TLS behavior.
+
+A matching request using a `FetchSession` must supply its TLS settings on the request itself.
+Matching requests using custom provider transports or TLS profiles are refused because their
+connection security settings cannot be safely inspected. Other requests are unaffected.
 
 ## Remote access
 

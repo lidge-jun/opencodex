@@ -481,8 +481,10 @@ a JEV combo's `decisionProvider` (see [Combos](/guides/combos/)).
 - Routed Codex compaction keeps the client tool catalog, system prompt and tool-selection
   options to preserve their prompt-cache prefix. Summary requests disable search/media
   sidecars; upstream-hosted tools retain their declarations with `tool_choice: none`, as does a
-  mandatory tool choice, while the advertised catalog stays the same. A request that advertises a
-  sidecar web-search tool (for example Exa) still changes its tool prefix on compaction.
+  mandatory tool choice, while the advertised catalog stays the same. When the ordinary turn
+  would declare the sidecar `web_search` tool (for example Exa or the ChatGPT helper), the summary
+  declares the same tool and keeps the replayed searches with their recorded results, but never
+  searches.
   A summary that attempts a tool call fails without publishing a function call or replacing
   history. A successful summary returns exactly one compaction item. With image-context recovery off, requests
   continue to use the existing image normalization and single tighter-image retry after HTTP 413.

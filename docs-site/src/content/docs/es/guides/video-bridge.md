@@ -133,6 +133,12 @@ Los clientes que hablan la API de OpenAI Videos pueden apuntar a OpenCodex. Se a
 
 Las rutas aplican las mismas comprobaciones de autenticación y origen que `/v1/images/generations`, una clave con alcance queda limitada a sus proveedores y modelos en las tres, y cada llamada se registra en `usage.jsonl`. No se atienden las rutas de listado, borrado, remezcla, edición ni extensión.
 
+Crear un trabajo, consultar su estado y descargar su contenido requieren una plaza de solicitud
+activa. Una descarga ocupa su plaza hasta que termina la transmisión. Si todas las plazas están
+ocupadas, vuelve a intentarlo tras el plazo indicado en la cabecera `Retry-After` de la respuesta
+HTTP 503. Puedes consultar o descargar un trabajo existente aunque el flujo que lo creó haya
+agotado su presupuesto.
+
 ## Cómo funciona
 
 1. opencodex detecta un modelo enrutado no OpenAI con `videoBridgeEnabled: true`

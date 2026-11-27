@@ -64,7 +64,7 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   refuses ACP before any request. Key-optional LiteLLM still accepts a key or an environment reference. Structural config validation
   (`src/config/schema/agy-acp-references.ts`) shares the static model roster in `src/providers/registry/agy-acp-models.ts`
   with the registry and refuses keys, pools, account settings,
-  non-Gemini models and any use as a combo target, a combo's `decisionModel`, a subagent fallback, a managed subagent default, automatic compaction, a `memoryModels` phase or the
+  non-Gemini/Claude models and any use as a combo target, a combo's `decisionModel`, a subagent fallback, a managed subagent default, automatic compaction, a `memoryModels` phase or the
   `shadowCallIntercept` target. Validation masks credential-shaped diagnostic path segments. A disk
   read drops an ACP memory phase and ACP subagent fallback entries, disables an ACP shadow-call target or
   managed subagent default sync, and removes the automatic trigger from an ACP compaction override. Per-model fallback chains emptied by the repair are removed individually. File diagnostics
@@ -93,11 +93,17 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   Compact turns are refused before reasoning retention can write an archive. In a combo, the
   preflight refusal excludes the candidate without treating it as an attempted send.
   Each `session/prompt` reserves and reports one physical inference send from
-  the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the Gemini model is not
+  the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the selected Gemini or Claude model is not
   confirmed against the current complete selector, including after a reply that reuses an opaque model ID.
-  Explicit non-Gemini evidence in the model ID or label invalidates the selection. The adapter checks the model and thinking level again after processing all complete frames in the current stdout batch and before spending the dispatch permit.
+  Explicit disallowed or contradictory model-family evidence in the model ID or label invalidates the selection. The adapter checks the model and thinking level again after processing all complete frames in the current stdout batch and before spending the dispatch permit.
   Selection rejects duplicate setting IDs, oversized snapshots and nested groups. The adapter ignores updates
   until it has a session ID and accepts updates only for that session. Permission requests are answered `cancelled`.
+  Caller-advertised tools use the capture-only CodeBuddy MCP helper. Each leg returns at most one
+  matching call to the host after child cleanup; the host executes it under its own tool permissions.
+  Updates are tracked by call ID so a same-batch failure or non-permission cancellation drops a pending call.
+  Inline user and tool-result images require ACP image capability and enforce per-image and aggregate
+  encoded byte limits before sending `session/prompt`. Text replay under pressure keeps
+  the latest request, preceding proposal and paired tool result within the prompt limit.
   Selection errors use fixed text. Answer and reasoning
   deltas each pass through a bounded streaming redactor for minted OpenCodex credentials, Bearer values,
   OAuth token fields, and token-shaped JWT and API-key strings. Long values stay masked across frames.
@@ -112,7 +118,7 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   child can start. Retained workspaces can accumulate when cleanup repeatedly cannot be confirmed.
   A confirmed spawn failure without an assigned PID leaves no process to reap. Deferred startup errors
   are handled even if the child has no pipes. The adapter parses a final stdout reply without a trailing newline and fails an unanswered turn at EOF.
-  The version probe and each turn start with a fresh private workspace containing only an empty temp directory.
+  The probe and turn workspaces start empty. A turn with caller tools stages a private catalog in its temp directory.
   On POSIX, workspace removal follows confirmed leader exit and a group check returning ESRCH after SIGKILL or
   ESRCH. Descendants that deliberately leave the process group are outside that check. Removing the workspace
   exposes no pre-existing user files. Windows requires successful

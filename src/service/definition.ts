@@ -10,6 +10,7 @@
 import { basename, join } from "node:path";
 import { getConfigDir, loadConfig } from "../config";
 import { readClaudeInterceptProxyToken } from "../claude/intercept/proxy-auth";
+import { inspectDesktopPickerProfile } from "../claude/desktop-picker-profile";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { PROXY_ENV_KEYS } from "../lib/proxy-env";
 
@@ -125,14 +126,63 @@ export function resolvedProxyEnv(
   ownClaudeInterceptProxy?: string | null,
 ): { name: string; value: string }[] {
   const token = ownClaudeInterceptProxy === undefined ? readClaudeInterceptProxyToken(getConfigDir()) : null;
+  const picker = ownClaudeInterceptProxy === undefined ? ownDesktopPickerProxy() : null;
   const resolved: { name: string; value: string }[] = [];
   for (const key of PROXY_ENV_KEYS) {
+    const outbound = key !== "NO_PROXY";
     const value = [env[key]?.trim(), env[key.toLowerCase()]?.trim()].find(v => v && (
-      ownClaudeInterceptProxy === undefined ? !isOwnedClaudeInterceptProxy(v, token) : v !== ownClaudeInterceptProxy
+      ownClaudeInterceptProxy === undefined
+        ? !isOwnedClaudeInterceptProxy(v, token) && !(outbound && isOwnedDesktopPickerProxy(v, picker))
+        : v !== ownClaudeInterceptProxy
     ));
     if (value) resolved.push({ name: key, value });
   }
   return resolved;
+}
+
+interface PickerProxyEndpoint {
+  protocol: string;
+  hostname: string;
+  port: string;
+}
+
+function parsePickerProxyEndpoint(value: string): PickerProxyEndpoint | null {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.includes("@") || /[?#]/.test(trimmed)) return null;
+  if (/\/\/+$/.test(trimmed)) return null;
+  let url: URL;
+  try { url = new URL(trimmed); } catch { return null; }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (url.username || url.password || url.search || url.hash) return null;
+  if (url.pathname !== "" && url.pathname !== "/") return null;
+  const port = url.port || (url.protocol === "http:" ? "80" : "443");
+  if (!/^\d{1,5}$/.test(port) || Number(port) <= 0 || Number(port) > 65535) return null;
+  return { protocol: url.protocol, hostname: url.hostname.toLowerCase(), port };
+}
+
+function isOwnedDesktopPickerProxy(value: string, picker: PickerProxyEndpoint | null): boolean {
+  if (!picker) return false;
+  const candidate = parsePickerProxyEndpoint(value);
+  return candidate !== null
+    && candidate.protocol === picker.protocol
+    && candidate.hostname === picker.hostname
+    && candidate.port === picker.port;
+}
+
+/**
+ * The egress URL of this install's applied Claude Desktop picker profile, read without writing.
+ * That profile points Desktop at the credential-less picker CONNECT proxy, and Desktop exports
+ * it as HTTP(S)_PROXY to everything it spawns, so a `service install`/`repair`/`restart` run
+ * from a Desktop Code session would otherwise bake it and the service would tunnel every
+ * provider request back into itself.
+ */
+function ownDesktopPickerProxy(): PickerProxyEndpoint | null {
+  try {
+    const profile = inspectDesktopPickerProfile();
+    return profile.kind === "applied" ? parsePickerProxyEndpoint(profile.proxyUrl) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -45,8 +45,16 @@ Kesin kilit reddi `usage_limit_reached` olarak bildirilir. Böylece Codex günle
 yeniden denemede beklemek yerine turu bitirir ve etkin Goal'ı kullanım sınırlı
 işaretler. Önerilen zaman, ana hesap sıfırlanmasıdır; havuzun ana hesaba
 yönlendirdiği isteklerde başka havuz hesabının bilinen en erken düzelme zamanı
-daha erkense o kullanılır. Süre hiçbir zaman bir dakikadan kısa değildir.
+daha erkense o kullanılır. Havuz hesabının zamanı hiçbir zaman bir dakikadan
+kısa değildir; ana hesap sıfırlanması olduğu gibi kullanılır.
 Goal'ı o zamandan sonra sürdürün; yönlendirme güncel durumdan hesap seçer.
+
+Önce başka bir havuz hesabı denenip istenen modeli desteklemediğini söylediğinde
+ve istek başka bir hesaba geçebildiğinde de aynı ret döner. İstemci o hesabın
+model hatası yerine ana hesabın sınırını ve yukarıda açıklanan önerilen yeniden
+deneme zamanını görür. Yüklenmiş dosya taşıyan, tek hesaba bağlı olan ya da hesap
+değiştirmek için gönderim hakkı kalmamış bir istek o hesabın model hatasını almaya
+devam eder; diğer hesabın kota reddi önceki gibi döner.
 
 ## İlk yeniden bağlanma satırı neden görünmeyebilir?
 

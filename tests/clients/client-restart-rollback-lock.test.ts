@@ -22,7 +22,7 @@ test("rollback closes each busy attempt before yielding and keeps one remaining 
     listener = false; return "busy";
   }, { budgetMs: 200, now: () => clock, sleep: async ms => {
     expect(listener).toBe(false); clock += ms;
-  } })).toBe(true);
+  } })).toBe("published");
   expect(remaining).toEqual([200, 140, 80]);
   expect(listener).toBe(true);
 });
@@ -31,7 +31,7 @@ test("rollback contention exhaustion never extends its budget", async () => {
   let clock = 0, calls = 0;
   expect(await retryClientRollback(async () => { calls++; clock += 20; return "busy"; }, {
     budgetMs: 100, now: () => clock, sleep: async ms => { clock += ms; },
-  })).toBe(false);
+  })).toBe("busy");
   expect({ clock, calls }).toEqual({ clock: 100, calls: 2 });
 });
 
@@ -39,6 +39,15 @@ test("a changed owner or non-contention refusal stops rollback retries immediate
   let clock = 0, calls = 0;
   expect(await retryClientRollback(async () => ++calls === 1 ? "busy" : "refused", {
     now: () => clock, sleep: async ms => { clock += ms; },
-  })).toBe(false);
+  })).toBe("refused");
   expect(calls).toBe(2);
+});
+
+test("publication and the subsequent ownership probe share one rollback deadline", async () => {
+  let clock = 0;
+  const io = { deadline: 70, now: () => clock, sleep: async (ms: number) => { clock += ms; } };
+  expect(await retryClientRollback(() => clock === 0 ? "busy" : "refused", io)).toBe("refused");
+  let probes = 0;
+  expect(await retryClientRollback(() => { probes++; return "busy"; }, io)).toBe("busy");
+  expect({ clock, probes }).toEqual({ clock: 70, probes: 1 });
 });

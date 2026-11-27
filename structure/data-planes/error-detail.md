@@ -202,7 +202,7 @@ HTTP and WebSocket.
 
 Client `Retry-After` advice is a string this proxy formats: `formatClientRetryAfter` in
 `src/lib/client-retry-after.ts` turns delay seconds (fractions round up) or an HTTP date in any RFC 9110
-form (IMF-fixdate, RFC 850, asctime, all read as GMT field by field) into
+form (IMF-fixdate, RFC 850, asctime, all read as GMT field by field, with a month-end `23:59:60` leap second carried into the following day after calendar validation) into
 an integer of seconds clamped to 0..691200 (eight days, so a weekly usage-window reset such as a local Codex account
 cooldown still reaches the client), and yields nothing for any other input. The Ollama surface keeps its
 own smaller bound (`ollamaRetryAfter`). Every other client boundary uses `formatClientRetryAfter`

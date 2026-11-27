@@ -23,6 +23,11 @@ describe("client Retry-After is regenerated at every boundary", () => {
     expect(safeResponseHeaders(new Headers({ "retry-after": "must-not-echo" }))["retry-after"]).toBeUndefined();
   });
 
+  test("WebSocket response metadata retains zero advice for a past leap second", () => {
+    const headers = new Headers({ "retry-after": "Sat, 31 Dec 2016 23:59:60 GMT" });
+    expect(safeResponseHeaders(headers)["retry-after"]).toBe("0");
+  });
+
   test("fallback refusal", () => {
     expect(fallbackRefusedResponse(event, { failureStatus: 429, retryAfter: NUMERIC_KEY }).headers.get("retry-after")).toBe("691200");
     expect(fallbackRefusedResponse(event, { failureStatus: 429, retryAfter: "30" }).headers.get("retry-after")).toBe("30");

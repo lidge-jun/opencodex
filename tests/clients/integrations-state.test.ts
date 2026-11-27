@@ -718,6 +718,23 @@ describe("ownership is scoped to recorded fragments", () => {
     expect(result).toEqual({ state: "current" });
   });
 
+  test("Kimi patches its TOML tables in place, so a sibling edit is not a conflict (#9152)", () => {
+    const contribution = { ...ownedContribution, clientId: "kimi" as const };
+    const result = classifyIntegration({
+      fileText: textWithExtra,
+      fileIsRegular: true,
+      parsed: documentWithExtra,
+      record: {
+        ...record,
+        clientId: "kimi",
+        configPath: "/tmp/kimi-config.toml",
+        blockFingerprint: fingerprint(canonicalContribution(contribution)),
+      },
+      contribution,
+    });
+    expect(result).toEqual({ state: "current" });
+  });
+
   // Re-serializing a whole document in these formats would drop any comments
   // the user keeps next to our block, so file-level drift stays a hard
   // conflict for every one of them — a regression that narrowed the condition
@@ -725,7 +742,6 @@ describe("ownership is scoped to recorded fragments", () => {
   for (const { clientId, configPath } of [
     { clientId: "gajae" as const, configPath: "/tmp/gajae-models.yaml" },
     { clientId: "openclaw" as const, configPath: "/tmp/openclaw.json5" },
-    { clientId: "kimi" as const, configPath: "/tmp/kimi-config.toml" },
   ]) {
     test(`${clientId} (comment-capable) still conflicts on an unrelated source edit`, () => {
       const contribution = { ...ownedContribution, clientId };

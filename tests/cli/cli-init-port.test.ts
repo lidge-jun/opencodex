@@ -77,9 +77,9 @@ describe("setup port validation", () => {
     const choice = providers.findIndex(provider => provider.id === "antigravity-acp") + 1;
     expect(choice).toBeGreaterThan(0);
     const run = await runWizard([
-      ["Select default provider (number):", String(choice)], ["Default model", "claude-test"], [PORT_PROMPT, ""],
+      ["Select default provider (number):", String(choice)], ["Default model", "gpt-test"], [PORT_PROMPT, ""],
     ]);
-    expect(run.stderr).toContain("providers.antigravity-acp.defaultModel: The Antigravity CLI (ACP) provider serves Gemini models only.");
+    expect(run.stderr).toContain("providers.antigravity-acp.defaultModel: The Antigravity CLI (ACP) provider serves Gemini and Claude models only.");
     expect(run.exitCode).toBe(1);
     expect(run.config).toBeUndefined();
   }, 30_000);

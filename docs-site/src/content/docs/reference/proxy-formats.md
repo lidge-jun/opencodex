@@ -63,6 +63,10 @@ OpenCodex records the failure and any reported usage without saving the response
 `previous_response_id` replay.
 Auto/none, incomplete results and unknown contracts retain their existing rules.
 
+Refusal text alone preserves a completed response. OpenCodex masks provider credentials in individual
+refusal fields as they arrive, including refusal parts in message items. Ordinary output and tool
+arguments keep their original content.
+
 ## Required tools on translated Chat routes
 
 Before sending, the proxy rejects a mandatory tool choice that the selected Chat destination cannot
@@ -353,6 +357,13 @@ requests without a trusted principal are left unchanged.
 Use distinct markers for distinct conversations. This preserves conversation continuity
 for downstream consumers, but does not guarantee an upstream cache hit or measured savings.
 WebSocket frames, compact, and count_tokens do not use this promotion.
+
+A Responses client that sends neither a session header nor `x-session-id` can name its
+conversation with the body `prompt_cache_key` instead. On `POST /v1/responses`, over HTTP and
+WebSocket frames, opencodex then uses that key as `session_id` under the same character rules
+and the same loopback and principal scoping as a promoted `x-session-id`, so ChatGPT-backed
+models can reuse the warmed prompt prefix. Any session header or `x-session-id` the client
+sends wins, and Chat Completions and Messages requests keep their own identity rules.
 
 On canonical ChatGPT-backed Responses dispatch, a non-empty explicit `session_id` wins.
 Otherwise, the first non-empty alias among `session-id`, then `thread-id`, supplies

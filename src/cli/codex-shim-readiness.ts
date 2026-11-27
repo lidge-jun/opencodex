@@ -7,6 +7,7 @@ import { diagnoseCodexShim, type CodexShimDiagnostic } from "../codex/shim";
 import { overlayActivationHint } from "../codex/shim-overlay";
 import { findFirstCodexOnPath, type CodexPathCandidate } from "../codex/shim-path-resolution";
 import { loadConfig, resolveEnvValue } from "../config";
+import type { OcxConnectedClientId } from "../types";
 
 const PROXY_ENV_KEYS = [
   "HTTP_PROXY",
@@ -41,6 +42,24 @@ const CODEX_TOKEN_NOTE = "The connected Codex config uses OPENCODEX_API_AUTH_TOK
   + "without a working shim or when a PATH wrapper replaces it, Codex may fail with "
   + '"Missing environment variable".';
 const CODEX_TOKEN_ACTION = `${CODEX_TOKEN_NOTE} Run 'ocx codex-shim install' to repair it.`;
+
+export const HUB_CODEX_DESKTOP_NOTE =
+  'Codex Desktop / GUI apps: direct launches bypass the CLI shim, so Hub-mode Codex (env_key = "OPENCODEX_API_AUTH_TOKEN") '
+  + 'fails with "Missing environment variable: OPENCODEX_API_AUTH_TOKEN" unless launched with that variable in its environment '
+  + '(from service-api-token) or connected via Remote Link (local loopback relay, no env var; --desktop-authless is inert on a connected client).';
+
+/**
+ * Secret-free caveat for Hub-connected Codex clients (#9171): the CLI shim covers PATH-resolved
+ * CLI launches only, while Codex Desktop spawns its own binary directly. Remote Link runs a
+ * local loopback relay with no env_key, so it does not emit this Hub-mode caveat.
+ */
+export function hubCodexDesktopReadinessLine(
+  selectedClients: readonly OcxConnectedClientId[] | undefined,
+  transport: "hub" | "link" | undefined = "hub",
+): string | null {
+  if (transport === "link" || !selectedClients?.includes("codex")) return null;
+  return HUB_CODEX_DESKTOP_NOTE;
+}
 
 export function codexConnectShimReadiness(inputs: {
   diagnosis: Pick<CodexShimDiagnostic, "installed" | "healthy" | "summary" | "runnable" | "active">;

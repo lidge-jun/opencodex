@@ -1954,10 +1954,22 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // Static seed; the ACP model options the CLI advertises at turn time decide what is accepted.
     models: [...AGY_ACP_SEED_MODELS],
     liveModels: false,
-    modelContextWindows: { "gemini-3.8-flash": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.7-flash": 1_048_576 },
+    modelContextWindows: {
+      "gemini-3.8-flash": 1_048_576,
+      "gemini-4-neon": 1_048_576,
+      "gemini-4-carbon": 1_048_576,
+      "gemini-4-argon": 1_048_576,
+      "gemini-4-hydrogen": 1_048_576,
+      "gemini-3.7-flash": 1_048_576,
+      "gemini-pro-orchestrator-neon": 1_048_576,
+      "gemini-pro-orchestrator": 1_048_576,
+      "gemini-pro-orchestrator-argon": 1_048_576,
+      "claude-opus-5-5": 1_000_000,
+      "claude-sonnet-5-5": 1_000_000,
+    },
     // ACP prompts carry text only; client function tools are not offered to the model.
     inputModalities: ["text"],
     reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-    note: "Drives the official Antigravity CLI (`agy acp`, 1.5.3 or newer) as a local child process over the Agent Client Protocol. The CLI owns its Google sign-in (`agy acp --login`); OpenCodex never reads or stores it, so no key or account belongs on this row. Google permits this only for interactive, user-directed use: OpenCodex refuses subagent, spawned-thread and Codex memory turns, combo members and decision calls, subagent-fallback routing and requests classified as remote from the observed connection. An undeclared loopback relay that forwards no recognized forwarding headers can appear local. On the public listener, declare a reverse proxy in dashboardTrustedProxy or keep this port out of the relay. OpenCodex serves Gemini models only. Use a Gemini API key or Vertex AI for programmatic or shared workloads. Each turn runs in an empty private workspace with `--sandbox`, every permission request is refused, and client tools are not offered; allow rules in your own agy settings still apply.",
+    note: "Drives the official Antigravity CLI (`agy acp`, 1.5.3 or newer) as a local child process over the Agent Client Protocol. The CLI owns its Google sign-in (`agy acp --login`); OpenCodex never reads or stores it, so no key or account belongs on this row. Google permits this only for interactive, user-directed use: OpenCodex refuses subagent, spawned-thread and Codex memory turns, combo members and decision calls, subagent-fallback routing and requests classified as remote from the observed connection. An undeclared loopback relay that forwards no recognized forwarding headers can appear local. On the public listener, declare a reverse proxy in dashboardTrustedProxy or keep this port out of the relay. OpenCodex serves Gemini and Claude models only. Use a Gemini API key or Vertex AI for programmatic or shared workloads. Each turn runs in an empty private workspace with `--sandbox`, every permission request is refused, and client tools are not offered; allow rules in your own agy settings still apply.",
   },
 ];

@@ -130,7 +130,7 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
     try {
       await io.spawnReplacement(acceptedAt + CLIENT_RESTART_READY_BY_MS);
     } catch (error) {
-      warn(`[client] restart: the replacement did not start (${failureCode(error)}); this runtime keeps serving`);
+      warn(`[client] restart: the replacement did not start (${failureCode(error)}); attempting recovery`);
       try {
         await io.resume();
       } catch (resumeError) {

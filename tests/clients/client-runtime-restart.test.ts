@@ -243,7 +243,7 @@ describe("client restart controller", () => {
     await controller.settled();
     expect(calls).toEqual([
       `stop:${CLIENT_RESTART_DRAIN_MS}`,
-      "warn:[client] restart: the replacement did not start (not_ready); this runtime keeps serving",
+      "warn:[client] restart: the replacement did not start (not_ready); attempting recovery",
       "resume",
     ]);
     // The latch is released: a later restart is accepted afresh.

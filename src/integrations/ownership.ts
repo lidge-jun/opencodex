@@ -99,6 +99,14 @@ export interface OwnershipRecord {
    * this field existed simply prune nothing, which is the old behavior.
    */
   createdContainers?: readonly string[];
+  /**
+   * Hash of the original file when a source-preserving writer first appended
+   * to a non-empty file that lacked a trailing newline. Disable strips the
+   * added EOF newline only when the remaining bytes hash back to that exact
+   * original content, so an overwrite or later sibling edit never loses its
+   * own newline.
+   */
+  sourceMissingTrailingNewlineFingerprint?: string;
   appliedAt: string;
   opId: string;
 }
@@ -117,8 +125,12 @@ export function isOwnershipRecord(value: unknown): value is OwnershipRecord {
     && hash(record.fileFingerprint) && hash(record.blockFingerprint)
     && (record.modelNames === undefined || record.modelNames === "routed" || record.modelNames === "alias")
     && paths(record.fragmentPaths) && (record.fragmentPaths as unknown[]).length > 0
-    && ["semanticBlockFingerprint", "protectedBlockFingerprint", "semanticProtectedBlockFingerprint"]
-      .every(key => record[key] === undefined || hash(record[key]))
+    && [
+      "semanticBlockFingerprint",
+      "protectedBlockFingerprint",
+      "semanticProtectedBlockFingerprint",
+      "sourceMissingTrailingNewlineFingerprint",
+    ].every(key => record[key] === undefined || hash(record[key]))
     && (record.refreshablePaths === undefined || paths(record.refreshablePaths))
     && (record.createdContainers === undefined || (Array.isArray(record.createdContainers)
       && record.createdContainers.every(path => typeof path === "string")));

@@ -151,12 +151,68 @@ test("ordinary restart rollback keeps file routes and admits fresh sync", async 
   expect(report.protectedUnchanged).toBe(true);
 }, 20_000);
 
+for (const mode of ["file-restart-control", "file-restart-overlap"] as const) {
+  test(`unchanged Link rollback exhaustion ${mode === "file-restart-control" ? "reports failed resume" : "defers to the parent stop"}`, async () => {
+    const report = await runStop({ mode, preserve: "restart-rollback", retryRollbackPublication: "exhausted", fileOnly: true });
+    expect(report.result).toMatchObject({
+      closedBeforeYield: true, published: false, bound: false, rollbackBinds: 1, replacementAttempts: 1,
+    });
+    expect(report.result.rollbackExit).toBe(mode === "file-restart-control" ? 1 : undefined);
+    expect(report.protectedUnchanged).toBe(true);
+  }, 20_000);
+}
+
 test("a finished parent stop preserves the retained sync fence through restart rollback", async () => {
   const report = await runStop({ mode: "file-restart-overlap", preserve: "restart-rollback", fileClients: ["pi"], finishStopBeforeRollback: true });
   expect(report.result).toEqual({ preflight: null, rolledBack: true, bound: true, stopping: true, explicitStop: false, retainedStop: true,
     sync: "client_runtime_stopping", admission: { kind: "stopping" } });
   expect(report.fileAfter.pi).not.toContain("127.0.0.1");
 }, 20_000);
+
+for (const finalRollbackProof of ["pending", "config-held"] as const) {
+  test(`unchanged Link rollback exhaustion defers exit when ownership is ${finalRollbackProof}`, async () => {
+    const report = await runStop({ mode: "file-restart-control", preserve: "restart-rollback", fileOnly: true,
+      retryRollbackPublication: "exhausted", finalRollbackProof });
+    expect(report.result).toMatchObject({ closedBeforeYield: true, published: false, bound: false, replacementAttempts: 1 });
+    expect(report.result.rollbackExit).toBeUndefined();
+    expect(report.protectedUnchanged).toBe(true);
+  }, 20_000);
+}
+
+for (const contention of ["unchanged", "pending", "stop"] as const) {
+  test(`rollback port contention ${contention === "unchanged" ? "fails unchanged Link recovery" : `defers exit under concurrent ${contention}`}`, async () => {
+    const report = await runStop({
+      mode: contention === "stop" ? "file-restart-overlap" : "file-restart-control",
+      preserve: "restart-rollback",
+      fileOnly: true,
+      rollbackBindContention: contention,
+    });
+    expect(report.result).toMatchObject({ published: false, rollbackBinds: 0, replacementAttempts: 1 });
+    expect(report.result.rollbackExit).toBe(contention === "unchanged" ? 1 : undefined);
+    expect(report.protectedUnchanged).toBe(true);
+  }, 20_000);
+}
+
+for (const receipt of ["complete", "pending", "other-owner"] as const) {
+  test(`a refused recycle after rollback exits only for its own completed disconnect (${receipt})`, async () => {
+    const report = await runStop({ mode: "file-restart-control", preserve: "restart-rollback", refusedDisconnectRecycle: receipt });
+    expect(report.result).toMatchObject({ replacementAttempts: 1, recycleAdmissions: 1, runtimePresent: true });
+    expect(report.result.rollbackExit).toBe(receipt === "complete" ? 1 : undefined);
+    expect(report.protectedUnchanged).toBe(true);
+  }, 20_000);
+}
+
+for (const [contention, waits, exit] of [
+  ["config-release", 1, 1], ["config-held", 2, undefined],
+  ["config-takeover", 1, undefined], ["config-at-deadline", 2, 1],
+] as const) {
+  test(`a listenerless rollback rechecks completed disconnect ownership after config contention (${contention})`, async () => {
+    const report = await runStop({ mode: "file-restart-control", preserve: "restart-rollback", refusedDisconnectRecycle: contention });
+    expect(report.result).toMatchObject({ replacementAttempts: 1, recycleAdmissions: 1, runtimePresent: true, proofWaits: waits });
+    expect(report.result.rollbackExit).toBe(exit);
+    expect(report.protectedUnchanged).toBe(true);
+  }, 20_000);
+}
 
 test("a pending restart admission cannot leave routing behind on signal shutdown", async () => {
   const report = await runStop({ mode: "runtime", preserve: "restart" });

@@ -179,7 +179,9 @@ export async function prepareResponsesSidecarAuth(
   // LOCAL PATCH (runturn-websearch): runTurn adapters can run the web-search
   // sidecar through src/web-search/run-turn-loop.ts, so resolve the helper
   // credential for them too. The passthrough bridge stays fetch-only.
-  const needsOpenAiSearch = !routedCompaction
+  // A prefix-preserving summary resolves the helper like the ordinary turn, only to decide whether
+  // the synthetic web_search is declared; it never searches (#7307).
+  const needsOpenAiSearch = (!routedCompaction || preserveCompactionPrefix)
     && (transportState.adapter.runTurn
       ? shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough)
       : (shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough)
