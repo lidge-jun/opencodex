@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +9,7 @@ import {
   buildNoticeHookScript,
   mountAdvisorMcpForClient,
   shellQuote,
+  syncAdvisorMcpClients,
   unmountAdvisorMcpForClient,
 } from "../../src/advisor/client-mcp";
 import { consultAdvisor } from "../../src/advisor/consult";
@@ -168,6 +169,19 @@ describe("Advisor client MCP safety", () => {
     expect(readFileSync(join(shared, "mcp.json"), "utf8")).toContain("/new/bun");
     expect(unmountAdvisorMcpForClient("workbuddy-ai", { ...opts, execPath: "/new/bun" }).ok).toBe(true);
     expect(JSON.parse(readFileSync(join(shared, "mcp.json"), "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeUndefined();
+  });
+  test("switching clients preserves a shared config reached through a directory symlink", () => {
+    const home = tempHome("ocx-advisor-path-alias-");
+    const configDir = join(home, ".opencodex");
+    const realDir = join(home, "qoder-real");
+    const alias = join(home, "qoder-alias");
+    mkdirSync(realDir);
+    symlinkSync(realDir, alias, "dir");
+    const opts = { homeDir: home, configDir, env: { QODER_CONFIG_DIR: realDir, QODERCN_CONFIG_DIR: alias }, execPath: "/same/bun" };
+    expect(mountAdvisorMcpForClient("qoder", opts).ok).toBe(true);
+    const config = { advisor: { enabled: true, model: "expert/m", contextSharingConsent: "v1", mcpClients: ["qoder-cn"] } } as Pick<OcxConfig, "advisor">;
+    expect(syncAdvisorMcpClients(config, opts).errors).toEqual([]);
+    expect(JSON.parse(readFileSync(join(realDir, "settings.json"), "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeDefined();
   });
   test("an identical opencodex-advisor entry OpenCodex never recorded is used but never deleted", () => {
     const home = tempHome("ocx-advisor-identical-");

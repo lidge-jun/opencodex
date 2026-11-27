@@ -2,7 +2,7 @@
  * Manage per-client `opencodex-advisor` MCP registration, anti-forgetting hooks/skills, and
  * bidirectional Advisor <-> Routing synchronization for compatible external coding clients.
  */
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -103,6 +103,20 @@ interface ClientSpec {
 }
 
 type JsonObj = Record<string, unknown>;
+
+function canonicalClientPath(path: string): string {
+  let current = resolve(path);
+  const missing: string[] = [];
+  for (;;) {
+    try { return join(realpathSync.native(current), ...missing); }
+    catch {
+      const parent = dirname(current);
+      if (parent === current) return resolve(path);
+      missing.unshift(basename(current));
+      current = parent;
+    }
+  }
+}
 
 function isPlainObject(value: unknown): value is JsonObj {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -678,7 +692,7 @@ function unmountHooksAndSkill(
 ): { changed: boolean } {
   let changed = false;
   if (spec.supportsHooks && paths.hookConfigPath && paths.hookScriptPath) {
-    if (!protectedPaths?.hookConfigPaths.has(resolve(paths.hookConfigPath))) {
+    if (!protectedPaths?.hookConfigPaths.has(canonicalClientPath(paths.hookConfigPath))) {
       const read = readJsonObject(paths.hookConfigPath);
       if (!read.parseError && read.doc && isPlainObject(read.doc.hooks)) {
         const hooks = { ...read.doc.hooks };
@@ -701,7 +715,7 @@ function unmountHooksAndSkill(
         }
       }
     }
-    if (!protectedPaths?.hookScriptPaths.has(resolve(paths.hookScriptPath))
+    if (!protectedPaths?.hookScriptPaths.has(canonicalClientPath(paths.hookScriptPath))
       && inspectManagedTextFile(paths.hookScriptPath, ADVISOR_HOOK_MARKER) === "owned") {
       try {
         unlinkSync(paths.hookScriptPath);
@@ -712,7 +726,7 @@ function unmountHooksAndSkill(
     }
   }
   if (spec.supportsSkills && paths.skillPath
-    && !protectedPaths?.skillPaths.has(resolve(paths.skillPath))
+    && !protectedPaths?.skillPaths.has(canonicalClientPath(paths.skillPath))
     && inspectManagedTextFile(paths.skillPath, ADVISOR_SKILL_MARKER) === "owned") {
     try {
       unlinkSync(paths.skillPath);
@@ -876,7 +890,7 @@ function ownsAdvisorEntry(owned: OwnedAdvisorEntries, clientId: string, configPa
   const slot = CLIENT_SPECS[clientId as AdvisorMcpClientId]?.mcpContainer;
   return Object.entries(owned).some(([recordClient, record]) =>
     (recordClient === clientId || (includeShared && CLIENT_SPECS[recordClient as AdvisorMcpClientId]?.mcpContainer === slot))
-    && record.configPath === resolve(configPath) && record.entry === currentText);
+    && canonicalClientPath(record.configPath) === canonicalClientPath(configPath) && record.entry === currentText);
 }
 
 export function mountAdvisorMcpForClient(
@@ -966,7 +980,7 @@ export function unmountAdvisorMcpForClient(
   const paths = spec.resolvePaths(home, env);
 
   let changed = false;
-  if (!protectedPaths?.mcpPaths.has(resolve(paths.mcpConfigPath)) && existsSync(paths.mcpConfigPath)) {
+  if (!protectedPaths?.mcpPaths.has(canonicalClientPath(paths.mcpConfigPath)) && existsSync(paths.mcpConfigPath)) {
     const read = readJsonObject(paths.mcpConfigPath);
     if (read.parseError || !read.doc) {
       return { ok: false, changed: false, error: `Refused to edit invalid JSON in ${paths.mcpConfigPath}` };
@@ -1031,10 +1045,10 @@ function collectProtectedPaths(
   };
   for (const id of targets) {
     const paths = CLIENT_SPECS[id].resolvePaths(home, env);
-    protectedPaths.mcpPaths.add(resolve(paths.mcpConfigPath));
-    if (paths.hookConfigPath) protectedPaths.hookConfigPaths.add(resolve(paths.hookConfigPath));
-    if (paths.hookScriptPath) protectedPaths.hookScriptPaths.add(resolve(paths.hookScriptPath));
-    if (paths.skillPath) protectedPaths.skillPaths.add(resolve(paths.skillPath));
+    protectedPaths.mcpPaths.add(canonicalClientPath(paths.mcpConfigPath));
+    if (paths.hookConfigPath) protectedPaths.hookConfigPaths.add(canonicalClientPath(paths.hookConfigPath));
+    if (paths.hookScriptPath) protectedPaths.hookScriptPaths.add(canonicalClientPath(paths.hookScriptPath));
+    if (paths.skillPath) protectedPaths.skillPaths.add(canonicalClientPath(paths.skillPath));
   }
   return protectedPaths;
 }
@@ -1119,9 +1133,9 @@ export function syncAdvisorMcpClients(
       const paths = CLIENT_SPECS[id].resolvePaths(home, env);
       const status = inspectAdvisorMcpClientStatus(id, config, options, routedSet);
       const hasUnprotectedMounted =
-        (status.mounted && !protectedPaths.mcpPaths.has(resolve(paths.mcpConfigPath)))
-        || (status.hooksMounted && (!paths.hookConfigPath || !protectedPaths.hookConfigPaths.has(resolve(paths.hookConfigPath))))
-        || (status.skillMounted && (!paths.skillPath || !protectedPaths.skillPaths.has(resolve(paths.skillPath))));
+        (status.mounted && !protectedPaths.mcpPaths.has(canonicalClientPath(paths.mcpConfigPath)))
+        || (status.hooksMounted && (!paths.hookConfigPath || !protectedPaths.hookConfigPaths.has(canonicalClientPath(paths.hookConfigPath))))
+        || (status.skillMounted && (!paths.skillPath || !protectedPaths.skillPaths.has(canonicalClientPath(paths.skillPath))));
       if (hasUnprotectedMounted) {
         const res = unmountAdvisorMcpForClient(id, options, protectedPaths);
         if (!res.ok && res.error) errors.push({ clientId: id, message: res.error });
