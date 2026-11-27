@@ -563,6 +563,7 @@ describe("headless GUI parity CLI", () => {
       // for. Listed here so the parity sweep stays exhaustive rather than silently
       // skipping the endpoint.
       ["/api/github/star", "(none — GUI-only)"],
+      ["/api/antigravity-acp/accounts", "ocx account agy"],
       ["/api/oauth/accounts/probe", "ocx account probe"],
       ["/api/oauth", "ocx account"],
       // The unified pool-settings route (#695 wp5c). One path answers for every pool
