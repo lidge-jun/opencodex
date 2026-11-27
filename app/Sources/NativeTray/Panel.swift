@@ -12,8 +12,7 @@ public enum NativeTrayHitTest {
 @MainActor
 final class NativeTrayPanel: NSPanel {
     var onDismiss: (() -> Void)?
-    var lastDismissedAt: Date?
-    var unconsumedButtonMouseDown = false
+    var buttonPress = NativeTrayButtonPress()
     private var outsideMonitor: Any?
     private weak var statusButton: NSStatusBarButton?
 
@@ -37,8 +36,7 @@ final class NativeTrayPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     func present(from button: NSStatusBarButton) {
-        lastDismissedAt = nil
-        unconsumedButtonMouseDown = false
+        buttonPress.clear()
         statusButton = button
         guard let buttonWindow = button.window else { return }
         let visible = (buttonWindow.screen ?? NSScreen.main)?.visibleFrame
@@ -58,11 +56,12 @@ final class NativeTrayPanel: NSPanel {
                     let mouse = NSEvent.mouseLocation
                     let buttonFrame = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
                     if NativeTrayHitTest.isNearButton(buttonFrame: buttonFrame, point: mouse) {
-                        self.unconsumedButtonMouseDown = true
-                        self.lastDismissedAt = Date()
+                        self.buttonPress.record()
                         return
                     }
                 }
+                // An outside or right click is not the status button's toggle.
+                self.buttonPress.clear()
                 self.dismiss()
             }
         }
@@ -78,8 +77,7 @@ final class NativeTrayPanel: NSPanel {
     }
 
     override func cancelOperation(_ sender: Any?) {
-        unconsumedButtonMouseDown = false
-        lastDismissedAt = nil
+        buttonPress.clear()
         dismiss()
     }
     override func resignKey() {
