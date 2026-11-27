@@ -1031,6 +1031,25 @@ setting and never grants it from a URL override. Without it, destination validat
 local endpoint for inference and model discovery. The OAuth browser callback listener itself
 does not require this provider opt-in. See the [OrcaRouter setup example](/guides/api-key-catalog/).
 
+### Open Design Cloud
+
+`opendesign` is the built-in Open Design Cloud provider. It speaks OpenAI-compatible chat on
+`https://amr-link.open-design.ai/v1` with an inference key (`sk-amr_…`) pasted into provider
+config, while `ocx login opendesign` runs Open Design's device authorization and stores the
+separate control-plane key that billing reads use. The two credentials never cross planes: the
+control key never signs model calls, and the inference key cannot read quota.
+
+Account quota reads the control plane (`https://amr-api.open-design.ai`): one account quota report
+containing a window for each workspace, labeled by workspace ID, from
+`GET /api/v1/workspaces`, then `GET /api/v1/workspaces/{id}/billing/preflight` for each — at most
+25 workspaces; a workspace whose preflight fails or is invalid is omitted from the returned
+windows while the others still report. Each
+coding-plan window (5-hour and 7-day) becomes one quota window in that report. These endpoints come
+from the Vela CLI and Open Design's own daemon (`nexu-io/open-design`), not an official public API,
+so reports are flagged reverse-engineered. Window resets are anchored recurring schedules
+(`resetMode: "anchored_recurring"`): the next reset is a fixed clock time, not an offset from the
+last observation.
+
 ## Provider diagnostic outbound safety
 
 Dashboard connection tests and live model discovery use a bounded GET-only transport. Without an

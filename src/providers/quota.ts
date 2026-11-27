@@ -125,7 +125,7 @@ async function maybeFetchProviderQuota(
     if (isBuiltInChatGptForwardProvider(name, provider)) {
       return await fetchChatGptForwardQuota(config, name, provider, forceRefresh, prefetchedCodexSnapshot);
     }
-    if (provider.authMode === "oauth" && explicitAccountReader(name)) return await fetchExplicitCurrentQuota(name, provider, config);
+    if ((provider.authMode === "oauth" || (name === "opendesign" && provider.authMode === "key")) && explicitAccountReader(name)) return await fetchExplicitCurrentQuota(name, provider, config);
     if (provider.authMode === "oauth" && configuredAnthropicInstance(config, name)) return await fetchAnthropicQuota(name, config);
     if (provider.authMode === "oauth" && name === ANTIGRAVITY_OAUTH_STORE_KEY) return await fetchAntigravityQuota(name, { ...provider });
     if (provider.authMode === "oauth" && name === "kiro") return await fetchKiroQuota(name);
@@ -375,6 +375,7 @@ async function readExplicitAccountQuota(provider: string, accountId: string, con
     case "devin": result = await (await import("./quota/devin")).fetchDevinQuota(provider, accessToken, credential.apiBaseUrl, config.baseUrl); break;
     case "workbuddy-ai": result = await (await import("./quota/workbuddy")).fetchWorkBuddyQuota(provider, credential); break;
     case "dsh-account": result = await (await import("./quota/dsh-account")).fetchDshAccountQuota(provider, accessToken, { accountId, credential }); break;
+    case "opendesign": result = await (await import("./quota/opendesign-account")).fetchOpenDesignAccountQuota(provider, accessToken); break;
     default: return null;
   }
   return { result, identity, isCurrent };

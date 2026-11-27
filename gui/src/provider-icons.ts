@@ -17,6 +17,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   deepseek: "deepseek-color.svg",
   "dsh-account": "deepseek-color.svg",
   "workbuddy-ai": "workbuddy-color.svg",
+  opendesign: "opendesign.svg",
   /*
    * One mark for the merged Devin provider. `devin` is Cognition's cloud; the
    * former `devin-cli` row was folded into it (CLI-credential import is now

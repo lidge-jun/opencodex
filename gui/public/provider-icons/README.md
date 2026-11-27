@@ -419,3 +419,14 @@ committing it.
   plate carrying a white "T3" glyph. **Not masked:** two neutral inks on an opaque plate, the
   plated case `qoder.svg` and `omo.svg` already record, so masking would fill the tile and
   discard the glyph. As an image it reads on both surfaces.
+
+## Open Design (2026-11-27)
+
+- `opendesign.svg` — `apps/web/public/logo-mark.svg` from `nexu-io/open-design`
+  (Apache-2.0, © Powerformer Inc.), the web app's own square mark, read at the `main` tip
+  and committed byte for byte (1205 bytes, MD5 `10dad4282a1f8edf92d9dcec04a998ee`).
+  `viewBox="0 0 256 256"`: a `#202020` rounded plate carrying the white Open Design symbol
+  (the arrows/quill monogram the app renders beside the brand). **Not masked:** the opaque
+  dark plate with a white glyph is the same two-neutral-ink plated case as `t3code.svg` and
+  `qoder.svg` — masking would read the alpha, fill the tile and discard the glyph — and a
+  dark plate would be wrong anyway; the art already reads on both surfaces as an image.

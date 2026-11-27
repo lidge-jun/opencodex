@@ -9,7 +9,7 @@ stay on that page.
 
 For subscription account rotation, see [`reset-near-weighted`](/reference/configuration/providers/#reset-near-weighted) for the Codex and Anthropic OAuth pools. API-key pools use their own [key selection settings](/reference/configuration/providers/).
 
-opencodex ships 114 built-in presets: 92 key-based, 18 OAuth, three local, and one default
+opencodex ships 115 built-in presets: 92 key-based, 19 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key where the provider can check one, and stores it. Notable entries:
 

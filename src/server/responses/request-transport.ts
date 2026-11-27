@@ -225,7 +225,7 @@ export async function prepareResponsesTransport(
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
   // existing openai-chat / anthropic adapters authenticate with no change.
-  const isOAuth401ReplayProvider = (
+  const isOAuth401ReplayProvider = route.providerName !== "opendesign" && route.provider.authMode === "oauth" && (
     route.providerName === "xai"
     || route.providerName === "github-copilot"
     || route.providerName === "kiro"
@@ -236,7 +236,7 @@ export async function prepareResponsesTransport(
     || route.providerName === "devin"
     || route.providerName === "workbuddy-ai"
     || route.providerName === "dsh-account"
-  ) && route.provider.authMode === "oauth";
+  );
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
   // One inference-401 replay belongs to this request, even when Auto changes exchange wire.
   let oauth401ReplayAttempted = false;
@@ -248,7 +248,7 @@ export async function prepareResponsesTransport(
   // the request actually used, so a concurrent rotation cannot cool an innocent replacement.
   let genericFailoverAccountId: string | null = null;
   let genericFailovers = 0;
-  let oauthSelection = route.provider.authMode === "oauth"
+  let oauthSelection = route.provider.authMode === "oauth" && route.providerName !== "opendesign"
     ? captureOAuthAccountSelection(route.providerName) : null;
   const anthropicManualSelectionGeneration = anthropicRouting?.captureAnthropicManualSelectionGeneration();
   let servingOAuthSnapshot: OAuthAccessSnapshot | undefined;
@@ -1389,7 +1389,12 @@ export async function prepareResponsesTransport(
   const anthropicSessionKey = anthropicInstance ? oauthSessionKey : null;
   const genericSessionKey = genericAffinityMode && oauthSessionKey
     ? JSON.stringify([resolveContextPrincipal(req, config, options.admission) ?? "loopback", oauthSessionKey]) : null;
-  if (route.provider.authMode === "oauth") {
+  if (route.providerName === "opendesign" && !route.provider.apiKey?.trim()) {
+    return markProxyError(
+      formatErrorResponse(401, "authentication_error", "Open Design inference API key missing — configure an inference key in provider config"),
+    );
+  }
+  if (route.provider.authMode === "oauth" && route.providerName !== "opendesign") {
     try {
       if (anthropicInstance !== undefined && anthropicRouting!.isAnthropicAccountPoolEnabled(config)) {
         const routeResult = resolveAnthropicModelRouteForInstance(anthropicInstance, config, route.modelId);

@@ -157,6 +157,9 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     const { headers: _savedHeaders, ...rest } = provider;
     return withAnthropicModelOutputCaps(snapshotVertexEnvironment({
       ...rest,
+      // Open Design's OAuth login holds the control-plane quota key only; model requests
+      // must use the configured inference key and never fall back to the OAuth plane.
+      ...(providerName === "opendesign" && provider.authMode === "oauth" ? { authMode: "key" as const } : {}),
       ...(headers ? { headers } : {}),
       ...(inputModalities ? { inputModalities } : {}),
       apiKey: usableResolvedApiKey(provider.apiKey),
@@ -183,7 +186,12 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     && staticModelCatalog
     && (provider.authMode === undefined || provider.authMode === "local");
   const explicitKeyOverride = providerUsesKeyAuthOverride(registryEntry, provider);
-  const canonicalAuthMode = explicitKeyOverride
+  // Open Design's OAuth store holds the control-plane billing key only; model routing
+  // always authenticates on the key plane with the configured inference key.
+  const controlPlaneOnlyOAuth = providerName === "opendesign";
+  const canonicalAuthMode = controlPlaneOnlyOAuth
+    ? "key"
+    : explicitKeyOverride
     ? "key"
     : repairLegacyMimoFreeAuth
       ? "key"
