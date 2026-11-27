@@ -1791,10 +1791,38 @@ describe("fetchProviderQuotaReports", () => {
 
     expect(result.reports).toHaveLength(1);
     expect(result.reports[0]?.source).toBe("venice:billing-balance");
-    expect(result.reports[0]?.quota.customWindows?.[0]?.label).toContain("DIEM balance (250)");
+    expect(result.reports[0]?.quota.customWindows?.[0]?.label).toContain("DIEM balance (250.00)");
     expect(result.reports[0]?.quota.customWindows?.[0]?.percent).toBe(30);
     expect(seen[0]?.url).toBe("https://api.venice.ai/api/v1/billing/balance");
     expect(seen[0]?.authorization).toBe("Bearer venice-secret");
+  });
+
+  test("Venice quota supports custom aliases and rate_limits USD/DIEM balances", async () => {
+    const seen: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      seen.push(url);
+      if (url.endsWith("/billing/balance")) {
+        return new Response(JSON.stringify({ error: "admin key required" }), { status: 403 });
+      }
+      return new Response(JSON.stringify({
+        data: { balances: { USD: 25, DIEM: 90.5 } },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(keyQuotaConfig("venice-custom", "https://api.venice.ai/api/v1"), true);
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.provider).toBe("venice-custom");
+    expect(result.reports[0]?.source).toBe("venice:rate-limits");
+    expect(result.reports[0]?.quota.customWindows).toEqual([
+      { label: "DIEM balance (90.50)", percent: 0 },
+      { label: "USD balance ($25.00)", percent: 0 },
+    ]);
+    expect(seen).toEqual([
+      "https://api.venice.ai/api/v1/billing/balance",
+      "https://api.venice.ai/api/v1/api_keys/rate_limits",
+    ]);
   });
 
   test("Synthetic quota maps rolling 5-hour and weekly token lanes", async () => {

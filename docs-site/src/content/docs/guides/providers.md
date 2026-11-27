@@ -933,6 +933,8 @@ Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-backed
 or Abliteration custom provider.
 
+**Venice balances.** Any provider alias using the canonical `https://api.venice.ai/api/v1` endpoint can show separate DIEM and USD balance windows. The DIEM window also shows epoch usage when available. The probe reads `/billing/balance` first and falls back to `/api_keys/rate_limits` if billing fails or does not return a usable balance.
+
 **Anthropic monthly usage.** Usage-based seats such as Enterprise can show a monthly
 extra-usage bar when Anthropic reports enabled extra usage and no plan windows. The reading
 comes without a reset date. The bar clears when Anthropic reports plan windows or confirms that
