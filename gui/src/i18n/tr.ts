@@ -4551,6 +4551,7 @@ export const tr: Record<TKey, string> = {
   "remoteLink.child.ownerAction.source-checkout": "Bu Child bir kaynak kodu kopyasından çalışıyor; elle güncelleyin",
   "remoteLink.child.ownerAction.installer-unknown": "Bu Child’ın kurulum yöntemi bilinmiyor; orada güncelleyin",
   "remoteLink.child.ownerAction.windows-apply": "Bu Windows cihazı için uzaktan güncelleme desteklenmiyor. OpenCodex’i doğrudan Windows bilgisayarında güncelleyin.",
+  "remoteLink.child.ownerAction.recheck-required": "Nasıl güncellenebileceğini görmek için bu Child’ı yeniden denetleyin",
   "remoteLink.child.check": "Denetle",
   "remoteLink.child.checkAll": "Tümünü denetle",
   "remoteLink.child.syncNow": "Şimdi eşitle",

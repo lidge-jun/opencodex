@@ -4517,6 +4517,7 @@ export const fr: Record<TKey, string> = {
   "remoteLink.child.ownerAction.source-checkout": "Cet Enfant s’exécute depuis une copie du code source ; mettez-le à jour à la main",
   "remoteLink.child.ownerAction.installer-unknown": "La méthode d’installation de cet Enfant est inconnue ; mettez-le à jour sur place",
   "remoteLink.child.ownerAction.windows-apply": "Les mises à jour à distance ne sont pas prises en charge pour cet appareil Windows. Mettez à jour OpenCodex directement sur l’ordinateur Windows.",
+  "remoteLink.child.ownerAction.recheck-required": "Vérifiez à nouveau cet Enfant pour savoir comment le mettre à jour",
   "remoteLink.child.check": "Vérifier",
   "remoteLink.child.checkAll": "Tout vérifier",
   "remoteLink.child.syncNow": "Synchroniser maintenant",

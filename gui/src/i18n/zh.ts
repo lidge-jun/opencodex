@@ -4549,6 +4549,7 @@ export const zh: Record<TKey, string> = {
   "remoteLink.child.ownerAction.source-checkout": "此子设备从源码检出运行；请手动更新",
   "remoteLink.child.ownerAction.installer-unknown": "此子设备的安装方式未知；请在该设备上更新",
   "remoteLink.child.ownerAction.windows-apply": "此 Windows 设备不支持远程更新。请直接在该 Windows 电脑上更新 OpenCodex。",
+  "remoteLink.child.ownerAction.recheck-required": "请再次检查此子设备，以确认更新方式",
   "remoteLink.child.check": "检查",
   "remoteLink.child.checkAll": "全部检查",
   "remoteLink.child.syncNow": "立即同步",

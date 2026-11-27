@@ -144,7 +144,7 @@ export function attachLinkChildOpsForState(dto: LinkStatusDto, state: LinkRouteS
     observation: linkId => {
       const cached = known.has(linkId) ? observations.children[linkId] ?? null : null;
       // #9172: an observation recorded before Windows was told to update locally reads the same as a new one.
-      return cached ? { ...cached, ...windowsLocalUpdateRoute(platforms.get(linkId), cached.updateRoute, cached.updateReason) } : null;
+      return cached ? { ...cached, ...windowsLocalUpdateRoute(platforms.get(linkId) ?? cached.platform, cached.updateRoute, cached.updateReason) } : null;
     },
     activity: linkId => state.listener.linkActivity?.(linkId, now) ?? null,
     catalogPull: linkId => state.listener.catalogPull?.(linkId) ?? null,

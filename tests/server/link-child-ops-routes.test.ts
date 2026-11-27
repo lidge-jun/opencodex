@@ -278,6 +278,22 @@ describe("link child operations routes", () => {
     expect(body.links.find(row => row.id === HUB)!.child.update).toMatchObject({ route: "owner-action", reason: "windows-apply" });
     expect(body.links.find(row => row.id === CLIENT)!.child.update).toMatchObject({ route: "orchestrated", reason: null });
   });
+  test("without a recorded link platform the observation's platform decides, and an unknown one asks for a fresh check (#9172)", async () => {
+    const LEGACY = "lnk_00000000000000aa";
+    const h = harness({ full: true, links: [link(HUB, { remotePlatform: undefined }), link(CLIENT, { remotePlatform: undefined }), link(LEGACY, { remotePlatform: undefined })] });
+    const file = emptyChildObservations();
+    const cached = { source: "plan" as const, installedVersion: "2.95.0", installKind: "npm" as const, updateRoute: "orchestrated" as const, updateReason: null };
+    patchChildObservation(file, HUB, { ...cached, platform: "windows" }, new Date(1_762_000_000_000));
+    patchChildObservation(file, CLIENT, { ...cached, platform: "posix" }, new Date(1_762_000_000_000));
+    patchChildObservation(file, LEGACY, cached, new Date(1_762_000_000_000));
+    writeFileSync(join(temp, "ocx", "link", "child-observations.json"), JSON.stringify(file));
+    const body = await (await h.call("/api/link/status?children=1"))!.json() as { links: Array<{ id: string; child: { update: unknown } }> };
+    const update = (id: string) => body.links.find(row => row.id === id)!.child.update;
+    expect(update(HUB)).toMatchObject({ route: "owner-action", reason: "windows-apply" });
+    expect(update(CLIENT)).toMatchObject({ route: "orchestrated", reason: null });
+    expect(update(LEGACY)).toMatchObject({ route: "owner-action", reason: "recheck-required" });
+  });
+
   test("?children=1 adds child to Home rows only and nothing without the query", async () => {
     const h = harness({ full: true });
     const plain = await (await h.call("/api/link/status?compatibility=1&diagnostics=1"))!.json() as { links: Array<Record<string, unknown>> };

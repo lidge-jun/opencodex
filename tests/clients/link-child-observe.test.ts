@@ -114,7 +114,7 @@ describe("observeChild", () => {
       expect(spy.mock.calls[0]?.[1]).toEqual({ homeVersion: "2.100.0", desktopUpdateRequest: false, platform: "windows" });
       // The probe keeps the plan's route for the runner; the observation the dashboard reads says the Home cannot apply it.
       expect(outcome).toMatchObject({ state: "succeeded", probe: { platform: "windows", classification: { updateRoute: "orchestrated" } },
-        observation: { installKind: "npm", updateRoute: "owner-action", updateReason: "windows-apply" } });
+        observation: { installKind: "npm", updateRoute: "owner-action", updateReason: "windows-apply", platform: "windows" } });
     } finally { spy.mockRestore(); }
   });
 
@@ -123,7 +123,7 @@ describe("observeChild", () => {
       platformOf: async () => "windows", peer: () => peer("2.97.0", ["desktop-update-request/1"]) }).value);
     expect(desktop.observation).toMatchObject({ installKind: "desktop-app", updateRoute: "desktop-request", updateReason: "desktop-app-owned" });
     const posix = await observeChild(record(), deps(ran(plan())).value);
-    expect(posix.observation).toMatchObject({ installKind: "npm", updateRoute: "orchestrated", updateReason: null });
+    expect(posix.observation).toMatchObject({ installKind: "npm", updateRoute: "orchestrated", updateReason: null, platform: "posix" });
   });
 
   test("a Windows argv over the budget is failed windows-command-too-long with no SSH", async () => {

@@ -52,6 +52,8 @@ const OWNER_ACTION_KEYS: Record<string, TKey> = {
   "installer-unknown": "remoteLink.child.ownerAction.installer-unknown",
   // #9172: the Home never applies an orchestrated update on Windows; the Child updates locally.
   "windows-apply": "remoteLink.child.ownerAction.windows-apply",
+  // A route cached before the Home recorded the Child's platform; a fresh check decides it.
+  "recheck-required": "remoteLink.child.ownerAction.recheck-required",
 };
 
 const JOB_STATE_KEYS: Record<string, TKey> = {

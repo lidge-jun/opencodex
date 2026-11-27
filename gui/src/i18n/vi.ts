@@ -4520,6 +4520,7 @@ export const vi: Record<TKey, string> = {
   "remoteLink.child.ownerAction.source-checkout": "Máy con này chạy từ bản sao mã nguồn; hãy cập nhật thủ công",
   "remoteLink.child.ownerAction.installer-unknown": "Không rõ cách cài đặt của máy con này; hãy cập nhật tại đó",
   "remoteLink.child.ownerAction.windows-apply": "Thiết bị Windows này không hỗ trợ cập nhật từ xa. Hãy cập nhật OpenCodex trực tiếp trên máy tính Windows.",
+  "remoteLink.child.ownerAction.recheck-required": "Hãy kiểm tra lại máy con này để biết cách cập nhật",
   "remoteLink.child.check": "Kiểm tra",
   "remoteLink.child.checkAll": "Kiểm tra tất cả",
   "remoteLink.child.syncNow": "Đồng bộ ngay",

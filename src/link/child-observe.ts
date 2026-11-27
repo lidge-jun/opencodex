@@ -31,7 +31,7 @@ export interface ObserveOutcome {
 }
 
 type ObservedFields = Pick<ChildObservation, "source" | "installedVersion" | "installKind" | "runtimeOwner" | "updateRoute" | "updateReason"
-  | "targetVersion" | "updateInFlight">;
+  | "targetVersion" | "updateInFlight"> & Pick<Partial<ChildObservation>, "platform">;
 
 function observation(fields: ObservedFields, now: Date): ChildObservation {
   return {
@@ -44,12 +44,13 @@ function observation(fields: ObservedFields, now: Date): ChildObservation {
 /**
  * The Home never applies an orchestrated update on Windows (runUpdateItem refuses windows-apply, D20), so the dashboard
  * must not offer one (#9172): a Windows Child with that route is told to update locally. Applied when observing and
- * again when projecting status, so an observation cached before this rule existed reads the same way.
+ * again when projecting status, so an observation cached before this rule existed reads the same way. When neither the
+ * link record nor the observation names the platform, a cached orchestrated route may be a Windows Child: it is
+ * withheld until a fresh check records the platform (`recheck-required`).
  */
 export function windowsLocalUpdateRoute(platform: "posix" | "windows" | null | undefined, updateRoute: UpdateRoute, updateReason: string | null): { updateRoute: UpdateRoute; updateReason: string | null } {
-  return platform === "windows" && updateRoute === "orchestrated"
-    ? { updateRoute: "owner-action", updateReason: "windows-apply" }
-    : { updateRoute, updateReason };
+  if (updateRoute !== "orchestrated" || platform === "posix") return { updateRoute, updateReason };
+  return { updateRoute: "owner-action", updateReason: platform === "windows" ? "windows-apply" : "recheck-required" };
 }
 const strictVersion = (value: string | null | undefined): string | null => typeof value === "string" && parseStrictSemver(value) ? value : null;
 const peerVersion = (deps: ObserveDeps, record: LinkRecord): string | null => strictVersion(deps.peer(record.id).observed?.version);
@@ -107,7 +108,7 @@ export async function observeChild(record: LinkRecord, deps: ObserveDeps): Promi
         observation: observation({ source: "plan", installedVersion: strictVersion(classification.installedVersion),
           installKind: classification.installKind, runtimeOwner: classification.runtimeOwner,
           updateRoute: route.updateRoute, updateReason: route.updateReason, targetVersion: strictVersion(classification.targetVersion),
-          updateInFlight: classification.updateInFlight }, deps.now()) };
+          updateInFlight: classification.updateInFlight, platform }, deps.now()) };
     }
     case "ephemeral": return ephemeral(deps.now());
     case "legacy": {
