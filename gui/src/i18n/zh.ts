@@ -1425,7 +1425,7 @@ export const zh: Record<TKey, string> = {
   "logs.detail.estimate.expected_price_overlay": "使用了已验证的 Expected 标价。",
   "logs.detail.estimate.provider_cost_overlay": "使用了用户配置的提供方价格覆盖。",
   "logs.detail.estimate.priority_lower_bound": "暂无已确认的 Priority 价格；当前显示的估算是已知下界。",
-  "logs.detail.estimate.service_tier_transmitted": "按代理发送的 Ultrafast 费率计算；上游响应未确认该层级。",
+  "logs.detail.estimate.service_tier_transmitted": "至少有一次尝试按代理发送的 Ultrafast 层级费率计算；上游响应未确认该层级。",
   "logs.col.error": "错误",
   "logs.col.upstreamReason": "上游原因",
   "logs.col.failureDetail": "失败详情",

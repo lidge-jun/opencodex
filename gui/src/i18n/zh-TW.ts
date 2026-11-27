@@ -3405,7 +3405,7 @@ export const zhTW: Record<TKey, string> = {
   "logs.detail.resend.refusedFutile": "未重送：相同請求仍會失敗",
   "logs.detail.estimate.provider_cost_overlay": "已使用供應商設定的價格覆蓋。",
   "logs.detail.estimate.priority_lower_bound": "無法取得已確認的 Priority 價格；目前顯示的估算是已知下限。",
-  "logs.detail.estimate.service_tier_transmitted": "依 Proxy 送出的 Ultrafast 費率計算；上游回應未確認此層級。",
+  "logs.detail.estimate.service_tier_transmitted": "至少有一次嘗試依 Proxy 送出的 Ultrafast 層級費率計算；上游回應未確認此層級。",
   "pws.geminiNativePassthrough": "Gemini 原生透傳",
   "pws.geminiNativePassthroughDesc": "為符合條件的 Antigravity OAuth 路由保留 Gemini 請求和回應。",
   "pws.geminiNativePassthroughLoadFailed": "無法載入 Gemini 原生透傳設定。",

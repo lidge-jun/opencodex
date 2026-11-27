@@ -50,8 +50,10 @@ refusal keeps Standard. Otherwise an attempt whose adapter serialized `service_t
 Logs shows the `service_tier_transmitted` reason. A tier the caller only requested never selects
 the Ultrafast price. A long-context band stacks only where the catalog rule declares `stack`;
 otherwise the Standard long-context price is reported with `priorityLowerBound`. Estimates carry
-`serviceTierPricing` with the tier, multiplier and basis. `tests/usage/usage-ultrafast-pricing.test.ts`
-pins the schedule boundary, the evidence order, mixed routes and both read paths.
+`serviceTierPricing` with the tier, multiplier and basis. When the Ultrafast rate prices an attempt it
+replaces the Priority premium instead of stacking on it, including a canonical `priority` outcome
+that a `fastWire` mapping serialized as `ultrafast`. `tests/usage/usage-ultrafast-pricing.test.ts`
+pins the schedule boundary, the evidence order, mixed routes, the single premium and both read paths.
 
 ## Dialog and estimates
 

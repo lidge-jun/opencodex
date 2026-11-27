@@ -680,6 +680,22 @@ function applyUltrafastMultiplier(
     pricing: { tier: "ultrafast", multiplier, basis },
   };
 }
+
+/**
+ * True when the dated Ultrafast rate prices this attempt. Ultrafast replaces the Priority premium
+ * rather than stacking on it: a fastWire mapping can record canonical `priority` while the wire
+ * carried `ultrafast`, and that request is billed once, at the Ultrafast rate.
+ */
+function ultrafastPrices(
+  provider: string,
+  modelId: string,
+  tier: ServiceTierInput | undefined,
+  outcome: AttemptTierOutcome | undefined,
+): boolean {
+  if (!ultrafastBasis(tier, outcome)) return false;
+  const pricedAt = typeof tier === "object" && tier.pricedAt !== undefined ? tier.pricedAt : Date.now();
+  return ultrafastPriceMultiplier(provider, modelId, pricedAt) !== undefined;
+}
 function isOpenRouterPriorityLowerBound(
   provider: string,
   outcome: AttemptTierOutcome | undefined,
@@ -816,12 +832,12 @@ export function estimateAttemptCost(
   const [tieredCost4, contextTier, contextPriorityLowerBound, customThresholdApplied] = applyPromptLengthPricing(
     price.cost4, price.provider, attempt.model, attempt.usage.inputTokens, attemptServiceTier, price.promptLengthPricing,
   );
-  const [effectiveCost4, multiplier] = applyPriorityMultiplier(
-    tieredCost4, price.provider, attempt.model, attemptServiceTier, contextTier, customThresholdApplied,
-  );
   // Only the attempt's own outcome is Ultrafast evidence: a request-level record may describe another
   // attempt of the same combo. The request context supplies just the timestamp.
   const requestPricedAt = typeof serviceTier === "object" && serviceTier.pricedAt !== undefined ? { pricedAt: serviceTier.pricedAt } : {};
+  const [effectiveCost4, multiplier] = ultrafastPrices(price.provider, attempt.model, requestPricedAt, attempt.tierOutcome)
+    ? [tieredCost4, 1] as const
+    : applyPriorityMultiplier(tieredCost4, price.provider, attempt.model, attemptServiceTier, contextTier, customThresholdApplied);
   const ultrafast = applyUltrafastMultiplier(
     effectiveCost4, price.provider, attempt.model, requestPricedAt, attempt.tierOutcome, contextTier,
   );
@@ -991,9 +1007,9 @@ export function estimateRequestCost(
   const [tieredCost4, contextTier, contextPriorityLowerBound, customThresholdApplied] = applyPromptLengthPricing(
     price.cost4, price.provider, input.model, input.usage.inputTokens, input.serviceTier, price.promptLengthPricing,
   );
-  const [effectiveCost4, multiplier] = applyPriorityMultiplier(
-    tieredCost4, price.provider, input.model, input.serviceTier, contextTier, customThresholdApplied,
-  );
+  const [effectiveCost4, multiplier] = ultrafastPrices(price.provider, input.model, input.serviceTier, undefined)
+    ? [tieredCost4, 1] as const
+    : applyPriorityMultiplier(tieredCost4, price.provider, input.model, input.serviceTier, contextTier, customThresholdApplied);
   const ultrafast = applyUltrafastMultiplier(
     effectiveCost4, price.provider, input.model, input.serviceTier, undefined, contextTier,
   );

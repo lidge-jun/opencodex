@@ -1466,7 +1466,7 @@ export const pt: Record<TKey, string> = {
   "logs.detail.estimate.expected_price_overlay": "Foi usado um preço de tabela esperado verificado.",
   "logs.detail.estimate.provider_cost_overlay": "Foi usada uma sobreposição de preço configurada no provedor.",
   "logs.detail.estimate.priority_lower_bound": "O preço Priority confirmado está indisponível; a estimativa exibida é um limite inferior conhecido.",
-  "logs.detail.estimate.service_tier_transmitted": "Calculado com a tarifa Ultrafast enviada pelo proxy; a resposta upstream não confirmou o nível.",
+  "logs.detail.estimate.service_tier_transmitted": "Pelo menos uma tentativa é calculada com a tarifa do nível Ultrafast enviado pelo proxy; a resposta upstream não confirmou esse nível.",
   "logs.col.error": "Erro",
   "logs.col.upstreamReason": "Motivo do upstream",
   "logs.col.failureDetail": "Detalhe da falha",

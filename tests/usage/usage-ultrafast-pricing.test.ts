@@ -140,4 +140,15 @@ describe("Ultrafast pricing", () => {
     expect(totals).toEqual([0.03, 0.09]);
     expect(dto.attempts.map(a => Number(a.displayMetrics.cost.estimate.cost.total.toFixed(6)))).toEqual(totals);
   });
+  test("a canonical Priority request serialized as Ultrafast takes only the Ultrafast premium", () => {
+    const mapped: AttemptTierOutcome = { canonical: "priority", wireKind: "service-tier", wireValue: "ultrafast", fastOutcome: "applied", confirmation: "assumed" };
+    const est = attemptTotal(mapped)!;
+    expect(est.cost.total).toBeCloseTo(0.09, 10);
+    expect(est.serviceTierPricing).toEqual({ tier: "ultrafast", multiplier: 3, basis: "transmitted" });
+    const request = estimateRequestCost({ provider: "openai", model: "gpt-6.2-sol", usageStatus: "reported", usage,
+      serviceTier: serviceTierContext({ tierOutcome: mapped, timestamp: NOV_2026 }) })!;
+    expect(request.cost.total).toBeCloseTo(0.09, 10);
+    // Ordinary Priority keeps its 2x premium.
+    expect(attemptTotal({ ...mapped, wireValue: "priority" })?.cost.total).toBeCloseTo(0.06, 10);
+  });
 });

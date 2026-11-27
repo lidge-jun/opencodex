@@ -1354,7 +1354,7 @@ export const ja: Record<TKey, string> = {
   "logs.detail.estimate.expected_price_overlay": "検証済みの予想定価が使用されました。",
   "logs.detail.estimate.provider_cost_overlay": "プロバイダー設定の価格オーバーレイが使用されました。",
   "logs.detail.estimate.priority_lower_bound": "確認済みの Priority 価格を利用できないため、表示される見積もりは既知の下限です。",
-  "logs.detail.estimate.service_tier_transmitted": "プロキシが送信した Ultrafast の料金で算出しています。上流の応答ではティアが確認されていません。",
+  "logs.detail.estimate.service_tier_transmitted": "少なくとも 1 回の試行は、プロキシが送信した Ultrafast ティアの料金で算出しています。上流の応答ではこのティアが確認されていません。",
   "logs.col.error": "エラー",
   "logs.col.upstreamReason": "上流の理由",
   "logs.col.failureDetail": "失敗の詳細",

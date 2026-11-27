@@ -1457,7 +1457,7 @@ export const tr: Record<TKey, string> = {
   "logs.detail.estimate.expected_price_overlay": "Doğrulanmış liste fiyatı kullanıldı.",
   "logs.detail.estimate.provider_cost_overlay": "Kullanıcı tarafından yapılandırılan bir sağlayıcı fiyat katmanı kullanıldı.",
   "logs.detail.estimate.priority_lower_bound": "Doğrulanan Priority fiyatı kullanılamıyor; gösterilen tahmin bilinen bir alt sınırdır.",
-  "logs.detail.estimate.service_tier_transmitted": "Proxy'nin gönderdiği Ultrafast ücretiyle hesaplandı; upstream yanıtı katmanı doğrulamadı.",
+  "logs.detail.estimate.service_tier_transmitted": "En az bir deneme, Proxy'nin gönderdiği Ultrafast hizmet katmanının tarifesiyle hesaplandı; upstream yanıtı bu katmanı doğrulamadı.",
   "logs.col.error": "Hata",
   "logs.col.upstreamReason": "Yukarı akış nedeni",
   "logs.col.failureDetail": "Hata ayrıntısı",
