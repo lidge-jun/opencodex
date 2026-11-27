@@ -2648,6 +2648,8 @@ export const zhTW: Record<TKey, string> = {
   "cws.saved": "組合已儲存。",
   "cws.created": "已建立 {model}。",
   "cws.removed": "已刪除 combo/{id}。",
+  "cws.removedOnServer": "編輯期間此組合已在此伺服器上被刪除。草稿已保留：若 ID 仍未被使用，「重新建立」會將其儲存為新組合；或返回以捨棄草稿。",
+  "cws.recreate": "重新建立",
   "cws.renamed": "已將 {from} 重新命名為 {to}。",
   "cws.add": "新增組合",
   "cws.addTitle": "新增組合",

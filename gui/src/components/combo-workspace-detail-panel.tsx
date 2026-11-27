@@ -57,6 +57,7 @@ export function DetailPanel({
   onRequestRemove,
   onSave,
   onDirtyChange,
+  storedRemoved = false,
 }: {
   /** Management API target; without it the candidate path preview is not offered and JEV stats use same-origin paths. */
   apiBase?: string;
@@ -79,8 +80,11 @@ export function DetailPanel({
   onBack?: () => void;
   onSaved: (item: ComboItem) => void;
   onRequestRemove?: () => void;
+  /** `isCreate` saves create-only: the server refuses an id that is already taken. */
   onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null) => Promise<{ ok: boolean; error?: string; item?: ComboItem }>;
   onDirtyChange: (dirty: boolean) => void;
+  /** The server no longer has this combo while the draft is kept; Recreate creates it from the draft only if the id is still free. */
+  storedRemoved?: boolean;
 }) {
   const t = useT();
   const [tab, setTab] = useState<DetailTab>("config");
@@ -111,7 +115,7 @@ export function DetailPanel({
   const [conflicts, setConflicts] = useState<string[]>([]);
   const dirty = !draftEquals(draft, baseline);
   const allTargetsExhausted = comboQuotaState(draft.targets, providerQuotaStates, providerMap) === "exhausted";
-  const baselineSyncKey = JSON.stringify([baseline.id, baseline.alias, baseline.nativeAlias, baseline.displayName, baseline.strategy, baseline.stickyLimit, baseline.defaultEffort, baseline.imageInput, baseline.reasoningEffortMode, baseline.decisionProvider, baseline.decisionModel, baseline.decisionTimeoutMs, baseline.sessionPin === undefined, baseline.sessionPin, Boolean(baseline.allowMeteredTargets), Boolean(baseline.quotaOnlyFallback), Boolean(baseline.preserveFallbackModel), baseline.targets.map(t => [t.provider, t.model, t.weight, t.reasoningEfforts, t.modelProfile, Boolean(t.metered)])]);
+  const baselineSyncKey = JSON.stringify([baseline.revision, baseline.id, baseline.alias, baseline.nativeAlias, baseline.displayName, baseline.strategy, baseline.stickyLimit, baseline.defaultEffort, baseline.imageInput, baseline.reasoningEffortMode, baseline.decisionProvider, baseline.decisionModel, baseline.decisionTimeoutMs, baseline.sessionPin === undefined, baseline.sessionPin, Boolean(baseline.allowMeteredTargets), Boolean(baseline.quotaOnlyFallback), Boolean(baseline.preserveFallbackModel), baseline.targets.map(t => [t.provider, t.model, t.weight, t.reasoningEfforts, t.modelProfile, Boolean(t.metered)])]);
   const effortMap = useMemo(() => {
     const map = new Map<string, string[] | undefined>();
     for (const model of capabilityModels) {
@@ -145,13 +149,18 @@ export function DetailPanel({
       draftRef.current = result.merged;
       setDraft(result.merged);
       setConflicts(current => [...new Set([...current, ...result.conflicts])]);
-      setMsg(null);
+      setMsg(current => current?.text === t("pws.draftConflict") ? current : null);
       onDirtyChange(!draftEquals(result.merged, baseline));
     }, 0);
     return () => window.clearTimeout(timer);
     // oxlint-disable-next-line react/react-compiler -- existing exhaustive-deps exception is intentional
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: key captures baseline payload
   }, [baselineSyncKey]);
+
+  // A removed combo has no revision to check against: say so, and offer Recreate instead of Save.
+  useEffect(() => {
+    if (storedRemoved) setMsg({ ok: false, text: t("cws.removedOnServer") });
+  }, [storedRemoved, t]);
 
   const copyModel = async () => {
     try {
@@ -203,9 +212,10 @@ export function DetailPanel({
       // The server keeps these only for JEV, so the saved baseline must not carry stale ones.
       ...(workingDraft.strategy === "jev" ? {} : { decisionProvider: null, decisionModel: null, decisionTimeoutMs: null, sessionPin: undefined }),
     };
-    const renameFrom = !isCreate && trimmedId !== baseline.id ? baseline.id : undefined;
+    const recreate = !isCreate && storedRemoved;
+    const renameFrom = !isCreate && !recreate && trimmedId !== baseline.id ? baseline.id : undefined;
     try {
-      const res = await onSave(item, isCreate, renameFrom, isCreate ? null : draftBaseline.current);
+      const res = await onSave(item, isCreate || recreate, renameFrom, isCreate || recreate ? null : draftBaseline.current);
       if (!res.ok) {
         setMsg({ ok: false, text: res.error || t("cws.saveFailed") });
         return;
@@ -251,7 +261,7 @@ export function DetailPanel({
             </button>
           )}
           <button id={isCreate ? "cwi-edit-create" : "cwi-edit-save"} type="button" className="btn btn-primary btn-sm" disabled={(!isCreate && !dirty) || busy || allTargetsExhausted || conflicts.length > 0} onClick={() => { void save(); }}>
-            {busy ? t("common.saving") : t(isCreate ? "cws.create" : "common.save")}
+            {busy ? t("common.saving") : t(isCreate ? "cws.create" : storedRemoved ? "cws.recreate" : "common.save")}
           </button>
         </div>
       </div>

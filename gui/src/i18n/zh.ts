@@ -3473,6 +3473,8 @@ export const zh: Record<TKey, string> = {
   "cws.saved": "组合已保存。",
   "cws.created": "已创建 {model}。",
   "cws.removed": "已删除 combo/{id}。",
+  "cws.removedOnServer": "编辑期间此组合已在此服务器上被删除。草稿已保留：如果 ID 仍未被占用，“重新创建”会将其保存为新组合；或返回以放弃草稿。",
+  "cws.recreate": "重新创建",
   "cws.renamed": "已将 {from} 重命名为 {to}。",
   "cws.add": "添加组合",
   "cws.addTitle": "添加组合",

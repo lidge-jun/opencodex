@@ -3500,6 +3500,8 @@ export const ko: Record<TKey, string> = {
   "cws.saved": "콤보를 저장했습니다.",
   "cws.created": "{model}을(를) 만들었습니다.",
   "cws.removed": "combo/{id}을(를) 삭제했습니다.",
+  "cws.removedOnServer": "편집하는 동안 이 서버에서 이 콤보가 삭제됐습니다. 초안은 그대로 보관되어 있습니다. ID가 아직 사용 중이 아니면 다시 만들기로 새 콤보로 저장할 수 있고, 버리려면 뒤로 가세요.",
+  "cws.recreate": "다시 만들기",
   "cws.renamed": "{from}을(를) {to}(으)로 이름을 변경했습니다.",
   "cws.add": "콤보 추가",
   "cws.addTitle": "콤보 추가",

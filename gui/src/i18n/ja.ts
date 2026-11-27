@@ -3578,6 +3578,8 @@ export const ja: Record<TKey, string> = {
   "cws.saved": "コンボを保存しました。",
   "cws.created": "{model} を作成しました。",
   "cws.removed": "combo/{id} を削除しました。",
+  "cws.removedOnServer": "編集中にこのコンボはこのサーバーで削除されました。下書きは保持されています。ID がまだ空いていれば「再作成」で新しいコンボとして保存できます。破棄する場合は戻ってください。",
+  "cws.recreate": "再作成",
   "cws.add": "コンボを追加",
   "cws.addTitle": "コンボを追加",
   "cws.addSubtitle": "プロバイダー全体にファンアウトする仮想モデルを作成します。クライアントは combo/<id> をリクエストします。",

@@ -3480,6 +3480,8 @@ export const fr: Record<TKey, string> = {
   "cws.saved": "Combinaison enregistrée.",
   "cws.created": "{model} créé.",
   "cws.removed": "combo/{id} supprimé.",
+  "cws.removedOnServer": "Cette combinaison a été supprimée sur ce serveur pendant votre modification. Votre brouillon est conservé : Recréer l’enregistre comme nouvelle combinaison si l’identifiant est toujours libre, ou revenez en arrière pour l’abandonner.",
+  "cws.recreate": "Recréer",
   "cws.renamed": "{from} renommé en {to}.",
   "cws.add": "Ajouter une combinaison",
   "cws.addTitle": "Ajouter une combinaison",

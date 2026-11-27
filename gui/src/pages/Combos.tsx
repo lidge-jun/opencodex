@@ -372,6 +372,8 @@ export default function Combos({
         headers: { "content-type": "application/json" },
         body: JSON.stringify(toPutBody(item, {
           ...(renameFrom ? { renameFrom } : {}),
+          // A create never replaces a combo another client saved under the same id meanwhile.
+          ...(isCreate ? { ifAbsent: true as const } : {}),
           stored,
           // Enabling images declares text-only members for the Vision Sidecar so the
           // operator never has to hand-edit provider config for a multimodal combo.
@@ -384,6 +386,10 @@ export default function Combos({
         ? await res.json() as unknown
         : await res.json().catch(() => null) as unknown;
       const serverError = responseError(data);
+      if (res.status === 409 && data && typeof data === "object" && "code" in data && data.code === "combo_revision_conflict") {
+        resource.refresh();
+        return { ok: false as const, error: t(isCreate ? "cws.err.duplicateId" : "pws.draftConflict") };
+      }
       if (!res.ok || serverError || !responseSucceeded(data)) {
         const err = serverError || t("cws.saveFailed");
         notify(err, false);

@@ -3491,6 +3491,8 @@ export const vi: Record<TKey, string> = {
   "cws.saved": "Đã lưu combo.",
   "cws.created": "Đã tạo {model}.",
   "cws.removed": "Đã xóa combo/{id}.",
+  "cws.removedOnServer": "Combo này đã bị xóa trên máy chủ này trong khi bạn chỉnh sửa. Bản nháp của bạn được giữ lại: Tạo lại sẽ lưu nó thành combo mới nếu id vẫn còn trống, hoặc quay lại để bỏ bản nháp.",
+  "cws.recreate": "Tạo lại",
   "cws.renamed": "Đã đổi tên {from} thành {to}.",
   "cws.add": "Thêm combo",
   "cws.addTitle": "Thêm combo",

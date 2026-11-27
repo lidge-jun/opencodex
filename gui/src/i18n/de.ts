@@ -3453,6 +3453,8 @@ export const de: Record<TKey, string> = {
   "cws.saved": "Combo gespeichert.",
   "cws.created": "{model} erstellt.",
   "cws.removed": "combo/{id} entfernt.",
+  "cws.removedOnServer": "Diese Combo wurde während der Bearbeitung auf diesem Server entfernt. Ihr Entwurf bleibt erhalten: „Neu erstellen“ speichert ihn als neue Combo, sofern die ID noch frei ist, oder gehen Sie zurück, um ihn zu verwerfen.",
+  "cws.recreate": "Neu erstellen",
   "cws.renamed": "{from} wurde in {to} umbenannt.",
   "cws.add": "Combo hinzufügen",
   "cws.addTitle": "Combo hinzufügen",

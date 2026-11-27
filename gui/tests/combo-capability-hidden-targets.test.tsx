@@ -262,6 +262,95 @@ test("editing can select and save a hidden model without changing its visibility
   expect(hiddenImage.disabled).toBe(true);
 });
 
+test("revision conflict reloads and keeps the dashboard draft", async () => {
+  const visible = { ...hiddenImage, id: "visible", disabled: false };
+  mockCatalog([hiddenImage, visible], [target(visible)], { revision: "old" });
+  const fetchCatalog = globalThis.fetch;
+  let writes = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT") {
+      writes++;
+      expect(JSON.parse(String(init.body)).ifRevision).toBe("old");
+      return Response.json({ code: "combo_revision_conflict" }, { status: 409 });
+    }
+    if (writes && new URL(String(input)).pathname === "/api/combos") return Response.json({ combos: [combo([target(visible)], { revision: "new" })] });
+    return fetchCatalog(input, init);
+  }) as typeof fetch;
+  await mount();
+  await openDetail();
+  await chooseOption(selectTrigger(container, MODEL), "hidden");
+  await act(async () => { container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0)); });
+  expect(writes).toBe(1);
+  expect(selectValue(selectTrigger(container, MODEL))).toBe("hidden");
+  expect(container.textContent).toContain("The saved settings changed on this server while you were editing");
+});
+
+test("a combo removed on the server keeps the draft and Recreate creates it only if the id is free", async () => {
+  const visible = { ...hiddenImage, id: "visible", disabled: false };
+  mockCatalog([hiddenImage, visible], [target(visible)], { revision: "old" });
+  const fetchCatalog = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      bodies.push(body);
+      if (bodies.length === 1) return Response.json({ code: "combo_revision_conflict" }, { status: 409 });
+      return Response.json({ success: true, id: body.id, model: "combo/" + String(body.id), combo: { ...(body.combo as object), revision: "recreated" } });
+    }
+    if (bodies.length === 1 && new URL(String(input)).pathname === "/api/combos") return Response.json({ combos: [] });
+    return fetchCatalog(input, init);
+  }) as typeof fetch;
+  await mount();
+  await openDetail();
+  await chooseOption(selectTrigger(container, MODEL), "hidden");
+  await act(async () => { container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0)); });
+  expect(bodies[0]!.ifRevision).toBe("old");
+  expect(selectValue(selectTrigger(container, MODEL))).toBe("hidden");
+  expect(container.textContent).toContain("This combo was removed on this server while you were editing");
+  expect(container.querySelector("#cwi-edit-save")?.textContent).toBe("Recreate");
+  await act(async () => { container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0)); });
+  expect(bodies).toHaveLength(2);
+  expect(bodies[1]).not.toHaveProperty("ifRevision");
+  expect(bodies[1]).not.toHaveProperty("renameFrom");
+  expect(bodies[1]!.ifAbsent).toBe(true);
+  expect((bodies[1]!.combo as { targets: Array<{ model: string }> }).targets.map(t => t.model)).toEqual(["hidden"]);
+});
+
+test("Add creates only if the id is free and keeps the dialog when another client took it", async () => {
+  const visible = { ...hiddenImage, id: "visible", disabled: false };
+  mockCatalog([hiddenImage, visible], [target(visible)]);
+  const fetchCatalog = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT") {
+      bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return Response.json({ code: "combo_revision_conflict" }, { status: 409 });
+    }
+    return fetchCatalog(input, init);
+  }) as typeof fetch;
+  await mount();
+  await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="Add combo"]')!.click(); });
+  const dialog = container.querySelector("dialog")!;
+  const idInput = dialog.querySelector<HTMLInputElement>("#cwi-new-id")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(idInput, "fresh");
+    idInput.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  });
+  await chooseProvider("vision", dialog);
+  await chooseOption(selectTrigger(dialog, MODEL), "visible");
+  const create = [...dialog.querySelectorAll<HTMLButtonElement>(".cwi-modal-actions button")].find(button => button.textContent === "Create combo")!;
+  await act(async () => { create.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0)); });
+  expect(bodies).toHaveLength(1);
+  expect(bodies[0]).toMatchObject({ id: "fresh", ifAbsent: true });
+  expect(bodies[0]).not.toHaveProperty("ifRevision");
+  expect(container.querySelector("dialog")).not.toBeNull();
+  expect(container.querySelector("dialog")!.textContent).toContain("A combo with this id already exists.");
+});
+
 test("JEV decision model suggestions include hidden models but exclude the JEV combo itself", async () => {
   mockCatalog([hiddenImage], [target(hiddenImage)], { strategy: "jev", decisionModel: "vision/hidden" });
   await mount();
