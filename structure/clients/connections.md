@@ -59,10 +59,14 @@ prefix becomes `~`, a drive letter stays, and only the fixed directory and file 
 and Claude use are shown; any other segment (a user name, account id or token used as a folder name)
 becomes `…`, and an extra home is identified by `homeOrdinal` instead of its path. No setting value,
 token or email is returned; an unexpected failure answers a fixed `connections_failed` body. Reads are
-bounded: at most 16 extra homes (`MAX_EXTRA_CLAUDE_CONFIG_DIRS`), a `settings.json` that is not a
-regular file of at most 1 MiB is never opened (`claudeSettingsFileState`; the row reads `unknown` and
-the preview refuses `unreadable`), and the Codex profile goes through the same bounded reader as
-config.toml. The Codex
+bounded: at most 16 extra homes (`MAX_EXTRA_CLAUDE_CONFIG_DIRS`), and status/preview settings reads
+validate and size-cap the opened descriptor at 1 MiB, with nonblocking opens on POSIX, then parse only
+those bounded bytes. A final symlink remains compatible with Claude Code when its opened target is a
+regular file; a FIFO, device, directory, oversized file or unsafe replacement reads `unknown` in the
+row and makes the preview refuse `unreadable`. The switch-off preview applies the same descriptor
+checks to the optional NO_PROXY receipt, allowing space for both stored values and its JSON fields.
+The Codex profile goes through the same bounded reader
+as config.toml. The Codex
 toggle envelopes in `native-integration-routes.ts` carry `connections: "/api/connections"`.
 
 CLI verb: owed. The route registry declares it `deferred-verb` with owner "proxy catch-up 020

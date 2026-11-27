@@ -151,6 +151,15 @@ describe("enabling CLI first-party", () => {
 });
 
 describe("turning CLI first-party off", () => {
+  test("a missing receipt is optional and an oversized receipt makes the preview unreadable", () => {
+    writeEnv({ NODE_EXTRA_CA_CERTS: claudeInterceptCaCertPath(root) });
+    const config = cfg({ cli: true, desktopMode: "gateway" });
+    const input = { live: config, persisted: config, enabled: false, options: options() };
+    expect(previewClaudeFirstPartySettings(input).ok).toBe(true);
+    writeFileSync(join(claudeHome, "opencodex-no-proxy.json"), "{}".padEnd(2 * 1024 * 1024 + 1025));
+    expect(previewClaudeFirstPartySettings(input)).toMatchObject({ ok: false, reason: "unreadable" });
+  });
+
   test("a CLI-only env is removed, restoring NO_PROXY from its receipt", () => {
     expect(realSwitch(cfg({ desktopMode: "gateway" }), cfg({ desktopMode: "gateway" }), true).ok).toBe(true);
     const on = cfg({ cli: true, desktopMode: "gateway" });
