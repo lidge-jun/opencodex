@@ -163,7 +163,7 @@ remplace depuis la page de ce profil.
 
 **Le formatage n'est généralement pas préservé.** L'application analyse une configuration avant de la
 réécrire ; JSON et JSON5 peuvent donc être reformatés, et les commentaires JSON5 sont perdus.
-OMP, DSH et Kimi Code font exception : leurs outils d’écriture YAML ne modifient que le fragment géré. Pour OMP, il s’agit de `providers.opencodex` ; pour DSH, de `[id=llm-pi-ai].config.providers.opencodex` dans le patch Desktop, ou de `llm-pi-ai.providers.opencodex` dans `settings.yaml` uniquement si le profil Desktop est absent. Ils préservent octet par octet les commentaires et le formatage des fournisseurs sans rapport. Si la plage source exacte ne peut pas être identifiée de manière
+OMP, DSH, Hermes et Kimi Code font exception. Les outils d’écriture YAML d’OMP, de Hermes et de DSH ne modifient que le fragment géré. Pour OMP et Hermes, il s’agit de `providers.opencodex` ; pour DSH, de `[id=llm-pi-ai].config.providers.opencodex` dans le patch Desktop, ou de `llm-pi-ai.providers.opencodex` dans `settings.yaml` uniquement si le profil Desktop est absent. Ils préservent octet par octet les commentaires et le formatage des fournisseurs sans rapport. Si la plage source exacte ne peut pas être identifiée de manière
 sûre, l'opération est refusée. L'outil d'écriture de Kimi Code ne remplace que ses propres tables `[providers.opencodex]` et `[models."opencodex/…"]` dans `config.toml`, conserve les commentaires et les tables `[[hooks]]`, et refuse si ces tables sont écrites autrement. Pour les autres clients, utilisez **Restaurer** lorsque vous avez besoin des
 octets précédents du fichier : l'instantané en est une copie exacte.
 

@@ -1054,6 +1054,27 @@ describe("Kimi source preservation (#9152)", () => {
     expect(Bun.TOML.parse(readFileSync(configPath, "utf8"))).toEqual(Bun.TOML.parse(original));
   });
 
+  test("trailing blank lines in the user's file survive apply and disable", () => {
+    const padded = `${original}\n\n`;
+    const configPath = installKimi(padded);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8").startsWith(padded)).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(padded);
+  });
+
+  test("disable keeps a comment the user put on a parent table header", () => {
+    const configPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const rerendered = serializeDocument(Bun.TOML.parse(readFileSync(configPath, "utf8")), "toml")
+      .replace("[providers]\n", "[providers] # mine\n");
+    writeFileSync(configPath, rerendered);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const after = readFileSync(configPath, "utf8");
+    expect(after).toContain("[providers] # mine");
+    expect(after).not.toContain("opencodex");
+  });
+
   test("an overwrite refuses a provider table it cannot replace in place", () => {
     const inline = `providers = { opencodex = { type = "openai" } }\n${original}`;
     const configPath = installKimi(inline);
