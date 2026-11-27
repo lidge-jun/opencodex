@@ -363,7 +363,8 @@ export function requestLogDto(
             tokPerSecond: tokPerSecondResult(attempt),
             // Each attempt measures its own attempt-relative TTFT.
             ...(includeDecodeRate ? { decodeTokPerSecond: decodeTokPerSecondResult(attempt) } : {}),
-            cost: costResult({ ...attempt, attempts: undefined, routeDecision: entry.routeDecision, requestedServiceTier: entry.requestedServiceTier, configuredServiceTier: entry.configuredServiceTier, responseServiceTier: entry.responseServiceTier }),
+            // Attempts carry no time of their own; dated tier prices follow the request's.
+            cost: costResult({ ...attempt, attempts: undefined, timestamp: entry.timestamp, routeDecision: entry.routeDecision, requestedServiceTier: entry.requestedServiceTier, configuredServiceTier: entry.configuredServiceTier, responseServiceTier: entry.responseServiceTier }),
           },
         })),
       }

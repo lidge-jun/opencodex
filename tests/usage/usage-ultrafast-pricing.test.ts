@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { costResult } from "../../src/server/management/shared";
+import { costResult, requestLogDto } from "../../src/server/management/shared";
+import type { RequestLogEntry } from "../../src/server/request-log";
 import type { AttemptTierOutcome } from "../../src/types";
 import { estimateAttemptCost, estimateComboCost, estimateRequestCost, serviceTierContext } from "../../src/usage/cost";
 import type { PersistedUsageEntry } from "../../src/usage/log";
@@ -94,5 +95,26 @@ describe("Ultrafast pricing", () => {
     expect(computeEntryCost(entry).costTotal).toBeCloseTo(0.09, 10);
     const later = { ...entry, timestamp: STEP } as PersistedUsageEntry;
     expect(computeEntryCost(later).costTotal).toBeCloseTo(0.18, 10);
+  });
+  test("an attempt without its own tier record never inherits another attempt's Ultrafast evidence", () => {
+    const combo = estimateComboCost([
+      attempt(transmitted),
+      { ...attempt(undefined), ordinal: 2 },
+    ], undefined, { tierOutcome: transmitted, pricedAt: NOV_2026 })!;
+    expect(combo.attempts!.map(est => Number(est.cost.total.toFixed(6)))).toEqual([0.09, 0.03]);
+    expect(combo.attempts![1]!.serviceTierPricing).toBeUndefined();
+  });
+
+  test("expanded Logs attempts price at the row's own date", () => {
+    const after = STEP + 24 * 60 * 60 * 1000;
+    const entry = {
+      requestId: "r", timestamp: after, provider: "openai", model: "gpt-6.2-sol", usageStatus: "reported", usage, durationMs: 1000, status: 200,
+      tierOutcome: transmitted,
+      attempts: [{ ordinal: 1, provider: "openai", model: "gpt-6.2-sol", usageStatus: "reported", usage, durationMs: 1000, status: 200,
+        sendCount: 1, recoveryKinds: [], tierOutcome: transmitted }],
+    } as unknown as RequestLogEntry;
+    const dto = requestLogDto(entry) as { displayMetrics: { cost: { estimate: { cost: { total: number } } } }; attempts: Array<{ displayMetrics: { cost: { estimate: { cost: { total: number } } } } }> };
+    expect(dto.displayMetrics.cost.estimate.cost.total).toBeCloseTo(0.18, 10);
+    expect(dto.attempts[0]!.displayMetrics.cost.estimate.cost.total).toBeCloseTo(0.18, 10);
   });
 });

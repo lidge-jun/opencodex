@@ -817,9 +817,11 @@ export function estimateAttemptCost(
   const [effectiveCost4, multiplier] = applyPriorityMultiplier(
     tieredCost4, price.provider, attempt.model, attemptServiceTier, contextTier, customThresholdApplied,
   );
-  // The attempt's own outcome is its evidence; the request context supplies the timestamp.
+  // Only the attempt's own outcome is Ultrafast evidence: a request-level record may describe another
+  // attempt of the same combo. The request context supplies just the timestamp.
+  const requestPricedAt = typeof serviceTier === "object" && serviceTier.pricedAt !== undefined ? { pricedAt: serviceTier.pricedAt } : {};
   const ultrafast = applyUltrafastMultiplier(
-    effectiveCost4, price.provider, attempt.model, serviceTier, attempt.tierOutcome, contextTier,
+    effectiveCost4, price.provider, attempt.model, requestPricedAt, attempt.tierOutcome, contextTier,
   );
   const billed = resolveAttemptCost(attempt.provider, attempt.usage, creditPrices, tokens, ultrafast.cost4);
   if (!billed) return null;
