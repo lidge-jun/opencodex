@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -168,6 +168,9 @@ describe("Advisor client MCP safety", () => {
     expect(mountAdvisorMcpForClient("workbuddy-ai", { ...opts, execPath: "/new/bun" }).ok).toBe(true);
     expect(readFileSync(join(shared, "mcp.json"), "utf8")).toContain("/new/bun");
     expect(unmountAdvisorMcpForClient("workbuddy-ai", { ...opts, execPath: "/new/bun" }).ok).toBe(true);
+    // WorkBuddy still records the shared entry, updated along with the rewrite, so it stays until WorkBuddy unmounts too.
+    expect(readFileSync(join(shared, "mcp.json"), "utf8")).toContain("/new/bun");
+    expect(unmountAdvisorMcpForClient("workbuddy", { ...opts, execPath: "/new/bun" }).ok).toBe(true);
     expect(JSON.parse(readFileSync(join(shared, "mcp.json"), "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeUndefined();
   });
   test("switching clients preserves a shared config reached through a directory symlink", () => {
@@ -375,6 +378,29 @@ describe("Advisor client MCP safety", () => {
     const edited = readFileSync(otherSkill, "utf8");
     expect(unmountAdvisorMcpForClient("qoder", otherOpts).ok).toBe(true);
     expect(readFileSync(otherSkill, "utf8")).toBe(edited);
+  });
+  test("upgrading one of two clients that share a config directory keeps the other client's ownership current", () => {
+    const home = tempHome("ocx-advisor-shared-upgrade-");
+    const configDir = join(home, ".opencodex");
+    const shared = join(home, "workbuddy-shared");
+    const env = { WORKBUDDY_CONFIG_DIR: shared };
+    const at = (execPath: string) => ({ homeDir: home, configDir, env, execPath });
+    expect(mountAdvisorMcpForClient("workbuddy", at("/old/bun")).ok).toBe(true);
+    expect(mountAdvisorMcpForClient("workbuddy-ai", at("/old/bun")).ok).toBe(true);
+    expect(mountAdvisorMcpForClient("workbuddy", at("/new/bun")).ok).toBe(true);
+    const mcpPath = join(shared, "mcp.json");
+    const entry = () => JSON.parse(readFileSync(mcpPath, "utf8")).mcpServers?.[ADVISOR_MCP_SERVER_NAME];
+    const upgraded = entry();
+    expect(JSON.stringify(upgraded)).toContain("/new/bun");
+    expect(unmountAdvisorMcpForClient("workbuddy", at("/new/bun")).ok).toBe(true);
+    // WorkBuddy AI still owns the shared, upgraded entry.
+    expect(entry()).toEqual(upgraded);
+    expect(unmountAdvisorMcpForClient("workbuddy-ai", at("/new/bun")).ok).toBe(true);
+    expect(entry()).toBeUndefined();
+    const leftovers = readdirSync(shared, { recursive: true }).map(String).filter(name => name.includes("opencodex-advisor"));
+    expect(leftovers).toEqual([]);
+    const queue = join(configDir, "advisor-pending-cleanup.json");
+    expect(existsSync(queue) ? JSON.parse(readFileSync(queue, "utf8")) : []).toEqual([]);
   });
   test("a user edit at the old recorded path is kept, and a removed old file only drops the record", () => {
     const home = tempHome("ocx-advisor-stale-path-edited-");

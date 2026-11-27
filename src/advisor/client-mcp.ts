@@ -606,6 +606,25 @@ function readPlainTextFile(path: string): string | null | undefined {
 }
 
 /**
+ * After rewriting a shared script or skill, move every other client that recorded the replaced content to the new
+ * hash, so their records keep describing the file they share (mutates `artifacts`).
+ */
+function adoptRewrittenFile(
+  artifacts: OwnedArtifactRecords, clientId: string, path: string, previousSha: string, nextSha: string, kind: "hook" | "skill",
+): void {
+  const target = canonicalClientPath(path);
+  for (const [otherId, other] of Object.entries(artifacts)) {
+    if (otherId === clientId) continue;
+    if (kind === "hook" && other.hookScriptPath && canonicalClientPath(other.hookScriptPath) === target && other.hookScriptSha256 === previousSha) {
+      artifacts[otherId] = { ...other, hookScriptSha256: nextSha };
+    }
+    if (kind === "skill" && other.skillPath && canonicalClientPath(other.skillPath) === target && other.skillSha256 === previousSha) {
+      artifacts[otherId] = { ...other, skillSha256: nextSha };
+    }
+  }
+}
+
+/**
  * A hook script or skill file is OpenCodex's only when a record names this path with the hash of exactly this content;
  * a marker alone is not ownership. "same" is unrecorded content identical to what OpenCodex would write.
  */
@@ -951,9 +970,13 @@ function mountHooksAndSkill(
     const scriptState = managedFileState(artifacts, paths.hookScriptPath, desiredHookScript, "hook");
     if (scriptState === "missing" || scriptState === "owned") {
       mkdirSync(dirname(paths.hookScriptPath), { recursive: true, mode: 0o700 });
-      if (readPlainTextFile(paths.hookScriptPath) !== desiredHookScript) {
+      const previousScript = readPlainTextFile(paths.hookScriptPath);
+      if (previousScript !== desiredHookScript) {
         atomicWriteFile(paths.hookScriptPath, desiredHookScript);
         changed = true;
+        if (typeof previousScript === "string") {
+          adoptRewrittenFile(artifacts, spec.id, paths.hookScriptPath, contentSha256(previousScript), contentSha256(desiredHookScript), "hook");
+        }
       }
       chmodSync(paths.hookScriptPath, 0o755);
       record.hookScriptPath = resolve(paths.hookScriptPath);
@@ -996,17 +1019,20 @@ function mountHooksAndSkill(
     const skillState = managedFileState(artifacts, paths.skillPath, ADVISOR_SKILL_CONTENT, "skill");
     if (skillState === "missing" || skillState === "owned") {
       mkdirSync(dirname(paths.skillPath), { recursive: true, mode: 0o700 });
-      if (readPlainTextFile(paths.skillPath) !== ADVISOR_SKILL_CONTENT) {
+      const previousSkill = readPlainTextFile(paths.skillPath);
+      if (previousSkill !== ADVISOR_SKILL_CONTENT) {
         atomicWriteFile(paths.skillPath, ADVISOR_SKILL_CONTENT);
         changed = true;
+        if (typeof previousSkill === "string") {
+          adoptRewrittenFile(artifacts, spec.id, paths.skillPath, contentSha256(previousSkill), contentSha256(ADVISOR_SKILL_CONTENT), "skill");
+        }
       }
       record.skillPath = resolve(paths.skillPath);
       record.skillSha256 = contentSha256(ADVISOR_SKILL_CONTENT);
     }
   }
-  if (JSON.stringify(record) !== JSON.stringify(artifacts[spec.id] ?? {})) {
-    writeOwnedArtifacts(configDir, { ...artifacts, [spec.id]: record });
-  }
+  const nextArtifacts = { ...artifacts, [spec.id]: record };
+  if (JSON.stringify(nextArtifacts) !== JSON.stringify(readOwnedArtifacts(configDir))) writeOwnedArtifacts(configDir, nextArtifacts);
   return { changed };
 }
 
@@ -1226,8 +1252,17 @@ export function mountAdvisorMcpForClient(
     changed = true;
   }
   const record = { configPath: resolve(paths.mcpConfigPath), entry: desiredText };
-  if (!userEntry && (owned[clientId]?.configPath !== record.configPath || owned[clientId]?.entry !== record.entry)) {
-    writeOwnedAdvisorEntries(configDir, { ...owned, [clientId]: record });
+  if (!userEntry) {
+    const target = canonicalClientPath(paths.mcpConfigPath);
+    const nextOwned: OwnedAdvisorEntries = { ...readOwnedAdvisorEntries(configDir), [clientId]: record };
+    // Clients sharing this file recorded the bytes just replaced; they own the updated entry now, or a later cleanup
+    // for this client would delete an entry they still use.
+    for (const [otherId, other] of Object.entries(nextOwned)) {
+      if (otherId !== clientId && canonicalClientPath(other.configPath) === target && other.entry === currentText) {
+        nextOwned[otherId] = { ...other, entry: desiredText };
+      }
+    }
+    if (JSON.stringify(nextOwned) !== JSON.stringify(readOwnedAdvisorEntries(configDir))) writeOwnedAdvisorEntries(configDir, nextOwned);
   }
 
   const hookSkillRes = mountHooksAndSkill(spec, paths, configDir, options);
