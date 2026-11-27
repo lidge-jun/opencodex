@@ -10,7 +10,7 @@ import {
   requestOpenDesignDeviceAuthorization,
   listOpenDesignWorkspaces,
 } from "../../src/oauth/opendesign";
-import { saveCredential } from "../../src/oauth/store";
+import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
 
@@ -234,8 +234,11 @@ describe("opendesign OAuth registration", () => {
       [WORKSPACES_URL]: workspacesResponse,
     });
     const credentials = await loginOpenDesign({}, { fetchImpl, sleep: pendingSleep });
-    saveCredential("opendesign", credentials);
-    const stored = OAUTH_PROVIDERS["opendesign"];
+    const receipt = await saveCredential("opendesign", credentials);
+    expect(receipt).not.toBeNull();
+    const stored = getAccountSet("opendesign")?.accounts.find(row => row.credential.access === CONTROL_KEY);
     expect(stored).toBeDefined();
+    expect(stored!.credential.expires).toBe(Number.MAX_SAFE_INTEGER);
+    expect(OAUTH_PROVIDERS["opendesign"]).toBeDefined();
   });
 });

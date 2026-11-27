@@ -125,7 +125,7 @@ async function maybeFetchProviderQuota(
     if (isBuiltInChatGptForwardProvider(name, provider)) {
       return await fetchChatGptForwardQuota(config, name, provider, forceRefresh, prefetchedCodexSnapshot);
     }
-    if (provider.authMode === "oauth" && explicitAccountReader(name)) return await fetchExplicitCurrentQuota(name, provider, config);
+    if ((provider.authMode === "oauth" || (name === "opendesign" && provider.authMode === "key")) && explicitAccountReader(name)) return await fetchExplicitCurrentQuota(name, provider, config);
     if (provider.authMode === "oauth" && configuredAnthropicInstance(config, name)) return await fetchAnthropicQuota(name, config);
     if (provider.authMode === "oauth" && name === ANTIGRAVITY_OAUTH_STORE_KEY) return await fetchAntigravityQuota(name, { ...provider });
     if (provider.authMode === "oauth" && name === "kiro") return await fetchKiroQuota(name);

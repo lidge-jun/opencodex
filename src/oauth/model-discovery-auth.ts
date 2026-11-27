@@ -14,6 +14,9 @@ export function mayResolveModelsOAuth(name: string, provider: OcxProviderConfig 
   // The DSH account token is pinned to its own adapter and fixed DeepSeek hosts. Its catalog is
   // static, so no discovery path may resolve it, whatever adapter or baseUrl the row was edited to.
   if (name === "dsh-account") return false;
+  // Open Design's OAuth store holds the control-plane quota key only; its catalog is static and
+  // the control key must never authorize model discovery.
+  if (name === "opendesign") return false;
   if (name === "workbuddy-ai" || provider?.adapter === "workbuddy-ai") {
     if (name !== "workbuddy-ai" || provider?.adapter !== "workbuddy-ai" || provider.disabled) return false;
     try { assertWorkBuddyDestination(provider.baseUrl); return true; } catch { return false; }

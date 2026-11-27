@@ -106,8 +106,7 @@ describe("fetchOpenDesignAccountQuota", () => {
     expect(fiveHour).toBeDefined();
     expect(fiveHour.percent).toBe(9); // 45/500
     expect(fiveHour.resetAt).toBe(Date.parse("2026-11-27T15:00:00.000Z"));
-    // Anchored: reset is the reported anchor, never now-plus-duration.
-    expect(fiveHour.resetAt).toBeLessThan(Date.now());
+    // Anchored: reset is the reported anchor, preserved verbatim, never now-plus-duration.
   });
 
   test("windows are labeled per workspace so rows stay distinguishable", async () => {

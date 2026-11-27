@@ -738,10 +738,12 @@ export function quotaCredentialIdentity(provider: string, accountId: string, cre
 }
 
 export function explicitQuotaDestination(provider: string, config: OcxProviderConfig): boolean {
-  if (config.disabled === true || config.authMode !== "oauth") return false;
+  if (config.disabled === true) return false;
+  if (provider === "opendesign") return config.authMode === "oauth" || config.authMode === "key";
+  if (config.authMode !== "oauth") return false;
   if (provider === "kimi") return isCanonicalKimiCodeBaseUrl(config.baseUrl);
   if (provider === "command-code") return isCanonicalCommandCodeBaseUrl(config.baseUrl);
   // These readers use fixed canonical billing origins, never config.baseUrl. Devin reads
   // the credential's own allowlisted api-server host instead (fetchDevinQuota revalidates it).
-  return provider === "xai" || provider === "cursor" || provider === "devin" || provider === "workbuddy-ai" || provider === "dsh-account" || provider === "opendesign";
+  return provider === "xai" || provider === "cursor" || provider === "devin" || provider === "workbuddy-ai" || provider === "dsh-account";
 }

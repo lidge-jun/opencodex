@@ -601,9 +601,10 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     baseUrl: "https://amr-link.open-design.ai/v1",
     authKind: "oauth",
     oauthId: "opendesign",
+    allowKeyAuthOverride: true,
     featured: false,
     dashboardPreset: true,
-    note: "Open Design Cloud: device-auth login stores the control-plane key for billing quota; model calls use an inference key in provider config. Quota reads are per workspace via the control plane.",
+    note: "Open Design Cloud: device-auth login stores the control-plane key for billing quota only; model inference requires a configured inference key in provider config and never falls back to the control key. Account quota returns one report containing workspace-labeled windows from the control plane.",
     dashboardUrl: "https://open-design.ai",
     // Static catalog: the control key never authorizes model discovery (src/oauth/model-discovery-auth.ts).
     liveModels: false,
