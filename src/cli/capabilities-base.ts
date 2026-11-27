@@ -357,7 +357,7 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     command: ["account", "agy"],
     summary: "Register and manually select a host-local Antigravity ACP sign-in.",
-    routes: [], flags: [], mutates: true, json: "none",
+    routes: [{ method: "GET", path: "/api/antigravity-acp/accounts" }, { method: "POST", path: "/api/antigravity-acp/accounts" }], flags: [], mutates: true, json: "none",
     usage: "ocx account agy list | add <name> | use <name|default>",
     details: ["List is read-only. Add opens agy's interactive login. Use applies to new ACP turns."],
   },

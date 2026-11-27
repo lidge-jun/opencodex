@@ -287,3 +287,36 @@ test("a login replaced between the credential read and the refresh call does not
   expect(lastOAuthRefreshOutcome("kimi", accountId, after)).toBeNull();
   expect(lastOAuthRefreshOutcome("kimi", accountId, before)).toMatchObject({ ok: true });
 });
+
+test.skipIf(process.platform === "win32")("local Antigravity accounts register after terminal login and select explicitly", async () => {
+  const { handleAgyAccounts } = await import("../../src/server/management/agy-account-routes");
+  const { addProfile } = await import("../../src/cli/account-agy");
+  const { mkdirSync } = await import("node:fs");
+  const profiles = join(home, "profiles");
+  const origin = "http://localhost:10100";
+  const url = new URL("/api/antigravity-acp/accounts", origin);
+  const launch: string[] = [];
+  const request = (body?: Record<string, string>, local = true, principal = "gui-session") => {
+    const req = new Request(url, body ? { method: "POST", body: JSON.stringify(body) } : {});
+    return handleAgyAccounts({ req, url, principal, config: { port: 10100 }, trustedLoopbackIngress: local } as Parameters<typeof handleAgyAccounts>[0],
+      async label => { launch.push(label); }, profiles);
+  };
+  expect((await request(undefined, false)).status).toBe(403);
+  expect((await request({ action: "add", name: "work" }, true, "admin-token")).status).toBe(403);
+  expect((await request({ action: "add", name: "../invalid" })).status).toBe(400);
+  expect((await request({ action: "use", name: "work" })).status).toBe(404);
+  if (process.platform === "darwin") {
+    expect((await request({ action: "add", name: "work" })).status).toBe(202);
+    expect(launch).toEqual(["work"]);
+  }
+  expect(await (await request()).json()).toMatchObject({ names: ["default"], selected: "default" });
+  addProfile(profiles, "work", dir => {
+    const dataDir = join(dir, "antigravity-cli");
+    mkdirSync(dataDir);
+    writeFileSync(join(dataDir, "antigravity-oauth-token"), "fixture", { mode: 0o600 });
+  });
+  expect(await (await request()).json()).toMatchObject({ names: ["default", "work"], selected: "default" });
+  expect(await (await request({ action: "use", name: "work" })).json()).toMatchObject({ selected: "work" });
+  expect(await (await request()).json()).toMatchObject({ selected: "work" });
+  expect(await (await request({ action: "use", name: "default" })).json()).toMatchObject({ selected: "default" });
+});

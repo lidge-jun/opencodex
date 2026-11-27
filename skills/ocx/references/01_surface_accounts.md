@@ -125,7 +125,10 @@ Register and manually select a host-local Antigravity ACP sign-in.
 
 State-changing: yes. JSON mode: `none`.
 
-Drives no management route.
+| Method | Route |
+|---|---|
+| GET | `/api/antigravity-acp/accounts` |
+| POST | `/api/antigravity-acp/accounts` |
 
 - List is read-only. Add opens agy's interactive login. Use applies to new ACP turns.
 

@@ -3,14 +3,12 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getConfigDir } from "../../config/paths";
+export { validProfileName } from "./profile-name";
+import { validProfileName } from "./profile-name";
 import { parseAgyVersion, versionAtLeast } from "./binary";
 
 export function profileRoot(): string {
   return join(homedir(), ".gemini", "opencodex-acp-profiles");
-}
-
-export function validProfileName(name: string): boolean {
-  return /^[a-z][a-z0-9-]{0,31}$/.test(name) && name !== "default";
 }
 
 export function requireProfileVersion(version: string): void {
