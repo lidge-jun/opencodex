@@ -1101,7 +1101,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
   });
 
   test("client-mcp preserves sibling hooks in matched groups, isolates per-client errors, and makes Routing Undo confirm before removing Advisor edits", async () => {
-    const { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
+    const { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
     const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
     const { fingerprint, readRecords, writeRecord, integrationsDir } = await import("../../src/integrations/ownership");
@@ -1166,11 +1166,10 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
       const afterMountDoc = JSON.parse(afterMountText) as { hooks: { UserPromptSubmit: Array<{ matcher?: string; hooks: Array<{ command: string }> }> } };
       const siblingGroup = afterMountDoc.hooks.UserPromptSubmit.find(g => g.matcher === "custom-matcher");
       expect(siblingGroup).toBeDefined();
-      // A hook with the same file name at another path is not the command OpenCodex registered, so it stays.
-      expect(siblingGroup!.hooks).toEqual([
-        { type: "command", command: "/usr/local/bin/user-hook.sh" },
-        { type: "command", command: "/old/path/opencodex-advisor-notice.sh" },
-      ]);
+      // OpenCodex records only the standalone group it appends. The same command inside a user's group is not provably
+      // its registration, so the group is left exactly as written and no second registration is appended.
+      expect(siblingGroup!.hooks).toEqual(initialDoc.hooks.UserPromptSubmit[0]!.hooks);
+      expect(afterMountDoc.hooks.UserPromptSubmit).toHaveLength(1);
 
       // Routing ownership follows the shared file, so a Routing toggle does not see Advisor's edit as a conflict...
       expect((readRecords(intDir) as Record<string, { fileFingerprint: string }>).qoder!.fileFingerprint).toBe(fingerprint(afterMountText));
@@ -1179,16 +1178,13 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
       expect(matchesOperationResult(opAfterMount, afterMountText)).toBe(false);
       expect(matchesOperationResult(opAfterMount, initialText)).toBe(true);
 
-      // Unmount Advisor MCP: sibling user hook still preserved.
+      // Unmount Advisor MCP: the user's group, including its registration of the same command, is preserved.
       const unmountRes = unmountAdvisorMcpForClient("qoder", { homeDir, configDir, env: {} });
       expect(unmountRes.ok).toBe(true);
       const afterUnmountDoc = JSON.parse(readFileSync(qoderPath, "utf8")) as { hooks: { UserPromptSubmit: Array<{ matcher?: string; hooks: Array<{ command: string }> }> } };
-      expect(afterUnmountDoc.hooks.UserPromptSubmit).toEqual([
-        { matcher: "custom-matcher", hooks: [
-          { type: "command", command: "/usr/local/bin/user-hook.sh" },
-          { type: "command", command: "/old/path/opencodex-advisor-notice.sh" },
-        ] },
-      ]);
+      expect(afterUnmountDoc.hooks.UserPromptSubmit).toEqual(initialDoc.hooks.UserPromptSubmit);
+      // That registration still runs the hook script, so the script stays too.
+      expect(existsSync(join(qoderDir, "hooks", "opencodex-advisor-notice.sh"))).toBe(true);
 
       // Per-client error isolation: block workbuddy config path with a directory while qoder still succeeds.
       mkdirSync(join(homeDir, ".workbuddy", "mcp.json"), { recursive: true });
