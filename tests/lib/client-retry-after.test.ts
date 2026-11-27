@@ -44,9 +44,14 @@ describe("formatClientRetryAfter", () => {
     expect(formatClientRetryAfter(value, before + 1000)).toBe("0");
   });
 
-  test("leap-second handling still rejects invalid calendar dates and seconds", () => {
+  test("leap-second handling still rejects invalid calendar dates, positions, and seconds", () => {
     expect(formatClientRetryAfter("Sat, 31 Apr 2016 23:59:60 GMT", now)).toBeUndefined();
     expect(formatClientRetryAfter("Sat, 31 Dec 2016 23:59:61 GMT", now)).toBeUndefined();
+    expect(formatClientRetryAfter("Mon, 02 Nov 2026 12:34:60 GMT", now)).toBeUndefined();
+    expect(formatClientRetryAfter("Thu, 15 Dec 2016 23:59:60 GMT", now)).toBeUndefined();
+    expect(formatClientRetryAfter("Sun, 28 Feb 2016 23:59:60 GMT", now)).toBeUndefined();
+    const feb29 = Date.parse("2016-02-29T23:59:59Z");
+    expect(formatClientRetryAfter("Mon, 29 Feb 2016 23:59:60 GMT", feb29)).toBe("1");
   });
 
   test("obsolete RFC 850 and asctime dates are read as GMT", () => {
