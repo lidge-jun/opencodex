@@ -937,9 +937,10 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
   An undeclared loopback relay or SSH port forward can appear local when it passes no recognized forwarding headers.
   Declare the reverse proxy for the public listener or keep this port out of the relay. Keep the other local listeners
   out of relays, since the declared-proxy setting applies only to the public listener.
-- **Gemini models only:** the static roster is `gemini-3.8-flash`, `gemini-4-argon` and `gemini-3.7-flash`. At each
-  turn the model must also be a Gemini model the CLI offers, confirmed before the prompt is sent; anything else is
-  refused. Codex reasoning effort selects the CLI's thinking level (`xhigh` selects Extra). OpenCodex masks
+- **Gemini and Claude models only:** the static roster is `gemini-3.8-flash`, `gemini-4-neon`, `gemini-4-carbon`,
+  `gemini-4-argon`, `gemini-4-hydrogen`, `gemini-pro-orchestrator-neon`, `gemini-pro-orchestrator`,
+  `gemini-pro-orchestrator-argon`, `claude-opus-5-5` and `claude-sonnet-5-5`. At each turn the model must also be a
+  Gemini or Claude model the CLI offers, confirmed before the prompt is sent; other model families are refused. Codex reasoning effort selects the CLI's thinking level (`xhigh` selects Extra). OpenCodex masks
   recognized credentials in answer and reasoning text from the CLI.
 - **Workspace and permissions:** each turn runs in a new empty private directory outside the OpenCodex home. The CLI's
   permission engine asks before every command and before file access outside that directory, and OpenCodex refuses
