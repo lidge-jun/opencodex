@@ -576,9 +576,10 @@ function entryMatchesAdvisorHook(entry: unknown, hookScriptPath: string): boolea
  * rewritten or removed, like an unrecorded MCP entry.
  */
 const ADVISOR_ARTIFACT_OWNERSHIP_FILE = "advisor-hook-registrations.json";
-interface OwnedArtifacts { hookConfigPath?: string; command?: string; hookScriptPath?: string; skillPath?: string }
+/** `scriptHookConfigPath` is the hook config that may run the script, recorded even when the registration is the user's. */
+interface OwnedArtifacts { hookConfigPath?: string; command?: string; hookScriptPath?: string; scriptHookConfigPath?: string; skillPath?: string }
 type OwnedArtifactRecords = Record<string, OwnedArtifacts>;
-const ARTIFACT_FIELDS = ["hookConfigPath", "command", "hookScriptPath", "skillPath"] as const;
+const ARTIFACT_FIELDS = ["hookConfigPath", "command", "hookScriptPath", "scriptHookConfigPath", "skillPath"] as const;
 
 function readOwnedArtifacts(configDir: string): OwnedArtifactRecords {
   try {
@@ -704,9 +705,12 @@ function queueRecordedArtifacts(spec: ClientSpec, paths: ResolvedClientPaths, co
     });
   }
   if (record.hookScriptPath && !(keepCurrent && same(record.hookScriptPath, paths.hookScriptPath))) {
+    // The script stays while any hook in the config that may run it still does, whoever registered that hook.
+    const scriptConfig = record.scriptHookConfigPath ?? record.hookConfigPath;
     items.push({ kind: "file", clientId: spec.id, path: record.hookScriptPath, marker: "hook",
-      ...(record.hookConfigPath && record.command ? { hookConfigPath: record.hookConfigPath, command: record.command } : {}) });
+      ...(scriptConfig ? { hookConfigPath: scriptConfig, command: advisorHookCommand(record.hookScriptPath) } : {}) });
     delete record.hookScriptPath;
+    delete record.scriptHookConfigPath;
   }
   if (record.skillPath && !(keepCurrent && same(record.skillPath, paths.skillPath))) {
     items.push({ kind: "file", clientId: spec.id, path: record.skillPath, marker: "skill" });
@@ -756,53 +760,49 @@ function reconcilePendingCleanup(
   let changed = false;
   // Registrations before files, so a hook script goes only after nothing runs it.
   const ordered = [...pending.filter(item => item.kind !== "file"), ...pending.filter(item => item.kind === "file")];
-  for (const item of ordered) {
-    if (onlyClient !== undefined && item.clientId !== onlyClient) {
-      keep.push(item);
-      continue;
-    }
+  const step = (item: PendingCleanup): void => {
     const clientId = item.clientId as AdvisorMcpClientId;
     if (item.kind === "mcp") {
       const target = canonicalClientPath(item.configPath);
       // Another client still records this exact entry in this file: it is in use, not left over.
-      if (Object.values(mcpRecords).some(record => canonicalClientPath(record.configPath) === target && record.entry === item.entry)) continue;
-      if (protectedPaths?.mcpPaths.has(target)) { keep.push(item); continue; }
-      if (!existsSync(item.configPath)) continue;
+      if (Object.values(mcpRecords).some(record => canonicalClientPath(record.configPath) === target && record.entry === item.entry)) return;
+      if (protectedPaths?.mcpPaths.has(target)) { keep.push(item); return; }
+      if (!existsSync(item.configPath)) return;
       const read = readJsonObject(item.configPath);
       if (read.parseError || !read.doc) {
         keep.push(item);
         errors.push({ clientId, message: `Refused to edit invalid JSON in ${item.configPath}; Advisor cleanup will retry` });
-        continue;
+        return;
       }
-      if (!isPlainObject(read.doc[item.container])) continue;
+      if (!isPlainObject(read.doc[item.container])) return;
       const container = { ...(read.doc[item.container] as JsonObj) };
-      if (!Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) || JSON.stringify(container[ADVISOR_MCP_SERVER_NAME]) !== item.entry) continue;
+      if (!Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) || JSON.stringify(container[ADVISOR_MCP_SERVER_NAME]) !== item.entry) return;
       backupOnceBeforeEdit(configDir, clientId, item.configPath, read.text);
       delete container[ADVISOR_MCP_SERVER_NAME];
       const nextText = `${JSON.stringify({ ...read.doc, [item.container]: container }, null, 2)}\n`;
       atomicWriteFile(item.configPath, nextText);
       if (item.routingShared) syncOwnershipFingerprintIfClean(configDir, clientId, item.configPath, read.text, nextText);
       changed = true;
-      continue;
+      return;
     }
     if (item.kind === "hook") {
       const target = canonicalClientPath(item.hookConfigPath);
       if (Object.values(artifacts).some(record => record.command === item.command && !!record.hookConfigPath
-        && canonicalClientPath(record.hookConfigPath) === target)) continue;
-      if (protectedPaths?.hookConfigPaths.has(target)) { keep.push(item); continue; }
-      if (!existsSync(item.hookConfigPath)) continue;
+        && canonicalClientPath(record.hookConfigPath) === target)) return;
+      if (protectedPaths?.hookConfigPaths.has(target)) { keep.push(item); return; }
+      if (!existsSync(item.hookConfigPath)) return;
       const read = readJsonObject(item.hookConfigPath);
       if (read.parseError || !read.doc) {
         keep.push(item);
         errors.push({ clientId, message: `Refused to edit invalid JSON in ${item.hookConfigPath}; Advisor cleanup will retry` });
-        continue;
+        return;
       }
       const hooks = isPlainObject(read.doc.hooks) ? { ...read.doc.hooks } : {};
       const list = Array.isArray(hooks.UserPromptSubmit) ? [...hooks.UserPromptSubmit] : [];
       const { exact, other } = locateHookCommand(list, item.command);
-      if (exact.length === 0 && other === 0) continue;
+      if (exact.length === 0 && other === 0) return;
       // Only one group exactly as OpenCodex wrote it, and nothing else running the command, is provably ours.
-      if (exact.length !== 1 || other !== 0) { keep.push(item); continue; }
+      if (exact.length !== 1 || other !== 0) { keep.push(item); return; }
       list.splice(exact[0]!, 1);
       if (list.length === 0) delete hooks.UserPromptSubmit;
       else hooks.UserPromptSubmit = list;
@@ -814,21 +814,36 @@ function reconcilePendingCleanup(
       atomicWriteFile(item.hookConfigPath, nextText);
       if (item.routingShared) syncOwnershipFingerprintIfClean(configDir, clientId, item.hookConfigPath, read.text, nextText);
       changed = true;
-      continue;
+      return;
     }
     const target = canonicalClientPath(item.path);
     if (Object.values(artifacts).some(record => [record.hookScriptPath, record.skillPath]
-      .some(path => !!path && canonicalClientPath(path) === target))) continue;
+      .some(path => !!path && canonicalClientPath(path) === target))) return;
     const protectedSet = item.marker === "hook" ? protectedPaths?.hookScriptPaths : protectedPaths?.skillPaths;
-    if (protectedSet?.has(target)) { keep.push(item); continue; }
+    if (protectedSet?.has(target)) { keep.push(item); return; }
     const state = inspectManagedTextFile(item.path, item.marker === "hook" ? ADVISOR_HOOK_MARKER : ADVISOR_SKILL_MARKER);
-    if (state !== "owned") continue;
-    // A registration (the user's, or one whose ownership is ambiguous) still runs this script: keep it.
-    if (item.marker === "hook" && item.hookConfigPath && item.command && hookStillRegistered(item.hookConfigPath, item.command)) {
+    if (state !== "owned") return;
+    // A registration (the user's, or one whose ownership is ambiguous) still runs this script, or nothing says which
+    // config could run it: keep it.
+    if (item.marker === "hook" && (!item.hookConfigPath || !item.command || hookStillRegistered(item.hookConfigPath, item.command))) {
+      keep.push(item);
+      return;
+    }
+    if (unlinkOwnedFile(item)) changed = true;
+  };
+  for (const item of ordered) {
+    if (onlyClient !== undefined && item.clientId !== onlyClient) {
       keep.push(item);
       continue;
     }
-    if (unlinkOwnedFile(item)) changed = true;
+    // One failing item (a write or unlink error) stays queued and is reported; the rest still run.
+    try {
+      step(item);
+    } catch (error) {
+      if (!keep.includes(item)) keep.push(item);
+      const where = item.kind === "mcp" ? item.configPath : item.kind === "hook" ? item.hookConfigPath : item.path;
+      errors.push({ clientId: item.clientId, message: `Advisor cleanup of ${where} failed and will retry: ${error instanceof Error ? error.message : String(error)}` });
+    }
   }
   writePendingCleanup(configDir, keep);
   return { changed, errors };
@@ -881,6 +896,7 @@ function mountHooksAndSkill(
     }
     chmodSync(paths.hookScriptPath, 0o755);
     record.hookScriptPath = resolve(paths.hookScriptPath);
+    record.scriptHookConfigPath = resolve(paths.hookConfigPath);
 
     const command = advisorHookCommand(paths.hookScriptPath);
     const read = readJsonObject(paths.hookConfigPath);
@@ -1321,9 +1337,14 @@ export function syncAdvisorMcpClients(
     }
   }
 
-  const cleanup = reconcilePendingCleanup(configDir, protectedPaths);
-  for (const error of cleanup.errors) {
-    if (!errors.some(existing => existing.message === error.message)) errors.push({ clientId: error.clientId as AdvisorMcpClientId, message: error.message });
+  try {
+    const cleanup = reconcilePendingCleanup(configDir, protectedPaths);
+    for (const error of cleanup.errors) {
+      if (!errors.some(existing => existing.message === error.message)) errors.push({ clientId: error.clientId as AdvisorMcpClientId, message: error.message });
+    }
+  } catch (error) {
+    // The queue file itself could not be read or written; the items stay where they are for the next sync.
+    errors.push({ clientId: ADVISOR_MCP_CLIENT_IDS[0], message: `Advisor cleanup queue could not be updated: ${error instanceof Error ? error.message : String(error)}` });
   }
 
   return {

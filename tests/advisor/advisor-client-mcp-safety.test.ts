@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -297,6 +297,43 @@ describe("Advisor client MCP safety", () => {
     const repaired = JSON.parse(readFileSync(oldSettings, "utf8"));
     expect(repaired.mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeUndefined();
     expect(repaired.hooks).toBeUndefined();
+  });
+  test("moving a client keeps the old hook script while an unrecorded user hook still runs it", () => {
+    const home = tempHome("ocx-advisor-moved-user-hook-");
+    const configDir = join(home, ".opencodex");
+    const oldDir = join(home, "old-qoder");
+    const newDir = join(home, "new-qoder");
+    const oldOpts = { homeDir: home, configDir, env: { QODER_CONFIG_DIR: oldDir } };
+    const newOpts = { homeDir: home, configDir, env: { QODER_CONFIG_DIR: newDir } };
+    mkdirSync(oldDir, { recursive: true });
+    const oldScript = join(oldDir, "hooks", "opencodex-advisor-notice.sh");
+    const userHooks = { UserPromptSubmit: [{ hooks: [{ type: "command", command: advisorHookCommand(oldScript) }] }] };
+    writeFileSync(join(oldDir, "settings.json"), JSON.stringify({ hooks: userHooks, mcpServers: {} }));
+    expect(mountAdvisorMcpForClient("qoder", oldOpts).ok).toBe(true);
+    expect(mountAdvisorMcpForClient("qoder", newOpts).ok).toBe(true);
+    expect(JSON.parse(readFileSync(join(oldDir, "settings.json"), "utf8")).hooks).toEqual(userHooks);
+    expect(existsSync(oldScript)).toBe(true);
+  });
+  // A read-only directory blocks writes only for a non-root POSIX user.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a cleanup item that fails is reported and kept while the other clients' cleanup still runs", () => {
+    const home = tempHome("ocx-advisor-cleanup-failure-");
+    const configDir = join(home, ".opencodex");
+    const qoderDir = join(home, "qoder");
+    const opts = { homeDir: home, configDir, env: { QODER_CONFIG_DIR: qoderDir } };
+    expect(mountAdvisorMcpForClient("qoder", opts).ok).toBe(true);
+    expect(mountAdvisorMcpForClient("commandcode", opts).ok).toBe(true);
+    const commandCodeConfig = join(home, ".commandcode", "mcp.json");
+    expect(JSON.parse(readFileSync(commandCodeConfig, "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeDefined();
+    chmodSync(qoderDir, 0o500);
+    try {
+      const sync = syncAdvisorMcpClients({ advisor: { enabled: false } }, opts);
+      expect(sync.errors.some(error => error.message.includes(qoderDir))).toBe(true);
+      expect(JSON.parse(readFileSync(commandCodeConfig, "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeUndefined();
+    } finally {
+      chmodSync(qoderDir, 0o700);
+    }
+    expect(syncAdvisorMcpClients({ advisor: { enabled: false } }, opts).errors).toEqual([]);
+    expect(JSON.parse(readFileSync(join(qoderDir, "settings.json"), "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeUndefined();
   });
   test("a user edit at the old recorded path is kept, and a removed old file only drops the record", () => {
     const home = tempHome("ocx-advisor-stale-path-edited-");
