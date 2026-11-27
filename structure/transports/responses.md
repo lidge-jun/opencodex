@@ -392,7 +392,6 @@ always become unable to serve.
 
 > Decision record: [ADR-0039](../decisions/ADR-0039-responses-http-sse.md)
 
-
 ## Decoded checkpoint continuation
 
 `src/responses/parser.ts` adds `CHECKPOINT_CONTINUATION_NOTE` from `src/responses/compaction.ts` for decoded `ocx1:`/`ocx2:` checkpoints; `src/adapters/openai-responses/request-strips.ts` does the same while lowering them. For plaintext `SUMMARY_PREFIX` and readable portable checkpoints, `src/responses/compaction-history-framing.ts` frames text-only retained requests before the latest checkpoint as historical context. Plaintext checkpoints append the same note there; portable decoders retain their existing note placement. The parser projects only adapter context; `src/adapters/openai-responses/passthrough.ts` projects only non-OpenAI-operated outbound bodies. Original request text/blocks, canonical raw history, item identities, replay-prefix lengths, checkpoints and later input remain unchanged. Context wrappers, images/files and assistant/tool items are preserved; client-side summarizer turns ending in `COMPACT_PROMPT` and opaque native blobs do not activate framing. A remote `compaction_trigger` summary is framed like the ordinary request it extends but gets no note from the parser or the plaintext framing; `src/server/responses/response-effects.ts` appends `CHECKPOINT_CONTINUATION_NOTE` at the ordinary request's position only on the prefix-preserving Anthropic route (parser flag `_summaryCheckpointNote`), where the appended summary prompt steers the turn (#7307). Native OpenAI passthrough input is unchanged by checkpoint framing; the separate [citation projection](response-citations.md) repairs legacy annotation fields on OpenAI-operated outbound history.
@@ -402,6 +401,7 @@ The note is a prompt contract and grants no authority. Completed requests remain
 The continuation-note and continuation-wire tests establish prompt and wire contracts, including separated `ocx2:` retained reasoning. `tests/responses/compaction-history-framing.test.ts` adds offline A/B projection, original-detail preservation, native passthrough isolation, multi-turn canonical replay/dedup coverage and exclusion of client-side summarizer turns ending in the canonical `COMPACT_PROMPT` (which carry no `compaction_trigger`). `tests/responses/compaction-portable-history.test.ts` covers default JSON/SSE trigger round trips and replacement replay with an external task envelope, plus portable checkpoint families and later user changes. These tests do not establish live model behavior or whether a model actually resumes the correct task.
 
 > Decision record: [ADR-7003](../decisions/ADR-7003-decoded-checkpoint-continuation.md)
+> Decision record: [ADR-9174](../decisions/ADR-9174-remote-summary-checkpoint-prefix.md)
 
 ## Core module ownership
 
