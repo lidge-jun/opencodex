@@ -71,6 +71,10 @@ local port where no opencodex has answered for about 20 seconds (an instance tha
 then died, for example), the proxy re-points Codex at its own port and prints one warning. Codex
 threads opened in the meantime keep the dead address until you reopen them.
 
+An interactive foreground start may show an advisory about an installed managed service after the
+proxy is ready. The check does not block requests; an inconclusive result points to `ocx status`.
+The foreground proxy is not supervised, and the advisory never repairs or restarts a service.
+
 `--socks5` (default `127.0.0.1:10808`) saves `config.proxy` as a SOCKS5 URL and routes outbound
 HTTP(S) through a real SOCKS5 tunnel. `--socks5-off` clears only that saved SOCKS5 proxy; it
 does not remove an HTTP proxy. The value survives `ocx update` because it lives in config, not in
