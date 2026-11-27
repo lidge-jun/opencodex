@@ -35,7 +35,7 @@ import {
   CYBER_POLICY_ERROR_CODE,
   CYBER_POLICY_FALLBACK_MESSAGE,
   isModelNotInPlanRefusal,
-  isUndeclaredToolCallRefusalResponse,
+  undeclaredToolGuardRefused,
   markVerifiedModelNotInPlanResponse,
   namesModelNotInPlanCode,
 } from "../../lib/errors";
@@ -369,10 +369,6 @@ export async function consumeComboFailure(
   // would hide the stable model_not_allowed_for_key type clients branch on.
   let scopeRefusalBody: string | undefined;
   let verifiedPlanRefusal = false;
-  // The combo preflight projected this terminal as the undeclared-tool guard's own refusal
-  // (#9163): membership, not the bare words, is the provenance. An upstream body that merely
-  // repeats the code or message never gains the hop.
-  let undeclaredToolCallRefusal = isUndeclaredToolCallRefusalResponse(response) || undefined;
   try {
     const legacy = comboFailureEvidence(response);
     if (legacy !== undefined) void response.body?.cancel().catch(() => undefined);
@@ -453,6 +449,9 @@ export async function consumeComboFailure(
     if (signal?.aborted) throw error;
     classificationText = fallback;
   }
+  // Read after the body: the passthrough guard rewrites a buffered body lazily, so it may trip
+  // during the read above. Its own mark on this attempt's context is the provenance (#9163).
+  const undeclaredToolCallRefusal = undeclaredToolGuardRefused(logCtx) || undefined;
   const cyberFailure = isCyberPolicyCode(upstreamCode) || isCyberPolicyMessage(classificationText);
   const normalizedUpstreamCode = cyberFailure ? CYBER_POLICY_ERROR_CODE
     : replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : upstreamCode;

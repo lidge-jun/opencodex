@@ -151,7 +151,7 @@ import {
   markNativePassthroughSseResponse,
   markEagerRelaySseResponse,
 } from "../relay";
-import { comboChildDeclaredWireTools, preflightComboStreamResponse } from "./combo-stream-preflight";
+import { preflightComboStreamResponse } from "./combo-stream-preflight";
 import { requiredToolContractOf } from "./combo-required-tool-contract";
 import {
   streamingContextOverflowResponse,
@@ -1549,13 +1549,10 @@ export async function executeComboResponses(
       const eagerRelay = isEagerRelaySseResponse(response);
       let preflight;
       try {
-        // The child guard's own catalog lets an undeclared call read as its refusal (#9163).
-        const childCatalog = comboChildDeclaredWireTools(childInput, previousResponseRestoredPrefixLength(body), childRoute.route ?? targetRoute);
         preflight = await preflightComboStreamResponse(response, childLog, undefined, {
           signal: options.abortSignal,
           requiredToolPrelude: childLog.providerAdapter === "openai-responses" && requiredToolContractOf(rawBody) !== undefined,
           degeneratePrelude: true,
-          ...(childCatalog !== undefined ? { declaredWireTools: childCatalog } : {}),
         });
       } catch (error) {
         callbackGate.discard();
