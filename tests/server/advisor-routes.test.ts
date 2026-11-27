@@ -1106,7 +1106,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
     const { tmpdir } = await import("node:os");
     const { fingerprint, readRecords, writeRecord, integrationsDir } = await import("../../src/integrations/ownership");
     const { appendOperation, findOperation, matchesOperationResult } = await import("../../src/integrations/journal");
-    const { mountAdvisorMcpForClient, unmountAdvisorMcpForClient, syncAdvisorMcpClients } = await import("../../src/advisor/client-mcp");
+    const { advisorHookCommand, mountAdvisorMcpForClient, unmountAdvisorMcpForClient, syncAdvisorMcpClients } = await import("../../src/advisor/client-mcp");
 
     const homeDir = mkdtempSync(join(tmpdir(), "ocx-mcp-hardening-"));
     const configDir = join(homeDir, ".opencodex");
@@ -1115,6 +1115,8 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
       const qoderDir = join(homeDir, ".qoder");
       mkdirSync(qoderDir, { recursive: true });
       const qoderPath = join(qoderDir, "settings.json");
+      expect(mountAdvisorMcpForClient("qoder", { homeDir, configDir, env: {} }).ok).toBe(true);
+      const registeredCommand = advisorHookCommand(join(qoderDir, "hooks", "opencodex-advisor-notice.sh"));
       const initialDoc = {
         hooks: {
           UserPromptSubmit: [
@@ -1123,6 +1125,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
               hooks: [
                 { type: "command", command: "/usr/local/bin/user-hook.sh" },
                 { type: "command", command: "/old/path/opencodex-advisor-notice.sh" },
+                { type: "command", command: registeredCommand },
               ],
             },
           ],
