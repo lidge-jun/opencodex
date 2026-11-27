@@ -5,6 +5,7 @@ import { noteRelaySyntheticTail, noteRequestSentValueGuard } from "../request-lo
 import { createSentValueGuard } from "../../lib/outbound-credential-registry";
 import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { markProxyError, rememberProxyErrorMessage, carryProxyError } from "../../lib/client-error-body";
+import { markUndeclaredToolGuardRefusal } from "../../lib/errors";
 import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
@@ -995,7 +996,10 @@ export async function deliverPassthroughResponse(
             declaredBareWireToolNames,
             recoverableBareCustomWireToolNames,
             { refuseUndeclared: nativeExchange.undeclaredToolGuardActive,
-              onRefusal: message => rememberProxyErrorMessage(logCtx, message, { status: 502, type: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE }) },
+              onRefusal: message => {
+                markUndeclaredToolGuardRefusal(logCtx);
+                rememberProxyErrorMessage(logCtx, message, { status: 502, type: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE });
+              } },
           )
           : undefined,
         grokUpstreamEchoEnabled
