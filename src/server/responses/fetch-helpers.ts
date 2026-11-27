@@ -37,6 +37,7 @@ import {
   type ProviderEgressBinding,
 } from "../../lib/provider-egress";
 import { redactSecretString } from "../../lib/redact";
+import { inheritTlsContextProof, isTlsContextTransparentExecutor, markTlsContextTransparentExecutor } from "../../lib/tls-context-proof";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
 import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
 import { redeemOutboundTurnState, TURN_STATE_BINDING_INIT, turnStateBinding } from "../turn-state-handles";
@@ -247,9 +248,10 @@ export function sendWithConnectionPolicy(
     return Promise.reject(new Error("Cannot apply classical TLS groups to a FetchSession without explicit request TLS settings"));
   }
   const providerTransport = egress?.provider as { fetch?: unknown; tlsProfile?: unknown } | undefined;
-  if (classicalTls && (egress
-    ? typeof providerTransport?.fetch === "function" || providerTransport?.tlsProfile !== undefined
-    : physicalFetch !== globalThis.fetch)) {
+  if (classicalTls && (
+    !isTlsContextTransparentExecutor(physicalFetch)
+    || typeof providerTransport?.fetch === "function" || providerTransport?.tlsProfile !== undefined
+  )) {
     return Promise.reject(new Error("Cannot apply classical TLS groups to a custom provider transport"));
   }
   const body = init?.body;
@@ -393,6 +395,7 @@ export function providerFetch(
     { preconnect: globalThis.fetch.preconnect?.bind(globalThis.fetch) },
   ) as typeof globalThis.fetch);
   markPassiveKeyTransparent(configuredFetch);
+  markTlsContextTransparentExecutor(configuredFetch);
   const base = customExecutor ?? configuredFetch;
   const transport = options.providerName ? providerTlsFetch(options.providerName, provider, base) : base;
   const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
@@ -414,6 +417,7 @@ export function providerFetch(
     { preconnect },
   ) as typeof globalThis.fetch);
   inheritPassiveKeyProof(dispatch, transport);
+  inheritTlsContextProof(dispatch, transport);
   const httpFetch = Object.assign(
     async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
       reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>,

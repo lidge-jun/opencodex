@@ -1,10 +1,17 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { providerFetch, sendWithConnectionPolicy, wantsFreshConnection } from "../../src/server/responses/fetch-helpers";
-import type { OcxProviderConfig } from "../../src/types";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { registerUpstreamRewriter, resetUpstreamRewritersForTests } from "../../src/plugins/upstream-hooks";
+import { markEgressTransparentExecutor } from "../../src/lib/provider-egress";
+import { markTlsContextTransparentExecutor } from "../../src/lib/tls-context-proof";
+import { markPassiveKeyTransparent } from "../../src/lib/passive-key-fetch-proof";
+import { anthropicBillingPhysicalFetch } from "../../src/providers/anthropic-billing-ownership";
+import { distributedKeyPhysicalFetch } from "../../src/providers/api-key-response-ownership";
+import { passiveKeyPhysicalFetch } from "../../src/providers/passive-key-observation";
 
 const originalHosts = process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS;
 const builtinBinding = { providerName: "fixture", provider: {} };
+const builtinFetch = (executor: typeof fetch) => markTlsContextTransparentExecutor(markEgressTransparentExecutor(executor));
 afterEach(() => {
   resetUpstreamRewritersForTests();
   if (originalHosts === undefined) delete process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS;
@@ -23,7 +30,7 @@ describe("host-scoped classical TLS groups", () => {
       method: "POST", body: "{}", headers: { "X-Test": "value" },
       tls: { rejectUnauthorized: true, serverName: "relay.example" },
     };
-    await sendWithConnectionPolicy(fetcher, "https://relay.example/v1/responses", input, builtinBinding);
+    await sendWithConnectionPolicy(builtinFetch(fetcher), "https://relay.example/v1/responses", input, builtinBinding);
     expect(observed?.tls).toMatchObject({
       rejectUnauthorized: true, serverName: "relay.example", ecdhCurve: "X25519:P-256:P-384",
     });
@@ -56,7 +63,7 @@ describe("host-scoped classical TLS groups", () => {
       observed = init as BunFetchRequestInit;
       return new Response("ok");
     }) as typeof fetch;
-    await sendWithConnectionPolicy(fetcher, new Request("https://sub.example.test/v1"), undefined, builtinBinding);
+    await sendWithConnectionPolicy(builtinFetch(fetcher), new Request("https://sub.example.test/v1"), undefined, builtinBinding);
     expect((observed?.tls as Record<string, unknown>)?.ecdhCurve).toBe("X25519:P-256:P-384");
   });
 
@@ -72,7 +79,7 @@ describe("host-scoped classical TLS groups", () => {
       [".EXAMPLE.test.", "https://sub.example.test./v1"],
     ]) {
       process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS = configured;
-      await sendWithConnectionPolicy(fetcher, url, undefined, builtinBinding);
+      await sendWithConnectionPolicy(builtinFetch(fetcher), url, undefined, builtinBinding);
       expect((observed?.tls as Record<string, unknown>)?.ecdhCurve).toBe("X25519:P-256:P-384");
     }
     expect(wantsFreshConnection("https://sub.example.test./v1", ".example.test.")).toBe(true);
@@ -107,6 +114,53 @@ describe("host-scoped classical TLS groups", () => {
       await expect(sendWithConnectionPolicy(session.fetch as typeof fetch, "https://relay.example/v1"))
         .rejects.toThrow(/custom.*transport/i);
     } finally { session.close(); }
+  });
+
+  test("refuses an opaque executor even when a provider binding is supplied", async () => {
+    process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS = "relay.example";
+    let dispatched = false;
+    const opaque = (async () => { dispatched = true; return new Response("ok"); }) as typeof fetch;
+    await expect(sendWithConnectionPolicy(opaque, "https://relay.example/v1", undefined, builtinBinding))
+      .rejects.toThrow(/custom.*transport/i);
+    expect(dispatched).toBe(false);
+  });
+
+  test("proxy transparency alone does not prove that an executor preserves TLS settings", async () => {
+    process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS = "relay.example";
+    let dispatched = false;
+    const session = new Bun.FetchSession({ tls: { checkServerIdentity: () => new Error("fixture pin") } });
+    const opaque = markEgressTransparentExecutor((async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      dispatched = true; return session.fetch(input, init);
+    }) as typeof fetch);
+    try {
+      await expect(sendWithConnectionPolicy(opaque, "https://relay.example/v1", undefined, builtinBinding))
+        .rejects.toThrow(/custom.*transport/i);
+      const provider = { adapter: "openai-responses", baseUrl: "https://relay.example/v1" } as OcxProviderConfig;
+      const wrapped = anthropicBillingPhysicalFetch(opaque, "fixture", provider);
+      await expect(sendWithConnectionPolicy(wrapped, "https://relay.example/v1", undefined, builtinBinding))
+        .rejects.toThrow(/custom.*transport/i);
+      expect(dispatched).toBe(false);
+    } finally { session.close(); }
+  });
+
+  test("built-in credential observation wrappers preserve the TLS proof", async () => {
+    process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS = "relay.example";
+    let observed: BunFetchRequestInit | undefined;
+    const base = builtinFetch((async (_input: unknown, init?: RequestInit) => {
+      observed = init as BunFetchRequestInit; return new Response("ok");
+    }) as typeof fetch);
+    markPassiveKeyTransparent(base);
+    const provider = { adapter: "openai-responses", baseUrl: "https://relay.example/v1", apiKey: "fixture-key",
+      _apiKeyAttempt: { distributed: true, reference: "fixture-key" } } as OcxProviderConfig;
+    const config = { defaultProvider: "fixture", providers: { fixture: provider } } as OcxConfig;
+    const billing = anthropicBillingPhysicalFetch(base, "fixture", provider);
+    const distributed = distributedKeyPhysicalFetch(billing, "fixture", provider, "https://relay.example/v1");
+    const physical = passiveKeyPhysicalFetch(distributed, config, "fixture", provider);
+    expect(billing).not.toBe(base);
+    expect(distributed).not.toBe(billing);
+    expect(physical).not.toBe(distributed);
+    await sendWithConnectionPolicy(physical, "https://relay.example/v1", undefined, builtinBinding);
+    expect((observed?.tls as Record<string, unknown>)?.ecdhCurve).toBe("X25519:P-256:P-384");
   });
 
   test("refuses a provider-owned FetchSession executor only for opted-in hosts", async () => {
@@ -154,7 +208,7 @@ describe("host-scoped classical TLS groups", () => {
     const pin = () => new Error("fixture pin");
     const session = new Bun.FetchSession();
     try {
-      await sendWithConnectionPolicy(fetcher, "https://relay.example/v1",
+      await sendWithConnectionPolicy(builtinFetch(fetcher), "https://relay.example/v1",
         { session, tls: { checkServerIdentity: pin } } as BunFetchRequestInit, builtinBinding);
       expect(observed?.tls?.checkServerIdentity).toBe(pin);
       expect((observed?.tls as Record<string, unknown>)?.ecdhCurve).toBe("X25519:P-256:P-384");
@@ -169,11 +223,11 @@ describe("host-scoped classical TLS groups", () => {
       return new Response("ok");
     }) as typeof fetch;
     registerUpstreamRewriter("test-rewrite", target => { target.url = "https://relay.example/v1"; });
-    await sendWithConnectionPolicy(fetcher, "https://other.example/v1", undefined, builtinBinding);
+    await sendWithConnectionPolicy(builtinFetch(fetcher), "https://other.example/v1", undefined, builtinBinding);
     expect((observed?.tls as Record<string, unknown>)?.ecdhCurve).toBe("X25519:P-256:P-384");
     resetUpstreamRewritersForTests();
     registerUpstreamRewriter("test-rewrite", target => { target.url = "https://other.example/v1"; });
-    await sendWithConnectionPolicy(fetcher, "https://relay.example/v1", undefined, builtinBinding);
+    await sendWithConnectionPolicy(builtinFetch(fetcher), "https://relay.example/v1", undefined, builtinBinding);
     expect(observed?.tls).toBeUndefined();
   });
 });
