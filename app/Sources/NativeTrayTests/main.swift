@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import NativeTray
 
@@ -142,4 +143,85 @@ let unrelatedError = try decode(["errors": ["Usage unavailable"], "providers": [
 check(!NativeTraySwitch.settles(snapshot: unrelatedError, pendingRow: "pool-b:0"), "An unrelated error does not settle")
 let failedSwitch = try decode(["errors": ["The runtime refused that account right now."], "switchFailed": true, "refreshing": false, "providers": []])
 check(NativeTraySwitch.settles(snapshot: failedSwitch, pendingRow: "pool-b:0"), "The host's failure marker settles at once")
+
+// Toggle policy and hit testing: ensure status bar icon toggle collapses rather than loops reopen
+let testNow = Date()
+check(
+    NativeTrayTogglePolicy.evaluate(toggle: false, isVisible: true, unconsumedButtonMouseDown: false, lastDismissedAt: nil, now: testNow) == .present,
+    "Show action without toggle always presents even when visible"
+)
+check(
+    NativeTrayTogglePolicy.evaluate(toggle: true, isVisible: true, unconsumedButtonMouseDown: false, lastDismissedAt: nil, now: testNow) == .dismiss,
+    "Toggle when panel is visible dismisses the panel"
+)
+check(
+    NativeTrayTogglePolicy.evaluate(
+        toggle: true,
+        isVisible: false,
+        unconsumedButtonMouseDown: true,
+        lastDismissedAt: testNow.addingTimeInterval(-0.1),
+        now: testNow
+    ) == .ignoreRecentDismissal,
+    "Toggle right after status-button mouse-down dismissal stays dismissed"
+)
+check(
+    NativeTrayTogglePolicy.evaluate(
+        toggle: true,
+        isVisible: false,
+        unconsumedButtonMouseDown: true,
+        lastDismissedAt: testNow.addingTimeInterval(-0.5),
+        now: testNow
+    ) == .present,
+    "Toggle after grace period presents the panel"
+)
+check(
+    NativeTrayTogglePolicy.evaluate(
+        toggle: true,
+        isVisible: false,
+        unconsumedButtonMouseDown: false,
+        lastDismissedAt: testNow.addingTimeInterval(-0.1),
+        now: testNow
+    ) == .present,
+    "Toggle after dismissal without button mouse-down presents the panel"
+)
+
+let buttonRect = NSRect(x: 100, y: 100, width: 30, height: 22)
+check(NativeTrayHitTest.isNearButton(buttonFrame: buttonRect, point: NSPoint(x: 110, y: 110)), "Inside button frame hits")
+check(NativeTrayHitTest.isNearButton(buttonFrame: buttonRect, point: NSPoint(x: 98, y: 100)), "Within button margin hits")
+check(!NativeTrayHitTest.isNearButton(buttonFrame: buttonRect, point: NSPoint(x: 50, y: 50)), "Outside button frame misses")
+
+// A global monitor's press keeps the position it happened at, wherever the pointer is now.
+let pressPoint = NSPoint(x: NSEvent.mouseLocation.x + 400, y: NSEvent.mouseLocation.y + 300)
+let windowlessPress = NSEvent.mouseEvent(
+    with: .leftMouseDown, location: pressPoint, modifierFlags: [], timestamp: 0,
+    windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+check(MainActor.assumeIsolated { NativeTrayHitTest.screenLocation(of: windowlessPress) } == pressPoint,
+      "A windowless press is hit-tested where it happened, not at the live pointer")
+
+// Button-press sequences, in the order AppKit and Tauri deliver them.
+var press = NativeTrayButtonPress()
+press.record(at: testNow)
+check(press.toggle(isVisible: true, now: testNow.addingTimeInterval(0.05)) == .dismiss,
+      "A press on the icon followed by its toggle closes the open panel")
+check(press.toggle(isVisible: false, now: testNow.addingTimeInterval(0.1)) == .present,
+      "That toggle consumed the press, so the next click on the icon opens the panel")
+
+press = NativeTrayButtonPress()
+press.record(at: testNow)
+press.clear()
+check(press.toggle(isVisible: false, now: testNow.addingTimeInterval(0.1)) == .present,
+      "An outside or right click dismissal forgets an earlier press, so a quick click reopens")
+
+press = NativeTrayButtonPress()
+press.record(at: testNow)
+check(press.toggle(isVisible: false, now: testNow.addingTimeInterval(0.1)) == .ignoreRecentDismissal,
+      "A panel hidden between the icon's press and its toggle stays closed")
+check(press.toggle(isVisible: false, now: testNow.addingTimeInterval(0.15)) == .present,
+      "Only one toggle is absorbed per press")
+
+press = NativeTrayButtonPress()
+press.record(at: testNow)
+check(press.toggle(isVisible: false, now: testNow.addingTimeInterval(1)) == .present,
+      "An expired press does not suppress a later click")
+
 print("PASS: \(assertions) native tray contract/formatting assertions")
