@@ -1122,7 +1122,7 @@
   "loop-reasoning-replay.test.ts": "images", "loop.test.ts": "images",
   "loopback-companion-client-targets.test.ts": "server", "loopback-listener-admission.test.ts": "server",
   "local-control-socket.test.ts": "server", "local-control-socket-windows.test.ts": "server", "loopback-listener-integration.test.ts": "server", "macos-serial-lanes.test.ts": "ci-workflows",
-  "main-account-hard-lock-auth.test.ts": "codex-integration", "main-account-hard-lock-fallback-routing.test.ts": "codex-integration", "main-account-hard-lock-usage-limit.test.ts": "codex-integration",
+  "main-account-hard-lock-auth.test.ts": "codex-integration", "main-account-hard-lock-fallback-routing.test.ts": "codex-integration", "main-account-hard-lock-usage-limit.test.ts": "codex-integration", "main-account-hard-lock-model-refusal.test.ts": "codex-integration",
   "main-account-hard-lock-default.test.ts": "codex-integration",
   "main-account-hard-lock-policy.test.ts": "codex-integration",
   "main-account-hard-lock-refusal-read.test.ts": "codex-integration", "main-account-hard-lock-recovery.test.ts": "codex-integration", "main-account-credit-renewal.test.ts": "codex-integration",
