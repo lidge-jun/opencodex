@@ -309,6 +309,10 @@ on. **Logs** works the same way with `#logs` and `#logs/debug`. An older `#provi
 bookmark now lands on `#providers`.
 
 Cost values in **Logs** and **Usage** are API list-price equivalents calculated from reported tokens.
+An OpenAI Ultrafast request uses the published Ultrafast multiple of the Standard rate for its
+model and request date. When the upstream response does not confirm the tier, the price follows the
+Ultrafast tier the proxy sent, and **Logs** marks that value as an estimate. A tier that was only
+requested keeps the Standard price.
 For a **Logs** Combo that mixes credit and token charges, `≥` means at least one token-priced
 attempt has a known lower bound and every other token-priced attempt is either a known lower
 bound or has a non-estimated amount with observed cache detail.
