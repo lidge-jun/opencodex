@@ -61,8 +61,9 @@ Resume the Goal after that time; routing then picks an account from fresh state.
 
 The same refusal is returned when another pool account was tried first and
 answered that it does not support the requested model. The client sees the main
-account's limit and reset rather than that account's model error. A quota refusal
-from the other account is still returned as before.
+account's limit, with the suggested retry time described above, rather than that
+account's model error. A quota refusal from the other account is still returned
+as before.
 
 ## Stored-account credit metadata retries
 
