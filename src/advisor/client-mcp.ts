@@ -980,29 +980,35 @@ export function unmountAdvisorMcpForClient(
   const paths = spec.resolvePaths(home, env);
 
   let changed = false;
+  // The record names the file OpenCodex wrote. When the client's config directory has moved since, clean that
+  // recorded file, under the same byte-for-byte ownership check, rather than the file the client now uses.
   const recordedPath = readOwnedAdvisorEntries(configDir)[clientId]?.configPath;
-  if (recordedPath && canonicalClientPath(recordedPath) !== canonicalClientPath(paths.mcpConfigPath)) {
-    if (protectedPaths?.mcpPaths.has(canonicalClientPath(recordedPath))) return { ok: true, changed: false };
-    return { ok: false, changed: false, error: `Advisor MCP cleanup needs attention at previously recorded path ${recordedPath}` };
+  const mcpPath = recordedPath ?? paths.mcpConfigPath;
+  const movedFromRecord = canonicalClientPath(mcpPath) !== canonicalClientPath(paths.mcpConfigPath);
+  if (!protectedPaths?.mcpPaths.has(canonicalClientPath(mcpPath)) && !existsSync(mcpPath) && recordedPath) {
+    // Nothing is left to own at the recorded file.
+    const { [clientId]: _gone, ...rest } = readOwnedAdvisorEntries(configDir);
+    writeOwnedAdvisorEntries(configDir, rest);
   }
-  if (!protectedPaths?.mcpPaths.has(canonicalClientPath(paths.mcpConfigPath)) && existsSync(paths.mcpConfigPath)) {
-    const read = readJsonObject(paths.mcpConfigPath);
+  if (!protectedPaths?.mcpPaths.has(canonicalClientPath(mcpPath)) && existsSync(mcpPath)) {
+    const read = readJsonObject(mcpPath);
     if (read.parseError || !read.doc) {
-      return { ok: false, changed: false, error: `Refused to edit invalid JSON in ${paths.mcpConfigPath}` };
+      return { ok: false, changed: false, error: `Refused to edit invalid JSON in ${mcpPath}` };
     }
     if (isPlainObject(read.doc[spec.mcpContainer])) {
       const container = { ...(read.doc[spec.mcpContainer] as JsonObj) };
       const owned = readOwnedAdvisorEntries(configDir);
       const currentText = JSON.stringify(container[ADVISOR_MCP_SERVER_NAME] ?? null);
       // A same-named entry OpenCodex did not record writing is the user's, even with identical content: leave it.
-      if (Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) && ownsAdvisorEntry(owned, clientId, paths.mcpConfigPath, currentText)) {
-        backupOnceBeforeEdit(configDir, spec.id, paths.mcpConfigPath, read.text);
+      if (Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) && ownsAdvisorEntry(owned, clientId, mcpPath, currentText)) {
+        backupOnceBeforeEdit(configDir, spec.id, mcpPath, read.text);
         delete container[ADVISOR_MCP_SERVER_NAME];
         const nextDoc = { ...read.doc, [spec.mcpContainer]: container };
         const nextText = `${JSON.stringify(nextDoc, null, 2)}\n`;
-        atomicWriteFile(paths.mcpConfigPath, nextText);
-        if (paths.sharedWithRouting) {
-          syncOwnershipFingerprintIfClean(configDir, clientId, paths.mcpConfigPath, read.text, nextText);
+        atomicWriteFile(mcpPath, nextText);
+        // A moved file is no longer the Routing-shared one, so its journal is left to detect the drift.
+        if (paths.sharedWithRouting && !movedFromRecord) {
+          syncOwnershipFingerprintIfClean(configDir, clientId, mcpPath, read.text, nextText);
         }
         changed = true;
       }
