@@ -54,6 +54,7 @@ interface PoolEntry {
 export interface StepConversationHost {
   get(ref: StepConversationRef | undefined): StepConversationSession | undefined;
   open(ref: StepConversationRef): Promise<StepConversationSession>;
+  open(ref: StepConversationRef, options: { existingOnly: boolean }): Promise<StepConversationSession | undefined>;
   nextRef(): StepConversationRef;
   rememberHeldTool(ref: StepConversationRef, held: StepHeldTool): void;
   takeHeldTool(ref: StepConversationRef): StepHeldTool | undefined;
@@ -107,7 +108,9 @@ export class StepSessionPool implements StepConversationHost {
   }
 
   /** Open a session for a conversation, coalescing concurrent opens of the same handle. */
-  async open(ref: StepConversationRef): Promise<StepCliSession> {
+  async open(ref: StepConversationRef): Promise<StepCliSession>;
+  async open(ref: StepConversationRef, options: { existingOnly: boolean }): Promise<StepCliSession | undefined>;
+  async open(ref: StepConversationRef, options?: { existingOnly: boolean }): Promise<StepCliSession | undefined> {
     if (this.#closing) throw new StepSessionError("StepCode session pool is closing.");
     const existing = this.get(ref);
     if (existing) return existing;
@@ -122,6 +125,8 @@ export class StepSessionPool implements StepConversationHost {
         "step_cli_pool_full",
       );
     }
+    // A tool result may join an opening session and wait for its turn, but cannot start a conversation.
+    if (options?.existingOnly) return undefined;
     const opening = (async () => {
       const session = await StepCliSession.open(this.#options.buildOptions(), this.#handlers, this.#deps, owned => {
         this.#sessions.add(owned);

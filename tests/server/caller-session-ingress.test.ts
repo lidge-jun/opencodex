@@ -97,4 +97,41 @@ describe("caller session identity through admitted HTTP ingress", () => {
       }
     });
   }
+
+  // #9137: a Responses caller that names its conversation only through prompt_cache_key.
+  for (const transport of ["responses", "ws"] as const) {
+    test(`${transport} promotes a body prompt_cache_key when no session header is sent`, async () => {
+      const fixture = await reserveIngressFixture();
+      const blockedFetch = globalThis.fetch;
+      const wires: Headers[] = [];
+      globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const req = new Request(input, init);
+        if (req.url === "https://chatgpt.com/backend-api/codex/responses") wires.push(req.headers);
+        return blockedFetch(req);
+      }, { preconnect() { /* No fixture opens an upstream socket. */ } });
+      try {
+        const cacheKey = { prompt_cache_key: "omp-cache-key-1" };
+        const local = await fixture.request("local", transport, "openai/gpt-5.6-luna", { authorization: `Bearer ${ACCESS}` }, cacheKey);
+        expect(local.status, local.text).toBe(200);
+        expect(wires.at(-1)!.get("session_id")).toBe("omp-cache-key-1");
+
+        const headers = { "x-opencodex-api-key": PROXY_KEY, authorization: `Bearer ${ACCESS}` };
+        const first = await fixture.request("public", transport, "openai/gpt-5.6-luna", headers, cacheKey);
+        expect(first.status, first.text).toBe(200);
+        const scoped = wires.at(-1)!.get("session_id");
+        expect(scoped).toMatch(/^[a-f0-9]{64}$/);
+        const second = await fixture.request("public", transport, "openai/gpt-5.6-luna", headers, cacheKey);
+        expect(second.status, second.text).toBe(200);
+        expect(wires.at(-1)!.get("session_id")).toBe(scoped);
+
+        const explicit = await fixture.request("local", transport, "openai/gpt-5.6-luna",
+          { authorization: `Bearer ${ACCESS}`, session_id: "explicit-winner" }, cacheKey);
+        expect(explicit.status, explicit.text).toBe(200);
+        expect(wires.at(-1)!.get("session_id")).toBe("explicit-winner");
+      } finally {
+        globalThis.fetch = blockedFetch;
+        await fixture.close();
+      }
+    });
+  }
 });

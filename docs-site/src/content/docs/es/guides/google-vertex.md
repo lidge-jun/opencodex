@@ -32,6 +32,11 @@ predeterminado) y xhigh; Gemini 4 Carbon y Argon ofrecen low, medium y high. Un 
 preajuste no asigna niveles, como `gemini-3-pro`, no muestra ninguno, porque sus solicitudes no
 llevan nivel de razonamiento.
 
+El modelo predeterminado del preajuste sigue siendo `gemini-3-pro` hasta que se verifique para él el
+ciclo de vida de modelos propio de Vertex AI. El [calendario de retirada de la Gemini API](https://ai.google.dev/gemini-api/docs/deprecations)
+cubre AI Studio, no Vertex AI, por lo que no cambia este valor. El descubrimiento en vivo muestra los
+modelos que tu proyecto puede usar; elige uno de ellos como predeterminado si `gemini-3-pro` no figura.
+
 ## Imágenes de herramientas en Gemini 3+
 
 En Vertex AI, los modelos Gemini 3 y posteriores (incluidos `gemini-3.8-flash`, `gemini-4-argon`,

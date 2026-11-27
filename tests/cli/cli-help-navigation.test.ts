@@ -42,6 +42,33 @@ function run(args: string[], columns = "80") {
 }
 
 describe("CLI help navigation", () => {
+  test.each([
+    ["account", "ocx account pool openai --json", "not account availability"],
+    ["config", "ocx config show --source", "not a complete view of the running proxy"],
+    ["connect", "ocx connect status --json", "does not make every management command"],
+    ["models", "ocx models list --json", "may fetch upstream and reconcile discovery state"],
+    ["provider", "ocx provider snapshot --json", "not provider reachability"],
+  ])("family help for %s gives the next inspection and its scope", (family, next, scope) => {
+    const result = run(["help", family]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain(`Inspect first: ${next}`);
+    expect(result.stdout).toContain(scope);
+  });
+
+  test.each([
+    [["account", "strategy"], "ocx account pool openai --json", "Existing bindings follow affinity and recovery policy"],
+    [["account", "pool"], "ocx account pool openai --json", "supported"],
+    [["config", "get"], "ocx config show --source", "validated local settings"],
+    [["models", "new-policy"], "ocx models new-policy --json", "off disables new arrivals"],
+  ])("leaf help for %j gives a read-only next step", (path, next, context) => {
+    const result = run(["help", ...path]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain(`Inspect first: ${next}`);
+    expect(result.stdout).toContain(context);
+  });
+
   test("compact root fits 28 lines and provides the three discovery escapes", () => {
     const output = capture(printUsage);
     expect(output.split("\n").length).toBeLessThanOrEqual(28);

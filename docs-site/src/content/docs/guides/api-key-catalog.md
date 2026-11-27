@@ -9,7 +9,7 @@ stay on that page.
 
 For subscription account rotation, see [`reset-near-weighted`](/reference/configuration/providers/#reset-near-weighted) for the Codex and Anthropic OAuth pools. API-key pools use their own [key selection settings](/reference/configuration/providers/).
 
-opencodex ships 113 built-in presets: 91 key-based, 18 OAuth, three local, and one default
+opencodex ships 114 built-in presets: 92 key-based, 18 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key where the provider can check one, and stores it. Notable entries:
 
@@ -122,6 +122,13 @@ subscriptions and pay-as-you-go by GPU energy, so the estimate is not the amount
 presets. Both regions offer both subscription tiers. The presets keep static chat-model
 lists because upstream discovery also includes non-chat models. Existing selections and
 explicit International endpoint overrides are preserved.
+
+The Beijing preset also lists `qwen4-max`, Alibaba's newest flagship, which the Personal
+Edition model list includes
+([quick start](https://help.aliyun.com/en/model-studio/token-plan-personal-quick-start), checked
+2026-11-26). It accepts text and image input, has a 1,000,000-token context and a 131,072-token
+output ceiling, and takes `low`, `high` or `xhigh` reasoning (default `high`). The
+International preset does not list it because the Team Edition overview does not.
 
 Both presets include `deepseek-v4.1-flash-1017` with text/image input, text output,
 1,000,000 context and `low`/`high`/`max` reasoning (default `high`). Its 393,216 output
@@ -392,6 +399,11 @@ are sent directly to DeepSeek by default instead of through the vision sidecar. 
 `noVisionModels` or text-only declarations remain authoritative. First-party `deepseek-chat`,
 `deepseek-reasoner`, and `deepseek-v4-flash` remain sidecar-backed by default. Zen routes are
 unchanged and were not probed in this update.
+The DeepSeek preset lists `deepseek-flash` (the default), `deepseek-v4-flash`, `deepseek-v4-pro`
+and `deepseek-v4-flash-vision-exp`. DeepSeek discontinued `deepseek-chat` and `deepseek-reasoner`
+on July 24, 2026, and its [API reference](https://api-docs.deepseek.com/api/create-chat-completion)
+accepts only `deepseek-flash` and `deepseek-v4-pro` (checked 2026-11-26), so new installs no
+longer list them. A saved model list keeps whatever it already holds.
 
 > **Three Volcengine billing routes:** `volcengine` is the pay-as-you-go Ark API,
 > `volcengine-coding-plan` consumes Coding Plan quota, and `volcengine-agent-plan` consumes Agent
@@ -986,6 +998,7 @@ The preset uses a **static roster** (`liveModels: false`) taken from the publish
 
 | Model | Context tokens | Upstream selectable effort | Default effort | Reasoning summaries |
 | --- | ---: | --- | --- | --- |
+| `glm-5.4` | 1,048,576 | `low`, `high`, `max` | `max` | Supported |
 | `glm-5.3` | 1,048,576 | `low`, `high`, `max` | `max` | Supported |
 | `glm-5.3-flash` | 1,048,576 | `low`, `high`, `max` | `max` | Supported |
 | `glm-5-turbo` | 204,800 | None (empty list) | `max` | Supported |
@@ -998,6 +1011,11 @@ sidecar and does not claim native BigModel image support.
 `glm-5.3-flash` is the exception: it declares native `text` and `image` input, because
 upstream documents it as a natively multimodal model. It therefore reads pictures
 directly instead of being routed through the describe-it-first sidecar detour.
+
+`glm-5.4` also reads images natively: upstream lists video, image, text and file input for it. The
+GLM Coding Plan offers it on every tier
+([how to switch models](https://docs.bigmodel.cn/cn/coding-plan/latest-model.md), checked 2026-11-26);
+the `zai` and `zhipu-bigmodel-coding` presets list it too, with the local `glm-5.4[1m]` alias.
 
 The default model is `glm-5.3`; Responses reasoning content is preserved on replay.
 The existing Codex export adds its compatibility
@@ -1097,6 +1115,13 @@ not exempt the target. Scheme-specific HTTP(S) proxy variables retain their sepa
 device-flow login for a short-lived Copilot API token — not a pasted API key. **GitLab Duo** remains
 a key/subscription-token gateway on its OpenAI-compatible endpoint. **Cloudflare AI
 Gateway** needs your account + gateway ids filled into the URL.
+
+Copilot's model list comes from your account's live catalog. Before the first successful fetch the
+preset offers a fallback list of current GPT models and defaults to `gpt-5.3-codex`, which GitHub
+names its long-term support model. Models GitHub has retired, such as `gpt-4o`, `gpt-4.1` and
+`gpt-5.5`, are no longer in that fallback
+([supported models](https://docs.github.com/en/copilot/reference/ai-models/supported-models),
+checked 2026-11-26).
 
 Copilot automatically uses Auto when every valid row in a nonempty account catalog explicitly
 reports that manual selection is unavailable. Missing or malformed permissions retain named routes;

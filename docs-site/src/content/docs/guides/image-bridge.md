@@ -30,6 +30,11 @@ xAI Grok Imagine, so the model you're actually chatting with can still generate 
   `images.provider` explicitly hands `/v1/images` to that provider, and its own
   validation errors are returned as-is rather than being retried through xAI.
 
+  For edits routed to xAI, the smaller of `maxInboundBodyBytes` and 100 MiB limits the
+  decompressed JSON request. Each inline image can contain about 66.7 MiB of base64 text.
+  Distinct inline images share a 100 MiB encoded-data budget. HTTPS image URLs count toward
+  the five-source limit and add no inline image data.
+
   ```json
   {
     "providers": {

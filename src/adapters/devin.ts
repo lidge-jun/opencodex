@@ -152,39 +152,92 @@ function hasEffortSuffix(modelId: string): boolean {
 }
 
 /**
- * SWE-2 ships exactly three native lanes. Cognition spells them as the model id,
- * not as a separate effort field, so an explicit caller effort has to be resolved
- * to the UID before the suffix shortcut below accepts whatever the picker sent.
+ * Native effort lanes of Cognition's own SWE families. Cognition spells them as
+ * the model id, not as a separate effort field, so an explicit caller effort has
+ * to be resolved to the UID before the suffix shortcut below accepts whatever the
+ * picker sent. SWE-2 ships three lanes; SWE-2.1 (live catalog 2026-11-25) ships
+ * five, and its bare `swe-2-1` row is the Low lane rather than the default.
  *
  * Kept as a named table rather than an inline branch because the caller-effort
  * set does not carry `ultra`, `off`, or `minimal`, so the two would drift apart
- * silently.
- * Values below Medium select Medium: SWE-2 has no lane under it, and rounding down
- * to nothing would quietly disable its reasoning.
+ * silently. Longer ids come first so `swe-2-1` is never read as `swe-2` with a
+ * `1` suffix.
  */
-const SWE2_EFFORT: Record<string, "medium" | "high" | "max"> = {
-  none: "medium",
-  off: "medium",
-  minimal: "medium",
-  low: "medium",
-  medium: "medium",
-  high: "high",
-  xhigh: "max",
-  ultra: "max",
-  max: "max",
+const SWE_EFFORT_LANES: ReadonlyArray<readonly [family: string, lanes: readonly string[]]> = [
+  ["swe-2-1", ["low", "medium", "high", "xhigh", "max"]],
+  ["swe-2", ["medium", "high", "max"]],
+];
+
+/** Rank of a caller effort on the shared ladder; `ultra` is Max and no-reasoning spellings sit under Low. */
+const SWE_EFFORT_RANK: Record<string, number> = {
+  none: 0, off: 0, minimal: 0, low: 1, medium: 2, high: 3, xhigh: 4, max: 5, ultra: 5,
 };
+const SWE_LANE_RANK: Record<string, number> = { low: 1, medium: 2, high: 3, xhigh: 4, max: 5 };
 
 /**
- * Resolve an explicit effort onto a SWE-2 lane, or undefined when this is not a
- * SWE-2 id or the caller named no usable effort. Reached only when the catalog
- * is unavailable or lacks family metadata; otherwise the catalog's SWE-2 family
+ * Lane each family picks when nothing is asked for, matching the catalog's
+ * isFamilyDefault row (live 2026-11-25), and the lane its bare row actually is.
+ * SWE-2.1's bare `swe-2-1` and `swe-2-1-lightning` rows are Low, so sending
+ * the bare id would quietly run the lowest lane; SWE-2 has no bare row.
+ */
+const SWE_DEFAULT_LANE: Record<string, string> = { "swe-2-1": "medium", "swe-2": "high" };
+const SWE_BARE_ROW_LANE: Record<string, string> = { "swe-2-1": "low" };
+/** Ultrafast is spelled as a trailing `-lightning` on the lane, never `-fast`. */
+const SWE_FAST_SUFFIX = "lightning";
+
+interface SweLaneId { family: string; lanes: readonly string[]; lane?: string; fast: boolean }
+
+/** Read a SWE-2/SWE-2.1 id as family, optional lane and Ultrafast flag; undefined for anything else. */
+function parseSweLaneId(modelId: string): SweLaneId | undefined {
+  for (const [family, lanes] of SWE_EFFORT_LANES) {
+    if (modelId !== family && !modelId.startsWith(`${family}-`)) continue;
+    const tokens = modelId === family ? [] : modelId.slice(family.length + 1).split("-");
+    const fast = tokens[tokens.length - 1] === SWE_FAST_SUFFIX;
+    if (fast) tokens.pop();
+    if (tokens.length > 1 || (tokens.length === 1 && !lanes.includes(tokens[0]!))) continue;
+    return { family, lanes, ...(tokens[0] ? { lane: tokens[0] } : {}), fast };
+  }
+  return undefined;
+}
+
+/**
+ * The family's default row for a bare SWE family id whose bare catalog row is a
+ * measured NON-default lane, e.g. `swe-2-1` (Low) → `swe-2-1-medium`. Families with
+ * no such measurement keep a bare row the catalog lists: SWE-2 ships none, and a
+ * catalog that does list one is trusted as named.
+ */
+function sweFamilyDefaultUid(modelId: string): string | undefined {
+  const parsed = parseSweLaneId(modelId);
+  if (!parsed || parsed.lane || parsed.fast || !SWE_BARE_ROW_LANE[parsed.family]) return undefined;
+  const lane = SWE_DEFAULT_LANE[parsed.family];
+  return lane ? `${parsed.family}-${lane}` : undefined;
+}
+
+/**
+ * Resolve an explicit effort onto a SWE lane, or undefined when this is not a
+ * SWE-2/SWE-2.1 id or the caller named no usable effort. Reached only when the
+ * catalog is unavailable or lacks family metadata; otherwise the catalog's family
  * rows decide, with the same rounding. Undefined leaves every existing
  * path untouched, which is what keeps other model families on suffix precedence.
+ *
+ * An effort lands on the lowest lane at or above it, or the top lane when none is:
+ * a missing rung never quietly turns reasoning down, and below the lowest lane
+ * the lowest lane is used rather than nothing. `fast`, or an id already carrying
+ * `-lightning`, keeps the lane and selects its Ultrafast row.
  */
-function resolveSwe2Variant(modelId: string, reasoningEffort?: string): string | undefined {
-  if (!/^swe-2(?:-(?:medium|high|max))?$/.test(modelId)) return undefined;
-  const mapped = reasoningEffort ? SWE2_EFFORT[reasoningEffort.toLowerCase()] : undefined;
-  return mapped ? `swe-2-${mapped}` : undefined;
+function resolveSweLaneVariant(modelId: string, reasoningEffort?: string): string | undefined {
+  const parsed = parseSweLaneId(modelId);
+  if (!parsed) return undefined;
+  const effort = reasoningEffort?.toLowerCase();
+  const callerFast = effort === "fast";
+  const rank = effort && !callerFast ? SWE_EFFORT_RANK[effort] : undefined;
+  const fast = parsed.fast || callerFast;
+  if (rank === undefined && !fast) return undefined;
+  const { family, lanes } = parsed;
+  const lane = rank !== undefined
+    ? lanes.find((l) => SWE_LANE_RANK[l]! >= rank) ?? lanes[lanes.length - 1]!
+    : parsed.lane ?? (parsed.fast ? SWE_BARE_ROW_LANE[family] : undefined) ?? SWE_DEFAULT_LANE[family] ?? lanes[0]!;
+  return `${family}-${lane}${fast ? `-${SWE_FAST_SUFFIX}` : ""}`;
 }
 
 const VARIANT_EFFORT_TOKENS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -293,12 +346,18 @@ async function resolveWireModelUid(
   // Explicit effort wins over a suffix the picker already baked into the id, so
   // `swe-2-high` asked for at `medium` becomes `swe-2-medium` instead of ignoring
   // the caller. Runs before the shortcut below, which would otherwise return early.
-  const swe2 = resolveSwe2Variant(modelId, reasoningEffort);
-  if (swe2) return swe2;
+  const sweLane = resolveSweLaneVariant(modelId, reasoningEffort);
+  if (sweLane) return sweLane;
   if (hasEffortSuffix(modelId)) return modelId;
   const effort = reasoningEffort && CALLER_EFFORT_VALUES.has(reasoningEffort) ? reasoningEffort : "medium";
   if (entry) {
-    if (entry.byUid.has(modelId)) return modelId;
+    if (entry.byUid.has(modelId)) {
+      // A bare SWE-2.1 row is the Low lane; naming the family still means its default.
+      // A catalog without that row is sent the default anyway, so the request fails with
+      // the Medium row's own error instead of quietly running the Low lane.
+      const familyDefault = sweFamilyDefaultUid(modelId);
+      return familyDefault ?? modelId;
+    }
     const suffixed = `${modelId}-${effort}`;
     if (entry.byUid.has(suffixed)) return suffixed;
     // Any enabled variant of this exact base. The base must match after

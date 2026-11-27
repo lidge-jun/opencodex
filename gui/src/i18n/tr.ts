@@ -1469,6 +1469,8 @@ export const tr: Record<TKey, string> = {
   "logs.detail.stage.headersOnly": "yalnızca başlıklar",
   "logs.detail.stage.protocolPrelude": "protokol ön bölümü",
   "logs.detail.stage.semanticOutput": "çıktı iletildi",
+  "logs.status.streamInterrupted": "Akış kesildi",
+  "logs.detail.streamInterrupted1006": "Yanıt olayları iletildikten sonra sağlayıcıya giden WebSocket bağlantısı beklenmedik şekilde kapandı (1006). Yanıtın tamamlandığı doğrulanamadı.",
   "logs.detail.stage.sideEffect": "yan etki üretildi",
   "logs.detail.stage.terminal": "yanıt iletildi",
   "logs.detail.resend.permitted": "Yeniden gönderilebilir",

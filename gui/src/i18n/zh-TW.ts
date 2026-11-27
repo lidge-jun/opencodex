@@ -3429,6 +3429,8 @@ export const zhTW: Record<TKey, string> = {
   "logs.detail.stage.headersOnly": "僅標頭",
   "logs.detail.stage.protocolPrelude": "協定前導",
   "logs.detail.stage.semanticOutput": "已傳遞輸出",
+  "logs.status.streamInterrupted": "串流中斷",
+  "logs.detail.streamInterrupted1006": "轉送回應事件後，上游 WebSocket 連線異常關閉（1006）。無法確認回應是否完成。",
   "logs.detail.stage.sideEffect": "已產生副作用",
   "logs.detail.stage.terminal": "已傳遞答覆",
   "logs.detail.resend.permitted": "可以重送",

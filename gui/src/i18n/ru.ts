@@ -1442,6 +1442,8 @@ export const ru: Record<TKey, string> = {
   "logs.detail.stage.headersOnly": "только заголовки",
   "logs.detail.stage.protocolPrelude": "начало протокола",
   "logs.detail.stage.semanticOutput": "вывод доставлен",
+  "logs.status.streamInterrupted": "Поток прерван",
+  "logs.detail.streamInterrupted1006": "После передачи событий ответа соединение WebSocket с провайдером аварийно закрылось (1006). Завершение ответа не подтверждено.",
   "logs.detail.stage.sideEffect": "побочный эффект отправлен",
   "logs.detail.stage.terminal": "ответ доставлен",
   "logs.detail.resend.permitted": "Можно отправить повторно",

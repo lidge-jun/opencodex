@@ -34,6 +34,7 @@ import { atomicWriteFile } from "../config/atomic-write";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
 import { getConfigDir } from "../config/paths";
 import { registerOptionalShutdownHook } from "../lib/optional-shutdown-hooks";
+import { recordOwnedConfigPath } from "../lib/config-ownership";
 import type { OcxConfig } from "../types";
 import { GCP_CREDENTIAL_MARKER_PREFIX, isKeychainReference } from "./api-key-resolve";
 import {
@@ -145,6 +146,13 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
   private bumpedAll = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private delayMs = FLUSH_DELAY_MS;
+  /**
+   * False once detached while writes were still pending: the store keeps retrying them for its
+   * home, but the process-wide hold map then belongs to another home and must not be touched.
+   */
+  private active = true;
+  /** Called once a detached store has written everything. */
+  private onDrained: (() => void) | undefined;
 
   constructor(readonly dir: string) {}
 
@@ -153,11 +161,37 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
   /** Pending holds not yet written (diagnostics and tests). */
   get pendingHolds(): number { return this.dirty.size; }
 
-  /** Live rows on disk now, adopting the file's clear counters. Throws on a read error other than a missing file. */
+  /** Pending holds that still carry the current clear counters, for restoring when the store is reattached. */
+  pendingRows(now = Date.now()): ApiKeyCooldownRow[] {
+    return liveRows(this.dirty.values(), Object.assign(epochTable(), Object.fromEntries(this.epochs)), this.allEpoch, now);
+  }
+
+  /** Stop touching the process-wide holds and keep retrying pending writes; `drained` runs once they land. */
+  detachRetrying(drained: () => void): void {
+    this.active = false;
+    this.onDrained = drained;
+    if (this.pending()) this.schedule();
+    else drained();
+  }
+
+  /** Own the process-wide holds again (the store's home is current once more). */
+  reactivate(): void {
+    this.active = true;
+    this.onDrained = undefined;
+  }
+
+  /**
+   * Live rows on disk now, adopting the file's clear counters. While a clear of this store's is not
+   * written yet, every disk row it covers is left out (a peer may have reached the same counter
+   * independently, so the counter alone cannot tell a row recorded after it); only this store's
+   * own pending holds recorded after the clear survive it. Throws on a read error other than a
+   * missing file.
+   */
   load(now = Date.now()): ApiKeyCooldownRow[] {
     const state = readApiKeyCooldownState(this.path);
     this.adopt(state);
-    return liveRows(state.rows, state.epochs, state.allEpoch, now);
+    if (this.bumpedAll) return [];
+    return liveRows(state.rows, state.epochs, state.allEpoch, now).filter(row => !this.bumped.has(row.provider));
   }
 
   /**
@@ -170,13 +204,13 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
     // tagged with it were recorded after that clear and must stay.
     if (written?.all) this.allEpoch = state.allEpoch;
     else if (!this.bumpedAll) {
-      if (this.adopted && state.allEpoch > this.allEpoch) resetLocalApiKeyCooldowns();
+      if (this.active && this.adopted && state.allEpoch > this.allEpoch) resetLocalApiKeyCooldowns();
       this.allEpoch = state.allEpoch;
     }
     for (const [provider, epoch] of Object.entries(state.epochs)) {
       if (written?.providers.has(provider)) { this.epochs.set(provider, epoch); continue; }
       if (this.bumped.has(provider)) continue;
-      if (this.adopted && epoch > (this.epochs.get(provider) ?? 0)) resetLocalApiKeyCooldowns(provider);
+      if (this.active && this.adopted && epoch > (this.epochs.get(provider) ?? 0)) resetLocalApiKeyCooldowns(provider);
       this.epochs.set(provider, epoch);
     }
     this.adopted = true;
@@ -236,6 +270,9 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
           allEpoch: this.bumpedAll && row.allEpoch === this.allEpoch ? allEpoch : row.allEpoch,
         }));
         const rows = liveRows([...disk.rows, ...own], epochs, allEpoch, now);
+        // Registered under this store's home, which can differ from the current config dir when a
+        // surviving server's store is rebound while another home is current.
+        recordOwnedConfigPath(this.dir, path);
         atomicWriteFile(path, JSON.stringify({ version: 1, rows, epochs, allEpoch }));
         written = { rows, epochs, allEpoch };
       }, this.dir);
@@ -248,6 +285,7 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
     const own = { providers: new Set(this.bumped), all: this.bumpedAll };
     this.discardPending();
     if (written) this.adopt(written, own);
+    if (!this.active) { const drained = this.onDrained; this.onDrained = undefined; drained?.(); }
     return true;
   }
 
@@ -258,15 +296,18 @@ export class ApiKeyCooldownStore implements ApiKeyCooldownPersistence {
     this.delayMs = FLUSH_DELAY_MS;
   }
 
-  /** Bounded final write for process shutdown; never blocks for more than about a second. */
-  flushForShutdown(): void {
+  /** Bounded final write for a detach; never blocks for more than about a second. True when nothing is left pending. */
+  flushForShutdown(): boolean {
+    let flushed = false;
     for (let attempt = 0; attempt < SHUTDOWN_ATTEMPTS; attempt += 1) {
       if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
-      if (this.flush()) break;
+      if (this.flush()) { flushed = true; break; }
       if (attempt < SHUTDOWN_ATTEMPTS - 1) Bun.sleepSync(SHUTDOWN_RETRY_MS);
     }
     if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
+    return flushed;
   }
+
 }
 
 /** Keep only rows whose pool entry still exists and still carries the inline key the row was recorded for. */
@@ -279,25 +320,37 @@ export function rowsMatchingCurrentKeys<T extends ApiKeyCooldownHold>(rows: read
 }
 
 let installed: { store: ApiKeyCooldownStore; detach: () => void; detachShutdown: () => void } | undefined;
+/** Detached stores still retrying writes for their home, so reinstalling that home reuses their pending state. */
+const retrying = new Map<string, ApiKeyCooldownStore>();
 
 /**
  * Bind persistence to the running server's config dir and restore holds that are unexpired and
  * still belong to the configured key. The server background lifecycle calls this when a server
- * starts and `uninstallApiKeyCooldownPersistence` when the last one stops; repeat calls for the
- * same dir are no-ops. Installing for another dir first drops the in-memory holds, which belong
- * to the previous home. A failed read leaves the server running with in-memory cooldowns.
+ * starts (and again for the surviving server when a newer one stops) and
+ * `uninstallApiKeyCooldownPersistence` when the last one stops; repeat calls for the same dir are
+ * no-ops. Installing for another dir first drops the in-memory holds, which belong to the previous
+ * home. A failed read leaves the server running with in-memory cooldowns.
  */
-export function installApiKeyCooldownPersistence(config: Pick<OcxConfig, "providers">, now = Date.now()): ApiKeyCooldownStore {
-  const dir = getConfigDir();
+export function installApiKeyCooldownPersistence(
+  config: Pick<OcxConfig, "providers">, now = Date.now(), dir = getConfigDir(),
+): ApiKeyCooldownStore {
   if (installed?.store.dir === dir) return installed.store;
   // Holds restored or recorded for another home are not this home's.
   if (installed) uninstallApiKeyCooldownPersistence({ dropLocalHolds: true });
-  const store = new ApiKeyCooldownStore(dir);
+  // A store still retrying this home's writes carries holds the file may not have yet.
+  const resumed = retrying.get(dir);
+  retrying.delete(dir);
+  resumed?.reactivate();
+  const store = resumed ?? new ApiKeyCooldownStore(dir);
+  let diskRows: ApiKeyCooldownRow[] = [];
   try {
-    restoreApiKeyCooldowns(rowsMatchingCurrentKeys(store.load(now), config), now);
+    diskRows = store.load(now);
   } catch {
-    // An unreadable file restores nothing; later writes still try to persist.
+    // An unreadable file restores nothing from disk; later writes still try to persist.
   }
+  // Pending holds of a resumed store are restored by the counters it last knew; its next flush
+  // re-filters them against the file, so a peer's clear it has not seen yet still wins on disk.
+  restoreApiKeyCooldowns(rowsMatchingCurrentKeys([...diskRows, ...store.pendingRows(now)], config), now);
   installed = {
     store,
     detach: attachApiKeyCooldownPersistence(store),
@@ -318,6 +371,13 @@ export function uninstallApiKeyCooldownPersistence(options: { dropLocalHolds?: b
   installed = undefined;
   current.detach();
   current.detachShutdown();
-  current.store.flushForShutdown();
+  // A busy lock (another process mid-write) must not lose this home's pending holds: the detached
+  // store keeps retrying on its own timer without touching the holds of whichever home is next,
+  // and reinstalling this home picks it up again.
+  if (!current.store.flushForShutdown()) {
+    const { store } = current;
+    retrying.set(store.dir, store);
+    store.detachRetrying(() => { if (retrying.get(store.dir) === store) retrying.delete(store.dir); });
+  }
   if (options.dropLocalHolds === true) resetLocalApiKeyCooldowns();
 }

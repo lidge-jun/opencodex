@@ -17,7 +17,9 @@ import {
   assertChatCompletionsRoutingBody,
   chatRawReasoningVisible,
   ChatCompletionsRequestError,
+  ChatUnsupportedInputModalityError,
 } from "../chat/inbound";
+import { chatBodyVideoRefusal } from "../responses/video-input";
 import { chatSettingsBody, chatToResponsesBody } from "../protocols/codecs/chat";
 import { getCombo } from "../combos/types";
 import { chatConversationToIr, chatIrRouteEvidence, withDirectChatConversation, type ChatIrConversation } from "../protocols/codecs/chat-ir";
@@ -335,6 +337,9 @@ async function handleChatCompletionsWithBudget(
     callerAuthorizationRoute = !routeMayChangeCredentialDomain
       && providerConsumesCallerAuthorization(route.provider);
     if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro") {
+      // Usage estimation serializes the messages; a refused clip is refused before that copy.
+      const videoRefusal = chatBodyVideoRefusal(chatBody);
+      if (videoRefusal) throw new ChatUnsupportedInputModalityError(videoRefusal);
       const parts: string[] = [];
       if (chatBody.messages !== undefined) parts.push(JSON.stringify(chatBody.messages));
       if (chatBody.tools !== undefined) parts.push(JSON.stringify(chatBody.tools));
@@ -360,6 +365,11 @@ async function handleChatCompletionsWithBudget(
       }
     }
   } catch (err) {
+    if (err instanceof ChatUnsupportedInputModalityError) {
+      logCtx.requestedModel = requestedModel;
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
+      return chatCompletionsErrorResponse(400, err.message, "invalid_request_error", err.code);
+    }
     if (err instanceof AnthropicSecondaryInstanceUnavailableError) {
       logCtx.requestedModel = requestedModel;
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 401, { closeReason: "non_stream" });
@@ -490,7 +500,7 @@ async function handleChatCompletionsWithBudget(
       status,
       overflow ? "request translation buffer exceeded the safe limit" : err instanceof Error ? err.message : String(err),
       overflow ? "request_too_large" : undefined,
-      overflow ? "translation_buffer_limit" : undefined,
+      overflow ? "translation_buffer_limit" : err instanceof ChatUnsupportedInputModalityError ? err.code : undefined,
     );
   }
 

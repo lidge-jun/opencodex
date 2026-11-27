@@ -654,6 +654,8 @@ describe("resolveMatchedPrice", () => {
       // exact provider id; tuples come from the official docs.devin.ai
       // modelCostData table (2026-09-13).
       "devin-cli/swe-2",
+      "devin-cli/swe-2-1",
+      "devin-cli/swe-2-1-lightning",
       "devin-cli/swe-1-7",
       "devin-cli/swe-1-7-lightning",
       "devin-cli/swe-1-6",
@@ -667,6 +669,8 @@ describe("resolveMatchedPrice", () => {
       "devin-cli/gemini-3-8-flash",
       "devin-cli/grok-4-6",
       "devin/swe-2",
+      "devin/swe-2-1",
+      "devin/swe-2-1-lightning",
       "devin/swe-1-7",
       "devin/swe-1-7-lightning",
       "devin/swe-1-6",
@@ -714,6 +718,13 @@ describe("resolveMatchedPrice", () => {
     // time-boxed $0 promos are deliberately not baked in.
     for (const [provider, modelId, cost4] of [
       ["devin-cli", "swe-2", { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 }],
+      ["devin", "swe-2-1", { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 }],
+      ["devin-cli", "swe-2-1-lightning", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 0 }],
+      ["devin", "swe-2-1-xhigh-lightning", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 0 }],
+      ["devin-cli", "swe-2-1-low-lightning", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 0 }],
+      ["devin", "swe-2-1-low", { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 }],
+      ["devin-cli", "swe-2-1-max", { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 }],
+      ["devin", "swe-2-1-xhigh", { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 }],
       ["devin", "swe-1-7-lightning", { input: 2.5, output: 12.5, cacheRead: 1, cacheWrite: 0 }],
       ["devin", "gpt-5-6-luna", { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 }],
     ] as const) {

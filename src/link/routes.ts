@@ -1,3 +1,5 @@
+import { matchVideoRoute } from "../lib/video-routes";
+
 const CONTEXT_PATHS = new Set([
   "/v1/alpha/history/v2/list_windows",
   "/v1/alpha/history/v2/list_items",
@@ -28,5 +30,6 @@ export function linkRouteAllowed(url: URL, req: Request): boolean {
     || pathname === "/v1/realtime/calls" || CONTEXT_PATHS.has(pathname)) {
     return req.method === "POST";
   }
+  if (pathname === "/v1/videos" || pathname.startsWith("/v1/videos/")) return matchVideoRoute(req.method, pathname) !== undefined;
   return req.method === "GET" && pathname.startsWith("/v1/opencodex/artifacts/");
 }

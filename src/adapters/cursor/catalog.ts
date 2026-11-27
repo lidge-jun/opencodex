@@ -260,6 +260,17 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "medium", "high", "xhigh"] } },
   },
+  // 261126 preemptive cold-start fallback: Cursor's models page lists Gemini 4 Neon with model ID
+  // gemini-4-neon (cursor.com/docs/models/gemini-4-neon). cursorUmbrellaRows() exposes this row in
+  // CURSOR_STATIC_MODELS before live discovery confirms the account serves it. Cursor publishes no
+  // effort section for Neon, so the ladder is Google's (low..xhigh) and no default is claimed. The
+  // window is Cursor's published 1M maximum, the same value the Hydrogen row uses for that pair.
+  "gemini-4-neon": {
+    displayName: "Gemini 4 Neon",
+    window: CONTEXT_GEMINI,
+    defaultVariant: "regular",
+    variants: { regular: { levels: ["low", "medium", "high", "xhigh"] } },
+  },
   "gemini-4-carbon": {
     displayName: "Gemini 4 Carbon",
     window: CONTEXT_GEMINI,
