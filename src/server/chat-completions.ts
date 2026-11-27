@@ -152,12 +152,11 @@ function codebuddyBaggageSessionId(baggageHeader: string | null): string | undef
   return undefined;
 }
 
-export function deriveChatSessionId(reqHeaders: Headers, chatBody: Rec): string | undefined {
+export function deriveChatSessionId(reqHeaders: Headers, _chatBody: Rec): string | undefined {
   return normalizeSessionCandidate(reqHeaders.get("x-opencode-session"))
     ?? normalizeSessionCandidate(reqHeaders.get("x-session-id"))
     ?? normalizeSessionCandidate(reqHeaders.get("x-conversation-id"))
-    ?? codebuddyBaggageSessionId(reqHeaders.get("baggage"))
-    ?? (typeof chatBody.prompt_cache_key === "string" ? normalizeSessionCandidate(chatBody.prompt_cache_key) : undefined);
+    ?? codebuddyBaggageSessionId(reqHeaders.get("baggage"));
 }
 function routingPolicyRefusalMessage(kind: "unknown" | "unavailable", model: ClientFacingModelLabel): string {
   return kind === "unknown" ? `Unknown routing policy: ${clientFacingModelText(model)}`

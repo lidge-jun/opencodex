@@ -494,7 +494,7 @@ or splitting `tool_call`/`tool_result` pairs.
 active consultation (`isAlive` liveness predicate settled in `finally`) while retaining
 `ADVISOR_INFLIGHT_TTL_MS` for untracked/abandoned claims.
 `src/server/chat-completions.ts` derives `advisorSessionIdentity` from `x-opencode-session`,
-`x-session-id`, `x-conversation-id`, W3C `baggage` `codebuddy.session_id`, and `prompt_cache_key`
+`x-session-id`, `x-conversation-id`, and W3C `baggage` `codebuddy.session_id`
 internally into `parsed._advisorSessionIdentity` (without mutating upstream `session-id` HTTP headers)
 so `policy: adaptive` retains task identity without altering upstream wire headers.
 

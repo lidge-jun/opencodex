@@ -475,7 +475,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
     expect(stdoutLines.join("\n")).toContain("Use poll loop");
   });
 
-  test("chat-completions derives session-id from baggage codebuddy.session_id, headers, and prompt_cache_key", async () => {
+  test("chat-completions derives Advisor session identity from explicit session headers, not cache keys", async () => {
     const { deriveChatSessionId } = await import("../../src/server/chat-completions");
     expect(deriveChatSessionId(
       new Headers({ baggage: "env=prod, codebuddy.session_id=wb-sess-42%2Fabc;k=1" }),
@@ -492,7 +492,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
     expect(deriveChatSessionId(
       new Headers(),
       { prompt_cache_key: "cache-key-77" },
-    )).toBe("cache-key-77");
+    )).toBeUndefined();
     expect(deriveChatSessionId(
       new Headers({ baggage: "codebuddy.session_id=bad%0Anewline" }),
       { prompt_cache_key: "bad\nnewline" },
