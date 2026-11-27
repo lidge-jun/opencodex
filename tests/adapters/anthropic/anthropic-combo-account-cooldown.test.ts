@@ -243,15 +243,15 @@ test("a lone OAuth account without pool cooldown still cools the combo target", 
   expect(sentTokens).toHaveLength(1);
 });
 
-/** The pool's own credit-balance wording (`isAccountRefusal`), on a 402. */
-function creditRefused(): Response {
+/** The pool's own credit-balance wording (`isAccountRefusal`), on a 402 or the 400 Anthropic also sends. */
+function creditRefused(status = 402): Response {
   return Response.json({ type: "error", error: {
     type: "billing_error",
     message: "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
-  } }, { status: 402 });
+  } }, { status });
 }
 
-test("one account's 402 credit refusal does not cool the combo target while a sibling is eligible", async () => {
+test.each([400, 402])("one account's %p credit refusal does not cool the combo target while a sibling is eligible", async status => {
   const ids = await seed(2);
   const config = configFor(() => answered());
   const anthropic = config.providers.anthropic as OcxProviderConfig & { fetch: typeof fetch };
@@ -259,7 +259,7 @@ test("one account's 402 credit refusal does not cool the combo target while a si
   anthropic.fetch = (async (_input, init) => {
     const token = String(new Headers(init?.headers).get("authorization"));
     sentTokens.push(token);
-    return token === `Bearer ${credential(0).access}` ? creditRefused() : answered();
+    return token === `Bearer ${credential(0).access}` ? creditRefused(status) : answered();
   }) as typeof fetch;
   const fallbackSends: string[] = [];
   config.providers.fallback = {

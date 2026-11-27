@@ -4,6 +4,7 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import Usage from "../src/pages/Usage";
 import { LanguageProvider } from "../src/i18n/provider";
+import { LOCALES } from "../src/i18n/shared";
 import { usageV2Copy } from "../src/i18n/v2-pages/usage-copy";
 import { isUsageReport } from "../src/components/v2-usage/usage-validation";
 import { SOURCE_CLIENTS } from "../src/components/v2-usage/usage-source";
@@ -165,8 +166,8 @@ test.each(invalidApps)("rejects invalid optional app data: %s", async (_name, ap
   expect(host.textContent).not.toContain("UNSAFE"); expect(section()).toBeNull();
 });
 
-test("App breakdown copy is present in all eleven locales", () => {
-  for (const locale of ["en", "ko", "de", "fr", "zh", "zh-TW", "ru", "ja", "tr", "vi", "pt"] as const) {
+test("App breakdown copy is present in every registered locale", () => {
+  for (const { code: locale } of LOCALES) {
     const copy = usageV2Copy(locale) as Record<string, string>;
     for (const key of ["apps", "app", "unclassified", "appsUnavailable", "appsEmpty"]) expect(copy[`usageV2.${key}`]?.trim().length).toBeGreaterThan(0);
   }

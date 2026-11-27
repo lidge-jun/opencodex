@@ -176,7 +176,15 @@ export function carryProxyErrorPresentation<T extends object>(source: object, ta
   return target;
 }
 export function isProxyError(value: object): boolean { return proxyErrors.has(value); }
+const proxyQuotaExhaustions = new WeakSet<Response>();
+export function isProxyQuotaExhaustion(response: Response): boolean { return proxyQuotaExhaustions.has(response); }
+export function markProxyQuotaExhaustion(response: Response): Response {
+  proxyQuotaExhaustions.add(response);
+  return markProxyError(response);
+}
 export function carryProxyError<T extends object>(source: object, target: T): T {
+  if (source instanceof Response && target instanceof Response
+    && source.status === target.status && isProxyQuotaExhaustion(source)) markProxyQuotaExhaustion(target);
   return isProxyError(source) ? carryProxyErrorPresentation(source, markProxyError(target)) : target;
 }
 /** The tool guard records only messages it constructs for this response's request context. */

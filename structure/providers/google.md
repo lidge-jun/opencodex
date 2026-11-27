@@ -159,6 +159,17 @@ AI Studio, Vertex and Antigravity retain their own transport contracts. Mocked d
 and thought-signature continuation coverage lives in `tests/providers/opencode-go-gemini-wire.test.ts`;
 these fixtures do not attest live upstream availability.
 
+## Cloud Code Assist Claude prompt compatibility
+
+For Cloud Code Assist, `src/adapters/google.ts` treats `gemini-4-neon` as a Claude SDK
+paragraph rejector alongside `gemini-3.7-flash` and `gemini-3.8-flash`, using the routed
+wire identity and canonical model identity. It removes exact double-newline-delimited paragraphs
+identifying the assistant as a Claude agent built on the Claude Agent SDK, as Claude Code's
+official CLI, or as that CLI running within the Claude Agent SDK. It also rewords the stock
+“Dual-use security tools” authorization sentence as “Dual-purpose security tools” and the
+stock “Text inside <pasted_content> tags” sentence as “Content inside <pasted_content> tags”.
+Other models and non-Cloud Code Assist requests retain these phrases.
+
 ## Google thought-text visibility boundary
 
 Google-family parts with `thought: true` stay separate from assistant output. After a CCA

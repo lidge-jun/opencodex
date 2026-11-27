@@ -340,6 +340,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `baseUrl` | `string` | Upstream API base URL. Most built-in fixed endpoints ignore a mismatch; collision-safe key presets preserve an older same-named custom destination. |
 | `proxy?` | `string \| null` | Per-provider egress route. Omit it to inherit the global proxy decision; use `"direct"` or `null` to force direct egress; or provide an absolute `http://`, `https://`, `socks5://`, or `socks5h://` proxy URL. An empty string is rejected. |
 | `noProxy?` | `string \| string[]` | Destinations this provider reaches directly, using `NO_PROXY` host-pattern syntax. A match bypasses both this provider's own proxy and an inherited global proxy. |
+| `videoApi?` | `"xai" \| "openai"` | Video job API this row speaks when it serves video. Omitted or `"xai"` keeps the xAI wire. `"openai"` selects the OpenAI Videos wire (`POST /videos`, `GET /videos/{id}`, `GET /videos/{id}/content`) and lets the row serve the public `/v1/videos` endpoint. The `xai` row always uses the xAI wire. See [Video Bridge](/guides/video-bridge/#openai-videos-api-backends). |
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models?, keySelection?, keys? }` | Optional client-side outbound request-start pacing, separate from upstream usage, billing, and rate-limit indicators. RPM is converted to an even interval; `minIntervalMs` may impose a longer interval. `maxConcurrentRequests` is a positive integer cap on in-flight requests. A provider or model rule may use the concurrency cap alone; provider limits apply across all models, while `models` entries use exact upstream model IDs (for example `nvidia/llama-3.1-nemotron-ultra-253b-v1`) and can only add delay or narrow concurrency. Queue waits do not consume the upstream response-header timeout. HTTP and explicit adapter `fetchResponse`/`runTurn` dispatches are covered. A concurrency-capped canonical Responses WebSocket turn uses HTTP/SSE so its lease can be released when the response body completes, errors, or is cancelled. For `runTurn` adapters, including Cursor, the cap counts active turns rather than physical sends: RunSSE and BidiAppend may overlap within one turn, while another turn waits. Follow-up sends still obey start intervals. |
 | `requestPacing.keySelection?` | `"active"`, `"round-robin"` | Normal-request key selection. Default `active` preserves the saved key and existing failure rotation; `round-robin` distributes request-local selections across eligible API-key pool references without changing the saved active key. It balances allocations, not tokens or cost. |
 | `requestPacing.keys?` | `{ requestsPerMinute?, minIntervalMs?, maxConcurrentRequests? }` | Uniform per-key-reference RPM, minimum start interval and concurrency limits, shared across models. These compose with provider and exact-model upper bounds. Duplicate references share a bucket; separate references in one upstream project do not imply independent quota. TPM and daily quotas are not enforced. |
@@ -509,7 +510,7 @@ For multiple API-key pool entries, opt into normal-request distribution separate
 
 This admits at most ten active requests across the provider and one per credential reference, with starts on each reference at least four seconds apart. These are local upper bounds, not a promise of upstream capacity. A provider-wide RPM setting, when present, remains an aggregate limit and does not multiply with key count. Key limits span models; model rules remain additional restrictions. Projects sharing quota need an appropriate aggregate limit; TPM and daily quotas are not tracked here.
 
-Round-robin selects keys per request without saving a new active key. Known 401/429 cooldowns are skipped; when none remains eligible, new requests receive a retryable 429 instead of repeatedly sending. Already queued work normally retains its selected key and may wait behind that key even when another is idle. If that selection becomes cooled or invalid, the request selects an eligible key again and reacquires pacing admission for it; the bounded queue expires rather than waiting forever. Selection and diagnostics are process-local, reset on restart, and do not equal balanced token usage or billing. Starts count pacing admissions, including work cancelled before dispatch. OAuth and forwarded credentials keep their existing selection. The dashboard shows key handles, starts, in-flight work, queued work and known cooldowns, never secret key values. These limits cover the inference pacing executor, not the standalone Images relay's direct fetch.
+Round-robin selects keys per request without saving a new active key. Known 401/429 cooldowns are skipped; when none remains eligible, new requests receive a retryable 429 instead of repeatedly sending. Already queued work normally retains its selected key and may wait behind that key even when another is idle. If that selection becomes cooled or invalid, the request selects an eligible key again and reacquires pacing admission for it; the bounded queue expires rather than waiting forever. Selection and diagnostics are process-local, reset on restart, and do not equal balanced token usage or billing. Known cooldowns of inline keys are the exception: a hold from a 401, 429 or billing refusal is saved in `api-key-cooldowns.json` in the config directory and still applies after a restart until it expires. Replacing the key under that pool entry or clearing it from key management drops the hold. Keys given as an environment or keychain reference keep their cooldowns in memory only. Starts count pacing admissions, including work cancelled before dispatch. OAuth and forwarded credentials keep their existing selection. The dashboard shows key handles, starts, in-flight work, queued work and known cooldowns, never secret key values. These limits cover the inference pacing executor, not the standalone Images relay's direct fetch.
 
 ### Azure OpenAI model metadata discovery
 
@@ -535,9 +536,9 @@ and `modelContextWindows` for that exact id when needed. Unknown ids are not gue
 
 ### What a provider save keeps
 
-`POST /api/providers` with the name of an existing provider replaces the stored row with one built from the request. The dashboard's add/edit form cannot send every field, so the save keeps some stored fields the request omits. Fourteen of them record how one upstream behaves: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools` and `forwardAdvisorTool`.
+`POST /api/providers` with the name of an existing provider replaces the stored row with one built from the request. The dashboard's add/edit form cannot send every field, so the save keeps some stored fields the request omits. Fifteen of them record how one upstream behaves: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`, `unsupportedHostedTools`, `unsupportedHostedToolsWithClientTools`, `forwardAdvisorTool` and `videoApi`.
 
-| Save | The fourteen settings | Stored `apiKeyPool` |
+| Save | The fifteen settings | Stored `apiKeyPool` |
 | --- | --- | --- |
 | Same destination, field omitted | Stored value kept, including an explicit `[]` or `false` | Kept |
 | New destination, field omitted | Not kept; registry defaults for the new destination may apply | Not kept |
@@ -598,6 +599,13 @@ to choose direct egress explicitly.
 `noProxy` accepts a comma-separated string or an array of strings in `NO_PROXY` syntax. It is
 evaluated for each request. A matching destination goes direct whether the provider would otherwise
 use its own `proxy` or inherit a global proxy.
+
+An HTTP(S) `proxy` on a provider and a process `NO_PROXY` entry that matches the same destination
+cannot both apply, because the runtime would connect directly. Such a request is refused rather than
+sent without the configured proxy. List the host in the provider's `noProxy` to connect directly, or
+remove it from `NO_PROXY` to keep the proxy. While `NO_PROXY` is set, a redirect answered to such a
+request is refused rather than followed, because the next hop could leave without the proxy. A
+`socks5://` or `socks5h://` proxy is not affected.
 
 #### What the route covers
 
@@ -1418,6 +1426,7 @@ provider in question.
 `apiKeys[]` entries contain `id`, `name`, generated `key`, and ISO `createdAt` strings. Optional `allowMeteredComboTargets: true` explicitly permits targets marked `metered: true`; omitted or false consent denies them. The environment token never qualifies. Local loopback-only callers can instead use per-combo `allowMeteredTargets: true`; configured-key and linked callers still need key consent. See [Metered fallback consent](/guides/combos/#metered-fallback-consent).
 `codexAccounts[]` entries require `id`, `email`, and `isMain`, with optional `plan`,
 `chatgptAccountId`, and privacy-safe `logLabel`. These records are normally dashboard-managed.
+An optional `egress` object gives one pool account its own route, with the same `proxy` and `noProxy` values as a provider's [per-provider egress](#per-provider-egress): an account `proxy` replaces the `openai` provider's for that account's requests, compactions, token refreshes, usage checks, warmups, model discovery and reset-credit calls, and the usage check and warmup after signing in; an omitted `proxy` keeps the provider's, and the account's `noProxy` entries apply ahead of the provider's. Pool background calls now follow `providers.openai.proxy`, and a per-account `egress` overrides it: a pool account without an `egress` object sends those calls by the `openai` provider's route too. If `config.json` is missing or cannot be read, or a stored account credential is no longer listed in `codexAccounts` (for example, removed while a call was in flight), the call is refused instead of sent without the configured route. The main login has no pool entry and always uses the provider's route.
 
 ### `tokenGuardian` (`OcxTokenGuardianConfig`)
 
@@ -1661,7 +1670,7 @@ API keys and credential references can be stored in the OS credential store (mac
 
 ## Static model allowlists
 
-The `zhipu-bigmodel-responses` preset seeds `glm-5.3`, `glm-5.3-flash` and `glm-5-turbo` with
+The `zhipu-bigmodel-responses` preset seeds `glm-5.4`, `glm-5.3`, `glm-5.3-flash` and `glm-5-turbo` with
 `liveModels: false` for `https://open.bigmodel.cn/api/v1`. Its static roster and
 per-model context, effort, and summary metadata come from the
 [BigModel Responses guide](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses).
@@ -1823,18 +1832,21 @@ See the [reasoning-effort diagnostic limits](/guides/providers/#reasoning-effort
 ## Routed agent messages
 
 With the [`openai-responses` adapter](/reference/adapters/#openai-responses), Codex
-`agent_message` items containing nonempty arrays of supported plaintext parts become user messages when `authMode` is not `"forward"`
-(for example, `"key"`). Providers using `authMode: "forward"` retain these items unchanged.
+`agent_message` items containing nonempty arrays of supported parts (`input_text`, `input_image`
+or `input_file`) become user messages when `authMode` is not `"forward"` (for example, `"key"`).
+Providers using `authMode: "forward"` retain these items unchanged.
 `agent_message` is private to the ChatGPT Codex backend, and the routed destinations
 reported so far answer the whole request with
 `422 unknown item type "agent_message"`; Codex replays sub-agent history on every
 subsequent turn, so the thread keeps failing until the item is converted.
 Author and recipient remain explicit text metadata, and the content parts are preserved.
-For HTTPS `api.x.ai` and `cli-chat-proxy.grok.com` on the standard port, non-forward
+For HTTPS `api.x.ai`, `us.api.x.ai` and `cli-chat-proxy.grok.com` on the standard port, non-forward
 Responses dispatch also accepts a nonblank string child result and turns it into one
 `input_text` part. The original string, including leading/trailing whitespace and newlines,
 is preserved. Other destinations keep string-valued agent messages unchanged. Empty or
-whitespace-only strings remain unchanged, as do incomplete and mixed encrypted/unknown shapes.
+whitespace-only strings remain unchanged, as do empty content arrays and arrays that mix in
+encrypted or unknown parts. A nonempty array whose parts all use a supported type is converted
+as sent, even when a part lacks its expected field.
 Encrypted and unknown content is not normalized; native encrypted tasks still require the
 separate opt-in [task recovery](/reference/configuration/agents/#encrypted-v2-task-recovery).
 
@@ -1860,7 +1872,7 @@ contracts.
 
 ### Per-model capability declarations
 
-`modelCapabilities` stores explicit declarations keyed by exact upstream model ID. IDs preserve case and must not contain surrounding whitespace. Each entry may contain `inputModalities` (`text`, `image`, `audio`, `video`), `contextTier` (`default`, `long_context`), `video.processing` (`static`, `agentic`), `deepseekImageFiles` (`boolean`; see [DeepSeek image bytes](#deepseek-tokens-versus-image-bytes)), `mistralMaxImages` (integer 1–1000; see [Mistral images per request](#mistral-images-per-request)), and `responsesCustomTools` (`boolean`). These are operator declarations, not proof of provider support. Context-tier and video fields currently record intent only and do not activate upstream behavior or increase catalog windows. `responsesCustomTools` overrides `supportsResponsesCustomTools` for that exact final wire model; an absent model value inherits the provider value (an operator setting or the registry default, such as `false` for xAI and OpenGateway), and when neither is set native Responses custom tools are preserved.
+`modelCapabilities` stores explicit declarations keyed by exact upstream model ID. IDs preserve case and must not contain surrounding whitespace. Each entry may contain `inputModalities` (`text`, `image`, `audio`, `video`), `contextTier` (`default`, `long_context`), `video.processing` (`static`, `agentic`), `deepseekImageFiles` (`boolean`; see [DeepSeek image bytes](#deepseek-tokens-versus-image-bytes)), `mistralMaxImages` (integer 1–1000; see [Mistral images per request](#mistral-images-per-request)), and `responsesCustomTools` (`boolean`). These are operator declarations, not proof of provider support. `video` in `inputModalities` lets the translated Chat route send that model the Chat `video_url` part; without it a video is refused before send (see [video input](/reference/adapters/#video-input-on-translated-routes)). Context-tier and `video.processing` fields currently record intent only and do not activate upstream behavior or increase catalog windows. `responsesCustomTools` overrides `supportsResponsesCustomTools` for that exact final wire model; an absent model value inherits the provider value (an operator setting or the registry default, such as `false` for xAI and OpenGateway), and when neither is set native Responses custom tools are preserved.
 
 The raw provider editor and provider API expose this map. POST/PUT replace an explicitly supplied map and reject null entries. PATCH merges individual axes; null clears a map, model, axis or video processing value, while `{}` makes no change. Omitted provider overwrites preserve the existing map. Malformed hand-edited files retain valid independent axes and treat malformed explicit input modalities as text-only, with a diagnostic.
 

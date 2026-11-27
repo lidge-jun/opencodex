@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { captureCatalogAdmissionSnapshot } from "../../src/codex/catalog-admission";
@@ -51,7 +52,7 @@ async function snapshot(main: unknown[], pool: unknown[] = [], mainFails = false
   });
 }
 
-beforeEach(() => resetCodexModelEntitlementCacheForTests());
+beforeEach(() => { resetCodexModelEntitlementCacheForTests(); bindStoredCodexPoolRoutingForTests(["synthetic-pool"]); });
 
 test("confirmed main roster projects only its bounded message onto a bare native row", async () => {
   const result = await snapshot([rosterRow(MODEL, { message: `  ${"M".repeat(2_100)}  `, extra: "ignored" })],

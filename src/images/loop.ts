@@ -46,8 +46,8 @@ import {
 import { parseStreamWithProgress, withHeartbeats, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "../web-search/progress-stream";
 import { fulfillImageCall } from "./fulfill";
 import { parseVideoCallArgs, pollVideoWithHeartbeats, buildVideoResult, createVideoBudget } from "./fulfill-video";
-import { submitVideoJob } from "./xai-video-client";
-import { downloadVideoToArtifact, createImageBudget, pruneArtifacts } from "./artifacts";
+import { videoWireFor } from "./video-wire";
+import { createImageBudget, pruneArtifacts } from "./artifacts";
 import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "./synthetic-tool";
 import type { ImageBridgePlan, VideoBridgePlan } from "./types";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
@@ -1090,8 +1090,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                   const lastFrame = vArgs.lastFrame === undefined ? undefined : resolveInput(vArgs.lastFrame);
                   const keyframes = vArgs.keyframes?.map(frame => ({ ...frame, image: resolveInput(frame.image) }));
                   const referenceImages = vArgs.referenceImages?.map(resolveInput);
+                  const wire = videoWireFor(videoAuth);
                   paidVideoCalls += 1;
-                  const { requestId } = await submitVideoJob(
+                  const { requestId } = await wire.submit(
                     {
                       prompt: vArgs.prompt, model: videoPlan!.model,
                       ...(image !== undefined ? { image } : {}),
@@ -1108,8 +1109,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                   if (remainingMs <= 0) {
                     vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: `video generation timed out after ${Math.floor(videoTimeout / 1000)}s` };
                   } else {
-                  const pollGen = pollVideoWithHeartbeats(requestId, videoAuth, linkedDeadline, remainingMs);
-                  let pollResult: { ok: true; videoUrl: string } | { ok: false; error: string };
+                  const pollGen = pollVideoWithHeartbeats(requestId, videoAuth, linkedDeadline, remainingMs, undefined, wire.poll, wire.requireUrl);
+                  let pollResult: { ok: true; videoUrl?: string } | { ok: false; error: string };
                   try {
                     for (;;) {
                       const { value, done } = await pollGen.next();
@@ -1121,7 +1122,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                   }
                   if (signal.aborted) throw new LoopError(499, "client closed request during video-bridge");
                   if (pollResult.ok) {
-                    const dlPath = await downloadVideoToArtifact(pollResult.videoUrl, vBudget, signal);
+                    const dlPath = await wire.download(requestId, pollResult.videoUrl, videoAuth, vBudget, signal);
                     vResult = buildVideoResult(dlPath, vArgs.prompt, videoPlan!.model);
                   } else {
                     vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: pollResult.error };

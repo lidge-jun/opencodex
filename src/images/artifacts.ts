@@ -500,7 +500,16 @@ export async function downloadVideoToArtifact(
     try { await resp.body?.cancel(); } catch { /* ignore */ }
     throw new Error("video download failed: " + resp.status);
   }
+  return writeVideoResponseToArtifact(resp, budget);
+}
 
+/**
+ * Stream a successful video response body to a new artifact file under the same 200 MiB cap and
+ * per-turn budget as {@link downloadVideoToArtifact}, sniffing MP4/WebM from the first bytes. The
+ * caller owns the request that produced `resp` (its destination, credential and status check);
+ * this only decides what reaches disk.
+ */
+export async function writeVideoResponseToArtifact(resp: Response, budget?: VideoBudget): Promise<string> {
   const dir = getArtifactsDir();
   await mkdir(dir, { recursive: true, mode: 0o700 });
 

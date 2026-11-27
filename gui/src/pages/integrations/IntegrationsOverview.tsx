@@ -11,6 +11,7 @@ import IntegrationStateBadge from "./IntegrationStateBadge";
 import ConsequenceDialog, { type ConsequenceCopy } from "./ConsequenceDialog";
 import RestoreDialog from "./RestoreDialog";
 import { RollbackHistory } from "./RollbackHistory";
+import ConnectionsPanel from "./ConnectionsPanel";
 import { describeRefusal } from "./refusal-copy";
 import { previewRecoveryFor, type PreviewRecovery } from "./preview-recovery";
 import { loadCursorIntegrationStatus } from "./cursor-api";
@@ -897,6 +898,9 @@ export default function IntegrationsOverview({
           <p>{t("integrations.empty.body")}</p>
         </div>
       )}
+
+      {/* Read-only: where Codex and Claude go now, who owns their files, what switching back changes. */}
+      <ConnectionsPanel apiBase={apiBase} active={active} />
 
       <h3>{t("integrations.rollback.title")}</h3>
       {/*

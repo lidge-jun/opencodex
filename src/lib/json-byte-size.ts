@@ -57,36 +57,51 @@ export function jsonUtf8Bytes(value: unknown, limit = TRANSLATOR_MAX_TURN_BYTES)
       else add(3);
     }
   };
+  // Iterative walk: caller-controlled data (tool schemas, request bodies) can nest deeper than
+  // the call stack allows. One frame per open container keeps the recursive visit order, so
+  // the walk stops at the first element that exceeds the budget however wide the container is.
+  type Frame =
+    | { readonly array: readonly unknown[]; index: number }
+    | { readonly object: Record<string, unknown>; readonly keys: readonly string[]; index: number; first: boolean };
+  const stack: Frame[] = [];
   const visit = (item: unknown): void => {
     if (item === null) { add(4); return; }
     if (typeof item === "string") { string(item); return; }
     if (typeof item === "boolean") { add(item ? 4 : 5); return; }
     if (typeof item === "number") { add(Number.isFinite(item) ? String(item).length : 4); return; }
-    if (Array.isArray(item)) {
+    if (Array.isArray(item)) { add(2); stack.push({ array: item, index: 0 }); return; }
+    if (typeof item === "object") {
       add(2);
-      for (let i = 0; i < item.length; i++) {
-        if (i > 0) add(1);
-        if (item[i] === undefined) add(4);
-        else visit(item[i]);
-      }
-      return;
-    }
-    if (typeof item === "object" && item !== null) {
-      add(2);
-      let first = true;
-      for (const key of Object.keys(item)) {
-        const field = (item as Record<string, unknown>)[key];
-        if (field === undefined) continue;
-        if (!first) add(1);
-        first = false;
-        string(key);
-        add(1);
-        visit(field);
-      }
+      stack.push({ object: item as Record<string, unknown>, keys: Object.keys(item), index: 0, first: true });
       return;
     }
     throw new TypeError("Expected plain JSON data for translation sizing");
   };
   visit(value);
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1]!;
+    if ("array" in frame) {
+      if (frame.index >= frame.array.length) { stack.pop(); continue; }
+      const index = frame.index++;
+      if (index > 0) add(1);
+      const element = frame.array[index];
+      if (element === undefined) add(4);
+      else visit(element);
+      continue;
+    }
+    let field: unknown;
+    let key: string | undefined;
+    while (frame.index < frame.keys.length) {
+      const candidate = frame.keys[frame.index++]!;
+      field = frame.object[candidate];
+      if (field !== undefined) { key = candidate; break; }
+    }
+    if (key === undefined) { stack.pop(); continue; }
+    if (!frame.first) add(1);
+    frame.first = false;
+    string(key);
+    add(1);
+    visit(field);
+  }
   return bytes;
 }

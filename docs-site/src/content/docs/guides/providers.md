@@ -298,6 +298,15 @@ eligible Enterprise accounts. Cloud Code Assist serves Argon only to the Antigra
 OpenCodex sends every Gemini 4 model request and model discovery with the CLI User-Agent
 (`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model. Gemini 4 Hydrogen (low, medium, high by default, and xhigh) appears on `google-antigravity` only when your account's model list includes it, each level mapping to its `gemini-4-hydrogen-*` wire model; requesting `max` or `ultra` also selects xhigh.
 
+The `google` preset lists Gemini 4 Neon, Hydrogen, Carbon and Argon, Gemini 3.8 Flash, Gemini 3.6
+Flash, Gemini 3.5 Flash-Lite and Gemini 3.1 Pro Preview, and defaults to `gemini-3.6-flash`.
+Google no longer offers `gemini-3.5-flash` or `gemini-3.7-flash` in AI Studio and routes their
+endpoints to `gemini-3.6-flash` and `gemini-3.8-flash`
+([deprecations](https://ai.google.dev/gemini-api/docs/deprecations), checked 2026-11-26), so new
+installs no longer list them. A saved model list keeps them, and a saved selection keeps working. Usage estimates for Gemini 4 Argon and
+Carbon use Google's list rate of $4 input, $20 output and $0.20 cached input per million tokens.
+The introductory rate that runs through November 30, 2026 is not applied.
+
 Vertex AI model discovery, its credential rules and how Vertex Gemini 3+ models (including Gemini 4 Argon, Carbon, Hydrogen and Neon)
 receive tool images are described in [Google Vertex AI](/guides/google-vertex/).
 
@@ -507,7 +516,9 @@ endpoint migrate to `kimi-k3.1-pro`, refreshing old built-in context and reasoni
 preserving explicit overrides. Custom destinations keep their saved selections. `kimi-k2.6` and
 `kimi-k2.7-code` (including highspeed) remain selectable for existing users: Moonshot closes the
 K2 series to new accounts on 2026-10-31 and plans to retire it by the end of December 2026; see the
-[Kimi API model list](https://platform.kimi.ai/docs/models.md) (checked 2026-10-28).
+[Kimi API model list](https://platform.kimi.ai/docs/models.md) (checked 2026-10-28) and the
+[Kimi API pricing page](https://platform.kimi.ai/docs/pricing/chat), which still states that plan on
+2026-11-26. The seeds keep both ids until Moonshot publishes the retirement date.
 
 A custom `openai-chat` provider can opt in when its upstream documents support for
 `prompt_cache_key`:
@@ -814,6 +825,16 @@ are on the [API-key catalog](/guides/api-key-catalog/) page. Its sections:
   - [Subscription tier in account listings](/guides/api-key-catalog/#subscription-tier-in-account-listings)
 - [GPT-5.6 preview paths](/guides/api-key-catalog/#gpt-56-preview-paths)
 - [Ollama Cloud](/guides/api-key-catalog/#ollama-cloud)
+
+### RunAPI
+
+[RunAPI](https://runapi.co) is a Standard sponsor. Select **RunAPI** in **Add provider** or
+run `ocx provider add runapi` and enter a RunAPI API key. The preset uses OpenAI Chat
+Completions with the base URL `https://runapi.co/v1`, and live discovery lists the models your
+key can use. RunAPI is a unified gateway to 200+ models from OpenAI, Anthropic, Google, xAI,
+DeepSeek, Alibaba, Moonshot and others, billed pay-as-you-go. RunAPI also serves the same API at
+`https://runapi.host`, a mirror for networks that cannot reach `runapi.co`; to use it, change the
+provider's base URL to `https://runapi.host/v1`.
 
 ## 4. Local providers
 

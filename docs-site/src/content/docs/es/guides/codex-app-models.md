@@ -225,7 +225,7 @@ dependen del proveedor; ni el menú ni una solicitud prueban por sí solos qué 
 
 ### Selección ultra rápida en el escritorio Codex
 
-Para un proveedor que admita `service_tier: "ultrafast"`, declare esa asignación de cables una vez. opencodex publica entonces **Ultra rápido** en el menú de velocidad nativo Codex del modelo enrutado; no hay necesidad de editar `opencodex-catalog.json` después de cada sincronización. Por ejemplo, fusione estos campos en un proveedor API configurado para GPT-6.1 Sol:
+Para un proveedor que admita `service_tier: "ultrafast"`, declare esa asignación de cables una vez. opencodex publica entonces **Ultrafast** en el menú de velocidad nativo Codex del modelo enrutado; no hay necesidad de editar `opencodex-catalog.json` después de cada sincronización. Por ejemplo, fusione estos campos en un proveedor API configurado para GPT-6.1 Sol:
 
 ```json
 {
@@ -239,7 +239,7 @@ Para un proveedor que admita `service_tier: "ultrafast"`, declare esa asignació
 }
 ```
 
-La asignación se aplica a todos los modelos Fast-elegibles en ese proveedor. Utilice una entrada de proveedor independiente si solo algunos de sus modelos son compatibles con Ultra Fast. Mantenga el modo rápido de opencodex en **Auto** (omit `fastMode` ) para que la selección de velocidad de la aplicación llegue al proveedor; forzó a Fast a enviar `priority`, y forzó a Default a dejar caer el nivel. Actualizar el catálogo de modelos, reiniciar el escritorio Codex si todavía tiene la lista anterior, seleccione el modelo enrutado y luego elija **Ultra rápido** en su menú de velocidad. El estándar sigue siendo el valor predeterminado.
+La asignación se aplica a todos los modelos Fast-elegibles en ese proveedor. Utilice una entrada de proveedor independiente si solo algunos de sus modelos son compatibles con Ultra Fast. Mantenga el modo rápido de opencodex en **Auto** (omit `fastMode` ) para que la selección de velocidad de la aplicación llegue al proveedor; forzó a Fast a enviar `priority`, y forzó a Default a dejar caer el nivel. Actualizar el catálogo de modelos, reiniciar el escritorio Codex si todavía tiene la lista anterior, seleccione el modelo enrutado y luego elija **Ultrafast** en su menú de velocidad. El estándar sigue siendo el valor predeterminado.
 
 Solo un cable `service-tier` elegible con una asignación explícita de `ultrafast → ultrafast` agrega esta opción a las filas enrutadas; el soporte Fast ordinario o un nombre similar a GPT es insuficiente. Esa asignación enrutada no se aplica a filas nativas/de cuenta o alias combinados. La eliminación de la asignación o la desactivación del soporte de nivel de servicio de ese modelo elimina la opción enrutada generada tanto del catálogo como de la caché en la siguiente sincronización exitosa. La declaración activa también controla la opción Ultra Fast cuando Codex carga su lista de modelos sobre HTTP.
 

@@ -147,6 +147,16 @@ describe("translated pages do not contradict the English source", () => {
     });
   }
 
+  test("the English save paragraph and table state the carried-setting count the list has", async () => {
+    // Translations restate the same number, so a drifted English count is the one to catch first.
+    const words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
+      "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"];
+    const word = words[PROVIDER_COMPAT_CARRY_FIELDS.length]!;
+    const doc = await read(ENGLISH_REFERENCE);
+    expect(doc).toContain(word[0]!.toUpperCase() + word.slice(1) + " of them record how one upstream behaves");
+    expect(doc).toContain("| Save | The " + word + " settings |");
+  });
+
   test("the English pages carry roles worth comparing", async () => {
     expect(roleSpans(await referenceRow(ENGLISH_REFERENCE)).length).toBeGreaterThan(0);
     expect(roleSpans(await guideParagraph(ENGLISH_GUIDE)).length).toBeGreaterThan(0);

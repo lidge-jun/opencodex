@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { planAnthropicServerTools } from "../../src/adapters/anthropic/advisor-tool";
+import { videoWireFor } from "../../src/images/video-wire";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 import { loadConfig, saveConfig } from "../../src/config";
 import * as destinationPolicy from "../../src/lib/destination-policy";
@@ -215,6 +216,11 @@ const CASES: Record<ProviderCompatCarryField, CarryCase> = {
     // The Anthropic adapter's server-tool plan for this (non-first-party) gateway.
     probe: provider => planAnthropicServerTools({ ...provider, adapter: "anthropic" },
       [{ type: "advisor_20260301", name: "advisor", model: "claude-opus-4-8" }], undefined, new Set(), false).declared,
+  },
+  videoApi: {
+    seed: { videoApi: "openai" },
+    // The bridge wire this row's video jobs use: the OpenAI wire finishes from /content, not a URL.
+    probe: provider => videoWireFor(provider).requireUrl,
   },
 };
 

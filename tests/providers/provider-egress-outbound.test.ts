@@ -113,24 +113,26 @@ describe("per-provider egress on the discovery and quota transport", () => {
     }
   });
 
-  test("a provider proxy applies where global NO_PROXY exempts the host", async () => {
-    // The operator named this proxy for this provider. A global bypass list describes the
-    // global route and must not silently cancel the provider's own choice; the exemption that
-    // belongs to that choice is providers.<name>.noProxy, asserted below.
+  test("a provider proxy is never traded for direct egress where global NO_PROXY exempts the host", async () => {
+    // The operator named this proxy for this provider, but Bun skips a request-scoped proxy for a
+    // destination the process NO_PROXY exempts and would connect directly. The send is refused
+    // instead; the exemption that belongs to the provider's choice is providers.<name>.noProxy,
+    // asserted below. tests/lib/explicit-proxy-no-proxy.test.ts proves the route on a real socket.
     for (const key of proxyKeys) delete process.env[key];
     process.env.HTTPS_PROXY = GLOBAL_PROXY;
     process.env.NO_PROXY = "provider.example";
     process.env.no_proxy = "provider.example";
     const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { ExplicitProxyExemptedError } = await import("../../src/lib/proxy-env");
     const { dependencies } = pinnedDependencies();
     const proxied = captureProxiedFetch();
     try {
-      await providerOutboundGet(
+      await expect(providerOutboundGet(
         "vendor",
         { baseUrl: "https://provider.example", proxy: PROVIDER_PROXY },
         MODELS_URL, {}, dependencies,
-      );
-      expect(proxied.calls).toEqual([`${PROVIDER_PROXY}/`]);
+      )).rejects.toBeInstanceOf(ExplicitProxyExemptedError);
+      expect(proxied.calls).toEqual([]);
     } finally {
       proxied.restore();
     }

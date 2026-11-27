@@ -234,36 +234,7 @@ export function removeCodexConfig(
   // The unchanged fast path compares in LF space so an untouched file is never rewritten.
   const eol = dominantEol(rawContent);
   const content = applyEol(rawContent, "\n");
-  // Read the recorded injection once: the strip below consumes it, and so does the
-  // ownership verdict, which must agree with what was actually removed.
-  const journaledBaseUrls = journaledInjectedRootValues("openai_base_url");
-  const journaledRealtimeWsBaseUrls = journaledInjectedRootValues(REALTIME_WS_BASE_URL_KEY);
-  const journaledRootWebSearch = journaledInjectedRootWebSearch();
-  const journaledReplaced = journaledReplacedRootWebSearch();
-  const ownedRoot = (key: string, owned: readonly string[]) => {
-    const value = rootTomlString(content, key);
-    return value !== null && owned.includes(value);
-  };
-  const had = hasOpencodexRouting(content)
-    || ownedRoot("openai_base_url", journaledBaseUrls)
-    || ownedRoot(REALTIME_WS_BASE_URL_KEY, journaledRealtimeWsBaseUrls);
-  const stripped = stripOpencodexConfigResult(
-    content,
-    journaledBaseUrls,
-    journaledRealtimeWsBaseUrls,
-    journaledRootWebSearch,
-    journaledReplaced,
-    journaledInjectedSubagentDefaults(),
-    journaledOwnedCatalogBinding(),
-  );
-  // Captured from the pre-strip bytes: the strip is what removes the table, so reading it
-  // afterwards would find nothing.
-  const retainedBlock = historyDisposition === "stand-down-retain"
-    ? extractOcxProviderTableBlock(content)
-    : null;
-  const finalContent = retainedBlock === null
-    ? stripped.content
-    : appendOcxProviderTableBlock(stripped.content, retainedBlock);
+  const { had, stripped, retainedBlock, finalContent } = planCodexConfigRemoval(content, historyDisposition);
   if (had || finalContent !== content) {
     publishCodexConfigIfUnchanged(held, "remove", rawContent, applyEol(finalContent, eol));
   }
@@ -296,4 +267,70 @@ export function removeCodexConfig(
   });
   if (!locked.ok) return { success: false, retryable: locked.error === "locked", message: configWriteLockFailureMessage(locked) };
   return locked.value;
+}
+
+interface CodexConfigRemovalPlan {
+  had: boolean;
+  stripped: StripOpencodexConfigResult;
+  retainedBlock: string | null;
+  finalContent: string;
+}
+
+/**
+ * The removal transform for one LF-normalized config.toml text. Shared by the write path below
+ * and by the read-only Connections restore preview, so the preview shows what restore writes.
+ */
+function planCodexConfigRemoval(
+  content: string,
+  historyDisposition: RemoveCodexConfigHistoryDisposition,
+): CodexConfigRemovalPlan {
+  // Read the recorded injection once: the strip below consumes it, and so does the
+  // ownership verdict, which must agree with what was actually removed.
+  const journaledBaseUrls = journaledInjectedRootValues("openai_base_url");
+  const journaledRealtimeWsBaseUrls = journaledInjectedRootValues(REALTIME_WS_BASE_URL_KEY);
+  const journaledRootWebSearch = journaledInjectedRootWebSearch();
+  const journaledReplaced = journaledReplacedRootWebSearch();
+  const ownedRoot = (key: string, owned: readonly string[]) => {
+    const value = rootTomlString(content, key);
+    return value !== null && owned.includes(value);
+  };
+  const had = hasOpencodexRouting(content)
+    || ownedRoot("openai_base_url", journaledBaseUrls)
+    || ownedRoot(REALTIME_WS_BASE_URL_KEY, journaledRealtimeWsBaseUrls);
+  const stripped = stripOpencodexConfigResult(
+    content,
+    journaledBaseUrls,
+    journaledRealtimeWsBaseUrls,
+    journaledRootWebSearch,
+    journaledReplaced,
+    journaledInjectedSubagentDefaults(),
+    journaledOwnedCatalogBinding(),
+  );
+  // Captured from the pre-strip bytes: the strip is what removes the table, so reading it
+  // afterwards would find nothing.
+  const retainedBlock = historyDisposition === "stand-down-retain"
+    ? extractOcxProviderTableBlock(content)
+    : null;
+  const finalContent = retainedBlock === null
+    ? stripped.content
+    : appendOcxProviderTableBlock(stripped.content, retainedBlock);
+  return { had, stripped, retainedBlock, finalContent };
+}
+
+/**
+ * Read-only: the config.toml text `removeCodexConfig` would publish for `rawContent`, or the
+ * managed-defaults error that makes it fail. No lock, no write.
+ */
+export function previewRemovedCodexConfig(
+  rawContent: string,
+  historyDisposition: RemoveCodexConfigHistoryDisposition,
+): { content: string; managedDefaultsError: string | null } {
+  const eol = dominantEol(rawContent);
+  const content = applyEol(rawContent, "\n");
+  const plan = planCodexConfigRemoval(content, historyDisposition);
+  const published = plan.had || plan.finalContent !== content;
+  return {
+    content: published ? applyEol(plan.finalContent, eol) : rawContent,
+    managedDefaultsError: plan.stripped.managedDefaultsError,
+  };
 }

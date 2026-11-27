@@ -3,6 +3,7 @@ import { mock } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { unavailableFixtureHome } from "../helpers/client-stop-fixture-home";
 import { getDefaultConfig, prepareConfigMutationDatabasePathForWrite, saveConfig } from "../../src/config";
 import { CODEX_CONFIG_PATH, CODEX_HOME, CODEX_PROFILE_PATH, DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import { JOURNAL_PATH, markJournalInjectedState, writeJournal } from "../../src/codex/journal";
@@ -46,6 +47,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   danglingServiceRecord?: boolean;
   busyStopFence?: boolean;
   busyRollbackPublication?: boolean;
+  retryRollbackPublication?: "lifecycle" | "config" | "owner-changed";
   terminationPlatform?: "linux" | "darwin";
   siblingEscalation?: "stopping" | "different-generation";
   removeToken?: boolean;
@@ -72,14 +74,15 @@ mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
 const token = `ocx_data_${"c".repeat(40)}`;
 const config = getDefaultConfig();
 const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+const fixtureHome = options.transport === "hub" ? undefined : unavailableFixtureHome();
 config.port = probe.port!;
 await probe.stop(true);
 config.runtimeRole = "client";
 config.client = {
-  serverUrl: options.transport === "hub" ? "https://hub.example.test" : "http://127.0.0.1:34567",
-  managementUrl: options.transport === "hub" ? "https://hub.example.test" : "http://127.0.0.1:34567",
+  serverUrl: fixtureHome?.url.origin ?? "https://hub.example.test",
+  managementUrl: fixtureHome?.url.origin ?? "https://hub.example.test",
   managementTransport: "direct", transport: options.transport ?? "link",
-  ...(options.transport === "hub" ? {} : { link: { tunnelPort: 34567, linkId: "lnk_0123456789abcdef" } }),
+  ...(fixtureHome ? { link: { tunnelPort: fixtureHome.port!, linkId: "lnk_0123456789abcdef" } } : {}),
   selectedClients: ["codex", ...(options.deferFileApply ? [] : options.fileClients ?? [])], tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "fixture-client",
   tokenFingerprint: serviceApiTokenFingerprint(token), protocolVersion: 1, connectedAt: "2026-10-01T00:00:00.000Z",
 };
@@ -337,6 +340,7 @@ if (options.mode === "retry") {
     } }));
   }
   let replacementAttempts = 0;
+  let rollbackBinds = 0, publicationHeld = false;
   let observeRollback!: (closed: boolean) => void;
   const rollbackTurn = new Promise<boolean>(resolve => { observeRollback = resolve; });
   let restartSettled: (() => Promise<void>) | undefined;
@@ -345,7 +349,7 @@ if (options.mode === "retry") {
     saveConfig(config);
     protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
   };
-  if (options.failedRollback) {
+  if (options.failedRollback || options.retryRollbackPublication) {
     const controller = await import("../../src/client/runtime-restart");
     const create = controller.createClientRestartController;
     mock.module("../../src/client/runtime-restart", () => ({ ...controller, createClientRestartController: (...args: Parameters<typeof create>) => {
@@ -371,19 +375,25 @@ if (options.mode === "retry") {
   const restartStopping = new Promise<void>(resolve => { restartStopEntered = resolve; });
   const restartRelease = new Promise<void>(resolve => { releaseRestartStop = resolve; });
   await startClientRuntime({ block: false }, { restartSupervisor: () => options.preserve?.startsWith("restart-rollback") ? Promise.resolve(null) : new Promise(() => {}), startListener: (port, deps) => {
+    if (replacementAttempts === 1) rollbackBinds++;
     requestRestart = deps?.restart?.request;
     if (options.failedRollback === "during-rebind" && replacementAttempts === 1) replaceSavedConnection();
     const server = startMachineListener(port, options.oldStopCapability && deps?.restart
       ? { ...deps, restart: { ...deps.restart, linkStopFence: undefined } } : deps);
-    if (options.busyRollbackPublication && replacementAttempts === 1) {
-      const lock = new Database(prepareConfigMutationDatabasePathForWrite());
+    if ((options.busyRollbackPublication || options.retryRollbackPublication) && replacementAttempts === 1 && !publicationHeld) {
+      publicationHeld = true;
+      const lock = new Database(options.retryRollbackPublication === "lifecycle"
+        ? lifecycleLockDeps.lockPath : prepareConfigMutationDatabasePathForWrite());
       lock.exec("BEGIN IMMEDIATE");
       const stop = server.stop.bind(server);
       let closed = false;
       server.stop = ((force: boolean) => { const result = stop(force); closed = force; return result; }) as typeof server.stop;
       // The bind and failed admission complete before the next event-loop turn. Keep C
       // held until the observation, so a retry cannot publish in the meantime.
-      setImmediate(() => { observeRollback(closed); lock.close(); });
+      setImmediate(() => {
+        observeRollback(closed); lock.close();
+        if (options.retryRollbackPublication === "owner-changed") replaceSavedConnection();
+      });
       return server;
     }
     const stop = server.stop.bind(server);
@@ -412,6 +422,16 @@ if (options.mode === "retry") {
     if (options.busyRollbackPublication) {
       const closedBeforeYield = await rollbackTurn;
       report({ preflight, closedBeforeYield, published: readRuntimePort(process.pid)?.servingGeneration !== before.servingGeneration, replacementAttempts });
+      process.exit(0);
+    }
+    if (options.retryRollbackPublication) {
+      const closedBeforeYield = await rollbackTurn;
+      await restartSettled!();
+      const after = readRuntimePort(process.pid)!;
+      const published = after.servingGeneration !== before.servingGeneration;
+      const bound = published && (await fetch(`http://127.0.0.1:${config.port}/healthz`)).ok;
+      report({ preflight, closedBeforeYield, published, bound, rollbackBinds, replacementAttempts,
+        stopping: after.clientStopping, explicitStop: after.clientStopRequested });
       process.exit(0);
     }
     if (options.failedRollback) {

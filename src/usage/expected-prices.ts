@@ -94,10 +94,12 @@ const GEMINI_37_FLASH: Cost4 = { input: 0.75, output: 3.75, cacheRead: 0.075, ca
 // rising to $1.50 / $7.50 on 2027-01-01. A SEPARATE constant on purpose: equal today, but
 // aliasing them would silently drag 3.8 along if 3.7's row is ever re-verified differently.
 const GEMINI_38_FLASH: Cost4 = { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 };
-// Gemini 4 Argon introductory paid-tier rate: $2 in / $10 out (thinking included) / $0.10 cached
-// per 1M through 2026-11-30, stepping up to $4 / $20 / $0.20 on 2026-12-01. Revisit this row
-// then. No free tier. Implicit caching only, so there is no per-token cache-write price.
-const GEMINI_4_ARGON: Cost4 = { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 };
+// Gemini 4 Argon and Carbon list rate: $4 in / $20 out (thinking included) / $0.20 cached per 1M.
+// Google's $2 / $10 / $0.10 introductory rate through 2026-11-30 is a time-boxed promo and, like
+// DEVIN_SWE2_NOTE, is not baked in. No free tier. Implicit caching only, so no cache-write price.
+// Two constants on purpose: equal today, but one model's re-verification must not drag the other.
+const GEMINI_4_ARGON: Cost4 = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 };
+const GEMINI_4_CARBON: Cost4 = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 };
 // Standard paid Gemini API rates. Antigravity uses the same token rates as an
 // estimated reference. Its generation usage reports cache hits but no cache-write count.
 const GEMINI_4_API_RATES = [
@@ -232,7 +234,8 @@ export function cursorFastPriceSource(provider: string, modelId: string): string
 
 const GEMINI_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-07-22); cacheWrite=0: storage is billed per-hour, not per-token";
 const GEMINI_37_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-08-14); promotional rate through 2026-12-31, rises to 1.50/7.50 on 2027-01-01; cacheWrite=0: storage is billed per-hour, not per-token";
-const GEMINI_4_ARGON_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-10-14); introductory rate through 2026-11-30, rises to 4/20 (0.20 cached) on 2026-12-01; cacheWrite=0: implicit caching only";
+const GEMINI_4_ARGON_PRICING = "https://ai.google.dev/gemini-api/docs/pricing#gemini-4-argon (2026-11-26); list rate 4/20 (0.20 cached) from 2026-12-01; the 2/10 (0.10 cached) introductory rate through 2026-11-30 is a time-boxed promo, not baked in; cacheWrite=0: implicit caching only";
+const GEMINI_4_CARBON_PRICING = "https://ai.google.dev/gemini-api/docs/pricing#gemini-4-carbon (2026-11-26); list rate 4/20 (0.20 cached) from 2026-12-01; the 2/10 (0.10 cached) introductory rate through 2026-11-30 is a time-boxed promo, not baked in; cacheWrite=0: implicit caching only";
 const GEMINI_38_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-09-03); promotional rate through 2026-12-31, rises to 1.50/7.50 on 2027-01-01; cacheWrite=0: storage is billed per-hour, not per-token";
 const MINIMAX_PRICING = "https://platform.minimax.io/docs/guides/pricing-paygo";
 const OPENAI_GPT56_PRICING = "https://developers.openai.com/api/docs/pricing";
@@ -280,6 +283,21 @@ const ZAI_PRICING = "https://docs.z.ai/guides/overview/pricing (official USD tab
 // Morph Ultra is subscription-billed ($200/month, no token meter), so these are the vendor's
 // published per-token list prices shown as estimates, never the amount Ultra actually charges.
 const MORPH_ULTRA_PRICING = "https://www.morphllm.com/pricing (list price; Morph Ultra is subscription-billed with no token meter)";
+// Neuralwatt bills subscriptions and pay-as-you-go by GPU energy (kWh); these are the
+// per-token list prices its /v1/models catalog publishes, shown as estimates only.
+// Flex rows already carry the published 0.65 multiplier; no rate is charged for cache writes.
+const NEURALWATT_PRICING = "https://api.neuralwatt.com/v1/models metadata.pricing (token list price; billing is energy-based, see https://docs.neuralwatt.com/billing/faq)";
+const NEURALWATT_LIST_PRICES: readonly [string, number, number, number][] = [
+  ["glm-5.3", 1.45, 4.5, 0.145], ["glm-5.3-flex", 0.9425, 2.925, 0.09425],
+  ["glm-5.3-flash", 0.15, 0.5, 0.03], ["glm-5.3-flash-flex", 0.0975, 0.325, 0.0195],
+  ["deepseek-v4.1-flash", 0.15, 0.6, 0.015], ["deepseek-v4.1-flash-flex", 0.0975, 0.39, 0.00975],
+  ["deepseek-v4.1-flash-speed", 0.15, 0.6, 0.015], ["nw-flash", 0.15, 0.6, 0.015], ["nw-flash-flex", 0.0975, 0.39, 0.00975],
+  ["kimi-k3.1-pro", 2, 10, 0.2], ["kimi-k3.1-pro-flex", 1.3, 6.5, 0.13], ["nw-large", 2, 10, 0.2], ["nw-large-flex", 1.3, 6.5, 0.13],
+  ["mimo-v2.6-pro", 0.435, 0.87, 0.0036], ["mimo-v2.6-pro-flex", 0.28275, 0.5655, 0.00234],
+  ["qwen-3.8-27b", 0.45, 3.2, 0.25], ["qwen-3.8-27b-flex", 0.2925, 2.08, 0.1625], ["nw-small", 0.45, 3.2, 0.25], ["nw-small-flex", 0.2925, 2.08, 0.1625],
+  ["qwen3.6-35b", 0.29, 1.15, 0.029], ["qwen3.6-35b-flex", 0.1885, 0.7475, 0.01885], ["qwen3.6-35b-fast", 0.29, 1.15, 0.029],
+  ["gemma-4-31b", 0.144, 0.42, 0.0144],
+];
 const MORPH_KIMI_K31: Cost4 = { input: 2.5, output: 14, cacheRead: 0.29, cacheWrite: 0 };
 const MORPH_DSV41_FLASH: Cost4 = { input: 0.12, output: 0.8, cacheRead: 0.008, cacheWrite: 0 };
 const ZAI_CODING_PLAN_NOTE = "z.ai list price shown as estimate; GLM Coding Plan is subscription-billed";
@@ -317,6 +335,32 @@ const QWEN38_FLASH_PRICING = "https://qwen.ai/blog?id=qwen3.8-2026 (Qwen release
  * table entirely, so its row derives from Google's published rate instead.
  */
 const DEVIN_SWE_2: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 };
+/*
+ * SWE-2.1 (2026-11-24): every effort lane shares one list rate, and Ultrafast
+ * (`-lightning`) shares another. Self-serve is free on Desktop/CLI through
+ * 2026-12-08 and discounted to 0.5 / 2.5 / 0.05 through 2027-01-30; enterprise
+ * ACU gets the same discount window. Both are time-boxed, so the list rate is
+ * the durable value, as with SWE-2. Ultrafast is outside the offer.
+ */
+const DEVIN_SWE_21: Cost4 = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 };
+const DEVIN_SWE_21_ULTRAFAST: Cost4 = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 0 };
+const DEVIN_SWE21_SOURCE = "list rate; free self-serve on Desktop/CLI through 2026-12-08 and 0.5/2.5/0.05 through 2027-01-30 are time-boxed promos, not baked in; https://docs.devin.ai/desktop/models (SWE-2.1 rows, read 2026-11-25), https://cognition.com/blog/swe-2-1";
+const DEVIN_SWE21_ULTRAFAST_SOURCE = "SWE-2.1 Ultrafast, every effort lane, excluded from the SWE-2.1 offer; https://docs.devin.ai/desktop/models (read 2026-11-25)";
+/**
+ * Every SWE-2.1 id a caller can name: the family, one row per lane, and the
+ * Ultrafast bare row plus one per lane. A family pick with `fast` is logged under
+ * the family id, so it still prices as standard; that holds for every Devin fast
+ * variant and is not specific to SWE-2.1.
+ */
+function devinSwe21Rows(provider: string): ExpectedPriceOverlay[] {
+  const lanes = ["low", "medium", "high", "xhigh", "max"];
+  const row = (modelId: string, cost4: Cost4, source: string): ExpectedPriceOverlay =>
+    ({ provider, modelId, cost4, source, verifiedAt: "2026-11-25", status: "verified-derived" });
+  return [
+    ...["swe-2-1", ...lanes.map((lane) => `swe-2-1-${lane}`)].map((id) => row(id, DEVIN_SWE_21, DEVIN_SWE21_SOURCE)),
+    ...["swe-2-1-lightning", ...lanes.map((lane) => `swe-2-1-${lane}-lightning`)].map((id) => row(id, DEVIN_SWE_21_ULTRAFAST, DEVIN_SWE21_ULTRAFAST_SOURCE)),
+  ];
+}
 const DEVIN_SWE_17: Cost4 = { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0 };
 const DEVIN_SWE_17_LIGHTNING: Cost4 = { input: 2.5, output: 12.5, cacheRead: 1, cacheWrite: 0 };
 const DEVIN_SONNET_5: Cost4 = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
@@ -430,10 +474,10 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   }))),
   // Gemini 4 Argon on Antigravity (AI Ultra / Enterprise only): the picker id plus its three
   // verified CCA wire ids. Billing equivalence to the API price is inferred.
-  { provider: "google-antigravity", modelId: "gemini-4-argon", cost4: GEMINI_4_ARGON, source: `derived: Gemini 4 Argon introductory rate through 2026-11-30 ${GEMINI_4_ARGON_PRICING}`, verifiedAt: "2026-10-14", status: "verified-derived" },
-  { provider: "google-antigravity", modelId: "gemini-4-argon-low", cost4: GEMINI_4_ARGON, source: `derived: gemini-4-argon ${GEMINI_4_ARGON_PRICING}`, verifiedAt: "2026-10-14", status: "verified-derived" },
-  { provider: "google-antigravity", modelId: "gemini-4-argon-medium", cost4: GEMINI_4_ARGON, source: `derived: gemini-4-argon ${GEMINI_4_ARGON_PRICING}`, verifiedAt: "2026-10-14", status: "verified-derived" },
-  { provider: "google-antigravity", modelId: "gemini-4-argon-high", cost4: GEMINI_4_ARGON, source: `derived: gemini-4-argon ${GEMINI_4_ARGON_PRICING}`, verifiedAt: "2026-10-14", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "gemini-4-argon", cost4: GEMINI_4_ARGON, source: `derived: Gemini API list rate ${GEMINI_4_ARGON_PRICING}`, verifiedAt: "2026-11-26", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "gemini-4-argon-low", cost4: GEMINI_4_ARGON, source: `derived: gemini-4-argon ${GEMINI_4_ARGON_PRICING}`, verifiedAt: "2026-11-26", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "gemini-4-argon-medium", cost4: GEMINI_4_ARGON, source: `derived: gemini-4-argon ${GEMINI_4_ARGON_PRICING}`, verifiedAt: "2026-11-26", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "gemini-4-argon-high", cost4: GEMINI_4_ARGON, source: `derived: gemini-4-argon ${GEMINI_4_ARGON_PRICING}`, verifiedAt: "2026-11-26", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-3.8-flash", cost4: GEMINI_38_FLASH, source: `derived: Gemini 3.8 Flash promotional rate through 2026-12-31 ${GEMINI_38_PRICING}`, verifiedAt: "2026-09-03", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-3.8-flash-low", cost4: GEMINI_38_FLASH, source: `derived: gemini-3.8-flash ${GEMINI_38_PRICING}`, verifiedAt: "2026-09-03", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-3.8-flash-medium", cost4: GEMINI_38_FLASH, source: `derived: gemini-3.8-flash ${GEMINI_38_PRICING}`, verifiedAt: "2026-09-03", status: "verified-derived" },
@@ -492,7 +536,8 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // Developer API row: the price IS published for this surface, so `verified`.
   { provider: "google", modelId: "gemini-3.7-flash", cost4: GEMINI_37_FLASH, source: GEMINI_37_PRICING, verifiedAt: "2026-08-14", status: "verified" },
   { provider: "google", modelId: "gemini-3.8-flash", cost4: GEMINI_38_FLASH, source: GEMINI_38_PRICING, verifiedAt: "2026-09-03", status: "verified" },
-  { provider: "google", modelId: "gemini-4-argon", cost4: GEMINI_4_ARGON, source: GEMINI_4_ARGON_PRICING, verifiedAt: "2026-10-14", status: "verified" },
+  { provider: "google", modelId: "gemini-4-argon", cost4: GEMINI_4_ARGON, source: GEMINI_4_ARGON_PRICING, verifiedAt: "2026-11-26", status: "verified" },
+  { provider: "google", modelId: "gemini-4-carbon", cost4: GEMINI_4_CARBON, source: GEMINI_4_CARBON_PRICING, verifiedAt: "2026-11-26", status: "verified" },
   { provider: "google-antigravity", modelId: "gemini-3.1-pro-preview", cost4: GEMINI_31_PRO, source: GEMINI_PRICING, verifiedAt: "2026-07-20", status: "verified" },
   // Antigravity-bundled third-party models — derived from the underlying vendor's
   // official API price (Antigravity itself bills via subscription quota).
@@ -564,6 +609,11 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // Morph Ultra — subscription-billed, so the vendor list price is an estimate only.
   { provider: "morph", modelId: "morph-kimik31", cost4: MORPH_KIMI_K31, source: MORPH_ULTRA_PRICING, verifiedAt: "2026-11-13", status: "verified-derived" },
   { provider: "morph", modelId: "morph-dsv41flash-1017", cost4: MORPH_DSV41_FLASH, source: MORPH_ULTRA_PRICING, verifiedAt: "2026-11-13", status: "verified-derived" },
+  // Neuralwatt — energy-billed, so the published token list price is an estimate only.
+  ...NEURALWATT_LIST_PRICES.map(([modelId, input, output, cacheRead]): ExpectedPriceOverlay => ({
+    provider: "neuralwatt", modelId, cost4: { input, output, cacheRead, cacheWrite: 0 },
+    source: NEURALWATT_PRICING, verifiedAt: "2026-11-21", status: "verified-derived",
+  })),
   // Cursor Auto router — Cursor's published fixed token price (verified).
   { provider: "cursor", modelId: "auto", cost4: { input: 1.25, output: 6, cacheRead: 0.25, cacheWrite: 1.25 }, source: "https://docs.cursor.com/account/pricing + https://cursor.com/blog/aug-2025-pricing", verifiedAt: "2026-07-20", status: "verified" },
   // Z.AI GLM family — the zai bundle's rows are all-zero upstream, and the four
@@ -613,6 +663,7 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // column shows a discounted 1.2/6, and the doc calls the list rate the
   // billing rate for overage. glm-5-2 likewise takes the nonzero list column.
   { provider: "devin-cli", modelId: "swe-2", cost4: DEVIN_SWE_2, source: `${DEVIN_SWE2_NOTE}; ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  ...devinSwe21Rows("devin-cli"),
   { provider: "devin-cli", modelId: "swe-1-7", cost4: DEVIN_SWE_17, source: `list rate; self-serve column currently shows 0 (unannounced promo); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "swe-1-7-lightning", cost4: DEVIN_SWE_17_LIGHTNING, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "swe-1-6", cost4: DEVIN_SWE_17, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
@@ -634,6 +685,7 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "devin-cli", modelId: "gemini-3-8-flash", cost4: GEMINI_38_FLASH, source: `derived: absent from Devin's modelCostData table; Google published promotional rate through 2026-12-31 shown as estimate ${GEMINI_38_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "grok-4-6", cost4: DEVIN_GROK, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "swe-2", cost4: DEVIN_SWE_2, source: `${DEVIN_SWE2_NOTE}; ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  ...devinSwe21Rows("devin"),
   { provider: "devin", modelId: "swe-1-7", cost4: DEVIN_SWE_17, source: `list rate; self-serve column currently shows 0 (unannounced promo); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "swe-1-7-lightning", cost4: DEVIN_SWE_17_LIGHTNING, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "swe-1-6", cost4: DEVIN_SWE_17, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },

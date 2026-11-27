@@ -138,7 +138,7 @@ describe("a Responses default flip must carry Responses-side reasoning preservat
       expect(ALIBABA_TOKEN_PLAN_PRESERVE_REASONING).toContain(model);
     }
     expect(getProviderRegistryEntry("alibaba-token-plan")!.preserveReasoningContentModels)
-      .toEqual(ALIBABA_TOKEN_PLAN_PRESERVE_REASONING);
+      .toEqual([...ALIBABA_TOKEN_PLAN_PRESERVE_REASONING, "qwen4-max"]);
   });
 
   // The guard, not a restatement of the case above: preserveReasoningContentModels is read by the
