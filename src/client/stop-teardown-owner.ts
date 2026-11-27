@@ -1,21 +1,46 @@
-import { execFileSync } from "node:child_process";
 import { readlinkSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { NODE_LAUNCH_PROOF_PREFIX } from "../cli/launcher-context";
 import { parseStopApproval } from "../cli/stop-approval";
-import { tokenizeCommandLine } from "../codex/app-server-processes";
 import { readProcessCommandLine, type ClientStopOwner } from "../config/process-state";
 import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
-import { resolveTrustedWindowsPowerShellExe } from "../lib/windows-elevation";
-import { windowsProcessNative, windowsProcessPlatform, windowsProcessPlatformSimulated } from "../service/windows-process-native";
+import { windowsProcessNative, windowsProcessPlatform } from "../service/windows-process-native";
 import { readDarwinStopArgv, readDarwinStopCwd, readDarwinStopEnvironment, readDarwinStopStart } from "./stop-darwin-process";
 
 const basename = (value: string) => value.toLowerCase().replace(/\\/g, "/").split("/").pop() ?? "";
 
+/** Windows native argv rules: apostrophes are literal; only double quotes group arguments. */
+function windowsArgv(commandLine: string): string[] {
+  if (commandLine.length > 64 * 1024 || /[\0\r\n]/.test(commandLine)) return [];
+  const argv: string[] = [];
+  let offset = 0;
+  while (offset < commandLine.length) {
+    while (/[ \t]/.test(commandLine[offset] ?? "")) offset++;
+    if (offset === commandLine.length) break;
+    let value = "", quoted = false;
+    while (offset < commandLine.length) {
+      const character = commandLine[offset]!;
+      if (!quoted && /[ \t]/.test(character)) break;
+      // argv[0] is a pathname: its backslashes are literal, including before a closing quote.
+      if (argv.length > 0 && character === "\\") {
+        let count = 0;
+        while (commandLine[offset] === "\\") { count++; offset++; }
+        if (commandLine[offset] !== '"') { value += "\\".repeat(count); continue; }
+        value += "\\".repeat(Math.floor(count / 2));
+        if (count % 2) { value += '"'; offset++; continue; }
+      } else if (character !== '"') { value += character; offset++; continue; }
+      if (argv.length > 0 && quoted && commandLine[offset + 1] === '"') { value += '"'; offset += 2; }
+      else { quoted = !quoted; offset++; }
+    }
+    argv.push(value);
+  }
+  return argv;
+}
+
 /** Recognize the invocation that sets the native Child's explicit-stop fence, not any ocx. */
 export function isClientStopCommandLine(commandLine: string): boolean {
   if (commandLine.length > 64 * 1024) return false;
-  return isClientStopArgv(tokenizeCommandLine(commandLine));
+  return isClientStopArgv(windowsArgv(commandLine));
 }
 
 export function isClientStopArgv(argv: readonly string[]): boolean {
@@ -25,7 +50,7 @@ export function isClientStopArgv(argv: readonly string[]): boolean {
 
 export function isLegacyWindowsStartCommandLine(commandLine: string): boolean {
   if (commandLine.length > 64 * 1024) return false;
-  const argv = tokenizeCommandLine(commandLine);
+  const argv = windowsArgv(commandLine);
   const command = ocxCommandIndex(argv);
   return command !== undefined && argv[command] === "start";
 }
@@ -62,18 +87,8 @@ export function readClientStopProcessStart(pid: number): string | undefined {
       if (ticks && /^\d+$/.test(ticks) && /^[a-f0-9-]{36}$/.test(boot)) return `linux:${boot}:${ticks}`;
     }
     if (platform === "win32") {
-      const native = windowsProcessNative();
-      if (native) {
-        const identity = native.sameUserIdentity(pid);
-        return identity ? `win32:${identity.ticks}` : undefined;
-      }
-      if (windowsProcessPlatformSimulated()) return;
-      // The fallback also binds the SID to this incarnation by refreshing CreationDate.
-      const script = `$ErrorActionPreference='Stop'; $p=Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; $owner=Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid; if ($owner.ReturnValue -eq 0 -and $owner.Sid -eq [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value -and $p.CreationDate) { $after=Get-CimInstance -InputObject $p; if ($after.CreationDate -eq $p.CreationDate) { $p.CreationDate.ToUniversalTime().Ticks } }`;
-      const ticks = execFileSync(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NoLogo", "-NonInteractive", "-Command", script], {
-        encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, maxBuffer: 1024, windowsHide: true,
-      }).trim();
-      if (/^\d{1,20}$/.test(ticks)) return `win32:${ticks}`;
+      const ticks = windowsProcessNative()?.sameUserIdentity(pid)?.ticks;
+      if (typeof ticks === "bigint" && ticks > 0n && ticks <= 3155378975999999999n) return `win32:${ticks}`;
     }
   } catch { /* unreadable ownership cannot authorize a native restoration handoff */ }
 }

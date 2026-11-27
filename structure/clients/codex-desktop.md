@@ -168,6 +168,7 @@ described in the [transport inventory](../transports/inventory.md#native-desktop
 Invalid proxy routes refuse rather than falling back to direct egress.
 Native routing verification binds both the actual listener address family and port; the companion
 is IPv4-only. Ambiguous localhost aliases cannot qualify, and listener identity changes revoke observation.
+It accepts the native `/v1` base path and the `/backend-api/codex` alias when experimental context management is enabled.
 
 `relay-listener.ts` forwards HTTP with the existing upstream-header filter, cookies and
 streaming bodies, and pipes upgraded TLS sockets without decoding their frames. The

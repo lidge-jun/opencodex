@@ -185,15 +185,45 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
   }
 
   if (url.pathname === "/api/combos" && req.method === "GET") {
+    const selectors = url.searchParams.getAll("fallbackTarget");
+    if (selectors.length) {
+      if (selectors.length > 64 || selectors.some(selector => selector.length > 512)) {
+        return jsonResponse({ error: "Too many or oversized fallback targets" }, 400);
+      }
+      const { routeConcreteModel } = await import("../../router");
+      const { comboTargetRequiresConsent } = await import("../responses/combo-admission-snapshot");
+      const routes = Object.fromEntries([...new Set(selectors)].map(selector => {
+        const slash = selector.indexOf("/");
+        const provider = selector.slice(0, slash);
+        const model = selector.slice(slash + 1);
+        if (slash < 1 || !model || !Object.hasOwn(config.providers, provider) || config.providers[provider]?.disabled) return [selector, null];
+        try {
+          const route = routeConcreteModel(config, selector);
+          return [selector, {
+            provider: route.providerName, model: route.modelId,
+            requiresConsent: comboTargetRequiresConsent(config, { provider, model }, true, route),
+          }];
+        } catch {
+          return [selector, null];
+        }
+      }));
+      return jsonResponse({ routes });
+    }
     const { comboPublicModelId, getCombo, listComboIds } = await import("../../combos");
-    return jsonResponse({ combos: listComboIds(config).map(id => {
-      const combo = getCombo(config, id)!;
-      return {
-        id,
-        model: comboPublicModelId(id, combo),
-        ...sparseComboConfig(combo),
-      };
-    }) });
+    const { configuredComboProviderBilling } = await import("../../combos/billing");
+    return jsonResponse({
+      combos: listComboIds(config).map(id => {
+        const combo = getCombo(config, id)!;
+        return {
+          id,
+          model: comboPublicModelId(id, combo),
+          ...sparseComboConfig(combo),
+        };
+      }),
+      // The dashboard labels targets with the billing class the quota-only dispatcher applies.
+      providerBilling: Object.fromEntries(Object.entries(config.providers)
+        .map(([name, provider]) => [name, configuredComboProviderBilling({ ...provider, name })])),
+    });
   }
 
   if (url.pathname === "/api/combos" && req.method === "PUT") {
@@ -238,8 +268,15 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       return jsonResponse({ error: "combo must be an object" }, 400);
     }
     const requestedCombo: Record<string, unknown> = body.combo;
+    const savedFailoverOptions: Record<string, true> = {};
+    if (requestedCombo.strategy === undefined || requestedCombo.strategy === "failover") {
+      for (const key of ["quotaOnlyFallback", "preserveFallbackModel"] as const) {
+        if (!Object.hasOwn(requestedCombo, key) && previous?.[key] === true) savedFailoverOptions[key] = true;
+      }
+    }
     const effectiveCombo = {
       ...requestedCombo,
+      ...savedFailoverOptions,
       // Clients that do not expose this opt-in must preserve it on unrelated edits.
       ...(!Object.hasOwn(requestedCombo, "cooldownReprobe") && previous?.cooldownReprobe !== undefined
         ? { cooldownReprobe: previous.cooldownReprobe }

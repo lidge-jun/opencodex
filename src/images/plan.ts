@@ -175,7 +175,17 @@ export function selectVideoProvider(config: OcxConfig): VideoProviderSelection |
     return { ok: false, error: "images.videoProvider must be a nonblank provider name" };
   }
   const providerName = configured.trim();
-  const label = `images.videoProvider "${providerName}"`;
+  return resolveVideoProviderRow(config, providerName, `images.videoProvider "${providerName}"`);
+}
+
+/**
+ * Validate one named row as a video destination. Shared by `images.videoProvider` and the public
+ * `/v1/videos` routes, so both apply the same refusals: registry rows other than the pinned `xai`,
+ * missing, disabled, non-key, paused, keyless or foreign-keychain rows, an unusable baseUrl, a
+ * private destination without the row's own opt-in, and an xAI credential bound for a non-xAI origin.
+ * `label` prefixes every error. The resolved destination carries the row's `videoApi`.
+ */
+export function resolveVideoProviderRow(config: OcxConfig, providerName: string, label: string): VideoProviderSelection {
   const isXai = providerName === "xai";
   if (!isXai && getProviderRegistryEntry(providerName)) {
     return { ok: false, error: `${label} must name a custom provider or xai` };
@@ -228,6 +238,7 @@ export function selectVideoProvider(config: OcxConfig): VideoProviderSelection |
       ...(provider.allowPrivateNetwork === true ? { allowPrivateNetwork: true } : {}),
       ...(provider.proxy !== undefined ? { proxy: provider.proxy } : {}),
       ...(provider.noProxy !== undefined ? { noProxy: provider.noProxy } : {}),
+      ...(provider.videoApi === "openai" ? { videoApi: "openai" as const } : {}),
     };
   return { ok: true, providerName, provider, auth };
 }

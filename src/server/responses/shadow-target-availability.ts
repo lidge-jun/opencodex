@@ -1,6 +1,7 @@
 import { NoAvailableComboTargetsError } from "../../combos";
 import { NoEligiblePolicyCandidateError, type RouteResult } from "../../router";
 import { AdmissionModelDeniedError } from "../admission-model-scope";
+import { ComboRouteRefusal } from "./core-errors";
 
 /**
  * Shadow-call interception names one operator-chosen target (#5618). When that target stops
@@ -36,6 +37,7 @@ export function resolveChosenTarget(
     route = resolve(model);
   } catch (error) {
     if (error instanceof AdmissionModelDeniedError
+      || error instanceof ComboRouteRefusal
       || error instanceof NoAvailableComboTargetsError
       || error instanceof NoEligiblePolicyCandidateError) throw error;
     return { unavailable: error instanceof Error ? error.message : String(error) };

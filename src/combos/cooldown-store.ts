@@ -31,8 +31,8 @@ import { atomicWriteFile } from "../config/atomic-write";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
 import { getConfigDir } from "../config/paths";
 
-export interface PersistableCooldown { cooldownUntil: number; revision: number; status?: number }
-type StoredRow = { cooldownUntil: number; status?: number };
+export interface PersistableCooldown extends StoredRow { revision: number }
+type StoredRow = { cooldownUntil: number; status?: number; quotaExhausted?: true };
 
 const FILE = "combo-cooldowns.json";
 const FLUSH_DELAY_MS = 250;
@@ -59,9 +59,13 @@ function readStoredRows(path: string): Record<string, StoredRow> {
   const rows: Record<string, StoredRow> = {};
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return rows;
   for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-    const row = value as { cooldownUntil?: unknown; status?: unknown } | null;
+    const row = value as { cooldownUntil?: unknown; status?: unknown; quotaExhausted?: unknown } | null;
     if (typeof row?.cooldownUntil !== "number" || !Number.isFinite(row.cooldownUntil)) continue;
-    rows[key] = { cooldownUntil: row.cooldownUntil, ...(typeof row.status === "number" ? { status: row.status } : {}) };
+    rows[key] = {
+      cooldownUntil: row.cooldownUntil,
+      ...(typeof row.status === "number" ? { status: row.status } : {}),
+      ...(row.quotaExhausted === true ? { quotaExhausted: true } : {}),
+    };
   }
   return rows;
 }
@@ -101,7 +105,7 @@ export class PersistedCooldownMap<V extends PersistableCooldown> extends Map<str
     const now = Date.now();
     for (const [key, row] of Object.entries(rows)) {
       if (row.cooldownUntil <= now || super.has(key)) continue;
-      super.set(key, { cooldownUntil: row.cooldownUntil, revision: this.nextRevision(), ...(row.status !== undefined ? { status: row.status } : {}) } as V);
+      super.set(key, { ...row, revision: this.nextRevision() } as V);
     }
   }
 
@@ -139,7 +143,11 @@ export class PersistedCooldownMap<V extends PersistableCooldown> extends Map<str
           const other = out[key];
           out[key] = other && other.cooldownUntil > own.cooldownUntil
             ? other
-            : { cooldownUntil: own.cooldownUntil, ...(own.status !== undefined ? { status: own.status } : {}) };
+            : {
+              cooldownUntil: own.cooldownUntil,
+              ...(own.status !== undefined ? { status: own.status } : {}),
+              ...(own.quotaExhausted === true ? { quotaExhausted: true } : {}),
+            };
         }
         mkdirSync(dir, { recursive: true });
         atomicWriteFile(path, JSON.stringify(out));

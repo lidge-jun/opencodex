@@ -773,8 +773,8 @@ describe("google provider hardening", () => {
     const google = PROVIDER_REGISTRY.find(entry => entry.id === "google");
     const vertex = PROVIDER_REGISTRY.find(entry => entry.id === "google-vertex");
 
-    expect(google?.defaultModel).toBe("gemini-3.5-flash");
-    expect(google?.models).toEqual(["gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"]);
+    expect(google?.defaultModel).toBe("gemini-3.6-flash");
+    expect(google?.models).toEqual(["gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview"]);
     expect(google?.modelContextWindows?.["gemini-3.8-flash"]).toBe(1_048_576);
     expect(google?.modelInputModalities?.["gemini-3.8-flash"]).toEqual(["text", "image"]);
     // `minimal` is a documented validation error on this generation, so the ladder must not

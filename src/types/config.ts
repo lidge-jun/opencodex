@@ -1522,6 +1522,10 @@ export interface OcxComboTarget {
 
 export interface OcxComboConfig {
   targets: OcxComboTarget[];
+  /** Ordered failover advances only on confirmed target quota or billing exhaustion. */
+  quotaOnlyFallback?: boolean;
+  /** Require every failover destination to resolve to the original model ID. */
+  preserveFallbackModel?: boolean;
   /** Operator consent for metered targets on a loopback-only proxy. Default false; public listeners still require key consent. */
   allowMeteredTargets?: boolean;
   /** Ordered failover (default), round-robin, weighted random, least-used, or quota reset-window selection. */

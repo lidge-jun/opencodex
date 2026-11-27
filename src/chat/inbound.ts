@@ -9,8 +9,24 @@ import { normalizedClientExtraContent } from "../responses/provider-opaque-metad
 import { chatImageUrlFromPart } from "./image-parts";
 import { signedReasoningInputItems } from "./reasoning-details";
 import { chatAudioToResponsesPart, untranslatedChatInputMedia, untranslatedInputMediaMessage } from "../responses/input-media";
+import { chatBodyVideoRefusal } from "../responses/video-input";
 
 export class ChatCompletionsRequestError extends Error {}
+
+/**
+ * A video the Chat conversion cannot carry (outside user content, or over the inline cap). The
+ * Chat handler answers it as 400 `unsupported_input_modality`, the code the Responses core uses.
+ */
+export class ChatUnsupportedInputModalityError extends ChatCompletionsRequestError {
+  readonly code = "unsupported_input_modality";
+}
+
+/** The refusal for a Chat body's video, or undefined. Shared by both Chat conversions. */
+export function chatVideoRefusal(kind: string | undefined, raw: unknown): ChatUnsupportedInputModalityError | undefined {
+  if (kind === "video") return new ChatUnsupportedInputModalityError(untranslatedInputMediaMessage("video"));
+  const refusal = chatBodyVideoRefusal(raw);
+  return refusal ? new ChatUnsupportedInputModalityError(refusal) : undefined;
+}
 
 type Rec = Record<string, unknown>;
 type ChatCompletionsRoutingBody = Rec & { model: string; messages: unknown[] };
@@ -469,6 +485,8 @@ export interface ChatResponsesProjectionOptions {
 export function chatCompletionsToResponsesBody(raw: unknown, options: ChatResponsesProjectionOptions = {}): Rec {
   assertChatCompletionsRoutingBody(raw);
   const unsupportedMedia = untranslatedChatInputMedia(raw, options.allowInlineAudio);
+  const videoRefusal = chatVideoRefusal(unsupportedMedia, raw);
+  if (videoRefusal) throw videoRefusal;
   if (unsupportedMedia) {
     throw new ChatCompletionsRequestError(untranslatedInputMediaMessage(unsupportedMedia));
   }

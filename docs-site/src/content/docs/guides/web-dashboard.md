@@ -121,8 +121,8 @@ host and port over a LAN IP or an alias.
 
 ## Classic dashboard
 
-The dashboard was redesigned: its sidebar now groups pages into **Everyday**, **Set up** and
-**Fine-tuning**, and it opens on a Home page. The previous design stays available as the
+The current dashboard opens on **Home**. Its sidebar groups pages into **Everyday** and
+**Fine-tuning**. **Route** opens client integrations and has a separate setup tab. The previous design stays available as the
 **classic dashboard** at `/classic/` on the same proxy, for example `http://127.0.0.1:10100/classic/`.
 
 - To switch, select the clock icon (**Classic dashboard**) beside the theme switch at the foot of
@@ -299,10 +299,11 @@ historical records beyond the loaded ring.
 
 The language picker includes **Português** (Brazilian Portuguese, `pt-BR`). Portuguese browser languages select it automatically unless a supported language preference is already saved.
 
+**Español** uses neutral Spanish. Spanish browser locales such as `es-BO`, `es-MX` and `es-ES` select it automatically unless a supported `ocx-lang` preference is already saved. The document language is `es`, and quota dates use Spanish regional formatting.
+
 ### Linking to a section
 
-There is a single layout, so there is no layout switch to configure. Dashboard sections are
-addressable instead: `#dashboard` opens Overview, and `#dashboard/providers` and
+Dashboard sections have direct links: `#dashboard` opens Overview, and `#dashboard/providers` and
 `#dashboard/models` open the other two. Reload, bookmark, and Back all keep the section you were
 on. **Logs** works the same way with `#logs` and `#logs/debug`. An older `#providers/workspace`
 bookmark now lands on `#providers`.

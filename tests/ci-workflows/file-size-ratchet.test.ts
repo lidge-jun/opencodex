@@ -238,6 +238,7 @@ describe("file-size ratchet: exemption classification", () => {
     expect(new Set(all).size).toBe(all.length);
     expect([...all].sort()).toEqual([...EXEMPT_PATHS]);
     expect(EXEMPT_PATHS).toContain("gui/src/i18n/pt.ts");
+    expect(EXEMPT_PATHS).toContain("gui/src/i18n/es.ts");
 
     // Every exemption names a file that is actually here. A stale entry exempts nothing and
     // hides the fact that the policy no longer describes this tree.

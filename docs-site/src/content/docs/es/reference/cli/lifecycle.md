@@ -48,6 +48,8 @@ ocx start --socks5-off
 
 Si un proceso hermano sirve un Remote Link guardado, `ocx stop` verifica la instancia y la titularidad del Link y detiene solo ese proceso. El enrutamiento compartido se conserva.
 
+En Windows x64, si WMI no devuelve el propietario de un proceso auxiliar del servicio que coincide con la instalación, OpenCodex puede verificar la cuenta de Windows y la hora de creación mediante un identificador del proceso en ejecución. Si no se puede confirmar el propietario, el proceso sigue en ejecución. Si el error menciona el registro en el Programador de tareas, consúltalo con `ocx service status`.
+
 Un Child de Remote Link sin supervisor que recibe una señal de apagado restaura Codex nativo y Grok administrado antes de liberar su listener, comprobando de nuevo la conexión atendida antes de cada escritura. La supervisión de servicio o Desktop, la propiedad de otra instancia y los traspasos de reinicio o reciclaje conservan las integraciones. El Child aplaza la restauración de Codex nativo y Grok solo cuando una parada activa y verificada del padre es titular del recibo correspondiente. El Child completa la limpieza de archivos con la sincronización bloqueada antes de liberar el listener. Un recibo antiguo o ilegible, por sí solo, mantiene el listener abierto y conserva las pruebas de recuperación. Durante el apagado se rechaza un reinicio vinculado con `409 runtime_stopping`. Una terminación forzada puede omitir los manejadores de señales; sigue siendo necesaria la restauración del `ocx stop` del padre. Para volver a enrutar Codex por el Home, inicia primero el Child con `ocx start`, o `ocx service start` si está instalado como servicio, y después ejecuta `ocx sync --restart-codex`. Iniciar por sí solo no restablece el enrutamiento. Sincronizar con el Child detenido también lo restablece, pero apuntaría a un listener que no está ejecutándose: inicia primero el Child.
 
 Durante el apagado por señal sin supervisor, si se rechaza la limpieza de archivos o la restauración de Codex nativo o Grok, incluso por titularidad no verificable, el listener permanece abierto y la sincronización queda pausada; repara la configuración o la evidencia de titularidad indicada y vuelve a ejecutar `ocx stop`. Para salir del Home después de una parada rechazada, `ocx disconnect --recover-config --yes` completa la recuperación de la configuración y reinicia el Child retenido como OpenCodex independiente. Una parada o recuperación todavía en curso sigue rechazando el reinicio. Una parada explícita comprueba que el Child sigue atendiendo la conexión Link guardada y admite el bloqueo de parada. Después elimina las integraciones de archivos creadas por el Link antes de detener el proceso o el servicio. Si la conexión guardada no es válida, ha cambiado de titular o se rechaza la limpieza de archivos, repara la conexión o las pruebas de titularidad indicadas y vuelve a intentarlo. La parada también se rechaza antes de terminar el proceso si un registro de recuperación anterior impediría la restauración nativa. En una parada explícita con `ocx stop`, la restauración nativa se intenta después de que el Child haya terminado; un rechazo informa de la restauración incompleta y conserva las pruebas de recuperación, pero el listener ya está detenido.
@@ -125,7 +127,7 @@ Si OpenCodex no puede confirmar que un envoltorio terminó porque no dispone de 
 de objeto de proceso (handle), como puede ocurrir en ARM64, compruébalo en el Administrador de tareas desde la sesión
 de su propietario, detenlo si sigue en ejecución y vuelve a intentarlo.
 
-Si no puede demostrarse que el servicio se detuvo, `ocx stop` no envía una solicitud de parada al proxy, deja intacta la configuración del cliente y falla. Con `--json`, el resumen conserva `outcome: "failed"` y `proxy: "unknown"`, y añade `serviceStopReason`:
+Si no puede demostrarse que el servicio se detuvo, `ocx stop` no envía una solicitud de parada al proxy ni continúa con la restauración nativa compartida. En un Child de Remote Link, el prevuelo puede haber eliminado ya las integraciones de archivos propiedad del Link y pausado la sincronización; repara la parada del servicio y vuelve a ejecutar `ocx stop`. El comando falla. Con `--json`, el resumen conserva `outcome: "failed"` y `proxy: "unknown"`, y añade `serviceStopReason`:
 
 | `serviceStopReason` | Significado | Qué hacer |
 |---|---|---|
@@ -443,12 +445,22 @@ ocx catalog pull https://proxy.example.com/v1/catalog \
   --auth-env OPENCODEX_CATALOG_AUTH_TOKEN
 ```
 
-El valor se envía como un token de portador, pero nunca se acepta como un valor de argv. Las redirecciones son rechazadas, por lo que la autorización no puede cruzar orígenes. Las escrituras de catálogo y caché utilizan el bloqueo de catálogo Codex compartido y el escritor atómico. Una recuperación, validación, adquisición de bloqueos, escritura de catálogo o reconstrucción de caché fallida conserva los últimos archivos buenos conocidos. Si los bytes del catálogo son idénticos, la operación no cambia nada: conserva los mtimes y no modifica los procesos. `--restart-codex`, `--restart-app-server-only` y el alias `--restart-desktop-app` en desuso significan lo mismo aquí que en `ocx sync` y `ocx sync-cache`, y se aplican solo después de una escritura real.
+El valor se envía como token Bearer, pero no se acepta como argumento en argv. El comando
+rechaza las redirecciones para que la autorización no se envíe a otro origen. Las escrituras
+del catálogo y de la caché usan el bloqueo compartido del catálogo de Codex y el mecanismo
+de escritura atómica. Si falla la descarga, la validación, la adquisición del bloqueo o la
+escritura del catálogo o de la caché, se conservan los últimos archivos válidos.
+`--restart-codex`, `--restart-app-server-only` y el alias en desuso `--restart-desktop-app`
+seleccionan los mismos procesos que en `ocx sync` y `ocx sync-cache`. Al usar `ocx catalog pull`,
+solo se aplican si se escribe el catálogo.
 
 La URL debe nombrar `/v1/catalog` en la raíz del host. Este comando no admite un proxy inverso que sirva el punto final bajo un prefijo de ruta.
 
-El comando descarga el catálogo completo y compara bytes localmente en lugar de emitir un `ETag` /
-`If-None-Match` Solicitud condicional. Los bytes idénticos se tratan como un no-op completo, por lo que Codex casa cuyo catálogo es correcto, pero cuya `models_cache.json` falta o es rancio no reparado por este comando; usar `ocx sync-cache` Por eso.
+El comando descarga el catálogo completo y compara sus bytes localmente en vez de enviar una
+solicitud condicional con `ETag` / `If-None-Match`. Si los bytes del catálogo coinciden, el
+archivo se conserva sin cambios. El comando sí repara `models_cache.json` si falta o está
+desactualizado. En ese caso, el resultado puede indicar `status: "unchanged"` junto con
+`cacheSynced: true`. Si ambos archivos ya coinciden, mantienen sus fechas de modificación.
 
 `--json` emite un sobre estable en stdout. `schemaVersion`, `ok`, `status`, `catalogWritten`, `cacheSynced` y `codexRestarted` están siempre presentes. `codexRestarted` todavía significa solo servidores de aplicaciones. `desktopAppRestarted` está presente solo cuando se solicitó un reinicio del escritorio, y es `true` solo cuando se inició el relanzamiento; un traspaso no es un éxito. `status` es `updated`, `unchanged`, o `failed`. Un tirón exitoso agrega `modelCount`; un fallo agrega `code`, que es el campo en el que se ramifica un script:
 
@@ -680,7 +692,7 @@ ocx codex-shim uninstall
 Después de desinstalar Unix, elimine la línea de origen del archivo de inicio de shell y reinicie el shell o elimine la entrada de bin privado de su PATH. La desinstalación elimina el envoltorio, el archivo de entorno de shell y el estado propios; deja intacto el lanzador del administrador de paquetes. Se libera una shim Unix más antigua en el lugar utilizando sus datos de restauración registrados.
 
 :::note[Entorno del token en Windows]
-Windows CMD y las shims PowerShell recientemente generadas restauran el número de la persona que llama `OPENCODEX_API_AUTH_TOKEN` Después de la ejecución. Codex y sus procesos secundarios aún pueden heredar el token.
+Los shims nuevos de CMD y PowerShell en Windows restauran al terminar el valor de `OPENCODEX_API_AUTH_TOKEN` que tenía el proceso que los llamó. Codex y sus procesos secundarios aún pueden heredar el token.
 
 Después de actualizar OpenCodex, vuelva a crear una shim Windows existente con `ocx codex-shim uninstall` seguido por `ocx codex-shim install` para obtener este comportamiento. Una actualización ordinaria no reescribe una shim Windows saludable.
 :::

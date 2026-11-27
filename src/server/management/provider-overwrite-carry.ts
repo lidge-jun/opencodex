@@ -69,6 +69,8 @@ export const PROVIDER_COMPAT_CARRY_FIELDS = [
   // Whether this gateway runs Claude Code's Advisor server tool (#8448): a fact about the upstream,
   // so a move to another gateway must not keep forwarding it there.
   "forwardAdvisorTool",
+  // The video job wire (#9110) is a fact about the upstream the form cannot send.
+  "videoApi",
   ...RETRY_POLICY_FIELDS,
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
 

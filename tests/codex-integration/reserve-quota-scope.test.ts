@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -70,6 +71,7 @@ describe("Reserve quota scope", () => {
     previousFetch = globalThis.fetch;
     directory = mkdtempSync(join(tmpdir(), "ocx-reserve-quota-scope-"));
     process.env.OPENCODEX_HOME = directory;
+    bindStoredCodexPoolRoutingForTests();
     process.env.CODEX_HOME = join(directory, "codex");
     mkdirSync(process.env.CODEX_HOME, { recursive: true });
     clearAccountQuota();

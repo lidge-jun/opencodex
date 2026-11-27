@@ -24,6 +24,12 @@ while empty installation and turn-metadata headers retain their existence gates.
 `src/codex/forward-transport-headers.ts` also isolates a present installation field inside native
 turn metadata and strips caller attestations from substituted credentials. Its selected-header merge
 prevents removed identity fields from reappearing through provider defaults.
+Its `FORWARD_HEADERS` allowlist also carries Codex's stream-exclusion requests, `x-codex-exclude`
+and `x-codex-exclude-stream-fields`, to the canonical destination only. These requests keep the
+backend from echoing the tool catalog and per-item usage attribution, and from sending delta sequence
+numbers or preliminary reasoning ciphertext. No canonical-path consumer reads those fields; sequence
+numbers are validated only when present. Destinations OpenCodex does not operate never receive the
+headers (`tests/codex-integration/codex-metadata-integrity.test.ts`).
 For an object with a nonblank string `installation_id`, including one already matching the selected
 identity, turn-metadata JSON is canonicalized and escapes every code unit outside
 printable ASCII: `JSON.stringify` escapes U+0000–U+001F (with short forms such as `\n` and
