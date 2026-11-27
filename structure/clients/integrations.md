@@ -319,7 +319,7 @@ New records pair the exact contribution fingerprints with semantic fingerprints 
 sort JSON object keys while preserving array order. Existing records without the semantic companion
 fall back to comparing the recorded generated contribution when the catalog has not moved. This
 keeps old records readable while preventing a client's formatting-only key reorder from
-masquerading as a protected edit.
+masquerading as a protected edit. On the shared JSON files for Qoder, Qoder CN and OpenCode, a clean Advisor MCP companion write advances `fileFingerprint` but not the journal `resultFingerprint`, so Undo sees drift and requires confirmation.
 
 > Decision record: [ADR-0091](../decisions/ADR-0091-ownership-axes.md)
 
@@ -597,4 +597,4 @@ Native pair writes replace the named directory entries without following final s
 present at validation is refused, and one exchanged into place during a mutation is refused rather
 than redirecting OpenCodex's write outside Cline's settings directory.
 
-Routed `ocx claude` launches apply opt-in `claudeCode.subagentModelForce` via independent user-wins defaults for `CLAUDE_CODE_SUBAGENT_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`. Native launches add neither; plain Claude and persistent settings remain unchanged. Claude Code 2.1.257+ implements force, excluding forks and inherit-model skills; main and small-fast models remain separate. A clean companion write (Advisor MCP on shared JSON) advances the ownership record's `fileFingerprint` but never the journal `resultFingerprint`, so Undo of the earlier operation treats it as drift and requires confirmation instead of silently removing it.
+Routed `ocx claude` launches apply opt-in `claudeCode.subagentModelForce` via independent user-wins defaults for `CLAUDE_CODE_SUBAGENT_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`. Native launches add neither; plain Claude and persistent settings remain unchanged. Claude Code 2.1.257+ implements force, excluding forks and inherit-model skills; main and small-fast models remain separate.
