@@ -176,6 +176,30 @@ describe("combo hop on the undeclared-tool guard's refusal (#9163)", () => {
     });
   }
 
+  // The buffered application/json refusal branch never runs the SSE block rewrite, so its
+  // provenance must be marked directly: a primary answering non-streaming JSON with an
+  // undeclared call still hops without cooling the target (#9163).
+  for (const stream of [true, false] as const) {
+    test(`Responses: a buffered JSON undeclared call advances without cooling the target (stream=${stream})`, async () => {
+      const hits: string[] = [];
+      const refusedJson = () => new Response(JSON.stringify({ ...success("x", "m1"), output: [{ ...call("fc_9", "code_runner/bash"), arguments: "{}", status: "completed" }] }), { headers: { "content-type": "application/json" } });
+      const a = serve(() => { hits.push("a"); return refusedJson(); });
+      const b = serve(() => { hits.push("b"); return new Response(JSON.stringify(success("BACKUP_OK", "m2")), { headers: { "content-type": "application/json" } }); });
+      const config = {
+        port: 0,
+        defaultProvider: "a",
+        providers: { a: provider("openai-responses", baseUrl(a), "key-a"), b: provider("openai-responses", baseUrl(b), "key-b") },
+        combos: { free: { strategy: "failover", targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] } },
+      } as OcxConfig;
+      const response = await handleResponses(responsesRequest(stream), config, { model: "", provider: "" });
+      const body = await response.text();
+      expect(hits).toEqual(["a", "b"]);
+      expect(body).toContain("BACKUP_OK");
+      expect(body).not.toContain("code_runner/bash");
+      expect(firstTargetCooled()).toBe(false);
+    });
+  }
+
   test("Responses: an upstream error before an undeclared call keeps its own cooldown", async () => {
     // The guard trips on the later call, but the failure the combo judges is the upstream's own
     // rate-limit error: that verdict, not the guard's, decides the cooldown.
