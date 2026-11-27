@@ -1,8 +1,6 @@
 import { spawn } from "node:child_process";
-import { join } from "node:path";
 import { startWindowsCliChild, type WindowsCliChild } from "../codex/windows-cli-child";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
-import { resolveTrustedWindowsSystemDirectory } from "../lib/windows-elevation";
 
 export const FOREGROUND_ADVISORY_ARG = "__foreground-service-advisory";
 const TIMEOUT_MS = 3_000;
@@ -10,10 +8,6 @@ const REAP_MS = 1_000;
 const POLL_MS = 5;
 const SETTLE_POLL_MS = 250;
 const MAX_BYTES = 8_192;
-const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9;
-const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x0000_2000;
-const JOB_EXTENDED_LIMIT_BYTES = 144;
-const JOB_LIMIT_FLAGS_OFFSET = 16;
 
 export interface ForegroundAdvisoryEligibility {
   cleaned: boolean;
@@ -51,12 +45,12 @@ export interface ForegroundAdvisoryDeps {
   launch?: () => ReturnType<typeof spawn>;
   /**
    * Windows pre-resume Job-contained launcher override for tests. Defaults to
-   * `startWindowsCliChild`, which creates the probe `CREATE_SUSPENDED`, assigns it to an
-   * unnamed Job Object before `ResumeThread`, and fails closed if containment cannot be established.
+   * `startWindowsCliChild` with `killOnJobClose: true`, which configures
+   * `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` before `CreateProcessW`, creates the probe
+   * `CREATE_SUSPENDED`, assigns it to the Job Object before `ResumeThread`, and fails
+   * closed if containment cannot be established.
    */
   launchWindows?: () => ContainedWindowsAdvisoryChild;
-  /** Override for applying `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` to the Windows job in tests. */
-  setKillOnJobClose?: (job: bigint) => boolean;
   timeoutMs?: number;
   reapMs?: number;
   pollMs?: number;
@@ -107,44 +101,6 @@ function publishAdvisoryOutput(raw: string, warn: (line: string) => void): void 
   } catch { /* optional output */ }
 }
 
-let winJobLimitApi: {
-  readonly lib: { close(): void };
-  setInformationJobObject: (job: bigint, infoClass: number, infoPtr: number, length: number) => number;
-  ptr: typeof import("bun:ffi").ptr;
-} | null | undefined;
-
-function enableWindowsKillOnJobClose(job: bigint): boolean {
-  if (winJobLimitApi === undefined) {
-    winJobLimitApi = null;
-    if (process.platform === "win32" && process.arch === "x64") {
-      try {
-        const ffi = require("bun:ffi") as typeof import("bun:ffi");
-        const lib = ffi.dlopen(join(resolveTrustedWindowsSystemDirectory(), "kernel32.dll"), {
-          SetInformationJobObject: { args: ["u64", "i32", "ptr", "u32"], returns: "i32" },
-        });
-        winJobLimitApi = {
-          lib,
-          setInformationJobObject: (handle, cls, infoPtr, len) => lib.symbols.SetInformationJobObject(handle, cls, infoPtr, len),
-          ptr: ffi.ptr,
-        };
-      } catch { /* kernel32 SetInformationJobObject unavailable */ }
-    }
-  }
-  if (!winJobLimitApi) return false;
-  try {
-    const info = Buffer.alloc(JOB_EXTENDED_LIMIT_BYTES);
-    info.writeUInt32LE(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_LIMIT_FLAGS_OFFSET);
-    return Boolean(winJobLimitApi.setInformationJobObject(
-      job,
-      JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-      winJobLimitApi.ptr(info),
-      JOB_EXTENDED_LIMIT_BYTES,
-    ));
-  } catch {
-    return false;
-  }
-}
-
 function disposeWindowsHandlesAsync(child: ContainedWindowsAdvisoryChild): void {
   void child.pipe.dispose().then(() => {
     if (child.process) child.native.close(child.process);
@@ -171,6 +127,7 @@ function startWindowsContainedAdvisory(
       cwd: process.cwd(),
       env: process.env,
       policy: "version",
+      killOnJobClose: true,
     })))();
   } catch {
     // Fail closed when kernel Job Object containment is unavailable (e.g. Windows ARM64):
@@ -229,8 +186,9 @@ function startWindowsContainedAdvisory(
     const ok = terminateJob();
     if (sync) {
       // Synchronous exit path: stop any pending timer. JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-      // guarantees the kernel terminates the probe tree on parent exit even if TerminateJobObject
-      // returned false; retain the job handle until process exit when termination was not confirmed.
+      // was armed on child.job before CreateProcessW/ResumeThread, so Windows terminates the
+      // entire probe tree on parent exit even if TerminateJobObject returned false; retain
+      // child.job open until process exit when termination was not confirmed.
       clearPoll();
       if (ok) disposed = true;
       return;
@@ -291,17 +249,6 @@ function startWindowsContainedAdvisory(
     }
     schedulePoll(pollMs);
   };
-
-  // Enforce JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE on the probe's job so even if TerminateJobObject
-  // fails during shutdown or the parent crashes, Windows terminates the entire probe tree on exit.
-  const killOnCloseApplied = (() => {
-    try { return (deps.setKillOnJobClose ?? enableWindowsKillOnJobClose)(child.job); }
-    catch { return false; }
-  })();
-  if (!killOnCloseApplied) {
-    stop(false);
-    return stop;
-  }
 
   schedulePoll();
   return stop;

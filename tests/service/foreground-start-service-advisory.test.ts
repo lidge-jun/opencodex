@@ -1,5 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { read } from "bun:ffi";
+import { startWindowsCliChildWithNative } from "../../src/codex/windows-cli-child";
+import { WIN64_CHILD_ABI, type WindowsChildNative } from "../../src/codex/windows-cli-child-native";
 import {
   FOREGROUND_ADVISORY_ARG,
   maybeStartForegroundAdvisory,
@@ -279,7 +282,6 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
 
   test("normal Windows completion publishes advisory and releases handles without TerminateJobObject", async () => {
     const warnings: string[] = [];
-    const killOnCloseJobs: bigint[] = [];
     const fake = createFakeContainedWindowsChild({
       outputChunks: [Buffer.from(JSON.stringify(["windows advisory"]))],
       terminal: true,
@@ -289,12 +291,10 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
       platform: "win32",
       pollMs: 5,
       launchWindows: () => fake.child,
-      setKillOnJobClose: job => { killOnCloseJobs.push(job); return true; },
     });
     try {
       await Bun.sleep(40);
       expect(warnings).toEqual(["windows advisory"]);
-      expect(killOnCloseJobs).toEqual([0x100n]);
       // Later CLI shutdown (both async and synchronous exit paths) must not call
       // TerminateJobObject with an already-closed job handle that Windows could reuse.
       stop(false);
@@ -320,7 +320,6 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
       timeoutMs: 30,
       pollMs: 5,
       launchWindows: () => fake.child,
-      setKillOnJobClose: () => true,
     });
     try {
       await Bun.sleep(90);
@@ -342,7 +341,6 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
       timeoutMs: 10_000,
       pollMs: 50,
       launchWindows: () => fake.child,
-      setKillOnJobClose: () => true,
     });
     stop(true);
     expect(fake.state().terminatedJobs).toEqual([{ job: 0x100n, code: 1 }]);
@@ -351,14 +349,9 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
 
   test("slow-to-settle job and failed TerminateJobObject keep backoff polling until terminal so handles never leak", async () => {
     let allowTerminate = false;
-    let stayNonterminalAfterTerminate = true;
     const fake = createFakeContainedWindowsChild({
       terminal: false,
-      onTerminateJob: () => {
-        if (!allowTerminate) return false;
-        if (stayNonterminalAfterTerminate) return undefined;
-        return undefined;
-      },
+      onTerminateJob: () => allowTerminate ? undefined : false,
     });
     // Override observe so we can simulate a job that takes longer than reapMs to settle even after
     // TerminateJobObject succeeds.
@@ -376,7 +369,6 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
       pollMs: 5,
       settlePollMs: 15,
       launchWindows: () => wrappedChild,
-      setKillOnJobClose: () => true,
     });
     try {
       // Wait past timeoutMs + reapMs while TerminateJobObject fails: handles stay owned and retry continues.
@@ -393,7 +385,6 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
       expect(fake.state().closedHandles).toEqual([]);
 
       // Once the slow job finally becomes terminal, backoff polling disposes all handles cleanly.
-      stayNonterminalAfterTerminate = false;
       externallyTerminal = true;
       await Bun.sleep(50);
       expect(fake.state().pipeDisposed).toBe(1);
@@ -415,7 +406,6 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
       timeoutMs: 10_000,
       pollMs: 5,
       launchWindows: () => fake.child,
-      setKillOnJobClose: () => true,
     });
     try {
       await Bun.sleep(60);
@@ -426,7 +416,7 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
     }
   });
 
-  test("Windows fails closed when pre-resume Job containment or kill-on-close cannot be established", async () => {
+  test("Windows arms kill-on-job-close before CreateProcessW and fails closed before any process is created or resumed", async () => {
     const warnings: string[] = [];
     const unsupportedStop = startForegroundAdvisory(line => warnings.push(line), {
       platform: "win32",
@@ -447,19 +437,121 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
     expect(failedSetup.state().pipeDisposed).toBe(1);
     expect(failedSetup.state().closedHandles).toEqual([0x200n, 0x100n]);
 
-    const failedKillOnClose = createFakeContainedWindowsChild({ terminal: false });
+    // Real startWindowsCliChildWithNative fault injection: SetInformationJobObject fails BEFORE
+    // CreateProcessW/ResumeThread even run, and TerminateJobObject also returns 0. Verify no process
+    // is ever created or resumed and production shutdown (stop(false) then single stop(true)) stays clean.
+    const calls: string[] = [];
+    const observedLimits: Array<{ job: bigint; infoClass: number; flags: number; length: number }> = [];
+    const makeMockNative = (setLimitResult: number) => {
+      const handles = new Set<bigint>();
+      const borrowedMemory = new Set<Buffer>();
+      const closed: bigint[] = [];
+      let disposed = 0;
+      const native = {
+        handles,
+        borrowedMemory,
+        closeErrors: [] as bigint[],
+        k: {
+          CreateJobObjectW: () => { calls.push("CreateJobObjectW"); return 0x100n; },
+          SetInformationJobObject: (job: bigint, infoClass: number, infoPtr: number, length: number) => {
+            calls.push("SetInformationJobObject");
+            observedLimits.push({
+              job,
+              infoClass,
+              flags: read.u32(infoPtr as never, WIN64_CHILD_ABI.jobLimitFlags),
+              length,
+            });
+            return setLimitResult;
+          },
+          CreateProcessW: () => { calls.push("CreateProcessW"); return 0; },
+          ResumeThread: () => { calls.push("ResumeThread"); return 1; },
+          TerminateJobObject: () => { calls.push("TerminateJobObject"); return 0; },
+          GetLastError: () => 5,
+          CloseHandle: (handle: bigint) => { closed.push(handle); return 1; },
+        },
+        keep(value: number | bigint) {
+          const handle = BigInt(value);
+          handles.add(handle);
+          return handle;
+        },
+        close(handle: bigint) {
+          if (!handles.has(handle)) return;
+          closed.push(handle);
+          handles.delete(handle);
+        },
+        dispose() {
+          if (handles.size || borrowedMemory.size) return false;
+          disposed += 1;
+          return true;
+        },
+      };
+      return { native: native as unknown as WindowsChildNative, closed, getDisposed: () => disposed };
+    };
+
+    const failMock = makeMockNative(0);
+    const killOnCloseFailChild = startWindowsCliChildWithNative({
+      executable: "C:\\Program Files\\bun\\bun.exe",
+      args: [FOREGROUND_ADVISORY_ARG],
+      cwd: "C:\\Users\\tester",
+      env: {},
+      policy: "version",
+      killOnJobClose: true,
+    }, failMock.native);
+    expect(killOnCloseFailChild.setupFailure).toBe("job_kill_on_close");
+    expect(killOnCloseFailChild.process).toBe(0n);
+    expect(calls).toEqual(["CreateJobObjectW", "SetInformationJobObject"]);
+    expect(observedLimits).toEqual([{
+      job: 0x100n,
+      infoClass: 9,
+      flags: 0x2000,
+      length: WIN64_CHILD_ABI.jobExtendedLimit,
+    }]);
+
+    // Route that failed-setup child through startForegroundAdvisory and the production
+    // shutdown -> single syncCleanup lifecycle (no probe ever created; handles disposed cleanly).
     const abortedStop = startForegroundAdvisory(line => warnings.push(line), {
       platform: "win32",
-      launchWindows: () => failedKillOnClose.child,
-      setKillOnJobClose: () => false,
+      launchWindows: () => killOnCloseFailChild,
     });
+    abortedStop(false);
+    abortedStop(true);
     await Bun.sleep(20);
-    expect(failedKillOnClose.state().terminatedJobs).toEqual([{ job: 0x100n, code: 1 }]);
-    expect(failedKillOnClose.state().pipeDisposed).toBe(1);
-    expect(failedKillOnClose.state().closedHandles).toEqual([0x200n, 0x100n]);
+    expect(failMock.closed).toEqual([0x100n]);
+    expect(failMock.getDisposed()).toBe(1);
+    expect(calls).toEqual(["CreateJobObjectW", "SetInformationJobObject"]);
+
+    // When kill-on-close is armed before CreateProcessW and TerminateJobObject later fails through
+    // production shutdown (stop(false)) and a single syncCleanup (stop(true)), the job handle stays
+    // open until parent exit so Windows JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE reaps the probe tree.
+    const unkillable = createFakeContainedWindowsChild({
+      terminal: false,
+      onTerminateJob: () => false,
+    });
+    const unkillableStop = startForegroundAdvisory(line => warnings.push(line), {
+      platform: "win32",
+      pollMs: 5,
+      launchWindows: () => unkillable.child,
+    });
+    unkillableStop(false);
+    unkillableStop(true);
+    await Bun.sleep(25);
+    expect(unkillable.state().terminatedJobs.length).toBeGreaterThanOrEqual(2);
+    expect(unkillable.state().closedHandles).toEqual([]);
+    expect(unkillable.state().pipeDisposed).toBe(0);
+
+    // Durable recovery jobs remain incompatible with killOnJobClose.
+    expect(() => startWindowsCliChildWithNative({
+      executable: "C:\\Program Files\\bun\\bun.exe",
+      args: [FOREGROUND_ADVISORY_ARG],
+      cwd: "C:\\Users\\tester",
+      env: {},
+      policy: "installer",
+      recoveryJobName: "Global\\ocx-cli-12345678-1234-1234-1234-123456789abc",
+      killOnJobClose: true,
+    }, makeMockNative(1).native)).toThrow("windows_child_invalid_invocation");
+
     expect(warnings).toEqual([]);
     failedStop(true);
-    abortedStop(true);
   });
 
   test("timeout still terminates a living descendant holding stdout after the probe root exits on POSIX", async () => {

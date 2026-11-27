@@ -22,6 +22,8 @@ export interface WindowsCliChildInvocation {
   /** Private durable recovery identity, selected before native creation. */
   readonly recoveryJobName?: string;
   readonly recoveryProof?: CodexCliUpdateNativeRecoveryProof;
+  /** Opt-in JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, applied before CreateProcessW. Incompatible with recoveryJobName. */
+  readonly killOnJobClose?: boolean;
 }
 export interface WindowsCliChildResult {
   readonly terminal: boolean;
@@ -44,6 +46,7 @@ function validate(invocation: WindowsCliChildInvocation): void {
     || !localAbsolute(invocation.cwd) || !Array.isArray(invocation.args)
     || invocation.args.some(arg => typeof arg !== "string" || arg.includes("\0"))
     || !windowsCliChildPolicy(invocation.policy)
+    || (invocation.killOnJobClose && invocation.recoveryJobName !== undefined)
     || (invocation.recoveryJobName !== undefined && !/^Global\\ocx-cli-[0-9a-f-]{36}$/.test(invocation.recoveryJobName))) throw new Error("windows_child_invalid_invocation");
 }
 function environmentBlock(env: Readonly<NodeJS.ProcessEnv>, native: WindowsChildNative): Buffer {
@@ -195,6 +198,11 @@ export function startWindowsCliChildWithNative(invocation: WindowsCliChildInvoca
         if (k.GetLastError!() === 183) throw new Error("windows_child_job_exists");
       } finally { k.LocalFree!(descriptor); }
     } else child.job = native.keep(k.CreateJobObjectW!(null, null));
+    if (invocation.killOnJobClose) {
+      const limits = Buffer.alloc(WIN64_CHILD_ABI.jobExtendedLimit);
+      limits.writeUInt32LE(0x2000, WIN64_CHILD_ABI.jobLimitFlags); // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+      if (!k.SetInformationJobObject!(child.job, 9, ptr(limits), limits.length)) throw new Error("job_kill_on_close");
+    }
     child.pipe.open();
     const inheritable = securityAttributes(true), nul = wide("NUL");
     stdin = native.keep(k.CreateFileW!(ptr(nul), 0x80000000, 3, ptr(inheritable), 3, 0, 0n));
