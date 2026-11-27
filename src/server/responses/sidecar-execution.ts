@@ -311,7 +311,7 @@ export async function executeResponsesSidecars(
   // A prefix-preserving summary plans like the ordinary turn but never searches: it declares the
   // same synthetic tool and keeps the same replayed searches, so Anthropic reads the ordinary
   // request's cached prefix instead of rewriting it (#7307).
-  const summaryWsPlan = routedCompaction && parsed._summaryWebSearch && !transportState.adapter.runTurn
+  const summaryWsPlan = routedCompaction && parsed._summaryWebSearch
     ? planWebSearch(config, { ...parsed, _webSearch: parsed._summaryWebSearch }, false, route.provider, route.modelId,
       openAiSidecar, { admission: options.admission, codexAuthPolicy: options.codexAuthPolicy,
         providerName: route.providerName, routedTransport: "http" })
