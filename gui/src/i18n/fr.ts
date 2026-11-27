@@ -347,7 +347,7 @@ export const fr: Record<TKey, string> = {
   "advisor.mcp.badgeRouted": "Routé",
   "advisor.mcp.badgeDetected": "Installé",
   "advisor.mcp.badgeMounted": "Connecté",
-  "advisor.mcp.badgeHookSkill": "Hook + Skill",
+  "advisor.mcp.badgeHookSkill": "Hook + compétence",
   "advisor.mcp.trust.trusted": "Approuvé",
   "advisor.mcp.trust.actionRequired": "Cliquer sur Approuver dans le client",
   "advisor.mcp.trust.needsConfirmation": "Confirmer dans les réglages MCP",
