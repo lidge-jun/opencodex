@@ -80,8 +80,8 @@ export function findSelector(state: readonly AcpConfigOption[], category: "model
   return byId.length === 1 ? { ok: true, selector: byId[0]! } : { ok: false, reason: "missing" };
 }
 
-/** Lower-case, trimmed, whitespace collapsed to hyphens. */
-export const normalizeLabel = (value: string): string => value.trim().toLowerCase().replace(/\s+/g, "-");
+/** Lower-case, trimmed, whitespace and dots collapsed to hyphens. */
+export const normalizeLabel = (value: string): string => value.trim().toLowerCase().replace(/[\s.]+/g, "-");
 
 export type ValueMatch = { ok: true; value: AcpSelectValue } | { ok: false; reason: "none" | "ambiguous" };
 

@@ -221,6 +221,7 @@ describe("agy acp turn", () => {
     ["gemini-3.8-flash", "Claude Opus 5.5", "claude-opus-5-5", false],
     ["claude-opus-5-5", "Gemini 3.8 Flash", "claude-opus-5-5", false],
     ["claude-opus-5-5", "Claude Opus 5.5", "claude-opus-5-5", true],
+    ["opaque-claude", "Claude Opus 5.5", "claude-opus-5-5", true],
     ["gemini-3.8-flash", "Recommended", "gemini-3.8-flash", true],
     ["opaque", "Gemini 3.8 Flash", "gemini-3.8-flash", true],
   ] as const)("requires consistent Gemini/Claude evidence for %s / %s (%s)", async (value, name, modelId, allowed) => {
