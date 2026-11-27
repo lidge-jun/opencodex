@@ -31,6 +31,7 @@ import {
 } from "./options";
 import { AGY_ACP_MIN_VERSION, AGY_INSTALL_HINT, MAX_AGY_VERSION_OUTPUT_LENGTH, probeAgyVersion, readAgyExecutable, resolveAgyBinary, type AgyVersionProbe } from "./binary";
 import { AgyAcpCleanupError, AgyAcpTreeCleanupError, agySpawnCreatedNoProcess, createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild, type AgyAcpSpawn, type TurnWorkspace } from "./process";
+import { selectedLaunch } from "./profiles";
 import { AcpTurnOutput } from "./output-redaction";
 import { agyAcpPolicyRefusal } from "./policy";
 
@@ -207,7 +208,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       if (!binary) { emit(failure("agy_acp_unavailable", AGY_INSTALL_HINT)); return; }
       const initial = readAgyExecutable(binary);
       if (!initial) { emit(failure("agy_acp_unavailable", AGY_INSTALL_HINT)); return; }
-      const version = await probeVersion(initial.path, incoming.abortSignal);
+      let version = await probeVersion(initial.path, incoming.abortSignal);
       if (incoming.abortSignal?.aborted) return;
       if (!version.ok) { emitVersionFailure(version, emit); return; }
       let workspace: TurnWorkspace;
@@ -233,8 +234,9 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
             }
             return;
           }
+          version = refreshed;
         }
-        await driveTurn({ binary: executable.path, workspace, parsed, incoming, emit, requested, thoughtWanted });
+        await driveTurn({ version: version.version, binary: executable.path, workspace, parsed, incoming, emit, requested, thoughtWanted });
       } catch (error) {
         if (!(error instanceof AgyAcpCleanupError)) throw error;
         emit({ type: "error", status: 502, errorType: "upstream_error", code: "agy_acp_protocol", message: error.message });
@@ -243,13 +245,21 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
   };
 
   async function driveTurn(turn: {
-    binary: string; workspace: TurnWorkspace; parsed: OcxParsedRequest; incoming: IncomingMeta;
+    version: string; binary: string; workspace: TurnWorkspace; parsed: OcxParsedRequest; incoming: IncomingMeta;
     emit: (event: AdapterEvent) => void; requested: string; thoughtWanted: readonly string[] | undefined;
   }): Promise<void> {
     const { workspace, parsed, incoming, emit, requested, thoughtWanted } = turn;
+    let profile: ReturnType<typeof selectedLaunch>;
+    try {
+      profile = selectedLaunch(turn.version);
+    } catch {
+      await cleanup(workspace);
+      emit(failure("agy_acp_unavailable", "Check the selected account with ocx account agy list and use agy 1.5.18+ for named accounts."));
+      return;
+    }
     let child: AgyAcpChild;
     try {
-      child = spawnChild(turn.binary, [...AGY_ACP_ARGS], { cwd: workspace.dir, env: childEnv(workspace) });
+      child = spawnChild(turn.binary, [...AGY_ACP_ARGS, ...profile.args], { cwd: workspace.dir, env: { ...childEnv(workspace), ...profile.env } });
     } catch {
       await cleanup(workspace);
       emit(failure("agy_acp_unavailable", AGY_INSTALL_HINT));

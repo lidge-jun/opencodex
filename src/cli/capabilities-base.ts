@@ -355,6 +355,13 @@ export const CAPABILITIES: readonly Capability[] = [
     usage: "ocx account list [provider] [--all] [--quota [--refresh]] [--json]",
   },
   {
+    command: ["account", "agy"],
+    summary: "Register and manually select a host-local Antigravity ACP sign-in.",
+    routes: [], flags: [], mutates: true, json: "none",
+    usage: "ocx account agy list | add <name> | use <name|default>",
+    details: ["List is read-only. Add opens agy's interactive login. Use applies to new ACP turns."],
+  },
+  {
     command: ["account","import-orca"],
     summary: "Preview or register read-only links to Orca-managed Codex accounts without another login.",
     routes: [],

@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 44.
+Declared capabilities: 45.
 
 ### `ocx account login`
 
@@ -116,6 +116,18 @@ State-changing: no. JSON mode: `envelope`.
 
 - Omitting provider discovers OAuth providers and includes configured families. JSON is {accounts,notes}, not a raw server account array.
 - Default listing is observational. --quota can probe provider quotas; --refresh is only acted on together with --quota. A refresh observation is not pending-account validation consent.
+
+### `ocx account agy`
+
+Usage: `ocx account agy list | add <name> | use <name|default>`
+
+Register and manually select a host-local Antigravity ACP sign-in.
+
+State-changing: yes. JSON mode: `none`.
+
+Drives no management route.
+
+- List is read-only. Add opens agy's interactive login. Use applies to new ACP turns.
 
 ### `ocx account import-orca`
 
