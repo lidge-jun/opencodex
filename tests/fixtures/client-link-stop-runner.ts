@@ -49,6 +49,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   busyStopFence?: boolean;
   busyRollbackPublication?: boolean;
   retryRollbackPublication?: "lifecycle" | "config" | "owner-changed" | "exhausted";
+  rollbackBindContention?: "unchanged" | "pending" | "stop";
   finalRollbackProof?: "pending" | "config-held";
   terminationPlatform?: "linux" | "darwin";
   siblingEscalation?: "stopping" | "different-generation";
@@ -369,16 +370,24 @@ if (options.mode === "retry") {
       throw new apply.LinkApplyBusyError();
     } }));
   }
-  if (options.failedRollback || options.retryRollbackPublication || options.refusedDisconnectRecycle) {
+  if (options.failedRollback || options.retryRollbackPublication || options.rollbackBindContention || options.refusedDisconnectRecycle) {
     const controller = await import("../../src/client/runtime-restart");
     const create = controller.createClientRestartController;
     mock.module("../../src/client/runtime-restart", () => ({ ...controller, createClientRestartController: (...args: Parameters<typeof create>) => {
-      const result = options.retryRollbackPublication === "exhausted" || options.refusedDisconnectRecycle
+      const result = options.retryRollbackPublication === "exhausted" || options.rollbackBindContention || options.refusedDisconnectRecycle
         ? create({ ...args[0], exitProcess: code => { rollbackExit = code; } })
         : create(...args);
       restartSettled = result.settled;
       return result;
     } }));
+  }
+  let portHolder: ReturnType<typeof Bun.serve> | undefined;
+  if (options.rollbackBindContention) {
+    const rollback = await import("../../src/client/runtime-rollback");
+    const retry = rollback.retryClientRollback;
+    mock.module("../../src/client/runtime-rollback", () => ({ ...rollback,
+      retryClientRollback: (attempt: Parameters<typeof retry>[0]) => retry(attempt, { deadline: performance.now() + 250 }),
+    }));
   }
   if (options.retryRollbackPublication === "exhausted" || contendProof) {
     if (!contendProof) lock(() => {}, lifecycleLockDeps);
@@ -423,6 +432,13 @@ if (options.mode === "retry") {
           }), { mode: 0o600 });
           if (options.refusedDisconnectRecycle === "pending") (await import("../../src/client/state")).markClientConnectPending(expected.tokenFingerprint);
           protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
+        }
+        if (options.rollbackBindContention && replacementAttempts === 1) {
+          portHolder = Bun.serve({ hostname: "127.0.0.1", port: config.port, fetch: () => new Response("occupied") });
+          if (options.rollbackBindContention === "pending") {
+            const { markClientConnectPending } = await import("../../src/client/state");
+            lock(() => markClientConnectPending("a".repeat(64)), lifecycleLockDeps);
+          }
         }
         if (options.failedRollback === "before-rebind") replaceSavedConnection();
         if (replacementAttempts === 1) throw Object.assign(new Error("fixture replacement refused"), { code: "not_ready" });
@@ -494,6 +510,15 @@ if (options.mode === "retry") {
       const bound = published && (await fetch(`http://127.0.0.1:${config.port}/healthz`)).ok;
       report({ preflight, closedBeforeYield, published, bound, rollbackBinds, replacementAttempts,
         stopping: after.clientStopping, explicitStop: after.clientStopRequested, rollbackExit });
+      process.exit(0);
+    }
+    if (options.rollbackBindContention) {
+      await restartSettled!();
+      await portHolder?.stop(true);
+      const after = readRuntimePort(process.pid);
+      report({ preflight, published: after !== null && after.servingGeneration !== before.servingGeneration,
+        rollbackBinds, replacementAttempts, rollbackExit,
+        stopping: after?.clientStopping, explicitStop: after?.clientStopRequested });
       process.exit(0);
     }
     if (options.failedRollback || options.refusedDisconnectRecycle) {

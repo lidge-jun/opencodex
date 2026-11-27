@@ -179,6 +179,20 @@ for (const finalRollbackProof of ["pending", "config-held"] as const) {
   }, 20_000);
 }
 
+for (const contention of ["unchanged", "pending", "stop"] as const) {
+  test(`rollback port contention ${contention === "unchanged" ? "fails unchanged Link recovery" : `defers exit under concurrent ${contention}`}`, async () => {
+    const report = await runStop({
+      mode: contention === "stop" ? "file-restart-overlap" : "file-restart-control",
+      preserve: "restart-rollback",
+      fileOnly: true,
+      rollbackBindContention: contention,
+    });
+    expect(report.result).toMatchObject({ published: false, rollbackBinds: 0, replacementAttempts: 1 });
+    expect(report.result.rollbackExit).toBe(contention === "unchanged" ? 1 : undefined);
+    expect(report.protectedUnchanged).toBe(true);
+  }, 20_000);
+}
+
 for (const receipt of ["complete", "pending", "other-owner"] as const) {
   test(`a refused recycle after rollback exits only for its own completed disconnect (${receipt})`, async () => {
     const report = await runStop({ mode: "file-restart-control", preserve: "restart-rollback", refusedDisconnectRecycle: receipt });

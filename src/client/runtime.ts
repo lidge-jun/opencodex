@@ -607,11 +607,20 @@ export async function startClientRuntime(
         await recycleAfterRollback();
         return;
       }
-      if (await retryClientRollback(async remainingMs => {
-        observeExplicitStop();
-        if (clientRestartRollbackAction(state.value, readClientConnectionState()) === "recycle") return "refused";
-        return serve({ port: servedPort, portWaitMs: remainingMs });
-      }, { deadline }) !== "published") {
+      let rollbackResult: ClientRollbackAttempt | "bind_failed";
+      let bindError: unknown;
+      try {
+        rollbackResult = await retryClientRollback(async remainingMs => {
+          observeExplicitStop();
+          if (clientRestartRollbackAction(state.value, readClientConnectionState()) === "recycle") return "refused";
+          return serve({ port: servedPort, portWaitMs: remainingMs });
+        }, { deadline });
+      } catch (error) {
+        if (!linkMode) throw error;
+        bindError = error;
+        rollbackResult = "bind_failed";
+      }
+      if (rollbackResult !== "published") {
         // The old config can still be current after a new connect claims its credential.
         // Take the final snapshot under C, which excludes publication of that pending marker.
         if (linkMode && clientRestartRollbackAction(state.value, readClientConnectionStateWithEvidence()) === "resume") {
@@ -624,7 +633,12 @@ export async function startClientRuntime(
             return;
           }
           if (action === "defer") return;
-          if (action === "resume") throw Object.assign(new Error("Could not republish the Link listener"), { code: "client_rollback_unpublished" });
+          if (action === "resume") {
+            throw Object.assign(
+              new Error("Could not republish the Link listener", bindError !== undefined ? { cause: bindError } : undefined),
+              { code: "client_rollback_unpublished" },
+            );
+          }
         }
         await recycleAfterRollback();
       }
