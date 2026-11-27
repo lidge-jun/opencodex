@@ -44,11 +44,17 @@ interface FenceState {
   opening: boolean;
 }
 
+interface FenceRunState {
+  char: "`" | "~";
+  length: number;
+}
+
 interface ScanResult {
   safe: string;
   held: string;
   fail: boolean;
   fence: FenceState | null;
+  fenceRun: FenceRunState | null;
   lineStart: boolean;
 }
 
@@ -118,14 +124,33 @@ function matchControlSequence(text: string, index: number): "fail" | "hold" | nu
 function scan(
   text: string,
   initialFence: FenceState | null,
+  initialFenceRun: FenceRunState | null,
   initialLineStart: boolean,
 ): ScanResult {
   let fence = initialFence && { ...initialFence };
+  let fenceRun = initialFenceRun && { ...initialFenceRun };
   let lineStart = initialLineStart;
   let index = 0;
 
   while (index < text.length) {
-    if (fence?.opening) {
+    if (fenceRun) {
+      const char = text[index]!;
+      if (char === fenceRun.char) {
+        fenceRun.length += 1;
+        index += 1;
+        continue;
+      }
+      const run = fenceRun;
+      fenceRun = null;
+      if (!fence && run.length >= 3) {
+        fence = { char: run.char, length: run.length, closing: null, opening: run.char === "`" };
+        continue;
+      }
+      if (fence && run.char === fence.char && run.length >= fence.length) {
+        fence.closing = "run";
+        continue;
+      }
+    } else if (fence?.opening) {
       const char = text[index]!;
       if (char === "`") fence = null;
       else if (char === "\n" || char === "\r") fence.opening = false;
@@ -148,17 +173,20 @@ function scan(
       let runStart = index;
       while (runStart < text.length && runStart - index < 3 && text[runStart] === " ") runStart += 1;
       if (runStart === text.length) {
-        return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
+        return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, fenceRun, lineStart };
       }
       const runChar = text[runStart];
       if (runChar === "`" || runChar === "~") {
         let runEnd = runStart + 1;
         while (runEnd < text.length && text[runEnd] === runChar) runEnd += 1;
         const runLength = runEnd - runStart;
-        // A run cut off by the end of this chunk may still grow: an opener's length is not known yet,
-        // and a short run may still reach the length that opens or closes.
+        // Track a chunk-ending fence run incrementally instead of holding its bytes in pending,
+        // keeping buffering O(1) and avoiding cross-channel stalls on long backtick/tilde runs.
         if (runEnd === text.length && (!fence || (runChar === fence.char && runLength < fence.length))) {
-          return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
+          fenceRun = { char: runChar, length: runLength };
+          index = runEnd;
+          lineStart = false;
+          continue;
         }
         if (!fence && runLength >= 3) {
           fence = { char: runChar, length: runLength, closing: null, opening: runChar === "`" };
@@ -172,13 +200,16 @@ function scan(
           lineStart = false;
           continue;
         }
+        index = runEnd;
+        lineStart = false;
+        continue;
       }
 
       if (!fence) {
         const verdict = matchControlSequence(text, index);
-        if (verdict === "fail") return { safe: text.slice(0, index), held: "", fail: true, fence, lineStart };
+        if (verdict === "fail") return { safe: text.slice(0, index), held: "", fail: true, fence, fenceRun, lineStart };
         if (verdict === "hold") {
-          return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
+          return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, fenceRun, lineStart };
         }
       }
     }
@@ -188,7 +219,7 @@ function scan(
     lineStart = char === "\n";
   }
 
-  return { safe: text, held: "", fail: false, fence, lineStart };
+  return { safe: text, held: "", fail: false, fence, fenceRun, lineStart };
 }
 
 /** Streaming vendor control-sequence filter for one text or reasoning channel. */
@@ -196,6 +227,7 @@ export class CodeBuddyScaffoldFilter {
   private pending = "";
   private failed = false;
   private fence: FenceState | null = null;
+  private fenceRun: FenceRunState | null = null;
   private lineStart = true;
 
   /** True while an earlier event owns an unresolved marker or fence prefix. */
@@ -217,9 +249,10 @@ export class CodeBuddyScaffoldFilter {
     }
 
     const priorPending = this.pending;
-    const result = scan(priorPending + chunk, this.fence, this.lineStart);
+    const result = scan(priorPending + chunk, this.fence, this.fenceRun, this.lineStart);
     this.pending = result.held;
     this.fence = result.fence;
+    this.fenceRun = result.fenceRun;
     this.lineStart = result.lineStart;
     this.failed = result.fail;
 
