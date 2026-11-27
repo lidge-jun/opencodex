@@ -149,7 +149,33 @@ function comboRevision(combo: OcxComboConfig): string {
   return createHash("sha256").update(JSON.stringify(canonical(combo))).digest("hex");
 }
 
-class ComboRevisionConflict extends Error {}
+/** `stored` carries the persisted combos when the durable check refused the save. */
+class ComboRevisionConflict extends Error {
+  constructor(readonly stored?: Readonly<Record<string, OcxComboConfig>>) { super("combo revision conflict"); }
+}
+
+/**
+ * Nothing reloads the live config when another process edits the file, so the
+ * dashboard's refresh after a durable conflict would read the same stale combo and
+ * every retry would conflict again. Adopt the stored source and destination combos;
+ * the next rebasing save would have adopted these unedited disk values anyway.
+ */
+function adoptStoredCombos(config: OcxConfig, stored: Readonly<Record<string, OcxComboConfig>>, ids: readonly string[]): void {
+  let changed = false;
+  for (const comboId of new Set(ids)) {
+    const durable = Object.hasOwn(stored, comboId) ? stored[comboId] : undefined;
+    const live = config.combos?.[comboId];
+    if (durable === undefined) {
+      if (live === undefined) continue;
+      delete config.combos![comboId];
+    } else {
+      if (live !== undefined && comboRevision(live) === comboRevision(durable)) continue;
+      (config.combos ??= {})[comboId] = structuredClone(durable);
+    }
+    changed = true;
+  }
+  if (changed) notifyLiveConfigObservers(config);
+}
 
 /**
  * Request-only PUT field: combo members to declare text-only so the Vision Sidecar
@@ -549,10 +575,11 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
         if (body.ifRevision !== undefined && !deps.saveConfigPreservingClaudeCode) {
           const persisted = readConfigFileSnapshot({ passive: true }).diagnostics;
           if (persisted.source !== "file") throw new Error("config unavailable");
+          const storedCombos = persisted.config.combos ?? {};
           const durable = persisted.config.combos?.[sourceId];
-          if (!durable || comboRevision(durable) !== body.ifRevision) throw new ComboRevisionConflict();
+          if (!durable || comboRevision(durable) !== body.ifRevision) throw new ComboRevisionConflict(storedCombos);
           // A conditional rename also needs the destination to be free in the stored config.
-          if (renameFrom && Object.hasOwn(persisted.config.combos ?? {}, id)) throw new ComboRevisionConflict();
+          if (renameFrom && Object.hasOwn(storedCombos, id)) throw new ComboRevisionConflict(storedCombos);
         }
         config.combos = nextCombos;
         if (migratedModels.size > 0) {
@@ -619,7 +646,11 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
         }
       }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
     } catch (error) {
-      if (error instanceof ComboRevisionConflict) return jsonResponse({ error: "combo revision conflict", code: "combo_revision_conflict" }, 409);
+      if (error instanceof ComboRevisionConflict) {
+        // The transaction has rolled back; adopt only after it, or the rollback would undo it.
+        if (error.stored) adoptStoredCombos(config, error.stored, [sourceId, id]);
+        return jsonResponse({ error: "combo revision conflict", code: "combo_revision_conflict" }, 409);
+      }
       if (!(error instanceof ConfigWritePublishedError)) {
         return jsonResponse({ error: "combo could not be saved" }, 500);
       }

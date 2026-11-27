@@ -74,7 +74,19 @@ for (const change of ["changed", "deleted", "unchanged"] as const) {
       expect(response.status).toBe(409);
       expect(await response.json()).toMatchObject({ code: "combo_revision_conflict" });
       expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
-      expect(config).toEqual(liveBefore);
+      // The refused save adopts the stored combo, so the dashboard's refresh sees what blocked it.
+      expect({ ...config, combos: undefined }).toEqual({ ...liveBefore, combos: undefined });
+      expect(config.combos?.c).toEqual(disk.combos?.c);
+      const refreshed = ((await (await call("GET")).json()).combos as any[]).find(combo => combo.id === "c");
+      if (change === "deleted") {
+        expect(refreshed).toBeUndefined();
+        return;
+      }
+      expect(refreshed.targets.map((target: { model: string }) => target.model)).toEqual(["n"]);
+      expect(refreshed.revision).not.toBe(draft.revision);
+      const retried = await call("PUT", { id: "c", ifRevision: refreshed.revision, combo: { strategy: "round-robin", targets: [{ provider: "fixture", model: "n" }] } });
+      expect(retried.status).toBe(200);
+      expect(JSON.parse(readFileSync(getConfigPath(), "utf8")).combos.c.strategy).toBe("round-robin");
     } finally {
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
@@ -125,6 +137,8 @@ test("a conditional rename refuses a destination that exists only in the stored 
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ code: "combo_revision_conflict" });
     expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+    const listed = ((await (await call("GET")).json()).combos as any[]).map(combo => combo.id).sort();
+    expect(listed).toEqual(["c", "other"]);
   } finally {
     if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = oldHome;
