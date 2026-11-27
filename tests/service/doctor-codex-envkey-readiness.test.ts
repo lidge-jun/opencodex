@@ -1,6 +1,10 @@
 import { isolateCodexShimEnvironment, withInstalledShim } from "../helpers/codex-shim-install-fixture";
 import { describe, expect, test } from "bun:test";
-import { collectCodexEnvKeyReadiness, formatCodexShimDoctorLines } from "../../src/cli/doctor";
+import {
+  collectCodexDesktopEnvKeyNotice,
+  collectCodexEnvKeyReadiness,
+  formatCodexShimDoctorLines,
+} from "../../src/cli/doctor";
 import { diagnoseCodexShim, type CodexShimDiagnostic } from "../../src/codex/shim";
 import { join } from "node:path";
 
@@ -80,6 +84,34 @@ describe("doctor Codex env_key launch readiness", () => {
     const token = "super-secret-fixture-token";
     const row = collectCodexEnvKeyReadiness(config, {}, missingShim, Boolean(token));
     expect(JSON.stringify(row)).not.toContain(token);
+  });
+
+  test("notes Codex Desktop / GUI shim bypass when env_key is unset and CLI shim is healthy (#9171)", () => {
+    const clientNotice = collectCodexDesktopEnvKeyNotice(config, {}, healthyShim, true, true);
+    expect(clientNotice).not.toBeNull();
+    expect(clientNotice?.envName).toBe("OPENCODEX_API_AUTH_TOKEN");
+    expect(clientNotice?.detail).toContain("Codex Desktop");
+    expect(clientNotice?.detail).toContain("bypass");
+    expect(clientNotice?.detail).toContain('Missing environment variable: OPENCODEX_API_AUTH_TOKEN');
+    expect(clientNotice?.action).toContain("Remote Link");
+    expect(clientNotice?.action).toContain("--desktop-authless");
+    expect(JSON.stringify(clientNotice)).not.toContain("ocx_data_");
+
+    const nonClientNotice = collectCodexDesktopEnvKeyNotice(config, {}, healthyShim, true, false);
+    expect(nonClientNotice?.action).toContain("loopback");
+    expect(nonClientNotice?.action).not.toContain("--desktop-authless");
+
+    // Stays silent when the env var is set, shim is unhealthy (already warned above), token is
+    // absent, or Codex uses loopback without env_key (including Remote Link Child).
+    expect(collectCodexDesktopEnvKeyNotice(config, { OPENCODEX_API_AUTH_TOKEN: "secret" }, healthyShim, true, true)).toBeNull();
+    expect(collectCodexDesktopEnvKeyNotice(config, {}, missingShim, true, true)).toBeNull();
+    expect(collectCodexDesktopEnvKeyNotice(config, {}, healthyShim, false, true)).toBeNull();
+    expect(collectCodexDesktopEnvKeyNotice('openai_base_url = "http://127.0.0.1:10100/v1"\n', {}, healthyShim, true, true)).toBeNull();
+
+    // Prototype keys are not treated as set env vars.
+    const prototypeNameConfig = config.replace("OPENCODEX_API_AUTH_TOKEN", "toString");
+    expect(collectCodexDesktopEnvKeyNotice(prototypeNameConfig, {}, healthyShim, true, true)?.envName).toBe("toString");
+    expect(collectCodexDesktopEnvKeyNotice(prototypeNameConfig, { toString: "set" }, healthyShim, true, true)).toBeNull();
   });
 });
 

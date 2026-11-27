@@ -584,6 +584,12 @@ export type CodexEnvKeyReadinessDiagnostic = {
   action: string;
 };
 
+export type CodexDesktopEnvKeyNotice = {
+  envName: string;
+  detail: string;
+  action: string;
+};
+
 /** Shell activation and legacy migration are independent of admission-token readiness. */
 export function formatCodexShimDoctorLines(shim: CodexShimDiagnostic, platform = process.platform): string[] {
   if (platform === "win32" || !shim.installed) return [];
@@ -614,6 +620,30 @@ export function collectCodexEnvKeyReadiness(
         ? `Activate the PATH shim as shown under Codex restart safety, or export ${envName} in the process that starts Codex`
         : `${overlayActivationHint()} Or export ${envName} in the process that starts Codex`
       : `Run 'ocx codex-shim install' to repair launch-time token injection, or export ${envName} in the process that starts Codex`,
+  };
+}
+
+/**
+ * Notice for GUI/direct-binary launchers (such as Codex Desktop) when config.toml requires
+ * `env_key`, the variable is unset in this process, and the CLI shim is healthy (#9171).
+ */
+export function collectCodexDesktopEnvKeyNotice(
+  configText: string | null,
+  env: EnvMap,
+  shim: CodexShimDiagnostic,
+  serviceTokenPresent: boolean,
+  clientRole = false,
+): CodexDesktopEnvKeyNotice | null {
+  if (!configText || rootTomlString(configText, "model_provider") !== "opencodex") return null;
+  const envName = providerTableString(configText, "opencodex", "env_key")?.trim();
+  const envValue = envName ? ownEnvValue(env, envName) : undefined;
+  if (!envName || envValue?.trim() || !shim.healthy || !serviceTokenPresent) return null;
+  return {
+    envName,
+    detail: `Codex uses env_key ${envName}; the CLI shim is healthy for PATH-resolved CLI launches, but Codex Desktop and other direct-binary GUI launchers bypass the shim and will fail with "Missing environment variable: ${envName}"`,
+    action: clientRole
+      ? `Supply ${envName} in the GUI launcher's environment (from service-api-token), or connect via Remote Link (local loopback relay with no env var; --desktop-authless is inert on a connected client)`
+      : `Supply ${envName} in the GUI launcher's environment (from service-api-token), or keep Codex on a loopback listener so no env_key is required`,
   };
 }
 
@@ -1486,6 +1516,13 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     serviceTokenPresent,
     codexShimLines.length > 0,
   );
+  const codexDesktopEnvKeyNotice = collectCodexDesktopEnvKeyNotice(
+    codexConfigText,
+    process.env,
+    codexShim,
+    serviceTokenPresent,
+    doctorConfig.runtimeRole === "client",
+  );
   // Use the same attested live startup verdict as `ocx status` when the proxy is already
   // identity-verified. A shell-local systemd probe can be a false negative for a system-wide
   // service because the shell does not inherit the manager-owned environment.
@@ -1598,6 +1635,10 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   if (codexEnvKeyReadiness) {
     console.log(`  !!     ${codexEnvKeyReadiness.detail}`);
     console.log(`         Action: ${codexEnvKeyReadiness.action}`);
+  } else if (codexDesktopEnvKeyNotice) {
+    console.log("  ok     CLI shim launch path is healthy for PATH-resolved Codex CLI");
+    console.log(`  note   ${codexDesktopEnvKeyNotice.detail}`);
+    console.log(`         Action: ${codexDesktopEnvKeyNotice.action}`);
   } else {
     console.log("  ok     no broken OpenCodex env_key launch path detected");
   }
