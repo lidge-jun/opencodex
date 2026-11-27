@@ -201,6 +201,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
       patch.mcpClients = [];
     } else {
       const ids = options.mcpClients.split(",").map(s => s.trim()).filter(Boolean);
+      if (ids.length === 0) throw new CliUsageError("--mcp-clients requires client ids, auto, or none", USAGE);
       const invalid = ids.find(id => !isAdvisorMcpClientId(id));
       if (invalid) {
         throw new CliUsageError(`unknown MCP client "${invalid}" (supported: ${ADVISOR_MCP_CLIENT_IDS.join(", ")})`, USAGE);

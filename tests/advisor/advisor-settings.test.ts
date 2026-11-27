@@ -242,6 +242,7 @@ describe("ocx advisor set — clearing the model", () => {
     expect(await handleAdvisorCommand(["set", "--effort", "", "--json"], deps)).toBe(2);
     expect(await handleAdvisorCommand(["set", "--model"], deps)).toBe(2);
     expect(await handleAdvisorCommand(["set", "--timeout-ms", "", "--json"], deps)).toBe(2);
+    expect(await handleAdvisorCommand(["set", "--mcp-clients", ", ,", "--json"], deps)).toBe(2);
     // Not one of them reached the settings route.
     expect(requests).toHaveLength(0);
   });
