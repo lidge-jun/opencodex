@@ -376,8 +376,8 @@ destination receives unchanged whenever a caller sends one itself.
 
 ## Passthrough SSE stream shapes (#314)
 
-Native passthrough SSE has TWO shapes, selected per request in
-`src/server/responses/core.ts`; both apply the client-only [hosted-image projection](../data-planes/images.md#hosted-responses-image-display) after continuation-cache observers: `src/lib/errors.ts` selects the first nonblank string in the canonical upstream message precedence (error, last_error, response error, incomplete details, then a flat error event). Malformed or blank fields cannot hide a later valid diagnostic; retained text is not rewritten.
+`src/server/responses/core.ts` selects one of two native passthrough SSE shapes per request. Both apply the client-only [hosted-image projection](../data-planes/images.md#hosted-responses-image-display) after continuation-cache observers. On client delivery, both mask credentials in completed-response diagnostics and refusal parts while preserving the event type, ordinary message content and tool arguments.
+`src/lib/errors.ts` selects the first nonblank string in the canonical upstream message precedence (error, last_error, response error, incomplete details, then a flat error event). Malformed or blank fields cannot hide a later valid diagnostic; retained text is not rewritten.
 
 - **Default outside Windows: tee + background inspection.** `upstreamResponse.body.tee()` sends
   branch[0] through a terminal-aware client relay while branch[1] is
@@ -437,7 +437,7 @@ Deferred inspection checks cancellation after each yield and commits serving-rou
 after the final abort check; a disconnect returns 499 without publishing that state or a terminal.
 This buffered path makes no tee/eager choice. Failed and incomplete terminals mask selected outbound
 credentials across the full event, including nested output and metadata, before JSON or SSE delivery;
-synthetic stream failures use the same credential mask in both streaming relays.
+synthetic stream failures use the same credential mask in both streaming relays. Refusal delta, part and item events are masked field by field before delivery. Buffered error-bearing completions use `deliverFailedCompletion` in `src/server/responses/passthrough-delivery.ts` to mask their JSON error.
 
 > Decision record: [ADR-6162](../decisions/ADR-6162-responses-http-sse.md)
 

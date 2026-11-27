@@ -1435,6 +1435,8 @@ export const es = {
   "logs.detail.stage.headersOnly": "Solo encabezados",
   "logs.detail.stage.protocolPrelude": "Preludio del protocolo",
   "logs.detail.stage.semanticOutput": "salida entregada",
+  "logs.status.streamInterrupted": "Transmisión interrumpida",
+  "logs.detail.streamInterrupted1006": "La conexión WebSocket con el proveedor se cerró de forma anómala (1006) después de enviar eventos de respuesta al cliente. No se confirmó que la respuesta hubiera finalizado.",
   "logs.detail.stage.sideEffect": "efecto secundario emitido",
   "logs.detail.stage.terminal": "Respuesta entregada",
   "logs.detail.resend.permitted": "Podría ser resentido",

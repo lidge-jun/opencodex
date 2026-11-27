@@ -398,8 +398,8 @@ impl ExitCoordinator {
         self.inner().phase
     }
 
-    #[cfg(test)]
-    fn hides_to_tray(&self) -> bool {
+    #[cfg(any(target_os = "macos", test))]
+    pub fn hides_to_tray(&self) -> bool {
         self.inner().hides_to_tray
     }
 }

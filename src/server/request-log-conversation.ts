@@ -5,6 +5,7 @@
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import type { OcxConfig } from "../types";
 import { resolveContextPrincipal, type DataPlaneAdmission } from "./auth-cors";
+import { principalScopedSessionId, safeCallerSessionId } from "./caller-session-identity";
 
 /** Reject absurdly long client strings before hashing (DoS / JSONL bloat). */
 export const LOG_CONVERSATION_ID_INPUT_MAX = 4096;
@@ -214,6 +215,33 @@ export function conversationIdFromResponsesRequest(input: {
       ?? input.threadIdHeader
       ?? input.cursorConversationId,
   );
+}
+
+/**
+ * A Responses caller that names its conversation only through the body `prompt_cache_key`
+ * (Oh My Pi, for one) sends no session header, so its turns bound no affinity lane and reached
+ * the ChatGPT Codex backend without the `session_id` it keys prefix reuse on (#9137). The body is
+ * read after ingress, so the key is promoted onto the request's own headers there. Any session
+ * header the caller sent, `x-session-id` included, wins, and authenticated callers are scoped to
+ * their principal exactly as an `x-session-id` is.
+ */
+export function promotePromptCacheKeySession(
+  headers: Headers,
+  body: unknown,
+  admission: DataPlaneAdmission | undefined,
+): string | undefined {
+  if (!admission || !body || typeof body !== "object" || Array.isArray(body)) return undefined;
+  if (["session_id", "session-id", "thread-id", "x-session-id"].some(name => headers.has(name))) return undefined;
+  const key = (body as { prompt_cache_key?: unknown }).prompt_cache_key;
+  const conversation = typeof key === "string" ? safeCallerSessionId(key) : undefined;
+  const sessionId = conversation ? principalScopedSessionId(conversation, admission) : undefined;
+  if (!sessionId) return undefined;
+  try {
+    headers.set("session_id", sessionId);
+  } catch {
+    return undefined;
+  }
+  return sessionId;
 }
 
 /**

@@ -1402,6 +1402,8 @@ export const zh: Record<TKey, string> = {
   "logs.detail.stage.headersOnly": "仅响应头",
   "logs.detail.stage.protocolPrelude": "协议前导",
   "logs.detail.stage.semanticOutput": "已交付输出",
+  "logs.status.streamInterrupted": "流已中断",
+  "logs.detail.streamInterrupted1006": "转发响应事件后，上游 WebSocket 连接异常关闭（1006）。无法确认响应是否完成。",
   "logs.detail.stage.sideEffect": "已产生副作用",
   "logs.detail.stage.terminal": "已交付答复",
   "logs.detail.resend.permitted": "可以重发",

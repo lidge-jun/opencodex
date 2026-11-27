@@ -149,6 +149,8 @@ ocx help models
 ocx help models preset show
 ```
 
+Para pools de cuentas, configuración, conexiones remotas, modelos y proveedores, la línea **Inspect first** de la ayuda de cada familia ofrece un punto de partida de solo lectura e indica si examina la configuración local o el servicio en ejecución. Un comando de solo lectura aún puede comprobar una conexión. Las consultas del catálogo en vivo pueden acceder al proveedor y reconciliar el estado de descubrimiento; utiliza la vista local o las llegadas registradas para una inspección pasiva.
+
 Lee el capítulo correspondiente en `skills/ocx/references/01_management_surface.md` o en las páginas públicas de familias de comandos anteriores. `ocx help --all` permite acceder a la referencia completa. El inventario amplio para lectura por máquinas es opcional:
 
 ```bash

@@ -170,6 +170,75 @@ test.each([
   } finally { await act(async () => { root.unmount(); }); }
 });
 
+function interruptedFixture() {
+  const row = fixture(502, "transport-ambiguous", 1);
+  const attempt = (row.attempts as Record<string, unknown>[])[0]!;
+  const stage = { sent: true, closeCode: 1006, relayedEvents: 3, terminalEvent: null };
+  const failure = { failureStage: "semantic-output", failureCause: "transport-ambiguous" };
+  const last = { ...attempt, ...failure, adapter: "openai-responses", codexWsStage: stage };
+  return { ...row, ...failure, terminalSource: "synthetic", transportPhase: "mid_stream", attempts: [last] };
+}
+
+test("a final abnormal WebSocket close after delivery is visible in the row and its detail", async () => {
+  const { root, container } = await show(interruptedFixture());
+  try {
+    const row = container.querySelector("tbody tr[data-index]");
+    expect(row?.textContent).toContain("502");
+    expect(row?.textContent).toContain("Stream interrupted");
+    expect(document.querySelector(".modal-desc")?.textContent).toBe(
+      "The upstream WebSocket closed abnormally (1006) after response events were relayed. No completion was confirmed.",
+    );
+  } finally { await act(async () => { root.unmount(); }); }
+});
+
+test.each([
+  ["lifecycle events only", "protocol-prelude"],
+  ["a delivered tool call", "side-effect"],
+] as const)("an abnormal close after %s is also an interrupted stream", async (_name, failureStage) => {
+  const row = interruptedFixture();
+  const attempts = [{ ...row.attempts[0]!, failureStage }];
+  const { root, container } = await show({ ...row, failureStage, attempts });
+  try {
+    expect(container.querySelector("tbody tr[data-index]")?.textContent).toContain("Stream interrupted");
+    expect(document.querySelector(".modal-desc")?.textContent).toContain("(1006)");
+  } finally { await act(async () => { root.unmount(); }); }
+});
+
+test.each([
+  ["completed request", { status: 200, terminalStatus: "completed" }, {}, {}],
+  ["client cancellation", { closeReason: "client_cancel" }, {}, {}],
+  ["upstream terminal", { terminalSource: "upstream" }, {}, {}],
+  ["pre-response failure", { transportPhase: "pre_headers" }, {}, {}],
+  ["headers-only failure", { failureStage: "headers-only" }, { failureStage: "headers-only" }, {}],
+  ["dropped attempt", { attemptNormalizationDropped: true }, {}, {}],
+  ["different final cause", {}, { failureCause: "upstream-fault" }, {}],
+  ["normal close", {}, {}, { closeCode: 1000 }],
+  ["upstream failed event", {}, {}, { terminalEvent: "response.failed" }],
+  ["missing terminal data", {}, {}, { terminalEvent: undefined }],
+  ["no response events", {}, {}, { relayedEvents: 0 }],
+  ["malformed response count", {}, {}, { relayedEvents: "3" }],
+] as const)("%s leaves the usual request status and detail intact", async (_name, rowFields, attemptFields, stageFields) => {
+  const row = interruptedFixture();
+  const attempt = row.attempts[0]!;
+  const attempts = [{ ...attempt, ...attemptFields, codexWsStage: { ...attempt.codexWsStage, ...stageFields } }];
+  const { root, container } = await show({ ...row, ...rowFields, attempts });
+  try {
+    expect(container.querySelector("tbody tr[data-index]")?.textContent).not.toContain("Stream interrupted");
+    expect(document.querySelector(".modal-desc")?.textContent ?? "").not.toContain("1006");
+  } finally { await act(async () => { root.unmount(); }); }
+});
+
+test("a close on an earlier attempt does not explain a later failure", async () => {
+  const row = interruptedFixture();
+  const first = row.attempts[0]!;
+  const attempts = [first, { ...first, ordinal: 2, codexWsStage: undefined }];
+  const { root, container } = await show({ ...row, attempts });
+  try {
+    expect(container.querySelector("tbody tr[data-index]")?.textContent).not.toContain("Stream interrupted");
+    expect(document.querySelector(".modal-desc")?.textContent ?? "").not.toContain("1006");
+  } finally { await act(async () => { root.unmount(); }); }
+});
+
 test("a lossy normalized attempt roster does not imply retries", async () => {
   const row = fixture(500, "upstream-fault", 3);
   row.attemptNormalizationDropped = true;
