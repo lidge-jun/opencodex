@@ -87,6 +87,12 @@ export interface OcxParsedRequest {
    */
   _summaryProhibitsToolCalls?: boolean;
   /**
+   * Routed Anthropic compaction summary: the caller's hosted web_search, kept aside from
+   * `_webSearch` so the summary declares the synthetic tool the ordinary request would declare
+   * without ever running the sidecar (#7307).
+   */
+  _summaryWebSearch?: Record<string, unknown>;
+  /**
    * Compaction request after a decoded checkpoint. The parser withholds the continuation note from
    * every summary; a prefix-preserving route adds it back where the ordinary request carries it,
    * so the summary keeps that request's system prompt (#7307).
