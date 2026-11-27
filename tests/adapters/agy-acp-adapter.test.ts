@@ -10,7 +10,12 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { createAgyAcpAdapter, AGY_ACP_ARGS, type AgyAcpDeps } from "../../src/adapters/agy-acp/adapter";
 import { clearAgyVersionCacheForTests } from "../../src/adapters/agy-acp/binary";
-import { MAX_ACP_LINE_BYTES } from "../../src/adapters/agy-acp/acp";
+import {
+  MAX_ACP_IMAGE_ENCODED_BYTES,
+  MAX_ACP_LINE_BYTES,
+  MAX_ACP_PROMPT_CHARS,
+  MAX_ACP_TOTAL_IMAGE_ENCODED_BYTES,
+} from "../../src/adapters/agy-acp/acp";
 import { AgyAcpTreeCleanupError, createTurnWorkspace, reapProcessTree, type AgyAcpChild } from "../../src/adapters/agy-acp/process";
 import * as windowsAcl from "../../src/lib/windows-secret-acl";
 import { runWithRequestPeer } from "../../src/lib/request-peer-scope";
@@ -23,6 +28,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 type Frame = Record<string, any>;
 interface AgentApi {
   reply(id: unknown, result: unknown): void;
+  batch(frames: Frame[]): void;
   replyWithUpdate(id: unknown, result: unknown, update: Frame): void;
   endStdout(id?: unknown, result?: unknown): void;
   error(id: unknown, code: number, message: string): void;
@@ -65,7 +71,7 @@ function parsed(overrides: Partial<OcxParsedRequest> = {}, reasoning?: string): 
 interface Harness { events: AdapterEvent[]; sent: Frame[]; spawned: number; probed: number; args: string[]; env: Record<string, string>; cwd: string; removed: boolean }
 
 /** The default agent: answers every phase; `onFrame` may intercept a frame first. */
-function script(onFrame?: (frame: Frame, api: AgentApi, state: { config: Frame[] }) => boolean | void, options: { initial?: Frame[]; systemPrompt?: boolean; stopReason?: string } = {}) {
+function script(onFrame?: (frame: Frame, api: AgentApi, state: { config: Frame[] }) => boolean | void, options: { initial?: Frame[]; systemPrompt?: boolean; image?: boolean; stopReason?: string } = {}) {
   return (child: FakeChild, sent: Frame[]) => {
     const state = { config: options.initial ?? [modelOption("gemini-3.8-flash", OFFERED), thoughtOption("high")] };
     const encode = (frame: Frame) => `${JSON.stringify(frame)}\n`;
@@ -73,6 +79,7 @@ function script(onFrame?: (frame: Frame, api: AgentApi, state: { config: Frame[]
     const updateFrame = (update: Frame, sessionId = "s1") => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update } });
     const api: AgentApi = {
       reply: (id, result) => write({ jsonrpc: "2.0", id, result }),
+      batch: frames => child.stdout.write(frames.map(encode).join("")),
       replyWithUpdate: (id, result, update) => child.stdout.write(encode({ jsonrpc: "2.0", id, result }) + encode(updateFrame(update))),
       endStdout: (id, result) => child.stdout.end(id === undefined ? "" : JSON.stringify({ jsonrpc: "2.0", id, result })),
       error: (id, code, message) => write({ jsonrpc: "2.0", id, error: { code, message } }),
@@ -90,7 +97,7 @@ function script(onFrame?: (frame: Frame, api: AgentApi, state: { config: Frame[]
         buffer = buffer.slice(index + 1);
         sent.push(frame);
         if (onFrame?.(frame, api, state)) continue;
-        if (frame.method === "initialize") api.reply(frame.id, { protocolVersion: 1, agentCapabilities: options.systemPrompt ? { sessionCapabilities: { systemPrompt: {} } } : {} });
+        if (frame.method === "initialize") api.reply(frame.id, { protocolVersion: 1, agentCapabilities: { ...(options.systemPrompt ? { sessionCapabilities: { systemPrompt: {} } } : {}), ...(options.image ? { promptCapabilities: { image: true } } : {}) } });
         else if (frame.method === "session/new") api.reply(frame.id, { sessionId: "s1", configOptions: state.config });
         else if (frame.method === "session/set_config_option") {
           state.config = state.config.map(option => option.id === frame.params.configId ? { ...option, currentValue: frame.params.value } : option);
@@ -1128,5 +1135,222 @@ describe("agy acp use policy at runTurn", () => {
     const old = await run(script(), { deps: { probeVersion: async () => ({ ok: false, reason: "too_old", version: "1.3.3" }) } });
     expect((terminal(old)[0] as { message: string }).message).toContain("found 1.3.3");
     expect(old.spawned).toBe(0);
+  });
+});
+
+describe("host tools and multimodal replay", () => {
+  const tool = { name: "read_fixture", description: "Read a test fixture", parameters: { type: "object", properties: {} } };
+  function withTool(): OcxParsedRequest {
+    const request = parsed();
+    request.context.tools = [tool];
+    return request;
+  }
+  const call = { toolCallId: "local-1", name: "mcp_opencodex_read_fixture", rawInput: { toolSummary: "Read fixture" } };
+
+  test("returns a declared call to the host after cleanup and replays its image result alongside the attachment", async () => {
+    const request = withTool();
+    const first = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.request(101, "session/request_permission", { sessionId: "s1", toolCall: call });
+      return true;
+    }), { parsed: request, deps: { createWorkspace: () => createTurnWorkspace(tmpdir() + "/test-home") } });
+    expect(existsSync(first.cwd)).toBe(false);
+    expect(first.sent.find(frame => frame.id === 101)?.result).toEqual({ outcome: { outcome: "cancelled" } });
+    const start = first.events.find(event => event.type === "tool_call_start");
+    expect(start?.name).toBe(tool.name);
+    expect(first.events.find(event => event.type === "tool_call_delta")).toMatchObject({ arguments: "{}" });
+    expect(terminal(first)).toMatchObject([{ type: "done", stopReason: "tool_use" }]);
+
+    const image = (data: string) => ({ type: "image" as const, imageUrl: "data:image/png;base64," + data });
+    request.context.messages = [
+      { role: "user", content: [image("AQ==")], timestamp: 0 },
+      { role: "assistant", content: [{ type: "toolCall", name: tool.name, id: start!.id, arguments: {} }], timestamp: 0 },
+      { role: "toolResult", toolName: tool.name, toolCallId: start!.id, content: [image("Ag==")], timestamp: 0, isError: false },
+    ];
+    request.options.toolChoice = "none";
+    const second = await run(script(frame => {
+      if (frame.method === "session/new") expect(frame.params.mcpServers).toEqual([]);
+    }, { image: true }), { parsed: request });
+    const blocks = second.sent.find(frame => frame.method === "session/prompt")?.params.prompt;
+    expect(blocks.filter((block: Frame) => block.type === "image").map((block: Frame) => block.data)).toEqual(["AQ==", "Ag=="]);
+    expect(terminal(second)).toMatchObject([{ type: "done" }]);
+    const unsupported = await run(script(), { parsed: request });
+    expect(errorCode(unsupported)).toBe("unsupported_input_modality");
+    expect(methods(unsupported)).not.toContain("session/prompt");
+  });
+
+  test("captures a permission request followed by its cancellation in one stdout read", async () => {
+    const result = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.batch([
+        { jsonrpc: "2.0", id: 101, method: "session/request_permission", params: { sessionId: "s1", toolCall: call } },
+        { jsonrpc: "2.0", id: frame.id, result: { stopReason: "cancelled" } },
+      ]);
+      return true;
+    }), { parsed: withTool(), deps: { createWorkspace: () => createTurnWorkspace(tmpdir() + "/test-home") } });
+    expect(terminal(result)).toMatchObject([{ type: "done", stopReason: "tool_use" }]);
+    expect(result.events.filter(event => event.type === "tool_call_start")).toHaveLength(1);
+    expect(result.sent.find(frame => frame.id === 101)?.result.outcome.outcome).toBe("cancelled");
+  });
+
+  test("long latest user input keeps its inline images in order and checks vision capability", async () => {
+    const request = parsed();
+    const large = { type: "text" as const, text: "x".repeat(MAX_ACP_PROMPT_CHARS) };
+    const images = ["AQ==", "Ag=="].map(data => ({ type: "image" as const, imageUrl: "data:image/png;base64," + data }));
+    request.context.messages = [{ role: "user", timestamp: 0, content: [large, ...images, large] }];
+    const result = await run(script(undefined, { image: true }), { parsed: request });
+    const blocks = result.sent.find(frame => frame.method === "session/prompt")!.params.prompt as Frame[];
+    expect(blocks.filter(block => block.type === "image").map(block => block.data)).toEqual(["AQ==", "Ag=="]);
+    expect(blocks.map(block => block.text ?? "").join("").length).toBeLessThanOrEqual(MAX_ACP_PROMPT_CHARS);
+    const unsupported = await run(script(), { parsed: request });
+    expect(errorCode(unsupported)).toBe("unsupported_input_modality");
+    expect(methods(unsupported)).not.toContain("session/prompt");
+  });
+
+  test("a session can request only the exact tool names advertised for this turn", async () => {
+    const result = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.request(201, "session/request_permission", { sessionId: "s1", toolCall: { ...call, name: "shell" } });
+      api.request(202, "session/request_permission", { sessionId: "another-session", toolCall: call });
+      api.notify({ sessionUpdate: "tool_call", ...call, status: "failed" });
+      api.reply(frame.id, { stopReason: "end_turn" });
+      return true;
+    }), { parsed: withTool(), deps: { createWorkspace: () => createTurnWorkspace(tmpdir() + "/test-home") } });
+    for (const id of [201, 202]) {
+      expect(result.sent.find(frame => frame.id === id)?.result.outcome.outcome).toBe("cancelled");
+    }
+    expect(result.events.some(event => event.type === "tool_call_start")).toBe(false);
+    expect(terminal(result)).toMatchObject([{ type: "done" }]);
+  });
+
+  test("discards a captured call when the model changes in the same stdout batch", async () => {
+    const result = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.request(201, "session/request_permission", { sessionId: "s1", toolCall: { ...call, name: "shell" } });
+      api.notify({ sessionUpdate: "tool_call", ...call });
+      api.notify({ sessionUpdate: "config_option_update", configOptions: [modelOption("claude-opus-5-5", OFFERED)] });
+      return true;
+    }), { parsed: withTool(), deps: { createWorkspace: () => createTurnWorkspace(tmpdir() + "/test-home") } });
+    expect(errorCode(result)).toBe("agy_acp_model_switched");
+    expect(result.events.some(event => event.type === "tool_call_start")).toBe(false);
+  });
+
+  test("large tool output retains the scope, confirmation, call identity and final result", async () => {
+    const request = parsed();
+    request.context.messages = [
+      { role: "user", content: "Fix delta.", timestamp: 0 },
+      { role: "assistant", content: [{ type: "text", text: "I will edit and test." }], timestamp: 0 },
+      { role: "user", content: "Go ahead.", timestamp: 0 },
+      { role: "assistant", content: [{ type: "toolCall", name: "test_delta", id: "result-1", arguments: {} }], timestamp: 0 },
+      { role: "toolResult", toolName: "test_delta", toolCallId: "result-1", isError: false, timestamp: 0,
+        content: "start of output\n" + "a".repeat(MAX_ACP_PROMPT_CHARS * 2) + "\n3 tests passed" },
+    ];
+    const result = await run(script(), { parsed: request });
+    const text = result.sent.find(frame => frame.method === "session/prompt")?.params.prompt[0].text;
+    expect(text.length).toBeLessThanOrEqual(MAX_ACP_PROMPT_CHARS);
+    const markers = ["Fix delta.", "I will edit and test.", "Go ahead.", "[call test_delta id=result-1]", "[result id=result-1]", "3 tests passed"];
+    let end = 0;
+    for (const marker of markers) {
+      const index = text.indexOf(marker, end);
+      expect(index).toBeGreaterThanOrEqual(end);
+      end = index + marker.length;
+    }
+  });
+
+  test("drops a pending tool call when the same stdout batch reports it failed or non-permission cancelled", async () => {
+    for (const status of ["failed", "cancelled"] as const) {
+      const result = await run(script((frame, api) => {
+        if (frame.method !== "session/prompt") return;
+        api.batch([
+          { jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call", ...call } } },
+          // ACP tool_call_update frequently carries only toolCallId + status.
+          { jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call_update", toolCallId: call.toolCallId, status } } },
+          { jsonrpc: "2.0", id: frame.id, result: { stopReason: "end_turn" } },
+        ]);
+        return true;
+      }), { parsed: withTool(), deps: { createWorkspace: () => createTurnWorkspace(tmpdir() + "/test-home") } });
+      expect(result.events.some(event => event.type === "tool_call_start")).toBe(false);
+      expect(terminal(result)).toMatchObject([{ type: "done" }]);
+    }
+  });
+
+  test("drops a permission-captured call on same-batch failure, but preserves it on adapter-triggered cancellation", async () => {
+    const failed = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.batch([
+        { jsonrpc: "2.0", id: 101, method: "session/request_permission", params: { sessionId: "s1", toolCall: call } },
+        { jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call_update", toolCallId: call.toolCallId, status: "failed" } } },
+        { jsonrpc: "2.0", id: frame.id, result: { stopReason: "cancelled" } },
+      ]);
+      return true;
+    }), { parsed: withTool(), deps: { createWorkspace: () => createTurnWorkspace(tmpdir() + "/test-home") } });
+    expect(failed.events.some(event => event.type === "tool_call_start")).toBe(false);
+    expect(errorCode(failed)).toBe("agy_acp_cancelled");
+
+    const cancelledAfterPermission = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.batch([
+        { jsonrpc: "2.0", id: 102, method: "session/request_permission", params: { sessionId: "s1", toolCall: call } },
+        { jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call_update", toolCallId: call.toolCallId, status: "cancelled" } } },
+        { jsonrpc: "2.0", id: frame.id, result: { stopReason: "cancelled" } },
+      ]);
+      return true;
+    }), { parsed: withTool(), deps: { createWorkspace: () => createTurnWorkspace(tmpdir() + "/test-home") } });
+    expect(cancelledAfterPermission.events.filter(event => event.type === "tool_call_start")).toHaveLength(1);
+    expect(terminal(cancelledAfterPermission)).toMatchObject([{ type: "done", stopReason: "tool_use" }]);
+  });
+
+  test("bounds per-image and aggregate encoded image bytes before sending session/prompt", async () => {
+    const oversizedSingle = parsed();
+    oversizedSingle.context.messages = [{
+      role: "user",
+      timestamp: 0,
+      content: [{ type: "image", imageUrl: "data:image/png;base64," + "A".repeat(MAX_ACP_IMAGE_ENCODED_BYTES + 4) }],
+    }];
+    const singleResult = await run(script(undefined, { image: true }), { parsed: oversizedSingle });
+    expect(errorCode(singleResult)).toBe("unsupported_input_modality");
+    expect(methods(singleResult)).not.toContain("session/prompt");
+
+    const halfOverAggregate = Math.floor(MAX_ACP_TOTAL_IMAGE_ENCODED_BYTES / 2) + 4;
+    expect(halfOverAggregate).toBeLessThanOrEqual(MAX_ACP_IMAGE_ENCODED_BYTES);
+    const oversizedTotal = parsed();
+    oversizedTotal.context.messages = [{
+      role: "user",
+      timestamp: 0,
+      content: [
+        { type: "image", imageUrl: "data:image/png;base64," + "A".repeat(halfOverAggregate) },
+        { type: "image", imageUrl: "data:image/png;base64," + "B".repeat(halfOverAggregate) },
+      ],
+    }];
+    const totalResult = await run(script(undefined, { image: true }), { parsed: oversizedTotal });
+    expect(errorCode(totalResult)).toBe("unsupported_input_modality");
+    expect(methods(totalResult)).not.toContain("session/prompt");
+
+    for (const badUrl of [
+      "data:image/png;base64," + "\\".repeat(128),
+      `data:image/${"a".repeat(100)};base64,AQ==`,
+    ]) {
+      const invalid = parsed();
+      invalid.context.messages = [{ role: "user", timestamp: 0, content: [{ type: "image", imageUrl: badUrl }] }];
+      const res = await run(script(undefined, { image: true }), { parsed: invalid });
+      expect(errorCode(res)).toBe("unsupported_input_modality");
+      expect(methods(res)).not.toContain("session/prompt");
+    }
+  });
+
+  test("ignores a new tool call after a deferred prompt reply when the first pending call fails in the same batch", async () => {
+    const secondCall = { ...call, toolCallId: "local-2" };
+    const result = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.batch([
+        { jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call", ...call } } },
+        { jsonrpc: "2.0", id: frame.id, result: { stopReason: "end_turn" } },
+        { jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call_update", toolCallId: call.toolCallId, status: "failed" } } },
+        { jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call", ...secondCall } } },
+      ]);
+      return true;
+    }), { parsed: withTool(), deps: { createWorkspace: () => createTurnWorkspace(tmpdir() + "/test-home") } });
+    expect(result.events.some(event => event.type === "tool_call_start")).toBe(false);
+    expect(terminal(result)).toMatchObject([{ type: "done" }]);
   });
 });
