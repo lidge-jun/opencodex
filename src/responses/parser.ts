@@ -775,6 +775,7 @@ export function parseRequest(
     ...(imageGen ? { _imageGeneration: imageGen } : {}),
     ...(textFormat ? { _structuredOutput: true } : {}),
     ...(compactionRequest ? { _compactionRequest: true } : {}),
+    ...(compactionRequest && decodedCheckpoint ? { _summaryCheckpointNote: true } : {}),
     ...(contextCompactionBoundary ? { _contextCompactionBoundary: true } : {}),
   };
 }
