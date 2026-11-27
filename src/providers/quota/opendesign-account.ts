@@ -148,6 +148,15 @@ async function fetchWorkspacePreflight(
 
 /**
  * Fetch the account's quota: every workspace, every coding-plan window, one report.
+ *
+ * ONE report, not one per workspace, is a contract, not a shortcut: the provider-level quota
+ * cache is keyed one row per provider (`byProvider` in src/providers/quota.ts and
+ * `quotaCache.set(report.provider, …)` in src/providers/quota-routing-cache.ts), so a second
+ * report for `opendesign` would overwrite the first and the routing reader would rank on whichever
+ * workspace happened to land last. Workspaces therefore ride as `customWindows` labeled
+ * `5-hour · <workspaceId>` / `weekly · <workspaceId>`, which keeps every workspace's own numbers
+ * visible while the account stays one row. (#9182 open question 1.)
+ *
  * A 401/403 on the workspace DIRECTORY is the credential failing, which is terminal
  * (`TERMINAL_QUOTA_FAILURE`: key expired, switch accounts). A 403 on one workspace's
  * preflight is workspace-scoped and only skips that workspace. Anything else is null
