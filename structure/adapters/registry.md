@@ -64,7 +64,7 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   refuses ACP before any request. Key-optional LiteLLM still accepts a key or an environment reference. Structural config validation
   (`src/config/schema/agy-acp-references.ts`) shares the static model roster in `src/providers/registry/agy-acp-models.ts`
   with the registry and refuses keys, pools, account settings,
-  non-Gemini models and any use as a combo target, a combo's `decisionModel`, a subagent fallback, a managed subagent default, automatic compaction, a `memoryModels` phase or the
+  non-Gemini/Claude models and any use as a combo target, a combo's `decisionModel`, a subagent fallback, a managed subagent default, automatic compaction, a `memoryModels` phase or the
   `shadowCallIntercept` target. Validation masks credential-shaped diagnostic path segments. A disk
   read drops an ACP memory phase and ACP subagent fallback entries, disables an ACP shadow-call target or
   managed subagent default sync, and removes the automatic trigger from an ACP compaction override. Per-model fallback chains emptied by the repair are removed individually. File diagnostics
@@ -93,9 +93,9 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   Compact turns are refused before reasoning retention can write an archive. In a combo, the
   preflight refusal excludes the candidate without treating it as an attempted send.
   Each `session/prompt` reserves and reports one physical inference send from
-  the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the Gemini model is not
+  the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the selected Gemini or Claude model is not
   confirmed against the current complete selector, including after a reply that reuses an opaque model ID.
-  Explicit non-Gemini evidence in the model ID or label invalidates the selection. The adapter checks the model and thinking level again after processing all complete frames in the current stdout batch and before spending the dispatch permit.
+  Explicit disallowed or contradictory model-family evidence in the model ID or label invalidates the selection. The adapter checks the model and thinking level again after processing all complete frames in the current stdout batch and before spending the dispatch permit.
   Selection rejects duplicate setting IDs, oversized snapshots and nested groups. The adapter ignores updates
   until it has a session ID and accepts updates only for that session. Permission requests are answered `cancelled`.
   Selection errors use fixed text. Answer and reasoning

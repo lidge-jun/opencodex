@@ -938,7 +938,7 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
   Declare the reverse proxy for the public listener or keep this port out of the relay. Keep the other local listeners
   out of relays, since the declared-proxy setting applies only to the public listener.
 - **Gemini and Claude models only:** the static roster is `gemini-3.8-flash`, `gemini-4-neon`, `gemini-4-carbon`,
-  `gemini-4-argon`, `gemini-4-hydrogen`, `gemini-pro-orchestrator-neon`, `gemini-pro-orchestrator`,
+  `gemini-4-argon`, `gemini-4-hydrogen`, `gemini-3.7-flash`, `gemini-pro-orchestrator-neon`, `gemini-pro-orchestrator`,
   `gemini-pro-orchestrator-argon`, `claude-opus-5-5` and `claude-sonnet-5-5`. At each turn the model must also be a
   Gemini or Claude model the CLI offers, confirmed before the prompt is sent; other model families are refused. Codex reasoning effort selects the CLI's thinking level (`xhigh` selects Extra). OpenCodex masks
   recognized credentials in answer and reasoning text from the CLI.

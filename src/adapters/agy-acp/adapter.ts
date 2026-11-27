@@ -2,7 +2,7 @@
  * Antigravity CLI over the Agent Client Protocol (`agy acp`): one ACP session per turn (plan 080).
  *
  * The official binary owns its own sign-in; this adapter never reads, stores or forwards a Google
- * credential. One account (the CLI's), no rotation, local requests only, Gemini models only, and
+ * credential. One account (the CLI's), no rotation, local requests only, Gemini and Claude models only, and
  * interactive use only (see ./policy.ts). runTurn-only: a JSON-RPC session over a child process has no
  * fetch-shaped request, so buildRequest is an identity placeholder and parseStream is disabled.
  *
