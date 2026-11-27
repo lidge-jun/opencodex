@@ -129,10 +129,10 @@ l'actualisation fusionne les changements autour de vos entrées et les conserve,
 comme `1e999`, un nombre qu'une réécriture arrondirait (un très grand entier ou une valeur si petite qu'elle
 deviendrait zéro), `-0`, une même clé écrite deux fois dans un objet ou une imbrication de plus de 1000
 niveaux. Dans ces cas, le commutateur est verrouillé afin que rien ne soit modifié ou supprimé silencieusement.
-**OMP, DSH et Hermes** ne sont pas affectés non plus par les modifications voisines, mais pour une autre raison : leurs outils
-d'écriture ne modifient, octet par octet, que leur propre plage `providers.opencodex` ; le reste du fichier
+**OMP, DSH, Hermes et Kimi Code** ne sont pas affectés non plus par les modifications voisines, mais pour une autre raison : leurs outils
+d'écriture ne modifient, octet par octet, que leurs propres plages gérées ; le reste du fichier
 n'est jamais réécrit. Pour les autres formats susceptibles de contenir des commentaires (OpenClaw,
-Kimi Code, gjc, MiniMax Code et Raycast — documents YAML, JSON5 et TOML réécrits en entier), ou lorsque les propres entrées
+gjc, MiniMax Code et Raycast — documents YAML et JSON5 réécrits en entier), ou lorsque les propres entrées
 d'opencodex ont été modifiées, le commutateur se verrouille et la désactivation est refusée plutôt que de
 deviner quelles modifications vous appartiennent.
 
@@ -162,9 +162,9 @@ remplace depuis la page de ce profil.
 ## À quoi s'attendre, en toute transparence
 
 **Le formatage n'est généralement pas préservé.** L'application analyse une configuration avant de la
-réécrire ; JSON, JSON5 et TOML peuvent donc être reformatés, et les commentaires JSON5 ou TOML sont perdus.
-OMP et DSH font exception : leurs outils d’écriture YAML ne modifient que le fragment géré. Pour OMP, il s’agit de `providers.opencodex` ; pour DSH, de `[id=llm-pi-ai].config.providers.opencodex` dans le patch Desktop, ou de `llm-pi-ai.providers.opencodex` dans `settings.yaml` uniquement si le profil Desktop est absent. Ils préservent octet par octet les commentaires et le formatage des fournisseurs sans rapport. Si la plage source exacte ne peut pas être identifiée de manière
-sûre, l'opération est refusée. Pour les autres clients, utilisez **Restaurer** lorsque vous avez besoin des
+réécrire ; JSON et JSON5 peuvent donc être reformatés, et les commentaires JSON5 sont perdus.
+OMP, DSH et Kimi Code font exception : leurs outils d’écriture YAML ne modifient que le fragment géré. Pour OMP, il s’agit de `providers.opencodex` ; pour DSH, de `[id=llm-pi-ai].config.providers.opencodex` dans le patch Desktop, ou de `llm-pi-ai.providers.opencodex` dans `settings.yaml` uniquement si le profil Desktop est absent. Ils préservent octet par octet les commentaires et le formatage des fournisseurs sans rapport. Si la plage source exacte ne peut pas être identifiée de manière
+sûre, l'opération est refusée. L'outil d'écriture de Kimi Code ne remplace que ses propres tables `[providers.opencodex]` et `[models."opencodex/…"]` dans `config.toml`, conserve les commentaires et les tables `[[hooks]]`, et refuse si ces tables sont écrites autrement. Pour les autres clients, utilisez **Restaurer** lorsque vous avez besoin des
 octets précédents du fichier : l'instantané en est une copie exacte.
 
 **Si une valeur ne peut pas être réécrite fidèlement, le commutateur refuse l'opération.** L'aller-retour

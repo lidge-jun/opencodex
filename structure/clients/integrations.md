@@ -194,7 +194,7 @@ provider block in `models.yml`; default presets and proxy routing in `config.yml
 
 TOML temporal scalars cannot survive the JSON-cloned merge representation with their types
 intact. The common parser refuses documents containing them before either status or mutation
-proceeds, including nested arrays and inline tables. Quoted date strings remain supported.
+proceeds, including nested arrays and inline tables. Quoted date strings remain supported. Kimi Code's `config.toml` is patched in place by `src/integrations/toml-source.ts` (#9152): only the owned `[providers.opencodex]` and `[models."opencodex/…"]` tables are replaced, so comments, `[[array]]` tables and sibling edits survive, and a layout that cannot be patched that way is refused rather than re-rendered.
 
 ## Catalog visibility
 

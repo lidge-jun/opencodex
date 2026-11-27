@@ -1040,7 +1040,7 @@ export function observeIntegration(
   // ownership here and disable would delete fragments it never wrote.
   const classified = classifyIntegration({
     fileText: before, fileIsRegular: true, parsed, record, contribution, configPath, clientId,
-    format: effective.format, sourcePreservingYaml: effective.sourcePreservingYaml !== null,
+    format: effective.format, sourcePreserving: effective.sourcePreservingYaml !== null || effective.sourcePreservingToml,
   });
   if (clientId === "droid" && record && (classified.state === "current" || classified.state === "stale")) {
     try { assertDroidRecordedSettingsUnambiguous(detectDir, parsed, record); }

@@ -394,10 +394,10 @@ normalized. The exception is something JSON cannot rewrite exactly — a non-fin
 number like `1e999`, a number a rewrite would round (a very large integer, or one
 so small it collapses to zero), `-0`, the same key written twice in one object, or nesting deeper
 than 1000 levels — which locks the switch instead, so nothing is silently changed or dropped.
-**OMP, DSH and Hermes** are unaffected by sibling edits too, for a different reason: their writers
+**OMP, DSH, Hermes and Kimi Code** are unaffected by sibling edits too, for a different reason: their writers
 patch only their own managed provider ranges byte-wise, so the rest of the
 file is never rewritten. For the remaining formats that can carry comments
-(OpenClaw, Kimi Code, gjc, MiniMax Code, Raycast — JSON5 and TOML
+(OpenClaw, gjc, MiniMax Code, Raycast — JSON5
 written as whole documents, or generic YAML without source preservation), or
 whenever our own entries were edited, the switch locks and disable refuses rather
 than guessing which edits were yours.
@@ -508,12 +508,14 @@ exported model list before retrying. **Replace** does not bypass the limit. If t
 configuration must stay larger, manage it manually instead of using the Connect switch.
 
 **Formatting is generally not preserved.** Applying parses a config and writes it back
-out, so JSON, JSON5 and TOML may be reformatted and comments in JSON5 or TOML are lost.
-OMP, DSH and Hermes are the exceptions: OMP and Hermes patch only `providers.opencodex`.
+out, so JSON and JSON5 may be reformatted and comments in JSON5 are lost.
+OMP, DSH, Hermes and Kimi Code are the exceptions: OMP and Hermes patch only `providers.opencodex`.
 DSH patches only `[id=llm-pi-ai].config.providers.opencodex` in the Desktop profile patch,
 or `llm-pi-ai.providers.opencodex` in `settings.yaml` when there is no Desktop profile.
 Their YAML writers preserve unrelated provider comments and formatting byte-for-byte. If that exact
-source range cannot be identified safely, the operation refuses instead. For other clients, use
+source range cannot be identified safely, the operation refuses instead. Kimi Code's writer replaces
+only its own `[providers.opencodex]` and `[models."opencodex/…"]` tables in `config.toml`, keeping
+comments and `[[hooks]]` tables, and refuses when those tables are written another way. For other clients, use
 Restore when you need the previous file bytes: the snapshot is a verbatim copy.
 
 **If a value cannot be rewritten faithfully, the switch refuses instead.** The round
