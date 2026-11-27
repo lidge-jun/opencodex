@@ -18,6 +18,11 @@ export const ROUTING_COMPATIBILITY_FIELD_LABELS: Record<Locale, CompatibilityFie
     unknownEvidence: "Unknown evidence",
     degradedEvidence: "Degraded evidence",
   },
+  es: {
+    maxEvidenceAgeMs: "Antigüedad máxima de la evidencia (ms)",
+    unknownEvidence: "Evidencia desconocida",
+    degradedEvidence: "Evidencia degradada",
+  },
   de: {
     maxEvidenceAgeMs: "Maximales Evidenzalter (ms)",
     unknownEvidence: "Unbekannte Evidenz",

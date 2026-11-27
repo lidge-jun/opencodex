@@ -15,13 +15,21 @@ const AUDIO_FIELD_MAX_BYTES = 16 * 1024;
 const AUDIO_RESPONSE_MAX_BYTES = 2 * 1024 * 1024;
 const AUDIO_TIMEOUT_MS = 120_000;
 const FIELDS = new Set(["file", "model", "prompt", "language", "response_format"]);
-const MODELS = new Set([TRANSCRIPTION_MODEL, "gpt-4o-mini-transcribe", "whisper-1"]);
+/** Repeated multipart arrays, as OpenAI's create-transcription reference spells them. */
+const LIST_FIELDS = new Set(["keywords[]", "languages[]"]);
+const LIST_MAX_ITEMS = 100;
+/** OpenAI's recommended file model; it takes keywords[] and languages[] instead of language. */
+const LIST_MODEL = "gpt-transcribe";
+const MODELS = new Set([TRANSCRIPTION_MODEL, "gpt-4o-mini-transcribe", "whisper-1", LIST_MODEL]);
+const LANGUAGE_CODE = /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/;
 
 interface TranscriptionInput {
   file: File;
   model: string;
   prompt?: string;
   language?: string;
+  keywords: string[];
+  languages: string[];
   format: "json" | "text";
 }
 
@@ -57,8 +65,9 @@ async function parseTranscription(req: Request, operationSignal: AbortSignal): P
   }
   const seen = new Set<string>();
   for (const [name, value] of form) {
-    if (!FIELDS.has(name)) return invalid(`Unsupported transcription field: ${name.slice(0, 64)}`);
-    if (seen.has(name)) return invalid(`Duplicate transcription field: ${name}`);
+    const list = LIST_FIELDS.has(name);
+    if (!FIELDS.has(name) && !list) return invalid(`Unsupported transcription field: ${name.slice(0, 64)}`);
+    if (seen.has(name) && !list) return invalid(`Duplicate transcription field: ${name}`);
     seen.add(name);
     if (name !== "file" && (typeof value !== "string" || Buffer.byteLength(value) > AUDIO_FIELD_MAX_BYTES)) {
       return invalid("Audio text fields must be strings no larger than 16 KiB", 413);
@@ -73,8 +82,58 @@ async function parseTranscription(req: Request, operationSignal: AbortSignal): P
   if (format !== "json" && format !== "text") return invalid("response_format must be json or text");
   const prompt = form.get("prompt") as string | null;
   const language = form.get("language") as string | null;
-  if (language !== null && !/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/.test(language)) return invalid("Invalid transcription language");
-  return { file, model, format, ...(prompt !== null ? { prompt } : {}), ...(language !== null ? { language } : {}) };
+  if (language !== null && !LANGUAGE_CODE.test(language)) return invalid("Invalid transcription language");
+  const keywords = form.getAll("keywords[]") as string[];
+  const languages = form.getAll("languages[]") as string[];
+  if (keywords.length > LIST_MAX_ITEMS || languages.length > LIST_MAX_ITEMS) {
+    return invalid(`keywords[] and languages[] accept at most ${LIST_MAX_ITEMS} entries each`);
+  }
+  if (model === LIST_MODEL) {
+    if (language !== null) return invalid(`${LIST_MODEL} takes languages[] instead of language`);
+  } else if (keywords.length > 0 || languages.length > 0) {
+    return invalid(`keywords[] and languages[] require ${LIST_MODEL}`);
+  }
+  if (keywords.some(keyword => !keyword.trim() || /[<>\r\n]/.test(keyword))) return invalid("Invalid transcription keyword");
+  if (languages.some(code => !LANGUAGE_CODE.test(code))) return invalid("Invalid transcription language");
+  return {
+    file, model, format, keywords, languages,
+    ...(prompt !== null ? { prompt } : {}), ...(language !== null ? { language } : {}),
+  };
+}
+
+type UploadFormat = { extension: string; type: string };
+
+/**
+ * The container a file's leading bytes declare. openai/codex names its upload from the clip's MIME
+ * type (backend-client client.rs transcribe_audio), but Bun's multipart parser drops a part's
+ * Content-Type, so the bytes are the only type evidence that survives ingress here.
+ */
+function sniffAudioFormat(head: Uint8Array): UploadFormat | undefined {
+  const ascii = (start: number, text: string) => [...text].every((char, index) => head[start + index] === char.charCodeAt(0));
+  if (ascii(0, "RIFF") && ascii(8, "WAVE")) return { extension: ".wav", type: "audio/wav" };
+  if (ascii(0, "OggS")) return { extension: ".ogg", type: "audio/ogg" };
+  if (ascii(0, "fLaC")) return { extension: ".flac", type: "audio/flac" };
+  if (ascii(4, "ftyp")) return { extension: ".m4a", type: "audio/mp4" };
+  if (head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3) return { extension: ".webm", type: "audio/webm" };
+  // ID3 tag, or an MPEG audio frame sync whose layer bits are set (ADTS AAC leaves them zero).
+  if (ascii(0, "ID3") || (head[0] === 0xff && (head[1]! & 0xe0) === 0xe0 && ((head[1]! >> 1) & 3) !== 0)) {
+    return { extension: ".mp3", type: "audio/mpeg" };
+  }
+  return undefined;
+}
+
+/** Name and type the upstream part so it can be identified; an unknown extensionless clip keeps the old .webm name. */
+async function uploadFile(file: File): Promise<File> {
+  const sniffed = sniffAudioFormat(new Uint8Array(await file.slice(0, 12).arrayBuffer()));
+  const extension = /\.[a-z0-9]{1,8}$/i.exec(file.name)?.[0] ?? sniffed?.extension ?? ".webm";
+  return new File([file], "audio" + extension, sniffed ? { type: sniffed.type } : {});
+}
+
+/** Detected languages, reduced to their codes; anything else in the upstream array is dropped. */
+function detectedLanguages(payload: object): Array<{ code: string }> | undefined {
+  if (!("languages" in payload) || !Array.isArray(payload.languages)) return undefined;
+  return payload.languages.flatMap(entry => entry && typeof entry === "object" && "code" in entry
+    && typeof entry.code === "string" && LANGUAGE_CODE.test(entry.code) ? [{ code: entry.code }] : []);
 }
 
 async function transcribeAdmitted(
@@ -109,9 +168,11 @@ async function transcribeAdmitted(
       if (!headers.has("originator")) headers.set("originator", "codex_cli_rs");
     }
     const form = new FormData();
-    form.append("file", input.file, "audio" + (/\.[a-z0-9]{1,8}$/i.exec(input.file.name)?.[0] ?? ".webm"));
+    form.append("file", await uploadFile(input.file));
     if (input.prompt !== undefined) form.append("prompt", input.prompt);
     if (input.language !== undefined) form.append("language", input.language);
+    for (const keyword of input.keywords) form.append("keywords[]", keyword);
+    for (const code of input.languages) form.append("languages[]", code);
     if (relay.keyed) {
       form.append("model", input.model);
       form.append("response_format", "json");
@@ -137,9 +198,10 @@ async function transcribeAdmitted(
     if (!payload || typeof payload !== "object" || !("text" in payload) || typeof payload.text !== "string") {
       return formatErrorResponse(502, "upstream_error", "Audio upstream response is missing text");
     }
+    const languages = detectedLanguages(payload);
     return input.format === "text"
       ? new Response(payload.text, { headers: { "content-type": "text/plain; charset=utf-8" } })
-      : Response.json({ text: payload.text });
+      : Response.json({ text: payload.text, ...(languages ? { languages } : {}) });
   } catch {
     if (operation.signal.aborted) {
       outcome = operation.didExpire() ? "timeout" : undefined;

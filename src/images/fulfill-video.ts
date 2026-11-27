@@ -145,9 +145,11 @@ export async function* pollVideoWithHeartbeats(
   /** Test seams — avoid mock.module / global setTimeout (both poison parallel Bun CI). */
   sleepFn: SleepFn = sleep,
   pollFn: PollVideoJobFn = pollVideoJob,
+  /** False for a wire whose finished job is fetched from a content endpoint instead of a URL. */
+  requireUrl = true,
 ): AsyncGenerator<
   { type: "heartbeat"; message: string },
-  { ok: true; videoUrl: string } | { ok: false; error: string }
+  { ok: true; videoUrl?: string } | { ok: false; error: string }
 > {
   const start = Date.now();
   let interval = INITIAL_POLL_INTERVAL_MS;
@@ -164,6 +166,7 @@ export async function* pollVideoWithHeartbeats(
         if (poll.videoUrl) {
           return { ok: true, videoUrl: poll.videoUrl };
         }
+        if (!requireUrl) return { ok: true };
         return { ok: false, error: "video generation completed but no video URL was returned" };
       }
       if (poll.status === "failed") {

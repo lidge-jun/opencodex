@@ -51,8 +51,10 @@ schema) onto one Chat body, reading camelCase or snake_case. Hosted Gemini tools
 that would change the answer (`candidateCount` other than 1, non-image inline data, file parts,
 more than 1,024 function calls) is a 400. Responses map Chat finish `stop` and `tool_calls` to
 `STOP`, `length` to `MAX_TOKENS` and `content_filter` to `SAFETY`; an unknown or missing finish is an
-error, never a success. A streamed tool call is accumulated and emitted as one whole `functionCall`
-part. Usage becomes `usageMetadata`, with reasoning tokens reported as `thoughtsTokenCount`.
+error, never a success. The Chat bridge assembles a streamed `functionCall` under the shared
+translator limits for each call's arguments and for all retained tool fields in the turn. It releases
+those buffers on emission, failure or cancellation. Usage becomes `usageMetadata`, with reasoning
+tokens reported as `thoughtsTokenCount`.
 
 `src/server/gemini-inbound.ts` owns translated delivery. With `alt=sse` a stream is `data: <json>\r\n\r\n`
 frames; without it, one streamed JSON array. The closing chunk (finish reason and usage) is emitted

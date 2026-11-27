@@ -280,6 +280,11 @@ export interface HandleResponsesOptions {
   callerDirectAuth?: CallerDirectAuth | null;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /**
+   * Filled by a Combo bridge child with the route it settled on and that route's identity, so the Combo loop
+   * checks paid consent and a pinned continuation's route against the destination the child sends to.
+   */
+  comboChildRoute?: { route?: RouteResult; identity?: string };
   /** `union` combo with no member whose window fits: the child keeps the loose direct admission. */
   comboContextDegraded?: boolean;
   /** A union combo admitted this image-bearing child through a dispatchable vision plan. */

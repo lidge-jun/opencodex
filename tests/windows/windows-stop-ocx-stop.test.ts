@@ -84,6 +84,12 @@ describe("plain ocx stop on Windows: Part A holds the child stop", () => {
       expect(run.summary).toMatchObject({ schema: "ocx-stop/1", outcome: "failed", service, proxy: "unknown", sharedTeardown: "skipped" });
       if (reason) expect(run.summary.serviceStopReason).toBe(reason);
       else expect("serviceStopReason" in run.summary).toBe(false);
+      if (outcome === "unknown") {
+        expect(run.summary.message).toContain("fixture unknown");
+        expect(run.stderr.split(String(run.summary.message))).toHaveLength(2);
+        expect(run.stderr).not.toContain("repair Task Scheduler access");
+        expect("serviceStopMessage" in run.summary).toBe(false);
+      }
       expect(run.stderr).toContain("The proxy was left running and the shared teardown skipped");
     });
   }

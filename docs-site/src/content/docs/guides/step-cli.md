@@ -55,6 +55,10 @@ StepCode:
   accepted this residual risk on 2026-11-19 alongside the POSIX reap-ordering risk.
   If the wrapper has already exited or cleanup is unconfirmed after the helper may have run,
   OpenCodex quarantines the session, logs a fixed warning and reports incomplete cleanup.
+- **Conversation capacity:** A proxy can keep eight StepCode sessions per OpenCodex home. When all
+  slots are occupied, existing conversations can continue. A new one receives `step_cli_pool_full`
+  and can retry after a slot frees up. Idle sessions still count until
+  cleanup after the ten-minute idle timeout completes.
 - **Two documented limits:** a tool that takes longer than two minutes to come back exceeds the
   CLI's own tool-result window and the turn reports `step_cli_tool_result_too_late`; and the CLI's
   session system prompt cannot be replaced through this protocol, so your instructions are prepended

@@ -86,7 +86,7 @@ Par défaut, le pont envoie les tâches `video_gen` à xAI avec la clé d'API du
 - Un `baseUrl` en boucle locale ou en réseau privé exige `allowPrivateNetwork: true` sur ce fournisseur, comme pour le reste du trafic des fournisseurs.
 - Une clé qu'OpenCodex peut reconnaître comme xAI (clé `xai-`, clé détenue par une entrée `xai` ou référence d'environnement nommée d'après xAI ou Grok) n'est envoyée qu'à `https://api.x.ai` ou `https://cli-chat-proxy.grok.com` ; toute autre origine est refusée. Une clé sans ces marques ne peut pas être reconnue : ne collez donc pas votre clé xAI dans l'entrée d'un autre fournisseur. Une référence de trousseau vers le secret d'un autre fournisseur est toujours refusée, une clé active en pause est refusée, et le `baseUrl` ne peut contenir ni identifiants, ni requête, ni fragment.
 - Si le fournisseur est absent, désactivé, en pause, sans clé ou refusé, chaque appel `video_gen` renvoie cette erreur au modèle. Rien n'est envoyé et le pont ne se rabat jamais sur xAI.
-- La vidéo terminée n'est toujours téléchargée que depuis une URL `data:` en base64 ou une URL `https:` publique ; un pont local doit donc renvoyer l'une des deux dans `video.url`.
+- Avec le protocole xAI, la vidéo terminée n'est téléchargée que depuis une URL `data:` en base64 ou une URL `https:` publique ; un pont local doit donc renvoyer l'une des deux dans `video.url`. Un backend qui sert le fichier depuis son propre hôte définit plutôt `"videoApi": "openai"` (voir [la section OpenAI Videos API du guide anglais](/guides/video-bridge/#openai-videos-api-backends)).
 
 ## Fonctionnement
 

@@ -109,8 +109,72 @@ bridge:
   may not carry credentials, a query or a fragment.
 - If the provider is missing, disabled, paused, keyless or refused, every `video_gen` call returns
   that error to the model. Nothing is sent, and the bridge never falls back to xAI.
-- The finished video is still downloaded only from a base64 `data:` URL or a public `https:` URL, so
-  a local bridge must return one of those as `video.url`.
+- On the xAI wire the finished video is downloaded only from a base64 `data:` URL or a public
+  `https:` URL, so a local bridge must return one of those as `video.url`. A backend that serves the
+  rendered file from its own host instead uses the OpenAI wire below.
+
+### OpenAI Videos API backends
+
+Set `"videoApi": "openai"` on the provider when its backend implements the OpenAI Videos API shape
+(`POST {baseUrl}/videos`, then `GET {baseUrl}/videos/{id}` until `completed`, then the MP4 from
+`GET {baseUrl}/videos/{id}/content`), as LiteLLM and several self-hosted Gemini or AI Studio shims do.
+OpenAI shut its own Videos API down on September 24, 2026, so this names third-party backends, not
+`api.openai.com`.
+
+```json
+{
+  "providers": {
+    "aistudio": {
+      "adapter": "openai-chat",
+      "baseUrl": "http://127.0.0.1:2048/v1",
+      "apiKey": "${AISTUDIO_KEY}",
+      "authMode": "key",
+      "allowPrivateNetwork": true,
+      "videoApi": "openai"
+    }
+  },
+  "images": {
+    "videoBridgeEnabled": true,
+    "videoProvider": "aistudio",
+    "videoBridgeModel": "gemini-omni-1.1-flash"
+  }
+}
+```
+
+- `duration` is sent as `seconds`, `resolution` and `aspect_ratio` as `size` (720p at 16:9 is
+  `1280x720`), and a first-frame `image` as `input_reference.image_url`. `last_frame`, `keyframes` and
+  `reference_images` have no OpenAI field and are refused before any request.
+- Submit, poll and the content download all go to the same provider with the same key, under the
+  same address, `allowPrivateNetwork`, cleartext, proxy and redirect rules listed above. A redirect
+  from `/content` is refused, not followed, and the download keeps the 200 MiB video cap.
+- Name the backend's model in `videoBridgeModel`. Models OpenCodex does not know keep the generic
+  limits: 480p or 720p, seven aspect ratios and no image inputs.
+
+## Public `/v1/videos` endpoint
+
+Clients that speak the OpenAI Videos API can point at OpenCodex. Three routes are served:
+
+| Route | Purpose |
+|-------|---------|
+| `POST /v1/videos` | Create a job. JSON, or multipart with an `input_reference` PNG/JPEG/WebP file (sent upstream as a data URL). |
+| `GET /v1/videos/{id}` | Job status. |
+| `GET /v1/videos/{id}/content` | The rendered file; `variant` may be `video`, `thumbnail` or `spritesheet`. |
+
+`model` picks the backend: `"aistudio/gemini-omni-1.1-flash"` sends `gemini-omni-1.1-flash` to the
+`aistudio` provider, and a model without a slash goes to `images.videoProvider`. A model with a slash must start with a configured provider name (write `"<videoProvider>/google/veo"` for a backend model id that contains a slash); an unknown prefix is refused, never sent to another backend. Only a
+provider with `"videoApi": "openai"` serves these routes; any other, and every refusal listed above,
+returns an error and sends nothing. The `id` in each answer is an OpenCodex handle: status and content
+calls return to the provider that created the job, and a handle works only with the exact OpenCodex API key
+secret (or the same loopback or environment admission) that created it. Other keys, and a rotated or
+replaced secret under the same key id, get `404`, so fetch results before rotating a key. The
+handles are encrypted and signed with a key stored as `video-handle-key` in the OpenCodex home, so they survive a
+restart. If that key file cannot be read or created safely, `POST /v1/videos` fails before the job is
+submitted. Job objects carry only the documented fields (`status`, `progress`, `seconds`, `size`, timestamps and a
+short `error`), with `model` set to the model OpenCodex sent; other upstream fields and free text are dropped.
+
+The routes take the same authentication and origin checks as `/v1/images/generations`, a scoped key
+is held to its providers and models on all three, and each call is recorded in `usage.jsonl`. List,
+delete, remix, edit and extension routes are not served.
 
 ## How It Works
 
@@ -158,7 +222,7 @@ be referenced. An upstream temporary URL may expire earlier.
 
 ## Limitations
 
-- **xAI by default**: without `videoProvider`, video generation uses xAI's Grok Imagine Video API; another backend must implement the same asynchronous API
+- **xAI by default**: without `videoProvider`, video generation uses xAI's Grok Imagine Video API; another backend must implement the same asynchronous API, or the OpenAI Videos API with `videoApi: "openai"`
 - **Asynchronous**: Video generation takes 30-120 seconds
 - **Cost**: video generation is a paid xAI feature. Check the [official pricing](https://docs.x.ai/developers/pricing) before using it.
 - **One video per call**: Each `video_gen` call produces one video

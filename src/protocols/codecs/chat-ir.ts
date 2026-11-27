@@ -25,6 +25,7 @@ import { providerMetadataFromResponsesFunctionCall } from "../../responses/provi
 import {
   assistantReasoningText,
   ChatCompletionsRequestError,
+  chatVideoRefusal,
   contentToText,
   fileFromPart,
   videoFromPart,
@@ -216,6 +217,8 @@ export function chatConversationToIr(raw: unknown, modelId: string): ChatIrConve
     throw new ChatCompletionsRequestError("messages must be a non-empty array");
   }
   const unsupportedMedia = untranslatedChatInputMedia(raw);
+  const videoRefusal = chatVideoRefusal(unsupportedMedia, raw);
+  if (videoRefusal) throw videoRefusal;
   if (unsupportedMedia) throw new ChatCompletionsRequestError(untranslatedInputMediaMessage(unsupportedMedia));
 
   const now = Date.now();

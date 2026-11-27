@@ -94,6 +94,7 @@ describe("Claude native passthrough setting", () => {
     const descriptions: Record<string, RegExp> = {
       de: /Modellauswahl.*Claude Desktop.*vor modelMap/,
       en: /Claude picker.*Claude Desktop.*before modelMap/,
+      es: /selector.*Claude Desktop.*antes de modelMap/,
       fr: /sélecteur.*Claude Desktop.*avant modelMap/,
       ja: /モデルピッカー.*Claude Desktop.*modelMap より先/,
       ko: /모델 선택기.*Claude Desktop.*modelMap보다 먼저/,

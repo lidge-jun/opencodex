@@ -15,6 +15,39 @@ Ceci est utile lorsque vous souhaitez :
 Les combos interviennent en amont du routage normal des fournisseurs. Consultez d’abord [Routage des modèles](/fr/guides/model-routing/)
 si vous ne connaissez pas encore les sélecteurs `provider/model`.
 
+## Basculer quand le quota est épuisé
+
+Dans **Modèles → Combinaisons**, choisissez **OpenAI en premier** ou **Claude en premier** lorsque
+les quatre fournisseurs sont disponibles. Chaque modèle de configuration prépare l’abonnement
+choisi et sa clé API, puis l’autre abonnement et sa clé API. Réordonnez les cibles avec leur
+poignée ou les boutons fléchés. L’**Aperçu de la bascule** indique la première étape bloquée
+et les cibles qui suivent. L’interrupteur des appels payants se trouve sous l’état de l’aperçu.
+Il est désactivé par défaut dans les deux parcours. À la création, **Abonnements uniquement**
+retire les deux cibles API. Sélectionnez `combo/openai-first` ou
+`combo/claude-first` dans votre client pour utiliser la combinaison enregistrée.
+
+**Basculer uniquement si le quota est épuisé** (`quotaOnlyFallback`) suit l’ordre déclaré après
+confirmation d’un quota ou d’un crédit épuisé. Quand la cible essayée échoue sur une limite temporaire, un
+quota inconnu, une erreur d’authentification ou une requête incompatible, la chaîne s’arrête là. Une cible
+sans relevé de quota est quand même essayée dans l’ordre déclaré. Les règles de bascule, la rotation des comptes, les limites d’envoi et l’autorisation des appels
+payants continuent de s’appliquer. Une cible servie par plusieurs clés API bascule une fois que
+chaque clé active signale un quota ou un crédit épuisé. La bascule par quota exige un consentement pour toute destination
+hors abonnement reconnu ou route locale explicite en boucle locale. Les clés personnalisées, la
+facturation inconnue et les redirections sont couvertes. Un appel refusé renvoie
+`combo_metered_consent_required`. Si la cible retenue pour la conversation, celle de son dernier tour servi par la Combo, est
+inconnue ou indisponible, la continuation d’un appel d’outil renvoie `409 combo_tool_target_unavailable`. Un plafond de sortie laisse le modèle
+disponible au tour suivant.
+
+**Garder le même modèle lors de la bascule** (`preserveFallbackModel`) exige le même identifiant de
+modèle résolu entre deux cibles, même lorsque le fournisseur change. Un changement de modèle
+renvoie `409 combo_model_change_refused`. Laissez cette option décochée
+pour basculer entre familles de modèles.
+
+```bash
+ocx combo set openai-first --quota-only-fallback on
+ocx combo set exact-model --preserve-fallback-model on
+```
+
 ## Démarrage rapide en 60 secondes
 
 Cet exemple crée `combo/main`, avec Anthropic en premier et OpenAI en second. Les deux fournisseurs doivent

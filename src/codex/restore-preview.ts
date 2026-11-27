@@ -93,7 +93,7 @@ const SHOWN_LEAF_KEYS = new Set([
   "base_url", "name", "wire_api", "env_key", "requires_openai_auth", "query_params", "http_headers",
   "trust_level", "enabled", "trusted_hash", "model", "model_provider", "model_reasoning_effort",
   "default_subagent_model", "default_subagent_reasoning_effort", "stream_idle_timeout_ms",
-  "request_max_retries", "stream_max_retries", "supports_websockets",
+  "request_max_retries", "stream_max_retries", "supports_websockets", "capabilities",
 ]);
 
 /**
