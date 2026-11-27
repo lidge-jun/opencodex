@@ -3,13 +3,10 @@ import { once } from "node:events";
 import {
   FOREGROUND_ADVISORY_ARG,
   maybeStartForegroundAdvisory,
-  parseWindowsProcessSnapshot,
-  selectOwnedWindowsDescendants,
   shouldStartForegroundAdvisory,
   startForegroundAdvisory,
-  windowsProcessSnapshotArgs,
+  type ContainedWindowsAdvisoryChild,
   type ForegroundAdvisoryEligibility,
-  type WindowsAdvisoryJob,
 } from "../../src/service/foreground-advisory-process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -203,7 +200,7 @@ test("private advisory entrypoint launches cleanly from a path containing spaces
   }
 }, 15_000);
 
-describe("Windows handle-bound and Job Object advisory teardown", () => {
+describe("Windows pre-resume Job-contained advisory teardown", () => {
   async function waitUntilDead(pid: number, timeoutMs = 3_000): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -218,278 +215,174 @@ describe("Windows handle-bound and Job Object advisory teardown", () => {
     try { process.kill(pid, "SIGKILL"); } catch { /* process already exited */ }
   }
 
-  test("Job Object containment terminates root and descendants atomically without snapshot or bare-PID commands", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-advisory-job-"));
-    const descendantPidFile = join(dir, "descendant.pid");
-    let child!: ChildProcess;
-    let descendantPid = 0;
-    const rootTicks = 639_000_000_000_000_000n;
-    const attached: Array<{ pid: number; ticks: bigint }> = [];
-    let jobTerminated = 0;
-    let jobClosed = 0;
-    let snapshotCalls = 0;
-    const cancel = startForegroundAdvisory(() => {}, {
-      platform: "win32",
-      timeoutMs: 120,
-      windowsNative: () => ({
-        sameUserIdentity: () => ({ ticks: rootTicks }),
-        terminate: () => { throw new Error("Job Object already terminated the tree"); },
-      }),
-      attachWindowsJob: (pid, ticks): WindowsAdvisoryJob => {
-        attached.push({ pid, ticks });
-        return {
-          terminateAndClose: () => {
-            jobTerminated += 1;
-            safeKillPid(descendantPid);
-            if (child.pid) safeKillPid(child.pid);
-            return true;
-          },
-          close: () => { jobClosed += 1; },
-        };
-      },
-      spawnSnapshot: (() => {
-        snapshotCalls += 1;
-        throw new Error("snapshot must not run when Job Object termination succeeds");
-      }) as typeof spawn,
-      launch: () => {
-        const script = [
-          'const { spawn } = require("node:child_process");',
-          'const { writeFileSync } = require("node:fs");',
-          'const d = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: ["ignore", 1, "ignore"], windowsHide: true });',
-          `writeFileSync(${JSON.stringify(descendantPidFile)}, String(d.pid));`,
-          'console.log("ready");',
-          "setInterval(() => {}, 60000);",
-        ].join(" ");
-        return (child = fakeProbe(script));
-      },
-    });
-    try {
-      await once(child.stdout!, "data");
-      descendantPid = Number(readFileSync(descendantPidFile, "utf8").trim());
-      expect(descendantPid).toBeGreaterThan(0);
-      await once(child, "close");
-      expect(await waitUntilDead(descendantPid)).toBe(true);
-      expect(attached).toEqual([{ pid: child.pid!, ticks: rootTicks }]);
-      expect(jobTerminated).toBe(1);
-      expect(jobClosed).toBe(0);
-      expect(snapshotCalls).toBe(0);
-    } finally {
-      cancel(true);
-      safeKillPid(descendantPid);
-      await removeTreeAfterBackgroundWork(dir);
-    }
-  }, 15_000);
+  function createFakeContainedWindowsChild(options: {
+    outputChunks?: Buffer[];
+    terminal?: boolean;
+    exitCode?: number | null;
+    setupFailure?: string | null;
+    processHandle?: bigint;
+    onTerminateJob?: (job: bigint, code: number) => void;
+  } = {}) {
+    let eof = false;
+    let terminal = options.terminal ?? false;
+    let exitCode = options.exitCode ?? 0;
+    const queued = [...(options.outputChunks ?? [])];
+    const terminatedJobs: Array<{ job: bigint; code: number }> = [];
+    const closedHandles: bigint[] = [];
+    let pipeDisposed = 0;
+    let nativeDisposed = 0;
+    let reapedUnstarted = 0;
 
-  test("normal probe completion releases the Windows Job Object handle without forcing termination", async () => {
-    let child!: ChildProcess;
+    const child: ContainedWindowsAdvisoryChild = {
+      setupFailure: options.setupFailure ?? null,
+      job: 0x100n,
+      process: options.processHandle ?? 0x200n,
+      pipe: {
+        get eof() { return eof; },
+        error: false,
+        pump(onBytes) {
+          while (queued.length > 0) onBytes(queued.shift()!);
+          if (terminal) eof = true;
+        },
+        async dispose() { pipeDisposed += 1; },
+      },
+      native: {
+        k: {
+          TerminateJobObject(job, code) {
+            terminatedJobs.push({ job, code });
+            options.onTerminateJob?.(job, code);
+            terminal = true;
+            exitCode = code;
+            eof = true;
+            return 1;
+          },
+        },
+        close(handle) { closedHandles.push(handle); },
+        dispose() { nativeDisposed += 1; return true; },
+      },
+      observe() {
+        return { terminal, exitCode: terminal ? exitCode : null, unknown: false };
+      },
+      reapUnstarted() {
+        reapedUnstarted += 1;
+        return true;
+      },
+    };
+
+    return {
+      child,
+      setTerminal(nextExitCode: number) { terminal = true; exitCode = nextExitCode; },
+      state: () => ({ terminatedJobs, closedHandles, pipeDisposed, nativeDisposed, reapedUnstarted }),
+    };
+  }
+
+  test("normal Windows completion publishes advisory and releases handles without TerminateJobObject", async () => {
     const warnings: string[] = [];
-    let jobTerminated = 0;
-    let jobClosed = 0;
-    const cancel = startForegroundAdvisory(line => warnings.push(line), {
+    const fake = createFakeContainedWindowsChild({
+      outputChunks: [Buffer.from(JSON.stringify(["windows advisory"]))],
+      terminal: true,
+      exitCode: 0,
+    });
+    const stop = startForegroundAdvisory(line => warnings.push(line), {
       platform: "win32",
-      windowsNative: () => ({
-        sameUserIdentity: () => ({ ticks: 639_000_000_000_000_000n }),
-        terminate: () => ({ status: "gone" }),
-      }),
-      attachWindowsJob: (): WindowsAdvisoryJob => ({
-        terminateAndClose: () => { jobTerminated += 1; return true; },
-        close: () => { jobClosed += 1; },
-      }),
-      launch: () => (child = fakeProbe('console.log(JSON.stringify(["normal advisory"]))')),
+      pollMs: 5,
+      launchWindows: () => fake.child,
     });
     try {
-      await once(child, "close");
-      expect(warnings).toEqual(["normal advisory"]);
-      expect(jobClosed).toBe(1);
-      expect(jobTerminated).toBe(0);
+      await Bun.sleep(40);
+      expect(warnings).toEqual(["windows advisory"]);
+      expect(fake.state().terminatedJobs).toEqual([]);
+      expect(fake.state().pipeDisposed).toBe(1);
+      expect(fake.state().closedHandles).toEqual([0x200n, 0x100n]);
+      expect(fake.state().nativeDisposed).toBe(1);
     } finally {
-      cancel(true);
+      stop(true);
     }
   });
 
-  test("handle-bound fallback defeats PID reuse for both the root and descendants between snapshot and terminate", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-advisory-pid-reuse-"));
-    const descendantPidFile = join(dir, "descendant.pid");
-    let child!: ChildProcess;
-    let descendantPid = 0;
-    const rootTicks = 639_000_000_000_000_000n;
-    const genuineDescTicks = rootTicks + 50_000n;
-    const reusedDescPid = 999_001;
-    const staleReusedDescTicks = rootTicks + 60_000n;
-    const replacementDescTicks = rootTicks + 90_000_000n;
-    const replacementRootTicks = rootTicks + 80_000_000n;
-    const unrelatedChildOfReusedRootPid = 999_002;
-    const unrelatedChildOfReusedRootTicks = replacementRootTicks + 10_000n;
-
-    // Simulated OS process table at the moment native.terminate(pid, boundTicks) opens a handle:
-    // - root's PID has been reused by an unrelated process with newer ticks (replacementRootTicks);
-    // - reusedDescPid exited after snapshot and was reused with newer ticks (replacementDescTicks);
-    // - descendantPid still matches genuineDescTicks and is genuinely terminated.
-    const terminated: Array<{ pid: number; ticks: bigint | number; status: string }> = [];
-    const cancel = startForegroundAdvisory(() => {}, {
+  test("timeout terminates the Job Object atomically when a descendant outlives the probe root", async () => {
+    const warnings: string[] = [];
+    const fake = createFakeContainedWindowsChild({
+      outputChunks: [Buffer.from('["too late"]')],
+      // Root exited, descendant still active inside the Job -> Job accounting stays non-terminal.
+      terminal: false,
+    });
+    const stop = startForegroundAdvisory(line => warnings.push(line), {
       platform: "win32",
-      timeoutMs: 180,
-      killDeadlineMs: 2_000,
-      resolvePowerShell: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-      attachWindowsJob: () => null,
-      windowsNative: () => ({
-        sameUserIdentity: () => ({ ticks: rootTicks }),
-        terminate: (pid, boundStartTime) => {
-          const liveTicks = new Map<number, bigint>([
-            [child.pid!, replacementRootTicks],
-            [descendantPid, genuineDescTicks],
-            [reusedDescPid, replacementDescTicks],
-            [unrelatedChildOfReusedRootPid, unrelatedChildOfReusedRootTicks],
-          ]);
-          const actual = liveTicks.get(pid);
-          if (actual === undefined) {
-            terminated.push({ pid, ticks: boundStartTime, status: "gone" });
-            return { status: "gone" };
-          }
-          if (actual !== boundStartTime) {
-            terminated.push({ pid, ticks: boundStartTime, status: "reused" });
-            return { status: "reused" };
-          }
-          terminated.push({ pid, ticks: boundStartTime, status: "terminated" });
-          safeKillPid(pid);
-          return { status: "terminated" };
-        },
-      }),
-      spawnSnapshot: ((_cmd: string, args: readonly string[]) => {
-        expect(args).toEqual(windowsProcessSnapshotArgs());
-        expect(args[4]).not.toContain("Stop-Process");
-        const snapshotLines = [
-          `${child.pid!},1,${replacementRootTicks}`,
-          `${descendantPid},${child.pid!},${genuineDescTicks}`,
-          `${reusedDescPid},${child.pid!},${staleReusedDescTicks}`,
-          `${unrelatedChildOfReusedRootPid},${child.pid!},${unrelatedChildOfReusedRootTicks}`,
-        ].join("\n");
-        return spawn(process.execPath, ["-e", `process.stdout.write(${JSON.stringify(snapshotLines)})`], {
-          stdio: ["ignore", "pipe", "ignore"],
-          windowsHide: true,
-        });
-      }) as typeof spawn,
-      launch: () => {
-        const script = [
-          'const { spawn } = require("node:child_process");',
-          'const { writeFileSync } = require("node:fs");',
-          'const d = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: ["ignore", 1, "ignore"], windowsHide: true });',
-          `writeFileSync(${JSON.stringify(descendantPidFile)}, String(d.pid));`,
-          'process.stdout.write("root-exiting\\n", () => process.exit(0));',
-        ].join(" ");
-        return (child = fakeProbe(script));
-      },
+      timeoutMs: 30,
+      pollMs: 5,
+      launchWindows: () => fake.child,
     });
     try {
-      await once(child, "exit");
-      descendantPid = Number(readFileSync(descendantPidFile, "utf8").trim());
-      expect(descendantPid).toBeGreaterThan(0);
-      await once(child, "close");
-      expect(await waitUntilDead(descendantPid)).toBe(true);
-      // Genuine descendant was terminated via handle-bound ticks.
-      expect(terminated).toContainEqual({ pid: descendantPid, ticks: genuineDescTicks, status: "terminated" });
-      // Descendant whose PID was reused after snapshot was rejected as "reused" (never killed).
-      expect(terminated).toContainEqual({ pid: reusedDescPid, ticks: staleReusedDescTicks, status: "reused" });
-      // Reused root PID was rejected as "reused" (never killed).
-      expect(terminated).toContainEqual({ pid: child.pid!, ticks: rootTicks, status: "reused" });
-      // Child spawned by the unrelated replacement root was never even selected.
-      expect(terminated.some(entry => entry.pid === unrelatedChildOfReusedRootPid)).toBe(false);
+      await Bun.sleep(90);
+      expect(warnings).toEqual([]);
+      expect(fake.state().terminatedJobs).toEqual([{ job: 0x100n, code: 1 }]);
+      expect(fake.state().pipeDisposed).toBe(1);
+      expect(fake.state().closedHandles).toEqual([0x200n, 0x100n]);
+      expect(fake.state().nativeDisposed).toBe(1);
     } finally {
-      cancel(true);
-      safeKillPid(descendantPid);
-      await removeTreeAfterBackgroundWork(dir);
+      stop(true);
     }
-  }, 15_000);
+  });
 
-  test("Windows stdout close after exited root keeps async snapshot active and allows synchronous exit retry", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-advisory-win-exited-root-"));
-    const descendantPidFile = join(dir, "descendant.pid");
-    let child!: ChildProcess;
-    let descendantPid = 0;
-    const rootTicks = 639_000_000_000_000_000n;
-    const descTicks = rootTicks + 50_000n;
-    let asyncSnapshotSignal: NodeJS.Signals | null = null;
-    let syncSnapshotCalls = 0;
-    const cancel = startForegroundAdvisory(() => {}, {
+  test("synchronous exit cleanup terminates the Windows Job Object immediately without waiting on async timers", () => {
+    const warnings: string[] = [];
+    const fake = createFakeContainedWindowsChild({ terminal: false });
+    const stop = startForegroundAdvisory(line => warnings.push(line), {
       platform: "win32",
-      timeoutMs: 180,
-      killDeadlineMs: 2_000,
-      resolvePowerShell: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-      attachWindowsJob: () => null,
-      windowsNative: () => ({
-        sameUserIdentity: () => ({ ticks: rootTicks }),
-        terminate: (pid, ticks) => {
-          if (pid === descendantPid && ticks === descTicks) {
-            safeKillPid(pid);
-            return { status: "terminated" };
-          }
-          return { status: "gone" };
-        },
-      }),
-      spawnSnapshot: (() => {
-        const hung = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], {
-          stdio: ["ignore", "pipe", "ignore"],
-          windowsHide: true,
-        });
-        hung.once("exit", (_code, signal) => { asyncSnapshotSignal = signal; });
-        return hung;
-      }) as typeof spawn,
-      execSnapshotSync: (() => {
-        syncSnapshotCalls += 1;
-        return `${descendantPid},${child.pid!},${descTicks}\n`;
-      }) as typeof import("node:child_process").execFileSync,
-      launch: () => {
-        const script = [
-          'const { spawn } = require("node:child_process");',
-          'const { writeFileSync } = require("node:fs");',
-          'const d = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: ["ignore", 1, "ignore"], windowsHide: true });',
-          `writeFileSync(${JSON.stringify(descendantPidFile)}, String(d.pid));`,
-          'process.stdout.write("root-exiting\\n", () => process.exit(0));',
-        ].join(" ");
-        return (child = fakeProbe(script));
-      },
+      timeoutMs: 10_000,
+      pollMs: 50,
+      launchWindows: () => fake.child,
+    });
+    stop(true);
+    expect(fake.state().terminatedJobs).toEqual([{ job: 0x100n, code: 1 }]);
+    expect(warnings).toEqual([]);
+  });
+
+  test("Windows output overflow terminates the Job Object and suppresses advisory output", async () => {
+    const warnings: string[] = [];
+    const fake = createFakeContainedWindowsChild({
+      outputChunks: [Buffer.alloc(9_000, 0x20)],
+      terminal: false,
+    });
+    const stop = startForegroundAdvisory(line => warnings.push(line), {
+      platform: "win32",
+      timeoutMs: 10_000,
+      pollMs: 5,
+      launchWindows: () => fake.child,
     });
     try {
-      await once(child, "exit");
-      descendantPid = Number(readFileSync(descendantPidFile, "utf8").trim());
-      expect(descendantPid).toBeGreaterThan(0);
-      await once(child, "close");
       await Bun.sleep(60);
-      // "close" must NOT have cancelled the in-flight async snapshot or marked cleanup done.
-      expect(asyncSnapshotSignal).toBeNull();
-      // Synchronous exit cleanup cancels the hung async snapshot and completes handle-bound reap.
-      cancel(true);
-      expect(await waitUntilDead(descendantPid)).toBe(true);
-      expect(syncSnapshotCalls).toBe(1);
-      await Bun.sleep(50);
-      expect(asyncSnapshotSignal).not.toBeNull();
+      expect(warnings).toEqual([]);
+      expect(fake.state().terminatedJobs).toEqual([{ job: 0x100n, code: 1 }]);
     } finally {
-      cancel(true);
-      safeKillPid(descendantPid);
-      await removeTreeAfterBackgroundWork(dir);
+      stop(true);
     }
-  }, 15_000);
+  });
 
-  test("unavailable native Windows API never attempts unchecked PID-only termination", async () => {
-    let child!: ChildProcess;
-    let snapshotSpawned = false;
-    const cancel = startForegroundAdvisory(() => {}, {
+  test("Windows fails closed when pre-resume Job containment cannot be established", async () => {
+    const warnings: string[] = [];
+    const unsupportedStop = startForegroundAdvisory(line => warnings.push(line), {
       platform: "win32",
-      timeoutMs: 100,
-      windowsNative: () => null,
-      spawnSnapshot: (() => {
-        snapshotSpawned = true;
-        throw new Error("snapshot must not run without handle-bound native termination");
-      }) as typeof spawn,
-      launch: () => (child = fakeProbe("setInterval(() => {}, 60000)")),
+      launchWindows: () => { throw new Error("windows_child_unsupported_platform"); },
     });
-    try {
-      await once(child, "close");
-      expect(snapshotSpawned).toBe(false);
-    } finally {
-      cancel(true);
-    }
-  }, 15_000);
+    expect(() => unsupportedStop(true)).not.toThrow();
+
+    const failedSetup = createFakeContainedWindowsChild({
+      setupFailure: "job_assignment",
+      processHandle: 0x200n,
+    });
+    const failedStop = startForegroundAdvisory(line => warnings.push(line), {
+      platform: "win32",
+      launchWindows: () => failedSetup.child,
+    });
+    await Bun.sleep(20);
+    expect(failedSetup.state().reapedUnstarted).toBe(1);
+    expect(failedSetup.state().pipeDisposed).toBe(1);
+    expect(failedSetup.state().closedHandles).toEqual([0x200n, 0x100n]);
+    expect(warnings).toEqual([]);
+    failedStop(true);
+  });
 
   test("timeout still terminates a living descendant holding stdout after the probe root exits on POSIX", async () => {
     if (process.platform === "win32") return;
@@ -522,20 +415,6 @@ describe("Windows handle-bound and Job Object advisory teardown", () => {
       await removeTreeAfterBackgroundWork(dir);
     }
   }, 15_000);
-
-  test("parseWindowsProcessSnapshot and selectOwnedWindowsDescendants exclude reused-root and older processes", () => {
-    const rootTicks = 639_000_000_000_000_000n;
-    const rows = parseWindowsProcessSnapshot([
-      `42,1,${rootTicks + 90_000n}`,        // reused root PID (newer ticks)
-      `100,42,${rootTicks - 10n}`,          // created before our root -> excluded
-      `101,42,${rootTicks + 1_000n}`,       // genuine child -> included
-      `102,101,${rootTicks + 2_000n}`,      // genuine grandchild -> included
-      `103,42,${rootTicks + 95_000n}`,      // child of reused root -> excluded
-      "malformed,line",
-    ].join("\n"));
-    const selected = selectOwnedWindowsDescendants(rows, 42, rootTicks, rootTicks + 50_000n);
-    expect(selected.map(row => row.pid)).toEqual([101, 102]);
-  });
 });
 
 function fakeProbe(body: string) {
