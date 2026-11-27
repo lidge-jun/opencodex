@@ -468,6 +468,29 @@ describe("codebuddy runTurn streams a headless turn", () => {
     expect(events.map(event => event.type === "text_delta" ? event.text : "").join("")).toBe(first + second);
   });
 
+  test("releases streamed fence runs incrementally without buffering or stalling the other channel", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "text_delta", text: "``" });
+    guarded({ type: "thinking_delta", thinking: "checking" });
+    guarded({ type: "text_delta", text: "``" });
+    expect(events).toEqual([
+      { type: "text_delta", text: "``" },
+      { type: "thinking_delta", thinking: "checking" },
+      { type: "text_delta", text: "``" },
+    ]);
+
+    guarded({ type: "text_delta", text: "md\n```\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">\n" });
+    guarded({ type: "text_delta", text: "``" });
+    guarded({ type: "thinking_delta", thinking: "closing" });
+    expect(events.at(-1)).toEqual({ type: "thinking_delta", thinking: "closing" });
+
+    guarded({ type: "text_delta", text: "``\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">private-body" });
+    expect(events.at(-1)).toEqual(expect.objectContaining({ type: "error", code: "vendor_scaffold_detected" }));
+    expect(JSON.stringify(events)).not.toContain("private-body");
+  });
+
   test("holds a bare invoke prefix split across deltas until its name arrives", () => {
     const events: AdapterEvent[] = [];
     const guarded = guardCodeBuddyScaffolding(event => events.push(event));
