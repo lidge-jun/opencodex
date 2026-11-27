@@ -113,7 +113,7 @@ Aside 會對一次選取的單一設定檔使用相同的預覽與確認流程�
 
 ## 誠實的預期
 
-**格式通常不會被保留。** 套用會解析設定並重新寫出，所以 JSON 與 JSON5 可能被重新格式化，JSON5 中的註解會遺失。OMP、DSH 與 Kimi Code 是例外：OMP 的 YAML writer 只修補 `providers.opencodex`。DSH 在 Desktop profile 存在時修補 `$DSH_HOME/profiles/desktop/cordis.patch.yml` 中的 `[id=llm-pi-ai].config.providers.opencodex` 列；僅在沒有該 profile 時，才修補 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers.opencodex`。這些 writer 逐位元組保留無關的 provider 註解與格式。如果無法安全地識別那個確切的來源範圍，操作會拒絕執行。Kimi Code 的 writer 只取代 `config.toml` 中自己的 `[providers.opencodex]` 與 `[models."opencodex/…"]` 表格，保留註解與 `[[hooks]]` 表格；若這些表格以其他方式寫入，則拒絕執行。對其他客戶端，當你需要先前的檔案位元組時請使用 Restore：快照是逐字的副本。
+**格式通常不會被保留。** 套用會解析設定並重新寫出，所以 JSON 與 JSON5 可能被重新格式化，JSON5 中的註解會遺失。OMP、DSH、Hermes 與 Kimi Code 是例外：OMP 與 Hermes 的 YAML writer 只修補 `providers.opencodex`。DSH 在 Desktop profile 存在時修補 `$DSH_HOME/profiles/desktop/cordis.patch.yml` 中的 `[id=llm-pi-ai].config.providers.opencodex` 列；僅在沒有該 profile 時，才修補 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers.opencodex`。這些 writer 逐位元組保留無關的 provider 註解與格式。如果無法安全地識別那個確切的來源範圍，操作會拒絕執行。Kimi Code 的 writer 只取代 `config.toml` 中自己的 `[providers.opencodex]` 與 `[models."opencodex/…"]` 表格，保留註解與 `[[hooks]]` 表格；若這些表格以其他方式寫入，則拒絕執行。對其他客戶端，當你需要先前的檔案位元組時請使用 Restore：快照是逐字的副本。
 
 **如果某個值無法忠實重寫，開關會拒絕執行。** 往返覆蓋這些格式在實務上會用到的值種類；當它做不到時——例如使用 `inf` 或 `nan` 的 TOML 檔案，我們可用的 parser 無法準確讀回——套用會停止並說明，而不是寫入被改動的值然後宣稱成功。你會看到檔案被指名，磁碟上沒有任何東西被移動。手動編輯那個檔案仍然有效；只有我們的自動重寫會拒絕。
 

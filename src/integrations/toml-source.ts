@@ -26,6 +26,7 @@ export function patchTomlTablesSource(
   const owned = new Set([...remove, ...upsert.map(item => item.path)].map(pathKey));
   const prunedHeaders = prunedContainers(before, expected);
   const drop = new Set<number>();
+  const retained: string[][] = [];
   let insertAt: number | undefined;
   headers.forEach((header, index) => {
     if (header === null || header === "array") return;
@@ -34,7 +35,10 @@ export function patchTomlTablesSource(
       insertAt ??= index;
       dropRange(lines, headers, index, true, drop);
     } else if (prunedHeaders.has(key)) {
-      dropRange(lines, headers, index, false, drop);
+      // A comment the user put on the header line keeps the table, now empty, rather than going
+      // with it.
+      if (/\]\s*#/.test(lines[index]!)) retained.push(header);
+      else dropRange(lines, headers, index, false, drop);
     }
   });
   const kept: string[] = [];
@@ -54,11 +58,12 @@ export function patchTomlTablesSource(
     const lead = head.length > 0 && head[head.length - 1]!.trim() !== "" ? "\n" : "";
     text = `${head.join("\n")}${head.length > 0 ? "\n" : ""}${lead}${blocks.join("\n")}\n${tail.join("\n")}`;
   } else {
-    const body = kept.join("\n").replace(/\n+$/, "");
-    text = body.length > 0 ? `${body}\n\n${blocks.join("\n")}` : blocks.join("\n");
+    const body = kept.join("\n");
+    const separator = body.length === 0 ? "" : body.endsWith("\n") ? "\n" : "\n\n";
+    text = `${body}${separator}${blocks.join("\n")}`;
   }
   try {
-    return Bun.deepEquals(Bun.TOML.parse(text), expected) ? text : null;
+    return Bun.deepEquals(Bun.TOML.parse(text), withEmptyTables(expected, retained)) ? text : null;
   } catch {
     return null;
   }
@@ -141,6 +146,19 @@ function prunedContainers(before: string, expected: unknown): Set<string> {
   };
   walk(current, expected, []);
   return pruned;
+}
+
+function withEmptyTables(document: unknown, paths: readonly string[][]): unknown {
+  if (paths.length === 0 || !isPlainRecord(document)) return document;
+  const copy = structuredClone(document);
+  for (const path of paths) {
+    let node: Record<string, unknown> = copy;
+    for (const key of path) {
+      if (!isPlainRecord(node[key])) node[key] = {};
+      node = node[key] as Record<string, unknown>;
+    }
+  }
+  return copy;
 }
 
 function renderTable(path: readonly string[], value: Record<string, unknown>): string {

@@ -159,10 +159,10 @@ normalleştirilebilir. İstisna, JSON'un birebir yeniden yazamayacağı şeylerd
 büyük bir tam sayı ya da sıfıra çökecek kadar küçük bir sayı), `-0`, aynı
 nesnede iki kez yazılmış bir anahtar veya 1000 seviyeden derin iç içe geçme —
 bu durumda anahtar kilitlenir, böylece
-hiçbir şey sessizce değiştirilmez veya düşürülmez. **OMP** ve **Kimi Code** de yanındaki
+hiçbir şey sessizce değiştirilmez veya düşürülmez. **OMP**, **Hermes** ve **Kimi Code** de yanındaki
 düzenlemelerden etkilenmez, ama başka bir nedenle: writer'ları yalnızca kendi
 yönetilen aralıklarını bayt bayt yamalar, dosyanın geri kalanı hiçbir
-zaman yeniden yazılmaz. Yorum taşıyabilen diğer biçimlerde (Hermes, OpenClaw,
+zaman yeniden yazılmaz. Yorum taşıyabilen diğer biçimlerde (OpenClaw,
 gjc, MiniMax Code, Raycast — bütün belge olarak yazılan YAML ve JSON5) veya
 kendi girdilerimiz düzenlenmişse, anahtar kilitlenir ve hangi düzenlemelerin
 size ait olduğunu tahmin etmek yerine devre dışı bırakmayı reddeder.
@@ -194,8 +194,8 @@ sayfasında değiştirilir.
 
 **Biçimlendirme genellikle korunmaz.** Uygulama işlemi bir yapılandırmayı
 ayrıştırır ve geri yazar, bu nedenle JSON ve JSON5 yeniden
-biçimlendirilebilir ve JSON5 içindeki yorumlar kaybolur. OMP, DSH ve Kimi Code
-istisnadır: OMP YAML yazıcısı yalnızca `providers.opencodex` bölümünü yamalar.
+biçimlendirilebilir ve JSON5 içindeki yorumlar kaybolur. OMP, DSH, Hermes ve Kimi Code
+istisnadır: OMP ve Hermes YAML yazıcıları yalnızca `providers.opencodex` bölümünü yamalar.
 DSH yazıcısı, Desktop profili varsa `$DSH_HOME/profiles/desktop/cordis.patch.yml` içindeki
 `[id=llm-pi-ai].config.providers.opencodex` satırını, profil yoksa
 `$DSH_HOME/settings.yaml` içindeki `llm-pi-ai.providers.opencodex` bölümünü yamalar;
