@@ -1443,6 +1443,8 @@ export const pt: Record<TKey, string> = {
   "logs.detail.stage.headersOnly": "somente cabeçalhos",
   "logs.detail.stage.protocolPrelude": "preâmbulo do protocolo",
   "logs.detail.stage.semanticOutput": "saída entregue",
+  "logs.status.streamInterrupted": "Transmissão interrompida",
+  "logs.detail.streamInterrupted1006": "A conexão WebSocket com o provedor foi encerrada de forma anormal (1006) após o envio de eventos de resposta ao cliente. A conclusão da resposta não foi confirmada.",
   "logs.detail.stage.sideEffect": "efeito colateral emitido",
   "logs.detail.stage.terminal": "resposta entregue",
   "logs.detail.resend.permitted": "Poderia ser reenviada",

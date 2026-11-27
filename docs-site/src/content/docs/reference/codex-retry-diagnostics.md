@@ -113,6 +113,8 @@ sends no pings. All three keep the client's idle deadline on purpose.
 `pings` and `pongs` counts, which tell the three apart. Raising
 `stream_idle_timeout_ms` only makes them wait longer.
 
+In the dashboard request log, **Stream interrupted** means the upstream WebSocket closed abnormally (1006) after the proxy relayed response events and before it observed a terminal event. The request details show this distinction. To inspect subsequent activity, use the filter beside the conversation ID and clear any status filter. The resulting rows belong to the same conversation, which can include multiple turns. Their timing and sizes alone cannot establish an automatic retry or successful recovery.
+
 ## Why the first reconnect row can be absent
 
 The public Codex `rust-v0.158.0-alpha.2.1` source gates the ordinary stream-retry

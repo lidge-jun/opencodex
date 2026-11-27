@@ -57,7 +57,7 @@ sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 
 트레이의 **Open dashboard** 또는 **Open in browser**를 사용하면 내장 대시보드와 일반 브라우저를 오갈 수 있습니다. 트레이에서는 업데이트도 확인할 수 있습니다.
 
-macOS에서는 대시보드를 닫아도 앱이 메뉴 막대에서 계속 실행됩니다. Dock 또는 Finder에서 OpenCodex를 다시 열면 프록시를 재시작하지 않고 대시보드가 다시 표시됩니다.
+macOS에서는 대시보드를 닫아도 앱이 메뉴 막대에서 계속 실행됩니다. 메뉴 막대에서 **Open Dashboard**를 선택하거나 Finder에서 OpenCodex를 다시 열면 프록시를 재시작하지 않고 대시보드를 표시할 수 있습니다. 같은 메뉴에서 **Hide Dock icon**을 켜면 대시보드가 열려 있어도 Dock 아이콘이 숨겨집니다.
 
 ## 데스크톱 앱과 ocx CLI 함께 사용하기
 

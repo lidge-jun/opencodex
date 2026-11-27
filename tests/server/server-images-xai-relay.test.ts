@@ -1,5 +1,9 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { handleImages } from "../../src/server/images";
+import {
+  collectXaiEditSources,
+  handleImages,
+  XAI_EDIT_MAX_REQUEST_BYTES,
+} from "../../src/server/images";
 import type { OcxConfig } from "../../src/types";
 const oldFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = oldFetch; });
@@ -40,6 +44,75 @@ test("relay validates canonical edit data URLs without decoding their payloads",
   for (const source of sources) {
     expect(from).not.toHaveBeenCalledWith(source.split(",")[1], "base64");
   }
+});
+
+test("relay enforces per-image and aggregate inline budgets with synthetic limits", () => {
+  const limits = { maxDecodedBytesPerImage: 6, maxAggregateEncodedBytes: 12 };
+  const accepted = collectXaiEditSources({
+    image: "https://example.com/source.png",
+    image_url: "data:image/png;base64,aGk=",
+    images: [{ image_url: { url: "data:image/jpeg;base64,QUFBQUFB" }, url: "data:image/png;base64,aGk=" }],
+  }, limits);
+  expect(accepted).toEqual({
+    sources: [
+      "https://example.com/source.png",
+      "data:image/png;base64,aGk=",
+      "data:image/jpeg;base64,QUFBQUFB",
+    ],
+    unusable: false,
+    oversized: false,
+  });
+
+  expect(collectXaiEditSources({ image: "data:image/png;base64,QUFBQUFBQUFB" }, limits).oversized).toBe(true);
+  expect(collectXaiEditSources({
+    images: ["data:image/png;base64,aGk=aGk=", "data:image/jpeg;base64,aG8="],
+  }, { maxDecodedBytesPerImage: 12, maxAggregateEncodedBytes: 8 }).unusable).toBe(true);
+  expect(collectXaiEditSources({
+    images: ["data:image/png;base64,aGk=", "data:image/jpeg;base64,aG8=", "data:image/webp;base64,Ynk="],
+  }, { maxDecodedBytesPerImage: 6, maxAggregateEncodedBytes: 8 }).oversized).toBe(true);
+});
+
+test("the decoded per-image limit accepts both padding lengths and rejects one byte over", () => {
+  // Like 50 MiB, five bytes need two quartets. Four and six bytes use the same encoded length.
+  const limits = { maxDecodedBytesPerImage: 5, maxAggregateEncodedBytes: 8 };
+  for (const [encoded, accepted] of [["QUJDRA==", true], ["QUJDREU=", true], ["QUJDREVG", false]] as const) {
+    const url = "data:image/png;base64," + encoded;
+    const { sources, unusable, oversized } = collectXaiEditSources({ image: url }, limits);
+    expect({ sources, unusable, oversized }).toEqual({
+      sources: accepted ? [url] : [], unusable: false, oversized: !accepted,
+    });
+  }
+});
+
+test("only edits routed to the xAI bridge use its request limit", async () => {
+  const raised = { ...config, maxInboundBodyBytes: 200 * 1024 * 1024 };
+  // A small invalid JSON body distinguishes admission (413) from parsing (400).
+  // Use the reader's declared-length check without allocating a large image.
+  const submit = (cfg: OcxConfig, endpoint: "edits" | "generations", declaredBytes: number) => {
+    const req = new Request("http://localhost/v1/images/" + endpoint, {
+      method: "POST", headers: { "content-length": String(declaredBytes) }, body: "{",
+    });
+    return handleImages(req, cfg, endpoint, { model: "", provider: "" });
+  };
+  const status = async (...args: Parameters<typeof submit>) => (await submit(...args)).status;
+  const over = XAI_EDIT_MAX_REQUEST_BYTES + 1;
+  expect(await status(raised, "edits", XAI_EDIT_MAX_REQUEST_BYTES)).toBe(400);
+  for (const configuredLimit of [XAI_EDIT_MAX_REQUEST_BYTES, raised.maxInboundBodyBytes]) {
+    const fixed = await submit({ ...raised, maxInboundBodyBytes: configuredLimit }, "edits", over);
+    expect(fixed.status).toBe(413);
+    const { error } = await fixed.json();
+    expect(error.code).toBe("inbound_body_too_large");
+    expect(error.message).toContain("Reduce the edit payload");
+    expect(error.message).not.toContain("maxInboundBodyBytes");
+  }
+  expect(await status(raised, "generations", over)).toBe(400);
+  expect(await status({ ...raised, images: { ...raised.images, provider: "custom" } }, "edits", over)).toBe(400);
+  expect(await status({ ...raised, images: { ...raised.images, bridgeEnabled: false } }, "edits", over)).toBe(400);
+  expect(await status({ ...raised, providers: {} }, "edits", over)).toBe(400);
+  const lower = 1024 * 1024;
+  const configured = await submit({ ...raised, maxInboundBodyBytes: lower }, "edits", lower + 1);
+  expect(configured.status).toBe(413);
+  expect((await configured.json()).error.message).toContain("maxInboundBodyBytes");
 });
 
 test("relay keeps five distinct sources in order and validates entries after the limit", async () => {

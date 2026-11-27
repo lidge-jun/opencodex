@@ -110,6 +110,8 @@ export interface OcxParsedRequest {
    * CLIENT already carried that history verbatim and the proxy skipped the prepend.
    */
   _replayPrefixLen?: number;
+  /** First parsed message eligible as current input. Recomputed when a projection removes historical messages. */
+  _currentInputMessageStart?: number;
   /** Parsed-message index before the first conversational item in a continuation's current delta. */
   _continuationConversationMessageIndex?: number;
   /**

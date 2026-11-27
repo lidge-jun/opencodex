@@ -8,7 +8,12 @@
 
 // Version 2 rebuilds the derived projection so old raw requested-model selectors
 // are replaced by the bounded encoding already used by canonical JSONL reads.
-export const HISTORY_SCHEMA_VERSION = 2;
+// Version 3 orders the conversation, API-key and profile indexes by
+// (timestamp DESC, request_id DESC), so a filtered page reads `limit + 1` rows
+// in index order instead of sorting every matching row (#9103). The index names
+// stay the same: on a version-2 file `CREATE INDEX IF NOT EXISTS` is then a
+// no-op at open, and the version mismatch rebuilds it like any other upgrade.
+export const HISTORY_SCHEMA_VERSION = 3;
 export const HISTORY_DB_FILENAME = "routing-history.sqlite";
 
 export const HISTORY_META_KEYS = {
@@ -64,9 +69,9 @@ CREATE INDEX IF NOT EXISTS idx_requests_provider ON requests(provider);
 CREATE INDEX IF NOT EXISTS idx_requests_model ON requests(model);
 CREATE INDEX IF NOT EXISTS idx_requests_requested_model ON requests(requested_model);
 CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
-CREATE INDEX IF NOT EXISTS idx_requests_conversation ON requests(conversation_id);
-CREATE INDEX IF NOT EXISTS idx_requests_api_key ON requests(api_key_id);
-CREATE INDEX IF NOT EXISTS idx_requests_profile ON requests(profile_id);
+CREATE INDEX IF NOT EXISTS idx_requests_conversation ON requests(conversation_id, timestamp DESC, request_id DESC);
+CREATE INDEX IF NOT EXISTS idx_requests_api_key ON requests(api_key_id, timestamp DESC, request_id DESC);
+CREATE INDEX IF NOT EXISTS idx_requests_profile ON requests(profile_id, timestamp DESC, request_id DESC);
 `;
 
 export function historyIndexPath(configDir: string): string {

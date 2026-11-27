@@ -1429,6 +1429,8 @@ export const ko: Record<TKey, string> = {
   "logs.detail.stage.headersOnly": "헤더까지",
   "logs.detail.stage.protocolPrelude": "프로토콜 프리앰블",
   "logs.detail.stage.semanticOutput": "출력 전달됨",
+  "logs.status.streamInterrupted": "스트림 중단",
+  "logs.detail.streamInterrupted1006": "응답 이벤트를 전달하던 중 상류 WebSocket 연결이 비정상 종료됐습니다(1006). 응답 완료는 확인되지 않았습니다.",
   "logs.detail.stage.sideEffect": "부수 효과 발생",
   "logs.detail.stage.terminal": "응답 전달 완료",
   "logs.detail.resend.permitted": "재전송 가능",

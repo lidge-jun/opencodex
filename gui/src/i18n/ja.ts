@@ -1331,6 +1331,8 @@ export const ja: Record<TKey, string> = {
   "logs.detail.stage.headersOnly": "ヘッダーのみ",
   "logs.detail.stage.protocolPrelude": "プロトコル前段",
   "logs.detail.stage.semanticOutput": "出力を配信済み",
+  "logs.status.streamInterrupted": "ストリーム中断",
+  "logs.detail.streamInterrupted1006": "応答イベントを転送した後、上流の WebSocket 接続が異常終了しました（1006）。応答の完了は確認できませんでした。",
   "logs.detail.stage.sideEffect": "副作用が発生",
   "logs.detail.stage.terminal": "応答を配信済み",
   "logs.detail.resend.permitted": "再送可能",
