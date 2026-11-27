@@ -104,9 +104,10 @@ type ModelFamily = "gemini" | "claude" | "other" | null;
 
 function classifyModelFamily(raw: string): ModelFamily {
   const field = raw.trim();
-  if (GEMINI_MODEL.test(field)) return "gemini";
-  if (CLAUDE_MODEL.test(field)) return "claude";
-  if (NON_ALLOWED_MODEL.test(field)) return "other";
+  const tail = field.includes("/") ? field.slice(field.lastIndexOf("/") + 1).trim() : field;
+  if (NON_ALLOWED_MODEL.test(field) || NON_ALLOWED_MODEL.test(tail)) return "other";
+  if (GEMINI_MODEL.test(field) || GEMINI_MODEL.test(tail)) return "gemini";
+  if (CLAUDE_MODEL.test(field) || CLAUDE_MODEL.test(tail)) return "claude";
   return null;
 }
 
