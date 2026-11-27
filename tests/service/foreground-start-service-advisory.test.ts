@@ -221,7 +221,7 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
     exitCode?: number | null;
     setupFailure?: string | null;
     processHandle?: bigint;
-    onTerminateJob?: (job: bigint, code: number) => void;
+    onTerminateJob?: (job: bigint, code: number) => boolean | void;
   } = {}) {
     let eof = false;
     let terminal = options.terminal ?? false;
@@ -250,7 +250,8 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
         k: {
           TerminateJobObject(job, code) {
             terminatedJobs.push({ job, code });
-            options.onTerminateJob?.(job, code);
+            const outcome = options.onTerminateJob?.(job, code);
+            if (outcome === false) return 0;
             terminal = true;
             exitCode = code;
             eof = true;
@@ -341,6 +342,41 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
     stop(true);
     expect(fake.state().terminatedJobs).toEqual([{ job: 0x100n, code: 1 }]);
     expect(warnings).toEqual([]);
+  });
+
+  test("failed TerminateJobObject retains job handle ownership for later retry instead of closing handles", async () => {
+    let allowTerminate = false;
+    const fake = createFakeContainedWindowsChild({
+      terminal: false,
+      onTerminateJob: () => allowTerminate,
+    });
+    const stop = startForegroundAdvisory(() => {}, {
+      platform: "win32",
+      timeoutMs: 20,
+      reapMs: 30,
+      pollMs: 5,
+      launchWindows: () => fake.child,
+    });
+    // Wait past timeoutMs + reapMs while TerminateJobObject returns 0 (failure).
+    await Bun.sleep(90);
+    expect(fake.state().terminatedJobs.length).toBeGreaterThanOrEqual(1);
+    // Handles must NOT be released while the job remains nonterminal / termination failed.
+    expect(fake.state().closedHandles).toEqual([]);
+    expect(fake.state().pipeDisposed).toBe(0);
+    expect(fake.state().nativeDisposed).toBe(0);
+
+    // A failed synchronous exit attempt also retains ownership for a subsequent retry.
+    const beforeSyncFail = fake.state().terminatedJobs.length;
+    stop(true);
+    expect(fake.state().terminatedJobs.length).toBe(beforeSyncFail + 1);
+
+    // Once TerminateJobObject succeeds, the retained handle completes termination cleanly.
+    allowTerminate = true;
+    stop(true);
+    expect(fake.state().terminatedJobs.length).toBe(beforeSyncFail + 2);
+    // Further stops after successful termination are no-ops.
+    stop(true);
+    expect(fake.state().terminatedJobs.length).toBe(beforeSyncFail + 2);
   });
 
   test("Windows output overflow terminates the Job Object and suppresses advisory output", async () => {

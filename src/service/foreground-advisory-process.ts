@@ -159,10 +159,12 @@ function startWindowsContainedAdvisory(
     disposeWindowsHandlesAsync(child);
   };
 
-  const terminateJob = () => {
-    if (terminated || disposed) return;
-    terminated = true;
-    try { child.native.k.TerminateJobObject?.(child.job, 1); } catch { /* best-effort job termination */ }
+  const terminateJob = (): boolean => {
+    if (disposed || terminated) return true;
+    let ok = false;
+    try { ok = Boolean(child.native.k.TerminateJobObject?.(child.job, 1)); } catch { ok = false; }
+    if (ok) terminated = true;
+    return ok;
   };
 
   const schedulePoll = () => {
@@ -174,12 +176,12 @@ function startWindowsContainedAdvisory(
   const stop: StopForegroundAdvisory = (sync = false) => {
     if (disposed) return;
     settled = true;
-    terminateJob();
+    const ok = terminateJob();
     if (sync) {
-      // Synchronous exit path: Job Object termination above already ended root and all
-      // descendants atomically in the kernel; stop any pending timer without blocking exit.
-      disposed = true;
+      // Synchronous exit path: stop any pending timer; only mark disposed if TerminateJobObject
+      // succeeded, otherwise retain the job handle so another sync retry can still terminate it.
       clearPoll();
+      if (ok) disposed = true;
       return;
     }
     stopAt ??= performance.now();
@@ -229,7 +231,10 @@ function startWindowsContainedAdvisory(
       stop(false);
     }
     if (stopAt !== null && now - stopAt >= reapMs) {
-      finalizeAsync();
+      // Never close child.job while the job is nonterminal or termination failed: stop polling
+      // and retain handle ownership so a later shutdown/exit stop() can retry TerminateJobObject.
+      if (!terminated) terminateJob();
+      clearPoll();
       return;
     }
     schedulePoll();
