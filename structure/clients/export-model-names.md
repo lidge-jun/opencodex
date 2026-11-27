@@ -110,22 +110,22 @@ always resolve to that exact stored pool account regardless of any caller
 bearer, while a namespace bound to `__main__` resolves to stored `main-pool`
 for proxy-key / loopback clients (no caller-owned Codex JWT) and preserves the
 existing caller-owned `main` context when a caller supplies its own Codex JWT
-(`src/server/responses/core-auth.ts`, `src/codex/auth-context.ts`). Every
-affected surface shares `isBareNativeRow` (`src/clients/config-export.ts`) to
-drop only bare native rows in Direct mode while keeping account-qualified ones
-— the OpenCode launcher (`opencodeCatalogFromProxyRows` and bare-only
-`opencodeLaunchNativeSlugs`), `ocx export`, the managed OpenCode integration
-(`buildOpencodeClientConfig`), the Pi-family clients (`buildPiClientConfig`:
-Pi, Prime, Aside, omo, Gentle Shell), and DSH (`buildDshClientConfig`) — while
-the roster itself still exports bare rows for clients that select their own
-credential. When `providers.openai` is disabled or absent, every native row
+(`src/server/responses/core-auth.ts`, `src/codex/auth-context.ts`). Every affected surface shares `isBareNativeRow` / `filterDirectModeBareNative`
+(`src/clients/config-export/contracts.ts`, enforced centrally in
+`namedExportContext` for every client in `EXPORT_CLIENTS`, plus the direct
+OpenCode, Pi-family, DSH, OMP, WorkBuddy, and Gajae builders and the OpenCode
+launcher's `opencodeCatalogFromProxyRows` / `opencodeLaunchNativeSlugs`) to
+drop bare native rows in Direct mode while keeping account-qualified ones,
+while the roster itself still exports bare rows for clients that select their
+own credential. When `providers.openai` is disabled or absent, every native row
 (bare and account-qualified alike) is omitted. Coverage:
 `tests/server/management-model-roster.test.ts` (the roster, both account modes
 and an absent provider), `tests/providers/opencode-cli.test.ts` (the launcher's
 slug selection and proxy-row catalog, including account-qualified and Fast rows)
-and `tests/config/client-config-export.test.ts` (managed OpenCode, Pi, Prime,
-Aside, omo, Gentle Shell and DSH in both account modes, plus end-to-end
-credential-routing resolution with distinct fake caller and stored tokens).
+and `tests/config/client-config-export.test.ts` (all exported clients in Direct
+and Pool modes, plus HTTP-layer `resolveResponsesCodexAuth` resolution across
+loopback, dedicated proxy header, proxy bearer admission, and distinct caller
+Codex JWT credentials).
 
 ## CLI and API boundary
 

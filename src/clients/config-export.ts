@@ -897,8 +897,8 @@ export function buildOpencodeProviderBlockFromCatalog(
  * opencode's decision, not a consequence of where we write it. Both blocks are generated in
  * one pass so they cannot disagree about the model set, the names, or the connection.
  */
-export { isBareNativeRow } from "./config-export/contracts";
-import { isBareNativeRow } from "./config-export/contracts";
+export { filterDirectModeBareNative, isBareNativeRow } from "./config-export/contracts";
+import { filterDirectModeBareNative, isBareNativeRow } from "./config-export/contracts";
 
 function buildOpencodeClientConfig(ctx: ExportContext): OpencodeGeneratedConfig {
   const config = ctx.config ?? OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG;
@@ -1300,7 +1300,7 @@ function buildKimiClientConfig(ctx: ExportContext): KimiGeneratedConfig {
 
 function buildGajaeClientConfig(ctx: ExportContext): GajaeGeneratedConfig {
   const models: GajaeModelEntry[] = [];
-  for (const model of normalizeExportModels(ctx.models)) {
+  for (const model of normalizeExportModels(filterDirectModeBareNative(ctx.models, ctx.config))) {
     // Gajae's enum is text|image and it rejects the whole file over one bad
     // value, naming the offending index in the error.
     const input = inputModalitiesForClient("gajae", model.inputModalities);

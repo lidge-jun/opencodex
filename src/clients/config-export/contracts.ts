@@ -2,6 +2,7 @@
 import type { ExportClientId } from "../client-ids";
 export type { ExportClientId } from "../client-ids";
 import { canonicalizeReasoningEfforts } from "../../reasoning-effort";
+import { providerCodexAccountMode } from "../../providers/registry";
 import type { OcxConfig } from "../../types";
 import type { ConfigFormat } from "../../integrations/serialize";
 import type { ExportModelNames } from "./model-names";
@@ -217,6 +218,22 @@ export function isBareNativeRow(
   if (slash <= 0) return true;
   const namespace = model.namespaced.slice(0, slash);
   return !Object.keys(config?.codexAccountNamespaces ?? {}).includes(namespace);
+}
+
+/**
+ * Drop bare native OpenAI `gpt-*` rows when the serving config runs canonical `openai` in
+ * Codex Direct mode. Managed/exported clients send loopback placeholders or proxy admission
+ * keys rather than caller-owned OpenAI bearers, so bare Direct rows cannot run while
+ * account-qualified `<namespace>/gpt-*` rows remain servable.
+ */
+export function filterDirectModeBareNative<T extends { native?: boolean; namespaced: string }>(
+  models: readonly T[],
+  config?: OcxConfig,
+): T[] {
+  if (providerCodexAccountMode("openai", config?.providers?.openai) !== "direct") {
+    return [...models];
+  }
+  return models.filter(model => !isBareNativeRow(model, config));
 }
 
 export interface ExportContext {

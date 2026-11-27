@@ -1,5 +1,5 @@
 // Oh My Pi config export.
-import type { PiModelEntry, ExportModel, ExportContext, ManagedContribution } from "./contracts";
+import { filterDirectModeBareNative, type PiModelEntry, type ExportModel, type ExportContext, type ManagedContribution } from "./contracts";
 import { PI_API_DIALECT, OPENCODE_PROVIDER_ID, LOOPBACK_API_KEY_PLACEHOLDER } from "./constants";
 import { normalizeExportModels, inputModalitiesForClient, exportModelLabel, authoritativeContextWindow, outputBudgetFor, singleFragment } from "./model-metadata";
 
@@ -55,7 +55,7 @@ function ompEfforts(model: ExportModel): string[] {
  */
 export function buildOmpClientConfig(ctx: ExportContext): OmpGeneratedConfig {
   const models: OmpModelEntry[] = [];
-  for (const model of normalizeExportModels(ctx.models)) {
+  for (const model of normalizeExportModels(filterDirectModeBareNative(ctx.models, ctx.config))) {
     const input = inputModalitiesForClient("pi", model.inputModalities);
     if (input === null) continue;
     const entry: OmpModelEntry = {

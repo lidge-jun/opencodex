@@ -1,4 +1,4 @@
-import type { ExportClientId, ExportContext, ExportModel } from "./contracts";
+import { filterDirectModeBareNative, type ExportClientId, type ExportContext, type ExportModel } from "./contracts";
 import { resolveModelNames, selectExportModelNames } from "./model-names";
 import { effectiveModelAliases, effectiveProviderAlias, MODEL_ALIAS_PATTERN } from "../../providers/default-aliases";
 import { knownModelIdsForProvider, previewRouteModel, type RouteResult } from "../../router";
@@ -98,11 +98,12 @@ export function attachExportAliasSelectors(config: OcxConfig, input: readonly Ex
 }
 
 export function namedExportContext(client: ExportClientId, ctx: ExportContext): ExportContext {
+  const scopedModels = filterDirectModeBareNative(ctx.models, ctx.config);
   const mode = resolveModelNames(client, ctx.modelNames);
-  if (mode === "routed") return ctx;
+  if (mode === "routed") return { ...ctx, models: scopedModels };
   // Use the caller's exact captured configuration. Discovery may have returned
   // an old projection, or caches may have changed since the retained proof.
-  const models = ctx.config ? attachExportAliasSelectors(ctx.config, ctx.models)
-    : ctx.models.map(({ aliasNamespaced: _priorCandidate, ...model }) => model);
+  const models = ctx.config ? attachExportAliasSelectors(ctx.config, scopedModels)
+    : scopedModels.map(({ aliasNamespaced: _priorCandidate, ...model }) => model);
   return { ...ctx, models: selectExportModelNames(models, mode) };
 }
