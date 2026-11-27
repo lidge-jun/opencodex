@@ -181,11 +181,10 @@ base_url = "http://<host>:<port>/v1"
 wire_api = "responses"
 requires_openai_auth = true
 env_key = "OPENCODEX_API_AUTH_TOKEN"
+capabilities = { cyber_access_programs = true }
 ```
 
-Root TOML keys must be written before the first `[table]`. Re-injection strips the stale form of
-both shapes — opencodex blocks, injected root base-url overrides, and stale catalog paths — before
-rewriting, so switching between forms leaves no residue. A root context-window override is user-owned.
+Root TOML keys must be written before the first `[table]`. Re-injection strips the stale form of both shapes — opencodex blocks, injected root base-url overrides, and stale catalog paths — before rewriting, so switching between forms leaves no residue. A root context-window override is user-owned. The inline `capabilities` line opts the `opencodex` id into Cyber access-program selections, which Codex defaults off for every id except `openai` (openai/codex 708e3e2c70; codex-rs/model-provider-info/src/lib.rs:706-710 @5505daf388). It is inline, so the owned span stays one table without a child header. `ocxProviderTableIdentity` in `src/codex/inject/provider-table.ts` treats exactly `{ cyber_access_programs: true }` as absent. Retention (`appendOcxProviderTableBlock`) and the journal's comparison with the recorded injected table (`matchesInjectedField` in `src/codex/journal-config-restore.ts`) therefore accept a table written before the line. Comparisons with the user's original value stay exact. The `ocx codex` credential gate (`src/cli/codex-launch-auth.ts`) compares with the writer's current block, so it trusts only the new shape (`tests/codex-integration/codex-launcher-security.test.ts`, `tests/codex-integration/codex-provider-table-retention.test.ts`, `tests/codex-integration/codex-journal-provider-reserialization.test.ts`).
 
 The `name` field is the only presentation value in that table, and `codexProviderDisplayName`
 chooses it (default `OpenCodex Proxy`). `resolveCodexProviderDisplayName` in

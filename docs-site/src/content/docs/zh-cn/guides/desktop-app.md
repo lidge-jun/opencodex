@@ -57,7 +57,7 @@ sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 
 使用托盘中的 **Open dashboard** 或 **Open in browser**，可在内嵌仪表盘与常用浏览器之间切换。托盘也提供更新检查。
 
-在 macOS 上，关闭仪表盘后，应用会继续在菜单栏中运行。从 Dock 或 Finder 再次打开 OpenCodex 即可恢复仪表盘，无需重启代理。
+在 macOS 上，关闭仪表盘后，应用会继续在菜单栏中运行。在菜单栏选择 **Open Dashboard**，或从访达重新打开 OpenCodex，即可恢复仪表盘，无需重启代理。在同一菜单中启用 **Hide Dock icon**，即可在仪表盘打开时继续隐藏程序坞图标。
 
 当 Codex 启动找不到 proxy 时，内置 CLI 会等待经过独立验证的 Desktop 恢复——即使 Desktop 没有记录在案的所有权声明也不例外。匹配到的 Desktop 已停止其 proxy，或其恢复无法验证时，会报错；但在不支持运行镜像验证的平台上，若有记录在案的所有权声明且应用仍在运行，则保留现有的有界等待。仅凭进程名或定位文件不会阻止普通的 CLI 启动。在 macOS 上，如果 shim 发现 OpenCodex 已退出且记录的所有权与有效的 **Start at Login** 注册一致，就会打开它。自动重新打开时，会选择该注册记录中的应用 bundle 路径，并检查其声明的主可执行文件是否与已注册的 Desktop 可执行文件一致。注册缺失、过期或不一致时，请手动打开 OpenCodex；具有相同 bundle 标识符的其他副本不会作为回退被选中。如果 shim 显示“activation not confirmed”，请在 shell 启动文件中的其他 PATH 设置之后添加 `. ~/.opencodex/codex-shell-env.sh`。
 

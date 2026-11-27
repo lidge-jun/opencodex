@@ -36,6 +36,7 @@ import {
   ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
   ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS,
   ANTHROPIC_MODEL_REASONING_EFFORTS,
+  GOOGLE_GEMINI_API_MODELS,
   ZAI_GLM_52_REASONING_EFFORTS,
   ZAI_GLM_53_REASONING_EFFORTS,
   OPENAI_GPT56_MODELS,
@@ -294,7 +295,8 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // only the old devin entry carried. Degraded-mode seed only either way —
     // `liveModels` discovers the account's real roster.
     // 261027 preemptive: GPT-6.1 Terra (same degraded seed policy as GPT-6.1 Sol).
-    models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "gpt-6-2-sol", "gpt-6-2-astra", "gpt-6-1-sol", "gpt-6-1-terra", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-2", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6", "grok-4-7", "swe-1-7-lightning", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "glm-5-2", "kimi-k2-7", "grok-4-5"],
+    // 261125: SWE-2.1 leads the seed as Cognition's newest SWE model (uid from the live catalog).
+    models: ["swe-2-1", "swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "gpt-6-2-sol", "gpt-6-2-astra", "gpt-6-1-sol", "gpt-6-1-terra", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-2", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6", "grok-4-7", "swe-1-7-lightning", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "glm-5-2", "kimi-k2-7", "grok-4-5"],
     liveModels: true,
     defaultModel: "swe-2",
     modelContextWindows: DEVIN_MODEL_CONTEXT_WINDOWS,
@@ -1223,7 +1225,11 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   // devlog/_plan/260710_provider_hardening/001_research_frontier.md.
   {
     id: "google", label: "Google Gemini", adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", authKind: "key", featured: true,
-    dashboardUrl: "https://aistudio.google.com/apikey", defaultModel: "gemini-3.5-flash", models: ["gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"],
+    // 2026-11-26 (ai.google.dev deprecations): gemini-3.5-flash and gemini-3.7-flash are no longer
+    // offered in AI Studio and their endpoints route to gemini-3.6-flash / gemini-3.8-flash, so they
+    // leave the picker; their metadata rows stay so saved selections keep resolving. The default
+    // follows Google's named replacement. Gemini 4 Neon/Hydrogen/Carbon are GA on the models page.
+    dashboardUrl: "https://aistudio.google.com/apikey", defaultModel: "gemini-3.6-flash", models: GOOGLE_GEMINI_API_MODELS,
     modelContextWindows: { "gemini-4-neon": 1_048_576, "gemini-4-hydrogen": 1_048_576, "gemini-4-carbon": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_000_000, "gemini-3.5-flash-lite": 1_048_576, "gemini-3.7-flash": 1_048_576 },
     modelInputModalities: { "gemini-4-neon": ["text", "image"], "gemini-4-hydrogen": ["text", "image"], "gemini-4-carbon": ["text", "image"], "gemini-4-argon": ["text", "image"], "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"], "gemini-3.7-flash": ["text", "image"] },
     modelReasoningEfforts: { ...GEMINI_MODEL_REASONING_EFFORTS },
@@ -1264,14 +1270,13 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // back to the 128k strict-fields default (scripts/model-metadata.source.json,
     // verified 2026-08-08).
     jawcodeBundle: "deepseek",
-    // deepseek-chat/deepseek-reasoner were deprecated upstream on 2026-07-24 15:59 UTC;
-    // the current official identifier is deepseek-flash. They stay in
-    // the list only as compatibility aliases so existing saved configs and requests
-    // keep validating and routing (they previously mapped to v4-flash; devlog
-    // _fin/260710_provider_hardening/002_research_cn.md). The current offerings are
-    // V4.1-Flash and V4 Pro; Flash remains the default.
-    // Keep the legacy vision-preview alias; see DEEPSEEK_VISION_PREVIEW_MODEL.
-    models: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_NATIVE_THINKING_MODELS, DEEPSEEK_VISION_PREVIEW_MODEL],
+    // deepseek-chat/deepseek-reasoner were discontinued upstream on 2026-07-24, and the API
+    // reference's model enum is now deepseek-flash | deepseek-v4-pro (checked 2026-11-26:
+    // api-docs.deepseek.com/api/create-chat-completion), so they leave the seed. A saved config
+    // that still lists them keeps its list; their noVisionModels entries below stay for it.
+    // deepseek-v4-flash and the vision preview remain documented accepted names served by V4.1
+    // Flash (pricing page note 1); see DEEPSEEK_VISION_PREVIEW_MODEL. Flash remains the default.
+    models: [...DEEPSEEK_NATIVE_THINKING_MODELS, DEEPSEEK_VISION_PREVIEW_MODEL],
     // V4.1-Flash is the first-party default; `deepseek-v4-flash` now routes there
     // as a compatibility alias, so a new install should ask for the live id by name.
     defaultModel: "deepseek-flash",

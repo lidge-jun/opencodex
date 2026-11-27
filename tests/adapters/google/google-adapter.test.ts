@@ -137,7 +137,7 @@ describe("google adapter — Chat Completions video input", () => {
     });
   });
 
-  test("does not mislabel an arbitrary remote video URL as Gemini file_data", async () => {
+  test("refuses an arbitrary remote video URL instead of mislabeling or flattening it", async () => {
     const responsesBody = chatCompletionsToResponsesBody({
       model: "google-antigravity/gemini-3.7-flash",
       messages: [{
@@ -148,13 +148,12 @@ describe("google adapter — Chat Completions video input", () => {
     const parsed = parseRequest(responsesBody);
     parsed.modelId = "gemini-3.7-flash";
 
-    const contents = await geminiContents(parsed);
-
-    expect(contents).toContainEqual({
-      role: "user",
-      parts: [{ text: "[video: https://example.test/video.mp4]" }],
-    });
-    expect(JSON.stringify(contents)).not.toContain("file_data");
+    // Gemini fetches only YouTube and Files API URIs. A "[video: url]" text marker reached the
+    // model as an ordinary prompt about a clip it never saw, so the adapter refuses instead.
+    let failure: unknown;
+    try { await geminiContents(parsed); } catch (error) { failure = error; }
+    expect((failure as Error).message).toContain("OpenCodex cannot send this remote video to Gemini");
+    expect((failure as Error).message).not.toContain("example.test");
   });
 
   test("a YouTube URL reaches Gemini as a video, carrying the agentic processing mode", async () => {
@@ -271,8 +270,8 @@ describe("google adapter — Chat Completions video input", () => {
 
   test("a look-alike host is not treated as fetchable", async () => {
     // The allowlist matches the host, not a substring: `file_data` asks Gemini to
-    // dereference the URL, so a near-miss must stay a marker rather than send
-    // Google after an attacker-chosen host.
+    // dereference the URL, so a near-miss is refused rather than sending Google
+    // after an attacker-chosen host.
     for (const url of [
       "https://youtube.com.evil.test/watch?v=x",
       "https://notyoutube.com/watch?v=x",
@@ -290,10 +289,9 @@ describe("google adapter — Chat Completions video input", () => {
       const parsed = parseRequest(responsesBody);
       parsed.modelId = "gemini-3.7-flash";
 
-      const contents = await geminiContents(parsed);
-
-      expect(contents).toContainEqual({ role: "user", parts: [{ text: `[video: ${url}]` }] });
-      expect(JSON.stringify(contents)).not.toContain("file_data");
+      let failure: unknown;
+      try { await geminiContents(parsed); } catch (error) { failure = error; }
+      expect((failure as Error).message).toContain("OpenCodex cannot send this remote video to Gemini");
     }
   });
 });

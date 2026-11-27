@@ -95,6 +95,19 @@ const LIVE_ROWS: Row[] = [
   { uid: "swe-2-medium", family: "swe-2", axes: [["Reasoning Effort", 0, "Medium"]], maxOut: 128_000, images: true },
   { uid: "swe-2-high", family: "swe-2", axes: [["Reasoning Effort", 1, "High"]], isDefault: true, maxOut: 128_000, images: true },
   { uid: "swe-2-max", family: "swe-2", axes: [["Reasoning Effort", 2, "Max"]], maxOut: 128_000, images: true },
+  // SWE-2.1, live 2026-11-25: five rungs, a bare row that is the LOW member
+  // (not the default), Medium as the family default, and an Ultrafast twin of
+  // every rung whose bare spelling is again Low.
+  ...(["low", "medium", "high", "xhigh", "max"] as const).flatMap((rung, order): Row[] => [false, true].map((fast) => ({
+    uid: `swe-2-1-${rung}${fast ? "-lightning" : ""}`,
+    family: "swe-2-1",
+    axes: [["Reasoning Effort", order, ["Low", "Medium", "High", "XHigh", "Max"][order]!], ["Fast Mode", fast ? 1 : 0, fast ? "Ultrafast" : undefined]],
+    isDefault: rung === "medium" && !fast,
+    maxOut: 65_536,
+    images: true,
+  }))),
+  { uid: "swe-2-1", family: "swe-2-1", axes: [["Reasoning Effort", 0, "Low"], ["Fast Mode", 0]], maxOut: 65_536, images: true },
+  { uid: "swe-2-1-lightning", family: "swe-2-1", axes: [["Reasoning Effort", 0, "Low"], ["Fast Mode", 1, "Ultrafast"]], maxOut: 65_536, images: true },
   ...claudeFamily("claude-opus-5", "claude-opus-5"),
   ...claudeFamily("claude-opus-5-5", "claude-opus-5-5"),
   ...gptFamily("gpt-6-sol", "gpt-6-sol"),
@@ -175,6 +188,14 @@ describe("family-based wire model resolution", () => {
     ["swe-2", "low", "swe-2-medium"],
     ["swe-2", "xhigh", "swe-2-max"],
     ["swe-2-high", "medium", "swe-2-medium"],
+    // The bare swe-2-1 row is Low; naming the family still means its Medium default.
+    ["swe-2-1", undefined, "swe-2-1-medium"],
+    ["swe-2.1", undefined, "swe-2-1-medium"],
+    ["swe-2-1", "xhigh", "swe-2-1-xhigh"],
+    ["swe-2-1", "ultra", "swe-2-1-max"],
+    ["swe-2-1", "fast", "swe-2-1-medium-lightning"],
+    ["swe-2-1-high", "fast", "swe-2-1-high-lightning"],
+    ["swe-2-1-lightning", "max", "swe-2-1-max-lightning"],
     ["glm-5-2", undefined, "glm-5-2"],
     ["glm-5.2", undefined, "glm-5-2"],
     ["glm-5-2", "none", "glm-5-2-none"],
@@ -385,6 +406,10 @@ describe("family-aware picker", () => {
     expect(result.defaultEfforts["swe-1-7"]).toBe("medium");
     expect(result.efforts["swe-2"]).toEqual(["medium", "high", "max"]);
     expect(result.defaultEfforts["swe-2"]).toBe("high");
+    expect(result.models).toContain("swe-2-1");
+    expect(result.models).not.toContain("swe-2-1-lightning");
+    expect(result.efforts["swe-2-1"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(result.defaultEfforts["swe-2-1"]).toBe("medium");
     expect(result.efforts["kimi-k3"]).toEqual(["low", "high", "max"]);
     expect(result.defaultEfforts["kimi-k3"]).toBe("high");
     expect(result.efforts["glm-5-2"]).toEqual(["none", "high", "max"]);

@@ -194,7 +194,7 @@ provider block in `models.yml`; default presets and proxy routing in `config.yml
 
 TOML temporal scalars cannot survive the JSON-cloned merge representation with their types
 intact. The common parser refuses documents containing them before either status or mutation
-proceeds, including nested arrays and inline tables. Quoted date strings remain supported.
+proceeds, including nested arrays and inline tables. Quoted date strings remain supported. YAML serializers quote leading-dot numeric strings, including exponent forms, in keys and values to preserve their string types.
 
 ## Catalog visibility
 

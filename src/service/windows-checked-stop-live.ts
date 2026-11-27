@@ -177,14 +177,15 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
 /**
  * Status words of `schtasks /query /fo CSV /nh`. schtasks localizes the column from its .mui
  * resources, and the PowerShell fallback cannot start inside Part A's 1 s manager-state cap on a
- * cold machine (#8863), so the words observed from shipped resources are read here: zh-CN, ja-JP
- * and ko-KR from their System32 locale directories, ko-KR running/ready also from two machines.
+ * cold machine (#8863), so the words observed from shipped resources are read here: zh-CN, zh-TW,
+ * ja-JP and ko-KR from their System32 locale directories, ko-KR running/ready also from two machines,
+ * zh-TW running/ready/disabled also from one.
  * Any other word stays unknown here and falls back to the numeric TASK_STATE read through the
  * Schedule.Service COM object, which is locale-independent and imports no module.
  */
 // A queued instance can launch after Part A. Only ready and disabled prove inactivity.
-const TASK_CSV_ACTIVE = new Set(["running", "queued", "正在运行", "已排队", "실행 중", "대기", "実行中", "キューに登録済み"]);
-const TASK_CSV_NOT_RUNNING = new Set(["ready", "disabled", "就绪", "已禁用", "준비", "사용 안 함", "準備完了", "無効"]);
+const TASK_CSV_ACTIVE = new Set(["running", "queued", "正在运行", "已排队", "執行中", "已排入佇列", "실행 중", "대기", "実行中", "キューに登録済み"]);
+const TASK_CSV_NOT_RUNNING = new Set(["ready", "disabled", "就绪", "已禁用", "就緒", "已停用", "준비", "사용 안 함", "準備完了", "無効"]);
 
 export function parseTaskCsvState(csv: string): "running" | "not-running" | "unknown" {
   for (const line of csv.split(/\r?\n/)) {

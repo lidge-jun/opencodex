@@ -1390,6 +1390,8 @@ export const de: Record<TKey, string> = {
   "logs.detail.stage.headersOnly": "nur Kopfzeilen",
   "logs.detail.stage.protocolPrelude": "Protokollvorspann",
   "logs.detail.stage.semanticOutput": "Ausgabe zugestellt",
+  "logs.status.streamInterrupted": "Stream unterbrochen",
+  "logs.detail.streamInterrupted1006": "Nach der Weiterleitung von Antwortereignissen wurde die WebSocket-Verbindung zum Anbieter unerwartet geschlossen (1006). Der Abschluss der Antwort wurde nicht bestätigt.",
   "logs.detail.stage.sideEffect": "Nebenwirkung ausgelöst",
   "logs.detail.stage.terminal": "Antwort zugestellt",
   "logs.detail.resend.permitted": "Erneut sendbar",

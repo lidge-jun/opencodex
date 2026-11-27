@@ -406,11 +406,13 @@ describe("StepCode session pool", () => {
     try {
       const opening = refs.map(ref => pool.open(ref));
       const reuse = pool.open(refs[0]!);
+      const continuation = pool.open(refs[0]!, { existingOnly: true });
       await expect(pool.open(next).catch(mapSessionFailure)).resolves.toMatchObject({
         status: 503, code: "step_cli_pool_full", errorType: "server_error", retryable: true,
       });
       const sessions = await Promise.all(opening);
       expect(await reuse).toBe(sessions[0]!);
+      expect(await continuation).toBe(sessions[0]!);
       expect(await pool.open(refs[1]!)).toBe(sessions[1]!);
       expect(children).toHaveLength(8);
 

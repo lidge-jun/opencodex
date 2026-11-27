@@ -107,6 +107,9 @@ nonblank `id`/`name`/`namespace`, and fully representable nonempty text/image ou
 existing continuation conversation-boundary calculation. The metadata is structural,
 not authentication. Unknown/opaque/malformed parts reject the entire conversion;
 ordinary missing/empty tool call ids retain the existing translated-route 400 guard.
+On an expanded continuation, `src/responses/parser.ts` records where the new wire input starts
+in the parsed messages. This includes leading tool results. Developer guidance still follows
+those results and precedes the next conversational message.
 Passthrough and routed-compaction raw-body repairs emit it as a user turn (`externalTaskInputResponsesContent`,
 #6764); the direct native `/responses/compact` forward keeps its raw-body handling. The leaf imports no optional subsystem.
 Stateful developer-guidance injection reuses that validator for its raw insertion

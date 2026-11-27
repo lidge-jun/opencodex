@@ -7,7 +7,7 @@ const MAX_CALL_BINDINGS = 1024;
 export interface LiveCallBinding {
   owner: string;
   upstreamCallId: string;
-  joinStyle: "frameless-path" | "realtime-query";
+  joinStyle: "frameless-path" | "realtime-query" | "live-session";
   providerName: string;
   /**
    * The model this call settled on when it was created. A join names no model

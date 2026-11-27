@@ -152,6 +152,10 @@ Los patrocinadores permiten mantener opencodex al día con los cambios de protoc
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
 <td>Gracias a <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a> por patrocinar este proyecto. TokenLab ofrece a los agentes de programación una clave API para los principales modelos. Admite OpenAI Responses y Chat Completions, Anthropic Messages y los formatos nativos de Gemini, con streaming y llamadas a herramientas. También proporciona un servidor MCP y skills para facilitar la integración. Puedes elegir el modo de entrega y pagar según el uso. Selecciona <code>TokenLab</code> en Añadir proveedor o ejecuta <code>ocx provider add tokenlab</code>.<br><sub>TokenLab unifica el acceso a varios modelos con una clave API, admite los protocolos y herramientas indicados y permite integrar el servidor MCP y las skills en los flujos de trabajo existentes, con modos de entrega opcionales y pago por uso.</sub></td>
 </tr>
+<tr>
+<td width="180"><a href="https://runapi.co"><img src="../assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
+<td>Gracias a <a href="https://runapi.co">RunAPI</a> por patrocinar este proyecto. RunAPI es una pasarela unificada de API de IA: una sola clave API abre un catálogo de más de 200 modelos de OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot y otros, servidos mediante los formatos OpenAI Chat Completions y Responses, Anthropic Messages y la API nativa de Gemini; los formatos disponibles varían según el modelo. El enrutamiento inteligente envía cada solicitud a un nodo de proveedor rápido y estable, con conmutación automática ante fallos, y el pago es por uso, normalmente muy por debajo de las tarifas estándar. Selecciona <code>RunAPI</code> en Añadir proveedor o ejecuta <code>ocx provider add runapi</code>.</td>
+</tr>
 </tbody>
 </table>
 
