@@ -484,6 +484,7 @@ if (options.exitCleanup) {
   const restore = await import("../../src/cli/stop-restore");
   const dispatch = await import("../../src/cli/dispatch");
   const bindings = {
+    stopForegroundAdvisory: undefined,
     catalogHealer: null, routingHealer: null, guardian: { stop() {} }, historyGuardian: null, healthSentinel: null,
     siblingStart: false, isRecyclingForExit: () => false, decideStartExitTeardown: dispatch.decideStartExitTeardown,
     preserveConnectedClientRoutingOnExit: (teardown: Parameters<typeof restore.preserveConnectedClientRoutingOnExit>[0]) => {
