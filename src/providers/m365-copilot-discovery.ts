@@ -6,6 +6,7 @@ export const M365_COPILOT_WEB_URL = "https://copilot.cloud.microsoft/chat/";
 export const M365_COPILOT_WEB_COOKIE_NAMES = /^(?:OhpAuth(?:C\d+)?|OhpToken|SSRUserType)$/;
 const guid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const M365_NATIVE_MODEL_ID = /^[A-Z][A-Za-z0-9_]{0,159}$/;
+export class M365RosterMissingError extends Error {}
 
 export function normalizeM365WebSession(value: unknown): M365CopilotWebSession | undefined {
   if (!value || typeof value !== "object") return;
@@ -66,14 +67,18 @@ export function m365BootstrapAccountId(html: string): string {
   } catch { return ""; }
 }
 
-export function parseM365ModelBootstrap(html: string): { accountId: string; items: ProviderModelsApiItem[] } {
+export function parseM365ModelBootstrap(html: string, expectedAccountId?: string): { accountId: string; items: ProviderModelsApiItem[] } {
   const root = hydrationRoot(html);
   const account = record(record(root.store).accountInfo);
   if (!guid.test(account.objectId) || !guid.test(account.tenantId)) throw new Error("Microsoft 365 Copilot returned no work-account identity");
+  const accountId = account.objectId + "@" + account.tenantId;
+  if (expectedAccountId && accountId.toLowerCase() !== expectedAccountId.toLowerCase()) throw new Error("Microsoft 365 Copilot model discovery account mismatch");
   const queries = record(root.__queryState).queries;
+  if (queries === undefined) throw new M365RosterMissingError("Microsoft 365 Copilot returned no chat model roster");
   if (!Array.isArray(queries) || queries.length > 256) throw new Error("Microsoft 365 Copilot returned invalid model metadata");
   const metadata = queries.map(q => record(record(record(q).state).data).bizchatAsAgentGpt?.clientPreferences?.modelSelectorMetadata).find(Boolean);
-  return { accountId: account.objectId + "@" + account.tenantId, items: m365RosterFromMetadata(metadata) };
+  if (!metadata) throw new M365RosterMissingError("Microsoft 365 Copilot returned no chat model roster");
+  return { accountId, items: m365RosterFromMetadata(metadata) };
 }
 
 function findSelectorMetadata(value: unknown, depth: number, fromBizchat: boolean, requireBizchat: boolean): Record<string, any> | undefined {
@@ -104,7 +109,7 @@ export function parseM365RosterBody(text: string): ProviderModelsApiItem[] | und
     if (!quoted) return undefined;
     try { value = JSON.parse(JSON.parse(quoted)); } catch { return undefined; }
   }
-  const metadata = findSelectorMetadata(value, 0, false, true) ?? findSelectorMetadata(value, 0, false, false);
+  const metadata = findSelectorMetadata(value, 0, false, true);
   if (!metadata) return undefined;
   try { return m365RosterFromMetadata(metadata); } catch { return undefined; }
 }
@@ -127,7 +132,6 @@ export function normalizeM365Roster(value: unknown): ProviderModelsApiItem[] | u
 export async function readM365ModelBootstrap(response: Response, expectedAccountId: string, signal?: AbortSignal) {
   const read = await readBoundedResponseBytes(response, { maxBytes: 2 * 1024 * 1024, signal });
   if (read.oversized) throw new Error("Microsoft 365 Copilot model metadata exceeds its limits");
-  const result = parseM365ModelBootstrap(new TextDecoder().decode(read.bytes));
-  if (result.accountId.toLowerCase() !== expectedAccountId.toLowerCase()) throw new Error("Microsoft 365 Copilot model discovery account mismatch");
+  const result = parseM365ModelBootstrap(new TextDecoder().decode(read.bytes), expectedAccountId);
   return result.items;
 }

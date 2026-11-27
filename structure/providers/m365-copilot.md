@@ -1,5 +1,7 @@
 # Microsoft 365 Copilot
 
+The managed browser may capture a bounded main-chat roster during sign-in. If a later authenticated page confirms the same account but omits picker metadata, this snapshot is degraded catalog data, not an authoritative live refresh. It cannot discover models added after sign-in. Missing or mismatched web-account identity never falls back to the OAuth token identity.
+
 The repository owner has granted a canonical-preset policy exception; the independent maintainer security re-review passed on implementation head `359a57431b` (October 28, 2026). The [public evidence section](../../docs-site/src/content/docs/guides/m365-copilot.md#evidence-and-admission-status) distinguishes Microsoft's documented Graph API from this observed private ChatHub/bootstrap contract.
 
 `src/providers/registry/entries-core.ts` registers the opt-in, non-featured `m365-copilot` OAuth provider in the dashboard's Add Provider catalog. Its live model discovery uses the account, and its offline roster is empty. It is separate from `github-copilot`. `src/providers/m365-copilot-models.ts` keeps old request aliases compatible and accepts Microsoft's native selector IDs so new versions need no alias-table update. A selector is not evidence of an underlying model identity.

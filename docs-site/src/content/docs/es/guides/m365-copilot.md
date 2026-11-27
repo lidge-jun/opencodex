@@ -23,6 +23,8 @@ La ventana usa un perfil temporal. El registro M365 Chat Client de Microsoft rec
 
 ## Modelos y solicitudes
 
+Si la página identifica la cuenta pero no incluye los metadatos del selector, OpenCodex puede mostrar una lista capturada al iniciar sesión e indicará que la detección en vivo no está disponible. Esa lista no incluye modelos añadidos después del inicio de sesión. Si no se puede verificar la identidad de la cuenta web, el inicio de sesión permanece pendiente.
+
 OpenCodex vuelve a comprobar la credencial seleccionada antes de abrir ChatHub y antes de enviar la prueba de conexión. Un turno o una prueba en espera no puede enviar credenciales que se hayan sustituido durante la espera.
 
 ChatHub admite proxies HTTP(S) y reglas de exclusión del proveedor, incluidas las heredadas de la configuración global. Un proxy SOCKS o un ejecutor de solicitudes personalizado produce un error de configuración antes de abrir el WebSocket. OpenCodex rechaza los ejecutores sin una ruta de socket explícita también antes de preparar o subir imágenes. Usa un proxy HTTP(S), una conexión directa o una regla de exclusión aplicable si tu política de red lo permite.

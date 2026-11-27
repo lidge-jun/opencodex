@@ -16,7 +16,7 @@ const fetchChatHtml = "location.origin===" + M365_WEB_ORIGIN + "?(async()=>{"
   + "for(;;){const{done,value}=await rd.read();if(done)break;n+=value.byteLength;"
   + "if(n>" + M365_CHAT_HTML_MAX_BYTES + "){c.abort();return''}s+=d.decode(value,{stream:true})}"
   + "return s+d.decode()}catch{return''}finally{clearTimeout(t)}})():''";
-const pageAccountExpression = "(()=>{const a=window.__staticRouterHydrationData?.loaderData?.root?.store?.accountInfo;"
+const pageAccountExpression = "(()=>{if(location.origin!==" + M365_WEB_ORIGIN + ")return'';const a=window.__staticRouterHydrationData?.loaderData?.root?.store?.accountInfo;"
   + "return a?.objectId&&a?.tenantId?a.objectId+'@'+a.tenantId:''})()";
 
 async function browserAccountId(browser: BrowserCommands, context: string): Promise<string> {
@@ -41,14 +41,16 @@ function chatCookieHeader(cookies: unknown): string {
 export async function readM365BrowserWebSession(browser: BrowserCommands, context: string, signal: AbortSignal, expectedAccountId?: string): Promise<M365CopilotWebSession> {
   await browser.command("Page.navigate", { url: M365_COPILOT_WEB_URL }, context);
   const deadline = Date.now() + 120_000;
-  // Cookies are the arrival signal; the token's oid/tid claims identify the account when the page keeps its internals to itself.
+  // A cookie must be accompanied by an independently observed web-account identity.
   while (Date.now() < deadline) {
     signal.throwIfAborted();
     const cookies = await browser.command("Network.getCookies", { urls: [M365_COPILOT_WEB_URL] }, context).then(result => result?.cookies).catch(() => undefined);
+    signal.throwIfAborted();
     const cookie = chatCookieHeader(cookies);
     if (cookie) {
-      const accountId = await browserAccountId(browser, context) || await htmlAccountId(browser, context, signal)
-        || (typeof expectedAccountId === "string" ? expectedAccountId : "");
+      const accountId = await browserAccountId(browser, context) || await htmlAccountId(browser, context, signal);
+      signal.throwIfAborted();
+      if (accountId && expectedAccountId && accountId.toLowerCase() !== expectedAccountId.toLowerCase()) throw new Error("Microsoft 365 Copilot web sign-in account mismatch");
       const session = normalizeM365WebSession({ cookie, accountId });
       if (session) return session;
     }

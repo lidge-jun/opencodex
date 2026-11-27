@@ -74,6 +74,7 @@ class BrowserProtocol {
   private pending = new Map<number, { method: string; resolve(value: any): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
   onClose?: () => void;
   onEvent?: (method: string, params: any, sessionId?: string) => void;
+  get isClosed() { return this.closed; }
 
   constructor(private input: Writable, private output: Readable) {
     input.on("error", this.close);
@@ -144,31 +145,41 @@ type BrowserSpawn = (file: string, args: string[], options: {
 class M365RosterCapture {
   items: ProviderModelsApiItem[] | undefined;
   private pending = new Set<string>();
+  private decodedBytes = new Map<string, number>();
   private scannedBytes = 0;
   constructor(private protocol: BrowserProtocol, private sessionId: string) {}
 
   onEvent(method: string, params: any, eventSession?: string) {
     if (eventSession !== this.sessionId) return;
+    const id = String(params?.requestId ?? "");
     if (method === "Network.responseReceived") {
       const url = String(params?.response?.url ?? ""), mimeType = String(params?.response?.mimeType ?? "");
       const origin = new URL(M365_COPILOT_WEB_URL).origin;
       if (/^(?:application|text)\/(?:json|html)/i.test(mimeType) && (url === origin || url.startsWith(origin + "/"))) this.pending.add(String(params?.requestId ?? ""));
       return;
     }
-    if (method === "Network.loadingFailed") { this.pending.delete(String(params?.requestId ?? "")); return; }
+    if (method === "Network.dataReceived" && this.pending.has(id)) {
+      const size = params?.dataLength;
+      this.decodedBytes.set(id, Number.isSafeInteger(size) && size >= 0 ? (this.decodedBytes.get(id) ?? 0) + size : Infinity);
+      return;
+    }
+    if (method === "Network.loadingFailed") { this.pending.delete(id); this.decodedBytes.delete(id); return; }
     if (method !== "Network.loadingFinished" || !this.pending.has(String(params?.requestId ?? ""))) return;
     const requestId = String(params.requestId);
     this.pending.delete(requestId);
-    // shortcut: a body whose base64 frame could exceed the 2 MiB CDP pipe cap must never be fetched.
-    if (this.items || this.scannedBytes > 32 * 1024 * 1024 || Number(params?.encodedDataLength) > 1024 * 1024) return;
+    const decoded = this.decodedBytes.get(requestId);
+    this.decodedBytes.delete(requestId);
+    // JSON escaping can expand decoded data sixfold in a CDP frame.
+    if (this.items || decoded === undefined || decoded > 256 * 1024 || this.scannedBytes + decoded > 32 * 1024 * 1024) return;
+    this.scannedBytes += decoded;
     void this.protocol.command("Network.getResponseBody", { requestId }, this.sessionId).then(body => {
       const text = body?.base64Encoded ? Buffer.from(String(body.body ?? ""), "base64").toString("utf8") : String(body?.body ?? "");
-      this.scannedBytes += text.length;
+      this.scannedBytes += Math.max(decoded, Buffer.byteLength(text)) - decoded;
       // shortcut: skip parser work on the many bodies that cannot contain the picker.
       if (text.length > 2 * 1024 * 1024 || !text.includes("availableModelSelectionOptions")) return;
       const items = parseM365RosterBody(text);
       if (items?.length) this.items = items;
-    }).catch(() => {});
+    }).catch(() => { this.scannedBytes -= decoded; });
   }
 }
 
@@ -235,10 +246,15 @@ async function captureInBrowser(authUrl: string, expectedState: string, signal: 
     });
     onReady(executable.toLowerCase().includes("edge") ? "Edge" : "Chromium-based browser");
     const [capturedCode] = await Promise.all([code, protocol.command("Page.navigate", { url: authUrl }, sessionId)]);
-    // Exchange while the window is still open: the token's oid/tid claims identify the session without the page's help.
+    // Exchange while the window is still open to compare the token and web account identities.
     const credential = exchange ? await exchange(capturedCode, signal) : undefined;
-    const m365 = await readM365BrowserWebSession(protocol, sessionId, signal, credential?.accountId);
-    const roster = await waitM365Roster(rosterCapture, signal, rosterWaitMs);
+    // A browser disconnect must fail the session wait promptly instead of polling to its deadline.
+    const disconnect = new AbortController();
+    protocol.onClose = () => disconnect.abort(new Error("Microsoft 365 Copilot browser disconnected"));
+    if (protocol.isClosed) protocol.onClose();
+    const waitSignal = AbortSignal.any([signal, disconnect.signal]);
+    const m365 = await readM365BrowserWebSession(protocol, sessionId, waitSignal, credential?.accountId);
+    const roster = await waitM365Roster(rosterCapture, waitSignal, rosterWaitMs);
     return { code: capturedCode, m365: roster ? { ...m365, roster } : m365, ...(credential ? { credential } : {}) };
   } finally {
     if (cancelCapture) signal.removeEventListener("abort", cancelCapture);

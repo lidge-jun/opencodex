@@ -84,6 +84,7 @@ describe("Microsoft 365 Copilot registration and authentication", () => {
       return true;
     } });
     const methods: string[] = [];
+    const bodyRequests: string[] = [];
     let launch: { args: string[]; stdio: unknown } | undefined;
     const spawn = (_file: string, args: string[], options: { stdio: unknown }) => {
       launch = { args, stdio: options.stdio };
@@ -94,6 +95,7 @@ describe("Microsoft 365 Copilot registration and authentication", () => {
       expect(frame.endsWith("\0")).toBe(true);
       const request = JSON.parse(frame.slice(0, -1));
       methods.push(request.method);
+      if (request.method === "Network.getResponseBody") bodyRequests.push(request.params.requestId);
       const oid = "11111111-1111-1111-1111-111111111111", tid = "22222222-2222-2222-2222-222222222222";
       const rosterBody = JSON.stringify({ bizchatAsAgentGpt: { clientPreferences: { modelSelectorMetadata: {
         availableModelSelectionOptions: [{ id: "Magic", type: "item", menuItemTitle: "Magic" }],
@@ -102,15 +104,18 @@ describe("Microsoft 365 Copilot registration and authentication", () => {
         : request.method === "Target.attachToTarget" ? { sessionId: "session" }
         : request.method === "Runtime.evaluate" ? { result: { value: oid + "@" + tid } }
         : request.method === "Network.getCookies" ? { cookies: [{ name: "OhpAuth", value: "fixture", domain: ".copilot.cloud.microsoft", path: "/", secure: true }] }
-        : request.method === "Network.getResponseBody" ? { body: Buffer.from(rosterBody).toString("base64"), base64Encoded: true }
+        : request.method === "Network.getResponseBody" ? { body: Buffer.from(request.params.requestId === "agent" ? JSON.stringify({ agentList: [{ modelSelectorMetadata: { availableModelSelectionOptions: [{ id: "Forum", type: "item" }] } }] }) : rosterBody).toString("base64"), base64Encoded: true }
         : {};
       const reply = Buffer.from(JSON.stringify({ id: request.id, result }) + "\0");
       output.write(reply.subarray(0, 4));
       const callback = request.method === "Page.navigate" && request.params.url === "https://fixture.invalid/auth"
         ? Buffer.concat([
           Buffer.from(JSON.stringify({ method: "Fetch.requestPaused", sessionId: "session", params: { requestId: "fixture", request: { url: "https://login.microsoftonline.com/common/oauth2/nativeclient?state=state&code=fixture" } } }) + "\0"),
-          Buffer.from(JSON.stringify({ method: "Network.responseReceived", sessionId: "session", params: { requestId: "roster", response: { url: "https://copilot.cloud.microsoft/api/fixture", mimeType: "application/json" } } }) + "\0"),
-          Buffer.from(JSON.stringify({ method: "Network.loadingFinished", sessionId: "session", params: { requestId: "roster" } }) + "\0"),
+          ...["oversized", "agent", "roster"].flatMap(id => [
+            Buffer.from(JSON.stringify({ method: "Network.responseReceived", sessionId: "session", params: { requestId: id, response: { url: "https://copilot.cloud.microsoft/api/fixture", mimeType: "application/json" } } }) + "\0"),
+            Buffer.from(JSON.stringify({ method: "Network.dataReceived", sessionId: "session", params: { requestId: id, dataLength: id === "oversized" ? 3 * 1024 * 1024 : 512 } }) + "\0"),
+            Buffer.from(JSON.stringify({ method: "Network.loadingFinished", sessionId: "session", params: { requestId: id, encodedDataLength: 10 } }) + "\0"),
+          ]),
         ])
         : Buffer.alloc(0);
       output.write(Buffer.concat([reply.subarray(4), callback]));
@@ -126,6 +131,9 @@ describe("Microsoft 365 Copilot registration and authentication", () => {
         roster: [{ id: "Magic", name: "Magic", input_modalities: ["text", "image"], m365_disabled: false }] } });
       expect(methods).toContain("Fetch.fulfillRequest");
       expect(methods).toContain("Network.enable");
+      expect(bodyRequests).not.toContain("oversized");
+      expect(bodyRequests).toContain("agent");
+      expect(bodyRequests).toContain("roster");
       expect(methods.at(-1)).toBe("Browser.close");
     } finally { oldSpawn.mockRestore(); }
   });
