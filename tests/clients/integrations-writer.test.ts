@@ -8,6 +8,7 @@ import { buildClientContribution, type ExportModel } from "../../src/clients/con
 import { refreshOwnedCatalogIntegrations } from "../../src/integrations/catalog-refresh";
 import { assertIntegrationWriteOwnership, fileIO, type IntegrationIO } from "../../src/integrations/config-io";
 import { canonicalContribution, fingerprint, semanticContribution } from "../../src/integrations/ownership";
+import { serializeDocument } from "../../src/integrations/serialize";
 import { protectedContributionFingerprint } from "../../src/integrations/ownership-policy";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
@@ -993,6 +994,180 @@ describe("disable", () => {
     expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
     const after = Bun.TOML.parse(readFileSync(configPath, "utf8")) as { models?: Record<string, unknown> };
     expect(after.models).toEqual({ "opencodex/mine": { provider: "elsewhere" } });
+  });
+});
+
+describe("Kimi source preservation (#9152)", () => {
+  const original = [
+    "# user header",
+    "default_model = \"kimi-k3\"",
+    "",
+    "# >>> other-tool-hooks >>>",
+    "[[hooks]]",
+    "event = \"SessionStart\"",
+    "command = \"echo start\"",
+    "",
+    "[[hooks]]",
+    "event = \"Stop\"",
+    "command = \"echo stop\"",
+    "# <<< other-tool-hooks <<<",
+    "",
+  ].join("\n");
+
+  function installKimi(text: string): string {
+    mkdirSync(join(home, ".kimi-code"), { recursive: true });
+    const configPath = join(home, ".kimi-code", "config.toml");
+    writeFileSync(configPath, text);
+    return configPath;
+  }
+
+  test("apply and disable leave the user's comments and hook tables as written", () => {
+    const configPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const applied = readFileSync(configPath, "utf8");
+    expect(applied.startsWith(original)).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+  });
+
+  test("another tool's block added after apply survives refresh and disable", () => {
+    const configPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const sibling = "# >>> late-tool >>>\n[[hooks]]\nevent = \"UserPromptSubmit\"\n# <<< late-tool <<<\n";
+    writeFileSync(configPath, `${readFileSync(configPath, "utf8")}\n${sibling}`);
+    expect(refreshIntegration(input({ clientId: "kimi", models: MODELS.slice(1) })).ok).toBe(true);
+    const refreshed = readFileSync(configPath, "utf8");
+    expect(refreshed.startsWith(original)).toBe(true);
+    expect(refreshed.endsWith(sibling)).toBe(true);
+    expect(refreshed).not.toContain("claude-opus-4-8");
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(`${original}\n${sibling}`);
+  });
+
+  test("disable cleans up a file the whole-document writer left behind", () => {
+    const configPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const rerendered = serializeDocument(Bun.TOML.parse(readFileSync(configPath, "utf8")), "toml");
+    expect(rerendered).toContain("[providers]\n[providers.opencodex]");
+    writeFileSync(configPath, rerendered);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(Bun.TOML.parse(readFileSync(configPath, "utf8"))).toEqual(Bun.TOML.parse(original));
+  });
+
+  test("trailing blank lines in the user's file survive apply and disable", () => {
+    const padded = `${original}\n\n`;
+    const configPath = installKimi(padded);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8").startsWith(padded)).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(padded);
+  });
+
+  test("disable keeps a comment the user put on a parent table header", () => {
+    const configPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const rerendered = serializeDocument(Bun.TOML.parse(readFileSync(configPath, "utf8")), "toml")
+      .replace("[providers]\n", "[providers] # mine\n");
+    writeFileSync(configPath, rerendered);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const after = readFileSync(configPath, "utf8");
+    expect(after).toContain("[providers] # mine");
+    expect(after).not.toContain("opencodex");
+  });
+
+  test("an overwrite refuses a provider table it cannot replace in place", () => {
+    const inline = `providers = { opencodex = { type = "openai" } }\n${original}`;
+    const configPath = installKimi(inline);
+    const result = overwriteIntegration(input({ clientId: "kimi" }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("unsafe");
+    expect(readFileSync(configPath, "utf8")).toBe(inline);
+  });
+
+  test("refuses refresh or disable when a user added a comment inside a managed table", () => {
+    const configPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const commented = readFileSync(configPath, "utf8").replace(
+      "[providers.opencodex]\n",
+      "[providers.opencodex]\n# keep my note\n",
+    );
+    writeFileSync(configPath, commented);
+    const refreshed = refreshIntegration(input({ clientId: "kimi", models: MODELS.slice(1) }));
+    expect(refreshed.ok).toBe(false);
+    if (!refreshed.ok) expect(refreshed.reason).toBe("unsafe");
+    expect(readFileSync(configPath, "utf8")).toBe(commented);
+    const disabled = disableIntegration(input({ clientId: "kimi" }));
+    expect(disabled.ok).toBe(false);
+    if (!disabled.ok) expect(disabled.reason).toBe("unsafe");
+    expect(readFileSync(configPath, "utf8")).toBe(commented);
+  });
+
+  test("preserves CRLF line endings, absent trailing newline, and surrounding blank lines", () => {
+    const crlf = original.replace(/\n/g, "\r\n");
+    const crlfPath = installKimi(crlf);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const appliedCrlf = readFileSync(crlfPath, "utf8");
+    expect(appliedCrlf.startsWith(crlf)).toBe(true);
+    expect(appliedCrlf.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(crlfPath, "utf8")).toBe(crlf);
+
+    const noNewline = 'default_model = "kimi-k3"';
+    const noNewlinePath = installKimi(noNewline);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(refreshIntegration(input({ clientId: "kimi", models: MODELS.slice(1) })).ok).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(noNewlinePath, "utf8")).toBe(noNewline);
+
+    // Removing the blank separator before the managed block after apply must NOT strip
+    // the preceding user line's trailing newline on disable when the file originally had one.
+    const compactPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    writeFileSync(compactPath, readFileSync(compactPath, "utf8").replace(`${original}\n[providers.opencodex]`, `${original}[providers.opencodex]`));
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(compactPath, "utf8")).toBe(original);
+
+    // Trailing blank lines added after the final managed table stay after it on refresh.
+    const trailingPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    writeFileSync(trailingPath, `${readFileSync(trailingPath, "utf8")}\n\n`);
+    expect(refreshIntegration(input({ clientId: "kimi", models: MODELS.slice(1) })).ok).toBe(true);
+    const refreshedTrailing = readFileSync(trailingPath, "utf8");
+    expect(refreshedTrailing.startsWith(`${original}\n[providers.opencodex]`)).toBe(true);
+    expect(refreshedTrailing.endsWith("\n\n\n")).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(trailingPath, "utf8")).toBe(`${original}\n\n`);
+
+    const sibling = "# >>> late-tool >>>\n[[hooks]]\nevent = \"Stop\"\n# <<< late-tool <<<\n";
+    const blankPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    writeFileSync(blankPath, `${readFileSync(blankPath, "utf8")}\n\n${sibling}`);
+    expect(refreshIntegration(input({ clientId: "kimi", models: MODELS.slice(1) })).ok).toBe(true);
+    expect(readFileSync(blankPath, "utf8").endsWith(`\n\n\n${sibling}`)).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(blankPath, "utf8")).toBe(`${original}\n\n${sibling}`);
+
+    // Overwriting a pre-existing managed table in a newline-less file must not strip the
+    // preceding user line's newline on disable.
+    const existingNoEof = 'default_model = "kimi-k3"\n\n[providers.opencodex]\ntype = "old"';
+    const overwritePath = installKimi(existingNoEof);
+    expect(overwriteIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(overwritePath, "utf8")).toBe('default_model = "kimi-k3"\n');
+
+    // Adding a sibling line before the managed block after an initial append to a newline-less
+    // file invalidates the EOF provenance, so disable keeps the new sibling's trailing newline.
+    const editedBeforePath = installKimi(noNewline);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    writeFileSync(
+      editedBeforePath,
+      readFileSync(editedBeforePath, "utf8").replace(
+        `${noNewline}\n\n[providers.opencodex]`,
+        `${noNewline}\ntheme = "dark"\n\n[providers.opencodex]`,
+      ),
+    );
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(editedBeforePath, "utf8")).toBe(`${noNewline}\ntheme = "dark"\n`);
   });
 });
 

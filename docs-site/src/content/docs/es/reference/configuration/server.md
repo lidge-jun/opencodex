@@ -232,6 +232,20 @@ El valor es una lista separada por comas de nombres de host. El emparejamiento e
 
 Un envío coincidente lleva `Connection: close` y se envía con keep-alive deshabilitado. La decisión se toma en contra de la dirección realmente utilizada en el cable, por lo que todavía se aplica cuando un proveedor de transporte reescribe el destino después de la selección de credenciales. La latencia por solicitud aumenta ligeramente para esos hosts, ya que cada solicitud paga un nuevo protocolo TCP y TLS; nombre solo los hosts que lo necesitan.
 
+<a id="tls-compatibility-for-specific-upstream-hosts"></a>
+
+## Compatibilidad TLS para hosts de origen específicos
+
+Algunas rutas de red ascendentes restablecen las conexiones cuando el protocolo de enlace TLS ofrece un intercambio de claves híbrido poscuántico. Para probar un intercambio de claves solo clásico para los hosts nombrados en las rutas HTTP de Responses y Chat nativo, defina esta variable de entorno antes de iniciar OpenCodex:
+
+```bash
+OCX_TLS_CLASSICAL_GROUPS_HOSTS="api.example.com" ocx start
+```
+
+El valor es una lista separada por comas de nombres de host. La coincidencia no distingue entre mayúsculas y minúsculas, incluye subdominios e ignora un punto DNS final; omita esquemas, puertos y rutas. La opción afecta solo a las solicitudes HTTPS a los hosts coincidentes y conserva la verificación de certificados. Elimina el grupo híbrido poscuántico para esas conexiones, así que úsela solo para los extremos que necesiten esta solución de compatibilidad. Sin definir o vacía mantiene el comportamiento TLS predeterminado del entorno de ejecución.
+
+Una solicitud coincidente que use `FetchSession` debe proporcionar su configuración TLS en la propia solicitud. Las solicitudes coincidentes que usan transportes personalizados o perfiles TLS se rechazan porque no se pueden inspeccionar sus ajustes de seguridad. Las demás solicitudes no se ven afectadas.
+
 <a id="remote-access"></a>
 
 ## Acceso remoto

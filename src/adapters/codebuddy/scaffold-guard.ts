@@ -3,12 +3,21 @@ import type { AdapterEvent } from "../../types";
 /** Error code for a CodeBuddy turn whose output contains vendor agent scaffolding. */
 export const CODEBUDDY_SCAFFOLD_ERROR_CODE = "vendor_scaffold_detected";
 
-// The observed control protocol uses FULLWIDTH VERTICAL LINE (U+FF5C). Detection stays
+// The observed control protocols use FULLWIDTH VERTICAL LINE (U+FF5C). Detection stays
 // deliberately narrower than the marker spelling: a calls control line must be followed by an
 // invoke line with a non-empty tool name. That distinguishes an agent scaffold from prose quoting or
 // discussing one tag.
-const DSML_CALLS_LINE = "<｜｜dsml｜｜ calls>";
-const DSML_INVOKE_PREFIX = "<｜｜dsml｜｜ invoke name=\"";
+interface ScaffoldGrammar {
+  callsLine: string;
+  invokePrefix: string;
+}
+
+const SCAFFOLD_GRAMMARS: readonly ScaffoldGrammar[] = [
+  { callsLine: "<｜｜dsml｜｜ calls>", invokePrefix: "<｜｜dsml｜｜ invoke name=\"" },
+  // DeepSeek's native tool markup (LOWER ONE EIGHTH BLOCK U+2581 joins the words), printed as
+  // text when the CLI runs with no tool catalog (#8447).
+  { callsLine: "<｜tool▁calls｜>", invokePrefix: "<｜tool▁invoke name=\"" },
+];
 
 export interface CodeBuddyScaffoldFilterResult {
   /** Bytes released from a suffix withheld by an earlier event on this channel. */
@@ -20,11 +29,32 @@ export interface CodeBuddyScaffoldFilterResult {
   fail: boolean;
 }
 
+/**
+ * An open fenced code block (CommonMark): it closes only on a line whose fence run uses the same
+ * character, is at least as long as the opener, and is followed by nothing but spaces or tabs.
+ * `closing` tracks a candidate closing line whose remainder has not been seen yet: `run` while the
+ * fence run may still grow, `space` once trailing whitespace started. A backtick opener's info
+ * string may not contain a backtick (` ```a``` ` is an inline code span, not a fence).
+ */
+interface FenceState {
+  char: "`" | "~";
+  length: number;
+  closing: "run" | "space" | null;
+  /** A backtick opener whose info string is still being read; a backtick in it voids the fence. */
+  opening: boolean;
+}
+
+interface FenceRunState {
+  char: "`" | "~";
+  length: number;
+}
+
 interface ScanResult {
   safe: string;
   held: string;
   fail: boolean;
-  fence: "`" | "~" | null;
+  fence: FenceState | null;
+  fenceRun: FenceRunState | null;
   lineStart: boolean;
 }
 
@@ -53,57 +83,133 @@ function prefixAtEnd(text: string, at: number, expected: string): boolean {
 }
 
 /**
+ * Classify a column-zero position against every known control grammar: a complete
+ * calls-plus-named-invoke sequence fails the turn, and a suffix that may still become one is held.
+ */
+function matchControlSequence(text: string, index: number): "fail" | "hold" | null {
+  let hold = false;
+  for (const { callsLine, invokePrefix } of SCAFFOLD_GRAMMARS) {
+    if (startsWithFolded(text, index, callsLine)) {
+      const afterCalls = index + callsLine.length;
+      let invokeAt = -1;
+      if (text[afterCalls] === "\n") invokeAt = afterCalls + 1;
+      else if (text[afterCalls] === "\r" && text[afterCalls + 1] === "\n") invokeAt = afterCalls + 2;
+      else if (afterCalls === text.length || (text[afterCalls] === "\r" && afterCalls + 1 === text.length)) {
+        hold = true;
+        continue;
+      }
+
+      if (invokeAt >= 0) {
+        const invokeNameStart = text[invokeAt + invokePrefix.length];
+        if (startsWithFolded(text, invokeAt, invokePrefix) && invokeNameStart && !/[\s"]/.test(invokeNameStart)) {
+          return "fail";
+        }
+        if (invokeAt === text.length || prefixAtEnd(text, invokeAt, invokePrefix)) hold = true;
+      }
+    } else if (prefixAtEnd(text, index, callsLine)) {
+      hold = true;
+    }
+  }
+  return hold ? "hold" : null;
+}
+
+/**
  * Scan complete bytes and retain only a bounded suffix that can still become a control sequence.
  *
  * Control tags are recognized only at column zero and outside fenced Markdown. Inline code,
  * quoted strings, blockquotes, indented source, and prose all add syntax before the tag and are
- * therefore forwarded unchanged. A calls line alone is harmless; refusal requires the observed
- * two-line calls-plus-named-invoke grammar.
+ * therefore forwarded unchanged. A calls line alone is harmless; refusal requires one of the
+ * observed two-line calls-plus-named-invoke grammars.
  */
 function scan(
   text: string,
-  initialFence: "`" | "~" | null,
+  initialFence: FenceState | null,
+  initialFenceRun: FenceRunState | null,
   initialLineStart: boolean,
 ): ScanResult {
-  let fence = initialFence;
+  let fence = initialFence && { ...initialFence };
+  let fenceRun = initialFenceRun && { ...initialFenceRun };
   let lineStart = initialLineStart;
   let index = 0;
 
   while (index < text.length) {
-    if (lineStart) {
-      const fenceMarkers = fence ? [fence.repeat(3)] : ["```", "~~~"];
-      const completeFence = fenceMarkers.find(marker => text.startsWith(marker, index));
-      if (completeFence) {
-        fence = fence ? null : (completeFence[0] as "`" | "~");
-        index += completeFence.length;
+    if (fenceRun) {
+      const char = text[index]!;
+      if (char === fenceRun.char) {
+        fenceRun.length += 1;
+        index += 1;
+        continue;
+      }
+      const run = fenceRun;
+      fenceRun = null;
+      if (!fence && run.length >= 3) {
+        fence = { char: run.char, length: run.length, closing: null, opening: run.char === "`" };
+        continue;
+      }
+      if (fence && run.char === fence.char && run.length >= fence.length) {
+        fence.closing = "run";
+        continue;
+      }
+    } else if (fence?.opening) {
+      const char = text[index]!;
+      if (char === "`") fence = null;
+      else if (char === "\n" || char === "\r") fence.opening = false;
+    } else if (fence?.closing) {
+      const char = text[index]!;
+      if (fence.closing === "run" && char === fence.char) {
+        index += 1;
+        continue;
+      }
+      if (char === " " || char === "\t") {
+        fence.closing = "space";
+        index += 1;
+        continue;
+      }
+      // A line end confirms the close; any other text makes the line ordinary fenced content.
+      if (char === "\n" || char === "\r") fence = null;
+      else fence.closing = null;
+    } else if (lineStart) {
+      // A fence line may be indented by up to three spaces; control markers stay column-zero only.
+      let runStart = index;
+      while (runStart < text.length && runStart - index < 3 && text[runStart] === " ") runStart += 1;
+      if (runStart === text.length) {
+        return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, fenceRun, lineStart };
+      }
+      const runChar = text[runStart];
+      if (runChar === "`" || runChar === "~") {
+        let runEnd = runStart + 1;
+        while (runEnd < text.length && text[runEnd] === runChar) runEnd += 1;
+        const runLength = runEnd - runStart;
+        // Track a chunk-ending fence run incrementally instead of holding its bytes in pending,
+        // keeping buffering O(1) and avoiding cross-channel stalls on long backtick/tilde runs.
+        if (runEnd === text.length && (!fence || (runChar === fence.char && runLength < fence.length))) {
+          fenceRun = { char: runChar, length: runLength };
+          index = runEnd;
+          lineStart = false;
+          continue;
+        }
+        if (!fence && runLength >= 3) {
+          fence = { char: runChar, length: runLength, closing: null, opening: runChar === "`" };
+          index = runEnd;
+          lineStart = false;
+          continue;
+        }
+        if (fence && runChar === fence.char && runLength >= fence.length) {
+          fence.closing = "run";
+          index = runEnd;
+          lineStart = false;
+          continue;
+        }
+        index = runEnd;
         lineStart = false;
         continue;
       }
-      if (fenceMarkers.some(marker => prefixAtEnd(text, index, marker))) {
-        return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
-      }
 
       if (!fence) {
-        if (startsWithFolded(text, index, DSML_CALLS_LINE)) {
-          const afterCalls = index + DSML_CALLS_LINE.length;
-          let invokeAt = -1;
-          if (text[afterCalls] === "\n") invokeAt = afterCalls + 1;
-          else if (text[afterCalls] === "\r" && text[afterCalls + 1] === "\n") invokeAt = afterCalls + 2;
-          else if (afterCalls === text.length || (text[afterCalls] === "\r" && afterCalls + 1 === text.length)) {
-            return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
-          }
-
-          if (invokeAt >= 0) {
-            const invokeNameStart = text[invokeAt + DSML_INVOKE_PREFIX.length];
-            if (startsWithFolded(text, invokeAt, DSML_INVOKE_PREFIX) && invokeNameStart && !/[\s"]/.test(invokeNameStart)) {
-              return { safe: text.slice(0, index), held: "", fail: true, fence, lineStart };
-            }
-            if (invokeAt === text.length || prefixAtEnd(text, invokeAt, DSML_INVOKE_PREFIX)) {
-              return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
-            }
-          }
-        } else if (prefixAtEnd(text, index, DSML_CALLS_LINE)) {
-          return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, lineStart };
+        const verdict = matchControlSequence(text, index);
+        if (verdict === "fail") return { safe: text.slice(0, index), held: "", fail: true, fence, fenceRun, lineStart };
+        if (verdict === "hold") {
+          return { safe: text.slice(0, index), held: text.slice(index), fail: false, fence, fenceRun, lineStart };
         }
       }
     }
@@ -113,14 +219,15 @@ function scan(
     lineStart = char === "\n";
   }
 
-  return { safe: text, held: "", fail: false, fence, lineStart };
+  return { safe: text, held: "", fail: false, fence, fenceRun, lineStart };
 }
 
-/** Streaming DSML control-sequence filter for one text or reasoning channel. */
+/** Streaming vendor control-sequence filter for one text or reasoning channel. */
 export class CodeBuddyScaffoldFilter {
   private pending = "";
   private failed = false;
-  private fence: "`" | "~" | null = null;
+  private fence: FenceState | null = null;
+  private fenceRun: FenceRunState | null = null;
   private lineStart = true;
 
   /** True while an earlier event owns an unresolved marker or fence prefix. */
@@ -142,9 +249,10 @@ export class CodeBuddyScaffoldFilter {
     }
 
     const priorPending = this.pending;
-    const result = scan(priorPending + chunk, this.fence, this.lineStart);
+    const result = scan(priorPending + chunk, this.fence, this.fenceRun, this.lineStart);
     this.pending = result.held;
     this.fence = result.fence;
+    this.fenceRun = result.fenceRun;
     this.lineStart = result.lineStart;
     this.failed = result.fail;
 

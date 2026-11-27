@@ -133,8 +133,11 @@ children. ARM64 is unsupported.
 It starts only an explicit drive-absolute `.exe` plus argv: `CreateProcessW(CREATE_SUSPENDED)`,
 assignment to a non-inheritable Job, then `ResumeThread`. Installer/verifier Jobs have a random
 global name and protected current-user DACL for durable read-only recovery; other Jobs stay unnamed.
-An existing named object refuses creation. Normal execution uses original handles; no PID reopen,
-shell, breakaway fallback, process-count limit or kill-on-close limit. Assignment/resume failures
+An existing named object refuses creation. Update invocations use original handles; no PID reopen,
+shell, breakaway fallback, process-count limit or kill-on-close limit (non-update callers such as the
+foreground advisory probe may opt into `killOnJobClose: true`, which pairs
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` with `PROC_THREAD_ATTRIBUTE_JOB_LIST` before `CreateProcessW`
+so assignment is atomic with process creation and no unassigned process can exist). Assignment/resume failures
 reap the original suspended primary before user code; failed termination retains an unknown owner.
 `STARTUPINFOEXW` and an explicitly rooted attribute buffer whitelist exactly the three owned,
 inheritable stdio handles with `bInheritHandles=TRUE`. Parent read/event/Job/process/thread handles

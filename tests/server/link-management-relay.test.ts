@@ -18,7 +18,7 @@ import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { linkStorePath } from "../../src/link/paths";
 import { writeLinkStore } from "../../src/link/store";
 import { parseHomeCodexSettingsDocument } from "../../src/link/codex-settings";
-import { LINK_MANAGEMENT_READ_PATHS } from "../../src/link/management-routes";
+import { LINK_MANAGEMENT_READ_PATHS, linkChildManagementRefusal } from "../../src/link/management-routes";
 import { hubRelayDigest, hubRelayEnrollmentProof } from "../../src/remote/hub-management-relay";
 import { admitHubRelayRead, HUB_RELAY_IDLE_TTL_MS, issueHubRelayCredential } from "../../src/server/hub-relay-auth";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -100,6 +100,15 @@ function opensForWrite(args: unknown[]): boolean {
   return !["r", "rs", "sr"].includes(String(flags));
 }
 
+test("a Windows Child's update refusal gives local-update guidance; other refusals and platforms are unchanged (#9172)", () => {
+  const win = linkChildManagementRefusal("Home home-mac", "lnk_0123456789abcdef", "GET /api/update/check", "win32");
+  expect(win).toContain("Remote Link Child managed by Home home-mac (link lnk_0123456789abcdef)");
+  expect(win).toContain("Remote updates aren't supported for this Windows device. Update OpenCodex directly on the Windows computer.");
+  expect(win).toContain("No request was sent.");
+  expect(win).not.toContain("runs on the Home");
+  expect(linkChildManagementRefusal("Home home-mac", "lnk_0123456789abcdef", "GET /api/update/check", "linux")).toContain("runs on the Home, not on this Child");
+  expect(linkChildManagementRefusal("Home home-mac", "lnk_0123456789abcdef", "PUT /api/settings", "win32")).toContain("runs on the Home, not on this Child");
+});
 test("the passive effect watcher classifies opens by their write capability", () => {
   const { O_RDONLY, O_NONBLOCK, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND } = fs.constants;
   for (const flags of [undefined, "r", "rs", "sr", O_RDONLY, O_RDONLY | O_NONBLOCK]) {

@@ -59,7 +59,7 @@ En el equipo que debe utilizar los proveedores de Home:
 
 La conexión se reinicia OpenCodex en este equipo. Codex turnos que ya se están ejecutando terminan primero, y las nuevas solicitudes pueden fallar hasta por un minuto mientras se reinicia. El tablero de instrumentos se recarga por sí mismo y muestra el enlace Child. Codex sigue usando `http://127.0.0.1:<port>/v1` en este equipo, sin token y sin variable de entorno para establecer: el local OpenCodex retransmite cada solicitud al Home, que le sirve con sus propios proveedores y cuentas.
 
-El Child espera su puerto configurado mientras el proceso anterior lo libera. Si aún falla un reinicio administrado CLI, ejecute `ocx start` en el Child y verifique `~/.opencodex/restart-handoff.log`. En la aplicación de escritorio, la aplicación inicia y supervisa el reemplazo automáticamente.
+El Child espera su puerto configurado mientras el proceso anterior lo libera. Si falla un reinicio gestionado por la CLI y no se puede restaurar la escucha anterior, OpenCodex informa del fallo de recuperación. Para recuperarlo, ejecute `ocx start` en el Child y verifique `~/.opencodex/restart-handoff.log`. En la aplicación de escritorio, la aplicación inicia y supervisa el reemplazo automáticamente. Al desconectar desde el panel, OpenCodex reintenta durante un máximo de 30 segundos si el bloqueo está ocupado. Si el bloqueo sigue ocupado, no se inicia el proceso independiente. Consulta `ocx status` y reinicia OpenCodex.
 
 Un `ocx stop` explícito en un Child de Remote Link detiene su proxy y, si se completa la restauración compartida, restaura el enrutamiento nativo de Codex, su catálogo y los metadatos respaldados del historial de reanudación, y elimina la configuración administrada de Grok. La conexión guardada con Home se conserva; usa `ocx disconnect` para eliminarla.
 
@@ -415,7 +415,7 @@ En un Home, cada fila de Remote Link lleva lo último que el Home aprendió sobr
 - `Catalog current` o `Catalog out of date`. `Codex restart needed (<n>)` y `Codex not running` solo aparecen cuando el Child informa de su estado de Codex, que añade una versión posterior; todavía ningún Child publicado lo envía, así que hoy esas dos insignias no aparecen.
 - la última operación, como `Last <operation>: <state>` con su razón en monoespaciada, y la que se está ejecutando mientras un trabajo ocupa el enlace.
 
-Cuando el Home no puede actualizar ese Child por sí mismo, la fila dice qué hacer en su lugar: use Check for Updates en OpenCodex Desktop allí, actualice a mano, mediante `mise`, o deje que GOAT lo haga. Una razón desconocida se imprime como un token en lugar de una frase supuesta.
+Cuando el Home no puede actualizar ese Child por sí mismo, la fila dice qué hacer en su lugar: use Check for Updates en OpenCodex Desktop allí, actualice a mano, mediante `mise`, o deje que GOAT lo haga. Un Child de Windows instalado con un gestor de paquetes no se puede actualizar desde el Home: su fila no ofrece **Update** e indica que actualice OpenCodex directamente en el equipo Windows, y el panel del propio Child da la misma indicación cuando busca actualizaciones allí. Si el Home no registró la plataforma de un Child que comprobó por última vez antes de este cambio, su fila tampoco ofrece **Update** y pide comprobar de nuevo ese Child; **Check** u `ocx link check` actualiza la fila. Una razón desconocida se imprime como un token en lugar de una frase supuesta.
 
 Las cuatro acciones inician el mismo trabajo que la CLI, así que necesitan las mismas versiones en el Child:
 

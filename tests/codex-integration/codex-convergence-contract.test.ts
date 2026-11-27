@@ -630,7 +630,8 @@ test("the route inventory retains every convergence path after separating subage
   const counts = Object.fromEntries([
     ["provider-routes.ts", 8],
     ["model-routes.ts", 16],
-    ["combo-routes.ts", 2],
+    // The durable revision conflict converges the catalog for adopted combos.
+    ["combo-routes.ts", 3],
     ["agent-settings-routes.ts", 1],
     ["subagent-model-routes.ts", 1],
   ].map(([file, expected]) => {
@@ -650,7 +651,7 @@ test("the route inventory retains every convergence path after separating subage
   expect(counts).toEqual({
     "provider-routes.ts": 8,
     "model-routes.ts": 16,
-    "combo-routes.ts": 2,
+    "combo-routes.ts": 3,
     "agent-settings-routes.ts": 1,
     "subagent-model-routes.ts": 1,
   });

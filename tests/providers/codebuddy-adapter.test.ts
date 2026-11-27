@@ -326,6 +326,171 @@ describe("codebuddy runTurn streams a headless turn", () => {
     expect(events).toEqual([expect.objectContaining({ type: "error", code: "vendor_scaffold_detected" })]);
   });
 
+  test("refuses DeepSeek native tool-call markup printed as text (#8447)", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({
+      type: "text_delta",
+      text: "Reading it.\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">\n"
+        + "<｜tool▁parameter name=\"file_path\" string=\"true\">/tmp/private-body",
+    });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: "Reading it.\n" },
+      expect.objectContaining({ type: "error", code: "vendor_scaffold_detected", retryable: false }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain("private-body");
+  });
+
+  test("holds DeepSeek native markup split across deltas until the invoke name arrives", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "text_delta", text: "Safe prefix.\n<｜tool▁" });
+    guarded({ type: "text_delta", text: "calls｜>\r\n<｜tool▁invoke name=\"" });
+    expect(events).toEqual([{ type: "text_delta", text: "Safe prefix.\n" }]);
+    guarded({ type: "text_delta", text: "Read\">private-body" });
+
+    expect(events.at(-1)).toEqual(expect.objectContaining({ type: "error", code: "vendor_scaffold_detected" }));
+    expect(JSON.stringify(events)).not.toContain("private-body");
+  });
+
+  test("delivers discussed, quoted and fenced DeepSeek markup unchanged", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+    const answer = "The tag <｜tool▁calls｜> opens a native call block.\n"
+      + "<｜tool▁calls｜>\nfollowed by prose, not an invoke line.\n"
+      + "> <｜tool▁calls｜>\n> <｜tool▁invoke name=\"Read\">\n"
+      + "```text\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">\n```\n"
+      + "<｜tool▁calls｜>\n<｜tool▁invoke name=\"\">";
+
+    guarded({ type: "text_delta", text: answer });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: answer },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("keeps a longer fence open across an inner shorter fence line", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+    const answer = "````md\n```\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">\n```\n````\n";
+
+    guarded({ type: "text_delta", text: answer });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: answer },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("does not close a fence on a fence-like line with trailing text", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+    const answer = "```text\n```not a close\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">\n```\n";
+
+    guarded({ type: "text_delta", text: answer });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: answer },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("refuses markup after a long fence closes on a matching line split across deltas", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "text_delta", text: "````\n```\n``" });
+    guarded({ type: "text_delta", text: "``  \n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">private-body" });
+
+    expect(events.at(-1)).toEqual(expect.objectContaining({ type: "error", code: "vendor_scaffold_detected" }));
+    expect(JSON.stringify(events)).not.toContain("private-body");
+  });
+
+  test("refuses markup after a closing fence indented by up to three spaces", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "text_delta", text: "````\ncode\n " });
+    guarded({ type: "text_delta", text: "  ````\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">private-body" });
+
+    expect(events.at(-1)).toEqual(expect.objectContaining({ type: "error", code: "vendor_scaffold_detected" }));
+    expect(JSON.stringify(events)).not.toContain("private-body");
+  });
+
+  test.each([
+    ["DSML", "<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"exec\">"],
+    ["DeepSeek native", "<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">"],
+  ])("refuses %s markup after an inline code span that looks like a fence opener", (_name, markup) => {
+    for (const deltas of [[` \`\`\`example\`\`\`\n${markup}private-body`], [" ```exam", `ple\`\`\`\n${markup}private-body`]]) {
+      const events: AdapterEvent[] = [];
+      const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+      for (const text of deltas) guarded({ type: "text_delta", text });
+
+      expect(events.at(-1)).toEqual(expect.objectContaining({ type: "error", code: "vendor_scaffold_detected" }));
+      expect(JSON.stringify(events)).not.toContain("private-body");
+    }
+  });
+
+  test("keeps a backtick fence with a valid info string open", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+    const answer = " ```md title=\"x\"\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">\n```\n"
+      + "~~~md `x`\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">\n~~~\n";
+
+    guarded({ type: "text_delta", text: answer });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "text_delta", text: answer },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("keeps a fence open when its opener is split across deltas", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+    const first = "```";
+    const second = "`md\n```\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">\n````\n";
+
+    guarded({ type: "text_delta", text: first });
+    guarded({ type: "text_delta", text: second });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events.some(event => event.type === "error")).toBe(false);
+    expect(events.map(event => event.type === "text_delta" ? event.text : "").join("")).toBe(first + second);
+  });
+
+  test("releases streamed fence runs incrementally without buffering or stalling the other channel", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "text_delta", text: "``" });
+    guarded({ type: "thinking_delta", thinking: "checking" });
+    guarded({ type: "text_delta", text: "``" });
+    expect(events).toEqual([
+      { type: "text_delta", text: "``" },
+      { type: "thinking_delta", thinking: "checking" },
+      { type: "text_delta", text: "``" },
+    ]);
+
+    guarded({ type: "text_delta", text: "md\n```\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">\n" });
+    guarded({ type: "text_delta", text: "``" });
+    guarded({ type: "thinking_delta", thinking: "closing" });
+    expect(events.at(-1)).toEqual({ type: "thinking_delta", thinking: "closing" });
+
+    guarded({ type: "text_delta", text: "``\n<｜tool▁calls｜>\n<｜tool▁invoke name=\"Read\">private-body" });
+    expect(events.at(-1)).toEqual(expect.objectContaining({ type: "error", code: "vendor_scaffold_detected" }));
+    expect(JSON.stringify(events)).not.toContain("private-body");
+  });
+
   test("holds a bare invoke prefix split across deltas until its name arrives", () => {
     const events: AdapterEvent[] = [];
     const guarded = guardCodeBuddyScaffolding(event => events.push(event));

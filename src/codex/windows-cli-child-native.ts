@@ -4,7 +4,7 @@ import { dlopen, ptr, read, type Library, type Symbols } from "bun:ffi";
 export const WIN64_CHILD_ABI = Object.freeze({ securityAttributes: 24, securityDescriptor: 8, inheritHandle: 16,
   startupInfo: 104, startupInfoEx: 112, startupFlags: 60, stdin: 80, stdout: 88, stderr: 96, attributes: 104,
   processInformation: 24, process: 0, thread: 8, pid: 16, tid: 20,
-  overlapped: 32, event: 24, jobAccounting: 48, activeProcesses: 40 });
+  overlapped: 32, event: 24, jobAccounting: 48, activeProcesses: 40, jobExtendedLimit: 144, jobLimitFlags: 16 });
 const KERNEL = {
   GetLastError: { args: [], returns: "u32" },
   SetLastError: { args: ["u32"], returns: "void" },
@@ -13,6 +13,7 @@ const KERNEL = {
   GetCurrentProcess: { args: [], returns: "u64" },
   CompareStringOrdinal: { args: ["ptr", "i32", "ptr", "i32", "i32"], returns: "i32" },
   CreateJobObjectW: { args: ["ptr", "ptr"], returns: "u64" },
+  SetInformationJobObject: { args: ["u64", "i32", "ptr", "u32"], returns: "i32" },
   AssignProcessToJobObject: { args: ["u64", "u64"], returns: "i32" },
   QueryInformationJobObject: { args: ["u64", "i32", "ptr", "u32", "ptr"], returns: "i32" },
   TerminateJobObject: { args: ["u64", "u32"], returns: "i32" },

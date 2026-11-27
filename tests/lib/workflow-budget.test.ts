@@ -575,7 +575,9 @@ describe("a refusal an operator can read, name and clear (#4546)", () => {
       await Bun.file(repoPath("src/server/admitted-http-turn.ts")).text(),
     ].join("\n");
     const callSites = source.match(/return runAdmittedHttpTurn\(/g) ?? [];
-    const threaded = source.match(/, \{ requestId, start, logCtx \}\);/g) ?? [];
+    // A call site may pass per-route turn options after the log context (the video route marks
+    // existing-job reads); the log context is still threaded.
+    const threaded = source.match(/, \{ requestId, start, logCtx \}(?:, \{[^{}]*\})?\);/g) ?? [];
     expect(callSites.length).toBeGreaterThan(1);
     // Exactly one surface has no log context to thread: /v1/messages/count_tokens opens no
     // request-log row at all. Every other one must, or a refusal there leaves no trace.

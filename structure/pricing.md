@@ -32,6 +32,29 @@ when the submitted base rates equal the old baseline. Unrelated saves still adop
 the replacement row, so a base-rate edit never silently drops a Flat or Custom policy; its receipt
 must echo the same policy, with absent and `automatic` treated as equal.
 
+## Ultrafast
+
+`ULTRAFAST_PRICING_RULES` in `src/usage/expected-prices.ts` records OpenAI's published Ultrafast
+schedule for the `openai` and `openai-apikey` routes: GPT-6.2 Astra and Sol at 3x Standard
+before 2027-03-01 00:00 Pacific (`GPT62_ULTRAFAST_6X_FROM_MS`) and 6x from then on, GPT-6 Astra
+and GPT-6.1 Sol at 6x. The multiplier scales every token bucket. `src/usage/cost.ts` selects the
+step from `ServiceTierContext.pricedAt`, which `serviceTierContext()` takes from the logged row's
+`timestamp`, so Logs (`costResult` in `src/server/management/shared.ts`) and usage totals
+(`computeEntryCost` in `src/usage/summary.ts`) price a row by its own request time; without a
+timestamp the current time applies.
+
+Evidence is read per attempt from its own tier-outcome record, strongest first; a scalar tier copied from a parent row or the request context never selects Ultrafast, and the context contributes only the timestamp. An authoritative response tier decides: an
+Ultrafast echo is `confirmed`, any other tier keeps Standard. An explicit `response-declined`
+refusal keeps Standard. Otherwise an attempt whose adapter serialized `service_tier: ultrafast`
+(`wireKind: "service-tier"`) is priced as `transmitted`: the estimate is marked `estimated` and
+Logs shows the `service_tier_transmitted` reason. A tier the caller only requested never selects
+the Ultrafast price. A long-context band stacks only where the catalog rule declares `stack`;
+otherwise the Standard long-context price is reported with `priorityLowerBound`. Estimates carry
+`serviceTierPricing` with the tier, multiplier and basis. When the Ultrafast rate prices an attempt it
+replaces the Priority premium instead of stacking on it, including a canonical `priority` outcome
+that a `fastWire` mapping serialized as `ultrafast`. `tests/usage/usage-ultrafast-pricing.test.ts`
+pins the schedule boundary, the evidence order, mixed routes, the single premium and both read paths.
+
 ## Dialog and estimates
 
 `gui/src/components/ModelPriceDialog.tsx` edits base rates plus Automatic, Flat rate or Custom

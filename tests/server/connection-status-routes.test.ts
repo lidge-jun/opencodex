@@ -7,7 +7,8 @@
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -313,12 +314,58 @@ describe("security bounds", () => {
     expect(row).toMatchObject({ observed: "unknown", owner: "unknown", driftReasons: [] });
   });
 
+  test("the connection and preview routes inspect ordinary settings through bounded file descriptors", async () => {
+    const extra = join(root, "extra-read");
+    const settings = [claudeHome, extra].map(dir => {
+      mkdirSync(dir, { recursive: true });
+      const path = join(dir, "settings.json");
+      writeFileSync(path, "{}");
+      return path;
+    });
+    const config = baseConfig({ claudeCode: { extraConfigDirs: [extra] } } as Partial<OcxConfig>);
+    const opens = spyOn(fs, "openSync");
+    const reads = spyOn(fs, "readFileSync");
+    try {
+      const views = await connections(config);
+      expect(views.find(row => row.homeSource === "extra")?.observed).toBe("native");
+      for (const path of settings) expect(opens.mock.calls.some(([file]) => file === path)).toBe(true);
+      opens.mockClear();
+      const preview = await dispatch(config, "/api/claude-code/first-party/preview?enabled=false");
+      expect(preview!.status).toBe(200);
+      expect(opens.mock.calls.some(([file]) => file === settings[0])).toBe(true);
+      expect(reads.mock.calls.some(([file]) => settings.some(path => path === file))).toBe(false);
+    } finally {
+      reads.mockRestore();
+      opens.mockRestore();
+    }
+  });
+
+  test.skipIf(process.platform === "win32")("a symlinked regular settings.json keeps Claude-compatible routing", async () => {
+    const extra = join(root, "linked-home");
+    const target = join(root, "linked-settings.json");
+    mkdirSync(extra, { recursive: true });
+    writeFileSync(target, JSON.stringify({ env: {
+      HTTPS_PROXY: "http://proxy.corp:8080", NODE_EXTRA_CA_CERTS: "/corp/ca.pem",
+    } }));
+    symlinkSync(target, join(extra, "settings.json"));
+    const config = baseConfig({ claudeCode: { extraConfigDirs: [extra] } } as Partial<OcxConfig>);
+    const row = (await connections(config)).find(view => view.homeSource === "extra")!;
+    expect(row).toMatchObject({ observed: "foreign", owner: "external", driftReasons: [] });
+  });
+
   test("an oversized default settings.json makes the preview refuse instead of reading it", async () => {
     mkdirSync(claudeHome, { recursive: true });
     writeFileSync(join(claudeHome, "settings.json"), `{"pad":"${"x".repeat(1024 * 1024 + 16)}"}`);
     const response = await dispatch(baseConfig(), "/api/claude-code/first-party/preview?enabled=true");
     expect(response!.status).toBe(500);
     expect(await response!.json()).toMatchObject({ code: "unreadable" });
+    mkdirSync(join(root, "library"), { recursive: true });
+    const pinnedViews = await connections(baseConfig({ claudeCode: { desktopMode: "first-party" } }));
+    expect(pinnedViews.find(row => row.client === "claude-desktop")).toMatchObject({ observed: "unknown", owner: "unknown" });
+    const unpinnedViews = await connections(baseConfig());
+    expect(unpinnedViews.find(row => row.client === "claude-desktop")).toMatchObject({ observed: "unknown", owner: "unknown", driftReasons: [] });
+    const pinnedGatewayViews = await connections(baseConfig({ claudeCode: { desktopMode: "gateway" } }));
+    expect(pinnedGatewayViews.find(row => row.client === "claude-desktop")).toMatchObject({ observed: "native", owner: "none" });
   });
 
   test("registered homes are capped", async () => {

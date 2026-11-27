@@ -27,6 +27,8 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # yerel slug'lar öneksiz kalır
 ```
 
+Öneksiz yerel OpenAI `gpt-*` satırları yalnızca kanonik `openai` sağlayıcısı etkinken ve Codex Direct modunda değilken görünür; Codex Direct modu açıkken kullanılabilir hesap nitelikli `<namespace>/gpt-*` satırları dışa aktarımda korunur. Direct modu her çağıranın kendi OpenAI kimlik bilgisini iletirken opencode proxy'nin anahtarını gönderir ve devre dışı bir `openai` sağlayıcısı proxy'nin öneksiz tüm `gpt-*` seçicilerini reddetmesine yol açar; her iki durumda da başlatıcı, yönetilen entegrasyon ve `ocx export` çalıştırılamayan bir model sunmak yerine öneksiz `gpt-*` satırlarını atlar.
+
 ## Kendi yapılandırmanız asla değiştirilmez
 
 Başlatıcı `~/.config/opencode/opencode.json`, proje `opencode.json` /

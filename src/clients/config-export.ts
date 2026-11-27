@@ -897,9 +897,27 @@ export function buildOpencodeProviderBlockFromCatalog(
  * opencode's decision, not a consequence of where we write it. Both blocks are generated in
  * one pass so they cannot disagree about the model set, the names, or the connection.
  */
+export { filterDirectModeBareNative, isBareNativeRow } from "./config-export/contracts";
+import { filterDirectModeBareNative, isBareNativeRow } from "./config-export/contracts";
+
 function buildOpencodeClientConfig(ctx: ExportContext): OpencodeGeneratedConfig {
-  const models = normalizeExportModels(ctx.models);
   const config = ctx.config ?? OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG;
+  // Codex Direct forwards each caller's own bearer, while opencode sends the proxy's
+  // admission key, so a *bare* native row could only ever answer 401. Pi, DSH and the
+  // CLI's `ocx export` already drop those rows in that mode; the managed integration is
+  // the same client surface and has to agree, or a managed apply would list models that
+  // fail when selected. `ctx.config` is undefined for a caller that has no live config,
+  // and Direct cannot be claimed without one.
+  //
+  // Account-qualified rows (`<namespace>/<gpt-*>`), which also carry `native: true`, are
+  // deliberately kept: `routeModelInternal` assigns `codexAccountMode: "pool"` with the
+  // namespace's fixed account. Non-main namespaces always resolve to that exact stored pool
+  // account regardless of any caller bearer; the `__main__` namespace resolves to the stored
+  // `main-pool` credential for proxy-key / loopback clients (no caller-owned Codex JWT), while
+  // callers carrying their own Codex JWT preserve their existing caller-owned `main` context
+  // (`src/codex/auth-context.ts`). In both cases these rows remain servable in Direct mode.
+  const models = normalizeExportModels(ctx.models).filter(model =>
+    !(isBareNativeRow(model, config) && providerCodexAccountMode("openai", config.providers?.openai) === "direct"));
   const blocks = opencodeProviderBlocks(ctx.baseUrl, models, config, { keylessInference: ctx.keylessInference === true });
   return {
     $schema: OPENCODE_CONFIG_SCHEMA,
@@ -929,10 +947,10 @@ export interface PiProviderCompat {
 interface PiExportOptions {
   sendSessionAffinityHeaders?: boolean;
   /**
-   * Drop native OpenAI rows when the serving proxy runs Codex Direct (`codexAccountMode: direct`).
-   * Direct mode forwards the caller's own bearer, and Pi sends the loopback placeholder key, so a
-   * native row would only ever answer 401. The CLI-built Pi export omitted them before the export
-   * moved onto the serving proxy's roster (#8172); this keeps that behaviour.
+   * Drop bare native OpenAI `gpt-*` rows when the serving proxy runs Codex Direct
+   * (`codexAccountMode: direct`). Defaults to `true` because every client built by
+   * `buildPiClientConfig` (Pi, Prime, Aside, omo, Gentle Shell) sends the loopback placeholder
+   * key rather than a caller-owned OpenAI bearer, so a bare native row would answer 401.
    */
   omitNativeInCodexDirect?: boolean;
   /**
@@ -1112,10 +1130,10 @@ export interface GajaeGeneratedConfig {
 function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}): PiGeneratedConfig {
   const models: PiModelEntry[] = [];
   const roster = options.rawNestedModelIds ? selectNestedSelectors(ctx.models) : ctx.models;
-  const omitNative = options.omitNativeInCodexDirect === true
+  const omitBareNative = options.omitNativeInCodexDirect !== false
     && providerCodexAccountMode("openai", ctx.config?.providers?.openai) === "direct";
   for (const model of normalizeExportModels(roster)) {
-    if (omitNative && model.native === true) continue;
+    if (omitBareNative && isBareNativeRow(model, ctx.config)) continue;
     // Text is the one modality every routed model supports; anything richer must come
     // from the catalog rather than an assumption — and must still be inside the enum
     // Pi accepts, because one rejected value empties the whole config.
@@ -1282,7 +1300,7 @@ function buildKimiClientConfig(ctx: ExportContext): KimiGeneratedConfig {
 
 function buildGajaeClientConfig(ctx: ExportContext): GajaeGeneratedConfig {
   const models: GajaeModelEntry[] = [];
-  for (const model of normalizeExportModels(ctx.models)) {
+  for (const model of normalizeExportModels(filterDirectModeBareNative(ctx.models, ctx.config))) {
     // Gajae's enum is text|image and it rejects the whole file over one bad
     // value, naming the offending index in the error.
     const input = inputModalitiesForClient("gajae", model.inputModalities);

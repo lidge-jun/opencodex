@@ -1,5 +1,5 @@
 // DSH config export.
-import type { ExportModel, ExportContext, ManagedContribution } from "./contracts";
+import { isBareNativeRow, type ExportModel, type ExportContext, type ManagedContribution } from "./contracts";
 import type { OcxConfig } from "../../types";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { normalizeExportModels, authoritativeContextWindow, exportModelLabel, knownOutputBudget, singleFragment } from "./model-metadata";
@@ -97,7 +97,7 @@ export function buildDshClientConfig(ctx: ExportContext): DshGeneratedConfig {
   const direct = providerCodexAccountMode("openai", ctx.config?.providers?.openai) === "direct";
   const models: DshModelEntry[] = [];
   for (const model of normalizeExportModels(ctx.models)) {
-    if (direct && (model.native === true || model.provider === "openai")) continue;
+    if (direct && (isBareNativeRow(model, ctx.config) || (model.native !== true && model.provider === "openai"))) continue;
     if (direct && model.provider === "combo" && (!ctx.config || !isKnownSafeDshCombo(model, ctx.config))) continue;
     const input = dshInputModalities(model.inputModalities);
     if (input === null) continue;

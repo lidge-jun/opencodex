@@ -30,13 +30,17 @@ import { recordAttemptRequestedEffort } from "../request-log";
 import { bindLinkTurnChild, failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion } from "../link-turn";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
-  deriveRequestExecutionBudget,
   isRequestExecutionBudget,
 } from "../../lib/request-execution-budget";
 import type {
   RequestExecutionBudgetPolicy,
   RequestExecutionBudget,
 } from "../../lib/request-execution-budget";
+import { deriveSendBudgetScope } from "./combo-send-budget-scope";
+// The wrapper this PR extracted used to export `deriveSendBudgetScope` from this module;
+// the re-export keeps every existing named import of it working while internal calls
+// read the extracted implementation (#9163 review: preserve public exports).
+export { deriveSendBudgetScope } from "./combo-send-budget-scope";
 import type { OcxComboDefaultEffort, OcxConfig, OcxUsage } from "../../types";
 import type { RequestLogContext } from "../request-log";
 import type { HandleResponsesOptions, ResponsesDispatchers, ConsumedComboFailure } from "./core-options";
@@ -201,33 +205,6 @@ export function comboExecutionBudgetPolicy(declaredTargets: number): RequestExec
     maxAlternateTargetSends: Math.max(1, hops),
     maxTargetTransitions: Math.max(1, hops),
   };
-}
-
-
-/**
- * A budget scope that keeps its own recovery ledgers but spends the SAME request-wide counter.
- *
- * The sharing has to happen inside the factory. Redefining `used` as an accessor onto the parent
- * only shared what callers read from the outside: `remainingBaseSends`, the total check and the
- * reserve test all consult the factory's own private counter, which an overridden property
- * cannot reach. Each derived scope therefore admitted dispatches as though the request had spent
- * nothing, and the per-target holdback below -- expressed against `maxTotalModelSends` -- had
- * nothing to hold back from.
- *
- * `deriveRequestExecutionBudget` binds the scope to the parent's real ledger, including pending
- * externally-counted bookings and the durable-spend observer, all of which must travel together.
- * A pending booking is a send already counted in the total and waiting for its reporter, and the
- * observer books by watching that same counter move (#4707) -- so a scope that spent the counter
- * without carrying the observer would move it without booking, and this combo's child sends
- * would go missing from the spend ledger. The reserve, alternate-target and transition ledgers
- * stay per-scope on purpose: a combo target's account failover is its own recovery decision,
- * while the request total still bounds every target together.
- */
-export function deriveSendBudgetScope(
-  parent: RequestExecutionBudget,
-  policy: RequestExecutionBudgetPolicy,
-): RequestExecutionBudget {
-  return deriveRequestExecutionBudget(parent, policy);
 }
 
 
@@ -1748,6 +1725,7 @@ export async function executeComboResponses(
         malformedResponseFormat: failure.malformedResponseFormat,
         openRouterOpaque400: failure.openRouterOpaque400,
         unofferedToolCallRefusal: failure.unofferedToolCallRefusal,
+        undeclaredToolCallRefusal: failure.undeclaredToolCallRefusal,
         providerModerationRefusal: failure.providerModerationRefusal,
         providerIntakeRefusal: failure.providerIntakeRefusal,
         // The adapter the failed leg actually resolved: a configured `kiro` provider can route a
@@ -1836,6 +1814,7 @@ export async function executeComboResponses(
       malformedResponseFormat: failure.malformedResponseFormat,
       openRouterOpaque400: failure.openRouterOpaque400,
       unofferedToolCallRefusal: failure.unofferedToolCallRefusal,
+      undeclaredToolCallRefusal: failure.undeclaredToolCallRefusal,
       providerModerationRefusal: failure.providerModerationRefusal,
     });
     const failedTargetKey = targetKey(pick.target);

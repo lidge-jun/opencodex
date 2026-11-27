@@ -5,6 +5,7 @@ import { noteRelaySyntheticTail, noteRequestSentValueGuard } from "../request-lo
 import { createSentValueGuard } from "../../lib/outbound-credential-registry";
 import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { markProxyError, rememberProxyErrorMessage, carryProxyError } from "../../lib/client-error-body";
+import { markUndeclaredToolGuardRefusal } from "../../lib/errors";
 import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
@@ -995,7 +996,10 @@ export async function deliverPassthroughResponse(
             declaredBareWireToolNames,
             recoverableBareCustomWireToolNames,
             { refuseUndeclared: nativeExchange.undeclaredToolGuardActive,
-              onRefusal: message => rememberProxyErrorMessage(logCtx, message, { status: 502, type: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE }) },
+              onRefusal: message => {
+                markUndeclaredToolGuardRefusal(logCtx);
+                rememberProxyErrorMessage(logCtx, message, { status: 502, type: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE });
+              } },
           )
           : undefined,
         grokUpstreamEchoEnabled
@@ -1545,6 +1549,11 @@ export async function deliverPassthroughResponse(
           }
         })();
         if (undeclared !== undefined) {
+          // Mirror the SSE refusal path's provenance: the buffered JSON branch never runs the
+          // block rewrite, so without this mark `consumeComboFailure` cannot grant the hop and
+          // a healthy combo target would take a cooldown it must not (#9163).
+          markUndeclaredToolGuardRefusal(logCtx);
+          rememberProxyErrorMessage(logCtx, undeclaredToolCallMessage(), { status: 502, type: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE });
           return markProxyError(formatErrorResponse(502, "upstream_error", undeclaredToolCallMessage(), {
             code: UNDECLARED_TOOL_CALL_ERROR_CODE,
           }));

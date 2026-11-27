@@ -864,6 +864,45 @@ export const PRIORITY_PRICING_RULES: readonly PriorityPricingRule[] = [
   })),
 ];
 
+/**
+ * Ultrafast (#9138): a published multiple of the Standard rate, uniform across fresh input, cached
+ * input, cache writes and output. GPT-6.2 Astra and Sol cost 3x through 2027-02-28 and 6x from
+ * 2027-03-01, both in Pacific time; GPT-6 Astra and GPT-6.1 Sol are 6x. Login and API-key routes
+ * share the API-equivalent value, as for Standard and Fast.
+ */
+export interface UltrafastPricingRule {
+  provider: string;
+  modelId: string;
+  /** Ordered steps; a step applies to requests before its `untilMs`, the last step has none. */
+  schedule: readonly { untilMs?: number; multiplier: number }[];
+  source: string;
+  verifiedAt: string;
+}
+
+const OPENAI_ULTRAFAST_PRICING = "https://developers.openai.com/api/docs/pricing?latest-pricing=ultrafast";
+/** 2027-03-01 00:00 PST (UTC-8): Daylight saving time starts later that month. */
+export const GPT62_ULTRAFAST_6X_FROM_MS = Date.UTC(2027, 2, 1, 8);
+
+export const ULTRAFAST_PRICING_RULES: readonly UltrafastPricingRule[] = ["openai", "openai-apikey"].flatMap(provider => [
+  ...["gpt-6.2-astra", "gpt-6.2-sol"].map((modelId): UltrafastPricingRule => ({
+    provider, modelId, schedule: [{ untilMs: GPT62_ULTRAFAST_6X_FROM_MS, multiplier: 3 }, { multiplier: 6 }],
+    source: OPENAI_ULTRAFAST_PRICING, verifiedAt: "2026-11-28",
+  })),
+  ...["gpt-6-astra", "gpt-6.1-sol"].map((modelId): UltrafastPricingRule => ({
+    provider, modelId, schedule: [{ multiplier: 6 }], source: OPENAI_ULTRAFAST_PRICING, verifiedAt: "2026-11-28",
+  })),
+]);
+
+/** The Ultrafast multiplier for an exact provider/model at a request time, or undefined when unpublished. */
+export function ultrafastPriceMultiplier(
+  provider: string,
+  modelId: string,
+  atMs: number,
+  rules: readonly UltrafastPricingRule[] = ULTRAFAST_PRICING_RULES,
+): number | undefined {
+  const rule = rules.find(candidate => candidate.provider === provider && candidate.modelId === modelId);
+  return rule?.schedule.find(step => step.untilMs === undefined || atMs < step.untilMs)?.multiplier;
+}
 /** Exact provider/model priority-pricing lookup. */
 export function findPriorityPricingRule(
   provider: string,

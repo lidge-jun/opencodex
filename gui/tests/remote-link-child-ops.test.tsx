@@ -841,3 +841,23 @@ test("a reload merges only the fields the operator changed onto the server's ans
   await click(button(host, "Save"));
   expect(calls.filter(call => call.method === "PUT").at(-1)?.body).toEqual({ catalogFanout: "manual" });
 });
+
+test("a Windows npm Child behind Home shows local-update guidance and no Update action (#9172)", async () => {
+  installFetch(() => response(status([
+    row("lnk_0000000000000011", "box-win", childBlock({ update: { route: "owner-action", reason: "windows-apply", observedAt: "2026-11-12T00:00:00.000Z" } })),
+  ])));
+  const host = await mount();
+  const badges = host.querySelector(".remote-link-child-badges")!;
+  expect(badges.textContent).toContain("Behind Home (2.35.0)");
+  expect(badges.textContent).not.toContain("Update available");
+  expect(badges.textContent).toContain("Remote updates aren’t supported for this Windows device. Update OpenCodex directly on the Windows computer.");
+  // The sentence wraps instead of truncating, so it is readable without hovering.
+  const guidance = [...badges.querySelectorAll(".startup-badge")].find(badge => badge.textContent?.startsWith("Remote updates"))!;
+  expect(guidance.className).toContain("whitespace-normal");
+  expect(guidance.querySelector(".truncate")).toBeNull();
+  const firstRow = host.querySelectorAll(".remote-link-row")[0]!;
+  const update = [...firstRow.querySelectorAll("button")].find(item => item.textContent === "Update");
+  expect((update as HTMLButtonElement).disabled).toBe(true);
+  expect(update!.getAttribute("title")).toBe("Remote updates aren’t supported for this Windows device. Update OpenCodex directly on the Windows computer.");
+  expect(button(host, "Update all").disabled).toBe(true);
+});

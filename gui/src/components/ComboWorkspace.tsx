@@ -89,11 +89,12 @@ export default function ComboWorkspace({
     () => combos.flatMap((combo) => combo.alias ? [combo.alias] : []),
     [combos],
   );
-  const activeId = selectedId && combos.some((c) => c.id === selectedId) ? selectedId : null;
-  const selected = combos.find((c) => c.id === activeId) ?? null;
+  const [lastSelected, setLastSelected] = useState<ComboItem | null>(null);
+  const [detailDirty, setDetailDirty] = useState(false);
+  const activeId = selectedId && (combos.some((c) => c.id === selectedId) || (detailDirty && lastSelected?.id === selectedId)) ? selectedId : null;
+  const selected = combos.find((c) => c.id === activeId) ?? (detailDirty && lastSelected?.id === activeId ? lastSelected : null);
   const baseline = selected && localBaseline?.source === selected ? localBaseline.item : selected;
 
-  const [detailDirty, setDetailDirty] = useState(false);
   const mainRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLElement>(null);
   const previousSelection = useRef<string | null>(null);
@@ -284,7 +285,8 @@ export default function ComboWorkspace({
             }}
             onRequestRemove={() => setRemoveId(baseline.id)}
             onSave={onSave}
-            onDirtyChange={setDetailDirty}
+            onDirtyChange={(dirty) => { setDetailDirty(dirty); if (dirty) setLastSelected(selected); }}
+            storedRemoved={!combos.some((c) => c.id === baseline.id)}
           />
         ) : creatingFirstCombo ? (
           <DetailPanel
