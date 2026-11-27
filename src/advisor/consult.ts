@@ -343,6 +343,8 @@ export async function consultAdvisor(
         if (chunkUsage) streamUsage = chunkUsage;
       };
       const processSseLine = (line: string) => {
+        // [DONE] ends the stream: anything after it is ignored however the transport chunked it.
+        if (sawDone) return;
         if (line === "") { dispatchSseEvent(); return; }
         if (line.startsWith(":")) return;
         const colon = line.indexOf(":");

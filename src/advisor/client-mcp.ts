@@ -559,25 +559,24 @@ export function advisorHookCommand(hookScriptPath: string): string {
   return shellQuote(hookScriptPath);
 }
 
-/** Only the exact command OpenCodex registers (or the unquoted path an earlier build wrote) is owned; a same-named user hook is not. */
-function isAdvisorHookItem(item: unknown, hookScriptPath: string): boolean {
-  return isPlainObject(item)
-    && typeof item.command === "string"
-    && (item.command === advisorHookCommand(hookScriptPath) || item.command === hookScriptPath);
+/** A hook item running exactly this command. */
+function isHookItemWithCommand(item: unknown, command: string): boolean {
+  return isPlainObject(item) && typeof item.command === "string" && item.command === command;
 }
 
+/** Whether any group runs the Advisor hook command for this script path (used for status only). */
 function entryMatchesAdvisorHook(entry: unknown, hookScriptPath: string): boolean {
   if (!isPlainObject(entry) || !Array.isArray(entry.hooks)) return false;
-  return entry.hooks.some(item => isAdvisorHookItem(item, hookScriptPath));
+  return entry.hooks.some(item => isHookItemWithCommand(item, advisorHookCommand(hookScriptPath)));
 }
 
 /**
- * Strip only OpenCodex Advisor hook commands from each hook group, preserving all sibling
+ * Strip only hook items running `command` from each hook group, preserving all sibling
  * commands and group metadata. Drops a group only when its `hooks` array becomes empty.
  */
-function stripAdvisorHooksFromEntries(
+function stripHookCommandFromEntries(
   entries: readonly unknown[],
-  hookScriptPath: string,
+  command: string,
 ): { next: unknown[]; changed: boolean } {
   const next: unknown[] = [];
   let changed = false;
@@ -586,7 +585,7 @@ function stripAdvisorHooksFromEntries(
       next.push(entry);
       continue;
     }
-    const remaining = entry.hooks.filter(item => !isAdvisorHookItem(item, hookScriptPath));
+    const remaining = entry.hooks.filter(item => !isHookItemWithCommand(item, command));
     if (remaining.length === entry.hooks.length) {
       next.push(entry);
       continue;
@@ -597,6 +596,66 @@ function stripAdvisorHooksFromEntries(
     }
   }
   return { next, changed };
+}
+
+/**
+ * Hook registrations OpenCodex wrote, per client: the hook config file and the exact command. A matching command
+ * OpenCodex did not record is the user's registration and is never rewritten or removed, like an unrecorded MCP entry.
+ */
+const ADVISOR_HOOK_OWNERSHIP_FILE = "advisor-hook-registrations.json";
+type OwnedHookRegistrations = Record<string, { hookConfigPath: string; command: string }>;
+
+function readOwnedHookRegistrations(configDir: string): OwnedHookRegistrations {
+  try {
+    const parsed = JSON.parse(readFileSync(join(configDir, ADVISOR_HOOK_OWNERSHIP_FILE), "utf8")) as unknown;
+    if (!isPlainObject(parsed)) return {};
+    const owned: OwnedHookRegistrations = {};
+    for (const [clientId, value] of Object.entries(parsed)) {
+      if (isPlainObject(value) && typeof value.hookConfigPath === "string" && typeof value.command === "string") {
+        owned[clientId] = { hookConfigPath: value.hookConfigPath, command: value.command };
+      }
+    }
+    return owned;
+  } catch {
+    return {};
+  }
+}
+
+function writeOwnedHookRegistrations(configDir: string, owned: OwnedHookRegistrations): void {
+  mkdirSync(configDir, { recursive: true, mode: 0o700 });
+  atomicWriteFile(join(configDir, ADVISOR_HOOK_OWNERSHIP_FILE), `${JSON.stringify(owned, null, 2)}\n`);
+}
+
+function hookRecordedAt(owned: OwnedHookRegistrations, hookConfigPath: string, command: string, exceptClient?: string): boolean {
+  const target = canonicalClientPath(hookConfigPath);
+  return Object.entries(owned).some(([clientId, record]) =>
+    clientId !== exceptClient && record.command === command && canonicalClientPath(record.hookConfigPath) === target);
+}
+
+/** Remove a recorded hook command from one hook config file. */
+function removeHookCommand(
+  spec: ClientSpec,
+  configDir: string,
+  hookConfigPath: string,
+  command: string,
+  syncRoutingFingerprint: boolean,
+): boolean {
+  const read = readJsonObject(hookConfigPath);
+  if (read.parseError || !read.doc || !isPlainObject(read.doc.hooks)) return false;
+  const hooks = { ...read.doc.hooks };
+  if (!Array.isArray(hooks.UserPromptSubmit)) return false;
+  const { next: nextArr, changed } = stripHookCommandFromEntries(hooks.UserPromptSubmit, command);
+  if (!changed) return false;
+  backupOnceBeforeEdit(configDir, spec.id, hookConfigPath, read.text);
+  if (nextArr.length === 0) delete hooks.UserPromptSubmit;
+  else hooks.UserPromptSubmit = nextArr;
+  const nextDoc = { ...read.doc };
+  if (Object.keys(hooks).length === 0) delete nextDoc.hooks;
+  else nextDoc.hooks = hooks;
+  const nextText = `${JSON.stringify(nextDoc, null, 2)}\n`;
+  atomicWriteFile(hookConfigPath, nextText);
+  if (syncRoutingFingerprint) syncOwnershipFingerprintIfClean(configDir, spec.id, hookConfigPath, read.text, nextText);
+  return true;
 }
 
 interface ProtectedClientPaths {
@@ -643,33 +702,52 @@ function mountHooksAndSkill(
     }
     chmodSync(paths.hookScriptPath, 0o755);
 
+    const command = advisorHookCommand(paths.hookScriptPath);
+    const registrations = readOwnedHookRegistrations(configDir);
+    const prior = registrations[spec.id];
+    // The client's config directory moved since the last mount: take the recorded registration out of the old file
+    // first, unless another client recorded the same registration there.
+    if (prior && canonicalClientPath(prior.hookConfigPath) !== canonicalClientPath(paths.hookConfigPath)) {
+      if (!hookRecordedAt(registrations, prior.hookConfigPath, prior.command, spec.id)
+        && removeHookCommand(spec, configDir, prior.hookConfigPath, prior.command, false)) {
+        changed = true;
+      }
+      delete registrations[spec.id];
+      writeOwnedHookRegistrations(configDir, registrations);
+    }
     const read = readJsonObject(paths.hookConfigPath);
     if (!read.parseError && read.doc) {
       const next = { ...read.doc };
       const hooks = isPlainObject(next.hooks) ? { ...next.hooks } : {};
       const existing = Array.isArray(hooks.UserPromptSubmit) ? [...hooks.UserPromptSubmit] : [];
-      const matchingEntries = existing.filter(entry => entryMatchesAdvisorHook(entry, paths.hookScriptPath!));
-      const alreadyCleanSingleHook = matchingEntries.length === 1
-        && isPlainObject(matchingEntries[0])
-        && Array.isArray(matchingEntries[0].hooks)
-        && matchingEntries[0].hooks.length === 1
-        && isPlainObject(matchingEntries[0].hooks[0])
-        && matchingEntries[0].hooks[0].command === advisorHookCommand(paths.hookScriptPath);
-      const { next: stripped } = stripAdvisorHooksFromEntries(existing, paths.hookScriptPath);
-      stripped.push({
-        hooks: [{ type: "command", command: advisorHookCommand(paths.hookScriptPath) }],
-      });
-      hooks.UserPromptSubmit = stripped;
-      next.hooks = hooks;
-      const nextText = `${JSON.stringify(next, null, 2)}\n`;
-      if (!alreadyCleanSingleHook || read.text !== nextText) {
-        backupOnceBeforeEdit(configDir, spec.id, paths.hookConfigPath, read.text);
-        mkdirSync(dirname(paths.hookConfigPath), { recursive: true, mode: 0o700 });
-        atomicWriteFile(paths.hookConfigPath, nextText);
-        if (paths.sharedWithRouting && paths.hookConfigPath === paths.mcpConfigPath) {
-          syncOwnershipFingerprintIfClean(configDir, spec.id, paths.hookConfigPath, read.text, nextText);
+      const matchingEntries = existing.filter(entry => isPlainObject(entry) && Array.isArray(entry.hooks)
+        && entry.hooks.some(item => isHookItemWithCommand(item, command)));
+      const recorded = hookRecordedAt(registrations, paths.hookConfigPath, command);
+      // An unrecorded registration of the same command is the user's: it already runs the hook, so leave the file alone.
+      if (matchingEntries.length === 0 || recorded) {
+        const alreadyCleanSingleHook = matchingEntries.length === 1
+          && isPlainObject(matchingEntries[0])
+          && Array.isArray(matchingEntries[0].hooks)
+          && matchingEntries[0].hooks.length === 1
+          && isHookItemWithCommand(matchingEntries[0].hooks[0], command);
+        const { next: stripped } = stripHookCommandFromEntries(existing, command);
+        stripped.push({ hooks: [{ type: "command", command }] });
+        hooks.UserPromptSubmit = stripped;
+        next.hooks = hooks;
+        const nextText = `${JSON.stringify(next, null, 2)}\n`;
+        if (!alreadyCleanSingleHook || read.text !== nextText) {
+          backupOnceBeforeEdit(configDir, spec.id, paths.hookConfigPath, read.text);
+          mkdirSync(dirname(paths.hookConfigPath), { recursive: true, mode: 0o700 });
+          atomicWriteFile(paths.hookConfigPath, nextText);
+          if (paths.sharedWithRouting && paths.hookConfigPath === paths.mcpConfigPath) {
+            syncOwnershipFingerprintIfClean(configDir, spec.id, paths.hookConfigPath, read.text, nextText);
+          }
+          changed = true;
         }
-        changed = true;
+        const record = { hookConfigPath: resolve(paths.hookConfigPath), command };
+        if (registrations[spec.id]?.hookConfigPath !== record.hookConfigPath || registrations[spec.id]?.command !== command) {
+          writeOwnedHookRegistrations(configDir, { ...registrations, [spec.id]: record });
+        }
       }
     }
   }
@@ -692,28 +770,18 @@ function unmountHooksAndSkill(
 ): { changed: boolean } {
   let changed = false;
   if (spec.supportsHooks && paths.hookConfigPath && paths.hookScriptPath) {
-    if (!protectedPaths?.hookConfigPaths.has(canonicalClientPath(paths.hookConfigPath))) {
-      const read = readJsonObject(paths.hookConfigPath);
-      if (!read.parseError && read.doc && isPlainObject(read.doc.hooks)) {
-        const hooks = { ...read.doc.hooks };
-        if (Array.isArray(hooks.UserPromptSubmit)) {
-          const { next: nextArr, changed: hooksChanged } = stripAdvisorHooksFromEntries(hooks.UserPromptSubmit, paths.hookScriptPath);
-          if (hooksChanged) {
-            backupOnceBeforeEdit(configDir, spec.id, paths.hookConfigPath, read.text);
-            if (nextArr.length === 0) delete hooks.UserPromptSubmit;
-            else hooks.UserPromptSubmit = nextArr;
-            const nextDoc = { ...read.doc };
-            if (Object.keys(hooks).length === 0) delete nextDoc.hooks;
-            else nextDoc.hooks = hooks;
-            const nextText = `${JSON.stringify(nextDoc, null, 2)}\n`;
-            atomicWriteFile(paths.hookConfigPath, nextText);
-            if (paths.sharedWithRouting && paths.hookConfigPath === paths.mcpConfigPath) {
-              syncOwnershipFingerprintIfClean(configDir, spec.id, paths.hookConfigPath, read.text, nextText);
-            }
-            changed = true;
-          }
-        }
+    // Only a registration OpenCodex recorded is removed, from the file it was recorded in.
+    const registrations = readOwnedHookRegistrations(configDir);
+    const record = registrations[spec.id];
+    if (record && !protectedPaths?.hookConfigPaths.has(canonicalClientPath(record.hookConfigPath))) {
+      const sameFile = canonicalClientPath(record.hookConfigPath) === canonicalClientPath(paths.hookConfigPath);
+      if (!hookRecordedAt(registrations, record.hookConfigPath, record.command, spec.id)
+        && removeHookCommand(spec, configDir, record.hookConfigPath, record.command,
+          !!paths.sharedWithRouting && sameFile && paths.hookConfigPath === paths.mcpConfigPath)) {
+        changed = true;
       }
+      delete registrations[spec.id];
+      writeOwnedHookRegistrations(configDir, registrations);
     }
     if (!protectedPaths?.hookScriptPaths.has(canonicalClientPath(paths.hookScriptPath))
       && inspectManagedTextFile(paths.hookScriptPath, ADVISOR_HOOK_MARKER) === "owned") {
@@ -935,6 +1003,23 @@ export function mountAdvisorMcpForClient(
   const desired = buildMcpEntry(spec, configDir, options);
   const currentText = JSON.stringify(container[ADVISOR_MCP_SERVER_NAME] ?? null);
   const desiredText = JSON.stringify(desired);
+  let changed = false;
+  // The client's config directory moved since the last mount: reconcile the recorded old file before this
+  // client's single record is replaced, unless another client recorded the same entry in that file.
+  const priorRecord = readOwnedAdvisorEntries(configDir)[clientId];
+  if (priorRecord && canonicalClientPath(priorRecord.configPath) !== canonicalClientPath(paths.mcpConfigPath)) {
+    const others = readOwnedAdvisorEntries(configDir);
+    const sharedElsewhere = Object.entries(others).some(([otherId, record]) => otherId !== clientId
+      && canonicalClientPath(record.configPath) === canonicalClientPath(priorRecord.configPath));
+    if (sharedElsewhere) {
+      const { [clientId]: _moved, ...rest } = others;
+      writeOwnedAdvisorEntries(configDir, rest);
+    } else {
+      const removed = removeRecordedMcpEntry(clientId, spec, configDir, priorRecord.configPath, paths);
+      if (!removed.ok) return { ok: false, changed: false, error: removed.error };
+      changed = removed.changed;
+    }
+  }
   const owned = readOwnedAdvisorEntries(configDir);
   const ownedEntry = Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) && ownsAdvisorEntry(owned, clientId, paths.mcpConfigPath, currentText, true);
   // An unrecorded entry is the user's. If it already says exactly what we would write it serves Advisor as it is, but
@@ -943,8 +1028,6 @@ export function mountAdvisorMcpForClient(
   if (userEntry && currentText !== desiredText) {
     return { ok: false, changed: false, error: `Refused to replace the ${ADVISOR_MCP_SERVER_NAME} MCP entry in ${paths.mcpConfigPath}: OpenCodex did not write it` };
   }
-  let changed = false;
-
   if (currentText !== desiredText) {
     backupOnceBeforeEdit(configDir, spec.id, paths.mcpConfigPath, read.text);
     container[ADVISOR_MCP_SERVER_NAME] = desired;
@@ -979,48 +1062,66 @@ export function unmountAdvisorMcpForClient(
   const configDir = resolveOpencodeConfigDir(options);
   const paths = spec.resolvePaths(home, env);
 
-  let changed = false;
   // The record names the file OpenCodex wrote. When the client's config directory has moved since, clean that
   // recorded file, under the same byte-for-byte ownership check, rather than the file the client now uses.
   const recordedPath = readOwnedAdvisorEntries(configDir)[clientId]?.configPath;
   const mcpPath = recordedPath ?? paths.mcpConfigPath;
-  const movedFromRecord = canonicalClientPath(mcpPath) !== canonicalClientPath(paths.mcpConfigPath);
-  if (!protectedPaths?.mcpPaths.has(canonicalClientPath(mcpPath)) && !existsSync(mcpPath) && recordedPath) {
-    // Nothing is left to own at the recorded file.
-    const { [clientId]: _gone, ...rest } = readOwnedAdvisorEntries(configDir);
-    writeOwnedAdvisorEntries(configDir, rest);
-  }
-  if (!protectedPaths?.mcpPaths.has(canonicalClientPath(mcpPath)) && existsSync(mcpPath)) {
-    const read = readJsonObject(mcpPath);
-    if (read.parseError || !read.doc) {
-      return { ok: false, changed: false, error: `Refused to edit invalid JSON in ${mcpPath}` };
-    }
-    if (isPlainObject(read.doc[spec.mcpContainer])) {
-      const container = { ...(read.doc[spec.mcpContainer] as JsonObj) };
-      const owned = readOwnedAdvisorEntries(configDir);
-      const currentText = JSON.stringify(container[ADVISOR_MCP_SERVER_NAME] ?? null);
-      // A same-named entry OpenCodex did not record writing is the user's, even with identical content: leave it.
-      if (Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) && ownsAdvisorEntry(owned, clientId, mcpPath, currentText)) {
-        backupOnceBeforeEdit(configDir, spec.id, mcpPath, read.text);
-        delete container[ADVISOR_MCP_SERVER_NAME];
-        const nextDoc = { ...read.doc, [spec.mcpContainer]: container };
-        const nextText = `${JSON.stringify(nextDoc, null, 2)}\n`;
-        atomicWriteFile(mcpPath, nextText);
-        // A moved file is no longer the Routing-shared one, so its journal is left to detect the drift.
-        if (paths.sharedWithRouting && !movedFromRecord) {
-          syncOwnershipFingerprintIfClean(configDir, clientId, mcpPath, read.text, nextText);
-        }
-        changed = true;
-      }
-      if (owned[clientId]) {
-        const { [clientId]: _dropped, ...rest } = owned;
-        writeOwnedAdvisorEntries(configDir, rest);
-      }
-    }
+  let changed = false;
+  if (!protectedPaths?.mcpPaths.has(canonicalClientPath(mcpPath))) {
+    const removed = removeRecordedMcpEntry(clientId, spec, configDir, mcpPath, paths);
+    if (!removed.ok) return { ok: false, changed: false, error: removed.error };
+    changed = removed.changed;
   }
 
   const hookSkillRes = unmountHooksAndSkill(spec, paths, configDir, protectedPaths);
   changed = changed || hookSkillRes.changed;
+  return { ok: true, changed };
+}
+
+/**
+ * Remove this client's recorded `opencodex-advisor` entry from `mcpPath` when the file still holds exactly the
+ * recorded bytes, then drop the record. A missing file only drops the record; an edited or unrecorded entry is left.
+ */
+function removeRecordedMcpEntry(
+  clientId: AdvisorMcpClientId,
+  spec: ClientSpec,
+  configDir: string,
+  mcpPath: string,
+  paths: ResolvedClientPaths,
+): { ok: boolean; changed: boolean; error?: string } {
+  const dropRecord = () => {
+    const owned = readOwnedAdvisorEntries(configDir);
+    if (!owned[clientId]) return;
+    const { [clientId]: _dropped, ...rest } = owned;
+    writeOwnedAdvisorEntries(configDir, rest);
+  };
+  if (!existsSync(mcpPath)) {
+    dropRecord();
+    return { ok: true, changed: false };
+  }
+  const read = readJsonObject(mcpPath);
+  if (read.parseError || !read.doc) {
+    return { ok: false, changed: false, error: `Refused to edit invalid JSON in ${mcpPath}` };
+  }
+  if (!isPlainObject(read.doc[spec.mcpContainer])) return { ok: true, changed: false };
+  const container = { ...(read.doc[spec.mcpContainer] as JsonObj) };
+  const currentText = JSON.stringify(container[ADVISOR_MCP_SERVER_NAME] ?? null);
+  let changed = false;
+  // A same-named entry OpenCodex did not record writing is the user's, even with identical content: leave it.
+  if (Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME)
+    && ownsAdvisorEntry(readOwnedAdvisorEntries(configDir), clientId, mcpPath, currentText)) {
+    backupOnceBeforeEdit(configDir, spec.id, mcpPath, read.text);
+    delete container[ADVISOR_MCP_SERVER_NAME];
+    const nextDoc = { ...read.doc, [spec.mcpContainer]: container };
+    const nextText = `${JSON.stringify(nextDoc, null, 2)}\n`;
+    atomicWriteFile(mcpPath, nextText);
+    // A moved file is no longer the Routing-shared one, so its journal is left to detect the drift.
+    if (paths.sharedWithRouting && canonicalClientPath(mcpPath) === canonicalClientPath(paths.mcpConfigPath)) {
+      syncOwnershipFingerprintIfClean(configDir, clientId, mcpPath, read.text, nextText);
+    }
+    changed = true;
+  }
+  dropRecord();
   return { ok: true, changed };
 }
 

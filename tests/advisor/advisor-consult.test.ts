@@ -53,6 +53,23 @@ describe("consultAdvisor", () => {
     expect(result.usage).toMatchObject({ inputTokens: 3, outputTokens: 2 });
     expect(cancelled).toBe(true);
   });
+  for (const split of [false, true]) {
+    test(`ignores events after DONE whether they share its chunk or not (split=${split})`, async () => {
+      const head = 'data: {"choices":[{"delta":{"content":"Advice"}}]}\n\ndata: [DONE]\n\n';
+      const tail = 'data: {"choices":[{"delta":{"content":" extra"}}]}\n\ndata: {"error":{"message":"late"}}\n\n';
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const part of split ? [head, tail] : [head + tail]) controller.enqueue(encoder.encode(part));
+          controller.close();
+        },
+      });
+      globalThis.fetch = (async () => new Response(stream, { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+      const result = await consultAdvisor(baseInput, {}, "max", 500, undefined, "http://advisor.test");
+      expect(result.ok).toBe(true);
+      expect(result.advice).toBe("Advice");
+    });
+  }
   test("question-only sends only the question over real loopback independently of history size", async () => {
     const bodies: { messages: { role: string; content: string }[] }[] = [];
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {

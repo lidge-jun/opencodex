@@ -203,6 +203,45 @@ describe("Advisor client MCP safety", () => {
     expect(readFileSync(join(newDir, "settings.json"), "utf8")).toBe(userEntry);
     expect(JSON.parse(readFileSync(record, "utf8")).qoder).toBeUndefined();
   });
+  test("a hook registration OpenCodex did not record is never rewritten or removed", () => {
+    const home = tempHome("ocx-advisor-user-hook-");
+    const configDir = join(home, ".opencodex");
+    const dir = join(home, "qoder");
+    const opts = { homeDir: home, configDir, env: { QODER_CONFIG_DIR: dir } };
+    mkdirSync(dir, { recursive: true });
+    const command = advisorHookCommand(join(dir, "hooks", "opencodex-advisor-notice.sh"));
+    const userDoc = { hooks: { UserPromptSubmit: [{ matcher: "mine", hooks: [{ type: "command", command }, { type: "command", command: "/usr/local/bin/other.sh" }] }] }, mcpServers: {} };
+    writeFileSync(join(dir, "settings.json"), JSON.stringify(userDoc));
+    expect(mountAdvisorMcpForClient("qoder", opts).ok).toBe(true);
+    const mounted = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
+    expect(mounted.hooks).toEqual(userDoc.hooks);
+    expect(mounted.mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeDefined();
+    expect(unmountAdvisorMcpForClient("qoder", opts).ok).toBe(true);
+    const unmounted = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
+    expect(unmounted.hooks).toEqual(userDoc.hooks);
+    expect(unmounted.mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeUndefined();
+  });
+  test("remounting a selected client after its config directory moved cleans the old location first", () => {
+    const home = tempHome("ocx-advisor-moved-selected-");
+    const configDir = join(home, ".opencodex");
+    const oldDir = join(home, "old-qoder");
+    const newDir = join(home, "new-qoder");
+    const oldOpts = { homeDir: home, configDir, env: { QODER_CONFIG_DIR: oldDir } };
+    const newOpts = { homeDir: home, configDir, env: { QODER_CONFIG_DIR: newDir } };
+    const selected = { advisor: { enabled: true, model: "fixture/m", contextSharingConsent: "v1", mcpClients: ["qoder"] } } as unknown as OcxConfig;
+    expect(syncAdvisorMcpClients(selected, oldOpts).errors).toEqual([]);
+    const oldDoc = () => JSON.parse(readFileSync(join(oldDir, "settings.json"), "utf8"));
+    expect(oldDoc().mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeDefined();
+    expect(oldDoc().hooks.UserPromptSubmit).toHaveLength(1);
+    expect(syncAdvisorMcpClients(selected, newOpts).errors).toEqual([]);
+    expect(oldDoc().mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeUndefined();
+    expect(oldDoc().hooks).toBeUndefined();
+    const newDoc = () => JSON.parse(readFileSync(join(newDir, "settings.json"), "utf8"));
+    expect(newDoc().mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeDefined();
+    expect(syncAdvisorMcpClients({ advisor: { enabled: false } }, newOpts).errors).toEqual([]);
+    expect(newDoc().mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeUndefined();
+    expect(newDoc().hooks).toBeUndefined();
+  });
   test("a user edit at the old recorded path is kept, and a removed old file only drops the record", () => {
     const home = tempHome("ocx-advisor-stale-path-edited-");
     const configDir = join(home, ".opencodex");
