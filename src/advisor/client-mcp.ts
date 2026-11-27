@@ -872,9 +872,11 @@ function writeOwnedAdvisorEntries(configDir: string, owned: OwnedAdvisorEntries)
 }
 
 /** An existing entry is ours only when we recorded writing exactly these bytes at this path. Matching content alone is not ownership. */
-function ownsAdvisorEntry(owned: OwnedAdvisorEntries, clientId: string, configPath: string, currentText: string): boolean {
-  const record = owned[clientId];
-  return record !== undefined && record.configPath === resolve(configPath) && record.entry === currentText;
+function ownsAdvisorEntry(owned: OwnedAdvisorEntries, clientId: string, configPath: string, currentText: string, includeShared = false): boolean {
+  const slot = CLIENT_SPECS[clientId as AdvisorMcpClientId]?.mcpContainer;
+  return Object.entries(owned).some(([recordClient, record]) =>
+    (recordClient === clientId || (includeShared && CLIENT_SPECS[recordClient as AdvisorMcpClientId]?.mcpContainer === slot))
+    && record.configPath === resolve(configPath) && record.entry === currentText);
 }
 
 export function mountAdvisorMcpForClient(
@@ -920,7 +922,7 @@ export function mountAdvisorMcpForClient(
   const currentText = JSON.stringify(container[ADVISOR_MCP_SERVER_NAME] ?? null);
   const desiredText = JSON.stringify(desired);
   const owned = readOwnedAdvisorEntries(configDir);
-  const ownedEntry = Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) && ownsAdvisorEntry(owned, clientId, paths.mcpConfigPath, currentText);
+  const ownedEntry = Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) && ownsAdvisorEntry(owned, clientId, paths.mcpConfigPath, currentText, true);
   // An unrecorded entry is the user's. If it already says exactly what we would write it serves Advisor as it is, but
   // it stays unrecorded so OpenCodex never deletes it; any other content is refused.
   const userEntry = Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) && !ownedEntry;

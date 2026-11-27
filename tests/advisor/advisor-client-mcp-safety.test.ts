@@ -157,6 +157,18 @@ describe("Advisor client MCP safety", () => {
     expect(unmountAdvisorMcpForClient("qoder", { homeDir: home, configDir, env: {}, execPath: "/new/bun" }).changed).toBe(true);
     expect(JSON.parse(readFileSync(settingsPath, "utf8")).mcpServers?.[ADVISOR_MCP_SERVER_NAME]).toBeUndefined();
   });
+  test("clients sharing one config entry retain ownership when selection changes", () => {
+    const home = tempHome("ocx-advisor-shared-slot-");
+    const configDir = join(home, ".opencodex");
+    const shared = join(home, "shared");
+    const opts = { homeDir: home, configDir, env: { WORKBUDDY_CONFIG_DIR: shared }, execPath: "/old/bun" };
+    expect(mountAdvisorMcpForClient("workbuddy", opts).ok).toBe(true);
+    expect(mountAdvisorMcpForClient("workbuddy-ai", opts).ok).toBe(true);
+    expect(mountAdvisorMcpForClient("workbuddy-ai", { ...opts, execPath: "/new/bun" }).ok).toBe(true);
+    expect(readFileSync(join(shared, "mcp.json"), "utf8")).toContain("/new/bun");
+    expect(unmountAdvisorMcpForClient("workbuddy-ai", { ...opts, execPath: "/new/bun" }).ok).toBe(true);
+    expect(JSON.parse(readFileSync(join(shared, "mcp.json"), "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeUndefined();
+  });
   test("an identical opencodex-advisor entry OpenCodex never recorded is used but never deleted", () => {
     const home = tempHome("ocx-advisor-identical-");
     const configDir = join(home, ".opencodex");
