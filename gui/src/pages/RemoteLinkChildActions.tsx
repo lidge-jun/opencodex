@@ -117,8 +117,8 @@ export function ChildRowBadges({ row }: { row: ChildOpsRowView }): ReactElement 
       {row.catalog.state === "current" && <StateBadge tone="ok">{t("remoteLink.child.catalog.current")}</StateBadge>}
       {codexRestartNeeded(row) && <StateBadge tone="warn">{t("remoteLink.child.codex.restartNeeded", { count: row.codex?.staleCount ?? 0 })}</StateBadge>}
       {row.codex?.appServers === "not_running" && <StateBadge tone="neutral">{t("remoteLink.child.codex.notRunning")}</StateBadge>}
-      {/* Owner guidance can be a full sentence the badge truncates; the title keeps it readable. */}
-      {ownerKey && <StateBadge tone="neutral" title={t(ownerKey)}>{t(ownerKey)}</StateBadge>}
+      {/* Owner guidance can be a full sentence: let it wrap rather than truncate. */}
+      {ownerKey && <StateBadge tone="neutral" wrap>{t(ownerKey)}</StateBadge>}
       {owner && !ownerKey && <CodeToken>{owner}</CodeToken>}
       {row.activeJob && <StateBadge tone="neutral">{t(ACTIVE_KEY[row.activeJob.op])}</StateBadge>}
       {row.lastOperation && (
@@ -224,13 +224,15 @@ export function ChildRowActions(props: { apiBase: string; link: LinkRowWire; dis
   const single = (op: ChildOp, restart?: "app-server" | "codex") =>
     void run({ op, linkIds: [props.link.id], ...(restart ? { restart } : {}) });
   const canUpdate = updateAvailable(row!);
+  // A Child the Home cannot update says why, instead of claiming it is up to date.
+  const ownerReason = row!.update.route === "owner-action" && row!.update.reason ? OWNER_ACTION_KEYS[row!.update.reason] : undefined;
   return (
     <span className="remote-link-child-actions flex shrink-0 flex-wrap items-center gap-1">
       <Button variant="ghost" size="sm" onClick={() => single("observe")} disabled={held}>{t("remoteLink.child.check")}</Button>
       <Button variant="ghost" size="sm" onClick={() => single("sync")} disabled={held}>{t("remoteLink.child.syncNow")}</Button>
       <Button variant="ghost" size="sm" onClick={() => { setRestarting(true); props.onDialog(true); }} disabled={busy}>{t("remoteLink.child.restartCodex")}</Button>
       <Button variant="primary" size="sm" onClick={() => { setConfirmUpdate(true); props.onDialog(true); }} disabled={busy || !canUpdate}
-        title={canUpdate ? undefined : t("remoteLink.child.upToDate")}>{t("remoteLink.child.update")}</Button>
+        title={canUpdate ? undefined : ownerReason ? t(ownerReason) : t("remoteLink.child.upToDate")}>{t("remoteLink.child.update")}</Button>
       <RestartCodexDialog alias={props.link.alias} open={restarting}
         onCancel={() => { setRestarting(false); props.onDialog(false); }}
         onConfirm={scope => { setRestarting(false); props.onDialog(false); single("restart-codex", scope); }} />

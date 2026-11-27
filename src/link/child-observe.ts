@@ -1,5 +1,5 @@
 import { classifyUpdatePlanProbe, remoteUpdatePlanArgv, type SshResult } from "./child-gated-ocx";
-import type { PlanClassification } from "./child-update-contract";
+import type { PlanClassification, UpdateRoute } from "./child-update-contract";
 import type { ChildObservation } from "./child-observations";
 import type { LinkPeerEntry } from "./peer-report";
 import type { inspectRemoteChildRuntime } from "./remote-plant";
@@ -41,6 +41,16 @@ function observation(fields: ObservedFields, now: Date): ChildObservation {
   };
 }
 
+/**
+ * The Home never applies an orchestrated update on Windows (runUpdateItem refuses windows-apply, D20), so the dashboard
+ * must not offer one (#9172): a Windows Child with that route is told to update locally. Applied when observing and
+ * again when projecting status, so an observation cached before this rule existed reads the same way.
+ */
+export function windowsLocalUpdateRoute(platform: "posix" | "windows" | null | undefined, updateRoute: UpdateRoute, updateReason: string | null): { updateRoute: UpdateRoute; updateReason: string | null } {
+  return platform === "windows" && updateRoute === "orchestrated"
+    ? { updateRoute: "owner-action", updateReason: "windows-apply" }
+    : { updateRoute, updateReason };
+}
 const strictVersion = (value: string | null | undefined): string | null => typeof value === "string" && parseStrictSemver(value) ? value : null;
 const peerVersion = (deps: ObserveDeps, record: LinkRecord): string | null => strictVersion(deps.peer(record.id).observed?.version);
 const outcome = (state: ObserveOutcome["state"], reason: string | null, value: ChildObservation | null = null): ObserveOutcome =>
@@ -91,14 +101,12 @@ export async function observeChild(record: LinkRecord, deps: ObserveDeps): Promi
   switch (verdict.kind) {
     case "plan": {
       const { classification } = verdict;
-      // The Home never applies an orchestrated update on Windows (runUpdateItem refuses windows-apply, D20), so the
-      // dashboard must not offer one: record a local update instead. The probe keeps the plan's own route for the runner.
-      const windowsLocal = platform === "windows" && classification.updateRoute === "orchestrated";
+      // The probe keeps the plan's own route for the runner; the observation the dashboard reads gets the local route.
+      const route = windowsLocalUpdateRoute(platform, classification.updateRoute, classification.updateReason);
       return { state: "succeeded", reason: null, probe: { classification, childNowMs: verdict.childNowMs, startedAt, platform },
         observation: observation({ source: "plan", installedVersion: strictVersion(classification.installedVersion),
           installKind: classification.installKind, runtimeOwner: classification.runtimeOwner,
-          updateRoute: windowsLocal ? "owner-action" : classification.updateRoute,
-          updateReason: windowsLocal ? "windows-apply" : classification.updateReason, targetVersion: strictVersion(classification.targetVersion),
+          updateRoute: route.updateRoute, updateReason: route.updateReason, targetVersion: strictVersion(classification.targetVersion),
           updateInFlight: classification.updateInFlight }, deps.now()) };
     }
     case "ephemeral": return ephemeral(deps.now());

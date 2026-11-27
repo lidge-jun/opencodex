@@ -851,10 +851,13 @@ test("a Windows npm Child behind Home shows local-update guidance and no Update 
   expect(badges.textContent).toContain("Behind Home (2.35.0)");
   expect(badges.textContent).not.toContain("Update available");
   expect(badges.textContent).toContain("Remote updates aren’t supported for this Windows device. Update OpenCodex directly on the Windows computer.");
-  // The badge truncates a long sentence; its title keeps the whole guidance readable.
-  expect(badges.querySelector('[title^="Remote updates"]')?.getAttribute("title")).toBe("Remote updates aren’t supported for this Windows device. Update OpenCodex directly on the Windows computer.");
+  // The sentence wraps instead of truncating, so it is readable without hovering.
+  const guidance = [...badges.querySelectorAll(".startup-badge")].find(badge => badge.textContent?.startsWith("Remote updates"))!;
+  expect(guidance.className).toContain("whitespace-normal");
+  expect(guidance.querySelector(".truncate")).toBeNull();
   const firstRow = host.querySelectorAll(".remote-link-row")[0]!;
   const update = [...firstRow.querySelectorAll("button")].find(item => item.textContent === "Update");
-  expect(update === undefined || (update as HTMLButtonElement).disabled).toBe(true);
+  expect((update as HTMLButtonElement).disabled).toBe(true);
+  expect(update!.getAttribute("title")).toBe("Remote updates aren’t supported for this Windows device. Update OpenCodex directly on the Windows computer.");
   expect(button(host, "Update all").disabled).toBe(true);
 });

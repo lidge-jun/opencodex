@@ -10,7 +10,7 @@ import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { LinkSupervisor } from "../../src/link/supervisor";
 import type { SshRunResult, SshRunner } from "../../src/link/ssh-runner";
-import { readChildObservations } from "../../src/link/child-observations";
+import { emptyChildObservations, patchChildObservation, readChildObservations } from "../../src/link/child-observations";
 import { resetSharedChildOpsEngineForTests, sharedChildOpsEngine } from "../../src/link/child-ops-engine";
 import { catalogEtag } from "../../src/server/catalog-download";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -267,6 +267,17 @@ describe("link child operations routes", () => {
     expect(((await invalid!.json()) as { error: { code: string } }).error.code).toBe("invalid_job_id");
   });
 
+  test("a Windows observation cached as orchestrated before #9172 reads as a local update; POSIX keeps its route", async () => {
+    const h = harness({ full: true, links: [link(HUB, { remotePlatform: "windows" }), link(CLIENT)] });
+    const file = emptyChildObservations();
+    const cached = { source: "plan" as const, installedVersion: "2.95.0", installKind: "npm" as const, updateRoute: "orchestrated" as const, updateReason: null };
+    patchChildObservation(file, HUB, cached, new Date(1_762_000_000_000));
+    patchChildObservation(file, CLIENT, cached, new Date(1_762_000_000_000));
+    writeFileSync(join(temp, "ocx", "link", "child-observations.json"), JSON.stringify(file));
+    const body = await (await h.call("/api/link/status?children=1"))!.json() as { links: Array<{ id: string; child: { update: unknown } }> };
+    expect(body.links.find(row => row.id === HUB)!.child.update).toMatchObject({ route: "owner-action", reason: "windows-apply" });
+    expect(body.links.find(row => row.id === CLIENT)!.child.update).toMatchObject({ route: "orchestrated", reason: null });
+  });
   test("?children=1 adds child to Home rows only and nothing without the query", async () => {
     const h = harness({ full: true });
     const plain = await (await h.call("/api/link/status?compatibility=1&diagnostics=1"))!.json() as { links: Array<Record<string, unknown>> };
