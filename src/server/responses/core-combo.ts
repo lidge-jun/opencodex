@@ -37,6 +37,10 @@ import type {
   RequestExecutionBudget,
 } from "../../lib/request-execution-budget";
 import { deriveSendBudgetScope } from "./combo-send-budget-scope";
+// The wrapper this PR extracted used to export `deriveSendBudgetScope` from this module;
+// the re-export keeps every existing named import of it working while internal calls
+// read the extracted implementation (#9163 review: preserve public exports).
+export { deriveSendBudgetScope } from "./combo-send-budget-scope";
 import type { OcxComboDefaultEffort, OcxConfig, OcxUsage } from "../../types";
 import type { RequestLogContext } from "../request-log";
 import type { HandleResponsesOptions, ResponsesDispatchers, ConsumedComboFailure } from "./core-options";
