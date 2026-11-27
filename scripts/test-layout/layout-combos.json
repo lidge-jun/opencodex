@@ -11,6 +11,7 @@
   "combo-stream-attempt-timing.test.ts": "responses",
   "combo-cooldown-persistence.test.ts": "routing",
   "combo-unoffered-tool-refusal.test.ts": "routing",
+  "combo-undeclared-tool-guard-refusal.test.ts": "routing",
   "server-combo-cooldown-recording.test.ts": "server",
   "server-combo-main-account-cooldown.test.ts": "server",
   "combo-capability-policy.test.ts": "codex-integration",

@@ -64,6 +64,22 @@ export function isVerifiedModelNotInPlanResponse(response: Response): boolean {
   return verifiedPlanRefusalResponses.has(response);
 }
 
+/**
+ * Request contexts whose undeclared-tool guard refused the turn (#9163). The guard records its
+ * own trip on the context of the attempt it rewrote, so a combo reads the refusal's provenance
+ * from the guard rather than from the words: an upstream body that merely repeats the code or
+ * message never sets it, and a wire on which the guard stands down never trips it.
+ */
+const undeclaredToolGuardRefusals = new WeakSet<object>();
+
+export function markUndeclaredToolGuardRefusal(context: object): void {
+  undeclaredToolGuardRefusals.add(context);
+}
+
+export function undeclaredToolGuardRefused(context: object | undefined): boolean {
+  return context !== undefined && undeclaredToolGuardRefusals.has(context);
+}
+
 /** True for a verified plan refusal that still carries the canonical code in its 400 body. */
 export function isModelNotInPlanRefusal(response: Response, bodyCode: string | null | undefined): boolean {
   return response.status === 400 && bodyCode === MODEL_NOT_IN_PLAN_CODE && verifiedPlanRefusalResponses.has(response);
