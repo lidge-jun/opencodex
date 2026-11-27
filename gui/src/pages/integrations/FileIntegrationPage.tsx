@@ -501,7 +501,7 @@ function FileIntegrationControls({
           && (entry?.defaultAutoMount !== false || manualList?.includes(client))) {
           return (
             <Notice tone="warn">
-              {t("advisor.mcp.routeNoticeWillMount", { path })}{note ? ` ${note}` : ""}
+              {t("advisor.mcp.routeNoticeWillMount", { path })}
             </Notice>
           );
         }
