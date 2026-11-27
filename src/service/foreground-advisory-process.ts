@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsTaskkillExe } from "../lib/windows-elevation";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 
@@ -24,8 +24,11 @@ export interface ForegroundAdvisoryDeps {
   resolveTaskkill?: () => string;
   resolvePowerShell?: () => string;
   spawnKill?: typeof spawn;
+  execKillSync?: typeof execFileSync;
   killDeadlineMs?: number;
 }
+
+export type StopForegroundAdvisory = (sync?: boolean) => void;
 
 /** True only for an eligible interactive foreground owner after readiness. */
 export function shouldStartForegroundAdvisory(state: ForegroundAdvisoryEligibility): boolean {
@@ -43,7 +46,7 @@ export function maybeStartForegroundAdvisory(
   state: ForegroundAdvisoryEligibility,
   warn: (line: string) => void,
   deps?: ForegroundAdvisoryDeps,
-): (() => void) | undefined {
+): StopForegroundAdvisory | undefined {
   if (!shouldStartForegroundAdvisory(state)) return undefined;
   return startForegroundAdvisory(warn, deps);
 }
@@ -79,48 +82,110 @@ export function windowsPowerShellTreeKillArgs(pid: number): string[] {
   return ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script];
 }
 
-function stopProbe(child: ReturnType<typeof spawn>, deps: ForegroundAdvisoryDeps = {}): void {
+interface ProbeKillerState {
+  done: boolean;
+  cancelAsync?: () => void;
+}
+
+function stopProbe(
+  child: ReturnType<typeof spawn>,
+  deps: ForegroundAdvisoryDeps,
+  state: ProbeKillerState,
+  sync: boolean,
+): void {
+  if (state.done) return;
   const pid = child.pid;
-  if (!pid || !Number.isInteger(pid) || pid <= 0 || child.exitCode !== null || child.signalCode !== null) return;
+  if (!pid || !Number.isInteger(pid) || pid <= 0) { state.done = true; return; }
   const platform = deps.platform ?? process.platform;
-  const killChild = () => { try { child.kill("SIGKILL"); } catch { /* best effort */ } };
+  const killChild = () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      try { child.kill("SIGKILL"); } catch { /* best effort */ }
+    }
+  };
   if (platform !== "win32") {
+    state.done = true;
+    // Do not return early when the root already exited: a descendant that inherited stdout
+    // can still live in the detached process group `-pid`.
     try { process.kill(-pid, "SIGKILL"); return; } catch { /* fall back to the child */ }
     killChild();
     return;
   }
-  const spawnKill = deps.spawnKill ?? spawn;
   const killDeadlineMs = deps.killDeadlineMs ?? KILL_DEADLINE_MS;
+  if (sync) {
+    state.cancelAsync?.();
+    state.cancelAsync = undefined;
+    state.done = true;
+    const execSync = deps.execKillSync ?? execFileSync;
+    const syncOpts = { stdio: "ignore" as const, windowsHide: true, timeout: killDeadlineMs };
+    let taskkillOk = false;
+    try {
+      const taskkill = (deps.resolveTaskkill ?? resolveTrustedWindowsTaskkillExe)();
+      execSync(taskkill, ["/F", "/T", "/PID", String(pid)], syncOpts);
+      taskkillOk = true;
+    } catch { /* fall back to PowerShell tree kill */ }
+    if (!taskkillOk) {
+      try {
+        const ps = (deps.resolvePowerShell ?? resolveTrustedWindowsPowerShellExe)();
+        execSync(ps, windowsPowerShellTreeKillArgs(pid), syncOpts);
+      } catch { /* fall back to child kill */ }
+    }
+    killChild();
+    return;
+  }
+  if (state.cancelAsync) return;
+  const spawnKill = deps.spawnKill ?? spawn;
+  let activeKiller: ReturnType<typeof spawn> | undefined;
+  let activeTimer: ReturnType<typeof setTimeout> | undefined;
+  let cancelled = false;
   let fallbackStarted = false;
+  const clearActive = () => {
+    if (activeTimer) { clearTimeout(activeTimer); activeTimer = undefined; }
+    activeKiller = undefined;
+  };
+  state.cancelAsync = () => {
+    cancelled = true;
+    if (activeTimer) { clearTimeout(activeTimer); activeTimer = undefined; }
+    if (activeKiller) { try { activeKiller.kill("SIGKILL"); } catch { /* best effort */ } activeKiller = undefined; }
+  };
+  const finish = () => { clearActive(); state.cancelAsync = undefined; state.done = true; };
   const fallbackTreeKill = () => {
-    if (fallbackStarted) return;
+    if (cancelled || fallbackStarted) return;
     fallbackStarted = true;
     try {
       const ps = (deps.resolvePowerShell ?? resolveTrustedWindowsPowerShellExe)();
       const psKill = spawnKill(ps, windowsPowerShellTreeKillArgs(pid), { stdio: "ignore", windowsHide: true });
-      const psDeadline = setTimeout(() => {
+      activeKiller = psKill;
+      activeTimer = setTimeout(() => {
         try { psKill.kill("SIGKILL"); } catch { /* best effort */ }
         killChild();
+        finish();
       }, killDeadlineMs);
-      psDeadline.unref();
-      psKill.once("exit", () => { clearTimeout(psDeadline); killChild(); });
-      psKill.once("error", () => { clearTimeout(psDeadline); killChild(); });
+      activeTimer.unref();
+      psKill.once("exit", () => { if (!cancelled) { killChild(); finish(); } });
+      psKill.once("error", () => { if (!cancelled) { killChild(); finish(); } });
       psKill.unref();
     } catch {
       killChild();
+      finish();
     }
   };
   // Terminate only the process tree this invocation spawned, never service PIDs.
   try {
     const taskkill = (deps.resolveTaskkill ?? resolveTrustedWindowsTaskkillExe)();
     const kill = spawnKill(taskkill, ["/F", "/T", "/PID", String(pid)], { stdio: "ignore", windowsHide: true });
-    const deadline = setTimeout(() => {
+    activeKiller = kill;
+    activeTimer = setTimeout(() => {
       try { kill.kill("SIGKILL"); } catch { /* best effort */ }
       fallbackTreeKill();
     }, killDeadlineMs);
-    deadline.unref();
-    kill.once("exit", code => { clearTimeout(deadline); if (code !== 0) fallbackTreeKill(); });
-    kill.once("error", () => { clearTimeout(deadline); fallbackTreeKill(); });
+    activeTimer.unref();
+    kill.once("exit", code => {
+      if (cancelled) return;
+      clearActive();
+      if (code === 0) finish();
+      else fallbackTreeKill();
+    });
+    kill.once("error", () => { if (!cancelled) { clearActive(); fallbackTreeKill(); } });
     kill.unref();
   } catch {
     fallbackTreeKill();
@@ -131,7 +196,7 @@ function stopProbe(child: ReturnType<typeof spawn>, deps: ForegroundAdvisoryDeps
 export function startForegroundAdvisory(
   warn: (line: string) => void,
   deps: ForegroundAdvisoryDeps = {},
-): () => void {
+): StopForegroundAdvisory {
   const timeoutMs = deps.timeoutMs ?? TIMEOUT_MS;
   const expires = performance.now() + timeoutMs;
   let child: ReturnType<typeof spawn>;
@@ -142,25 +207,29 @@ export function startForegroundAdvisory(
   } catch { return () => {}; }
 
   let settled = false;
+  let closed = false;
   let bytes = 0;
   const chunks: Buffer[] = [];
-  const stop = () => {
-    if (settled) return;
+  const killerState: ProbeKillerState = { done: false };
+  const stop: StopForegroundAdvisory = (sync = false) => {
     settled = true;
     clearTimeout(timer);
-    stopProbe(child, deps);
+    if (!closed) stopProbe(child, deps, killerState, sync);
     child.stdout?.destroy();
   };
-  const timer = setTimeout(stop, timeoutMs);
+  const timer = setTimeout(() => stop(false), timeoutMs);
   timer.unref();
-  child.once("error", stop);
-  child.stdout?.once("error", stop);
+  child.once("error", () => stop(false));
+  child.stdout?.once("error", () => stop(false));
   child.stdout?.on("data", (chunk: Buffer) => {
     bytes += chunk.length;
-    if (bytes > MAX_BYTES) { stop(); return; }
+    if (bytes > MAX_BYTES) { stop(false); return; }
     if (!settled) chunks.push(chunk);
   });
   child.once("close", (code) => {
+    closed = true;
+    killerState.cancelAsync?.();
+    killerState.done = true;
     if (settled) return;
     settled = true;
     clearTimeout(timer);

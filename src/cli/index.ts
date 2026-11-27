@@ -642,13 +642,13 @@ async function handleStart(options: { block?: boolean } = {}) {
   let routingHealer: { stop(): void } | undefined; // routing-healer.ts; stopped first in syncCleanup
   let catalogHealer: { stop(): void } | undefined;
 
-  let stopForegroundAdvisory: (() => void) | undefined;
+  let stopForegroundAdvisory: ((sync?: boolean) => void) | undefined;
   let cleaned = false;
   let cleanupSucceeded = true;
   const syncCleanup = () => {
     if (cleaned) return cleanupSucceeded;
     cleaned = true;
-    stopForegroundAdvisory?.();
+    stopForegroundAdvisory?.(true);
     try { catalogHealer?.stop(); } catch { /* best-effort */ }
     try { routingHealer?.stop(); } catch { /* best-effort */ }
     try { guardian.stop(); } catch { /* best-effort */ }

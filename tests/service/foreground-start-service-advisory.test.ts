@@ -277,6 +277,103 @@ describe("Windows failing-taskkill fallback terminates pending descendants", () 
     },
     15_000,
   );
+
+  test("synchronous exit cleanup completes Windows taskkill -> PowerShell fallback even after an async stop started", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-advisory-exit-"));
+    const descendantPidFile = join(dir, "descendant.pid");
+    let child!: ChildProcess;
+    const syncCalls: Array<{ cmd: string; args: readonly string[] }> = [];
+    let asyncTaskkillKilled = false;
+    let descendantPid = 0;
+    const cancel = startForegroundAdvisory(() => {}, {
+      platform: "win32",
+      timeoutMs: 10_000,
+      killDeadlineMs: 2_000,
+      resolveTaskkill: () => "C:\\Windows\\System32\\taskkill.exe",
+      resolvePowerShell: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      spawnKill: (() => {
+        const hung = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: "ignore", windowsHide: true });
+        hung.once("exit", () => { asyncTaskkillKilled = true; });
+        return hung;
+      }) as typeof spawn,
+      execKillSync: ((cmd: string, args: readonly string[]) => {
+        syncCalls.push({ cmd, args });
+        if (cmd.toLowerCase().includes("taskkill")) {
+          throw new Error("taskkill failed during exit");
+        }
+        expect(args).toEqual(windowsPowerShellTreeKillArgs(child.pid!));
+        if (process.platform === "win32") {
+          return Buffer.from("");
+        }
+        try { process.kill(-child.pid!, "SIGKILL"); } catch { /* already gone */ }
+        return Buffer.from("");
+      }) as typeof import("node:child_process").execFileSync,
+      launch: () => {
+        const script = [
+          'const { spawn } = require("node:child_process");',
+          'const { writeFileSync } = require("node:fs");',
+          'const d = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: "ignore", windowsHide: true });',
+          `writeFileSync(${JSON.stringify(descendantPidFile)}, String(d.pid));`,
+          'console.log("ready");',
+          "setInterval(() => {}, 60000);",
+        ].join(" ");
+        return (child = fakeProbe(script));
+      },
+    });
+    try {
+      await once(child.stdout!, "data");
+      descendantPid = Number(readFileSync(descendantPidFile, "utf8").trim());
+      expect(descendantPid).toBeGreaterThan(0);
+      // Simulate shutdown starting async stop, followed immediately by process exit calling syncCleanup.
+      cancel(false);
+      cancel(true);
+      await once(child, "close");
+      expect(await waitUntilDead(descendantPid)).toBe(true);
+      expect(syncCalls.map(c => c.cmd.toLowerCase())).toEqual([
+        expect.stringContaining("taskkill"),
+        expect.stringContaining("powershell"),
+      ]);
+      // Give the killed async taskkill child a brief moment to report exit.
+      await Bun.sleep(50);
+      expect(asyncTaskkillKilled).toBe(true);
+    } finally {
+      if (descendantPid > 0) { try { process.kill(descendantPid, "SIGKILL"); } catch {} }
+      await removeTreeAfterBackgroundWork(dir);
+    }
+  }, 15_000);
+
+  test("timeout still terminates a living descendant holding stdout after the probe root exits", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-advisory-exited-root-"));
+    const descendantPidFile = join(dir, "descendant.pid");
+    let child!: ChildProcess;
+    let descendantPid = 0;
+    const cancel = startForegroundAdvisory(() => {}, {
+      timeoutMs: 250,
+      launch: () => {
+        const script = [
+          'const { spawn } = require("node:child_process");',
+          'const { writeFileSync } = require("node:fs");',
+          // Descendant inherits stdout so parent's pipe stays open after root exits.
+          'const d = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: ["ignore", 1, "ignore"], windowsHide: true });',
+          `writeFileSync(${JSON.stringify(descendantPidFile)}, String(d.pid));`,
+          'process.stdout.write("root-exiting\\n", () => process.exit(0));',
+        ].join(" ");
+        return (child = fakeProbe(script));
+      },
+    });
+    try {
+      await once(child, "exit");
+      descendantPid = Number(readFileSync(descendantPidFile, "utf8").trim());
+      expect(descendantPid).toBeGreaterThan(0);
+      // Root already exited, but close waits on the descendant until advisory timeout cleans the tree.
+      await once(child, "close");
+      expect(await waitUntilDead(descendantPid)).toBe(true);
+    } finally {
+      cancel(true);
+      if (descendantPid > 0) { try { process.kill(descendantPid, "SIGKILL"); } catch {} }
+      await removeTreeAfterBackgroundWork(dir);
+    }
+  }, 15_000);
 });
 
 function fakeProbe(body: string) {
