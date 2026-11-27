@@ -48,9 +48,12 @@ import {
   type RuntimeApiDeps,
 } from "./runtime-api";
 import {
+  hubCodexDesktopReadinessLine,
   inspectCodexShimForConnect,
   type CodexConnectShimReadiness,
 } from "./codex-shim-readiness";
+
+export { hubCodexDesktopReadinessLine } from "./codex-shim-readiness";
 
 export interface ClientCommandDeps extends RuntimeApiDeps {
   lifecycleLockDeps?: ClientLifecycleLockDeps;
@@ -431,6 +434,9 @@ export function clientConnectionStatusLines(status: ClientConnectionStatus): str
         ? " (run 'ocx connect rotate' with a fresh pairing code)" : ""}`]
       : []),
     `Catalog: ${status.catalog}${status.catalogAgeSeconds !== undefined ? ` (${status.catalogAgeSeconds}s old)` : ""}`,
+    ...(hubCodexDesktopReadinessLine(status.selectedClients, status.transport)
+      ? [hubCodexDesktopReadinessLine(status.selectedClients, status.transport)!]
+      : []),
   ];
 }
 
@@ -509,6 +515,8 @@ async function runHubConnect(argv: string[], deps: ClientCommandDeps): Promise<v
   const report = connectCompletionReport(connection, connection.selectedClients, readiness);
   for (const line of report.lines) console.log(line);
   printCodexShimReadiness(connection.selectedClients);
+  const desktopNote = hubCodexDesktopReadinessLine(connection.selectedClients, connection.transport ?? "hub");
+  if (desktopNote) console.log(desktopNote);
   if (report.failure) throw new Error(report.failure);
 }
 
@@ -561,6 +569,8 @@ async function runLinkConnect(argv: string[], deps: ClientCommandDeps): Promise<
   const report = connectCompletionReport(connection, connection.selectedClients, readiness);
   for (const line of report.lines) console.log(line);
   printCodexShimReadiness(connection.selectedClients);
+  const desktopNote = hubCodexDesktopReadinessLine(connection.selectedClients, connection.transport ?? "hub");
+  if (desktopNote) console.log(desktopNote);
   if (report.failure) throw new Error(report.failure);
 }
 
