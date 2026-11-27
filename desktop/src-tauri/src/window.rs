@@ -170,16 +170,25 @@ pub fn shows_update_page(window: &WebviewWindow) -> bool {
 }
 
 pub fn show(window: &WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    if window
+        .app_handle()
+        .state::<crate::dock::Preference>()
+        .enabled()
+    {
+        // The status menu must also restore a minimized dashboard in menu bar mode.
+        let _ = window.unminimize();
+    }
     let _ = window.show();
     let _ = window.set_focus();
     report_visibility(window, true);
-    apply_tray_policy(window.app_handle(), true);
+    refresh_tray_policy(window.app_handle());
 }
 
 pub fn hide(window: &WebviewWindow) {
     let _ = window.hide();
     report_visibility(window, false);
-    apply_tray_policy(window.app_handle(), false);
+    refresh_tray_policy(window.app_handle());
 }
 
 /// Tell the main window's page whether its host window is visible.
@@ -204,22 +213,31 @@ pub fn report_visibility(window: &WebviewWindow, visible: bool) {
 }
 
 #[cfg(target_os = "macos")]
-fn apply_tray_policy(app: &AppHandle, visible: bool) {
-    let policy = if visible {
-        tauri::ActivationPolicy::Regular
-    } else {
-        tauri::ActivationPolicy::Accessory
-    };
-    let _ = app.set_dock_visibility(visible);
-    let _ = app.set_activation_policy(policy);
+pub fn refresh_tray_policy(app: &AppHandle) {
+    let handle = app.clone();
+    // Read live state in the same main-thread turn as both native updates. Startup can
+    // queue this refresh from another thread while the user toggles the menu item.
+    let _ = app.run_on_main_thread(move || {
+        let visible = handle
+            .get_webview_window("main")
+            .is_some_and(|window| window.is_visible().unwrap_or(false));
+        let hide_dock = handle.state::<crate::dock::Preference>().enabled();
+        let has_tray = handle
+            .state::<crate::exit::ExitCoordinator>()
+            .hides_to_tray();
+        let show_dock = crate::dock::show_in_dock(visible, hide_dock, has_tray);
+        let policy = if show_dock {
+            tauri::ActivationPolicy::Regular
+        } else {
+            tauri::ActivationPolicy::Accessory
+        };
+        let _ = handle.set_dock_visibility(show_dock);
+        let _ = handle.set_activation_policy(policy);
+    });
 }
 
 #[cfg(not(target_os = "macos"))]
-fn apply_tray_policy(_app: &AppHandle, _visible: bool) {}
-
-pub fn set_tray_policy(app: &AppHandle, visible: bool) {
-    apply_tray_policy(app, visible);
-}
+pub fn refresh_tray_policy(_app: &AppHandle) {}
 
 #[cfg(test)]
 mod tests {

@@ -1428,6 +1428,8 @@ export const vi: Record<TKey, string> = {
   "logs.detail.stage.headersOnly": "chỉ có tiêu đề",
   "logs.detail.stage.protocolPrelude": "phần mở đầu giao thức",
   "logs.detail.stage.semanticOutput": "đã gửi đầu ra",
+  "logs.status.streamInterrupted": "Luồng bị gián đoạn",
+  "logs.detail.streamInterrupted1006": "Kết nối WebSocket đến nhà cung cấp đã đóng bất thường (1006) sau khi các sự kiện phản hồi được chuyển tiếp. Chưa xác nhận được phản hồi đã hoàn tất.",
   "logs.detail.stage.sideEffect": "đã phát sinh tác dụng phụ",
   "logs.detail.stage.terminal": "đã gửi câu trả lời",
   "logs.detail.resend.permitted": "Có thể gửi lại",

@@ -66,9 +66,20 @@ import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { isAntigravityRawValidationRefusal } from "./antigravity-validation-refusal";
 import { createSidecarSendBudget } from "./sidecar-send-budget";
-import { stripReplayedSearchPairs } from "../../web-search/sidecar-search-replay";
+import { restoreSidecarSearchResults, stripReplayedSearchPairs } from "../../web-search/sidecar-search-replay";
 import { providerConnectTimeoutMs, providerStallTimeoutSec } from "../../stall-timeout";
 import { settleAnthropicPerMessageEffort, shareAnthropicPerMessageEffortTurn } from "../../adapters/anthropic/per-message-effort";
+
+type RoutedTool = NonNullable<OcxParsedRequest["context"]["tools"]>[number];
+
+/** The catalog a web-search sidecar turn sends: caller tools, the synthetic tool, then the advisor. */
+function webSearchTurnTools(requested: readonly RoutedTool[], advisorTool?: RoutedTool): RoutedTool[] {
+  return [
+    ...requested.filter(tool => !advisorTool || (!tool.advisor && tool.name !== ADVISOR_TOOL_NAME)),
+    buildWebSearchTool(),
+    ...(advisorTool ? [advisorTool] : []),
+  ];
+}
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function executeResponsesSidecars(
@@ -297,9 +308,23 @@ export async function executeResponsesSidecars(
       routedTransport: transportState.adapter.runTurn ? "runTurn" : "http",
     })
     : undefined;
+  // A prefix-preserving summary plans like the ordinary turn but never searches: it declares the
+  // same synthetic tool and keeps the same replayed searches, so Anthropic reads the ordinary
+  // request's cached prefix instead of rewriting it (#7307).
+  const summaryWsPlan = routedCompaction && parsed._summaryWebSearch
+    ? planWebSearch(config, { ...parsed, _webSearch: parsed._summaryWebSearch }, false, route.provider, route.modelId,
+      openAiSidecar, { admission: options.admission, codexAuthPolicy: options.codexAuthPolicy,
+        providerName: route.providerName, routedTransport: "http" })
+    : undefined;
+  delete parsed._summaryWebSearch;
+  if (summaryWsPlan) {
+    parsed.context.tools = webSearchTurnTools(parsed.context.tools ?? []);
+    restoreSidecarSearchResults(parsed);
+  }
+  if (routedCompaction) releaseSearchProbeLease();
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
   // Replayed search pairs call the synthetic web_search tool only the sidecar declares (#7269).
-  if (!wsPlan) stripReplayedSearchPairs(parsed);
+  if (!wsPlan && !summaryWsPlan) stripReplayedSearchPairs(parsed);
   const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
   // Hosted loops rebuild per iteration from spread copies; they share one per-message effort turn (#6895).
   if (wsPlan || imgPlan || vidPlan) shareAnthropicPerMessageEffortTurn(parsed);
@@ -823,11 +848,7 @@ export async function executeResponsesSidecars(
       && typeof advisorPlan.consult === "function" && typeof advisorPlan.formatUnavailable === "function"
       ? advisorPlan
       : undefined;
-    parsed.context.tools = [
-      ...requestedTools.filter(tool => !webSearchAdvisor || (!tool.advisor && tool.name !== ADVISOR_TOOL_NAME)),
-      buildWebSearchTool(),
-      ...(webSearchAdvisor ? [webSearchAdvisor.tool] : []),
-    ];
+    parsed.context.tools = webSearchTurnTools(requestedTools, webSearchAdvisor?.tool);
     if (webSearchAdvisor) {
       withholdShadowedAdvisorTool();
       requestState.toolBridgeMaps = buildToolBridgeMaps(parsed);

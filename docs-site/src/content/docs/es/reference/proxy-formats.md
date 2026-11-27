@@ -42,6 +42,10 @@ Los clientes que esperan una respuesta completa reciben un error JSON con el est
 correspondiente. OpenCodex registra el fallo y el uso declarado sin guardar la respuesta para
 reutilizarla mediante `previous_response_id`.
 
+El texto de rechazo por sí solo conserva el estado completado. OpenCodex enmascara las credenciales
+del proveedor en cada campo de rechazo al recibirlo, incluidas las partes de rechazo de los mensajes.
+La salida normal y los argumentos de las herramientas conservan su contenido original.
+
 <a id="required-tools-on-translated-chat-routes"></a>
 
 ## Herramientas obligatorias en rutas Chat traducidas
@@ -231,6 +235,8 @@ está presente, opencodex promueve el marcador para `session_id`. Identidad Grok
 Use 1-128 letras ASCII, dígitos, `.`, `_`, `:` o `-`, comenzando con una letra o dígito. Se recortan los espacios en blanco circundantes; se ignoran los marcadores no válidos o faltantes. La admisión de Loopback preserva el marcador. La admisión autenticada deriva un identificador opaco del marcador y el principal de credenciales admitido, por lo que las credenciales diferentes no comparten un identificador recién promovido. La rotación cambia este identificador; las solicitudes autenticadas sin un principal de confianza se dejan sin cambios.
 
 Utilice marcadores distintos para conversaciones distintas. Esto preserva la continuidad de la conversación para los consumidores intermedios, pero no garantiza un éxito de caché ascendente o ahorros medidos. WebSocket marcos, compactos, y count_tokens no utilizan esta promoción.
+
+Un cliente de Responses que no envíe ninguna cabecera de sesión ni `x-session-id` puede identificar la conversación mediante `prompt_cache_key` en el cuerpo. En `POST /v1/responses`, tanto por HTTP como en tramas WebSocket, opencodex utiliza esa clave como `session_id` con las mismas reglas de caracteres y el mismo alcance de loopback y principal que un `x-session-id` promovido, para que los modelos respaldados por ChatGPT puedan reutilizar el prefijo de prompt ya almacenado en caché. Cualquier cabecera de sesión o `x-session-id` enviada por el cliente tiene prioridad; las solicitudes de Chat Completions y Messages conservan sus propias reglas de identidad.
 
 En el despacho canónico de Responses respaldado por ChatGPT, un `session_id` explícito no vacío gana. De lo contrario, el primer alias no vacío entre `session-id`, luego `thread-id`, suministra `session_id` si su valor es seguro; un alias ganador no válido suprime la identidad más débil. Los valores de cabecera vacíos se eliminan antes de este paso en cada ruta (selección de cabecera de autenticación Responses y los puentes Claude Messages y Chat Completions), por lo que una cabecera vacía cuenta como ausente: una `session-id` vacía permite una victoria `thread-id` válida. La sesión derivada de metadatos Claude solo se aplica cuando no queda ninguna cabecera canónica no vacía o alias. Los alias mantienen sus nombres originales en el cable; sus valores de llamada sin procesar validados se reenvían como un `session_id` explícito, sin el alcance principal utilizado para el `x-session-id` promocionado. Esta conversión de salida no cambia la afinidad de entrada. Los destinos personalizados y los de clave API no cambian, y no se inventa ninguna identidad para las solicitudes sin un marcador de conversación.
 

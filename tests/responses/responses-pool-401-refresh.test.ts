@@ -536,23 +536,25 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     expect(expandPreviousResponseInput(next)).toEqual(next);
   });
 
-  test("bare upstream SSE error masks the selected pool credential in buffered JSON and diagnostics", async () => {
+  test.each(["error", "response.completed"] as const)("%s masks the selected pool credential in buffered JSON", async type => {
     const harness = installHarness({
       responseForSend(authorization) {
-        return new Response(`event: error\ndata: ${JSON.stringify({
-          type: "error",
-          error: { type: "server_error", code: "upstream_error", message: `rejected ${authorization.slice(7)}` },
-        })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+        const message = `rejected ${authorization.slice(7)}`;
+        const event = type === "error" ? { type, error: { type: "server_error", code: "upstream_error", message } }
+          : { type, response: { id: "resp_buffered_verdict", status: "completed", output: [],
+            error: { type: "rate_limit_error", code: "rate_limit_exceeded", message } } };
+        return new Response(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`, { headers: { "content-type": "text/event-stream" } });
       },
     });
     const logCtx = { model: "", provider: "" } as RequestLogContext;
     const response = await handleResponses(request("/v1/responses"), config(), logCtx);
     const body = await response.text();
     expect(harness.sends).toEqual(["Bearer rejected-access"]);
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(type === "error" ? 502 : 429);
+    if (type === "response.completed") expect(JSON.parse(body)).toMatchObject({ error: { code: "rate_limit_exceeded" } });
     expect(body).not.toContain("rejected-access");
     expect(body).toContain("[REDACTED]");
-    expect(JSON.stringify(logCtx)).not.toContain("rejected-access");
+    if (type === "error") expect(JSON.stringify(logCtx)).not.toContain("rejected-access");
   });
 
   test("disconnect during buffered replay does not record a pool conversation-state issuer", async () => {

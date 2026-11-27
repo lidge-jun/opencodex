@@ -16,7 +16,7 @@
  */
 import type { OcxMessage, OcxParsedRequest, OcxReasoningReplayScopeRef } from "../types";
 import { peekBridgeSearchReplay, rememberBridgeSearchReplay } from "../responses/bridge-search-replay-cache";
-import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
+import { isReplayedSearchResult, WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 
 export function sidecarSearchReplayScope(scope: OcxReasoningReplayScopeRef | undefined): string | undefined {
   if (!scope?.clientPrincipalId || !scope.clientThreadId) return undefined;
@@ -78,19 +78,22 @@ export function stripReplayedSearchPairs(parsed: OcxParsedRequest): void {
   const cells = parsed._replayedWebSearchCells;
   if (!cells?.length) return;
   const ids = new Set(cells.map(cell => cell.callId));
-  const isPair = (part: { type: string; id?: string; name?: string }) =>
-    part.type === "toolCall" && part.name === WEB_SEARCH_TOOL_NAME && part.id !== undefined && ids.has(part.id);
   const kept: OcxMessage[] = [];
-  for (const message of parsed.context.messages) {
-    if (message.role === "toolResult" && message.toolName === WEB_SEARCH_TOOL_NAME && ids.has(message.toolCallId)) continue;
-    if (message.role === "assistant" && message.content.some(isPair)) {
-      const content = message.content.filter(part => !isPair(part));
-      if (!content.some(part => part.type !== "thinking")) continue;
-      kept.push({ ...message, content });
-      continue;
+  const previousStart = parsed._currentInputMessageStart;
+  let currentStart = 0;
+  for (const [index, message] of parsed.context.messages.entries()) {
+    if (message.role === "assistant") {
+      const content = message.content.filter(part => !(part.type === "toolCall" && part.name === WEB_SEARCH_TOOL_NAME && ids.has(part.id)));
+      if (content.length === message.content.length) kept.push(message);
+      else if (content.some(part => part.type !== "thinking")) kept.push({ ...message, content });
+      // The removed assistant turn still separates old input from what the caller sent next.
+      else currentStart = kept.length;
+    } else if (!isReplayedSearchResult(message, ids)) {
+      kept.push(message);
     }
-    kept.push(message);
+    if (previousStart !== undefined && index < previousStart) currentStart = kept.length;
   }
+  if (previousStart !== undefined || currentStart > 0) parsed._currentInputMessageStart = currentStart;
   parsed.context.messages = kept;
   delete parsed._replayedWebSearchCells;
 }

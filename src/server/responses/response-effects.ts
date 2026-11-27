@@ -90,6 +90,9 @@ export function createResponsesEffects(
     }
   };
   if (routedCompaction) {
+    // The summary never searches. With a preserved prefix it still declares the synthetic tool an
+    // ordinary turn declares; the sidecar step decides that from the same plan (#7307).
+    if (preserveCompactionPrefix && parsed._webSearch) parsed._summaryWebSearch = parsed._webSearch;
     delete parsed._webSearch;
     if (!preserveCompactionPrefix) {
       delete parsed.context.tools;

@@ -277,6 +277,7 @@ export function parseRequest(
   let decodedCheckpoint = false;
   let contextCompactionBoundary = false;
   let continuationConversationMessageIndex: number | undefined;
+  let replayedContextMessageCount: number | undefined;
 
   if (typeof data.instructions === "string" && data.instructions.length > 0) {
     // #5217: this is the stored session instruction block. A sub-agent spawned on a DIFFERENT model
@@ -300,6 +301,11 @@ export function parseRequest(
       const item = inputItems[itemIndex];
       // Boundaries are measured on the caller's input, before any replayed-search rewrite.
       const inputIndex = webSearchReplay?.sourceIndexes[itemIndex] ?? itemIndex;
+      // Fresh tool results belong to the input delta even when they precede the point where
+      // developer guidance can be inserted. Keep those two positions independent.
+      if (replayedInputPrefixLength > 0 && replayedContextMessageCount === undefined && inputIndex >= replayedInputPrefixLength) {
+        replayedContextMessageCount = messages.length;
+      }
       if (itemIndex > 0 && isAnthropicProgressMirror(item, anthropicProgressEnvelope(inputItems[itemIndex - 1]))) continue;
       const effectiveType = (item as { type?: string }).type ?? ("role" in item ? "message" : undefined);
       const itemRole = (item as { role?: string }).role;
@@ -757,7 +763,10 @@ export function parseRequest(
     stream: data.stream === true,
     options,
     _rawBody: body,
-    ...(replayedInputPrefixLength > 0 ? { _replayPrefixLen: replayedInputPrefixLength } : {}),
+    ...(replayedInputPrefixLength > 0 ? {
+      _replayPrefixLen: replayedInputPrefixLength,
+      _currentInputMessageStart: replayedContextMessageCount ?? messages.length,
+    } : {}),
     ...(continuationConversationMessageIndex !== undefined
       ? { _continuationConversationMessageIndex: continuationConversationMessageIndex }
       : {}),
