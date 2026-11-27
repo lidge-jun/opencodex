@@ -511,6 +511,11 @@ function applyOrRefreshIntegration(
     snapshot, resultFingerprint: fingerprint(text), resultAbsent: false, priorRecord: record,
   };
   const refreshablePaths = refreshablePathsOf(contribution);
+  const sourceMissingTrailingNewlineFingerprint = classified.state === "absent"
+    ? (target.sourcePreservingToml && before !== null && before.length > 0 && !before.endsWith("\n")
+      ? fingerprint(before)
+      : undefined)
+    : record?.sourceMissingTrailingNewlineFingerprint;
   return commit({
     io, store, clientId, configPath, before, nextText: text, state: "current",
     priorRecord: record,
@@ -528,9 +533,8 @@ function applyOrRefreshIntegration(
         refreshablePaths,
       } : {}),
       fragmentPaths: fragmentPathsOf(contribution), createdContainers: created,
-      ...(record?.sourceMissingTrailingNewline === true
-        || (!record && target.sourcePreservingToml && before !== null && before.length > 0 && !before.endsWith("\n"))
-        ? { sourceMissingTrailingNewline: true } : {}),
+      ...(sourceMissingTrailingNewlineFingerprint !== undefined
+        ? { sourceMissingTrailingNewlineFingerprint } : {}),
       appliedAt: at, opId,
     },
     entry,
@@ -642,7 +646,7 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
       text = patched;
     } else if (target.sourcePreservingToml && before !== null) {
       const patched = patchTomlTablesSource(before, record!.fragmentPaths, [], doc, {
-        restoreAbsentTrailingNewline: record!.sourceMissingTrailingNewline === true,
+        restoreAbsentTrailingNewlineFingerprint: record!.sourceMissingTrailingNewlineFingerprint,
       });
       if (patched === null) return refuse(clientId, "unsafe", "unsafe", tomlRefusalReason(configPath, "nothing was removed"));
       text = patched;

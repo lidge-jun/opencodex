@@ -1146,6 +1146,28 @@ describe("Kimi source preservation (#9152)", () => {
     expect(readFileSync(blankPath, "utf8").endsWith(`\n\n\n${sibling}`)).toBe(true);
     expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
     expect(readFileSync(blankPath, "utf8")).toBe(`${original}\n\n${sibling}`);
+
+    // Overwriting a pre-existing managed table in a newline-less file must not strip the
+    // preceding user line's newline on disable.
+    const existingNoEof = 'default_model = "kimi-k3"\n\n[providers.opencodex]\ntype = "old"';
+    const overwritePath = installKimi(existingNoEof);
+    expect(overwriteIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(overwritePath, "utf8")).toBe('default_model = "kimi-k3"\n');
+
+    // Adding a sibling line before the managed block after an initial append to a newline-less
+    // file invalidates the EOF provenance, so disable keeps the new sibling's trailing newline.
+    const editedBeforePath = installKimi(noNewline);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    writeFileSync(
+      editedBeforePath,
+      readFileSync(editedBeforePath, "utf8").replace(
+        `${noNewline}\n\n[providers.opencodex]`,
+        `${noNewline}\ntheme = "dark"\n\n[providers.opencodex]`,
+      ),
+    );
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(editedBeforePath, "utf8")).toBe(`${noNewline}\ntheme = "dark"\n`);
   });
 });
 
