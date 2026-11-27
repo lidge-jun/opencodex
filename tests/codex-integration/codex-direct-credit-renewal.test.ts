@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -82,6 +83,7 @@ describe("Direct explicit-account credit renewal", () => {
     priorHome = process.env.OPENCODEX_HOME;
     home = mkdtempSync(join(tmpdir(), "ocx-direct-credit-"));
     process.env.OPENCODEX_HOME = home;
+    bindStoredCodexPoolRoutingForTests();
     codexHome = installIsolatedCodexHome("ocx-direct-credit-native-");
     writeFileSync(join(codexHome.path, "auth.json"), JSON.stringify({
       tokens: { access_token: "fixture-native-main", account_id: "fixture-native-account" },

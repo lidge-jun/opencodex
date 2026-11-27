@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { createCommandCodeAdapter } from "../../src/adapters/command-code";
 import { normalizeAnthropicInputSchema } from "../../src/adapters/anthropic-input-schema";
 import * as inputSchemas from "../../src/adapters/anthropic-input-schema";
@@ -51,7 +51,8 @@ function sharedRefGraph(depth: number): Record<string, unknown> {
 
 describe("Command Code wireTools input_schema", () => {
   test("normalizes each visible tool once when preparing the wire and recovery views", async () => {
-    const normalize = spyOn(inputSchemas, "normalizeAnthropicInputSchema");
+    const normalize = mock(inputSchemas.createAnthropicInputSchemaNormalizer());
+    const catalog = spyOn(inputSchemas, "createAnthropicInputSchemaNormalizer").mockReturnValue(normalize);
     try {
       const parameters = { type: "object", properties: { path: { type: "string" } } };
       const schemas = await wiredSchemas([
@@ -59,9 +60,10 @@ describe("Command Code wireTools input_schema", () => {
         { name: "write", description: "Write", parameters },
       ]);
       expect(Object.keys(schemas)).toEqual(["read", "write"]);
+      expect(catalog).toHaveBeenCalledTimes(1);
       expect(normalize).toHaveBeenCalledTimes(2);
     } finally {
-      normalize.mockRestore();
+      catalog.mockRestore();
     }
   });
 

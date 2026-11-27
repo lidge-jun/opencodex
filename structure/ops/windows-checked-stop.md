@@ -28,7 +28,7 @@ lazily, caches a failed load as unavailable, and closes every handle in a `final
 - an exit watch: a handle opened at bind time and polled with `WaitForSingleObject(handle, 0)`;
 - the Task Scheduler service host PID through `QueryServiceStatusEx` on `Schedule`, only while it runs.
 
-Link stop reads a live process’s creation time and token user through one handle. To verify a stop owner, it also reads the command line through that handle using `src/config/windows-process-command-line.ts`. The creation time uses .NET ticks truncated to CIM’s microsecond precision so existing receipts and runtime records still match. If the native API is unavailable, a bounded CIM probe refreshes the creation time after reading the SID. A failed native read leaves the identity unverified. Forced Link termination requires the native handle and compares the saved creation time and token user on that handle before ending the process.
+The Link Child reads its live same-user creation proof in-process on one native handle, using `GetProcessTimes` and the token user SID; stop-owner argv is read through that same handle by `src/config/windows-process-command-line.ts`. It preserves the existing .NET tick identity at microsecond precision without spawning PowerShell or caching a PID proof. The process fallback compares that identity on the same handle used for termination. Unavailable native identity or handle binding refuses promptly; it does not fall back to repeated CIM subprocesses. `tests/windows/windows-stop-owner-identity.test.ts` covers handle ownership, stale identities and an actual-Windows-only repeated-read budget.
 
 Windows ARM64, other platforms and any test that simulates a platform get no native API.
 `src/service/windows-process-evidence.ts` is the facade the operations use. Its process snapshot is
@@ -44,12 +44,17 @@ that baseline. Owner evidence arriving at or after either cutoff is discarded.
 Owner verification requires a successful `GetOwnerSid`,
 valid local/domain or Entra ID SIDs, and a fresh CIM read reporting the original creation time.
 Matching SIDs prove the current account. Different supported SIDs prove a foreign account.
-Built-in and virtual service SIDs and failed or skipped lookups leave ownership unverified.
-Raw SIDs stay within the snapshot parser. Later operations receive nullable `foreignOwner`.
-All reads share the snapshot timeout and output cap. On x64 a native creation time is kept
-only when it agrees with CIM within one millisecond. A disagreement clears creation time
-and owner evidence. Elsewhere the CIM time is used for observation. The Schedule PID falls
-back to a capped `sc.exe queryex Schedule` from the trusted system directory.
+On Windows x64, a missing CIM owner sample for a wrapper with this installation's complete
+launcher or script path can be supplemented by a query-only live handle. Its process creation
+time must exactly match the original CIM microsecond, and its token user must match both the
+caller and the supported SID reported by the helper. This bounded probe can confirm a same-user
+wrapper only. It does not override conflicting evidence. Built-in and virtual service SIDs and
+unresolved lookups remain unverified. Later operations receive nullable `foreignOwner`.
+All reads share the snapshot timeout and output cap. On x64 a native creation-time read
+must start and finish before the snapshot deadline and agree with CIM within one millisecond.
+Otherwise the row retains its ancestry with unknown creation time and owner. Elsewhere the CIM
+time is used for observation. The Schedule PID falls back to a capped `sc.exe queryex Schedule`
+from the trusted system directory.
 
 ## Binding rule
 
@@ -88,7 +93,12 @@ manager still running is `survived` (`unbound-wrapper` when the survivor was nev
 is `survived` while the proxy is still alive after the service reports stopped. The authorizer
 variant `guardedStopWindowsServiceChecked` runs its authorizer at entry, before each manager stop and before each terminate and
 reports a refusal as `WindowsCheckedStopRefusedError` with what had already happened. For Task
-Scheduler it reauthorizes after validating the helper proof, before sending `stop-before` on stdin. The
+Scheduler it reauthorizes after validating the helper proof, before sending `stop-before` on stdin.
+With native identity support, each captured running instance carries its GUID, engine PID and
+creation time through that exchange. The native handle must prove the matching process and
+token user for every engine. The helper rechecks the registration and the captured instances
+before calling their COM stop methods. The bounded CIM owner check remains the fallback when
+native identity support is unavailable. The
 helper and outer deadlines must still be open after authorization. The helper starts its
 monotonic clock before sending proof. The parent measures from proof receipt and sends the
 earlier deadline as a cutoff on that clock. Time spent delivering approval and refreshing
@@ -152,9 +162,10 @@ shape, the exact launcher, and the single run-as principal through `src/service/
 The logon scope and every recovery-trigger scope must match the expected account. Only the
 recognized legacy shape without recovery triggers may omit the logon scope. The stop proof accepts a disabled task with the same
 ownership evidence. Installation health still requires an enabled task.
-The helper requires a successful same-account SID check for every `EnginePID`, with the process
-creation time re-read after the owner lookup. After approval it re-reads the registration XML and
-refreshes every captured instance to verify that its GUID, engine PID and running state still agree.
+Each `EnginePID` requires the native identity proof described above when available.
+The CIM fallback re-reads process creation time after checking the owner SID. After approval the
+helper re-reads the registration XML and refreshes every captured instance to verify that its GUID,
+engine PID and running state still agree.
 It stops each captured `IRunningTask` by instance GUID. An empty collection counts as idle only if
 the final task state shows ready or disabled before the stop deadline. Failed proof returns
 `evidence-unreadable` with instructions to verify the task in Task Scheduler and repair an owned
@@ -172,7 +183,7 @@ objects. The final manager-state probe treats both running and queued tasks as a
 
 The task's running state is read from `schtasks /query /fo CSV`. The status words observed from shipped
 zh-CN, ko-KR, and ja-JP resources are recognized there, because a cold `Get-ScheduledTask` takes
-1.6 s to 4.9 s (#8863) and cannot finish inside the 1 s cap. Any other localized word still falls back to it.
+1.6 s to 4.9 s (#8863) and cannot finish inside the 1 s cap. Any other localized word (French `Prêt`, for example) falls back to the numeric `TASK_STATE` read through the `Schedule.Service` COM object, which needs no module import (about 0.3 s including PowerShell startup on the reporting host): 2 and 4 (queued, running) are active, 1 and 3 (disabled, ready) are stopped, and a failed, timed-out or other value stays unknown.
 The instance stop maps an access-denied HRESULT to `denied`. A running WinSW service is only this home's manager
 when `sc qc` shows a `BINARY_PATH_NAME` naming this installation's WinSW executable, the same
 proof the guarded manager path uses: the service ID is fixed, so a successful `sc query` alone

@@ -22,6 +22,12 @@ export interface NativeResponseControl {
   continue(frame: Record<string, unknown>): boolean;
   /** Apply operator-configured limits to the exact reconstructed upstream frame. */
   assertOutboundFrame?(text: string): void;
+  /**
+   * The upload ceiling the attached socket's handshake advertised (`x-codex-websocket-max-message-bytes`).
+   * A control that queues frames checks it before queuing, so a refusal reaches its caller as a known
+   * non-delivery instead of failing the channel when the queued frame is finally prepared.
+   */
+  setTransportMessageLimit?(bytes: number | undefined): void;
 }
 
 export const OPENAI_API_RESPONSES_URL = "https://api.openai.com/v1/responses";

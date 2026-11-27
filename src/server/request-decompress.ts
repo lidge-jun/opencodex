@@ -400,6 +400,25 @@ export function readJsonRequestBody(
 }
 
 /**
+ * Read a non-JSON data-plane body (multipart) as decoded bytes under the same cap, declared-length
+ * refusal and content-encoding handling as {@link readBoundedJsonRequestBody}.
+ */
+export async function readBoundedRequestBodyBytes(req: Request, maxBytes: number, signal: AbortSignal = req.signal): Promise<Uint8Array> {
+  const declaredLength = declaredBodyLength(req);
+  if (declaredLength !== null && declaredLength > maxBytes) {
+    const error = new DecompressedBodyTooLargeError(declaredLength, maxBytes, "declared_wire");
+    cancelStreamWithoutWaiting(req.body, error);
+    throw error;
+  }
+  const raw = await readRequestBodyBytesCapped(req.body, maxBytes, signal);
+  assertBodySizeWithinLimit(raw, maxBytes, "observed_wire_lower_bound");
+  const decoded = decodeRequestBody(raw, req.headers.get("content-encoding"), maxBytes);
+  recordRequestBodyFacts(req, raw.byteLength, req.headers.get("content-encoding"), decoded.byteLength);
+  updateInboundBodyReservation(req, Math.max(raw.byteLength, decoded.byteLength));
+  return decoded;
+}
+
+/**
  * Admit a body the caller already parsed (a Remote Link WebSocket create, #8600) as if it had been read: its serialized
  * size is held to the same limit and observed by the same budget as the parse at the end of the bounded reader.
  */

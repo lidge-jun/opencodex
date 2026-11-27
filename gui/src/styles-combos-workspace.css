@@ -494,18 +494,6 @@
 }
 
 
-.cwi-target-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.cwi-target-entry {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
 .cwi-jev-target-meta {
   display: flex;
   align-items: flex-start;
@@ -576,17 +564,6 @@
   font-size: var(--text-label);
 }
 
-.cwi-target-row {
-  display: grid;
-  grid-template-columns: 28px auto minmax(0, 1fr) minmax(0, 1.2fr) 4.5rem auto auto;
-  gap: 8px;
-  align-items: center;
-}
-
-.cwi-target-row--failover {
-  grid-template-columns: 28px auto minmax(0, 1fr) minmax(0, 1.2fr) auto auto;
-}
-
 .cwi-target-row--dragging {
   opacity: 0.55;
 }
@@ -618,25 +595,6 @@
 
 .cwi-target-grip:active {
   cursor: grabbing;
-}
-
-.cwi-target-reorder {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 0;
-  flex-shrink: 0;
-}
-
-.cwi-target-reorder .btn {
-  min-width: 0;
-  padding: 2px 4px;
-  line-height: 1;
-}
-
-.cwi-target-actions {
-  display: flex;
-  gap: 2px;
-  flex-shrink: 0;
 }
 
 .cwi-quota-badge {
@@ -790,16 +748,6 @@
 
   .cwi-capability-row {
     align-items: flex-start;
-  }
-
-  .cwi-target-row,
-  .cwi-target-row--failover {
-    grid-template-columns: 28px auto 1fr auto;
-  }
-
-  .cwi-target-row > .cwi-quota-badge {
-    grid-column: 3;
-    justify-self: start;
   }
 
   .cwi-jev-target-meta {

@@ -42,6 +42,51 @@ test("busy applies reject the request and retry on the short cadence without ove
   scheduler.stop();
 });
 
+test("a retained stop defers periodic sync while Home requests keep their original result", async () => {
+  const timers: Array<{ run: () => void; ms: number }> = [];
+  let fenced = true, checks = 0, calls = 0, reports = 0;
+  const refusal = new Error("link_apply_busy");
+  const scheduler = startRouteIntentTick(connection, {
+    deferPeriodic: () => { checks++; return fenced; },
+    sync: async () => { calls++; if (fenced) throw refusal; },
+    onApplied: () => { reports++; },
+    setTimer: (run, ms) => { const timer = { run, ms }; timers.push(timer); return timer; },
+    clearTimer: timer => { const i = timers.findIndex(entry => entry === timer); if (i >= 0) timers.splice(i, 1); },
+  });
+  const first = timers.shift()!;
+  expect(first.ms).toBe(2_000);
+  first.run(); await flush();
+  expect([checks, calls, reports]).toEqual([1, 0, 0]);
+  expect(timers.map(timer => timer.ms)).toEqual([5_000]);
+
+  await expect(scheduler.requestSync()).rejects.toBe(refusal);
+  await flush();
+  expect([checks, calls, reports]).toEqual([1, 1, 0]);
+  expect(timers.map(timer => timer.ms)).toEqual([5_000]);
+
+  fenced = false;
+  timers.shift()!.run(); await flush();
+  expect([checks, calls, reports]).toEqual([2, 2, 1]);
+  expect(timers.map(timer => timer.ms)).toEqual([60_000]);
+  scheduler.stop();
+  expect(timers).toHaveLength(0);
+});
+
+test("an inconclusive periodic fence check falls through to sync", async () => {
+  const timers: Array<{ run: () => void; ms: number }> = [];
+  let calls = 0, reports = 0;
+  const scheduler = startRouteIntentTick(connection, {
+    deferPeriodic: () => { throw new Error("runtime record unavailable"); },
+    sync: async () => { calls++; },
+    onApplied: () => { reports++; },
+    setTimer: (run, ms) => { timers.push({ run, ms }); return timers.length; }, clearTimer: () => {},
+  });
+  timers.shift()!.run(); await flush();
+  expect([calls, reports]).toEqual([1, 1]);
+  expect(timers.map(timer => timer.ms)).toEqual([60_000]);
+  scheduler.stop();
+});
+
 test("machine clients reports the saved selection a scheduled sync changed, only for the served connection", async () => {
   const { handleMachineApi } = await import("../../src/client/machine-api");
   const state = { serverUrl: "http://127.0.0.1:22001", managementUrl: "http://127.0.0.1:22001", managementTransport: "direct" as const,

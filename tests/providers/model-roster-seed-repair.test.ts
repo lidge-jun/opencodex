@@ -352,7 +352,7 @@ describe.each([
     expect(projectStaleModelRosters(config).changed).toBe(true);
     const added = entry.to.filter(id => !before.includes(id));
     expect(row.modelMaxOutputTokens).toEqual({
-      "qwen3.8-max": 4_096, ...Object.fromEntries(added.map(id => [id, ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS[id]])),
+      "qwen3.8-max": 4_096, ...Object.fromEntries(added.map(id => [id, entry.maxOutputTokens![id]])),
     });
     expect(routedMaxOutputTokens("custom-token-plan", row, { id: "deepseek-v4.1-flash-1017" } as never)).toBe(393_216);
     const kept = makeConfig([...before]);

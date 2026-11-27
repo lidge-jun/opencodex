@@ -5,6 +5,7 @@ import { CODEX_ACCOUNT_NAMESPACE_COMBO_ALIAS_COLLISION_ERROR } from "../codex/ac
 import { redactSecretString } from "../lib/redact";
 import { isPassiveRead } from "../lib/passive-read";
 import { hasWarnedConfigFallback, markWarnedConfigFallback } from "./warn-memo";
+import { recordConfigLoadFallback } from "./rebase-provenance";
 import { configSchema } from "./schema/config-schema";
 import type { OcxConfig } from "../types";
 
@@ -224,6 +225,7 @@ export function warnDroppedConfigSections(configPath: string, dropped: string[],
 }
 
 export function warnAndBackupInvalidConfig(configPath: string, error: unknown): void {
+  recordConfigLoadFallback(configPath);
   if (hasWarnedConfigFallback(configPath)) return;
   markWarnedConfigFallback(configPath);
 

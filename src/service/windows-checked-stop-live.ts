@@ -40,7 +40,7 @@ import {
 import { windowsProcessNative, type WindowsProcessNativeApi, type WindowsTerminateResult } from "./windows-process-native";
 import type { WindowsListenerIdentity, WindowsPortSample, WindowsStopConfirmDeps } from "./windows-stop-confirm";
 import { windowsSchedulerCsvIncludesTask } from "./windows-scheduler";
-import { WINDOWS_TASK_INSTANCE_STOP_SCRIPT, verifyWindowsTaskStopProof } from "./windows-task-instance-stop";
+import { windowsTaskInstanceStopScript, verifyWindowsTaskEngineProof, verifyWindowsTaskStopProof } from "./windows-task-instance-stop";
 
 // Only a missing task after connecting to the local root folder establishes absence.
 const TASK_REGISTRATION_SCRIPT = String.raw`
@@ -179,7 +179,8 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
  * resources, and the PowerShell fallback cannot start inside Part A's 1 s manager-state cap on a
  * cold machine (#8863), so the words observed from shipped resources are read here: zh-CN, ja-JP
  * and ko-KR from their System32 locale directories, ko-KR running/ready also from two machines.
- * Any other word stays unknown and falls back to Get-ScheduledTask's locale-independent State enum.
+ * Any other word stays unknown here and falls back to the numeric TASK_STATE read through the
+ * Schedule.Service COM object, which is locale-independent and imports no module.
  */
 // A queued instance can launch after Part A. Only ready and disabled prove inactivity.
 const TASK_CSV_ACTIVE = new Set(["running", "queued", "正在运行", "已排队", "실행 중", "대기", "実行中", "キューに登録済み"]);
@@ -273,6 +274,8 @@ export function stopperUnderHomeWrapper(
 
 export interface WindowsCheckedStopLiveOptions {
   run?: WindowsStopCommandRunner;
+  /** Use an injected engine observer with an injected runner. Synthetic PIDs never reach the live kernel. */
+  taskEngineIdentity?: WindowsProcessNativeApi["sameUserIdentity"];
   /**
    * The `sc.exe qc` query that proves the registered WinSW service runs THIS installation's
    * executable. Defaults to the capped runner; tests inject it.
@@ -370,12 +373,19 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       const deadline = performance.now() + Math.floor(timeoutMs);
       const withinDeadline = () => performance.now() < deadline && gate();
       const launcher = windowsLauncherVbsPath();
-      const script = Buffer.from(WINDOWS_TASK_INSTANCE_STOP_SCRIPT, "utf16le").toString("base64");
+      const identity = options.taskEngineIdentity ?? (run === liveWindowsStopCommandRunner ? windowsProcessNative()?.sameUserIdentity : undefined);
+      const script = Buffer.from(windowsTaskInstanceStopScript(identity !== undefined), "utf16le").toString("base64");
       let approved = false, dispatched = false, observedMutation = false;
+      let expectedVerdict: "ended" | "not-running" | null = null;
       let refusal: { cause: unknown } | undefined;
       const ended = await run("powershell", ["-NoProfile", "-NoLogo", "-NonInteractive", "-EncodedCommand", script], timeoutMs,
         async line => {
-          if (!verifyWindowsTaskStopProof(line, launcher) || !withinDeadline()) return false;
+          if (!withinDeadline()) return false;
+          if (identity) {
+            expectedVerdict = verifyWindowsTaskEngineProof(line, launcher, identity, withinDeadline);
+            if (!expectedVerdict) return false;
+          } else if (!verifyWindowsTaskStopProof(line, launcher)) return false;
+          if (!withinDeadline()) return false;
           try {
             await authorize?.();
           } catch (cause) {
@@ -394,7 +404,9 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       if (ended.timedOut || ended.status !== 0) return finish("failed", attempted || dispatched);
       const verdict = lines.at(-1);
       if (verdict === "unverified-registration" || verdict === "denied") return finish(verdict, attempted);
-      if (approved && (verdict === "ended" || verdict === "not-running")) return finish(verdict, attempted || verdict === "ended");
+      if (approved && (verdict === "ended" || verdict === "not-running") && (!identity || verdict === expectedVerdict)) {
+        return finish(verdict, attempted || verdict === "ended");
+      }
       return finish("failed", attempted || dispatched && verdict !== "failed");
     },
     async taskState(timeoutMs) {
@@ -402,14 +414,15 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       const csv = await run("schtasks", ["/query", "/tn", TASK, "/fo", "CSV", "/nh"], timeoutMs);
       const parsed = csv.status === 0 ? parseTaskCsvState(csv.stdout) : "unknown";
       if (parsed !== "unknown") return parsed;
-      // A localized status word: ask Get-ScheduledTask, whose State is an enum name.
+      // Query TASK_STATE directly: importing ScheduledTasks can exhaust the one-second state budget.
       const left = timeoutMs - (Date.now() - started);
       if (left <= 0) return "unknown";
       const ps = await run("powershell", ["-NoProfile", "-NoLogo", "-NonInteractive", "-Command",
-        "(Get-ScheduledTask -TaskName '" + TASK + "' -TaskPath '\\' -ErrorAction Stop).State"], left);
+        `$ErrorActionPreference = 'Stop'; $s = New-Object -ComObject Schedule.Service; $s.Connect(); $s.GetFolder('\\').GetTask('${TASK}').State`], left);
+      if (ps.timedOut || ps.status !== 0) return "unknown";
       const state = ps.stdout.trim();
-      if (/^(running|queued)$/i.test(state)) return "running";
-      if (/^(ready|disabled)$/i.test(state)) return "not-running";
+      if (state === "2" || state === "4") return "running"; // queued or running
+      if (state === "1" || state === "3") return "not-running"; // disabled or ready
       return "unknown";
     },
     async winswStop(timeoutMs) {

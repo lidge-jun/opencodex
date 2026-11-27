@@ -113,6 +113,68 @@ a redirect, keep the 1 MiB response cap, and the finished-video download keeps i
 `data:` policy.
 `tests/videos/video-provider.test.ts` covers both halves.
 
+### Video wire
+
+A row's `videoApi` picks the job wire (`src/images/video-wire.ts`); `resolveVideoProviderRow` copies
+it onto `VideoProviderAuth` for custom rows only, so the pinned `xai` destination is always the xAI
+wire. Absent or `"xai"` keeps `POST /videos/generations`, poll `GET /videos/{id}` and the public
+`video.url` download above. `"openai"` selects `src/images/openai-video-client.ts`: `POST /videos`,
+poll `GET /videos/{id}` (`queued`/`in_progress` keep polling, `completed` finishes with no URL), and
+`GET /videos/{id}/content` streamed by `writeVideoResponseToArtifact` under the 200 MiB video cap and
+per-turn budget. All three requests use the same `providerOutboundPost`/`providerOutboundGet` policy,
+row name, key and `cleartextPolicy: "credentialed"` as the xAI wire, so the content download obeys the
+submit POST's address, private-network, cleartext, proxy and no-redirect rules and never reaches another
+host. Upstream job ids `.` and `..` are refused because they survive percent-encoding and would
+collapse onto another path of the same host. Bridge arguments map to `seconds`, `size` and
+`input_reference.image_url`; last frames, keyframes and reference images are refused before any send.
+`tests/videos/video-openai-client.test.ts` and `tests/videos/video-openai-wire-bridge.test.ts` cover it.
+
+## Public Videos
+
+`src/server/videos.ts` serves `POST /v1/videos`, `GET /v1/videos/{id}` and `GET /v1/videos/{id}/content`
+(`src/lib/video-routes.ts` matches them; other methods and subpaths reach the JSON `/v1/*` 404).
+The dispatcher applies the Images admission: draining refusal, `resolveApiAuth`, origin policy and a
+request-log row (`usage.jsonl`); only the paid create takes an admitted turn slot and the inbound body gate
+(`/v1/videos` is in `CONFIGURABLE_JSON_BODY_ROUTES`). Its upstream POST is bound to that turn lease, so shutdown aborts
+it with a 503, and it keeps the listener request timeout until its body is read. The body read also has a 60 s
+whole-body deadline (the idle timeout alone bounds only silence), after which the reader is cancelled and the
+create answers 408 before any send, so neither a stalled nor a trickling upload can hold either slot. The loopback listener and Remote Link admit
+the same three shapes.
+
+`model` of `<provider>/<model>` names a configured row and sends the bare model; a model without a slash goes
+to `images.videoProvider`. A slash always means a provider prefix: an unknown prefix is refused before any
+send, and a backend model id containing a slash is written behind its provider. A named row is final even
+when it is refused.
+The row must pass `resolveVideoProviderRow` and set `videoApi: "openai"`; nothing else serves these
+routes and nothing falls back. A configured key's scope is checked with `admissionScopeDenial` against
+that row and model before the create, and again before each poll and content request.
+
+The returned job `id` is an AES-256-GCM handle (`src/server/video-handle.ts`, random nonce) that encrypts the provider, the
+upstream id and the model, keyed by `video-handle-key` in the config directory (32 random bytes, mode
+0600, recorded as owned, created exclusively). The authentication tag also covers, as associated data, the admission principal (admission kind,
+configured key id and a SHA-256 of the exact presented secret, read with `resolveApiAuth`'s header precedence;
+loopback is its own principal) without carrying it, so a handle presented by another key, under a replaced
+or rotated secret on the same key id, edited, or minted under another signing key reads as `404` before any
+credential is used. The key is read through an `O_NOFOLLOW` descriptor and refused unless it is a small
+regular file owned by this user with no group/other bits; it is created in a private temporary file and
+hard-linked into place, so a concurrent first use reads a complete key. Create loads the key and checks
+that the provider (128 bytes) and model (256 bytes) fit a handle before the paid POST, so a key failure or
+an unsealable handle sends nothing; nothing mints a process-local key. Poll and content re-resolve the
+row from the handle and refuse it if it has since become unusable.
+
+Create accepts JSON or multipart; a multipart `input_reference` PNG/JPEG/WebP file becomes the JSON
+`input_reference.image_url` data URL, and other files are refused. One upstream attempt per create.
+Upstream errors keep a 4xx status and only allowlisted detail; transport errors are redacted. Job
+objects are rebuilt from an allowlist of closed-shape fields (status, progress, seconds, size, timestamps,
+an error code and allowlisted detail or a generic message) with the handle as `id` and the model OCX sent;
+upstream free text never passes through. Status and error code are relayed only from closed value lists, and
+the handle is encrypted, so an upstream that echoes a credential as its job id, status or code cannot reflect it. Content is streamed with a
+fixed media-type allowlist (anything else is `application/octet-stream`), `nosniff`, `no-store`, a
+200 MiB cap, and only the `video`, `thumbnail` and `spritesheet` variants. List, delete, remix, edit
+and extension are not served. Neither xAI nor OpenAI publishes a Responses-API video tool (xAI Responses
+has `image_generation` only; OpenAI shut its Videos API down on 2026-09-24), so there is no Responses
+video path. `tests/server/server-videos.test.ts` and `tests/server/video-handle.test.ts` cover it.
+
 ## Hosted Responses image display
 
 For loopback-admitted Codex Responses clients,

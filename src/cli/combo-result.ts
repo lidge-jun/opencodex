@@ -53,7 +53,8 @@ function publicCombo(value: unknown): Record<string, unknown> {
       if (!pin) invalid();
       result[key] = pin;
       continue;
-    } else if (key === "nativeAlias" || key === "allowMeteredTargets" || key === "decisionQuotaSignals") {
+    } else if (key === "nativeAlias" || key === "allowMeteredTargets" || key === "decisionQuotaSignals"
+      || key === "quotaOnlyFallback" || key === "preserveFallbackModel") {
       if (typeof child !== "boolean") invalid();
     } else invalid();
     result[key] = child;
