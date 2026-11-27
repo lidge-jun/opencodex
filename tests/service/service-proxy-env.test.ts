@@ -95,10 +95,21 @@ describe("service proxy environment ownership", () => {
     const picker = "http://127.0.0.1:13101";
     storePickerProfile(picker);
     expect(resolvedProxyEnv({ HTTPS_PROXY: picker, HTTP_PROXY: `${picker}/`, ALL_PROXY: picker })).toEqual([]);
+    expect(resolvedProxyEnv({ HTTPS_PROXY: "HTTP://127.0.0.1:13101", HTTP_PROXY: "HTTP://127.0.0.1:13101/" })).toEqual([]);
     expect(resolvedProxyEnv({ HTTPS_PROXY: picker, https_proxy: "http://127.0.0.1:7897" }))
       .toEqual([{ name: "HTTPS_PROXY", value: "http://127.0.0.1:7897" }]);
     expect(resolvedProxyEnv({ NO_PROXY: picker })).toEqual([{ name: "NO_PROXY", value: picker }]);
-    for (const value of ["http://127.0.0.1:10201", "http://127.0.0.1:13100", "http://localhost:13101"]) {
+    for (const value of [
+      "http://127.0.0.1:10201",
+      "http://127.0.0.1:13100",
+      "http://localhost:13101",
+      "https://127.0.0.1:13101",
+      "http://user:pass@127.0.0.1:13101",
+      "http://127.0.0.1:13101/path",
+      "http://127.0.0.1:13101//",
+      "http://127.0.0.1:13101?query=1",
+      "http://127.0.0.1:13101#fragment",
+    ]) {
       expect(resolvedProxyEnv({ HTTPS_PROXY: value })).toEqual([{ name: "HTTPS_PROXY", value }]);
     }
     expect(existsSync(join(home, "config.json"))).toBe(false);
