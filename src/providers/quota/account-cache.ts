@@ -306,7 +306,7 @@ export function supportsPerAccountQuota(provider: string): boolean {
 
 export function explicitAccountReader(provider: string): boolean {
   return provider === "xai" || provider === "cursor" || provider === "kimi" || provider === "command-code"
-    || provider === "devin" || provider === "workbuddy-ai" || provider === "dsh-account";
+    || provider === "devin" || provider === "workbuddy-ai" || provider === "dsh-account" || provider === "opendesign";
 }
 
 export function providerOAuthAccountQuotaMode(provider: string): AccountQuotaMode {
@@ -743,5 +743,5 @@ export function explicitQuotaDestination(provider: string, config: OcxProviderCo
   if (provider === "command-code") return isCanonicalCommandCodeBaseUrl(config.baseUrl);
   // These readers use fixed canonical billing origins, never config.baseUrl. Devin reads
   // the credential's own allowlisted api-server host instead (fetchDevinQuota revalidates it).
-  return provider === "xai" || provider === "cursor" || provider === "devin" || provider === "workbuddy-ai" || provider === "dsh-account";
+  return provider === "xai" || provider === "cursor" || provider === "devin" || provider === "workbuddy-ai" || provider === "dsh-account" || provider === "opendesign";
 }

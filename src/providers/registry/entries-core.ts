@@ -595,6 +595,22 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     modelDisplayNames: DSH_ACCOUNT_MODEL_DISPLAY_NAMES,
   },
   {
+    id: "opendesign",
+    label: "Open Design",
+    adapter: "openai-chat",
+    baseUrl: "https://amr-link.open-design.ai/v1",
+    authKind: "oauth",
+    oauthId: "opendesign",
+    featured: false,
+    dashboardPreset: true,
+    note: "Open Design Cloud: device-auth login stores the control-plane key for billing quota; model calls use an inference key in provider config. Quota reads are per workspace via the control plane.",
+    dashboardUrl: "https://open-design.ai",
+    // Static catalog: the control key never authorizes model discovery (src/oauth/model-discovery-auth.ts).
+    liveModels: false,
+    defaultModel: "openai/gpt-5.2",
+    models: ["openai/gpt-5.2", "anthropic/claude-sonnet-4-7"],
+  },
+  {
     id: "orcarouter-oauth",
     label: "OrcaRouter - Auth",
     adapter: "openai-chat",

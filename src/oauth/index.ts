@@ -56,6 +56,7 @@ import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
 import { loginWorkBuddy, refreshWorkBuddyToken } from "./workbuddy";
 import { WORKBUDDY_CONFIG_URL, workBuddyHeaders } from "../providers/workbuddy";
 import { DSH_ACCOUNT_AUTH } from "./dsh";
+import { loginOpenDesign } from "./opendesign";
 import { loginOrcaRouter, orcaRouterInferenceBaseUrl, refreshOrcaRouterKey } from "./orcarouter";
 import { ANTIGRAVITY_DISCOVERY_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
@@ -278,6 +279,15 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     ...DSH_ACCOUNT_AUTH,
     providerConfig: oauthConfig("dsh-account"),
     defaultModel: oauthDefaultModel("dsh-account"),
+  },
+  "opendesign": {
+    // Static control key from device authorization: no refresh token exists, so the
+    // shared refresh path is disabled the same way Command Code's is.
+    login: (ctrl, _opts, _providerConfig) => loginOpenDesign(ctrl),
+    refresh: async () => { throw new Error("Open Design control key does not refresh; log in again"); },
+    providerConfig: oauthConfig("opendesign"),
+    defaultModel: oauthDefaultModel("opendesign"),
+    defaultRefreshPolicy: "disabled",
   },
   "command-code": {
     // Add-account/reauth must not reimport the current local CLI credential.

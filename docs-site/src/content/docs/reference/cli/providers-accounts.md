@@ -830,7 +830,7 @@ human rows show `paid-credits: on` only when permission is enabled. These reads 
 not change paid-credit permission.
 
 `--quota` adds a `QUOTA` column with each account's own usage, for providers that support a
-per-account probe (Anthropic, Kiro, Google Antigravity, and Devin today). It is opt-in because the proxy probes the upstream
+per-account probe (Anthropic, Kiro, Google Antigravity, Devin, and Open Design today). It is opt-in because the proxy probes the upstream
 once per stored credential; the default listing stays a local read. `--refresh` bypasses the
 cached result. An account with no per-account quota shows `-`, and one whose probe failed shows
 `unavailable` — blank would read as "no usage" rather than "not measured". `--json` carries the
