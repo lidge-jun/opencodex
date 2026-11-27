@@ -57,6 +57,7 @@ export function DetailPanel({
   onRequestRemove,
   onSave,
   onDirtyChange,
+  storedRemoved = false,
 }: {
   /** Management API target; without it the candidate path preview is not offered and JEV stats use same-origin paths. */
   apiBase?: string;
@@ -81,6 +82,8 @@ export function DetailPanel({
   onRequestRemove?: () => void;
   onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null) => Promise<{ ok: boolean; error?: string; item?: ComboItem }>;
   onDirtyChange: (dirty: boolean) => void;
+  /** The server no longer has this combo while the draft is kept; saving recreates it from the draft. */
+  storedRemoved?: boolean;
 }) {
   const t = useT();
   const [tab, setTab] = useState<DetailTab>("config");
@@ -153,6 +156,11 @@ export function DetailPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: key captures baseline payload
   }, [baselineSyncKey]);
 
+  // A removed combo has no revision to check against: say so, and let the next Save recreate it.
+  useEffect(() => {
+    if (storedRemoved) setMsg({ ok: false, text: t("pws.draftConflict") });
+  }, [storedRemoved, t]);
+
   const copyModel = async () => {
     try {
       await navigator.clipboard.writeText(baseline.model);
@@ -203,9 +211,10 @@ export function DetailPanel({
       // The server keeps these only for JEV, so the saved baseline must not carry stale ones.
       ...(workingDraft.strategy === "jev" ? {} : { decisionProvider: null, decisionModel: null, decisionTimeoutMs: null, sessionPin: undefined }),
     };
-    const renameFrom = !isCreate && trimmedId !== baseline.id ? baseline.id : undefined;
+    const recreate = !isCreate && storedRemoved;
+    const renameFrom = !isCreate && !recreate && trimmedId !== baseline.id ? baseline.id : undefined;
     try {
-      const res = await onSave(item, isCreate, renameFrom, isCreate ? null : draftBaseline.current);
+      const res = await onSave(item, isCreate || recreate, renameFrom, isCreate || recreate ? null : draftBaseline.current);
       if (!res.ok) {
         setMsg({ ok: false, text: res.error || t("cws.saveFailed") });
         return;

@@ -286,6 +286,37 @@ test("revision conflict reloads and keeps the dashboard draft", async () => {
   expect(container.textContent).toContain("The saved settings changed on this server while you were editing");
 });
 
+test("a combo removed on the server keeps the draft and the next save recreates it", async () => {
+  const visible = { ...hiddenImage, id: "visible", disabled: false };
+  mockCatalog([hiddenImage, visible], [target(visible)], { revision: "old" });
+  const fetchCatalog = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      bodies.push(body);
+      if (bodies.length === 1) return Response.json({ code: "combo_revision_conflict" }, { status: 409 });
+      return Response.json({ success: true, id: body.id, model: "combo/" + String(body.id), combo: { ...(body.combo as object), revision: "recreated" } });
+    }
+    if (bodies.length === 1 && new URL(String(input)).pathname === "/api/combos") return Response.json({ combos: [] });
+    return fetchCatalog(input, init);
+  }) as typeof fetch;
+  await mount();
+  await openDetail();
+  await chooseOption(selectTrigger(container, MODEL), "hidden");
+  await act(async () => { container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0)); });
+  expect(bodies[0]!.ifRevision).toBe("old");
+  expect(selectValue(selectTrigger(container, MODEL))).toBe("hidden");
+  expect(container.textContent).toContain("The saved settings changed on this server while you were editing");
+  await act(async () => { container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0)); });
+  expect(bodies).toHaveLength(2);
+  expect(bodies[1]).not.toHaveProperty("ifRevision");
+  expect(bodies[1]).not.toHaveProperty("renameFrom");
+  expect((bodies[1]!.combo as { targets: Array<{ model: string }> }).targets.map(t => t.model)).toEqual(["hidden"]);
+});
+
 test("JEV decision model suggestions include hidden models but exclude the JEV combo itself", async () => {
   mockCatalog([hiddenImage], [target(hiddenImage)], { strategy: "jev", decisionModel: "vision/hidden" });
   await mount();

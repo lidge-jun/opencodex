@@ -53,9 +53,10 @@ for (const change of ["changed", "deleted", "unchanged"] as const) {
       }, combos: { c: { strategy: "failover", targets: [{ provider: "fixture", model: "m" }] } } };
       saveConfig(config);
       armClaudeCodeBaseline(config);
+      let convergences = 0;
       const call = async (method: string, body?: unknown) => {
         const req = new Request("http://localhost/api/combos", { method, headers: { host: "localhost", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-        return (await handleManagementAPI(req, new URL(req.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() }))!;
+        return (await handleManagementAPI(req, new URL(req.url), config, { createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences++; }) }))!;
       };
       const draft = ((await (await call("GET")).json()).combos as any[])[0];
       const disk = structuredClone(config);
@@ -64,6 +65,7 @@ for (const change of ["changed", "deleted", "unchanged"] as const) {
       saveConfig(disk);
       const before = readFileSync(getConfigPath(), "utf8");
       const liveBefore = structuredClone(config);
+      convergences = 0;
       const response = await call("PUT", { id: "c", ifRevision: draft.revision, combo: { strategy: "failover", targets: [{ provider: "fixture", model: "n" }] } });
       if (change === "unchanged") {
         expect(response.status).toBe(200);
@@ -74,6 +76,8 @@ for (const change of ["changed", "deleted", "unchanged"] as const) {
       expect(response.status).toBe(409);
       expect(await response.json()).toMatchObject({ code: "combo_revision_conflict" });
       expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+      // Adopting a changed or removed combo converges the catalog like a save would.
+      expect(convergences).toBe(1);
       // The refused save adopts the stored combo, so the dashboard's refresh sees what blocked it.
       expect({ ...config, combos: undefined }).toEqual({ ...liveBefore, combos: undefined });
       expect(config.combos?.c).toEqual(disk.combos?.c);
@@ -139,6 +143,41 @@ test("a conditional rename refuses a destination that exists only in the stored 
     expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
     const listed = ((await (await call("GET")).json()).combos as any[]).map(combo => combo.id).sort();
     expect(listed).toEqual(["c", "other"]);
+  } finally {
+    if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = oldHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("an adopted stored combo does not override a later disk edit on an unrelated save", async () => {
+  const home = mkdtempSync(join(tmpdir(), "combo-adopt-baseline-"));
+  const oldHome = process.env.OPENCODEX_HOME;
+  process.env.OPENCODEX_HOME = home;
+  try {
+    const config: OcxConfig = { port: 10100, defaultProvider: "fixture", providers: {
+      fixture: { adapter: "openai-chat", baseUrl: "https://fixture.example/v1", apiKey: "fixture", models: ["m", "n"], liveModels: false },
+    }, combos: { c: { strategy: "failover", targets: [{ provider: "fixture", model: "m" }] } } };
+    saveConfig(config);
+    armClaudeCodeBaseline(config);
+    const call = async (method: string, body?: unknown) => {
+      const req = new Request("http://localhost/api/combos", { method, headers: { host: "localhost", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      return (await handleManagementAPI(req, new URL(req.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() }))!;
+    };
+    const draft = ((await (await call("GET")).json()).combos as any[])[0];
+    const diskB = structuredClone(config);
+    diskB.combos!.c!.targets = [{ provider: "fixture", model: "n" }];
+    saveConfig(diskB);
+    expect((await call("PUT", { id: "c", ifRevision: draft.revision, combo: { strategy: "failover", targets: [{ provider: "fixture", model: "m" }] } })).status).toBe(409);
+    const diskC = JSON.parse(readFileSync(getConfigPath(), "utf8"));
+    diskC.combos.c.strategy = "round-robin";
+    diskC.combos.c.targets = [{ provider: "fixture", model: "m" }, { provider: "fixture", model: "n" }];
+    saveConfig(diskC);
+    expect((await call("PUT", { id: "d", combo: { strategy: "failover", targets: [{ provider: "fixture", model: "n" }] } })).status).toBe(200);
+    const stored = JSON.parse(readFileSync(getConfigPath(), "utf8")).combos;
+    expect(stored.c.strategy).toBe("round-robin");
+    expect(stored.c.targets.map((target: { model: string }) => target.model)).toEqual(["m", "n"]);
+    expect(Object.keys(stored).sort()).toEqual(["c", "d"]);
   } finally {
     if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = oldHome;

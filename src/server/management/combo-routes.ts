@@ -57,6 +57,7 @@ import { modelRecordValue } from "../../reasoning-effort";
 import { commitProviderPatch } from "./provider-patch-transaction";
 import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 import { readConfigFileSnapshot } from "../../config/diagnostics";
+import { adoptPersistedCombos } from "../../config/live-reconcile";
 import {
   customRowInputModalities,
   isVisionSidecarConsumer,
@@ -159,22 +160,17 @@ class ComboRevisionConflict extends Error {
  * dashboard's refresh after a durable conflict would read the same stale combo and
  * every retry would conflict again. Adopt the stored source and destination combos;
  * the next rebasing save would have adopted these unedited disk values anyway.
+ * Returns the ids whose live combo changed.
  */
-function adoptStoredCombos(config: OcxConfig, stored: Readonly<Record<string, OcxComboConfig>>, ids: readonly string[]): void {
-  let changed = false;
-  for (const comboId of new Set(ids)) {
+function adoptStoredCombos(config: OcxConfig, stored: Readonly<Record<string, OcxComboConfig>>, ids: readonly string[]): string[] {
+  const changed = [...new Set(ids)].filter((comboId) => {
     const durable = Object.hasOwn(stored, comboId) ? stored[comboId] : undefined;
     const live = config.combos?.[comboId];
-    if (durable === undefined) {
-      if (live === undefined) continue;
-      delete config.combos![comboId];
-    } else {
-      if (live !== undefined && comboRevision(live) === comboRevision(durable)) continue;
-      (config.combos ??= {})[comboId] = structuredClone(durable);
-    }
-    changed = true;
-  }
-  if (changed) notifyLiveConfigObservers(config);
+    if (durable === undefined) return live !== undefined;
+    return live === undefined || comboRevision(live) !== comboRevision(durable);
+  });
+  if (changed.length > 0) adoptPersistedCombos(config, stored, changed);
+  return changed;
 }
 
 /**
@@ -648,7 +644,17 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     } catch (error) {
       if (error instanceof ComboRevisionConflict) {
         // The transaction has rolled back; adopt only after it, or the rollback would undo it.
-        if (error.stored) adoptStoredCombos(config, error.stored, [sourceId, id]);
+        const adopted = error.stored ? adoptStoredCombos(config, error.stored, [sourceId, id]) : [];
+        if (adopted.length > 0) {
+          // Same follow-up as a save: runtime state and the catalog track the adopted rows.
+          notifyLiveConfigObservers(config);
+          reconcileLiveStateStores();
+          for (const adoptedId of adopted) {
+            clearComboSelectionState(adoptedId);
+            clearComboTargetCooldowns(adoptedId);
+          }
+          await convergeCodexCatalog();
+        }
         return jsonResponse({ error: "combo revision conflict", code: "combo_revision_conflict" }, 409);
       }
       if (!(error instanceof ConfigWritePublishedError)) {

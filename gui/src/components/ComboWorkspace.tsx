@@ -286,6 +286,7 @@ export default function ComboWorkspace({
             onRequestRemove={() => setRemoveId(baseline.id)}
             onSave={onSave}
             onDirtyChange={(dirty) => { setDetailDirty(dirty); if (dirty) setLastSelected(selected); }}
+            storedRemoved={!combos.some((c) => c.id === baseline.id)}
           />
         ) : creatingFirstCombo ? (
           <DetailPanel

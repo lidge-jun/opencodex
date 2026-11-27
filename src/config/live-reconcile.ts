@@ -130,6 +130,25 @@ export function adoptPersistedAdvisor(config: OcxConfig, persisted: OcxConfig["a
   if (baseline) clearConfigTopLevelDeletionIntent(baseline, ["advisor"]);
 }
 
+/**
+ * Adopt stored combos into the live config and its rebase baseline together. Changing only the
+ * live rows would make a later save treat them as pending live edits and overwrite a newer disk edit.
+ */
+export function adoptPersistedCombos(
+  config: OcxConfig,
+  persisted: Readonly<Record<string, NonNullable<OcxConfig["combos"]>[string]>>,
+  ids: Iterable<string>,
+): void {
+  const baseline = liveConfigBaseline.get(config);
+  for (const id of ids) {
+    const stored = Object.hasOwn(persisted, id) ? persisted[id] : undefined;
+    for (const target of baseline ? [config, baseline] : [config]) {
+      if (stored !== undefined) (target.combos ??= {})[id] = structuredClone(stored);
+      else if (target.combos) delete target.combos[id];
+    }
+  }
+}
+
 /** Adopt the committed telemetry consent subtree without advancing unrelated pending live intent. */
 export function adoptPersistedTelemetry(config: OcxConfig, persisted: OcxConfig["telemetry"]): void {
   if (persisted === undefined) delete config.telemetry;
