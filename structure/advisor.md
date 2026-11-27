@@ -529,7 +529,7 @@ propagation), hooks (stripping only the exact command OpenCodex registers, the P
 while preserving sibling commands and same-named hooks at other paths in shared hook groups; the hook
 script's own path assignments are single-quoted too), and skills across compatible clients (`workbuddy`, `workbuddy-ai`, `qoder`, `qoder-cn`,
 `commandcode`, `cline` with 900s timeout and explicit user confirmation, `opencode` with 900_000ms
-timeout and `skills/`, optional `claude`). Skill files (`ADVISOR_SKILL_MARKER`) and hook scripts
+timeout and `skills/`, optional `claude`). The reminder requires readable Advisor settings and an executable runtime before checking proxy health. Skill files (`ADVISOR_SKILL_MARKER`) and hook scripts
 (`ADVISOR_HOOK_MARKER`) carry explicit ownership markers: unowned files and symlinks are never
 overwritten or counted as mounted, and unmounting deletes only verified OpenCodex files (never recursive
 directory removal, preserving sibling user files). An `opencodex-advisor` MCP entry is replaced or removed only when it is

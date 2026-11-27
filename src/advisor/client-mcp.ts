@@ -474,6 +474,7 @@ CFG_PATH=${configFileLiteral}
 SESSION_ID=""
 PROXY_PORT="10100"
 
+[ -f "$CFG_PATH" ] && [ -x "$BUN_BIN" ] || exit 0
 if [ -f "$CFG_PATH" ] && [ -x "$BUN_BIN" ]; then
   META=$(BUN_BE_BUN=1 HOOK_STDIN="$STDIN_PAYLOAD" OCX_CFG="$CFG_PATH" "$BUN_BIN" -e '
     import { readFileSync } from "node:fs";
@@ -507,9 +508,9 @@ cat <<'EOF'
 Consult it PROACTIVELY (not only when asked) before committing to a complex/high-risk architecture design, after 2 failed repair attempts on the same issue, or for final verification. If MCP lazy-loading is active, use \`mcp_get\` / \`mcp_call\` on \`mcp__opencodex_advisor__consult_advisor\` with a focused \`question\` and optional \`context\`.
 EOF
 if [ -n "$SESSION_ID" ]; then
-  printf 'Pass sessionId="%s" so OpenCodex attaches the exact full session transcript directly. ' "$SESSION_ID"
+  printf 'Pass sessionId="%s" when available. In full-context mode, OpenCodex may attach a matching local session transcript if found. ' "$SESSION_ID"
 else
-  printf 'OpenCodex automatically attaches your active local session transcript alongside any context you pass. '
+  printf 'In full-context mode, OpenCodex may attach a matching local session transcript when a session or task ID is available. '
 fi
 cat <<'EOF'
 If it returns status="in_progress" with nextCallArguments ({ "consultationId": "...", "afterElapsedMs": <elapsedMs> }), immediately call it again with nextCallArguments to keep waiting cleanly until finished.
@@ -535,7 +536,7 @@ You have access to the stronger OpenCodex Advisor model via \`consult_advisor\` 
 ## How to invoke
 - Direct MCP clients: call \`consult_advisor({ question, context?, sessionId? })\`.
 - Lazy-loading MCP clients (e.g. Qoder): call \`mcp_get({ toolName: "mcp__opencodex_advisor__consult_advisor" })\` or \`mcp_call({ toolName: "mcp__opencodex_advisor__consult_advisor", arguments: { question, context?, sessionId? } })\`.
-- Pass \`sessionId\` when available so OpenCodex attaches your local session transcript cleanly.
+- Pass \`sessionId\` when available. In full-context mode, OpenCodex may attach a matching local session transcript if found.
 - If the call returns \`status: "in_progress"\` with \`consultationId\` and \`elapsedMs\`, immediately poll again with \`{ "consultationId": "...", "afterElapsedMs": <elapsedMs> }\` (updating \`afterElapsedMs\` each round avoids duplicate-tool-call guards).
 `;
 

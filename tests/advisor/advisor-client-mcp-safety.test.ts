@@ -78,6 +78,19 @@ describe("Advisor client MCP safety", () => {
     expect(advisorHookCommand(scriptPath)).toBe(shellQuote(scriptPath));
   });
 
+  test("hook stays quiet when its settings or runtime are unavailable", () => {
+    const home = tempHome("ocx-advisor-hook-ready-");
+    const bin = join(home, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "curl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const env = { PATH: `${bin}:/usr/bin:/bin`, HOME: home, USERPROFILE: home };
+    const run = (execPath: string) => spawnSync("sh", ["-c", buildNoticeHookScript(home, execPath)], { encoding: "utf8", env, input: "{}" });
+    expect(run(process.execPath).stdout).toBe("");
+    writeFileSync(join(home, "config.json"), JSON.stringify({ advisor: { enabled: true, model: "expert", contextSharingConsent: "v1" } }));
+    expect(run(join(home, "missing-bun")).stdout).toBe("");
+    expect(run(process.execPath).stdout).toContain("active and ready");
+  });
+
   test("automatic MCP mounting is off unless the operator turns it on", () => {
     const config = { advisor: { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1" } } as Pick<OcxConfig, "advisor">;
     expect(resolveAdvisorSettings(config).autoMountMcp).toBe(false);
