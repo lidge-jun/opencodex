@@ -8,6 +8,7 @@ import { buildClientContribution, type ExportModel } from "../../src/clients/con
 import { refreshOwnedCatalogIntegrations } from "../../src/integrations/catalog-refresh";
 import { assertIntegrationWriteOwnership, fileIO, type IntegrationIO } from "../../src/integrations/config-io";
 import { canonicalContribution, fingerprint, semanticContribution } from "../../src/integrations/ownership";
+import { serializeDocument } from "../../src/integrations/serialize";
 import { protectedContributionFingerprint } from "../../src/integrations/ownership-policy";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
@@ -993,6 +994,73 @@ describe("disable", () => {
     expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
     const after = Bun.TOML.parse(readFileSync(configPath, "utf8")) as { models?: Record<string, unknown> };
     expect(after.models).toEqual({ "opencodex/mine": { provider: "elsewhere" } });
+  });
+});
+
+describe("Kimi source preservation (#9152)", () => {
+  const original = [
+    "# user header",
+    "default_model = \"kimi-k3\"",
+    "",
+    "# >>> other-tool-hooks >>>",
+    "[[hooks]]",
+    "event = \"SessionStart\"",
+    "command = \"echo start\"",
+    "",
+    "[[hooks]]",
+    "event = \"Stop\"",
+    "command = \"echo stop\"",
+    "# <<< other-tool-hooks <<<",
+    "",
+  ].join("\n");
+
+  function installKimi(text: string): string {
+    mkdirSync(join(home, ".kimi-code"), { recursive: true });
+    const configPath = join(home, ".kimi-code", "config.toml");
+    writeFileSync(configPath, text);
+    return configPath;
+  }
+
+  test("apply and disable leave the user's comments and hook tables as written", () => {
+    const configPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const applied = readFileSync(configPath, "utf8");
+    expect(applied.startsWith(original)).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+  });
+
+  test("another tool's block added after apply survives refresh and disable", () => {
+    const configPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const sibling = "# >>> late-tool >>>\n[[hooks]]\nevent = \"UserPromptSubmit\"\n# <<< late-tool <<<\n";
+    writeFileSync(configPath, `${readFileSync(configPath, "utf8")}\n${sibling}`);
+    expect(refreshIntegration(input({ clientId: "kimi", models: MODELS.slice(1) })).ok).toBe(true);
+    const refreshed = readFileSync(configPath, "utf8");
+    expect(refreshed.startsWith(original)).toBe(true);
+    expect(refreshed.endsWith(sibling)).toBe(true);
+    expect(refreshed).not.toContain("claude-opus-4-8");
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(`${original}\n${sibling}`);
+  });
+
+  test("disable cleans up a file the whole-document writer left behind", () => {
+    const configPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const rerendered = serializeDocument(Bun.TOML.parse(readFileSync(configPath, "utf8")), "toml");
+    expect(rerendered).toContain("[providers]\n[providers.opencodex]");
+    writeFileSync(configPath, rerendered);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(Bun.TOML.parse(readFileSync(configPath, "utf8"))).toEqual(Bun.TOML.parse(original));
+  });
+
+  test("an overwrite refuses a provider table it cannot replace in place", () => {
+    const inline = `providers = { opencodex = { type = "openai" } }\n${original}`;
+    const configPath = installKimi(inline);
+    const result = overwriteIntegration(input({ clientId: "kimi" }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("unsafe");
+    expect(readFileSync(configPath, "utf8")).toBe(inline);
   });
 });
 

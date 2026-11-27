@@ -58,6 +58,7 @@ import {
   sourcePrunableYamlContainers,
   yamlFragmentUnsupportedStyle,
 } from "./omp-yaml-source";
+import { patchTomlTablesSource } from "./toml-source";
 
 /**
  * "comments or formatting" used to be the only refusal this path could report.
@@ -226,6 +227,11 @@ function compensate(args: CommitArgs, cause: unknown, what: string): WriteRefuse
 function snapshotAbsPath(store: IntegrationStateStore, entry: JournalEntry): string | undefined {
   const snapshot = store.readSnapshot(entry);
   return snapshot.kind === "stored" ? snapshot.path : undefined;
+}
+
+function tomlRefusalReason(configPath: string, outcome: string): string {
+  return `${configPath} keeps opencodex's tables in a layout opencodex cannot edit without rewriting the whole file, so ${outcome}. `
+    + "Move them back to their own [providers.opencodex] and [models.\"opencodex/…\"] tables, or remove them, and try again.";
 }
 
 function sourcePreservingFragmentValue(
@@ -448,6 +454,10 @@ function applyOrRefreshIntegration(
             yamlRefusalReason(before, target.sourcePreservingYaml.path, configPath, "it was left alone"));
         }
         text = patched;
+      } else if (target.sourcePreservingToml && before !== null) {
+        const patched = patchTomlTablesSource(before, base === parsed ? [] : record!.fragmentPaths, contribution.fragments, nextDocument);
+        if (patched === null) return refuse(clientId, "unsafe", "unsafe", tomlRefusalReason(configPath, "it was left alone"));
+        text = patched;
       } else {
         text = clientId === "cline" ? serializeClineDocument(nextDocument) : serializeDocument(nextDocument, target.format);
       }
@@ -626,6 +636,10 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
         return refuse(clientId, "unsafe", "unsafe",
           yamlRefusalReason(before, target.sourcePreservingYaml.path, configPath, "nothing was removed"));
       }
+      text = patched;
+    } else if (target.sourcePreservingToml && before !== null) {
+      const patched = patchTomlTablesSource(before, record!.fragmentPaths, [], doc);
+      if (patched === null) return refuse(clientId, "unsafe", "unsafe", tomlRefusalReason(configPath, "nothing was removed"));
       text = patched;
     } else {
       text = clientId === "cline" ? serializeClineDocument(doc) : serializeDocument(doc, target.format);
