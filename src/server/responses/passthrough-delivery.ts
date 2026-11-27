@@ -1549,6 +1549,11 @@ export async function deliverPassthroughResponse(
           }
         })();
         if (undeclared !== undefined) {
+          // Mirror the SSE refusal path's provenance: the buffered JSON branch never runs the
+          // block rewrite, so without this mark `consumeComboFailure` cannot grant the hop and
+          // a healthy combo target would take a cooldown it must not (#9163).
+          markUndeclaredToolGuardRefusal(logCtx);
+          rememberProxyErrorMessage(logCtx, undeclaredToolCallMessage(), { status: 502, type: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE });
           return markProxyError(formatErrorResponse(502, "upstream_error", undeclaredToolCallMessage(), {
             code: UNDECLARED_TOOL_CALL_ERROR_CODE,
           }));
