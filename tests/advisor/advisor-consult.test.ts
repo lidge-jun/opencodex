@@ -24,6 +24,35 @@ const baseInput = {
 };
 
 describe("consultAdvisor", () => {
+  test("parses multiline SSE events and headerless event fields split across chunks", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const part of ['eve', 'nt: message\ndata: {"choices":\n', 'data: [{"delta":{"content":"Advice"}}]}\n\ndata: [DONE]\n\n']) controller.enqueue(encoder.encode(part));
+        controller.close();
+      },
+    });
+    globalThis.fetch = (async () => new Response(stream)) as typeof fetch;
+    const result = await consultAdvisor(baseInput, {}, "max", 500, undefined, "http://advisor.test");
+    expect(result.ok).toBe(true);
+    expect(result.advice).toBe("Advice");
+  });
+
+  test("stops reading at DONE even when the upstream leaves the body open", async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Advice"}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}\n\ndata: [DONE]\n\n'));
+      },
+      cancel() { cancelled = true; },
+    });
+    globalThis.fetch = (async () => new Response(stream, { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+    const result = await consultAdvisor(baseInput, {}, "max", 80, undefined, "http://advisor.test");
+    expect(result.ok).toBe(true);
+    expect(result.advice).toBe("Advice");
+    expect(result.usage).toMatchObject({ inputTokens: 3, outputTokens: 2 });
+    expect(cancelled).toBe(true);
+  });
   test("question-only sends only the question over real loopback independently of history size", async () => {
     const bodies: { messages: { role: string; content: string }[] }[] = [];
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {

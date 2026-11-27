@@ -501,7 +501,7 @@ so `policy: adaptive` retains task identity without altering upstream wire heade
 During intercepted tool calls, `src/server/responses/advisor-slot.ts` (`withAdvisorHeartbeats`)
 yields `{ type: "heartbeat" }` events so the worker SSE stall timer stays alive during long
 expert turns. `src/advisor/consult.ts` sends `stream: true`, detects headerless SSE incrementally
-while streaming so data frames reset `createInactivitySignal` before EOF (ignoring `: ` heartbeat
+while streaming; it assembles multiline SSE data fields per event and stops at `[DONE]`. Data fields reset `createInactivitySignal` before EOF (ignoring `: ` heartbeat
 comments; default `timeoutMs` is `600_000` ms / 10 min, max `1_800_000` ms / 30 min).
 
 For harnesses whose built-in models bypass the OpenCodex proxy,

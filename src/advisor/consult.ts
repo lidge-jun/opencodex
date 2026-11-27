@@ -311,16 +311,14 @@ export async function consultAdvisor(
       let sawMalformedSseJson = false;
       let sawAnySseData = false;
       let sawDone = false;
+      let eventData: string[] = [];
       // A stream is complete only with a terminal signal: [DONE], a finish_reason, or response.completed.
       let sawTerminal = false;
 
-      const processSseLine = (line: string) => {
-        const trimmed = line.trim();
-        if (trimmed === "" || trimmed.startsWith(":")) return;
-        if (!trimmed.startsWith("data:")) return;
-        linkedSignal.touch();
-        sawAnySseData = true;
-        const dataStr = trimmed.slice(5).trim();
+      const dispatchSseEvent = () => {
+        if (eventData.length === 0) return;
+        const dataStr = eventData.join("\n");
+        eventData = [];
         if (dataStr === "" || dataStr === "[DONE]") {
           if (dataStr === "[DONE]") { sawDone = true; sawTerminal = true; }
           return;
@@ -344,6 +342,19 @@ export async function consultAdvisor(
         const chunkUsage = extractUsage(chunk);
         if (chunkUsage) streamUsage = chunkUsage;
       };
+      const processSseLine = (line: string) => {
+        if (line === "") { dispatchSseEvent(); return; }
+        if (line.startsWith(":")) return;
+        const colon = line.indexOf(":");
+        const field = colon < 0 ? line : line.slice(0, colon);
+        if (field !== "data") return;
+        linkedSignal.touch();
+        sawAnySseData = true;
+        let value = colon < 0 ? "" : line.slice(colon + 1);
+        if (value.startsWith(" ")) value = value.slice(1);
+        eventData.push(value);
+      };
+      const looksLikeSse = (value: string) => /^(?:data|event|id|retry):|^:/.test(value.trimStart());
 
       let totalBytes = 0;
       const reader = res.body?.getReader();
@@ -371,7 +382,7 @@ export async function consultAdvisor(
             if (!streamingSse) {
               raw += decoded;
               const trimmed = raw.trimStart();
-              if (trimmed.startsWith("data:") || trimmed.startsWith(":")) {
+              if (looksLikeSse(trimmed)) {
                 streamingSse = true;
                 sseBuffer = raw;
                 raw = "";
@@ -383,13 +394,14 @@ export async function consultAdvisor(
               const lines = sseBuffer.split(/\r?\n/);
               sseBuffer = lines.pop() ?? "";
               for (const line of lines) processSseLine(line);
+              if (sawDone) { void reader.cancel().catch(() => {}); break; }
             }
           }
           const flushed = decoder.decode();
           if (!streamingSse) {
             raw += flushed;
             const trimmed = raw.trimStart();
-            if (trimmed.startsWith("data:") || trimmed.startsWith(":")) {
+            if (looksLikeSse(trimmed)) {
               streamingSse = true;
               sseBuffer = raw;
               raw = "";
@@ -400,6 +412,7 @@ export async function consultAdvisor(
           if (streamingSse && sseBuffer.length > 0) {
             for (const line of sseBuffer.split(/\r?\n/)) processSseLine(line);
           }
+          if (streamingSse && !sawDone) dispatchSseEvent();
         } finally {
           linkedSignal.signal.removeEventListener("abort", cancelLockedReader);
         }
