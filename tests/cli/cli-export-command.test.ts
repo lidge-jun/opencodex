@@ -30,7 +30,18 @@ function config(extra?: Partial<OcxConfig>): OcxConfig {
     port: 10100,
     hostname: "127.0.0.1",
     defaultProvider: "mock",
-    providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
+    providers: {
+      mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" },
+      // The rows below include a native one, and only an enabled canonical OpenAI provider
+      // routes a bare `gpt-*` selector. Every configuration `loadConfig` produces carries this
+      // row (a fresh install enables it), so exporting native rows without it described a state
+      // that cannot exist on disk and the router refuses.
+      openai: {
+        adapter: "openai-responses",
+        authMode: "forward",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+    },
     ...extra,
   } as OcxConfig;
 }

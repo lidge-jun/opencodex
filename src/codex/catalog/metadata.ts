@@ -506,6 +506,24 @@ export function shouldIncludeAccountBoundNativeOpenAi(
   return isCanonicalOpenAiForwardProvider(canonical);
 }
 
+/**
+ * Whether the canonical OpenAI provider can route a bare native selector at all.
+ *
+ * This is the router's own admission for a bare `gpt-*` model (`routeModelInternal`): the
+ * provider is present and not disabled, whatever its auth mode. It is deliberately weaker than
+ * `shouldIncludeAccountBoundNativeOpenAi`, whose exact-account routes additionally require
+ * canonical forward auth, and it deliberately omits `shouldIncludeNativeOpenAi`'s
+ * no-enabled-provider bootstrap exception, which keeps the Codex catalog listable rather than
+ * claiming that any native row can be served.
+ *
+ * Everything that promises a client a selectable model has to use this: a disabled provider is
+ * what makes `NoEnabledOpenAiProviderError` the answer for every bare native id.
+ */
+export function isNativeOpenAiProviderEnabled(config: Pick<OcxConfig, "providers">): boolean {
+  const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
+  return provider !== undefined && provider.disabled !== true;
+}
+
 /** Whether native ChatGPT/Codex rows belong in this provider configuration. */
 export function shouldIncludeNativeOpenAi(config: Pick<OcxConfig, "providers">): boolean {
   const hasEnabledProvider = Object.values(config.providers)

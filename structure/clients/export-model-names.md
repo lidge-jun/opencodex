@@ -82,6 +82,51 @@ Refresh does not recreate a removed managed block. Alias edits and client-file
 migration are separate operations; a previously saved selector can be stale
 until refresh succeeds.
 
+## Native-row admission
+
+`loadExportModels` keeps a native row only while the canonical OpenAI provider
+can route it. `isNativeOpenAiProviderEnabled` in
+`src/codex/catalog/metadata.ts` is the router's own admission for a bare `gpt-*`
+selector — the provider exists and is not disabled, in either account mode — and
+`NoEnabledOpenAiProviderError` is what a client would otherwise hit. This is
+deliberately weaker than `shouldIncludeAccountBoundNativeOpenAi`, whose
+account-qualified routes also require canonical forward auth, and it omits
+`shouldIncludeNativeOpenAi`'s no-enabled-provider bootstrap exception, which
+keeps the Codex catalog listable rather than promising a servable row. The
+launcher applies the same rule in `opencodeCatalogFromProxyRows` and
+`opencodeLaunchNativeSlugs` (`src/cli/opencode.ts`), so `ocx opencode`,
+`ocx export --client opencode` and every integration route agree about which
+native selectors a client may choose.
+
+Admission is only half of what a client may be offered. Codex Direct is a
+separate omission that applies after admission succeeds: direct mode forwards
+each caller's own OpenAI bearer while a client sends the proxy's key, so a bare
+native `gpt-*` selector (and its synthetic `--fast` row) would answer 401.
+Account-qualified `<namespace>/<gpt-*>` rows (and their synthetic Fast rows),
+whose first path segment names a configured `codexAccountNamespaces` entry,
+route with `codexAccountMode: "pool"` and the namespace's fixed account even
+while the provider is globally Direct (`src/router.ts`): non-main namespaces
+always resolve to that exact stored pool account regardless of any caller
+bearer, while a namespace bound to `__main__` resolves to stored `main-pool`
+for proxy-key / loopback clients (no caller-owned Codex JWT) and preserves the
+existing caller-owned `main` context when a caller supplies its own Codex JWT
+(`src/server/responses/core-auth.ts`, `src/codex/auth-context.ts`). Every affected surface shares `isBareNativeRow` / `filterDirectModeBareNative`
+(`src/clients/config-export/contracts.ts`, enforced centrally in
+`namedExportContext` for every client in `EXPORT_CLIENTS`, plus the direct
+OpenCode, Pi-family, DSH, OMP, WorkBuddy, and Gajae builders and the OpenCode
+launcher's `opencodeCatalogFromProxyRows` / `opencodeLaunchNativeSlugs`) to
+drop bare native rows in Direct mode while keeping account-qualified ones,
+while the roster itself still exports bare rows for clients that select their
+own credential. When `providers.openai` is disabled or absent, every native row
+(bare and account-qualified alike) is omitted. Coverage:
+`tests/server/management-model-roster.test.ts` (the roster, both account modes
+and an absent provider), `tests/providers/opencode-cli.test.ts` (the launcher's
+slug selection and proxy-row catalog, including account-qualified and Fast rows)
+and `tests/config/client-config-export.test.ts` (all exported clients in Direct
+and Pool modes, plus HTTP-layer `resolveResponsesCodexAuth` resolution across
+loopback, dedicated proxy header, proxy bearer admission, and distinct caller
+Codex JWT credentials).
+
 ## CLI and API boundary
 
 `src/cli/integration-input.ts` parses `--model-names alias|routed`.

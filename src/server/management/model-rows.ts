@@ -28,6 +28,7 @@ import {
   nativeModelRows,
   nativeReasoningEfforts,
   uniqueCatalogModelsForPublicList,
+  isNativeOpenAiProviderEnabled,
   shouldIncludeAccountBoundNativeOpenAi,
   catalogModelEfforts,
 } from "../../codex/catalog";
@@ -710,8 +711,15 @@ export async function loadExportModels(
   // Management deliberately lists the full roster so hidden models can be enabled.
   // A client picker must also honor the provider selection, not just its blocklist.
   const visibleRouted = new Set(filterCatalogVisibleModels(rows.filter(row => !row.native), admitted));
+  // A native row is only selectable while the canonical OpenAI provider can route it. The
+  // router answers a bare `gpt-*` with `NoEnabledOpenAiProviderError` as soon as that provider
+  // is disabled, so exporting the row would hand a client a selector the proxy refuses. The
+  // account-qualified rows that `listManagementModelRows` only builds under
+  // `shouldIncludeAccountBoundNativeOpenAi` are therefore already absent here in that state.
+  const nativeRoutable = isNativeOpenAiProviderEnabled(admitted);
   const projected = attachNestedSelectors(admitted, attachExportAliasSelectors(admitted, rows.map(toExportModel)));
-  const exported = projected.filter((_, index) => !rows[index]!.disabled && (rows[index]!.native || visibleRouted.has(rows[index]!)));
+  const exported = projected.filter((_, index) => !rows[index]!.disabled
+    && (rows[index]!.native ? nativeRoutable : visibleRouted.has(rows[index]!)));
   // Retain the FINAL projection, not an input to it. A preview that rebuilt from raw provider
   // caches would miss static and forward providers, which never populate one, and would skip the
   // retention, metadata, combo and filtering this function applies afterwards.

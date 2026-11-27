@@ -109,6 +109,16 @@ function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
         liveModels: false,
         models: ["no-context"],
       },
+      // Every configuration `loadConfig` produces carries this row, and the native rows the
+      // export roster lists are only routable through it. Omitting it described a state that
+      // cannot exist on disk.
+      openai: {
+        adapter: "openai-responses",
+        authMode: "forward",
+        liveModels: false,
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        models: [],
+      },
     },
     ...overrides,
   } as OcxConfig;

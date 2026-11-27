@@ -20,6 +20,8 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ```
 
+前置きのないネイティブ OpenAI の `gpt-*` 行は、正規の `openai` プロバイダーが有効で、かつ Codex Direct モードでない間だけ表示されます。Codex Direct モードが有効な間も、利用可能なアカウント修飾付き `<namespace>/gpt-*` 行はエクスポートに残ります。Direct モードでは各呼び出し元自身の OpenAI 認証情報を転送しますが、opencode はプロキシのキーを送信します。また、`openai` プロバイダーが無効な場合、プロキシは前置きのない `gpt-*` セレクターをすべて拒否します。どちらの状態でも、ランチャー、管理対象の統合、および `ocx export` は、実行できないモデルを提示する代わりに前置きのない `gpt-*` 行を省略します。
+
 ## あなた自身の設定は決して変更されません
 
 ランチャーは、`~/.config/opencode/opencode.json`、プロジェクト `opencode.json` / `opencode.jsonc`、またはその他のディスク上の構成レイヤーをコピーしたり書き換えたりしません。既存のプロバイダー、エージェント、キーバインド、MCP エントリ、および相対的な `{file:…}` 参照は元のファイルから解決され続けますが、`provider.opencodex` または `providers.opencodex` オーバーライドを検出するためにグローバルまたはプロジェクト設定を読み取ることがあります。

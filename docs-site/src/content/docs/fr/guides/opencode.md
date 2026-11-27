@@ -26,6 +26,8 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ```
 
+Les lignes natives OpenAI `gpt-*` nues n'apparaissent que tant que le fournisseur canonique `openai` est activé et que le mode Codex Direct est désactivé ; les lignes `<namespace>/gpt-*` qualifiées par compte et utilisables restent dans l'export lorsque le mode Codex Direct est actif. Le mode Direct transmet la propre clé OpenAI de chaque appelant alors qu'opencode envoie la clé du proxy, et un fournisseur `openai` désactivé fait que le proxy refuse tous les sélecteurs `gpt-*` nus ; dans ces deux états, le lanceur, l'intégration gérée et `ocx export` omettent les lignes `gpt-*` nues plutôt que de proposer un modèle qui ne peut pas s'exécuter.
+
 ## Votre propre configuration n'est jamais modifiée
 
 Le lanceur ne copie ni ne réécrit `~/.config/opencode/opencode.json`,
