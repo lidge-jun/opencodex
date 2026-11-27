@@ -2,6 +2,7 @@ import { isCanonicalOpenAiForwardProvider, normalizedBaseUrl } from "../provider
 
 export interface SuggestionProvider {
   name: string;
+  alias?: string;
   disabled?: boolean;
   hiddenFromPicker?: boolean;
   authMode?: string;
@@ -75,6 +76,16 @@ function hostOf(baseUrl: string | undefined): string {
   } catch {
     return "";
   }
+}
+
+export type ComboProviderBilling = "subscription" | "local" | "consent";
+
+/** Classify the effective transport. The server applies registry defaults before calling this. */
+export function comboProviderBilling(provider: SuggestionProvider): ComboProviderBilling {
+  const { authMode, baseUrl } = provider;
+  const host = hostOf(baseUrl).replace(/\.$/, "");
+  if (authMode === "local" && ["localhost", "127.0.0.1", "[::1]"].includes(host)) return "local";
+  return subscriptionMaker(provider) ? "subscription" : "consent";
 }
 
 export function channelTier(provider: SuggestionProvider, model: string): ChannelTier {

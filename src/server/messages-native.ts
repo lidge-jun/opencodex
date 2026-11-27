@@ -4,7 +4,7 @@ import { createMessagesSseErrorFilter } from "./messages-sse-error-filter";
 import type { MessagesFailureVerdictSink } from "../claude/failure-verdict";
 import { upstreamErrorIsLocal } from "./request-log-failure-detail";
 import { boundedMessagesDisplayCount, ownedAnthropicErrorPayload, ownedAnthropicErrorResponse, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../lib/messages-error-body";
-import { attachComboFailureEvidence, isProxyError, markProxyError } from "../lib/client-error-body";
+import { attachComboFailureEvidence, isProxyError, markProxyError, markProxyQuotaExhaustion } from "../lib/client-error-body";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../oauth/account-auto-pause";
 import { createPhysicalSendReporter, reportDispatchSends, type RequestExecutionBudget, type SingleUseDispatchPermit } from "../lib/request-execution-budget";
 import { createInferenceSendBudget, expandInferenceOAuthSendBudget } from "./inference/context";
@@ -559,7 +559,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       const response = markProxyError(fail(429, message, "rate_limit_error"), date === undefined ? undefined : "usage");
       const advice = error.retryAfterSeconds !== null ? formatClientRetryAfter(error.retryAfterSeconds) : undefined;
       if (advice !== undefined) response.headers.set("retry-after", advice);
-      return response;
+      return error.usageLimit !== null && logCtx.comboQuotaOnlyFallback ? markProxyQuotaExhaustion(response) : response;
     }
     if (error instanceof OAuthAccountPausedError) return markProxyError(fail(403, publicOAuthAuthenticationErrorMessage(error), "permission_error"), publicOAuthErrorPresentation(error));
     if (error instanceof OAuthLoginRequiredError) return markProxyError(fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error"), publicOAuthErrorPresentation(error));

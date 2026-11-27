@@ -26,6 +26,7 @@ import { isCodexAccountCooldownResponse } from "../../src/codex/account-cooldown
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { mapCodexAuthContextErrorToResponse } from "../../src/server/responses/codex-auth-error";
 import { finalizeAccountLease } from "../../src/server/responses/core-lifetime";
+import { isProxyQuotaExhaustion } from "../../src/lib/client-error-body";
 
 /** The Responses mapping every combo child's local auth refusal goes through. */
 function localRefusal(error: CodexAccountCooldownError, now: number): Response {
@@ -277,6 +278,9 @@ for (const policy of [
     }
     const consumed = await consumeComboFailure(response, undefined, now);
     expect(isCodexAccountCooldownResponse(consumed.response)).toBe(false);
+    expect(isProxyQuotaExhaustion(consumed.response)).toBe(
+      error instanceof CodexMainAccountCreditsOffError || error instanceof CodexPoolAccountCreditsOffError,
+    );
     expect(consumed.retryAfter).toBe(reserve ? undefined : "84692");
     if (error instanceof CodexMainAccountHardLockError) expect(consumed.upstreamCode).toBe("usage_limit_reached");
     await consumed.response.text();

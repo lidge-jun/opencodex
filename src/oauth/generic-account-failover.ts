@@ -153,6 +153,12 @@ function isCooled(provider: string, accountId: string, now: number, family?: Quo
 
 export type KiroSkipReason = "paused" | "needs_reauth" | "suspended" | "cooldown" | "quota_exhausted";
 
+/** Account-wide cooldown expiry for diagnostics, or null when the account is not cooled. */
+export function genericAccountCooldownUntil(provider: string, accountId: string, now = Date.now()): number | null {
+  if (!isCooled(provider, accountId, now)) return null;
+  return health.get(healthKey(provider, accountId))?.cooldownUntil ?? null;
+}
+
 /** Eligibility for automatic alternatives; an active singleton can still send. */
 export function kiroAutoSelection(
   account: ProviderAccount, now = Date.now(),

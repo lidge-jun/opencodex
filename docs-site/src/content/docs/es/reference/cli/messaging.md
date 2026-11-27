@@ -116,6 +116,36 @@ respuestas guardadas de Codex. Para una prueba de ida y vuelta:
    y vuelta. Si la espera vence, vuelve a comprobar el mismo recibo o revisa la conversación de
    Codex. Un tiempo de espera agotado no justifica otro envío.
 
+<a id="list-local-claude-code-sessions"></a>
+
+## Listar sesiones locales de Claude Code
+
+En macOS o Linux, indica la ruta absoluta a un ejecutable de confianza de
+Claude Code. Debe admitir [`claude agents --json`](https://code.claude.com/docs/en/agent-view#list-sessions-as-json).
+
+```bash
+ocx message claude-sessions --claude /absolute/path/to/claude --json
+```
+
+El resultado `ocx-claude-sessions/1` incluye el UUID de cada sesión (`id`),
+su tipo (`kind`, con valor `interactive` o `background`) y el estado de
+actividad que informa Claude Code (`busy`, `waiting` o `idle`). Se omiten
+las filas cuyo identificador de sesión o PID sea nulo o esté ausente. Si
+ambos campos están presentes, un UUID de sesión abreviado o inválido, o
+un PID inválido, provoca un fallo en toda la consulta. Si se define
+`CLAUDE_CONFIG_DIR`, esta variable selecciona la configuración local de
+Claude. El resultado omite los nombres, las rutas, los PID y el historial.
+El comando ejecuta la CLI de Claude una vez con un plazo de cinco segundos,
+un límite de salida de 256 KiB y un máximo de 256 filas. Respeta
+`CLAUDE_CODE_DISABLE_AGENT_VIEW` y desactiva el tráfico no esencial de la CLI
+de Claude durante la consulta. Claude Code puede inicializar su propia
+configuración en el primer uso. Si la consulta falla, el comando devuelve
+un error sin datos sensibles y sin resultados parciales.
+
+La lista solo refleja las sesiones locales observadas. El comando no
+comprueba si pueden recibir mensajes, no envía mensajes y no usa los pares
+SSH registrados.
+
 <a id="discover-and-send"></a>
 
 ## Descubrir y enviar

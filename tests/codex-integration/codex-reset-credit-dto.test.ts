@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +33,7 @@ describe("reset-credit safe DTO", () => {
     oldHome = process.env.OPENCODEX_HOME;
     home = mkdtempSync(join(tmpdir(), "ocx-reset-dto-"));
     process.env.OPENCODEX_HOME = home;
+    bindStoredCodexPoolRoutingForTests();
     originalFetch = globalThis.fetch;
     saveCodexAccountCredential("dto-pool", { accessToken: "test-access", refreshToken: "test-refresh", expiresAt: Date.now() + 3600_000, chatgptAccountId: "test-account" });
     globalThis.fetch = (async (input: RequestInfo | URL) => {

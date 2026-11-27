@@ -235,7 +235,7 @@ export function createRegisteredAdapter(
   const adapter = definition.create(provider, context);
   const wire = effectiveAdapterContract(provider.adapter).wire;
   if (wire !== "openai-responses") {
-    withInputMediaGuard(adapter, wire);
+    withInputMediaGuard(adapter, wire, provider);
   }
   withCommandCodeDecisionModelGuard(adapter, provider);
   const buildRequest = adapter.buildRequest.bind(adapter);

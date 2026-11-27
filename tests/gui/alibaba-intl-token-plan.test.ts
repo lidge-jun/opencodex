@@ -179,7 +179,7 @@ describe("alibaba-token-plan-intl registry entry", () => {
     // entitled from its 260917 first listing, probed callable on a Personal key).
     const cnModels = PROVIDER_REGISTRY.find(e => e.id === "alibaba-token-plan")!.models;
     expect(cnModels).toEqual([
-      "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+      "qwen4-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
       "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "glm-5.2", "glm-5.3",
     ]);
     // The 260910 DeepSeek rename row is wired: vision-capable, effort ladder, and the

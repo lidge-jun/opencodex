@@ -716,6 +716,10 @@ const COGNITION_BLOCKLIST_REWRITES: ReadonlyArray<[RegExp, string]> = [
   // #8558: Claude Code system prompt. Matched like the Codex entries:
   // case-insensitive, flexible whitespace, optional commas.
   [
+    /\bYou\s+are\s+Claude\s+Code,?\s+Anthropic['’]?s\s+official\s+CLI\s+for\s+Claude\b/gi,
+    "You are Claude Code, a CLI for Claude built by Anthropic",
+  ],
+  [
     /\bYou\s+are\s+a\s+Claude\s+agent,?\s+built\s+on\s+Anthropic['’]?s\s+Claude\s+Agent\s+SDK\b/gi,
     "You are a Claude agent, built on Anthropic's Claude Agent Toolkit",
   ],

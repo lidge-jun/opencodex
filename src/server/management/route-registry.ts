@@ -147,6 +147,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/native-main-profiles/switch", module: "codex/native-profile-api", mutates: true },
   // server/management/agent-settings-routes
   { method: "GET", path: "/api/claude-code", module: "server/management/agent-settings-routes", mutates: false },
+  // server/management/claude-first-party-preview-routes (catch-up 010, G-002)
+  { method: "GET", path: "/api/claude-code/first-party/preview", module: "server/management/claude-first-party-preview-routes", mutates: false, exempt: { reason: "interactive-preview", why: "Preview half of the dashboard's CLI first-party switch: the dashboard shows the settings.json keys and asks before the PUT. ocx claude config set --first-party has no confirmation step to attach it to." } },
+  // server/management/connection-status-routes (catch-up 010, G-001)
+  { method: "GET", path: "/api/connections", module: "server/management/connection-status-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The read-only Connections view is dashboard-only for now; a CLI verb that prints the same projection is owed by the client-connection follow-up.", owner: "proxy catch-up 020 (client connections CLI)", ownerDoc: "structure/clients/connections.md" } },
   { method: "GET", path: "/api/claude-code/model-defaults", module: "server/management/agent-settings-routes", mutates: false, exempt: { reason: "interactive-preview", why: "Preview half of the GUI-only Claude Code tier-default apply; the fingerprint it returns is the only input POST accepts, and no terminal confirmation workflow exists yet." } },
   { method: "POST", path: "/api/claude-code/model-defaults", module: "server/management/agent-settings-routes", mutates: true, exempt: { reason: "interactive-preview", why: "Apply half of the GUI-only Claude Code tier-default preview; it writes the shared Claude settings only for a fingerprint the dashboard preview produced." } },
   { method: "GET", path: "/api/claude-desktop", module: "server/management/agent-settings-routes", mutates: false },
@@ -396,6 +400,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/provider-quotas", module: "server/management/provider-routes", mutates: false },
   { method: "GET", path: "/api/quota-pool", module: "server/management/quota-pool-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The ocx.quota-pool/1 read is a machine contract GOAT consumes over management and the link relay; the CLI shows the same caches through ocx provider quota and ocx account.", owner: "ocx-1 quota pool", ownerDoc: "structure/quota-pool.md" } },
   { method: "GET", path: "/api/fallback", module: "server/management/fallback-routes", mutates: false },
+  { method: "GET", path: "/api/oauth/accounts/diagnostics", module: "server/management/account-diagnostics-routes", mutates: false, exempt: { reason: "deferred-verb", why: "Per-account eligibility, refresh, cooldown and lease diagnostics are a read-only operator view with no CLI verb yet; ocx account shows the account list.", owner: "catch-up 040a account diagnostics", ownerDoc: "structure/providers/generic-account-pool.md" } },
   { method: "GET", path: "/api/route-to", module: "server/management/route-to-routes", mutates: false },
   { method: "PUT", path: "/api/route-to", module: "server/management/route-to-routes", mutates: true },
   { method: "POST", path: "/api/route-to/sync", module: "server/management/route-to-routes", mutates: true },

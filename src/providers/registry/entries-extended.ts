@@ -30,6 +30,10 @@ import type { ProviderRegistryEntry } from "./types";
 import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "./agy-acp-models";
 import {
   ZAI_GLM_53_MODELS,
+  ZAI_GLM_53_CONTRACT_MODELS,
+  ZAI_GLM_54_MODELS,
+  ZAI_CODING_PLAN_MODELS,
+  BIGMODEL_RESPONSES_MODELS,
   ZAI_GLM_5X_MODELS,
   ZAI_GLM_5X_SIDECAR_VISION_MODELS,
   ZAI_GLM_5X_INPUT_MODALITIES,
@@ -52,6 +56,8 @@ import {
   ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS,
   THINKING_BUDGET_EFFORTS,
   QWEN38_REASONING_EFFORTS,
+  QWEN4_MAX,
+  QWEN4_MAX_REASONING_EFFORTS,
   DEEPSEEK_V4_LEGACY_MODELS,
   DEEPSEEK_GATEWAY_THINKING_MODELS,
   DEEPSEEK_VISION_PREVIEW_MODEL,
@@ -66,6 +72,9 @@ import {
   ALIBABA_TOKEN_PLAN_QWEN_MODELS,
   ALIBABA_TOKEN_PLAN_INPUT_MODALITIES,
   ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
+  ALIBABA_TOKEN_PLAN_BEIJING_CONTEXT_WINDOWS,
+  ALIBABA_TOKEN_PLAN_BEIJING_INPUT_MODALITIES,
+  ALIBABA_TOKEN_PLAN_BEIJING_MAX_OUTPUT_TOKENS,
   ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
   ALIBABA_TOKEN_PLAN_NO_VISION,
   ALIBABA_TOKEN_PLAN_PRESERVE_REASONING,
@@ -599,17 +608,18 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     destinationAliases: [{ baseUrl: "https://api.z.ai/api/coding/paas/v4", adapter: "openai-chat" }],
     dashboardUrl: "https://z.ai/manage-apikey/apikey-list", defaultModel: "glm-5.3",
     note: "GLM-5.3 coding subscription",
-    models: ["glm-5.3", "glm-5.3[1m]", "glm-5.3-flash", "glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5", "glm-4.6"],
+    models: ZAI_CODING_PLAN_MODELS,
     // The upstream catalog reports 1_048_576 for the 5.3 family, which is what the domestic
-    // Responses row already carries. Both are documented as "1M"; this is that number.
-    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5.3[1m]": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
+    // Responses row already carries. Both are documented as "1M"; this is that number. GLM-5.4 is
+    // documented as "1M" too and follows the same convention.
+    modelContextWindows: { "glm-5.4": 1_048_576, "glm-5.4[1m]": 1_048_576, "glm-5.3": 1_048_576, "glm-5.3[1m]": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
     // Z.AI returns 400 for bracketed model ids on both wires; the aliases are local.
     modelSuffixBracketStrip: true,
     noVisionModels: ZAI_GLM_5X_SIDECAR_VISION_MODELS,
     modelInputModalities: ZAI_GLM_5X_INPUT_MODALITIES,
     modelReasoningEfforts: ZAI_GLM_5X_REASONING_EFFORTS,
-    modelDefaultReasoningEfforts: Object.fromEntries(ZAI_GLM_53_MODELS.map(id => [id, "max"])),
-    modelMaxOutputTokens: Object.fromEntries(ZAI_GLM_53_MODELS.map(id => [id, 131_072])),
+    modelDefaultReasoningEfforts: Object.fromEntries(ZAI_GLM_53_CONTRACT_MODELS.map(id => [id, "max"])),
+    modelMaxOutputTokens: Object.fromEntries(ZAI_GLM_53_CONTRACT_MODELS.map(id => [id, 131_072])),
     modelSupportsReasoningSummaries: Object.fromEntries(ZAI_GLM_5X_MODELS.map(id => [id, true])),
     preserveReasoningContentModels: ZAI_GLM_5X_MODELS,
     // Responses replay uses this provider-level flag; the model list above still covers a
@@ -686,9 +696,12 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://bigmodel.cn/console/usercenter/apikeys",
     defaultModel: "glm-5.3",
-    models: ["glm-5.3", "glm-5.3[1m]", "glm-5.3-flash", "glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5", "glm-4.6"],
+    models: ZAI_CODING_PLAN_MODELS,
     jawcodeBundle: "zai",
-    modelContextWindows: { "glm-5.3": 1_000_000, "glm-5.3[1m]": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
+    modelContextWindows: { "glm-5.4": 1_000_000, "glm-5.4[1m]": 1_000_000, "glm-5.3": 1_000_000, "glm-5.3[1m]": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 },
+    // GLM-5.4: 128K output and default effort max (docs.z.ai/guides/llm/glm-5.4.md, devpack/latest-model.md).
+    modelMaxOutputTokens: Object.fromEntries(ZAI_GLM_54_MODELS.map(id => [id, 131_072])),
+    modelDefaultReasoningEfforts: Object.fromEntries(ZAI_GLM_54_MODELS.map(id => [id, "max"])),
     modelSuffixBracketStrip: true,
     noVisionModels: ZAI_GLM_5X_SIDECAR_VISION_MODELS,
     modelInputModalities: ZAI_GLM_5X_INPUT_MODALITIES,
@@ -727,7 +740,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://bigmodel.cn/console/usercenter/apikeys",
     defaultModel: "glm-5.3",
-    models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"],
+    // GLM-5.4 joined every Coding Plan tier on the same Codex base URL (2026-11-26,
+    // docs.bigmodel.cn/cn/coding-plan/latest-model.md).
+    models: BIGMODEL_RESPONSES_MODELS,
     liveModels: false,
     // The local Codex catalog does not establish an authenticated HTTP /models contract.
     apiKeyValidation: "unknown",
@@ -738,14 +753,16 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // models are documented as "1M", and this preset expresses that family's 1M the way
     // BigModel's own Codex declaration does. Splitting the two would leave one preset
     // claiming two different sizes for one documented window.
-    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5-turbo": 204_800 },
+    modelContextWindows: { "glm-5.4": 1_048_576, "glm-5.3": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5-turbo": 204_800 },
     // Flash is the only row here that can actually see an image. Its siblings are declared
     // text-only and get `image` back from the vision sidecar at catalog-build time; declaring
     // Flash text-only would route a native VLM's pictures through a describe-it-first detour
     // and hand the model prose about an image it could have read (same defect
     // ZAI_GLM_5X_SIDECAR_VISION_MODELS exists to prevent on the Chat rows).
-    modelInputModalities: { "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"], "glm-5-turbo": ["text"] },
+    modelInputModalities: { "glm-5.4": ["text", "image"], "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"], "glm-5-turbo": ["text"] },
     modelReasoningEfforts: {
+      // GLM-5.4 documents the same low/high/max fold as GLM-5.3 (docs.z.ai/devpack/latest-model.md).
+      "glm-5.4": ZAI_GLM_53_REASONING_EFFORTS,
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
       // Same three effective tiers: upstream documents Flash's text parameters as identical
       // to GLM-5.3, and the Codex effort table folds every inbound value into low/high/max.
@@ -753,8 +770,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       // Explicitly empty: Turbo must not inherit the generic selectable effort ladder.
       "glm-5-turbo": [],
     },
-    modelDefaultReasoningEfforts: { "glm-5.3": "max", "glm-5.3-flash": "max", "glm-5-turbo": "max" },
-    modelSupportsReasoningSummaries: { "glm-5.3": true, "glm-5.3-flash": true, "glm-5-turbo": true },
+    modelDefaultReasoningEfforts: { "glm-5.4": "max", "glm-5.3": "max", "glm-5.3-flash": "max", "glm-5-turbo": "max" },
+    modelMaxOutputTokens: { "glm-5.4": 131_072 },
+    modelSupportsReasoningSummaries: { "glm-5.4": true, "glm-5.3": true, "glm-5.3-flash": true, "glm-5-turbo": true },
     // Responses replay uses this provider-level flag, not the Chat-path model list.
     preserveResponsesReasoningContent: true,
     note: "Domestic BigModel Coding Plan Responses endpoint; static model roster",
@@ -935,12 +953,13 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       "glm-5.3": { wire: "openai-responses", inbound: ["responses"] },
     },
     note: "Token Plan Personal Edition · China (Beijing)",
-    modelInputModalities: ALIBABA_TOKEN_PLAN_INPUT_MODALITIES,
-    modelContextWindows: ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
-    modelMaxOutputTokens: ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
+    modelInputModalities: ALIBABA_TOKEN_PLAN_BEIJING_INPUT_MODALITIES,
+    modelContextWindows: ALIBABA_TOKEN_PLAN_BEIJING_CONTEXT_WINDOWS,
+    modelMaxOutputTokens: ALIBABA_TOKEN_PLAN_BEIJING_MAX_OUTPUT_TOKENS,
     modelReasoningEfforts: {
       ...Object.fromEntries(ALIBABA_TOKEN_PLAN_QWEN_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
       ...Object.fromEntries(QWEN38_FAMILY.map(id => [id, QWEN38_REASONING_EFFORTS])),
+      [QWEN4_MAX]: QWEN4_MAX_REASONING_EFFORTS,
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
       "deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek-v4-pro"),
@@ -963,10 +982,10 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noJsonSchemaModels: ["deepseek-v4.1-flash"],
     // 261020 strict schema rejected; json_object unverified. Omit rather than invent a fallback.
     noStructuredOutputModels: ["deepseek-v4.1-flash-1017"],
-    modelDefaultReasoningEfforts: { ...Object.fromEntries(QWEN38_FAMILY.map(id => [id, "xhigh"])), "deepseek-v4.1-flash-1017": "high" },
-    directReasoningEffortModels: QWEN38_FAMILY,
+    modelDefaultReasoningEfforts: { ...Object.fromEntries(QWEN38_FAMILY.map(id => [id, "xhigh"])), [QWEN4_MAX]: "high", "deepseek-v4.1-flash-1017": "high" },
+    directReasoningEffortModels: [...QWEN38_FAMILY, QWEN4_MAX],
     thinkingBudgetModels: ALIBABA_TOKEN_PLAN_QWEN_MODELS.filter(id => !QWEN38_FAMILY.includes(id)),
-    preserveReasoningContentModels: ALIBABA_TOKEN_PLAN_PRESERVE_REASONING,
+    preserveReasoningContentModels: [...ALIBABA_TOKEN_PLAN_PRESERVE_REASONING, QWEN4_MAX],
     // Responses replay uses this provider-level flag, not the Chat-path model list above;
     // measured live on this gateway (see the pin comment). The model list still covers a
     // caller who opts back into Chat.
@@ -1306,6 +1325,24 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     note: "Sionic AI's OpenAI-compatible gateway. Public live discovery lists active models served on Chat Completions (plus pinned Responses-only rows), with Sionic-served ultrafast models first. The public catalog cannot validate keys.",
   },
   {
+    // Public contract checked 2026-11-26 without a key: https://runapi.co/api/pricing lists 208
+    // models with their supported endpoints (Chat Completions on 200, Responses on 53, Anthropic
+    // Messages on 37); /v1/models and /v1/chat/completions answer 401 without a token. runapi.co is
+    // canonical; runapi.host serves the same deployment as a mirror for mainland-China access.
+    // Standard sponsor under SPONSORS.md (agreement dated 2026-11-25). Pins the row in the picker
+    // and adds the chip; nothing about routing, discovery or defaults changes.
+    id: "runapi",
+    label: "RunAPI",
+    adapter: "openai-chat",
+    baseUrl: "https://runapi.co/v1",
+    authKind: "key",
+    dashboardUrl: "https://runapi.co",
+    sponsor: { tier: "standard", url: "https://runapi.co" },
+    liveModels: true,
+    preserveCustomDestination: true,
+    note: "Unified AI API gateway with a 200+ model catalog; this preset uses OpenAI Chat Completions, which most catalog models support. Use a RunAPI key; live discovery lists the models that key can use.",
+  },
+  {
     // Public contract checked 2026-09-29: https://docs.tokenlab.sh/api-reference/models/list-models
     // A supplied key is validated and scopes the catalog; anonymous discovery is also public.
     id: "tokenlab",
@@ -1397,6 +1434,71 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // answers an image, audio or file part with 400 `unsupported_content`.
     inputModalities: ["text"],
     note: "Smart Router that sends each request to a model chosen from AI Stupid Level's benchmarks, using the provider keys saved on your AI Stupid Level account (OpenAI, Anthropic, Google, DeepSeek, Kimi, GLM), so each provider bills you directly with no markup. Routing modes: auto-coding (the default), auto-tooling, auto-reasoning, auto-best, plus value and speed modes. A real model id from the live list, such as claude-opus-5-5, pins one model. The X-AISM-Model response header names the model that answered. Text only.",
+  },
+  {
+    // AI/ML API: OpenAI-compatible gateway at https://api.aimlapi.com/v1. Contract checked
+    // 2026-10-27: https://docs.aimlapi.com/api-references/model-database. GET /v1/models is
+    // public and answers 200 for any Bearer value, so it cannot validate a key. It lists ~950
+    // rows, and only the row `type` separates chat models from image, video, audio, embedding
+    // and Anthropic-batch rows; one id can appear in several rows. Discovery admits only
+    // `openai/chat-completions` rows. The seven seeds answered chat, streaming and tool calls
+    // through the proxy on 2026-10-27; context and output limits are the /v1/models `info`
+    // values. The env reference derived from the id is ${AIMLAPI_API_KEY}.
+    id: "aimlapi",
+    label: "AI/ML API",
+    adapter: "openai-chat",
+    baseUrl: "https://api.aimlapi.com/v1",
+    authKind: "key",
+    dashboardUrl: "https://aimlapi.com/app/keys",
+    // Client attribution requested by AI/ML API. Registry static headers reach the upstream only
+    // while the row still targets this host (withoutRegistryStaticHeaderCopies). The partner id
+    // AI/ML API asked for is deliberately absent: a default third-party partner identifier in an
+    // MIT client needs a commercial arrangement behind it, and there is none (owner decision,
+    // 2026-11-19).
+    staticHeaders: {
+      "X-AIMLAPI-Source": "agent/opencodex",
+    },
+    liveModels: true,
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    defaultModel: "openai/gpt-5.6-terra",
+    models: [
+      "openai/gpt-5.6-terra", "openai/gpt-6.1-terra", "anthropic/claude-sonnet-5-5", "google/gemini-3.5-flash",
+      "deepseek/deepseek-v4-flash", "z-ai/glm-5.3-flash", "moonshot/kimi-k3",
+    ],
+    modelContextWindows: {
+      "openai/gpt-5.6-terra": 1_050_000,
+      "openai/gpt-6.1-terra": 1_050_000,
+      "anthropic/claude-sonnet-5-5": 1_000_000,
+      "google/gemini-3.5-flash": 1_048_576,
+      "deepseek/deepseek-v4-flash": 1_000_000,
+      "z-ai/glm-5.3-flash": 1_048_576,
+      "moonshot/kimi-k3": 1_048_576,
+    },
+    // moonshot/kimi-k3 has no output cap here: /v1/models gives it no `outputMax` and its
+    // docs-json sets no maximum for max_tokens, so there is no published value to seed.
+    modelMaxOutputTokens: {
+      "openai/gpt-5.6-terra": 128_000,
+      "openai/gpt-6.1-terra": 128_000,
+      "anthropic/claude-sonnet-5-5": 128_000,
+      "google/gemini-3.5-flash": 65_536,
+      "deepseek/deepseek-v4-flash": 384_000,
+      "z-ai/glm-5.3-flash": 131_072,
+    },
+    modelInputModalities: {
+      "openai/gpt-5.6-terra": ["text", "image"],
+      "openai/gpt-6.1-terra": ["text", "image"],
+      "anthropic/claude-sonnet-5-5": ["text", "image"],
+      "google/gemini-3.5-flash": ["text", "image"],
+      "deepseek/deepseek-v4-flash": ["text"],
+      "z-ai/glm-5.3-flash": ["text", "image"],
+      "moonshot/kimi-k3": ["text", "image"],
+    },
+    modelDiscovery: {
+      path: "models",
+      filter: { allOf: [{ path: ["type"], equalsAny: ["openai/chat-completions"] }] },
+    },
+    note: "OpenAI-compatible gateway with one key for OpenAI, Anthropic, Google, DeepSeek, GLM, Kimi and other chat models. Model ids carry the vendor prefix (openai/gpt-5.6-terra). Live discovery lists only the Chat Completions models from the public catalog; image, video, audio and embedding models are left out. The public catalog cannot validate keys. Requests to api.aimlapi.com carry an X-AIMLAPI-Source attribution header.",
   },
   {
     // cheapaimodel, operated by LINKOVA PTE. LTD. (Singapore). Contract checked 2026-10-28:
@@ -1599,8 +1701,13 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     featured: false,
     dashboardUrl: "https://github.com/settings/copilot",
     liveModels: true,
-    models: ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "claude-sonnet-4", "gemini-2.5-pro", "gpt-5-mini", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"],
-    defaultModel: "gpt-4o",
+    // 2026-11-26 (docs.github.com/en/copilot/reference/ai-models/supported-models): retired ids
+    // leave the cold-start seed (gpt-4.1 06-01, claude-sonnet-4 05-01, gemini-2.5-pro 07-31,
+    // gpt-5-mini/5.4/5.4-mini/5.5 10-19, gpt-5.6-terra 11-16; gpt-4o and gpt-4.1-mini are not on
+    // the supported list). The default is GPT-5.3-Codex, which GitHub names its long-term support
+    // model and the fallback when no other model is available. Wire defaults below are untouched.
+    models: ["gpt-5.3-codex", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"],
+    defaultModel: "gpt-5.3-codex",
     // Copilot fronts a mixed-wire catalog: these models reject /chat/completions for
     // real Codex-agent traffic (function tools + reasoning), so every inbound wire
     // rides Responses. Evidence: issue #748 field runs, pi.dev/models/github-copilot/*

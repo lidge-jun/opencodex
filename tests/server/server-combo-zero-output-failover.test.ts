@@ -503,6 +503,25 @@ describe("combo zero-output bare Responses error failover", () => {
     expect(hits).toEqual(["a"]);
   });
 
+  test("a quota refusal after visible stream output stays on its original target", async () => {
+    const sent: string[] = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      sent.push(parsed.modelId);
+      emit({ type: "text_delta", text: "already delivered" });
+      emit({ type: "error", status: 429, code: "insufficient_quota", message: "Quota exhausted" });
+    };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+      b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+    }, undefined, { quotaOnlyFallback: true, allowMeteredTargets: true });
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
+    }), config, { model: "", provider: "" }, { admission: { kind: "loopback", source: "loopback" } });
+    expect(await response.text()).toContain("already delivered");
+    expect(sent).toEqual(["m1"]);
+  });
+
   test("buffered undeclared tool call after text and replay-unsafe heartbeat never replays on backup", async () => {
     const hits: string[] = [];
     customRunTurn = async (parsed, _incoming, emit) => {

@@ -370,6 +370,44 @@ and exempting them would restore the silent drop the scanner exists to prevent. 
 the decoder share one predicate so a request cannot be exempted here and reduced to a marker
 there.
 
+Video is the one kind whose carrier depends on the model. `src/adapters/video-input-carrier.ts`
+checks the normalized request's `video` parts (`src/responses/video-input.ts`) after the typed
+scan, which refuses an `input_video` block outside user or developer content because no
+converter there builds a part.
+
+Every inline video goes through one decoder, `parseMediaDataUrl` in `src/lib/media-data-url.ts`,
+called as `parseInlineVideo` with the `MAX_INLINE_VIDEO_BYTES` (50 MiB decoded) cap. It accepts
+exactly `data:<type>/<subtype>[;<attribute>=<value>]...;base64,<payload>` with canonical standard
+base64 (length a multiple of four, at most two trailing `=`, zero unused bits), which is the set
+of payloads that decode and re-encode to themselves; the size verdict comes from the payload
+length before any scan, and nothing is decoded on the request path. Input admission charges its
+`decodedBytes` (for a URL it refuses, a conservative upper bound: native Responses passthrough
+skips the guard and forwards the original body), the guard refuses on its refusal, both Chat conversions (`chatBodyVideoRefusal`)
+refuse before they build or serialize anything, and the Gemini `inline_data` and translated-Chat
+`video_url` builders send its `mime` and canonical `base64`. Rounds 4–6 of the review on #9131
+each found a different consumer reading a data URL its own way; `tests/lib/media-data-url.test.ts`
+holds the decoder to a strict decode-and-re-encode oracle and `tests/adapters/video-input-guard.test.ts`
+checks every consumer against the decoder over seeded mutations.
+
+The `google` wire carries decoded-valid inline video and the YouTube and Files API URIs that
+`src/adapters/google-video-uri.ts` allowlists; any other remote URL is refused. The translated Chat
+builder (`provider.adapter === "openai-chat"`, not merely the inherited wire) emits the Chat
+`video_url` part only in user messages and only for a model whose `modelCapabilities`,
+`modelInputModalities` or provider `inputModalities` declares `video`; absent evidence is a
+refusal. Every other wire refuses. The exempt Responses wire and native Chat forward the original
+body. Each refusal is fixed vocabulary and names no URL or byte. A builder-path video refusal throws
+`UnsupportedInputModalityError`, which `adapterBuildRefusal` in
+`src/server/responses/passthrough-build-error.ts` answers as 400 `unsupported_input_modality` (the
+code `runTurn` emits, and a combo hop code); audio, file and declaration refusals keep the generic
+builder 400. Both Chat conversions also refuse a `video_url` outside user content (the typed scan
+reads the Chat spelling too); the Chat handler applies `chatBodyVideoRefusal` before the
+Cursor/Kiro usage estimate serializes the messages, and its routing catch returns that refusal
+before the protocol check. Those Chat refusals are `ChatUnsupportedInputModalityError` and reach
+the client as 400 `unsupported_input_modality` too. The builder refusal is not marked
+non-replayable: nothing was sent, and the marker would stop the combo loop before it reads the hop
+code (`tests/responses/responses-combo-video-hop.test.ts`). The Gemini and Chat builders no longer
+write a video text marker.
+
 `src/adapters/input-media-guard.ts` guards adapters created by the registry after effective
 wire selection. It enables the audio exemption only for `openai-chat`. A translated
 `buildRequest` refuses unsupported inputs through the existing 400 error path; `runTurn` emits
@@ -391,7 +429,8 @@ upstream token formula; base64 inflation is not charged, and the scanner and gua
 the payload.
 
 `tests/adapters/openai/openai-chat-audio.test.ts` covers user and tool-result audio mapping;
-`tests/adapters/adapter-input-media-guard.test.ts` covers hook ordering, refusal positions and
+`tests/adapters/video-input-guard.test.ts` covers each video carrier and refusal through registered
+adapters. `tests/adapters/adapter-input-media-guard.test.ts` covers hook ordering, refusal positions and
 raw passthrough; `tests/responses/chat-media-translation.test.ts` reaches the real HTTP
 translation boundary and verifies that supported audio is forwarded while unsupported media
 sends no upstream request; `tests/server/input-admission.test.ts` covers decoded-byte charging.

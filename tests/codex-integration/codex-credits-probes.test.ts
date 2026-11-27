@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -56,6 +57,7 @@ beforeEach(() => {
   originalFetch = globalThis.fetch;
   testDir = mkdtempSync(join(tmpdir(), "ocx-credits-probes-"));
   process.env.OPENCODEX_HOME = testDir;
+  bindStoredCodexPoolRoutingForTests();
   process.env.CODEX_HOME = join(testDir, "codex");
   mkdirSync(process.env.CODEX_HOME, { recursive: true });
   globalThis.fetch = (async () => { throw new Error("unexpected fixture network request"); }) as typeof fetch;

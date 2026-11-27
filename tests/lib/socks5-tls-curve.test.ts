@@ -1,7 +1,13 @@
-import { describe, test } from "bun:test";
+import { afterEach, describe, test } from "bun:test";
 import assert from "node:assert/strict";
 import { createServer, type AddressInfo, type Socket } from "node:net";
 import { socks5Fetch } from "../../src/lib/socks5-fetch";
+
+const originalClassicalTlsHosts = process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS;
+afterEach(() => {
+  if (originalClassicalTlsHosts === undefined) delete process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS;
+  else process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS = originalClassicalTlsHosts;
+});
 
 const HYBRID_GROUP = 0x11ec; // X25519MLKEM768
 const X25519 = 0x1d;
@@ -83,19 +89,34 @@ async function captureClientHello(init?: RequestInit): Promise<{ keyShareGroups:
 
 describe("socks5Fetch TLS options", () => {
   test("the pinned runtime default offers the hybrid share, so the override below is distinguishable", async () => {
+    delete process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS;
     const byDefault = await captureClientHello();
     assert.ok(byDefault.keyShareGroups.includes(HYBRID_GROUP),
       `control failed: runtime default offered ${byDefault.keyShareGroups.map(g => "0x" + g.toString(16))}; `
       + "if the pinned runtime stops offering the hybrid share, this regression loses its discriminating power");
   });
 
-  test("init.tls.ecdhCurve reaches the SOCKS5 TLS handshake", async () => {
+  test("caller-supplied init.tls.ecdhCurve is ignored when the host did not opt in", async () => {
+    delete process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS;
+    const withoutOptIn = await captureClientHello({ tls: { ecdhCurve: "X25519:P-256:P-384" } } as BunFetchRequestInit);
+    assert.ok(withoutOptIn.keyShareGroups.includes(HYBRID_GROUP),
+      "an unopted host must keep the runtime default hybrid share even if init.tls.ecdhCurve is supplied");
+
+    process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS = "other.invalid";
+    const mismatchedOptIn = await captureClientHello({ tls: { ecdhCurve: "X25519:P-256:P-384" } } as BunFetchRequestInit);
+    assert.ok(mismatchedOptIn.keyShareGroups.includes(HYBRID_GROUP),
+      "a non-matching opt-in list must not forward init.tls.ecdhCurve");
+  });
+
+  test("init.tls.ecdhCurve reaches the SOCKS5 TLS handshake for an opted-in host", async () => {
+    process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS = "destination.invalid";
     const overridden = await captureClientHello({ tls: { ecdhCurve: "X25519:P-256:P-384" } } as BunFetchRequestInit);
     assert.ok(overridden.keyShareGroups.includes(X25519), "a classical key share must be offered");
     assert.ok(!overridden.keyShareGroups.includes(HYBRID_GROUP), "the hybrid share must not be offered");
   });
 
   test("only ecdhCurve crosses the boundary: caller ALPN and verification options do not reach the handshake", async () => {
+    process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS = ".destination.invalid";
     const captured = await captureClientHello({
       tls: {
         ecdhCurve: "X25519:P-256:P-384",

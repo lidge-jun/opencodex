@@ -3,6 +3,7 @@ import { chmodSync, closeSync, fsyncSync, mkdtempSync, openSync, writeFileSync }
 import { join } from "node:path";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import { isOcxRoutingMarkerLine } from "./injected-marker";
+import { ocxProviderTableIdentity } from "./inject/provider-table";
 import { CODEX_CONFIG_PATH, defaultCodexCatalogPathForConfig, sameCodexCatalogPath } from "./paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "./subagent-defaults";
 import { rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText } from "./toml-source-lines";
@@ -170,7 +171,23 @@ function matchesInjectedField(key: string, value: unknown, injected: unknown): b
   if (key === "model_catalog_json" && typeof value === "string" && value && typeof injected === "string" && injected) {
     return sameCodexCatalogPath(CODEX_CONFIG_PATH, value, injected);
   }
+  if (key === "model_providers.opencodex") {
+    // A table recorded before the Cyber capability line and one written after it are the same
+    // injected table. Only this provider is normalized; the enclosing shape compares exactly.
+    const present = capturedOcxProvider(value), recorded = capturedOcxProvider(injected);
+    if (present && recorded) return isDeepStrictEqual(ocxProviderTableIdentity(present), ocxProviderTableIdentity(recorded));
+  }
   return isDeepStrictEqual(value, injected);
+}
+
+/** The provider inside a captured `{ model_providers: { opencodex: … } }` span value, and nothing else. */
+function capturedOcxProvider(value: unknown): Record<string, unknown> | null {
+  const object = (candidate: unknown): Record<string, unknown> | null =>
+    candidate !== null && typeof candidate === "object" && !Array.isArray(candidate) ? candidate as Record<string, unknown> : null;
+  const root = object(value);
+  const providers = object(root?.model_providers);
+  if (!root || !providers || Object.keys(root).length !== 1 || Object.keys(providers).length !== 1) return null;
+  return object(providers.opencodex);
 }
 
 /** Three-way restore: an edited preference stays; an edited routing field blocks hand-back. */

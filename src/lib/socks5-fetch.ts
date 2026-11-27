@@ -309,6 +309,16 @@ function requestHeaders(request: Request, target: URL): { text: string; chunked:
   };
 }
 
+function hostOptedIntoClassicalTls(hostname: string, hostsEnv = process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS): boolean {
+  if (!hostsEnv) return false;
+  const host = hostname.toLowerCase();
+  for (const entry of hostsEnv.split(",")) {
+    const target = entry.trim().toLowerCase().replace(/^\.+/, "");
+    if (target && (host === target || host.endsWith(`.${target}`))) return true;
+  }
+  return false;
+}
+
 async function secureSocket(
   socket: Socket,
   target: URL,
@@ -671,10 +681,10 @@ async function uploadRequestBody(
 
 export async function socks5Fetch(
   input: RequestInfo | URL,
-  init: RequestInit | undefined,
+  init: BunFetchRequestInit | undefined,
   proxy: string,
 ): Promise<Response> {
-  const protocol = (init as (RequestInit & { protocol?: string }) | undefined)?.protocol;
+  const protocol = init?.protocol;
   if (protocol === "http2" || protocol === "h2") {
     throw new Socks5FetchError("SOCKS5 transport cannot honor an explicit HTTP/2 pin");
   }
@@ -699,10 +709,19 @@ export async function socks5Fetch(
   request.signal.addEventListener("abort", onAbort, { once: true });
   try {
     if (target.protocol === "https:") {
-      socket = await secureSocket(tunnel, target, request.signal,
-        ((init as BunFetchRequestInit | undefined)?.tls as { ecdhCurve?: string } | undefined)?.ecdhCurve);
+      const requestedCurve = (init?.tls as { ecdhCurve?: string } | undefined)?.ecdhCurve;
+      const ecdhCurve = typeof requestedCurve === "string" && requestedCurve && hostOptedIntoClassicalTls(target.hostname)
+        ? requestedCurve
+        : undefined;
+      socket = await secureSocket(tunnel, target, request.signal, ecdhCurve);
     }
-    socket.setTimeout(SOCKS5_RESPONSE_TIMEOUT_MS, onResponseTimeout);
+    // A positive Bun fetch timeout is the request's socket idle budget. Keep the tunnel's
+    // existing bound for callers that didn't request a positive timeout.
+    const idleMs = init?.timeout;
+    const responseTimeoutMs = typeof idleMs === "number" && Number.isFinite(idleMs) && idleMs > 0
+      ? Math.min(2_147_483_647, Math.ceil(idleMs))
+      : SOCKS5_RESPONSE_TIMEOUT_MS;
+    socket.setTimeout(responseTimeoutMs, onResponseTimeout);
     // Observe socket errors and early responses while uploading, not only after it.
     reader = new SocketReader(socket);
     const headers = requestHeaders(request, target);

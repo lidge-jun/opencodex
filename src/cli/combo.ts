@@ -28,6 +28,8 @@ const USAGE = `Usage:
       [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->]
       (force overrides valid client effort and can increase cost/latency) [--alias <name|->]
       [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->]
+      [--quota-only-fallback <on|off>] [--preserve-fallback-model <on|off>]
+      (quota-only mode requires consent for any paid target, including the first target)
       [--description <text|->]
       [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>]
       [--jev-effort-mode <decide|client>]
@@ -174,6 +176,9 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   // Flags that belong to one strategy. An explicit --strategy is checked before any request; an
   // omitted one is the stored strategy, so it is checked once the row has been read.
   const requireStrategyFlags = (strategy: string): void => {
+    if (strategy !== "failover" && (additional.quotaOnlyFallback === true || additional.preserveFallbackModel === true)) {
+      throw new CliUsageError("Enabling quota-only fallback or model preservation requires the failover strategy", USAGE);
+    }
     if (stickyLimit !== undefined && strategy !== "round-robin") throw new CliUsageError("--sticky applies only to round-robin", USAGE);
     if (strategy === "jev") return;
     if (decisionModel !== undefined && decisionModel !== "-") throw new CliUsageError("--decision-model applies only to the jev strategy", USAGE);
@@ -216,6 +221,10 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   if (alias !== undefined) combo.alias = alias === "-" ? "" : alias;
   if (additional.nativeAlias !== undefined) combo.nativeAlias = additional.nativeAlias;
   if (additional.allowMeteredTargets !== undefined) combo.allowMeteredTargets = additional.allowMeteredTargets;
+  for (const key of ["quotaOnlyFallback", "preserveFallbackModel"] as const) {
+    if (strategy !== "failover") delete combo[key];
+    else if (additional[key] !== undefined) combo[key] = additional[key];
+  }
   if (additional.imageInput !== undefined) combo.imageInput = additional.imageInput;
   if (additional.reasoningEffortMode !== undefined) combo.reasoningEffortMode = additional.reasoningEffortMode;
   if (additional.jevEffortMode !== undefined) combo.jevEffortMode = additional.jevEffortMode;
