@@ -555,6 +555,8 @@ Precommit Codex model refusals use bounded account recovery for HTTP `detail` an
 `error.message` bodies. Only an exact HTTP 400 refusal naming the requested or wire model establishes
 denial evidence; ordinary malformed requests and committed stream errors do not authorize another
 send. Account selectors, uploaded files and send budgets retain their existing restrictions.
+When the only alternate is a main login refused by its hard lock or credits-off hold, the client
+receives that policy refusal with its reset instead of the first account's model 400.
 
 OpenCode Go inference POSTs obey the same operator gate; the destination itself does not authorize
 replay. A granted pre-header replacement that returns transient 5xx has its body cancelled and returns
