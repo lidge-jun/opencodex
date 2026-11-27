@@ -155,13 +155,13 @@ test("OpenCode managed document drops native rows in Codex Direct and keeps them
   }
 });
 
-test("OpenCode managed document keeps account-qualified native rows in Direct mode", () => {
+test("OpenCode, Pi, and DSH keep account-qualified native rows (and their Fast rows) in Direct mode", () => {
   // An account-qualified selector (`main/gpt-5.6-luna`) is pinned to one account and served
   // from the pool credential (`codexAccountMode: "pool"` on the route), so it does not ride
   // the caller's own bearer and works in Direct mode. Only the bare form must be dropped.
   const models: ExportModel[] = [
-    { namespaced: "gpt-5.6-luna", provider: "openai", id: "gpt-5.6-luna", native: true },
-    { namespaced: "main/gpt-5.6-luna", provider: "openai", id: "main/gpt-5.6-luna", native: true },
+    { namespaced: "gpt-5.6-luna", provider: "openai", id: "gpt-5.6-luna", native: true, fastRowAvailable: true },
+    { namespaced: "main/gpt-5.6-luna", provider: "openai", id: "main/gpt-5.6-luna", native: true, fastRowAvailable: true },
     { namespaced: "safe/model", provider: "safe", id: "model" },
   ];
   const direct = cfg({
@@ -174,8 +174,14 @@ test("OpenCode managed document keeps account-qualified native rows in Direct mo
 
   const doc = opencodeConfig(ctx({ models, config: direct }));
   for (const block of [doc.provider.opencodex!.models, doc.providers.opencodex!.models]) {
-    expect(Object.keys(block).sort()).toEqual(["main/gpt-5.6-luna", "safe/model"]);
+    expect(Object.keys(block).sort()).toEqual(["main/gpt-5.6-luna", "main/gpt-5.6-luna--fast", "safe/model"]);
   }
+
+  const pi = piConfig(ctx({ models, config: direct }));
+  expect(pi.providers.opencodex.models.map(m => m.id).sort()).toEqual(["main/gpt-5.6-luna", "main/gpt-5.6-luna--fast", "safe/model"]);
+
+  const dsh = dshConfig(ctx({ models, config: direct }));
+  expect(dsh["llm-pi-ai"].providers.opencodex!.models.map(m => m.id).sort()).toEqual(["main/gpt-5.6-luna", "main/gpt-5.6-luna--fast", "safe/model"]);
 });
 
 function piConfig(context: ExportContext = ctx()): PiGeneratedConfig {

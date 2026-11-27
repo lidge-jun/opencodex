@@ -100,16 +100,25 @@ native selectors a client may choose.
 
 Admission is only half of what a client may be offered. Codex Direct is a
 separate omission that applies after admission succeeds: direct mode forwards
-each caller's own OpenAI bearer while a client sends the proxy's key, so a
-native row would answer 401. Every OpenCode surface therefore drops native rows
-in that mode — the launcher's slug and proxy-row paths, `ocx export`, and the
-managed integration, whose `buildOpencodeClientConfig` filters them alongside Pi
-and DSH — while the roster itself still exports them for clients that select
-their own credential. Coverage:
+each caller's own OpenAI bearer while a client sends the proxy's key, so a bare
+native `gpt-*` selector (and its synthetic `--fast` row) would answer 401.
+Account-qualified `<namespace>/<gpt-*>` rows (and their synthetic Fast rows),
+whose first path segment names a configured `codexAccountNamespaces` entry,
+route to the pinned account through the pool credential even while the provider
+is globally Direct (`src/router.ts`), so they remain servable. Every affected
+surface shares `isBareNativeRow` (`src/clients/config-export.ts`) to drop only
+bare native rows in Direct mode while keeping account-qualified ones — the
+OpenCode launcher (`opencodeCatalogFromProxyRows` and bare-only
+`opencodeLaunchNativeSlugs`), `ocx export`, the managed OpenCode integration
+(`buildOpencodeClientConfig`), and Pi/DSH (`buildPiClientConfig`) — while the
+roster itself still exports bare rows for clients that select their own
+credential. When `providers.openai` is disabled or absent, every native row
+(bare and account-qualified alike) is omitted. Coverage:
 `tests/server/management-model-roster.test.ts` (the roster, both account modes
 and an absent provider), `tests/providers/opencode-cli.test.ts` (the launcher's
-slug selection and proxy-row catalog) and `tests/config/client-config-export.test.ts`
-(the managed OpenCode document in both account modes, Fast row included).
+slug selection and proxy-row catalog, including account-qualified and Fast rows)
+and `tests/config/client-config-export.test.ts` (managed OpenCode, Pi and DSH in
+both account modes, including account-qualified and Fast rows).
 
 ## CLI and API boundary
 
