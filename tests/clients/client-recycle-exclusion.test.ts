@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { prepareConfigMutationDatabasePathForWrite } from "../../src/config/mutation-lock";
 import { LinkApplyBusyError, withLinkApply } from "../../src/client/link-home";
+import { readDesktopDisconnectReceipt } from "../../src/claude/desktop-remote-store";
 import { markClientConnectPending } from "../../src/client/state";
 import { runClientRecycleWithAdmission } from "../../src/client/runtime-recycle";
 import type { OcxClientConnectionConfig } from "../../src/types";
@@ -62,6 +63,62 @@ for (const state of ["same-connection", "unreadable", "pending-connect", "stop-r
 }
 
 test("a failure after teardown begins is propagated instead of reported as an admission refusal", async () => {
-  await expect(runClientRecycleWithAdmission(served, () => true, async () => { throw new LinkApplyBusyError(); }))
+  await expect(runClientRecycleWithAdmission(served, () => true, async () => { throw new LinkApplyBusyError(); },
+    { current: () => true, sleep: () => { throw new Error("unexpected retry after teardown"); } }))
     .rejects.toBeInstanceOf(LinkApplyBusyError);
+});
+
+for (const change of ["none", "new-connection", "new-receipt", "same-receipt", "pending", "stopping", "new-generation", "expired"] as const) {
+  test("deferred disconnect rechecks authority after apply contention: " + change, async () => {
+    let release!: () => void;
+    const held = withLinkApply(() => new Promise<void>(resolve => { release = resolve; }));
+    let stop = false, current = true, clock = 0, teardowns = 0;
+    const delays: number[] = [];
+    const next = { ...served, apiKeyId: "new-client", tokenFingerprint: "d".repeat(64) };
+    try {
+      const result = await runClientRecycleWithAdmission(served, () => !stop, async () => { teardowns++; }, {
+        current: () => current, now: () => clock,
+        sleep: async delay => {
+          delays.push(delay);
+          release(); await held;
+          if (change === "new-connection") saveConfig({ ...getDefaultConfig(), runtimeRole: "client", client: next });
+          if (change === "new-receipt" || change === "same-receipt") {
+            const owner = change === "same-receipt" ? served : next;
+            mkdirSync(home.path("desktop-remote"), { recursive: true, mode: 0o700 });
+            writeFileSync(home.path("desktop-remote", "disconnect.json"), JSON.stringify({
+              version: 1, owner: { serverUrl: owner.serverUrl, apiKeyId: owner.apiKeyId, connectedAt: owner.connectedAt },
+              phase: "complete", tokenFingerprint: owner.tokenFingerprint, keepCatalog: false,
+            }), { mode: 0o600 });
+            expect(readDesktopDisconnectReceipt().kind).toBe("valid");
+          }
+          if (change === "pending") markClientConnectPending(next.tokenFingerprint);
+          stop = change === "stopping";
+          current = change !== "new-generation";
+          clock += change === "expired" ? 60_000 : delay;
+        },
+      });
+      expect(delays).toEqual([50]);
+      const canFinish = change === "none" || change === "same-receipt";
+      expect(result).toBe(canFinish);
+      expect(teardowns).toBe(canFinish ? 1 : 0);
+    } finally { release(); await held; }
+  });
+}
+
+test("a scheduled disconnect waits for a busy config transaction without tearing down twice", async () => {
+  const lock = new Database(prepareConfigMutationDatabasePathForWrite());
+  lock.exec("BEGIN IMMEDIATE");
+  let teardowns = 0;
+  const delays: number[] = [];
+  try {
+    expect(await runClientRecycleWithAdmission(served, () => true, async () => { teardowns++; }, {
+      current: () => true,
+      sleep: async delay => {
+        delays.push(delay);
+        if (delays.length === 2) lock.exec("ROLLBACK");
+      },
+    })).toBe(true);
+    expect(delays).toEqual([50, 100]);
+    expect(teardowns).toBe(1);
+  } finally { lock.close(); }
 });

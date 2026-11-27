@@ -155,6 +155,60 @@ test.each(["SIGINT", "SIGTERM", "restart"])("%s shutdown persists queued diagnos
   }
 }, watchdogMs(60_000));
 
+test("an accepted Home disconnect recycles once after a competing apply releases its lock", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-scheduled-recycle-"));
+  const source = `
+    import { mock } from "bun:test";
+    import { existsSync } from "node:fs";
+    import { join } from "node:path";
+    import { getDefaultConfig, saveConfig } from ${JSON.stringify(repoPath("src/config.ts"))};
+    import { handleMachineApi } from ${JSON.stringify(repoPath("src/client/machine-api.ts"))};
+    const homeModule = ${JSON.stringify(repoPath("src/client/link-home.ts"))};
+    const home = await import(homeModule), hold = home.withLinkApply;
+    const busy = Promise.withResolvers();
+    mock.module(homeModule, () => ({ ...home, withLinkApply: async (...args) => {
+      try { return await hold(...args); }
+      catch (error) { if (error instanceof home.LinkApplyBusyError) busy.resolve(); throw error; }
+    } }));
+    const replacement = ${JSON.stringify(repoPath("src/server/restart-replacement.ts"))};
+    mock.module(replacement, () => ({ spawnReplacementStart: async () => console.log("replacement") }));
+    const { startClientRuntime } = await import(${JSON.stringify(repoPath("src/client/runtime.ts"))});
+    const config = getDefaultConfig(), connection = ${JSON.stringify(linkClientState())};
+    config.port = ${freePort()}; config.runtimeRole = "client"; config.client = connection; saveConfig(config);
+    let machine;
+    await startClientRuntime({ block: false }, { startListener: (port, deps) => {
+      machine = deps.machineApi;
+      return Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response(null) });
+    } });
+    await hold(async () => {
+      const url = new URL("http://localhost/api/machine/disconnect");
+      const response = await handleMachineApi(new Request(url, { method: "POST", body: "{}" }), url, connection, {
+        ...machine, disconnect: async () => { delete config.client; config.runtimeRole = "standalone"; saveConfig(config); return {}; },
+      });
+      if (response.status !== 202) throw new Error("disconnect was not accepted");
+      machine.scheduleStandaloneRecycle(connection.tokenFingerprint);
+      await busy.promise;
+      if (!existsSync(join(process.env.OPENCODEX_HOME, "runtime-port.json"))) throw new Error("teardown ran under contention");
+      console.log("accepted while busy");
+    });
+  `;
+  const child = Bun.spawn([process.execPath, "-e", source], {
+    cwd: root, env: { ...process.env, HOME: root, USERPROFILE: root, CODEX_HOME: join(root, "codex"),
+      OPENCODEX_HOME: join(root, "ocx"), OCX_SERVICE: "", OCX_DESKTOP_SUPERVISED: "" },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const out = new Response(child.stdout).text(), err = new Response(child.stderr).text();
+  try {
+    const exit = await waitFor(() => child.exitCode, "scheduled disconnect recycle");
+    expect({ exit, stderr: await err }).toEqual({ exit: 0, stderr: "" });
+    expect((await out).match(/accepted while busy|replacement/g)).toEqual(["accepted while busy", "replacement"]);
+  } finally {
+    if (child.exitCode === null) child.kill();
+    await child.exited;
+    removeTreeWithRetry(root);
+  }
+}, watchdogMs(60_000));
+
 test("an ended link recycles a connected sibling after listener cleanup", async () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-client-sibling-recycle-"));
   const home = join(root, "ocx");

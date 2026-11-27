@@ -23,6 +23,8 @@ Use **Show Usage** in the tray menu to open the native panel. The panel shows to
 
 The panel has **Refresh**, **Dashboard**, and **Settings** controls. **Dashboard** opens the usage view in the desktop window; **Settings** opens the **Menu bar & widget** tab under Usage. The tray menu also offers **Open Dashboard**, **Open in Browser**, **Start at Login**, **Stop proxy**, **Check for Updates…**, an **Install update** item when one is available, and **Quit**. **Stop proxy** is always listed but is enabled only when the app started the proxy itself; a proxy you started separately keeps running. Closing the window or using Command-Q hides the app when its tray is available; use the tray's **Quit** to exit it.
 
+To keep OpenCodex out of the Dock even while its dashboard is open, enable **Hide Dock icon** in the OpenCodex menu bar menu. You can still use **Open Dashboard** and **Quit** from that menu. OpenCodex remembers your choice after relaunch. Uncheck **Hide Dock icon** to show the Dock icon again whenever the dashboard is open.
+
 The desktop dashboard's update button opens the app's own update page; it checks and installs the same signed update as the tray menu.
 
 The tray headline refreshes every 60 seconds. While the native panel is open, its data refreshes every 60 seconds; **Refresh** requests an immediate update.

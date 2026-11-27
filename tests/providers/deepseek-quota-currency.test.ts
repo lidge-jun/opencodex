@@ -25,7 +25,7 @@ function deepSeekConfig(): OcxConfig {
 }
 
 /** Answer the DeepSeek balance probe with exactly these `balance_infos` rows. */
-async function balanceLabel(rows: unknown[]): Promise<string | undefined> {
+async function balanceLabels(rows: unknown[]): Promise<string[]> {
   globalThis.fetch = (async () => new Response(JSON.stringify({
     is_available: true,
     balance_infos: rows,
@@ -35,7 +35,11 @@ async function balanceLabel(rows: unknown[]): Promise<string | undefined> {
 
   expect(result.reports).toHaveLength(1);
   expect(result.reports[0]?.source).toBe("deepseek:balance");
-  return result.reports[0]?.quota.customWindows?.[0]?.label;
+  return (result.reports[0]?.quota.customWindows ?? []).map(window => window.label);
+}
+
+async function balanceLabel(rows: unknown[]): Promise<string | undefined> {
+  return (await balanceLabels(rows))[0];
 }
 
 beforeEach(() => {
@@ -78,8 +82,60 @@ describe("DeepSeek quota balance currency", () => {
       .toBe("API balance ($5.00)");
   });
 
-  test("a USD row is still preferred over a CNY row", async () => {
-    expect(await balanceLabel([{ currency: "CNY", total_balance: "10" }, { currency: "USD", total_balance: "7" }]))
-      .toBe("API balance ($7.00)");
+  test("a zero USD wallet does not shadow a non-zero CNY wallet", async () => {
+    expect(await balanceLabels([
+      { currency: "USD", total_balance: "0.00", granted_balance: "0.00", topped_up_balance: "0.00" },
+      { currency: "CNY", total_balance: "6.06", granted_balance: "0.00", topped_up_balance: "6.06" },
+    ])).toEqual(["API balance (¥6.06)"]);
+  });
+
+  test("a zero CNY wallet is omitted when USD has a positive balance", async () => {
+    expect(await balanceLabels([
+      { currency: "CNY", total_balance: "0.00" },
+      { currency: "USD", total_balance: "7" },
+    ])).toEqual(["API balance ($7.00)"]);
+  });
+
+  test("both positive wallets are shown with USD ordered before CNY", async () => {
+    expect(await balanceLabels([
+      { currency: "CNY", total_balance: "10" },
+      { currency: "USD", total_balance: "7" },
+    ])).toEqual(["API balance ($7.00)", "API balance (¥10.00)"]);
+  });
+
+  test("both positive wallets preserve per-currency granted amounts", async () => {
+    expect(await balanceLabels([
+      { currency: "CNY", total_balance: "10", granted_balance: "4" },
+      { currency: "USD", total_balance: "7", granted_balance: "2" },
+    ])).toEqual([
+      "API balance ($7.00 total, $2.00 granted)",
+      "API balance (¥10.00 total, ¥4.00 granted)",
+    ]);
+  });
+
+  test("all-zero wallets fall back to a single top-priority row (USD over CNY)", async () => {
+    expect(await balanceLabels([
+      { currency: "CNY", total_balance: "0.00" },
+      { currency: "USD", total_balance: "0.00" },
+    ])).toEqual(["API balance ($0.00)"]);
+  });
+
+  test("malformed or negative earlier rows do not mask a valid wallet", async () => {
+    expect(await balanceLabels([
+      { currency: "USD", total_balance: "not-a-number" },
+      { currency: "CNY", total_balance: "6.06" },
+    ])).toEqual(["API balance (¥6.06)"]);
+
+    expect(await balanceLabels([
+      { currency: "USD", total_balance: "-1" },
+      { currency: "CNY", total_balance: "6.06" },
+    ])).toEqual(["API balance (¥6.06)"]);
+  });
+
+  test("duplicate currency rows keep the first valid row per currency", async () => {
+    expect(await balanceLabels([
+      { currency: "CNY", total_balance: "6.06" },
+      { currency: "CNY", total_balance: "9.99" },
+    ])).toEqual(["API balance (¥6.06)"]);
   });
 });

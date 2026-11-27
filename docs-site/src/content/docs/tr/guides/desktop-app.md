@@ -57,7 +57,7 @@ Uygulama, paketindeki CLI'dan `ocx resolve --json` çalıştırmasını ister ve
 
 Gömülü kontrol paneli ile normal tarayıcınız arasında geçmek için tepsideki **Open dashboard** veya **Open in browser** eylemini kullanın. Tepsi, güncelleme denetimlerini de sunar.
 
-macOS’te kontrol panelini kapattığınızda uygulama menü çubuğunda çalışmaya devam eder. Proxy’yi yeniden başlatmadan kontrol panelini geri getirmek için OpenCodex’i Dock veya Finder üzerinden yeniden açın.
+macOS’te kontrol panelini kapattığınızda uygulama menü çubuğunda çalışmaya devam eder. Proxy’yi yeniden başlatmadan kontrol panelini açmak için menü çubuğunda **Open Dashboard** öğesini seçin veya OpenCodex’i Finder’dan yeniden açın. Kontrol paneli açıkken de Dock simgesini gizlemek için aynı menüde **Hide Dock icon** seçeneğini işaretleyin.
 
 ## Tepside kullanım
 

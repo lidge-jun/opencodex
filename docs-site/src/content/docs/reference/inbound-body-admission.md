@@ -70,7 +70,7 @@ including when errors, aborts, and cancellation race.
 The covered POST endpoints are `/v1/responses`, `/v1/responses/compact`,
 `/v1/chat/completions`, `/v1/messages`, `/v1/messages/count_tokens`,
 `/v1/images/generations`, `/v1/images/edits`, and `/v1/alpha/search`.
-Images, search, and token counting keep their existing configurable per-body limits.
+Images, search, and token counting keep their existing configurable per-body limits. Edits routed through the xAI bridge also have a fixed 100 MiB request limit. The smaller limit applies.
 Internal direct translation and combo calls do not reserve a second HTTP allowance.
 Management, audio, context-history, and WebSocket limits are unchanged.
 

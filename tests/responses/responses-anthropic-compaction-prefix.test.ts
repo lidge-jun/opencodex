@@ -1,7 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as openAiSidecar from "../../src/providers/openai-sidecar";
+import { clearBridgeSearchReplayCacheForTests } from "../../src/responses/bridge-search-replay-cache";
+import { reasoningReplayConversationIdFromResponsesRequest } from "../../src/server/request-log-conversation";
+import { rememberSidecarSearch } from "../../src/web-search/sidecar-search-replay";
 import { createResponsesEffects } from "../../src/server/responses/response-effects";
 import { prepareResponsesSidecarAuth } from "../../src/server/responses/request-sidecar-auth";
 import type { HandleResponsesOptions } from "../../src/server/responses/core-options";
@@ -304,32 +308,128 @@ describe("Anthropic compaction through Responses delivery", () => {
     });
   }
 
-  test("hosted search is prohibited upstream and the configured search sidecar never executes", async () => {
+  test("a summary keeps the ordinary turn's synthetic web_search declaration and replayed searches (#7307)", async () => {
     const cfg = config();
     cfg.webSearchSidecar = { backend: "exa", exaApiKey: "synthetic-search-key" };
-    let primarySends = 0;
-    let hostedExecutions = 0;
+    const seen: Array<{ tools: Array<{ name: string }>; system: unknown; tool_choice: unknown; messages: unknown[] }> = [];
+    globalThis.fetch = (async (input, init) => {
+      if (!String(input).startsWith("https://api.anthropic.com/")) throw new Error("Neither turn may search");
+      const wire = JSON.parse(String(init?.body));
+      seen.push(wire);
+      return upstream(wire.stream === true);
+    }) as typeof fetch;
+    const history = [
+      { type: "message", role: "user", content: "earlier turn" },
+      { type: "web_search_call", id: "ws_replayed", status: "completed", action: { type: "search", query: "synthetic query" } },
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "searched" }] },
+      { type: "message", role: "user", content: "next turn" },
+    ];
+    const ordinary = { ...body(true, false), tools: [...body(true).tools, { type: "web_search" }], input: history };
+    await (await send(ordinary, cfg)).text();
+    const text = await (await send({ ...ordinary, input: [...history, { type: "compaction_trigger" }] }, cfg)).text();
+    expect(text).toContain('"type":"compaction"');
+    expect(seen).toHaveLength(2);
+    const [before, after] = seen as [typeof seen[0], typeof seen[0]];
+    expect(before.tools.map(tool => tool.name)).toContain("web_search");
+    expect(after.tools).toEqual(before.tools);
+    expect(after.system).toEqual(before.system);
+    expect(after.tool_choice).toEqual(before.tool_choice);
+    // Breakpoints move with the new tail, and a breakpoint turns string content into its single text
+    // block; Anthropic reads both forms as the same prompt, as consecutive ordinary turns already do.
+    const content = (messages: unknown[]) => JSON.parse(JSON.stringify(messages, (key, value) =>
+      key === "cache_control" ? undefined
+        : key === "content" && typeof value === "string" ? [{ type: "text", text: value }] : value));
+    expect(content(after.messages).slice(0, before.messages.length)).toEqual(content(before.messages));
+  });
+
+  test("with the default ChatGPT search helper the summary keeps the prefix, recorded searches and the probe lease (#7307)", async () => {
+    const cfg = config();
+    cfg.providers.openai = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward", codexAccountMode: "direct" } as OcxConfig["providers"][string];
+    const helper = { released: 0, outcomes: 0, dispatches: 0 };
+    const resolver = spyOn(openAiSidecar, "resolveFirstUsableOpenAiSidecar").mockImplementation(async (candidates, headers) => ({
+      ...candidates[0]!, authContext: { kind: "main", accountId: null }, headers,
+      releaseProbeLease: () => { helper.released++; },
+      recordOutcome: () => { helper.outcomes++; },
+      beforeDispatch: () => { helper.dispatches++; },
+    }) as Awaited<ReturnType<typeof openAiSidecar.resolveFirstUsableOpenAiSidecar>>);
+    const seen: Array<{ tools: Array<{ name: string }>; system: unknown; tool_choice: unknown; messages: unknown[] }> = [];
+    globalThis.fetch = (async (input, init) => {
+      if (!String(input).startsWith("https://api.anthropic.com/")) throw new Error("Neither turn may search");
+      const wire = JSON.parse(String(init?.body));
+      seen.push(wire);
+      return upstream(wire.stream === true);
+    }) as typeof fetch;
+    const principal = { clientPrincipalId: "principal-7307" };
+    const clientThreadId = reasoningReplayConversationIdFromResponsesRequest({ threadIdHeader: "thread-7307" })!;
+    rememberSidecarSearch({ _reasoningReplayScope: { ...principal, clientThreadId } }, "ws_recorded",
+      { id: "toolu_recorded", arguments: { query: "synthetic query" } }, "Recorded result: synthetic answer");
+    const history = [
+      { type: "message", role: "user", content: "earlier turn" },
+      { type: "web_search_call", id: "ws_recorded", status: "completed", action: { type: "search", query: "synthetic query" } },
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "searched" }] },
+      { type: "message", role: "user", content: "next turn" },
+    ];
+    const ordinary = { ...body(true, false), tools: [...body(true).tools, { type: "web_search" }], input: history };
+    const post = (input: typeof ordinary) => handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json", "thread-id": "thread-7307" }, body: JSON.stringify(input),
+    }), cfg, { model: "", provider: "" }, { replayPrincipal: principal });
+    try {
+      await (await post(ordinary)).text();
+      const beforeSummary = { ...helper };
+      const text = await (await post({ ...ordinary, input: [...history, { type: "compaction_trigger" }] })).text();
+      expect(text).toContain('"type":"compaction"');
+      expect(resolver).toHaveBeenCalledTimes(2);
+      expect(helper.released).toBeGreaterThan(beforeSummary.released);
+      expect(helper.outcomes).toBe(0);
+      expect(helper.dispatches).toBe(0);
+    } finally {
+      resolver.mockRestore();
+      clearBridgeSearchReplayCacheForTests();
+    }
+    expect(seen).toHaveLength(2);
+    const [before, after] = seen as [typeof seen[0], typeof seen[0]];
+    expect(before.tools.map(tool => tool.name)).toContain("web_search");
+    expect(after.tools).toEqual(before.tools);
+    expect(after.system).toEqual(before.system);
+    expect(after.tool_choice).toEqual(before.tool_choice);
+    expect(JSON.stringify(before.messages)).toContain("Recorded result: synthetic answer");
+    const content = (messages: unknown[]) => JSON.parse(JSON.stringify(messages, (key, value) =>
+      key === "cache_control" ? undefined
+        : key === "content" && typeof value === "string" ? [{ type: "text", text: value }] : value));
+    expect(content(after.messages).slice(0, before.messages.length)).toEqual(content(before.messages));
+  });
+
+  test("hosted search is prohibited upstream, the search sidecar never executes, and the summary keeps the ordinary catalog", async () => {
+    const cfg = config();
+    cfg.webSearchSidecar = { backend: "exa", exaApiKey: "synthetic-search-key" };
+    const wires: Array<{ tools: unknown[]; system: unknown; tool_choice?: unknown }> = [];
     let sidecarSends = 0;
     globalThis.fetch = (async (input, init) => {
       if (!String(input).startsWith("https://api.anthropic.com/")) {
         sidecarSends++;
-        throw new Error("Summary must not dispatch a search sidecar");
+        throw new Error("Neither turn may dispatch a search sidecar");
       }
-      primarySends++;
       const wire = JSON.parse(String(init?.body));
-      expect(wire.tools).toContainEqual(expect.objectContaining({ type: "web_search_20250305", name: "web_search" }));
-      if (wire.tool_choice?.type !== "none") hostedExecutions++;
-      return upstream(false);
+      wires.push(wire);
+      return upstream(wire.stream === true);
     }) as typeof fetch;
     const request = { ...body(false), tools: [...body(false).tools, { type: "web_search", name: "web_search", description: "Search", parameters: {} }] };
-    const response = await send(request, cfg, { inboundWire: "anthropic",
+    const options = () => ({ inboundWire: "anthropic" as const,
       anthropicServerTools: [{ type: "web_search_20250305", name: "web_search" }] });
+    await (await send({ ...request, input: body(false, false).input }, cfg, options())).text();
+    const response = await send(request, cfg, options());
     const result = await response.json();
     expect(result).toMatchObject({ status: "completed" });
     expect(result.output).toHaveLength(1);
     expect(result.output[0].type).toBe("compaction");
-    expect(primarySends).toBe(1);
-    expect(hostedExecutions).toBe(0);
+    expect(wires).toHaveLength(2);
+    const [ordinary, summary] = wires as [typeof wires[0], typeof wires[0]];
+    // The sidecar's synthetic web_search wins the name over the hosted declaration on both turns.
+    expect(ordinary.tools).toContainEqual(expect.objectContaining({ name: "web_search", input_schema: expect.anything() }));
+    expect(summary.tools).toEqual(ordinary.tools);
+    expect(summary.system).toEqual(ordinary.system);
+    expect(summary.tool_choice).toEqual({ type: "none" });
     expect(sidecarSends).toBe(0);
   });
 
