@@ -263,6 +263,12 @@ ocx help models
 ocx help models preset show
 ```
 
+For account pools, configuration, remote connections, models, and providers,
+the family help's **Inspect first** line gives a read-only starting point and
+identifies whether it inspects local settings or the running service. A read-only
+command can still check a connection. Live catalogue reads can fetch upstream and
+reconcile discovery state; use the local view or recorded arrivals for passive inspection.
+
 Read the corresponding chapter in the repository's `skills/ocx/references/01_management_surface.md`
 or one of the public command-family pages above. Full `ocx help --all` is an
 escape to the top-level reference. A broad machine inventory is optional:
