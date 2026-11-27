@@ -56,6 +56,10 @@ aprobarlas y ejecutarlas:
   notificación de salida. Si el lanzador ya ha salido o la limpieza sigue sin confirmarse después
   de que la utilidad haya podido ejecutarse, OpenCodex pone la sesión en cuarentena, registra una
   advertencia fija e informa de que la limpieza quedó incompleta.
+- **Capacidad de conversaciones.** Cada proxy admite ocho sesiones de StepCode por directorio de OpenCodex.
+  Si las ocho plazas están ocupadas, las conversaciones existentes pueden continuar. Una nueva
+  recibe el error `step_cli_pool_full` y puede reintentarse cuando se libere una plaza.
+  Las sesiones inactivas siguen contando hasta que termina su cierre tras diez minutos de inactividad.
 - **Límites de sesión.** Si una herramienta tarda más de dos minutos en devolver un resultado,
   el turno informa del error `step_cli_tool_result_too_late`. El protocolo no permite reemplazar
   el mensaje de sistema de la sesión. OpenCodex antepone las instrucciones del cliente al turno.

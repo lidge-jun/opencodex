@@ -1,7 +1,7 @@
 import { registerMainCollisionCases } from "../helpers/codex-main-collision";
 import { registerReloginPauseCases, registerWarmupRateLimitCases } from "../helpers/codex-warmup-rate-limit";
 import { registerResetCreditConsumeValidationTests } from "../helpers/reset-credit-consume-validation";
-import { registerPoolReauthCauseCases } from "../helpers/pool-reauth-cause";
+import { bindStoredCodexPoolRoutingForTests, registerPoolReauthCauseCases } from "../helpers/pool-reauth-cause";
 import * as usageHistoryModule from "../../src/usage/log";
 import { getAccountQuotaHistory } from "../../src/codex/quota";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -551,7 +551,7 @@ beforeEach(() => {
   TEST_CODEX_HOME = join(TEST_DIR, "codex");
   mkdirSync(TEST_CODEX_HOME, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
-  process.env.CODEX_HOME = TEST_CODEX_HOME;
+  process.env.CODEX_HOME = TEST_CODEX_HOME; bindStoredCodexPoolRoutingForTests();
   delete process.env[MANUAL_IMPORT_ENV];
   clearAccountNeedsReauth("__main__");
   clearAccountQuota();

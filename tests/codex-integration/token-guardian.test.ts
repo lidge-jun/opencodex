@@ -28,10 +28,15 @@ function kimiProvider(refreshPolicy?: OcxProviderConfig["refreshPolicy"]): OcxPr
   return { adapter: "openai-chat", baseUrl: "https://api.moonshot.ai/v1", authMode: "oauth", ...(refreshPolicy ? { refreshPolicy } : {}) };
 }
 
+// Pool accounts the guardian may refresh or warm have rows: a stored credential the config does not
+// list is never sent (its route would be unknown).
+const POOL_ACCOUNT_IDS = ["acct-1", "acct-late", "acct-resolving", "acct-pending", "acct-stale", "acct-warm", "acct-revoked", "acct-transient", "acct-replaced", "acct-dead"];
+
 function writeConfig(partial: Partial<OcxConfig>): void {
   const providers = partial.providers ?? { kimi: kimiProvider() };
   const defaultProvider = partial.defaultProvider ?? Object.keys(providers)[0] ?? "kimi";
-  const cfg: OcxConfig = { port: 10100, ...partial, providers, defaultProvider };
+  const codexAccounts = partial.codexAccounts ?? POOL_ACCOUNT_IDS.map(id => ({ id, email: `${id}@example.test`, isMain: false }));
+  const cfg: OcxConfig = { port: 10100, ...partial, providers, defaultProvider, codexAccounts };
   writeFileSync(getConfigPath(), JSON.stringify(cfg, null, 2));
 }
 

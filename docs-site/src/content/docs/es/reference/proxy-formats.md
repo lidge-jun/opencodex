@@ -154,7 +154,7 @@ Por separado, en cada cable de entrada, una llamada con espacio de nombres `defa
 | Anthropic Messages | `POST /v1/messages` | Anthropic `message` JSON | Anthropic Messages SSE |
 | Anthropic recuento de tokens | `POST /v1/messages/count_tokens` | `{ "input_tokens": number }` | No se requiere |
 | Descubrimiento del modelo | `GET /v1/models` | Catálogo o instantánea de escritorio explícita | No se requiere |
-| Transcripción de archivos | `POST /v1/audio/transcriptions` | `{ "text": string }` o texto sin formato | No se admite en este punto final de archivo |
+| Transcripción de archivos | `POST /v1/audio/transcriptions` | `{ "text": string, "languages"?: [...] }` o texto sin formato | No se admite en este punto final de archivo |
 | Dictado de streaming | `WS /v1/audio/transcriptions/stream` | No se requiere | Dictado de escritorio JSON eventos |
 | Voz y tiempo real | `POST /v1/live`, `POST /v1/realtime/calls` | Respuesta retransmitida de creación de llamadas | Una banda lateral separada WebSocket retransmite tramas en ambas direcciones |
 | Responses compactación | `POST /v1/responses/compact` | Historial de reemplazo JSON | No se requiere |
@@ -179,9 +179,11 @@ curl "$OPENCODEX_BASE_URL/audio/transcriptions" \
   -F 'language=ko'
 ```
 
-Configure `OPENCODEX_BASE_URL` en su URL de proxy que termina en `/v1`. Los campos opcionales son `prompt`, `language`, y `response_format` ( `json`, el valor predeterminado, o `text` ). El resultado JSON contiene `text` solamente. Los archivos no deben estar vacíos y no deben tener más de 25.000.000 bytes; los cuerpos de varias partes están limitados a 32 MiB y los campos de texto a 16 KiB. El límite del cuerpo del oyente configurado puede imponer un techo más pequeño. Los campos duplicados o sin soporte, incluyendo `stream`, son rechazados. Este punto final no promete marcas de tiempo, diarización, subtítulos o metadatos de uso de tokens.
+Configure `OPENCODEX_BASE_URL` en su URL de proxy que termina en `/v1`. Los campos opcionales son `prompt`, `language`, y `response_format` ( `json`, el valor predeterminado, o `text` ). El resultado JSON contiene `text`, más `languages` (una matriz de `{ "code": string }`) cuando el servicio ascendente informa los idiomas detectados. Los archivos no deben estar vacíos y no deben tener más de 25.000.000 bytes; los cuerpos de varias partes están limitados a 32 MiB y los campos de texto a 16 KiB. El límite del cuerpo del oyente configurado puede imponer un techo más pequeño. Los campos escalares duplicados y los campos sin soporte, incluyendo `stream`, son rechazados. Este punto final no promete marcas de tiempo, diarización, subtítulos o metadatos de uso de tokens.
 
-La ruta de suscripción ChatGPT usa `gpt-4o-transcribe` como identificador de compatibilidad y no envía un nombre de modelo al punto final de transcripción privado. No es evidencia del modelo interno del backend. Un proveedor de claves OpenAI API habilitado también admite `gpt-4o-mini-transcribe` y `whisper-1`; cuando se selecciona un proveedor ChatGPT, un fallo de autenticación no cambia silenciosamente a ese proveedor pagado. El modo Direct utiliza la cuenta principal almacenada según las reglas de admisión de perfil existentes; El modo Pool utiliza la cuenta almacenada seleccionada. Las credenciales faltantes, caducadas o que se agotan devuelven un error. La cancelación detiene la solicitud de salida y el contenido de audio no está escrito para solicitar el historial.
+Con un proveedor de claves OpenAI API, `model=gpt-transcribe` acepta campos repetidos `keywords[]` y `languages[]` (hasta 100 entradas cada uno) en lugar de `language`; ese modelo rechaza el campo singular y los demás modelos rechazan los campos de lista. Una carga cuyo nombre de archivo no tiene extensión se nombra y tipifica según su firma de audio (WAV, MP3, M4A, Ogg, WebM o FLAC) antes de enviarse; cualquier otra conserva el nombre `.webm`.
+
+La ruta de suscripción ChatGPT usa `gpt-4o-transcribe` como identificador de compatibilidad y no envía un nombre de modelo al punto final de transcripción privado. No es evidencia del modelo interno del backend. Un proveedor de claves OpenAI API habilitado también admite `gpt-transcribe`, `gpt-4o-mini-transcribe` y `whisper-1`; cuando se selecciona un proveedor ChatGPT, un fallo de autenticación no cambia silenciosamente a ese proveedor pagado. El modo Direct utiliza la cuenta principal almacenada según las reglas de admisión de perfil existentes; El modo Pool utiliza la cuenta almacenada seleccionada. Las credenciales faltantes, caducadas o que se agotan devuelven un error. La cancelación detiene la solicitud de salida y el contenido de audio no está escrito para solicitar el historial.
 
 <a id="streaming-dictation"></a>
 
@@ -492,7 +494,7 @@ Los clientes de Gemini, como el SDK google-genai con una URL base personalizada,
 
 ### Claves API externas
 
-Los clientes externos usan una clave OpenCodex en cualquier encabezado de credencial de audio compatible, o el par de subprotocolos del navegador descrito anteriormente. Independiente `WS /v1/live?model=gpt-live-1-codex` utiliza el protocolo Frameless; un modelo omitido por defecto a ese identificador y `gpt-live-1` es su alias proxy. Esta no es una afirmación de que cada clave pública OpenAI Realtime SDK o API sea compatible con GPT-Live.
+Los clientes externos usan una clave OpenCodex en cualquier encabezado de credencial de audio compatible, o el par de subprotocolos del navegador descrito anteriormente. Independiente `WS /v1/live?model=gpt-live-1.1-codex` utiliza el protocolo Frameless. Un modelo omitido usa por defecto ese identificador, el modelo GPT-Live actual de Codex; `gpt-live-1` y `gpt-live-1.1` son alias proxy de `gpt-live-1-codex` y `gpt-live-1.1-codex`, y los mismos alias se aplican a una sesión de creación de llamada. Una clave limitada a un modelo en vivo se evalúa con el nombre resuelto y debe nombrar su modelo: una sesión sin modelo, `/v1/realtime/calls` sin sesión y un socket Realtime sin `model=` se rechazan para ella. Cuando `POST /v1/live` no lleva sesión, OpenCodex escribe una con ese modelo predeterminado y la voz predeterminada del destino: `cove` para una cuenta ChatGPT y `marin` para una clave OpenAI API. Una sesión que usted envía conserva sus propios campos; solo se resuelve un alias de modelo en ella. Esta no es una afirmación de que cada clave pública OpenAI Realtime SDK o API sea compatible con GPT-Live.
 
 Para una nueva conexión independiente, envíe la inicialización compatible con la fuente a continuación después de que se abra el socket y espere a `session.started` con un `session.id` no vacío. Un evento de sesión actualizada con la misma forma también es aceptado por el cliente nativo.
 
@@ -507,6 +509,16 @@ Para WebRTC, publique una oferta de SDP a `/v1/live` como multiparte `sdp` y opc
 Los enlaces de llamadas duran 30 minutos, están limitados a 1024 entradas por servidor y finalizan en el reinicio del servidor. Los tiempos de vida del socket están limitados de forma independiente; los medios viajan directamente sobre WebRTC y no están representados. El proxy nunca ejecuta solicitudes de delegación. La disponibilidad de la cuenta OpenAI se establece por la respuesta ascendente real, no por la presencia de un nombre de modelo en el panel de control.
 
 <a id="native-codex-compatibility"></a>
+
+### Sesiones GPT-Live
+
+OpenCodex también retransmite la API pública de sesiones GPT-Live de OpenAI para claves externas, solo a través de un proveedor de claves OpenAI API habilitado. Nunca se usa una cuenta ChatGPT para ello, y una solicitud sin ese proveedor recibe 400.
+
+- `POST /v1/live/sessions` acepta JSON `{ "session": { "model": ... }, "transport": { "type": "webrtc", "sdp": ... } }` (como máximo 1 MiB) y responde como la API, `201 { "session": { "id" }, "transport": { "type", "sdp" } }`. `session.model` es obligatorio y una clave limitada a modelos se evalúa con él. El transporte SIP se rechaza.
+- El `session.id` devuelto es un alias de OpenCodex vinculado a la clave que lo creó. Solo esa clave puede abrir `WS /v1/live/sessions/{id}/attach`, que llega a la conexión de control del servidor de la sesión.
+- `WS /v1/live/sessions` abre una sesión cuyo modelo llega después en `session.start`, por lo que una clave limitada a una lista de modelos no puede abrirla.
+
+`OpenAI-Safety-Identifier` se reenvía cuando el cliente lo envía. OpenCodex no transporta los medios WebRTC; el cliente se conecta a OpenAI con la respuesta SDP devuelta.
 
 ### Compatibilidad nativa con Codex
 
@@ -632,8 +644,16 @@ La historia también se maneja, y de manera diferente, porque perder un mensaje 
 
 Un elemento de razonamiento repetido lleva `encrypted_content` que solo el proveedor y la credencial que lo produjo pueden leer. Cuando opencodex sabe que la conversación fue atendida por última vez por un proveedor diferente, elimina esa mancha antes de enviarla y guarda el resumen del artículo. Si ese proveedor también usó un punto final o una credencial diferente, el identificador `rs_…` del elemento también se elimina, porque nombra un elemento que el nuevo destino no puede buscar. Cuando no puede saber, por ejemplo después de un reinicio proxy, el nuevo destino rechaza el blob en su lugar: OpenAI y Azure OpenAI responden `400 invalid_encrypted_content`. opencodex luego reenvía la solicitud una vez sin el estado de razonamiento del proveedor anterior. El blob se va, y también lo hace el id `rs_…` del elemento de razonamiento, porque ese id nombra un elemento que el proveedor anterior almacenó y el nuevo destino respondería `Item with id 'rs_…' not found`.
 
-Esta recuperación se aplica a todos los adaptadores que hablan el cable Responses, así `openai-responses` y
-`azure-openai` Comportarse de la misma manera. Después de una recuperación exitosa, los giros posteriores de esa conversación en el mismo destino, deje caer el estado extranjero antes del primer envío para los próximos cinco minutos, sin otro viaje rechazado. El reenvío cuenta con el presupuesto de envío normal de la solicitud. Un ordinario 400 y un 429 nunca se vuelven a intentar de esta manera, y tampoco lo es un 5xx, con una estrecha. excepción: un 502 cuyo cuerpo es la herramienta encriptada exacta descifra el rechazo, enviado para una solicitud que lleva la salida de la herramienta cifrada, obtiene el mismo reenvío único. Un segundo rechazo llega a cliente sin cambios. Si eso sucede, inicie una nueva conversación en el proveedor de destino.
+Esta recuperación se aplica a todos los adaptadores que usan el protocolo Responses,
+incluidos `openai-responses` y `azure-openai`. Si la recuperación funciona, durante los
+siguientes cinco minutos el proxy elimina el estado del proveedor anterior antes del
+primer envío de cada turno de esa conversación al mismo destino. Así evita otro rechazo.
+El reenvío cuenta dentro del límite habitual de envíos de la solicitud. Las respuestas
+400 comunes, 429 y 5xx no se reintentan de esta manera, salvo un caso: si una solicitud
+lleva una salida de herramienta cifrada y recibe un 502 cuyo cuerpo coincide exactamente
+con el rechazo de descifrado de esa salida, se hace el mismo reenvío único. Un segundo
+rechazo se entrega al cliente sin cambios. Si ocurre, inicia una nueva conversación en
+el proveedor de destino.
 
 <a id="malformed-tool-call-history"></a>
 

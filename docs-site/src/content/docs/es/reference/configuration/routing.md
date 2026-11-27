@@ -269,7 +269,7 @@ Ambos son espacios de nombres virtuales con alias y validación de colisión; di
 
 El combo puede seguir disponible por su identificador aunque quede fuera de `ocx sync`, `/v1/models` o del selector de Codex. Para publicarlo se requieren:
 
-- un `contextWindow` positivo, a partir de metadatos activos, sugerencias de registro, proveedor `modelContextWindows` / `contextWindow`, un `maxInputTokens` positivo conocido en la fila de miembros, o - cuando el proveedor es conocido y habilitado pero cada fuente aún omite una ventana - una reserva conservadora de 128,000 tokens (fijada por `providerContextCaps` cuando se establece); y
+- un `contextWindow` positivo, a partir de metadatos activos, sugerencias de registro, proveedor `modelContextWindows` / `contextWindow`, un `maxInputTokens` positivo conocido en la fila de miembros, o - cuando el proveedor es conocido y habilitado pero cada fuente aún omite una ventana - una reserva conservadora de 128 000 tokens (fijada por `providerContextCaps` cuando se establece); y
 - una intersección `inputModalities` no vacía, tratando un valor de miembro omitido como `["text"]`.
   Un combo con `capabilityPolicy: "union"` requiere una unión publicada no vacía y excluye el vídeo. Consulta [Capacidades de unión](/es/guides/combos/#union-capabilities-capabilitypolicy).
 

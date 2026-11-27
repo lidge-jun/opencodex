@@ -1892,3 +1892,15 @@ describe("provider moderation refusal: safety-system wording and framed native s
     }
   });
 });
+test("a quota-only confirmed billing exhaustion hops on 400/422 but never past a hard stop", () => {
+  const message = JSON.stringify({ error: { code: "project_spend_limit_exceeded", message: "Project spend limit exceeded" } });
+  for (const status of [400, 422]) {
+    const code = "project_spend_limit_exceeded";
+    // Ordinary Combos keep the request-validation stop; only the quota-only verdict opens the hop.
+    expect(comboFailureDecision(status, message, { code })).toBe("stop");
+    expect(comboFailureDecision(status, message, { code, confirmedQuotaExhaustion: true })).toBe("hop");
+    for (const rootCode of ["cyber_policy", "origin_rejected", "upstream_no_response"]) {
+      expect(comboFailureDecision(status, message, { code, rootCode, confirmedQuotaExhaustion: true })).toBe("stop");
+    }
+  }
+});

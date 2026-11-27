@@ -52,6 +52,8 @@ ocx start --socks5-off
 
 Gözetimsiz Link Child kapanma sinyalinde her yazmadan önce bağlantıyı doğrular ve dinleyiciyi bırakmadan önce yerel Codex ile yönetilen Grok ayarlarını geri yükler. Servis/Desktop, sibling, yeniden başlatma devri ve üst stop makbuzu ayarları korur. Kapanma sırasında yeniden başlatma `409 runtime_stopping` döndürür. Zorla sonlandırma sinyali atlayabilir; üst `ocx stop` geri yüklemesi yine gereklidir.
 
+Windows x64’te WMI eşleşen hizmet sarmalayıcısının sahibini bildirmezse OpenCodex, çalışan sürecin tanıtıcısı üzerinden Windows hesabını ve oluşturulma zamanını doğrulayabilir. Sahibi doğrulanamayan sarmalayıcı çalışmaya devam eder. Hata özellikle Görev Zamanlayıcı kaydını belirtiyorsa kaydı `ocx service status` ile inceleyin.
+
 Çalışan proxy'yi (PID'ye göre) durdurun, PID dosyasını kaldırın ve yerel Codex'i
 geri yükleyin. Yönetilen bir arka plan servisi kuruluysa `ocx stop` proxy'yi
 yeniden oluşturamaması için önce onu da durdurur. Web kontrol panelinin kenar çubuğundaki proxy kolunu sonuna kadar çekmek aynı eylemi (`POST /api/stop`) Windows Görev Zamanlayıcı dışındaki tüm arka uçlarda çalıştırır: orada görev bittikten sonra sarmalayıcı proxy'yi yeniden başlatabilir, bu yüzden panel `respawnable_service` ile reddeder, hiçbir şeyi değiştirmez ve `ocx stop` çalıştırmanızı ister.
@@ -581,6 +583,8 @@ Windows bu yalnızca Unix denetimini açıkça atlar. Bir arıza tepsi ve proxy 
 başlatılır, ön plan kurulumu ise sonraki adım olarak `ocx start` yazdırır.
 Kontrol paneli güncelleme kayıtları kalıcı hale getirilmeden önce
 profil/önbellek yollarını ve UID/GID değerlerini maskeler.
+
+Önizleme sürümleri `X.Y.Z-preview.<date>` veya `X.Y.Z-preview.<date>.<attempt>` biçiminde adlandırılır, örneğin `2.100.6-preview.20261119.1`; deneme, o tarihteki yayınları numaralandırır. preview kanalında önizlemeler önce temel sürüme, sonra tarihe, sonra denemeye göre sıralanır ve denemesi olmayan bir sürüm deneme 0 sayılır. Her iki kanalda da kararlı bir sürüm, bir önizleme kurulumuna yalnızca temel sürümü önizlemeninkinden yüksekse önerilir ve kararlı kanal hiçbir zaman önizleme önermez. Bu kurallar güncelleme denetimleri, bildirimler ve panodaki güncelleme önerisi için geçerlidir. `ocx update` ise seçilen etiketin gösterdiği sürüm kurulu sürümden farklı olduğunda onu kurar; bu yüzden bir önizleme kurulumunda `ocx update --tag latest`, temel sürümü daha yüksek olmasa bile güncel kararlı sürüme geçer.
 
 ```bash
 ocx update

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,6 +46,7 @@ beforeEach(() => {
   const codexHome = join(dir, "codex");
   mkdirSync(codexHome, { recursive: true });
   process.env.OPENCODEX_HOME = dir;
+  bindStoredCodexPoolRoutingForTests();
   process.env.CODEX_HOME = codexHome;
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   clearMainAccountInfoCache();

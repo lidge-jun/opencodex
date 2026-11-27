@@ -5,18 +5,49 @@ import { join } from "node:path";
 import { fixturePath, repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { runStop } from "../helpers/client-link-stop";
+import { stopFixtureEnv, unavailableFixtureHome } from "../helpers/client-stop-fixture-home";
 
-async function runRecovery(mode: string, scheduled = false, env = process.env) {
+test("stop fixtures keep Home traffic and integration state separate across children", async () => {
+  const first = unavailableFixtureHome(), second = unavailableFixtureHome();
+  try {
+    expect(first.port).not.toBe(second.port);
+    for (const home of [first, second]) {
+      expect(home.url.hostname).toBe("127.0.0.1");
+      expect((await fetch(home.url)).status).toBe(503);
+    }
+    const root = join(tmpdir(), "fixture-child");
+    const inherited = { ...process.env, GROK_HOME: "suite-grok", CLAUDE_CONFIG_DIR: "suite-claude",
+      XDG_CONFIG_HOME: "suite-config", OCX_OWNER_REGISTRY_DIR: "suite-registry", OCX_SERVICE: "1" };
+    expect(stopFixtureEnv(root, inherited)).toMatchObject({ GROK_HOME: join(root, ".grok"),
+      CLAUDE_CONFIG_DIR: join(root, ".claude"), XDG_CONFIG_HOME: join(root, ".config"),
+      OCX_OWNER_REGISTRY_DIR: join(root, "ocx", "ocx-homes"), OCX_SERVICE: "" });
+  } finally { await Promise.all([first.stop(true), second.stop(true)]); }
+});
+
+async function runRecovery(mode: string, scheduled = false, env = process.env, attempt = 0): Promise<Record<string, unknown>> {
   const root = mkdtempSync(join(tmpdir(), "ocx-link-stop-recovery-"));
   const child = Bun.spawn([process.execPath, fixturePath("client-link-stop-recovery-runner.ts")], {
     cwd: repoPath(), stdin: new Blob([JSON.stringify({ mode, scheduled })]), stdout: "pipe", stderr: "pipe",
-    env: { ...env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: join(root, "ocx"), CODEX_HOME: join(root, "codex"),
-      OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(root, "claude-desktop"), OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0" },
+    env: stopFixtureEnv(root, env),
   });
-  const timeout = setTimeout(() => child.kill("SIGKILL"), 15_000);
+  let parentDeadlineReached = false;
+  const timeout = setTimeout(() => {
+    if (child.exitCode !== null) return;
+    parentDeadlineReached = true;
+    child.kill("SIGKILL");
+  }, 15_000);
   try {
     const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    expect(exit, stderr).toBe(0);
+    if (exit === 75 && stderr.trim() === "fixture-port-collision") {
+      if (attempt >= 2) throw new Error("recovery fixture port collided three times");
+      return runRecovery(mode, scheduled, env, attempt + 1);
+    }
+    if (exit !== 0) {
+      const phases = stdout.split(/\r?\n/).filter(line => line.startsWith("recovery phase "));
+      const status = parentDeadlineReached ? "parent requested termination at its 15s deadline" : "child exited";
+      throw new Error([`Link recovery (${mode}): ${status}, exit ${exit}`,
+        ...(phases.length ? phases : ["no fixture phase reported"]), stderr.trimEnd()].filter(Boolean).join("\n"));
+    }
     expect(stderr).not.toContain("uncaughtException");
     const line = stdout.split("\n").find(line => line.startsWith("{"));
     expect(line, stdout + stderr).toBeDefined();
@@ -64,7 +95,7 @@ test("a stale stop owner cannot block completed disconnect recovery", async () =
 
 test("a refused signal stop can reschedule a canceled recycle after disconnect recovery", async () => {
   const result = await runRecovery("signal-pending-recycle");
-  expect(result).toMatchObject({ firstRecycleTimers: 1, beforeRecoveryAdmission: 409, recoveryRecycleTimers: 1,
+  expect(result).toMatchObject({ firstRecycleTimers: 1, firstRecycleCanceled: true, beforeRecoveryAdmission: 409, recoveryRecycleTimers: 1,
     role: "standalone", spawned: 1, file: { userSetting: "keep" }, state: "disconnected", phase: "complete", runtimePresent: false });
 }, 20_000);
 
@@ -102,6 +133,16 @@ test("restart rollback closes its unpublished listener in the binding turn when 
   expect(report.result).toEqual({ preflight: null, closedBeforeYield: true, published: false, replacementAttempts: 1 });
   expect(report.fileAfter.pi).not.toContain("127.0.0.1");
 }, 20_000);
+
+for (const retryRollbackPublication of ["lifecycle", "config", "owner-changed"] as const) {
+  test("restart rollback rechecks its owner after " + retryRollbackPublication + " contention", async () => {
+    const report = await runStop({ mode: "file-restart-overlap", preserve: "restart-rollback", fileClients: ["pi"], retryRollbackPublication });
+    const resumed = retryRollbackPublication !== "owner-changed";
+    expect(report.result).toEqual({ preflight: null, closedBeforeYield: true, published: resumed, bound: resumed,
+      rollbackBinds: resumed ? 2 : 1, replacementAttempts: 1, stopping: true, explicitStop: true });
+    expect(report.fileAfter.pi).not.toContain("127.0.0.1");
+  }, 20_000);
+}
 
 test("ordinary restart rollback keeps file routes and admits fresh sync", async () => {
   const report = await runStop({ mode: "file-restart-control", preserve: "restart-rollback", fileClients: ["pi"] });

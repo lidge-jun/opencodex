@@ -19,9 +19,9 @@ Codex account panels expose no Spark quota toggle or setting and retain quota re
 ## Dashboard surfaces
 
 Dashboard localization uses the English `gui/src/i18n/en.ts` catalog as the complete key and
-placeholder contract. Every registered locale, including Vietnamese and Brazilian Portuguese (`pt`, HTML `pt-BR`), supplies the same keys;
-locale-specific Compatibility Lab, log-guard, routing, vision, status-code, and quota-formatting
-maps remain total rather than silently falling back to English. The Dashboard registers Qoder for export and managed integration under the [Qoder settings ownership contract](clients/qoder.md#qoder-settings-ownership). T3 Code is registered the same way under the [T3 Code settings ownership contract](clients/t3code.md#t3-code-settings-ownership).
+placeholder contract. Every registered locale supplies the same keys, including Vietnamese, Brazilian Portuguese (`pt`, HTML `pt-BR`) and Spanish (`es`, HTML `es`).
+Spanish browser variants select `es` before and after mount unless a supported `ocx-lang` preference is saved, and quota dates use `es-ES`. The shared dashboard covers both browser and Desktop; native shell copy is separate.
+Locale-specific Compatibility Lab, log-guard, routing, vision, status-code and quota-formatting maps remain total rather than silently falling back to English. The Dashboard registers Qoder for export and managed integration under the [Qoder settings ownership contract](clients/qoder.md#qoder-settings-ownership). T3 Code is registered the same way under the [T3 Code settings ownership contract](clients/t3code.md#t3-code-settings-ownership).
 
 The Models catalog names three distinct delivery states. A successful management mutation confirms
 only that the catalog is saved on the hub. `gui/src/api-targets.ts` carries the local machine's
@@ -106,7 +106,7 @@ The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
 line so scroll-spy and the top-bar offset agree; other consumers keep their
 existing reading line. The section strip stays one row at every width.
 
-Provider Overview consumes the existing shared `add-provider-presets` resource for sponsor
+RunAPI joins the Standard tier through the registry. Provider Overview consumes the shared `add-provider-presets` resource for sponsor
 presentation. `matchingWorkspacePreset` requires the configured id, adapter and normalized
 endpoint to match; a custom endpoint or absent sponsor metadata suppresses the introduction.
 `ProviderSponsor` keeps localized promotional copy and outbound HTTP(S) links separate from
@@ -331,7 +331,7 @@ selectors, a vendor-only inferred price is unavailable; exact provider and user 
 eligible. Missing trace evidence is not reconstructed from today's configuration. Provider-detail
 model shares use that provider's token total, not the global total. Unknown reserved `policy/`
 selectors are rejected before upstream dispatch; historical rows remain unchanged.
-Haiku 5.5 in `src/usage/expected-prices.ts` uses 0.10/0.50/0.01/0.125 USD per MTok (input/output/cache read/5m write), with all four rates multiplied by five above 100,000 raw prompt tokens; exactly 100,000 stays base. Exact provider/id bands include Cursor regular effort spellings and reference-priced preemptive surfaces; Kilo stays untiered. Sonnet 5.5 cache read is 0.10 (0.05x input), except Bedrock retains partner rates and Venice has its 1.25x exact overlay. Expected-price overlays are estimates, not billing reproductions: the Z.AI GLM rows (`zai`, `zhipu-bigmodel`, `zhipu-bigmodel-coding`, `zhipu-bigmodel-responses`) display the published z.ai USD list price on surfaces that actually bill by Coding Plan subscription or CNY-tiered domestic PAYG, and every such row is marked `verified-derived` so the estimate flag reaches the UI. Antigravity base and effort overlays in `src/usage/expected-prices.ts` use Anthropic API reference prices for Claude Sonnet and Opus 5.5 and standard Gemini API rates for Gemini 4 Neon and Hydrogen. These rows carry `verified-derived`, so reported tokens still produce an estimated cost.
+Haiku 5.5 in `src/usage/expected-prices.ts` uses 0.10/0.50/0.01/0.125 USD per MTok (input/output/cache read/5m write), with all four rates multiplied by five above 100,000 raw prompt tokens; exactly 100,000 stays base. Exact provider/id bands include Cursor regular effort spellings and reference-priced preemptive surfaces; Kilo stays untiered. Sonnet 5.5 cache read is 0.10 (0.05x input), except Bedrock retains partner rates and Venice has its 1.25x exact overlay. Expected-price overlays are estimates, not billing reproductions: the Z.AI GLM rows (`zai`, `zhipu-bigmodel`, `zhipu-bigmodel-coding`, `zhipu-bigmodel-responses`) display the published z.ai USD list price on surfaces that actually bill by Coding Plan subscription or CNY-tiered domestic PAYG, and every such row is marked `verified-derived` so the estimate flag reaches the UI. Antigravity base and effort overlays in `src/usage/expected-prices.ts` use Anthropic API reference prices for Claude Sonnet and Opus 5.5 and standard Gemini API rates for Gemini 4 Neon and Hydrogen. These rows carry `verified-derived`, so reported tokens still produce an estimated cost. Neuralwatt rows use the per-token list prices from its `/v1/models` catalog as `verified-derived` estimates; Neuralwatt bills by GPU energy, so the estimate is not the charged amount.
 
 The management API retains the compact accumulator plus bounded query summaries; it never retains
 normalized per-request rows after a response. File identity changes, shrinkage, same-size metadata

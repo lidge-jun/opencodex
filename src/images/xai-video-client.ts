@@ -15,7 +15,7 @@ import { readSafeXaiErrorDetail, safeVideoFailureCode, safeXaiErrorDetail } from
  * bearer key without the opt-in and a later DNS answer cannot redirect it (rebinding).
  * The poll GET carries the same key as the submit POST, so it obeys the same cleartext rules.
  */
-import type { OcxProviderConfig } from "../types";
+import type { OcxProviderConfig, OcxVideoApi } from "../types";
 import { getProviderRegistryEntry } from "../providers/registry";
 import {
   providerOutboundGet,
@@ -35,6 +35,8 @@ export interface VideoProviderAuth {
   allowPrivateNetwork?: boolean;
   proxy?: OcxProviderConfig["proxy"];
   noProxy?: OcxProviderConfig["noProxy"];
+  /** Wire the destination speaks; absent means the xAI wire. The pinned xAI destination is always xAI. */
+  videoApi?: OcxVideoApi;
 }
 
 /** Test seam for DNS resolution and the pinned transport; production passes nothing. */
@@ -78,7 +80,8 @@ function isCanonicalXaiVideoUrl(name: string, url: string): boolean {
   return name === "xai" && url.startsWith(`${xaiRegistryBaseUrl()}/videos/`);
 }
 
-function outboundConfig(auth: VideoProviderAuth) {
+/** The selected row's destination fields, as the provider outbound policy reads them. */
+export function videoOutboundConfig(auth: VideoProviderAuth) {
   return {
     baseUrl: auth.baseUrl,
     ...(auth.allowPrivateNetwork === true ? { allowPrivateNetwork: true } : {}),
@@ -87,7 +90,8 @@ function outboundConfig(auth: VideoProviderAuth) {
   };
 }
 
-function outboundDependencies(dependencies: VideoOutboundDependencies): ProviderOutboundDependencies {
+/** Outbound policy shared by every credentialed video request, whatever the wire. */
+export function videoOutboundDependencies(dependencies: VideoOutboundDependencies): ProviderOutboundDependencies {
   return {
     ...dependencies,
     isCanonicalUrl: isCanonicalXaiVideoUrl,
@@ -107,7 +111,7 @@ const MAX_RESPONSE_BYTES = 1024 * 1024; // 1 MiB — these endpoints return smal
  * Read an HTTP response body as text with a hard byte cap. Used for the non-streaming
  * video submit/poll endpoints.
  */
-async function readBoundedText(resp: Response): Promise<string> {
+export async function readBoundedText(resp: Response): Promise<string> {
   const reader = resp.body?.getReader();
   if (!reader) throw new Error("xAI video API returned no body");
   const decoder = new TextDecoder();
@@ -154,14 +158,14 @@ export async function submitVideoJob(
   const timeout = AbortSignal.timeout(SUBMIT_TIMEOUT_MS);
   const linkedSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
-  const resp = await providerOutboundPost(auth.providerName, outboundConfig(auth), `${auth.baseUrl}/videos/generations`, {
+  const resp = await providerOutboundPost(auth.providerName, videoOutboundConfig(auth), `${auth.baseUrl}/videos/generations`, {
     headers: {
       "Authorization": `Bearer ${auth.token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
     signal: linkedSignal,
-  }, outboundDependencies(dependencies));
+  }, videoOutboundDependencies(dependencies));
 
   if (!resp.ok) {
     const detail = await readSafeXaiErrorDetail(resp, linkedSignal);
@@ -192,12 +196,12 @@ export async function pollVideoJob(
   const timeout = AbortSignal.timeout(POLL_TIMEOUT_MS);
   const linkedSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
-  const resp = await providerOutboundGet(auth.providerName, outboundConfig(auth), `${auth.baseUrl}/videos/${encodeURIComponent(requestId)}`, {
+  const resp = await providerOutboundGet(auth.providerName, videoOutboundConfig(auth), `${auth.baseUrl}/videos/${encodeURIComponent(requestId)}`, {
     headers: {
       "Authorization": `Bearer ${auth.token}`,
     },
     signal: linkedSignal,
-  }, outboundDependencies(dependencies));
+  }, videoOutboundDependencies(dependencies));
 
   if (!resp.ok) {
     const detail = await readSafeXaiErrorDetail(resp, linkedSignal);

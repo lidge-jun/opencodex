@@ -131,16 +131,23 @@ export async function readImageResponseBytes(
 }
 
 const CCA_IMAGE_MODEL = "gemini-3.1-flash-image";
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /** An edit source xAI can fetch: an https URL without credentials, or a base64 image data URL. */
 function isXaiEditSourceUrl(value: string): boolean {
-  const data = /^data:image\/(?:png|jpeg|jpg|webp);base64,(.*)$/is.exec(value);
-  if (data) {
-    // Canonical base64 only: whole quads, padding at the end and nowhere else, and unused
-    // padding bits zero (decoding and re-encoding must give back the same text).
-    const payload = data[1]!;
-    return payload.length > 0 && payload.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(payload)
-      && Buffer.from(payload, "base64").toString("base64") === payload;
+  const header = /^data:image\/(?:png|jpeg|jpg|webp);base64,/i.exec(value);
+  if (header) {
+    const start = header[0].length;
+    if (value.length === start || (value.length - start) % 4 !== 0) return false;
+    const nonAlphabet = /[^A-Za-z0-9+/]/g;
+    nonAlphabet.lastIndex = start;
+    const firstNonAlphabet = nonAlphabet.exec(value)?.index;
+    if (firstNonAlphabet === undefined) return true;
+    const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+    if (firstNonAlphabet !== value.length - padding) return false;
+    // Canonical padding leaves four unused bits before "==" or two before "=".
+    const lastSextet = BASE64_ALPHABET.indexOf(value[firstNonAlphabet - 1]!);
+    return (lastSextet & (padding === 2 ? 0x0f : 0x03)) === 0;
   }
   try {
     const url = new URL(value);
@@ -534,15 +541,20 @@ async function tryXaiImageRelay(
   let imageUrl: string | undefined;
   let imageUrls: string[] | undefined;
   if (endpoint === "edits") {
-    const sources: string[] = [];
+    const sources = new Set<string>();
     // Every supplied source must be a usable URL: silently dropping one would buy an edit
     // missing an image the caller sent. xAI takes a public https URL or a base64 image data URL;
     // an explicit null counts as supplied.
     let unusable = false;
     const add = (value: unknown) => {
       const url = typeof value === "string" ? value.trim() : "";
-      if (isXaiEditSourceUrl(url)) sources.push(url);
-      else unusable = true;
+      if (sources.has(url)) return;
+      if (!isXaiEditSourceUrl(url)) {
+        unusable = true;
+        return;
+      }
+      // One extra source records overflow. A later invalid source still takes precedence.
+      if (sources.size <= XAI_MAX_EDIT_IMAGES) sources.add(url);
     };
     if (obj.image !== undefined) add(obj.image);
     if (obj.image_url !== undefined) add(obj.image_url);
@@ -565,9 +577,8 @@ async function tryXaiImageRelay(
     }
     if (unusable) return formatErrorResponse(400, "invalid_request_error", "xAI image edits need every image as a URL");
     // Same rule as callXaiImages: duplicates collapse first, then the five-source limit applies.
-    const unique = [...new Set(sources)];
-    if (unique.length > XAI_MAX_EDIT_IMAGES) return formatErrorResponse(400, "invalid_request_error", "xAI image edits accept at most 5 images");
-    [imageUrl, ...imageUrls] = unique;
+    if (sources.size > XAI_MAX_EDIT_IMAGES) return formatErrorResponse(400, "invalid_request_error", "xAI image edits accept at most 5 images");
+    [imageUrl, ...imageUrls] = sources;
     if (!imageUrl) return formatErrorResponse(400, "invalid_request_error", "image edits require an image URL");
   }
   const timeoutMs = config.images?.timeoutMs ?? IMAGES_UPSTREAM_TIMEOUT_MS;
