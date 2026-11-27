@@ -129,7 +129,7 @@ Surfaces: `ocx claude desktop apply [--first-party|--gateway]` in `src/cli/claud
 `POST /api/claude-desktop/apply` with `mode` ∈ `first-party|gateway|static|hybrid|discovery` and
 `GET /api/claude-desktop/status` (`mode`, `riskWarning`, `firstParty.{applied,stale,interceptEnabled,interceptRunning,proxyPort,caCertPath}`)
 in `src/server/management/agent-settings-routes.ts`; the native toggle in
-`src/server/management/native-integration-routes.ts` applies the resolved mode on enable. Managed
+`src/server/management/native-integration-routes.ts` applies the resolved mode on enable. Successful toggles with unsaved state return `reason: "first_party_mode_unsaved"` (mode marker) or `reason: "gateway_state_unsaved"` (mode and profile fingerprint); Connect re-apply warns and refreshes observed status. Managed
 Windows policy health only applies in gateway mode, because first-party never touches Desktop's own
 configuration. Ordinary Chat-tab traffic is out of scope for both modes.
 
