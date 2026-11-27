@@ -176,6 +176,13 @@ async function handleFallbackRoutesOnDemand(ctx: ManagementContext): Promise<Res
   return handleFallbackRoutes(ctx);
 }
 
+/** Lazy: per-account OAuth diagnostics read routing state the account list does not need. */
+async function handleAccountDiagnosticsRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/oauth/accounts/diagnostics", false)) return null;
+  const { handleAccountDiagnosticsRoutes } = await import("./management/account-diagnostics-routes");
+  return handleAccountDiagnosticsRoutes(ctx);
+}
+
 async function handleRouteToRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/route-to")) return null;
   const { handleRouteToRoutes } = await import("./management/route-to-routes");
@@ -248,6 +255,13 @@ async function handleTelemetryRoutesOnDemand(ctx: ManagementContext): Promise<Re
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/telemetry")) return null;
   const { handleTelemetryRoutes } = await import("./management/telemetry-routes");
   return handleTelemetryRoutes(ctx);
+}
+
+/** Lazy: the Connections projections read Codex and Claude state no other request needs. */
+async function handleConnectionStatusRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/connections", false)) return null;
+  const { handleConnectionStatusRoutes } = await import("./management/connection-status-routes");
+  return handleConnectionStatusRoutes(ctx);
 }
 
 export async function handleManagementAPI(
@@ -382,6 +396,7 @@ export async function handleManagementAPI(
     ??     (await handleLowQuotaRoutesOnDemand(ctx))
     ??     (await handleQuotaPoolRoutesOnDemand(ctx))
     ??     (await handleFallbackRoutesOnDemand(ctx))
+    ??     (await handleAccountDiagnosticsRoutesOnDemand(ctx))
     ??     (await handleRouteToRoutesOnDemand(ctx))
     ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleCodexAgentRoleRoutesOnDemand(ctx))
@@ -395,6 +410,7 @@ export async function handleManagementAPI(
     ??     (await handleModelRoutes(ctx))
     ??     (await handleIntegrationRoutes(ctx))
     ??     (await handleNativeIntegrationRoutes(ctx))
+    ??     (await handleConnectionStatusRoutesOnDemand(ctx))
     ??     (await handleCursorIntegrationRoutes(ctx))
     ??     (await handleClaudeDesktopPickerRoutes(ctx))
     ??     (await handleDesktopCompatibilityRoutes(ctx))
@@ -529,11 +545,10 @@ export async function handleManagementAPI(
         }, 409, req, config);
       }
       if (serviceStop === "state-unknown") {
-        // Same case, same remedy as the pre-check: the query is what needs fixing.
         return jsonResponse({
           success: false,
           code: "service_state_unknown",
-          message: "The Windows Task Scheduler state could not be read, so this proxy cannot tell whether a wrapper would respawn it. Shared client config was left alone. Run `ocx service status` to see the query error, repair Task Scheduler access, then retry.",
+          message: "The Windows service or process state could not be verified, so the stop could not be confirmed. Shared client config was left alone.",
         }, 409, req, config);
       }
       // The pre-check above already refused the respawnable case without a receipt, so

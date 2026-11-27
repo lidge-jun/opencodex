@@ -1,4 +1,6 @@
 {
+  "chat-video-input-refusal.test.ts": "responses",
+  "responses-combo-video-hop.test.ts": "responses",
   "provider-upstream-deadlines.test.ts": "responses",
   "responses-anthropic-image-context-default.test.ts": "responses",
   "responses-anthropic-image-context-recovery.test.ts": "responses",

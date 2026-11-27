@@ -71,6 +71,15 @@ export function accountInFlight(provider: string, accountId: string): number {
   return reclaim(keyOf(provider, accountId), Date.now())?.records.size ?? 0;
 }
 
+/** Leases still within their lifetime, read without reclaiming expired ones or admitting a waiter. */
+export function accountInFlightSnapshot(provider: string, accountId: string, now = Date.now()): number {
+  const state = accounts.get(keyOf(provider, accountId));
+  if (!state) return 0;
+  let live = 0;
+  for (const record of state.records.values()) if (now - record.acquiredAt < KIRO_LEASE_MAX_MS) live += 1;
+  return live;
+}
+
 /** A null result means the deadline expired or the caller aborted. */
 export async function acquireAccountLease(
   provider: string, accountId: string, opts: AccountLeaseOptions = {},

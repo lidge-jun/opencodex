@@ -477,6 +477,12 @@ ocx models new-arrivals --json
 
 The provider read may report `inherit`; omission of `--provider` selects global
 policy. Recent arrivals show recorded discovery state, not a fresh upstream probe.
+For a missing model, start with `ocx models list --provider <provider> --json`
+for the local view and `ocx models new-arrivals --json` for recorded discoveries.
+If you need to compare the live selection and available catalogue, use
+`ocx models selected <provider> --json`. This may fetch upstream and reconcile
+discovery state; it is not a passive snapshot. An available model is not proof
+that the intended client has synced it or that a completion will succeed.
 
 ## 12. Inspect and dry-run an existing routing profile
 
@@ -705,6 +711,9 @@ ocx account pool anthropic --json
 The target's `supported` list decides which fields can be written. Preserve null,
 `enabledEffective`, and optional `inert`: null is not false, stored policy is not
 proof of an available account, and threshold zero is not the pool enable switch.
+For the OpenAI roster and observed selection, read `ocx account list openai --json`
+separately; the pool policy read does not report which account a bound conversation
+will use. Do not add `--quota --refresh` merely to verify a policy setting.
 OpenAI has no pool `--enabled` or `--quota-window` writer. `reset-first` is for OpenAI
 and generic OAuth pools. `reset-near-weighted` is for Codex and Anthropic pools and
 weights new assignments toward the nearest qualifying weekly reset. `least-loaded` is Kiro-only. Anthropic pool windows are

@@ -114,6 +114,7 @@ import {
   retryCodexPoolOnAlternateAccount,
   PoolPreOutputRefusals,
   subscriptionPreOutputRefusalHold,
+  codexPoolAccountEgressRoute,
 } from "./core-codex-account";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 import {
@@ -269,6 +270,8 @@ export async function preparePassthroughExchange(
   >,
 ) {
   const { config, logCtx, options, req } = requestContext;
+  // Read at each physical send: failover may move this request to another pool account.
+  const accountRoute = () => codexPoolAccountEgressRoute(config, admissionState.authCtx);
   const codexWsCaller = codexWsAdmittedCaller(options.replayPrincipal, () => resolveContextPrincipal(req, config, options.admission));
   const {
     route,
@@ -817,7 +820,7 @@ export async function preparePassthroughExchange(
       signal,
       sendConnectMs(),
       true,
-      providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+      providerFetch(route.provider, options.codexWsRuntimeIdentity, { account: accountRoute,
         httpOnly: true,
         providerName: route.providerName,
         modelId: route.modelId,
@@ -1011,7 +1014,7 @@ export async function preparePassthroughExchange(
             headers: request.headers,
             body: request.body,
           }, recovery), upstream.signal, sendConnectMs(), upstreamRequestsStream,
-            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+            providerFetch(route.provider, options.codexWsRuntimeIdentity, { account: accountRoute,
               httpOnly: canonicalBufferedJson, codexWsCaller, captureCodexWsRecovery: capturePhysicalSendRecovery, onRecoveryPhysicalDispatch: recordPhysicalSend(),
               nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                 && responseEffects.plaintextV2AgentMessageToolNames.size === 0
@@ -1092,7 +1095,7 @@ export async function preparePassthroughExchange(
         recovery => fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
           method: request.method, headers: request.headers, body: request.body,
         }, recovery), upstream.signal, sendConnectMs(), upstreamRequestsStream,
-          providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+          providerFetch(route.provider, options.codexWsRuntimeIdentity, { account: accountRoute,
             httpOnly: canonicalBufferedJson, codexWsCaller, captureCodexWsRecovery: capturePhysicalSendRecovery, onRecoveryPhysicalDispatch: recordPhysicalSend(() => commit(request, adapter)),
             nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
               && responseEffects.plaintextV2AgentMessageToolNames.size === 0 ? options.nativeControl : undefined,
@@ -1186,7 +1189,7 @@ export async function preparePassthroughExchange(
               headers: request.headers,
               body: request.body,
             }, innerRecovery), upstream.signal, sendConnectMs(), upstreamRequestsStream,
-              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              providerFetch(route.provider, options.codexWsRuntimeIdentity, { account: accountRoute,
                 httpOnly: canonicalBufferedJson, codexWsCaller, captureCodexWsRecovery: capturePhysicalSendRecovery, onRecoveryPhysicalDispatch: recordPhysicalSend(),
                 nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                   && responseEffects.plaintextV2AgentMessageToolNames.size === 0
@@ -1556,7 +1559,7 @@ export async function preparePassthroughExchange(
               headers: request.headers,
               body: request.body,
             }, recovery), upstream.signal, sendConnectMs(), upstreamRequestsStream,
-              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              providerFetch(route.provider, options.codexWsRuntimeIdentity, { account: accountRoute,
                 httpOnly: canonicalBufferedJson, codexWsCaller, captureCodexWsRecovery: capturePhysicalSendRecovery, onRecoveryPhysicalDispatch: recordPhysicalSend(),
                 nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                   && responseEffects.plaintextV2AgentMessageToolNames.size === 0

@@ -104,7 +104,7 @@ describe("GPT-6.1 Terra provider rows", () => {
     }
     expect(getProviderRegistryEntry("cursor")!.models).not.toContain(TERRA);
     expect(getProviderRegistryEntry("openai-apikey")!.defaultModel).toBe("gpt-5.5");
-    expect(getProviderRegistryEntry("github-copilot")!.defaultModel).toBe("gpt-4o");
+    expect(getProviderRegistryEntry("github-copilot")!.defaultModel).toBe("gpt-5.3-codex");
   });
 });
 

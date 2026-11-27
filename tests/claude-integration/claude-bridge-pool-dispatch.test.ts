@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,6 +48,7 @@ beforeEach(() => {
   previous = process.env.OPENCODEX_HOME;
   home = mkdtempSync(join(tmpdir(), "ocx-bridge-pool-"));
   process.env.OPENCODEX_HOME = home;
+  bindStoredCodexPoolRoutingForTests();
   isolated = installIsolatedCodexHome("ocx-bridge-codex-");
   release = acquireOwnedSpendHome();
   clearThreadAccountMap(); clearCodexUpstreamHealth(); clearAccountQuota(); clearCodexThreadLineageForTests(); clearConversationStateIssuerMap();

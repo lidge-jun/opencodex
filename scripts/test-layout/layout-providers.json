@@ -17,6 +17,7 @@
   "abliteratedllm-provider.test.ts": "providers",
   "free-directory-llmtr.test.ts": "providers",
   "free-directory-runcrate.test.ts": "providers",
+  "aimlapi-provider.test.ts": "providers",
   "cc-switch-import.test.ts": "providers",
   "kiro-completion-with-real-tools.test.ts": "providers/kiro",
   "mistral-image-limit.test.ts": "providers",
@@ -26,5 +27,8 @@
   "management-provider-model-discovery.test.ts": "server",
   "claude-cli-fixture-stdout-flush.test.ts": "providers",
   "alibaba-token-plan-developer-role.test.ts": "providers",
-  "provider-quota-probe-isolation.test.ts": "providers"
+  "provider-quota-probe-isolation.test.ts": "providers",
+  "api-key-cooldown-store.test.ts": "providers",
+  "registry-default-in-seed.test.ts": "providers",
+  "vendor-catalog-refresh.test.ts": "providers"
 }

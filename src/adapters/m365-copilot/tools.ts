@@ -1,5 +1,5 @@
 // Adapted from cramt/m365-copilot-proxy (65905e8), copyright 2026 Alexandra Østermark. MIT; see LICENSE.
-import { buildSpecMap, currentFramingVariant, deriveFencedSpec, findFirstToolFence, formatFencedToolDefinitions, parseFencedToolCalls, renderFencedCall, transcriptStyleForVariant, } from "./fenced";
+import { buildSpecMap, currentFramingVariant, deriveFencedSpec, findToolFenceRanges, formatFencedToolDefinitions, parseFencedToolCalls, unwrapToolReplyFences, renderFencedCall, transcriptStyleForVariant, type FenceRange } from "./fenced";
 export interface ToolFunction {
     name: string;
     description?: string;
@@ -41,8 +41,39 @@ export type ToolChoice = "auto" | "none" | "required" | {
         name: string;
     };
 } | undefined;
-const TOOL_CALL_REGEX = /\{\s*"tool"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[\s\S]*?\}\s*\}/g;
-const FENCED_TOOL_CALL_REGEX = /```tool_call\s*\n(\{[\s\S]*?\})\s*\n\s*```/g;
+interface JsonEnvelope { start: number; end: number; valueStart: number; valueEnd: number }
+
+/** Keep the original inline and fenced grammars. Advance both boundaries once per envelope. */
+function jsonToolEnvelopes(text: string, fenced: boolean): JsonEnvelope[] {
+    const opener = fenced ? /```tool_call\s*\n(?=\{)/g : /\{\s*"tool"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{/g;
+    const closer = fenced ? /\}[^\S\n]*\n\s*```/g : /\}\s*\}/g;
+    const ranges: JsonEnvelope[] = [];
+    let opening: RegExpExecArray | null;
+    while ((opening = opener.exec(text)) !== null) {
+        closer.lastIndex = opener.lastIndex;
+        const closing = closer.exec(text);
+        if (!closing) break;
+        ranges.push({ start: opening.index, end: closer.lastIndex, valueStart: fenced ? opener.lastIndex : opening.index,
+            valueEnd: fenced ? closing.index + 1 : closer.lastIndex });
+        opener.lastIndex = closer.lastIndex;
+    }
+    return ranges;
+}
+
+function proseOutsideEnvelopes(text: string, inline: JsonEnvelope[], fenced: JsonEnvelope[]): string {
+    if (!inline.length && !fenced.length) return text;
+    const prose: string[] = [];
+    let cursor = 0, i = 0, j = 0;
+    // An inline envelope can be inside a JSON fence. Both ranges refer to the original answer.
+    while (i < inline.length || j < fenced.length) {
+        const takeInline = j === fenced.length || (i < inline.length && inline[i]!.start < fenced[j]!.start);
+        const next = takeInline ? inline[i++]! : fenced[j++]!;
+        if (next.start > cursor) prose.push(text.slice(cursor, next.start));
+        cursor = Math.max(cursor, next.end);
+    }
+    prose.push(text.slice(cursor));
+    return prose.join("");
+}
 const CONFIDENCE_REGEX = /\{\s*"confidence"\s*:\s*-?[0-9.]+\s*\}/g;
 const FINAL_OBJECT_REGEX = /\{\s*"final"\s*:\s*"(?:[^"\\]|\\.)*"\s*\}/g;
 function cleanLooseText(text: string): string | null {
@@ -180,51 +211,90 @@ export interface ParseResult {
     textContent: string | null;
 }
 const SELF_WRITTEN_RESULT = /<tool_(?:response|result)\b/i;
-const ANY_FENCE = /```[A-Za-z0-9_.-]+[ \t]*\r?\n[\s\S]*?```/;
+const ANY_FENCE_OPEN = /```[A-Za-z0-9_.-]+[ \t]*\r?\n/;
 export function truncateAtFabricatedToolResponse(text: string, tools?: ToolDef[]): string {
     const i = fabricatedToolResponseAt(text, tools);
     return i < 0 ? text : text.slice(0, i).trimEnd();
 }
 export function fabricatedToolResponseAt(text: string, tools?: ToolDef[]): number {
-    const i = text.search(SELF_WRITTEN_RESULT);
-    if (i < 0)
-        return -1;
-    const head = text.slice(0, i);
-    const acted = tools && tools.length > 0 ? parseToolCalls(head, tools).hasToolCalls : ANY_FENCE.test(head);
-    return acted ? i : -1;
+    return precedingToolCall(text, tools?.length ? buildSpecMap(tools) : null)?.index ?? -1;
+}
+type ToolSpecs = ReturnType<typeof buildSpecMap> | null;
+interface ToolInspection { result: ParseResult; firstFenceStart?: number; inline?: JsonEnvelope[]; documentRanges?: FenceRange[] }
+
+function precedingToolCall(text: string, specs: ToolSpecs) {
+    const index = text.search(SELF_WRITTEN_RESULT);
+    if (index < 0) return;
+    const raw = text.slice(0, index);
+    if (specs) {
+        const inspection = inspectToolCalls(raw, specs);
+        if (!inspection.result.hasToolCalls) return;
+        const head = raw.trimEnd();
+        // The original prefix establishes eligibility. Only reuse ranges for the exact delivery text.
+        return { index, head, inspection: head.length === raw.length ? inspection : undefined };
+    }
+    const open = ANY_FENCE_OPEN.exec(raw);
+    if (open && raw.indexOf("```", open.index + open[0].length) >= 0) return { index, head: raw.trimEnd(), inspection: undefined };
+}
+
+/** Classify the same source ranges that supplied the accepted calls. */
+export function parseToolAnswer(text: string, tools: ToolDef[]) {
+    const specs = buildSpecMap(tools);
+    const prefix = precedingToolCall(text, specs);
+    const accepted = prefix?.head ?? text;
+    const inspection = prefix?.inspection ?? inspectToolCalls(accepted, specs);
+    return { accepted, result: inspection.result, truncated: prefix !== undefined, document: proseDocument(inspection, accepted) };
 }
 export function isProseDocument(parsed: ParseResult, text?: string, tools?: ToolDef[]): boolean {
     if (!parsed.hasToolCalls || parsed.toolCalls.length < 2)
         return false;
-    if (text !== undefined && tools && tools.length > 0) {
-        const first = findFirstToolFence(text, buildSpecMap(tools));
-        if (first && !looksLikeDocumentPreamble(text.slice(0, first.start)))
-            return false;
+    const documentRanges = text !== undefined && tools?.length ? findToolFenceRanges(text, buildSpecMap(tools)) : undefined;
+    const inline = !documentRanges?.length && text !== undefined && parsed.toolCalls.length < 4 ? jsonToolEnvelopes(text, false) : undefined;
+    return proseDocument({ result: parsed, firstFenceStart: documentRanges?.[0]?.start, inline, documentRanges }, text);
+}
+function proseDocument({ result: parsed, firstFenceStart, inline, documentRanges }: ToolInspection, text?: string): boolean {
+    if (parsed.toolCalls.length < 2) return false;
+    if (text !== undefined && firstFenceStart !== undefined && !looksLikeDocumentPreamble(text.slice(0, firstFenceStart))) return false;
+    if (parsed.toolCalls.length >= 4) return true;
+    // Only two or three calls depend on the exact heading and length of the old prose.
+    // Preserve that decision without reparsing calls, their arguments or IDs.
+    let prose = parsed.textContent?.trim() ?? "";
+    if (text !== undefined && (documentRanges?.length === 2 || documentRanges?.length === 3)) {
+        // Each original fence was removed at its first text match, which may have been in a document.
+        let legacy = text;
+        for (const range of documentRanges) legacy = legacy.replace(text.slice(range.start, range.end), "");
+        prose = cleanLooseText(legacy) ?? "";
+    } else if (text !== undefined && inline) {
+        // JSON cleanup removed inline envelopes first, then fenced envelopes from the remaining text.
+        const afterInline = proseOutsideEnvelopes(text, inline, []);
+        const fenced = afterInline.includes("```tool_call") ? jsonToolEnvelopes(afterInline, true) : [];
+        prose = proseOutsideEnvelopes(afterInline, [], fenced)
+            .replace(CONFIDENCE_REGEX, "").replace(FINAL_OBJECT_REGEX, "")
+            .replace(/```(?:json|tool_call)?\s*```/g, "").replace(/```(?:json|tool_call)?/g, "").trim();
     }
-    const prose = parsed.textContent ? parsed.textContent.trim() : "";
-    const hasMarkdownHeaders = /^#{1,6}\s/m.test(prose);
-    return parsed.toolCalls.length >= 4 || hasMarkdownHeaders || prose.length >= 300;
+    return /^#{1,6}\s/m.test(prose) || prose.length >= 300;
 }
 function looksLikeDocumentPreamble(preamble: string): boolean {
     return /^#{1,6}\s/m.test(preamble) || preamble.includes("```") || preamble.trim().length >= 200;
 }
 export function parseToolCalls(text: string, tools?: ToolDef[]): ParseResult {
-    const specMap = tools && tools.length > 0 ? buildSpecMap(tools) : null;
+    return inspectToolCalls(text, tools?.length ? buildSpecMap(tools) : null).result;
+}
+function inspectToolCalls(text: string, specMap: ToolSpecs): ToolInspection {
     if (specMap) {
-        const { calls, leftover } = parseFencedToolCalls(text, specMap);
+        const { calls, leftover, firstStart, documentRanges } = parseFencedToolCalls(text, specMap);
         if (calls.length > 0) {
-            return { hasToolCalls: true, toolCalls: calls, textContent: cleanLooseText(leftover) };
+            return { firstFenceStart: firstStart, documentRanges, result: { hasToolCalls: true, toolCalls: calls, textContent: cleanLooseText(leftover) } };
         }
     }
     const resolveName = (raw: unknown): string | undefined => typeof raw === "string" ? (specMap?.get(raw)?.name ?? raw) : undefined;
     const toolCalls: ParsedToolCall[] = [];
-    const jsonRegex = new RegExp(TOOL_CALL_REGEX.source, "g");
-    let match: RegExpExecArray | null;
-    while ((match = jsonRegex.exec(text)) !== null) {
+    function readCall(range: JsonEnvelope, fenced: boolean, emit: boolean): boolean {
         try {
-            const parsed = JSON.parse(match[0]);
-            const name = resolveName(parsed.tool);
-            if (name) {
+            const parsed = JSON.parse(text.slice(range.valueStart, range.valueEnd));
+            const name = resolveName(fenced ? parsed.tool || parsed.name : parsed.tool);
+            if (!name) return false;
+            if (emit) {
                 toolCalls.push({
                     id: `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
                     type: "function",
@@ -236,49 +306,24 @@ export function parseToolCalls(text: string, tools?: ToolDef[]): ParseResult {
                     },
                 });
             }
+            return true;
         }
         catch {
-            continue;
+            return false;
         }
     }
-    if (toolCalls.length === 0) {
-        const fencedRegex = new RegExp(FENCED_TOOL_CALL_REGEX.source, "g");
-        while ((match = fencedRegex.exec(text)) !== null) {
-            try {
-                const parsed = JSON.parse(match[1]);
-                const name = resolveName(parsed.tool || parsed.name);
-                if (name) {
-                    toolCalls.push({
-                        id: `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
-                        type: "function",
-                        function: {
-                            name,
-                            arguments: typeof parsed.arguments === "string"
-                                ? parsed.arguments
-                                : JSON.stringify(parsed.arguments ?? {}),
-                        },
-                    });
-                }
-            }
-            catch {
-                continue;
-            }
-        }
-    }
-    if (toolCalls.length === 0) {
-        return { hasToolCalls: false, toolCalls: [], textContent: cleanLooseText(text) };
-    }
-    let remaining = text
-        .replace(jsonRegex, "")
-        .replace(new RegExp(FENCED_TOOL_CALL_REGEX.source, "g"), "")
+    const inline = jsonToolEnvelopes(text, false);
+    const acceptedInline = inline.filter(range => readCall(range, false, true));
+    const useFenced = acceptedInline.length === 0;
+    const acceptedFenced = jsonToolEnvelopes(text, true).filter(range => readCall(range, true, useFenced));
+    if (!toolCalls.length) return { result: { hasToolCalls: false, toolCalls: [], textContent: cleanLooseText(text) } };
+    const remaining = unwrapToolReplyFences(proseOutsideEnvelopes(text, acceptedInline, acceptedFenced)
         .replace(CONFIDENCE_REGEX, "")
-        .replace(FINAL_OBJECT_REGEX, "")
-        .replace(/```(?:json|tool_call)?\s*```/g, "")
-        .replace(/```(?:json|tool_call)?/g, "")
-        .trim();
-    return {
+        .replace(FINAL_OBJECT_REGEX, "")).trim();
+    const documentInline = acceptedInline.length !== inline.length || text.includes("`") ? inline : undefined;
+    return { inline: documentInline, result: {
         hasToolCalls: true,
         toolCalls,
         textContent: remaining || null,
-    };
+    } };
 }

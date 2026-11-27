@@ -82,7 +82,7 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
 - 루프백 또는 사설망 `baseUrl`은 다른 제공자 트래픽과 마찬가지로 해당 제공자에 `allowPrivateNetwork: true`가 필요합니다.
 - OpenCodex가 xAI 키로 식별할 수 있는 키(`xai-` 형식 키, `xai` 항목이 가진 키, xAI나 Grok 이름의 환경 변수 참조)는 `https://api.x.ai` 또는 `https://cli-chat-proxy.grok.com`으로만 전송되며 다른 출처는 거부됩니다. 이런 표시가 없는 키는 식별할 수 없으므로 xAI 키를 다른 제공자 항목에 붙여 넣지 마세요. 다른 제공자의 비밀을 가리키는 키체인 참조는 항상 거부되고, 일시 중지된 활성 키도 거부되며, `baseUrl`에는 자격 증명, 쿼리, 프래그먼트를 넣을 수 없습니다.
 - 제공자가 없거나, 비활성화되었거나, 일시 중지되었거나, 키가 없거나, 거부되면 모든 `video_gen` 호출이 그 오류를 모델에 반환합니다. 아무것도 전송하지 않으며 xAI로 대체하지 않습니다.
-- 완성된 영상은 여전히 base64 `data:` URL이나 공개 `https:` URL에서만 내려받으므로, 로컬 브리지는 `video.url`로 둘 중 하나를 반환해야 합니다.
+- xAI 방식에서는 완성된 영상을 base64 `data:` URL이나 공개 `https:` URL에서만 내려받으므로, 로컬 브리지는 `video.url`로 둘 중 하나를 반환해야 합니다. 생성된 파일을 자기 호스트에서 제공하는 백엔드는 대신 `"videoApi": "openai"`를 설정합니다([영어 가이드의 OpenAI Videos API 절](/guides/video-bridge/#openai-videos-api-backends) 참고).
 
 ## 동작 방식
 

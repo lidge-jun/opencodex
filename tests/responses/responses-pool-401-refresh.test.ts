@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -268,6 +269,7 @@ beforeEach(() => {
   previousCodexHome = process.env.CODEX_HOME;
   process.env.OPENCODEX_HOME = home;
   process.env.CODEX_HOME = home;
+  bindStoredCodexPoolRoutingForTests();
   // Direct handler dispatches need the writer lease that startServer normally holds.
   releaseSpendHome = acquireOwnedSpendHome();
   clearAccountNeedsReauth(ACCOUNT_ID);

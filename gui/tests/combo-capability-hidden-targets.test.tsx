@@ -311,6 +311,28 @@ test("cache remount and live revalidation preserve hidden-target capabilities", 
   expect(await effortValues()).toEqual(["", "low", "high"]);
 });
 
+test("the open workspace refreshes routing revision on its polling tick", async () => {
+  const api = mockCatalog([hiddenImage], [target(hiddenImage)]);
+  const originalSetInterval = globalThis.setInterval;
+  const ticks: Array<() => void> = [];
+  globalThis.setInterval = ((callback: TimerHandler, delay?: number, ...args: unknown[]) => {
+    if (delay === 60_000 && typeof callback === "function") ticks.push(() => callback(...args));
+    return originalSetInterval(callback, delay, ...args);
+  }) as typeof setInterval;
+  try {
+    await mount();
+    await openDetail();
+    const before = readSessionListCacheEntry<{ routingRevision: string }>(CACHE_KEY)!.data.routingRevision;
+    expect(ticks.length).toBeGreaterThan(0);
+    await act(async () => { for (const tick of ticks) tick(); });
+    expect(api.requests()).toBe(2);
+    const after = readSessionListCacheEntry<{ routingRevision: string }>(CACHE_KEY)!.data.routingRevision;
+    expect(Number(after)).toBeGreaterThan(Number(before));
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+  }
+});
+
 test("an older cache entry without capabilityModels uses its models metadata", async () => {
   writeSessionListCacheEntry(CACHE_KEY, {
     combos: parseComboList({ combos: [combo([target(hiddenImage)])] }),
