@@ -820,8 +820,8 @@ history are preserved. Native OpenAI Responses passthrough, context wrappers, im
 assistant/tool items are unchanged. The framing applies to plaintext checkpoints beginning with
 Codex's summary prefix; decoded OpenCodex checkpoints retain their existing continuation guidance.
 A routed summary request (Codex `compaction_trigger`) gets the same historical framing as the
-ordinary request before it. On the Anthropic Messages route it also repeats that request's
-continuation guidance, so the summary keeps the ordinary request's prompt-cache prefix; its
+ordinary request before it. After a decoded OpenCodex checkpoint, the Anthropic Messages route
+also repeats that request's continuation guidance, so the summary keeps the ordinary request's prompt-cache prefix; its
 appended summary prompt still tells the model to summarize and not continue. Client-side
 summarizer turns using Codex's standard compaction prompt bypass framing. Framing is a prompt
 instruction, so model behavior can vary.
