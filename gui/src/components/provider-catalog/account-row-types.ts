@@ -8,7 +8,7 @@ export type AccountLoginStatus = { loggedIn: boolean; email?: string; error?: st
 export type AccountLoginRow = {
   id: string;
   label: string;
-  kind: "oauth" | "key" | "codex";
+  kind: "oauth" | "key" | "codex" | "agy";
   statusLabel?: string;
   /** Optional deep-link for codex/account-pool management. */
   href?: string;

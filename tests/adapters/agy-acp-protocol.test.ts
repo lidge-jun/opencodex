@@ -365,3 +365,22 @@ describe("workspace and reaping", () => {
     expect(signals).toEqual(["99:SIGTERM", "99:SIGKILL", "99:0", "99:0"]);
   });
 });
+
+describe("ACP model discovery", () => {
+  test("uses the same model selector as a turn and excludes unsupported, ambiguous and non-routing IDs", async () => {
+    const { catalogIds } = await import("../../src/adapters/agy-acp/live-models");
+    const option = { id: "model", type: "select", category: "model", currentValue: "gemini-4-neon" };
+    const choices = [
+      { value: "gemini-4-neon", name: "Gemini 4 Neon" },
+      { value: "gemini-pro-orchestrator", name: "Orchestrator (Carbon)" },
+      { value: "opaque-next", name: "Gemini Next" },
+      { value: "claude-model", name: "Claude Model" },
+      { value: "gemini-x", name: "Claude Model" },
+      { value: "gemini-b", name: "B" }, { value: "gemini-b", name: "B" },
+      { value: "gemini-a/b", name: "Gemini A/B" },
+    ];
+    expect(catalogIds([{ ...option, options: choices }])).toEqual(["gemini-4-neon", "gemini-pro-orchestrator", "gemini-next"]);
+    expect(catalogIds([])).toEqual([]);
+    expect(catalogIds([{ ...option, options: choices }, { ...option, id: "second", options: choices }])).toEqual([]);
+  });
+});

@@ -337,8 +337,8 @@ export function setCached(
  * Expire freshness and require a new observation, keeping the last-known-good rows for fallback.
  * During failure backoff, leave both the cache and its failure observation intact.
  */
-export function expireModelCache(provider: string): boolean {
-  if (isModelsFetchCoolingDown(provider)) return false;
+export function expireModelCache(provider: string, authority?: string): boolean {
+  if (isModelsFetchCoolingDown(provider, undefined, undefined, authority)) return false;
   const entry = cache.get(provider);
   if (entry) entry.expired = true;
   discoveryStatus.delete(provider);

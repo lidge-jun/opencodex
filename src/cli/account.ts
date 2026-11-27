@@ -45,6 +45,7 @@ const MAIN_CODEX_ID = "__main__";
 const REPLACEMENT_STYLE_OAUTH = new Set<string>();
 
 const ACCOUNT_USAGE = `Usage:
+  ocx account agy list | add <name> | use <name|default>
   ocx account list [provider] [--json] [--all] [--quota [--refresh]]
   ocx account history openai <pool-account-id> [--limit <1-200>] [--json]
   ocx account current <provider> [--json]
@@ -508,6 +509,7 @@ export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promis
     }
     if (sub === "add-key") return await cmdAddKey(rest, deps);
     if (sub === "import") return await cmdImport(rest, deps);
+    if (sub === "agy") return (await import("./account-agy")).cmdAgyAccount(rest);
     if (sub === "import-orca") {
       const { cmdOrcaImport } = await import("./account-orca-import");
       return await cmdOrcaImport(rest);

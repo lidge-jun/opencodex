@@ -19,6 +19,7 @@ import type { ModelRow } from "../../pages/models-shared";
 import ProviderModels from "./ProviderModels";
 import type { ProviderModelVisibility } from "../../provider-workspace/use-provider-model-visibility";
 import ProviderUsage from "./ProviderUsage";
+import AgyAccounts from "./AgyAccounts";
 import ProviderAuthPanel from "./ProviderAuthPanel";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
 import ProviderSettings from "./ProviderSettings";
@@ -482,7 +483,8 @@ export default function ProviderDetails({
             {...(onRefreshQuota ? { onRefreshQuota } : {})}
           />
         )}
-        {tab === "accounts" && (
+        {tab === "accounts" && authSurface === "agy-accounts" && <AgyAccounts key={JSON.stringify([targetKey, apiBase])} apiBase={apiBase} targetKey={targetKey} />}
+        {tab === "accounts" && authSurface !== "agy-accounts" && (
           <ProviderAuthPanel
             key={JSON.stringify([targetKey, apiBase, item.name])}
             item={item}

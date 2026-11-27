@@ -59,7 +59,7 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   and print a single numeric version at or above the minimum. The verdict binds to the executable’s
   real path, device, inode, size, modification time and change time. The adapter checks this identity
   after workspace setup, re-probes a replacement and launches the verified real path. A cancelled request reaps its uncached probe without recording a verdict. The CLI owns its Google sign-in,
-  so the `antigravity-acp` row is keyless (`authKind: "key"`, `keyOptional`). The init wizard skips the key question
+  and `src/adapters/agy-acp/profiles.ts` resolves the explicitly selected local CLI home once per turn. The default inherits the host login; named accounts on POSIX use agy-owned private file storage and fail closed if unavailable. OpenCodex checks file metadata only. Thus the `antigravity-acp` row is keyless (`authKind: "key"`, `keyOptional`). Live discovery opens an empty ACP session for the selected CLI profile, reads the model selector, and reaps the process before any prompt. Cache entries and cooldowns are scoped to the selected profile directory identity, including when a label is deleted and registered again. Manual refresh also converges the Codex catalog. The init wizard skips the key question
   and omits the key field for ACP. The login command prints the host sign-in command, and API-key validation
   refuses ACP before any request. Key-optional LiteLLM still accepts a key or an environment reference. Structural config validation
   (`src/config/schema/agy-acp-references.ts`) shares the static model roster in `src/providers/registry/agy-acp-models.ts`

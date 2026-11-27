@@ -50,6 +50,7 @@ import { enrichProviderFromRegistry } from "../../providers/derive";
 import { ensureCodexEntitlementFreshness } from "../../codex/model-entitlements";
 import { fetchAllModels } from "./shared";
 import { CatalogGatherBusyError, gatherRoutedModels, type GatherRoutedModelsOptions } from "../../codex/catalog/routed-gather";
+import { agyCatalogSelection } from "../../adapters/agy-acp/profiles";
 import { isProviderDiscoveryInFlight, withProviderDiscoveryInFlight } from "../../codex/catalog/provider-models";
 import { captureModelDiscoveryBaseline, finalizeModelDiscovery } from "../../providers/new-model-policy-runtime";
 import { reconcileSuccessfulModelDiscoveries } from "../../providers/new-model-policy";
@@ -64,7 +65,8 @@ export async function refreshProviderDiscovery(config: OcxConfig, name: string) 
   const provider = config.providers[name];
   if (!provider || provider.disabled || provider.adapter === "jev-decision") return undefined;
   if (isProviderDiscoveryInFlight(name)) return "in-progress" as const;
-  if (!expireModelCache(name)) return getProviderDiscoveryStatus(name);
+  const authority = provider.adapter === "agy-acp" ? agyCatalogSelection()?.authority : undefined;
+  if (!expireModelCache(name, authority)) return getProviderDiscoveryStatus(name);
   return withProviderDiscoveryInFlight(name, async () => {
     const baseline = captureModelDiscoveryBaseline(config);
     const initial = initialModelSelectionPending(provider) ? captureInitialSelectionBaseline(config) : null;

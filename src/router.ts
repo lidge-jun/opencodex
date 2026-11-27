@@ -39,6 +39,7 @@ import { decodeRoutedModelId, decodeRoutedModelIdOrThrow, encodeRoutedModelId } 
 import { effectiveProviderAliasDecision, resolveModelAlias } from "./providers/default-aliases";
 import { resolveBlockedModelRedirect } from "./lib/shadow-call";
 import { workBuddyCatalogIdentity } from "./providers/workbuddy";
+import { agyCatalogSelection } from "./adapters/agy-acp/profiles";
 import { getRoutingCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
 import {
@@ -175,6 +176,7 @@ export function knownModelIdsForProvider(
   const cachedModels = getRoutingCached(provName, () => {
     // This callback runs only for a scoped entry, not for each provider in an alias scan.
     const routed = routedProviderConfig(provName, prov);
+    if (routed.adapter === "agy-acp") return agyCatalogSelection()?.authority;
     let key = routed.apiKey;
     let destination = routed.baseUrl;
     if (routed.authMode === "oauth") {

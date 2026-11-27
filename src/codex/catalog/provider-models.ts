@@ -335,6 +335,33 @@ async function fetchProviderModelsUncached(
     }
     return observed(configured, "authoritative");
   }
+  if (prov.adapter === "agy-acp") {
+    const { agyCatalogSelection } = await import("../../adapters/agy-acp/profiles");
+    const selection = agyCatalogSelection(metadataConfigDir);
+    if (!selection) return observed(configured, "degraded");
+    const { authority } = selection;
+    const project = (rows: CatalogModel[]) => withConfiguredRetention(applyConfigHintsToCachedModels(
+      name, prov, rows, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false,
+    ));
+    const fresh = getFreshCached(name, ttlMs, Date.now(), authority);
+    if (fresh) return observed(project(fresh), "authoritative");
+    if (!isModelsFetchCoolingDown(name, undefined, undefined, authority)) {
+      const { discoverAgyModels } = await import("../../adapters/agy-acp/live-models");
+      const ids = await discoverAgyModels(metadataConfigDir, selection);
+      if (agyCatalogSelection(metadataConfigDir)?.authority !== authority) return observed(configured, "degraded", false);
+      if (ids.length) {
+        const rows = ids.map(id => ({ id, provider: name }));
+        if (!publishCache(rows, authority)) return supersededSuccess(project(rows));
+        markProviderDiscoveryOk(name, rows.length);
+        return observed(project(rows), "authoritative");
+      }
+      if (claimPublication()) {
+        markModelsFetchFailure(name, undefined, authority);
+        markProviderDiscoveryFailed(name, { reason: "invalid_response" });
+      }
+    }
+    return observed(project(getStaleCached(name, authority) ?? configured), "degraded");
+  }
   // One Vertex deadline covers ADC, the first request and every follow-up page.
   const vertexDeadline = effectiveGoogleMode(name, prov) === "vertex" ? vertexDiscoveryDeadline() : undefined;
   let vertexAuth: VertexDiscoveryAuth | undefined;
