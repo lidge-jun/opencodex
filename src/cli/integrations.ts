@@ -24,7 +24,7 @@ const CLAUDE_USAGE = `Usage:
       [--system-env <on|off>] [--fast-mode <on|off>] [--auto-context <on|off>]
       [--compact-window <tokens|default>] [--context-accounting <1m|200k>] [--inject-agents <on|off>]
       [--native-passthrough <on|off>] [--small-fast-model <id|->] [--model-map <from=to,from=to|->]
-      [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|xai|gemini|exa|->]
+      [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|xai|gemini|exa|parallel|->]
       [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]
   ocx claude config set --first-party <on|off> [--json]`;
 

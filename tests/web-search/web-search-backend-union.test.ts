@@ -23,6 +23,7 @@ describe("widened backend union remains fail-closed without backend authority", 
     expect(resolveSidecarBackend("xai")).toBe("xai");
     expect(resolveSidecarBackend("gemini")).toBe("gemini");
     expect(resolveSidecarBackend("exa")).toBe("exa");
+    expect(resolveSidecarBackend("parallel")).toBe("parallel");
   });
 
   test("planWebSearch xai -> no plan without a configured Grok OAuth provider", () => {
@@ -35,7 +36,7 @@ describe("widened backend union remains fail-closed without backend authority", 
     expect(planWebSearch(cfg, parsedWithWebSearch(), false, routed, "model", undefined)).toBeUndefined();
   });
 
-  test.each(["xai", "gemini", "exa"] as const)("shouldResolveOpenAiWebSearchSidecar false for %s", backend => {
+  test.each(["xai", "gemini", "exa", "parallel"] as const)("shouldResolveOpenAiWebSearchSidecar false for %s", backend => {
     const cfg = config({ webSearchSidecar: { backend } });
     expect(shouldResolveOpenAiWebSearchSidecar(cfg, parsedWithWebSearch(), false)).toBe(false);
   });
@@ -105,4 +106,30 @@ describe("claude-code overrides: union widened for web-search ONLY (review F1)",
     expect(response.status).toBe(400);
     expect(cfg.claudeCode?.visionSidecar).toBeUndefined();
   });
+});
+
+test("Parallel planning requires a hosted search declaration and skips passthrough", () => {
+  const cfg = config({ webSearchSidecar: { backend: "parallel" } });
+  const parsed = parsedWithWebSearch();
+  expect(planWebSearch(cfg, parsed, false, routed, "model")).toMatchObject({ backend: "parallel" });
+  expect(planWebSearch(cfg, parsed, true, routed, "model")).toBeUndefined();
+  expect(planWebSearch(cfg, { ...parsed, _webSearch: undefined }, false, routed, "model")).toBeUndefined();
+  expect(planWebSearch(cfg, { ...parsed, options: { ...parsed.options, toolChoice: "none" } }, false, routed, "model")).toBeUndefined();
+});
+
+test("Parallel settings preserve an existing model and offer the backend itself as the picker row", async () => {
+  const cfg = config({ webSearchSidecar: { backend: "openai", model: "existing-slot" } });
+  const response = await putSidecar(cfg, { backend: "parallel" });
+  expect(response.status).toBe(200);
+  expect(cfg.webSearchSidecar).toMatchObject({ backend: "parallel", model: "existing-slot" });
+  expect((await response.json()).webSearchModels).toContainEqual(
+    expect.objectContaining({ value: "parallel", backend: "parallel", model: "" }),
+  );
+  // Parallel runs no model, so the preserved one is inert rather than illegal:
+  // the pickers resend it on every save and must not be 400'd for it.
+  expect((await putSidecar(cfg, { model: "unrelated-model" })).status).toBe(200);
+
+  const override = config({ webSearchSidecar: { backend: "openai", model: "existing-slot" } });
+  expect((await putClaudeCode(override, { webSearchSidecar: { backend: "parallel" } })).status).toBe(200);
+  expect(override.claudeCode?.webSearchSidecar?.backend).toBe("parallel");
 });

@@ -406,4 +406,45 @@ describe("claude-code webSearchSidecar override honors the submitted backend (#2
     expect(response.status).toBe(400);
     expect(cfg.claudeCode?.webSearchSidecar).toEqual({ backend: "openai", model: "gpt-5.6-luna" });
   });
+
+  // A model-free backend runs no model, so the one a backend-only switch preserves
+  // cannot be illegal. Both pickers resend the preserved model on every save, and
+  // refusing it made Parallel a state the operator could enter but never save from.
+  test("PUT accepts a later Claude save that resends the model preserved by the switch to parallel", async () => {
+    const cfg = config({ claudeCode: { webSearchSidecar: { backend: "openai", model: "gpt-5.6-luna" } } });
+    expect((await claudeCode(cfg, { webSearchSidecar: { backend: "parallel" } })).status).toBe(200);
+    expect(cfg.claudeCode?.webSearchSidecar).toEqual({ backend: "parallel", model: "gpt-5.6-luna" });
+
+    // Exactly what claudeCodeSaveBody sends next: the backend plus the model the page still holds.
+    const resave = await claudeCode(cfg, { webSearchSidecar: { backend: "parallel", model: "gpt-5.6-luna" } });
+    expect(resave.status).toBe(200);
+    expect(cfg.claudeCode?.webSearchSidecar).toEqual({ backend: "parallel", model: "gpt-5.6-luna" });
+  });
+});
+
+// The dashboard's only web-search control is the model picker, so a backend that
+// admits no candidate had no row to re-select: Off was a one-way trip.
+describe("model-free backend: explicit selection and enable path", () => {
+  test("the option list offers parallel itself instead of the inert preserved model", async () => {
+    const cfg = config({ webSearchSidecar: { backend: "parallel", model: "legacy-model" } });
+    const options = webSearchModelOptionsFrom(cfg, await webSearchCandidateRows(cfg));
+    expect(options).toEqual([{ value: "parallel", label: "parallel", backend: "parallel", model: "" }]);
+  });
+
+  test("the row survives Off, and re-selecting it turns parallel back on", async () => {
+    const cfg = config({ webSearchSidecar: { backend: "parallel" } });
+    expect((await sidecarSettings(cfg, { method: "PUT", body: { webSearch: { enabled: false } } })).status).toBe(200);
+    expect(cfg.webSearchSidecar).toEqual({ backend: "parallel", enabled: false });
+
+    const off = await (await sidecarSettings(cfg)).json() as { webSearchModels: Array<{ value: string }> };
+    expect(off.webSearchModels.map(option => option.value)).toContain("parallel");
+
+    // What the dashboard submits for that row: its backend/model pair plus the activation.
+    const on = await sidecarSettings(cfg, {
+      method: "PUT",
+      body: { webSearch: { backend: "parallel", model: "", enabled: true } },
+    });
+    expect(on.status).toBe(200);
+    expect(cfg.webSearchSidecar).toEqual({ backend: "parallel" });
+  });
 });

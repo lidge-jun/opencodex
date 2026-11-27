@@ -211,7 +211,7 @@ export const AGENT_ROUTING_CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["agent","sidecar","web"],
-    usage: "ocx agent sidecar web (--list | [--model <id|->] [--backend <openai|anthropic|xai|gemini|exa|->] [--reasoning <level>] [--enabled <on|off>] [--stream-routed-output <on|off>]) [--json]",
+    usage: "ocx agent sidecar web (--list | [--model <id|->] [--backend <openai|anthropic|xai|gemini|exa|parallel|->] [--reasoning <level>] [--enabled <on|off>] [--stream-routed-output <on|off>]) [--json]",
     summary: "List web candidates or change the web sidecar.",
     routes: [{"method":"GET","path":"/api/sidecar-settings"},{"method":"PUT","path":"/api/sidecar-settings"}],
     flags: [{"name":"--list","value":"boolean","summary":"Read candidates only; cannot combine with setting flags."},{"name":"--model","value":"string","summary":"Model selector; - clears."},{"name":"--backend","value":"string","summary":"Backend selector; - clears."},{"name":"--reasoning","value":"string","summary":"Reasoning level."},{"name":"--enabled","value":"string","summary":"on or off."},{"name":"--json","value":"boolean","summary":"Emit structured JSON."},{"name":"--stream-routed-output","value":"string","summary":"Stream routed web-search model output; web only."}],

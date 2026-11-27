@@ -580,7 +580,7 @@ State-changing: no. JSON mode: `payload`.
 
 ### `ocx agent sidecar web`
 
-Usage: `ocx agent sidecar web (--list | [--model <id|->] [--backend <openai|anthropic|xai|gemini|exa|->] [--reasoning <level>] [--enabled <on|off>] [--stream-routed-output <on|off>]) [--json]`
+Usage: `ocx agent sidecar web (--list | [--model <id|->] [--backend <openai|anthropic|xai|gemini|exa|parallel|->] [--reasoning <level>] [--enabled <on|off>] [--stream-routed-output <on|off>]) [--json]`
 
 List web candidates or change the web sidecar.
 

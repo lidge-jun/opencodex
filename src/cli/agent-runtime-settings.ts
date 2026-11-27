@@ -1,3 +1,4 @@
+import { WEB_SEARCH_BACKEND_IDS } from "../types/config";
 import { isValidVisionTimeoutMs } from "../vision/plan";
 import { isDeclaredReasoningEffort } from "../reasoning-effort";
 import { runCatalogAction } from "./catalog-command-result";
@@ -89,7 +90,7 @@ export async function handleSidecarRuntimeSettings(argsInput: string[], deps: Ru
         && (requestedBackend === undefined || row.backend === requestedBackend));
       if (option !== undefined) {
         if (!record(option) || typeof option.model !== "string" || typeof option.backend !== "string"
-          || !["openai", "anthropic", "xai", "gemini", "exa"].includes(option.backend)) invalid();
+          || !WEB_SEARCH_BACKEND_IDS.some(backend => backend === option.backend)) invalid();
         settings.model = option.model;
         if (backend !== "-") settings.backend = option.backend;
       }
@@ -98,7 +99,7 @@ export async function handleSidecarRuntimeSettings(argsInput: string[], deps: Ru
       body: serializeManagementJson(section === "web" ? { webSearch: settings } : { vision: settings }) }, pinned);
     if (!record(value) || value.ok !== true) invalid();
     const raw = section === "web" ? value.webSearch : value.vision;
-    const backends = section === "web" ? ["openai", "anthropic", "xai", "gemini", "exa"] : ["openai", "anthropic", "routed"];
+    const backends: readonly string[] = section === "web" ? WEB_SEARCH_BACKEND_IDS : ["openai", "anthropic", "routed"];
     if (!record(raw) || typeof raw.enabled !== "boolean" || typeof raw.model !== "string" || !raw.model.trim()
       || (raw.backend !== undefined && (typeof raw.backend !== "string" || !backends.includes(raw.backend)))) invalid();
     const selected: Record<string, unknown> = { enabled: raw.enabled, model: raw.model,

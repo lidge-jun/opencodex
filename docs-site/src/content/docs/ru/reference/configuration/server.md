@@ -207,8 +207,8 @@ Codex использует маленькие helper-model'и для задач 
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | Главный переключатель. При `false` OpenCodex перестаёт перехватывать `web_search`, а интеграция Codex записывает `web_search = "disabled"` в `~/.codex/config.toml`. |
-| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | Явный выбор выигрывает; отсутствие значения всегда означает `openai`. `anthropic` и `xai` запускаются только при явной настройке; `gemini` и `exa` зарезервированы до появления executor. |
-| `model?` | `string` | backend-dependent | `gpt-5.6-luna` для OpenAI, `claude-sonnet-5` для Anthropic или `grok-4.6` для xAI. Старый явный `gpt-5.4-mini` мигрирует при старте. |
+| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa" \| "parallel"` | `openai` | Явно заданное значение имеет приоритет. `parallel` использует анонимный поиск Parallel через MCP. |
+| `model?` | `string` | backend-dependent | `gpt-5.6-luna` для OpenAI, `claude-sonnet-5` для Anthropic или `grok-4.6` для xAI. Старый явный `gpt-5.4-mini` мигрирует при старте. Parallel и Exa игнорируют это поле. |
 | `exaApiKey?` | `string` | отсутствует | Ключ оператора для backend `exa`. Только для записи: management-read никогда не возвращает сохранённое значение. |
 | `xSearch?` | `object` | отсутствует | Опциональный hosted `x_search` только для xAI: `enabled`, взаимоисключающие массивы `allowedXHandles` / `excludedXHandles` (не более 20) и ISO-даты `fromDate` / `toDate` (`YYYY-MM-DD`). |
 | `reasoning?` | `string` | `low` | Effort sidecar'а. Значение `minimal` с web search отклоняется. |

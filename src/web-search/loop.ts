@@ -24,6 +24,7 @@ import type { AuxiliaryModelSend } from "../lib/request-execution-budget";
 import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import { runExaWebSearch } from "./exa-executor";
+import { runParallelWebSearch } from "./parallel-executor";
 import type { WebSearchBackendId } from "./index";
 import { pacingHeaderDeadline } from "./header-deadline";
 import { redactSecretString } from "../lib/redact";
@@ -381,8 +382,7 @@ export interface WebSearchLoopDeps {
   incomingMeta: IncomingMeta;
   /**
    * Which executor runs searches. Defaults to "openai" so existing callers keep the ChatGPT path
-   * (audit F4). The widened ids (xai/gemini/exa) cannot reach the loop yet: planWebSearch returns
-   * no plan for them (inert 060 arms), and the dispatch below only branches on "anthropic".
+   * when the operator has not selected a backend.
    */
   backend?: WebSearchBackendId;
   /** Required for the openai backend; unused (and typically undefined) for the anthropic backend. */
@@ -1171,6 +1171,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             outcome = deps.geminiSidecar
               ? await runGeminiWebSearch(query, deps.geminiSidecar.providerName, deps.geminiSidecar.provider, settings, signal)
               : { text: "", sources: [], error: "gemini backend selected without a resolved Antigravity provider" };
+          } else if (backend === "parallel") {
+            outcome = await runParallelWebSearch(query, settings.timeoutMs, signal);
           } else if (backend === "exa") {
             // L9: non-LLM lane; key comes from the loop deps, never the plan. Fail closed.
             outcome = deps.exaApiKey

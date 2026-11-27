@@ -2,32 +2,28 @@
  * Which backends may RUN a hosted web_search, and which candidate rows each
  * can run (#2188 rule 2 for web-search: ∩ probed backend with an executor).
  *
- * A backend registers here only when BOTH hold:
- *  - an executor exists in this repository (src/web-search/executor.ts or
- *    anthropic-executor.ts today), and
- *  - its liveness probe passes. For the two shipped backends the probe IS
- *    auth presence — the ChatGPT forward path and the stored Anthropic OAuth
- *    path fail closed without a credential, so a live credential is the
- *    strongest pre-flight signal short of spending a search.
- *
- * Future backends (Gemini google_search, Grok web_search, Zen hosted search,
- * Exa-class vendors) stay OUT of this table until a live probe and an
- * executor land — the research and probe contracts are recorded in
- * devlog/_plan/260820_sidecar_selection_unification/002 and 031. Documenting
- * a tool is not the same as being able to run it.
+ * Each backend has a shipped executor and an availability check. Credentialed
+ * backends check their own credential. Parallel only needs explicit selection.
  */
 import type { OcxConfig } from "../types";
 import { AUTH_SLOT_MODELS, type SidecarAuthState } from "../sidecar/auth";
 import type { SidecarCandidate } from "../sidecar/candidates";
 import { getAccountSet } from "../oauth/store";
-import type { WebSearchBackendId } from "./index";
+import type { WebSearchBackendId } from "./sidecar-providers";
 
 export interface WebSearchBackendDescriptor {
   backend: WebSearchBackendId;
-  /** Liveness signal for this backend (auth presence for the shipped two). */
+  /** Availability of this backend before a search is sent. */
   isActive(auth: SidecarAuthState, config: OcxConfig): boolean;
   /** Which candidate rows this backend's executor can actually run. */
   eligibleModel(candidate: SidecarCandidate, auth: SidecarAuthState): boolean;
+  /**
+   * The executor runs no model at all, so a stored `webSearchSidecar.model` is
+   * inert here. Not the same as an empty `eligibleModel`: exa matches no
+   * candidate either, but its configured model is still the destination its
+   * api-key scope is judged against (modelForAlphaSearchBackend).
+   */
+  ignoresModel?: true;
 }
 
 export const WEB_SEARCH_BACKENDS: readonly WebSearchBackendDescriptor[] = [
@@ -86,7 +82,20 @@ export const WEB_SEARCH_BACKENDS: readonly WebSearchBackendDescriptor[] = [
     isActive: (_auth, config) => !!config.webSearchSidecar?.exaApiKey,
     eligibleModel: () => false,
   },
+  {
+    backend: "parallel",
+    isActive: (_auth, config) => config.webSearchSidecar?.backend === "parallel" && config.webSearchSidecar.enabled !== false,
+    eligibleModel: () => false,
+    // planWebSearch and alpha-search both pin settings.model to "parallel", so
+    // nothing ever reads the configured model on this backend.
+    ignoresModel: true,
+  },
 ];
+
+/** True when the backend's executor runs no model, so a stored `model` is inert. */
+export function webSearchBackendIgnoresModel(backend: WebSearchBackendId): boolean {
+  return WEB_SEARCH_BACKENDS.some(entry => entry.backend === backend && entry.ignoresModel === true);
+}
 
 /**
  * (picker-visible ∪ auth slots) ∩ (active backend able to run the row).

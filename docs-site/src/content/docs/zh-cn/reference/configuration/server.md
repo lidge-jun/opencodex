@@ -192,8 +192,8 @@ Codex 会为标题、提交信息等任务使用较小的辅助模型。启用
 | 字段 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | 在可用时启用 | 总开关。为 `false` 时，OpenCodex 停止拦截 `web_search`，并且 Codex 集成会把 `web_search = "disabled"` 写入 `~/.codex/config.toml`。 |
-| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | 显式配置优先；省略时始终使用 `openai`。`anthropic` 和 `xai` 仅在显式配置时运行；`gemini` 和 `exa` 在 executor 发布前仍为保留值。 |
-| `model?` | `string` | 依后端而定 | OpenAI 使用 `gpt-5.6-luna`，Anthropic 使用 `claude-sonnet-5`，xAI 使用 `grok-4.6`。旧的显式 `gpt-5.4-mini` 会在启动时迁移。 |
+| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa" \| "parallel"` | `openai` | 显式配置优先。`parallel` 通过 MCP 使用 Parallel 的匿名搜索。 |
+| `model?` | `string` | 依后端而定 | OpenAI 使用 `gpt-5.6-luna`，Anthropic 使用 `claude-sonnet-5`，xAI 使用 `grok-4.6`。旧的显式 `gpt-5.4-mini` 会在启动时迁移。Parallel 和 Exa 会忽略此字段。 |
 | `exaApiKey?` | `string` | 无 | `exa` 后端的操作员密钥。仅可写入：管理读取绝不会返回已存储的值。 |
 | `xSearch?` | `object` | 省略 | xAI 专用的托管 `x_search` opt-in：`enabled`、互斥的 `allowedXHandles` / `excludedXHandles` 数组（最多 20 项），以及 ISO `fromDate` / `toDate`（`YYYY-MM-DD`）。 |
 | `reasoning?` | `string` | `low` | 侧车努力级别。`minimal` 与 web search 不兼容，会被拒绝。 |
