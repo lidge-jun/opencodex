@@ -88,7 +88,7 @@ opencodex 从自己的环境读取这些变量。如果网关使用配置文件�
 - 较旧的操作，或操作后文件已发生变化时，会显示 **Restore this point…**。跨越此类变更恢复时，会在替换较新编辑内容前再次确认，并先备份这些编辑内容，因此恢复操作本身也可撤销。
 - 每个客户端保留十份备份。超过后会删除最旧的快照文件，对应的历史记录显示 **Backup expired**。
 
-Disable 只移除 opencodex 记录为自己管理的条目。如果文件在写入后发生变化，结果取决于我们的条目是否仍完整以及文件格式。对于严格 JSON 配置（OpenCode、Pi），在配置块**旁边**编辑，例如添加 MCP 服务器或自己的提供商，会显示 **Update needed**：刷新时会绕过并保留这些条目，但格式可能被规范化。有些 JSON 内容无法精确保留：如 `1e999` 这样的非有限数值、重写时会舍入的数字（超大整数或会变成零的极小数字）、`-0`、同一对象中的重复键，或超过 1000 层的嵌套。遇到这些内容时，开关会锁定，以免静默更改或丢弃数据。**OMP、DSH 和 Hermes** 也不受相邻编辑影响，但原因不同：其写入器只按字节修补自身管理的提供商片段，不重写文件其余部分。对于其他可能带注释的格式（OpenClaw、Kimi Code、gjc、MiniMax Code、Raycast——整份写入的 JSON5 和 TOML，或不保留源码的通用 YAML），以及我们管理的条目被编辑时，开关会锁定，Disable 会拒绝执行，而不是猜测哪些编辑来自你。
+Disable 只移除 opencodex 记录为自己管理的条目。如果文件在写入后发生变化，结果取决于我们的条目是否仍完整以及文件格式。对于严格 JSON 配置（OpenCode、Pi），在配置块**旁边**编辑，例如添加 MCP 服务器或自己的提供商，会显示 **Update needed**：刷新时会绕过并保留这些条目，但格式可能被规范化。有些 JSON 内容无法精确保留：如 `1e999` 这样的非有限数值、重写时会舍入的数字（超大整数或会变成零的极小数字）、`-0`、同一对象中的重复键，或超过 1000 层的嵌套。遇到这些内容时，开关会锁定，以免静默更改或丢弃数据。**OMP、DSH、Hermes 和 Kimi Code** 也不受相邻编辑影响，但原因不同：其写入器只按字节修补自身管理的提供商片段，不重写文件其余部分。对于其他可能带注释的格式（OpenClaw、gjc、MiniMax Code、Raycast——整份写入的 JSON5，或不保留源码的通用 YAML），以及我们管理的条目被编辑时，开关会锁定，Disable 会拒绝执行，而不是猜测哪些编辑来自你。
 
 锁定状态并非无解。有冲突的客户端会在概览卡片和自身页面的开关旁显示 **Replace**。它会将占据我们设置位置的内容替换为 opencodex 将写入的配置块，并事先询问：对话框会显示文件名、说明会丢失什么，并指向可用于撤销的快照。开关本身仍锁定，因为它无法知道你希望保留哪些编辑；只有你能决定。其他限制没有放宽：无法解析或无法可靠理解结构的文件仍会拒绝处理。
 
@@ -106,7 +106,7 @@ Aside 对单个选中配置文件采用相同的预览和确认流程。**Sync a
 
 ## 实际效果与限制
 
-**通常不会保留格式。** 应用操作会解析配置并重新写出，因此 JSON、JSON5 和 TOML 的排版可能变化，JSON5 或 TOML 中的注释也会丢失。OMP、DSH 和 Hermes 是例外：OMP 和 Hermes 的 YAML 写入器只修补 `providers.opencodex`。DSH 在 Desktop profile 存在时修补 `$DSH_HOME/profiles/desktop/cordis.patch.yml` 中的 `[id=llm-pi-ai].config.providers.opencodex` 行；仅在没有该 profile 时，才修补 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers.opencodex`。这些写入器逐字节保留无关提供商的注释和格式。如果无法安全确定准确的源码范围，操作会拒绝执行。对于其他客户端，如需先前文件的原始字节，请使用 Restore；快照是逐字节副本。
+**通常不会保留格式。** 应用操作会解析配置并重新写出，因此 JSON 和 JSON5 的排版可能变化，JSON5 中的注释也会丢失。OMP、DSH、Hermes 和 Kimi Code 是例外：OMP 和 Hermes 的 YAML 写入器只修补 `providers.opencodex`。DSH 在 Desktop profile 存在时修补 `$DSH_HOME/profiles/desktop/cordis.patch.yml` 中的 `[id=llm-pi-ai].config.providers.opencodex` 行；仅在没有该 profile 时，才修补 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers.opencodex`。这些写入器逐字节保留无关提供商的注释和格式。如果无法安全确定准确的源码范围，操作会拒绝执行。Kimi Code 的写入器只替换 `config.toml` 中自己的 `[providers.opencodex]` 和 `[models."opencodex/…"]` 表，保留注释和 `[[hooks]]` 表；如果这些表以其他方式写入，则拒绝执行。对于其他客户端，如需先前文件的原始字节，请使用 Restore；快照是逐字节副本。
 
 **如果无法忠实重写某个值，开关也会拒绝执行。** 往返转换覆盖这些格式实际使用的值类型；无法覆盖时，例如 TOML 使用 `inf` 或 `nan` 而当前解析器无法准确读回，应用操作会停止并说明原因，不会写入改变后的值却声称成功。界面会指出文件名，磁盘内容保持不变。你仍可手动编辑该文件；拒绝的只是自动重写。
 
