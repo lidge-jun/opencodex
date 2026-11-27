@@ -80,12 +80,15 @@ export function failureAttributionLabels(
 const nonnegativeInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0;
 
+/** Stages that prove the caller received response events: lifecycle frames, output, or a tool side effect. */
+const RELAYED_EVENT_STAGES: ReadonlySet<string> = new Set(["protocol-prelude", "semantic-output", "side-effect"]);
+
 /** A failed delivery can end an attempt in an otherwise successful request. Describe only the final failure. */
 export function isInterruptedWebSocketDelivery(row: LogEntry): boolean {
   if (row.status !== 502 || (row.closeReason !== undefined && row.closeReason !== "terminal")
     || (row.terminalStatus !== undefined && row.terminalStatus !== "failed")
     || row.terminalSource !== "synthetic" || row.transportPhase !== "mid_stream"
-    || row.failureStage !== "semantic-output" || row.failureCause !== "transport-ambiguous"
+    || row.failureStage === undefined || !RELAYED_EVENT_STAGES.has(row.failureStage) || row.failureCause !== "transport-ambiguous"
     || row.attemptNormalizationDropped === true || !Array.isArray(row.attempts)) return false;
   const last = row.attempts.at(-1);
   const stage = last?.codexWsStage;

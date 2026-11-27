@@ -192,10 +192,24 @@ test("a final abnormal WebSocket close after delivery is visible in the row and 
 });
 
 test.each([
+  ["lifecycle events only", "protocol-prelude"],
+  ["a delivered tool call", "side-effect"],
+] as const)("an abnormal close after %s is also an interrupted stream", async (_name, failureStage) => {
+  const row = interruptedFixture();
+  const attempts = [{ ...row.attempts[0]!, failureStage }];
+  const { root, container } = await show({ ...row, failureStage, attempts });
+  try {
+    expect(container.querySelector("tbody tr[data-index]")?.textContent).toContain("Stream interrupted");
+    expect(document.querySelector(".modal-desc")?.textContent).toContain("(1006)");
+  } finally { await act(async () => { root.unmount(); }); }
+});
+
+test.each([
   ["completed request", { status: 200, terminalStatus: "completed" }, {}, {}],
   ["client cancellation", { closeReason: "client_cancel" }, {}, {}],
   ["upstream terminal", { terminalSource: "upstream" }, {}, {}],
   ["pre-response failure", { transportPhase: "pre_headers" }, {}, {}],
+  ["headers-only failure", { failureStage: "headers-only" }, { failureStage: "headers-only" }, {}],
   ["dropped attempt", { attemptNormalizationDropped: true }, {}, {}],
   ["different final cause", {}, { failureCause: "upstream-fault" }, {}],
   ["normal close", {}, {}, { closeCode: 1000 }],
