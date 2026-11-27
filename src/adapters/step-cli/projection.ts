@@ -1,6 +1,7 @@
 import type { OcxParsedRequest, OcxUsage } from "../../types";
 import type { IncomingMeta } from "../base";
 import { buildSystemPrompt } from "../coding-agent/protocol";
+import { isReplayedSearchResult } from "../../web-search/synthetic-tool";
 import { CODING_AGENT_TOOL_LIMITS } from "../coding-agent/tool-catalog";
 import { STEP_CLI_CONTINUATION_KEY, STEP_CLI_TOOL_SERVER } from "./constants";
 import type { StepConversationRef } from "./session-pool";
@@ -91,16 +92,17 @@ export function projectToolResultContent(
 export function latestToolResult(
   parsed: OcxParsedRequest,
 ): { content: readonly unknown[]; isError?: boolean; toolCallId: string } | undefined {
-  for (let index = parsed.context.messages.length - 1; index >= 0; index -= 1) {
-    const message = parsed.context.messages[index];
-    if (!message || message.role !== "toolResult") continue;
-    return {
-      content: projectToolResultContent(message.content),
-      toolCallId: message.toolCallId,
-      ...(message.isError ? { isError: true } : {}),
-    };
-  }
-  return undefined;
+  // The newest CURRENT result, not only the newest message: Codex records text the user steers
+  // with during a tool call after the call's output, so a turn can end [toolResult, user]. The
+  // caller matches this against the held call id; a result restored from history sits before the
+  // current-input start and never matches.
+  const message = latestCurrentMessage(parsed, candidate => candidate.role === "toolResult");
+  if (message?.role !== "toolResult") return undefined;
+  return {
+    content: projectToolResultContent(message.content),
+    toolCallId: message.toolCallId,
+    ...(message.isError ? { isError: true } : {}),
+  };
 }
 
 export function toUsage(usage: Record<string, unknown>): OcxUsage | undefined {
@@ -190,7 +192,21 @@ export function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-/** Translate a transport failure into the actionable error an operator can act on. */
+function latestCurrentMessage(
+  parsed: OcxParsedRequest,
+  accept: (message: OcxParsedRequest["context"]["messages"][number]) => boolean = () => true,
+) {
+  const messages = parsed.context.messages;
+  const start = parsed._currentInputMessageStart ?? (parsed._replayPrefixLen ? messages.length : 0);
+  const cells = parsed._replayedWebSearchCells;
+  const replayedIds = cells?.length ? new Set(cells.map(cell => cell.callId)) : undefined;
+  for (let index = messages.length - 1; index >= start; index--) {
+    const message = messages[index];
+    if (!message || message.role === "developer") continue;
+    if (replayedIds && isReplayedSearchResult(message, replayedIds)) continue;
+    if (accept(message)) return message;
+  }
+}
 
 /**
  * The text StepCode should be asked for on this turn.
@@ -199,22 +215,13 @@ export function asRecord(value: unknown): Record<string, unknown> {
  * because the wire reduces every message to text and images.
  */
 export function pendingUserText(parsed: OcxParsedRequest): string | undefined {
-  for (let index = parsed.context.messages.length - 1; index >= 0; index -= 1) {
-    const message = parsed.context.messages[index];
-    if (!message || message.role !== "user") continue;
-    if (!Array.isArray(message.content)) {
-      return typeof message.content === "string" && message.content.length > 0
-        ? message.content
-        : undefined;
-    }
-    const text = message.content
-      .filter(part => part.type === "text")
-      .map(part => (part as { text: string }).text)
-      .join("")
-      .trim();
-    if (text.length > 0) return text;
+  const message = latestCurrentMessage(parsed);
+  if (message?.role !== "user") return undefined;
+  if (!Array.isArray(message.content)) {
+    return typeof message.content === "string" && /\S/.test(message.content) ? message.content : undefined;
   }
-  return undefined;
+  const text = message.content.filter(part => part.type === "text").map(part => part.text).join("").trim();
+  return text.length > 0 ? text : undefined;
 }
 
 /**
