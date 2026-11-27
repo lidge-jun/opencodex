@@ -505,7 +505,7 @@ while streaming; it assembles multiline SSE data fields per event and stops at `
 comments; default `timeoutMs` is `600_000` ms / 10 min, max `1_800_000` ms / 30 min).
 
 For harnesses whose built-in models bypass the OpenCodex proxy,
-`src/advisor/external-consult.ts` backs `POST /api/advisor/consult` with uniform consent checks
+`src/server/management/advisor-routes.ts` exposes `POST /api/advisor/consult`, backed by `src/advisor/external-consult.ts` with uniform consent checks
 (matching routed paths, including `question-only`), fail-closed adaptive task-budget enforcement
 (deriving `external:<taskId|sessionId>` or canonical `external:transcript:<path>` and rejecting
 adaptive requests without a stable identity with `400 advisor_budget_identity_required`),
