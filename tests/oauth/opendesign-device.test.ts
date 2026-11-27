@@ -14,11 +14,6 @@ import { saveCredential } from "../../src/oauth/store";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
 
-declare global {
-  // eslint-disable-next-line no-var
-  var __opendesignFetchLog: string[];
-}
-
 const CONTROL_API = "https://amr-api.open-design.ai";
 const DEVICE_URL = `${CONTROL_API}/api/v1/cli/device-authorizations`;
 const WORKSPACES_URL = `${CONTROL_API}/api/v1/workspaces`;
@@ -26,18 +21,18 @@ const CONTROL_KEY = "vela_ctrl_synthetic-0123456789abcdef";
 const originalFetch = globalThis.fetch;
 const originalEnv = { HOME: process.env.HOME, OPENCODEX_HOME: process.env.OPENCODEX_HOME };
 let home: string;
+const fetchLog: string[] = [];
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "opendesign-device-"));
   process.env.HOME = home;
   process.env.OPENCODEX_HOME = join(home, "ocx");
   mkdirSync(process.env.OPENCODEX_HOME, { recursive: true });
-  globalThis.__opendesignFetchLog = [];
+  fetchLog.length = 0;
 });
 
 afterEach(async () => {
   globalThis.fetch = originalFetch;
-  delete globalThis.__opendesignFetchLog;
   await drainAndRemoveFixtureRoots({
     roots: [{ path: join(home, "ocx"), remove: () => {} }, { path: home }],
     restoreEnvironment: () => {
@@ -53,7 +48,7 @@ function fixtureFetch(routes: Record<string, () => Response>): typeof fetch {
   const entries = Object.entries(routes);
   return (async (input: string | URL | Request) => {
     const url = String(input);
-    globalThis.__opendesignFetchLog.push(url);
+    fetchLog.push(url);
     const exact = entries.find(([pattern]) => pattern === url);
     if (exact) return exact[1]();
     const route = entries.find(([pattern]) => pattern.endsWith("*") && url.startsWith(pattern.slice(0, -1)));
@@ -135,7 +130,7 @@ describe("pollOpenDesignDeviceAuthorization", () => {
     const error = await pollOpenDesignDeviceAuthorization(authorization, { fetchImpl, sleep: pendingSleep }).catch(e => e);
     expect(error).toBeInstanceOf(OpenDesignDeviceLoginError);
     expect(error.kind).toBe("device-denied");
-    expect(globalThis.__opendesignFetchLog.length).toBe(1);
+    expect(fetchLog.length).toBe(1);
   });
 
   test("an expired grant fails rather than sleeping forever", async () => {
