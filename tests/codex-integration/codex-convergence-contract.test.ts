@@ -629,7 +629,7 @@ test("a failure cause never carries message text, paths or identifiers (#1784)",
 test("the route inventory retains every convergence path after separating subagent routes", () => {
   const counts = Object.fromEntries([
     ["provider-routes.ts", 8],
-    ["model-routes.ts", 16],
+    ["model-routes.ts", 17],
     ["combo-routes.ts", 2],
     ["agent-settings-routes.ts", 1],
     ["subagent-model-routes.ts", 1],
@@ -649,20 +649,24 @@ test("the route inventory retains every convergence path after separating subage
   }));
   expect(counts).toEqual({
     "provider-routes.ts": 8,
-    "model-routes.ts": 16,
+    "model-routes.ts": 17,
     "combo-routes.ts": 2,
     "agent-settings-routes.ts": 1,
     "subagent-model-routes.ts": 1,
   });
 });
 
-test("both model-discovery write paths converge the Codex catalog", () => {
+test("model-discovery settings, acknowledgements and successful ACP refreshes converge the Codex catalog", () => {
   const source = readFileSync(repoPath("src", "server", "management", "model-routes.ts"), "utf8");
   const settings = source.slice(source.indexOf('url.pathname === "/api/model-discovery" && req.method === "PUT"'), source.indexOf('url.pathname === "/api/model-discovery/acknowledge"'));
   // Sliced to the NEXT route rather than to /api/catalog: the alias routes (#2463) landed
   // between them, so a fixed far boundary would swallow their convergence calls and count
   // them as this route's.
-  const acknowledge = source.slice(source.indexOf('url.pathname === "/api/model-discovery/acknowledge"'), source.indexOf('url.pathname === "/api/aliases"'));
+  const refreshStart = source.indexOf('url.pathname === "/api/model-discovery/refresh"');
+  const acknowledge = source.slice(source.indexOf('url.pathname === "/api/model-discovery/acknowledge"'), refreshStart);
+  const refresh = source.slice(refreshStart, source.indexOf('url.pathname === "/api/aliases"'));
+  expect(refresh).toContain('adapter === "agy-acp" && discovery.status === "ok"');
+  expect(refresh.match(/await convergeCodexCatalog\(\)/g)?.length).toBe(1);
   expect(settings.match(/await convergeCodexCatalog\(\)/g)?.length).toBe(1);
   expect(acknowledge.match(/await convergeCodexCatalog\(\)/g)?.length).toBe(1);
 });
