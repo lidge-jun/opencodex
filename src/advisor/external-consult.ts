@@ -204,11 +204,15 @@ function findTranscriptFile(options: {
 
   let bestPath: string | undefined;
   let bestMtime = -Infinity;
+  let bestTier = Infinity;
   const considerFile = (filePath: string) => {
+    const tier = lookupIds.indexOf(basename(filePath));
+    if (tier < 0 || tier > bestTier) return;
     try {
       const stat = lstatSync(filePath);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_TRANSCRIPT_FILE_BYTES) return;
-      if (lookupIds.includes(basename(filePath)) && stat.mtimeMs > bestMtime) {
+      if (tier < bestTier || stat.mtimeMs > bestMtime) {
+        bestTier = tier;
         bestMtime = stat.mtimeMs;
         bestPath = filePath;
       }
@@ -283,11 +287,10 @@ export function loadWorkBuddySessionMessages(options: {
   let fallbackWorkerModel: string | undefined;
 
   const isMetaAdvisorLookupOrPoll = (name: string, serialized: string): boolean => {
+    if (name.includes("consult_advisor") || name.includes("opencodex-advisor") || name.includes("opencodex_advisor")) return true;
     const isMeta = name === "ToolSearch" || name === "DeferExecuteTool"
       || name === "mcp_list" || name === "mcp_get" || name === "mcp_call";
-    if (!isMeta && !name.includes("consult_advisor") && !name.includes("opencodex-advisor") && !name.includes("opencodex_advisor")) {
-      return false;
-    }
+    if (!isMeta) return false;
     return serialized.includes("consult_advisor")
       || serialized.includes("opencodex-advisor")
       || serialized.includes("opencodex_advisor")

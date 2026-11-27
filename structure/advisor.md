@@ -511,7 +511,8 @@ For harnesses whose built-in models bypass the OpenCodex proxy,
 adaptive requests without a stable identity with `400 advisor_budget_identity_required`),
 content-hashed request dedup (including `taskId` and transcript digest), explicit-ID/path local
 `.jsonl` session transcript attachment in `contextMode: "full"` across `~/.workbuddy`,
-`~/.workbuddy-ai`, `~/.qoder`, `~/.qoder-cn`, `~/.commandcode`, and `~/.claude/projects`
+`~/.workbuddy-ai`, `~/.qoder`, `~/.qoder-cn`, `~/.commandcode`, and `~/.claude/projects`,
+preferring exact session IDs over task-ID fallbacks and excluding prior Advisor calls and results
 (`loadWorkBuddySessionMessages`), and a bounded 32-entry 30-minute consultation store that never
 evicts pending entries (returning `429 advisor_capacity_exceeded` when saturated) and separates
 TTL expiry pruning from insertion eviction. Long-poll `waitMs` is capped at `240_000` ms across

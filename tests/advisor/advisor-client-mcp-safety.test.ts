@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,7 +12,7 @@ import {
   unmountAdvisorMcpForClient,
 } from "../../src/advisor/client-mcp";
 import { consultAdvisor } from "../../src/advisor/consult";
-import { runExternalAdvisorConsult } from "../../src/advisor/external-consult";
+import { loadWorkBuddySessionMessages, runExternalAdvisorConsult } from "../../src/advisor/external-consult";
 import { resolveAdvisorSettings } from "../../src/advisor/settings";
 import type { OcxConfig } from "../../src/types";
 import { parseRequest } from "../../src/responses/parser";
@@ -27,6 +27,22 @@ function tempHome(prefix: string): string {
 }
 
 describe("Advisor client MCP safety", () => {
+  test("transcript selection prefers the session over a newer task fallback and filters direct advisor calls", () => {
+    const root = tempHome("ocx-advisor-transcript-priority-");
+    writeFileSync(join(root, "session.jsonl"), [
+      JSON.stringify({ type: "message", message: { role: "user", content: "session content" } }),
+      JSON.stringify({ type: "function_call", name: "consult_advisor", callId: "old", arguments: '{"question":"ordinary question"}' }),
+      JSON.stringify({ type: "function_call_result", callId: "old", output: "old advice" }),
+    ].join("\n"));
+    writeFileSync(join(root, "task.jsonl"), JSON.stringify({ type: "message", message: { role: "user", content: "wrong task content" } }));
+    utimesSync(join(root, "session.jsonl"), new Date(1_000), new Date(1_000));
+    const result = loadWorkBuddySessionMessages({ sessionId: "session", taskId: "task", workbuddyProjectsDir: root, nowMs: Date.now() });
+    const content = JSON.stringify(result.messages);
+    expect(content).toContain("session content");
+    expect(content).not.toContain("wrong task content");
+    expect(content).not.toContain("ordinary question");
+    expect(content).not.toContain("old advice");
+  });
   test("an explicit homeDir never follows the host's client config-directory override", () => {
     const home = tempHome("ocx-advisor-env-");
     const outside = tempHome("ocx-advisor-outside-");
