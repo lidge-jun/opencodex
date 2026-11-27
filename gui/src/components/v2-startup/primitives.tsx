@@ -22,9 +22,9 @@ const BADGE_TONE: Record<Tone, string> = {
 };
 
 /** A state word in a soft pill with a dot (`integrations-6` status words). */
-export function StateBadge({ tone, children, className }: { tone: Tone; children: ReactNode; className?: string }) {
+export function StateBadge({ tone, children, className, title }: { tone: Tone; children: ReactNode; className?: string; title?: string }) {
   return (
-    <span className={cn(
+    <span title={title} className={cn(
       "startup-badge inline-flex h-[22px] max-w-full shrink-0 items-center gap-1.5 rounded-full px-2 text-[12px] leading-4 font-semibold whitespace-nowrap",
       BADGE_TONE[tone],
       className,

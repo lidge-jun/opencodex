@@ -117,7 +117,8 @@ export function ChildRowBadges({ row }: { row: ChildOpsRowView }): ReactElement 
       {row.catalog.state === "current" && <StateBadge tone="ok">{t("remoteLink.child.catalog.current")}</StateBadge>}
       {codexRestartNeeded(row) && <StateBadge tone="warn">{t("remoteLink.child.codex.restartNeeded", { count: row.codex?.staleCount ?? 0 })}</StateBadge>}
       {row.codex?.appServers === "not_running" && <StateBadge tone="neutral">{t("remoteLink.child.codex.notRunning")}</StateBadge>}
-      {ownerKey && <StateBadge tone="neutral">{t(ownerKey)}</StateBadge>}
+      {/* Owner guidance can be a full sentence the badge truncates; the title keeps it readable. */}
+      {ownerKey && <StateBadge tone="neutral" title={t(ownerKey)}>{t(ownerKey)}</StateBadge>}
       {owner && !ownerKey && <CodeToken>{owner}</CodeToken>}
       {row.activeJob && <StateBadge tone="neutral">{t(ACTIVE_KEY[row.activeJob.op])}</StateBadge>}
       {row.lastOperation && (
