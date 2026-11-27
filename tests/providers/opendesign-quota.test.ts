@@ -148,7 +148,7 @@ describe("fetchOpenDesignAccountQuota", () => {
 
   test("a non-string control key is not probed", async () => {
     const fetchImpl = passthroughWithWorkspace();
-    const result = await fetchOpenDesignAccountQuota("opendesign", "sk-amr-not-a-control-key", { fetchImpl });
+    const result = await fetchOpenDesignAccountQuota("opendesign", "not-a-control-key", { fetchImpl });
     expect(result).toBeNull();
   });
 
