@@ -138,31 +138,52 @@ function stopProbe(
   let activeTimer: ReturnType<typeof setTimeout> | undefined;
   let cancelled = false;
   let fallbackStarted = false;
-  const clearActive = () => {
-    if (activeTimer) { clearTimeout(activeTimer); activeTimer = undefined; }
-    activeKiller = undefined;
+  const clearActiveFor = (
+    killer: ReturnType<typeof spawn>,
+    timer: ReturnType<typeof setTimeout> | undefined,
+  ) => {
+    if (timer) clearTimeout(timer);
+    if (activeTimer === timer) activeTimer = undefined;
+    if (activeKiller === killer) activeKiller = undefined;
   };
   state.cancelAsync = () => {
     cancelled = true;
     if (activeTimer) { clearTimeout(activeTimer); activeTimer = undefined; }
     if (activeKiller) { try { activeKiller.kill("SIGKILL"); } catch { /* best effort */ } activeKiller = undefined; }
   };
-  const finish = () => { clearActive(); state.cancelAsync = undefined; state.done = true; };
+  const finish = () => {
+    if (activeTimer) { clearTimeout(activeTimer); activeTimer = undefined; }
+    activeKiller = undefined;
+    state.cancelAsync = undefined;
+    state.done = true;
+  };
   const fallbackTreeKill = () => {
     if (cancelled || fallbackStarted) return;
     fallbackStarted = true;
     try {
       const ps = (deps.resolvePowerShell ?? resolveTrustedWindowsPowerShellExe)();
       const psKill = spawnKill(ps, windowsPowerShellTreeKillArgs(pid), { stdio: "ignore", windowsHide: true });
+      let psHandled = false;
       activeKiller = psKill;
-      activeTimer = setTimeout(() => {
+      const psTimer = setTimeout(() => {
+        if (cancelled || psHandled) return;
+        psHandled = true;
+        clearActiveFor(psKill, psTimer);
         try { psKill.kill("SIGKILL"); } catch { /* best effort */ }
         killChild();
         finish();
       }, killDeadlineMs);
-      activeTimer.unref();
-      psKill.once("exit", () => { if (!cancelled) { killChild(); finish(); } });
-      psKill.once("error", () => { if (!cancelled) { killChild(); finish(); } });
+      activeTimer = psTimer;
+      psTimer.unref();
+      const completePs = () => {
+        if (cancelled || psHandled) return;
+        psHandled = true;
+        clearActiveFor(psKill, psTimer);
+        killChild();
+        finish();
+      };
+      psKill.once("exit", completePs);
+      psKill.once("error", completePs);
       psKill.unref();
     } catch {
       killChild();
@@ -173,19 +194,30 @@ function stopProbe(
   try {
     const taskkill = (deps.resolveTaskkill ?? resolveTrustedWindowsTaskkillExe)();
     const kill = spawnKill(taskkill, ["/F", "/T", "/PID", String(pid)], { stdio: "ignore", windowsHide: true });
+    let taskkillHandled = false;
     activeKiller = kill;
-    activeTimer = setTimeout(() => {
+    const taskkillTimer = setTimeout(() => {
+      if (cancelled || taskkillHandled) return;
+      taskkillHandled = true;
+      clearActiveFor(kill, taskkillTimer);
       try { kill.kill("SIGKILL"); } catch { /* best effort */ }
       fallbackTreeKill();
     }, killDeadlineMs);
-    activeTimer.unref();
+    activeTimer = taskkillTimer;
+    taskkillTimer.unref();
     kill.once("exit", code => {
-      if (cancelled) return;
-      clearActive();
+      if (cancelled || taskkillHandled) return;
+      taskkillHandled = true;
+      clearActiveFor(kill, taskkillTimer);
       if (code === 0) finish();
       else fallbackTreeKill();
     });
-    kill.once("error", () => { if (!cancelled) { clearActive(); fallbackTreeKill(); } });
+    kill.once("error", () => {
+      if (cancelled || taskkillHandled) return;
+      taskkillHandled = true;
+      clearActiveFor(kill, taskkillTimer);
+      fallbackTreeKill();
+    });
     kill.unref();
   } catch {
     fallbackTreeKill();
@@ -207,14 +239,13 @@ export function startForegroundAdvisory(
   } catch { return () => {}; }
 
   let settled = false;
-  let closed = false;
   let bytes = 0;
   const chunks: Buffer[] = [];
   const killerState: ProbeKillerState = { done: false };
   const stop: StopForegroundAdvisory = (sync = false) => {
     settled = true;
     clearTimeout(timer);
-    if (!closed) stopProbe(child, deps, killerState, sync);
+    if (!killerState.done) stopProbe(child, deps, killerState, sync);
     child.stdout?.destroy();
   };
   const timer = setTimeout(() => stop(false), timeoutMs);
@@ -227,11 +258,9 @@ export function startForegroundAdvisory(
     if (!settled) chunks.push(chunk);
   });
   child.once("close", (code) => {
-    closed = true;
-    killerState.cancelAsync?.();
-    killerState.done = true;
     if (settled) return;
     settled = true;
+    killerState.done = true;
     clearTimeout(timer);
     if (code !== 0 || performance.now() >= expires) return;
     try {

@@ -374,6 +374,98 @@ describe("Windows failing-taskkill fallback terminates pending descendants", () 
       await removeTreeAfterBackgroundWork(dir);
     }
   }, 15_000);
+
+  test("Windows stdout close after exited root does not cancel async tree cleanup or block sync retry", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-advisory-win-exited-root-"));
+    const descendantPidFile = join(dir, "descendant.pid");
+    let child!: ChildProcess;
+    let descendantPid = 0;
+    let taskkillSignal: NodeJS.Signals | null = null;
+    const syncCalls: string[] = [];
+    const cancel = startForegroundAdvisory(() => {}, {
+      platform: "win32",
+      timeoutMs: 180,
+      killDeadlineMs: 2_000,
+      resolveTaskkill: () => "C:\\Windows\\System32\\taskkill.exe",
+      resolvePowerShell: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      spawnKill: (() => {
+        const killer = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: "ignore", windowsHide: true });
+        killer.once("exit", (_code, signal) => { taskkillSignal = signal; });
+        return killer;
+      }) as typeof spawn,
+      execKillSync: ((cmd: string) => {
+        syncCalls.push(cmd.toLowerCase());
+        if (cmd.toLowerCase().includes("taskkill")) throw new Error("taskkill failed");
+        if (process.platform !== "win32") {
+          try { process.kill(-child.pid!, "SIGKILL"); } catch {}
+        }
+        return Buffer.from("");
+      }) as typeof import("node:child_process").execFileSync,
+      launch: () => {
+        const script = [
+          'const { spawn } = require("node:child_process");',
+          'const { writeFileSync } = require("node:fs");',
+          'const d = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: ["ignore", 1, "ignore"], windowsHide: true });',
+          `writeFileSync(${JSON.stringify(descendantPidFile)}, String(d.pid));`,
+          'process.stdout.write("root-exiting\\n", () => process.exit(0));',
+        ].join(" ");
+        return (child = fakeProbe(script));
+      },
+    });
+    try {
+      await once(child, "exit");
+      descendantPid = Number(readFileSync(descendantPidFile, "utf8").trim());
+      expect(descendantPid).toBeGreaterThan(0);
+      // Timeout starts async taskkill and destroys stdout, causing child "close" immediately.
+      await once(child, "close");
+      await Bun.sleep(60);
+      // "close" must NOT have cancelled the in-flight async taskkill or marked cleanup done.
+      expect(taskkillSignal).toBeNull();
+      // A subsequent synchronous exit cleanup must still cancel async taskkill and reap the descendant.
+      cancel(true);
+      expect(await waitUntilDead(descendantPid)).toBe(true);
+      expect(syncCalls).toEqual([expect.stringContaining("taskkill"), expect.stringContaining("powershell")]);
+    } finally {
+      cancel(true);
+      if (descendantPid > 0) { try { process.kill(descendantPid, "SIGKILL"); } catch {} }
+      await removeTreeAfterBackgroundWork(dir);
+    }
+  }, 15_000);
+
+  test("late taskkill exit after timeout does not clear the PowerShell fallback deadline", async () => {
+    let child!: ChildProcess;
+    let taskkillExited = false;
+    let psKill!: ChildProcess;
+    let psExited = false;
+    const cancel = startForegroundAdvisory(() => {}, {
+      platform: "win32",
+      timeoutMs: 80,
+      killDeadlineMs: 120,
+      resolveTaskkill: () => "C:\\Windows\\System32\\taskkill.exe",
+      resolvePowerShell: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      spawnKill: ((cmd: string) => {
+        if (cmd.toLowerCase().includes("taskkill")) {
+          const hungTaskkill = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: "ignore", windowsHide: true });
+          hungTaskkill.once("exit", () => { taskkillExited = true; });
+          return hungTaskkill;
+        }
+        psKill = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: "ignore", windowsHide: true });
+        psKill.once("exit", () => { psExited = true; });
+        return psKill;
+      }) as typeof spawn,
+      launch: () => (child = fakeProbe("setInterval(() => {}, 60000)")),
+    });
+    try {
+      await once(child, "close");
+      expect(taskkillExited).toBe(true);
+      expect(psKill).toBeDefined();
+      expect(await waitUntilDead(psKill.pid!)).toBe(true);
+      expect(psExited).toBe(true);
+    } finally {
+      cancel(true);
+      if (psKill?.pid) { try { process.kill(psKill.pid, "SIGKILL"); } catch {} }
+    }
+  }, 15_000);
 });
 
 function fakeProbe(body: string) {
