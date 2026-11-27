@@ -219,6 +219,8 @@ describe("agy acp turn", () => {
     ["gemini-3.8-flash", "GPT-5", "gemini-3.8-flash", false],
     ["gpt-5", "Gemini 3.8 Flash", "gemini-3.8-flash", false],
     ["openai/gpt-4o", "Claude Opus 5.5", "claude-opus-5-5", false],
+    ["gemini-a/claude-x", "Gemini A", "gemini-a", false],
+    ["provider/gpt-5/claude-x", "Claude X", "claude-x", false],
     ["gemini-3.8-flash", "Claude Opus 5.5", "claude-opus-5-5", false],
     ["claude-opus-5-5", "Gemini 3.8 Flash", "claude-opus-5-5", false],
     ["claude-opus-5-5", "Claude Opus 5.5", "claude-opus-5-5", true],
@@ -984,7 +986,7 @@ describe("agy acp turn", () => {
     expect(methods(missing)).not.toContain("session/prompt");
   });
 
-  test("the CLI's non-Gemini default is never used", async () => {
+  test("the CLI's default is never used when another model is requested", async () => {
     const h = await run(script(undefined, { initial: [modelOption("claude-opus-5-5", OFFERED)] }));
     // The requested Gemini model is selected instead, then proved.
     expect(h.sent[2]!.params.value).toBe("gemini-3.8-flash");
@@ -1009,7 +1011,7 @@ describe("agy acp turn", () => {
     for (const h of [unknown, none]) expect(methods(h)).not.toContain("session/prompt");
   });
 
-  test("a mid-turn switch to a non-Gemini model, or a removed selector, cancels the turn", async () => {
+  test("a mid-turn switch to a different model, or a removed selector, cancels the turn", async () => {
     for (const replacement of [[modelOption("claude-opus-5-5", OFFERED)], [thoughtOption("high")]]) {
       const h = await run(script((frame, api) => {
         if (frame.method !== "session/prompt") return;

@@ -42,7 +42,7 @@ describe("frames", () => {
   });
 });
 
-describe("config options and the Gemini proof", () => {
+describe("config options and the Gemini/Claude proof", () => {
   const state = (current: string, values: string[]) => parseConfigOptions([{ id: "model", name: "Model", category: "model", type: "select", currentValue: current, options: values.map(value => ({ value, name: value })) }])!;
 
   test("matching is exact first, then normalized value or name; ambiguity is refused", () => {
@@ -54,13 +54,15 @@ describe("config options and the Gemini proof", () => {
   });
 
   test("phase-aware proof", () => {
-    const s = state("gemini-a", ["gemini-a", "gemini-b", "claude-x"]);
-    // initial: the requested option need not be current yet.
+    const s = state("gemini-a", ["gemini-a", "gemini-b", "claude-x", "gpt-x"]);
+    // initial: the requested option need not be current yet; Gemini and Claude are allowed, others rejected.
     expect(proveModel(s, "initial", "gemini-b")).toMatchObject({ ok: true, target: { value: "gemini-b" } });
-    expect(proveModel(s, "initial", "claude-x")).toEqual({ ok: false, reason: "requested_not_offered" });
-    // selected: the current value must be the requested target.
+    expect(proveModel(s, "initial", "claude-x")).toMatchObject({ ok: true, target: { value: "claude-x" } });
+    expect(proveModel(s, "initial", "gpt-x")).toEqual({ ok: false, reason: "requested_not_offered" });
+    // selected: the current value must be the requested target (or an allowed family when unrequested).
     expect(proveModel(s, "selected", "gemini-b")).toEqual({ ok: false, reason: "not_requested" });
-    expect(proveModel(state("claude-x", ["gemini-a", "claude-x"]), "selected", undefined)).toEqual({ ok: false, reason: "not_gemini" });
+    expect(proveModel(state("claude-x", ["gemini-a", "claude-x"]), "selected", undefined)).toMatchObject({ ok: true, target: { value: "claude-x" } });
+    expect(proveModel(state("gpt-x", ["gemini-a", "gpt-x"]), "selected", undefined)).toEqual({ ok: false, reason: "not_gemini" });
     expect(proveModel(state("??", ["gemini-a"]), "pending", "gemini-a")).toEqual({ ok: false, reason: "unknown_current" });
     expect(proveModel([], "selected", "gemini-a")).toEqual({ ok: false, reason: "no_selector" });
   });

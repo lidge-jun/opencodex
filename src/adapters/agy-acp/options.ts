@@ -1,5 +1,5 @@
 /**
- * ACP session config options for `agy acp`: model and thought-level selection, and the Gemini-only
+ * ACP session config options for `agy acp`: model and thought-level selection, and the Gemini/Claude
  * model proof (plan 080, revision 4).
  *
  * Config options arrive as a complete state on session/new, on every session/set_config_option reply
@@ -103,12 +103,19 @@ const NON_ALLOWED_MODEL = /^(?:gpt|o[134]|grok|deepseek|qwen|llama|gemma|mistral
 type ModelFamily = "gemini" | "claude" | "other" | null;
 
 function classifyModelFamily(raw: string): ModelFamily {
-  const field = raw.trim();
-  const tail = field.includes("/") ? field.slice(field.lastIndexOf("/") + 1).trim() : field;
-  if (NON_ALLOWED_MODEL.test(field) || NON_ALLOWED_MODEL.test(tail)) return "other";
-  if (GEMINI_MODEL.test(field) || GEMINI_MODEL.test(tail)) return "gemini";
-  if (CLAUDE_MODEL.test(field) || CLAUDE_MODEL.test(tail)) return "claude";
-  return null;
+  const segments = raw.split("/").map(segment => segment.trim()).filter(Boolean);
+  let allowed: "gemini" | "claude" | null = null;
+  for (const segment of segments) {
+    if (NON_ALLOWED_MODEL.test(segment)) return "other";
+    const hit: "gemini" | "claude" | null = GEMINI_MODEL.test(segment)
+      ? "gemini"
+      : CLAUDE_MODEL.test(segment) ? "claude" : null;
+    if (hit) {
+      if (allowed && allowed !== hit) return "other";
+      allowed = hit;
+    }
+  }
+  return allowed;
 }
 
 /** Either field can establish an allowed family (Gemini or Claude), unless the other contradicts it. */
@@ -148,13 +155,13 @@ export type ModelProof =
   | { ok: false; reason: "no_selector" | "ambiguous_selector" | "unknown_current" | "not_gemini" | "requested_not_offered" | "requested_ambiguous" | "not_requested" };
 
 /**
- * Phase-aware Gemini proof (plan 080 R3-1).
+ * Phase-aware Gemini/Claude model proof (plan 080 R3-1).
  * - initial (after session/new): one selector with a resolvable current value; the requested model
- *   matches exactly one advertised Gemini option (the current value may still differ); without a
- *   request the current value itself must be Gemini.
+ *   matches exactly one advertised Gemini or Claude option (the current value may still differ); without a
+ *   request the current value itself must be Gemini or Claude.
  * - pending (a model setter is outstanding): the selector exists and its current value resolves.
  * - selected (after the setter, before and during the prompt): the current value is the requested
- *   option (or, without a request, a Gemini option).
+ *   option (or, without a request, a Gemini or Claude option).
  */
 export function proveModel(state: readonly AcpConfigOption[], phase: ModelPhase, requested: string | undefined): ModelProof {
   const found = findSelector(state, "model");

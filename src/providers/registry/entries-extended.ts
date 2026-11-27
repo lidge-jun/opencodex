@@ -1960,6 +1960,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       "gemini-4-carbon": 1_048_576,
       "gemini-4-argon": 1_048_576,
       "gemini-4-hydrogen": 1_048_576,
+      "gemini-3.7-flash": 1_048_576,
       "gemini-pro-orchestrator-neon": 1_048_576,
       "gemini-pro-orchestrator": 1_048_576,
       "gemini-pro-orchestrator-argon": 1_048_576,

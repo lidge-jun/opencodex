@@ -6,6 +6,7 @@ export const AGY_ACP_SEED_MODELS = [
   "gemini-4-carbon",
   "gemini-4-argon",
   "gemini-4-hydrogen",
+  "gemini-3.7-flash",
   "gemini-pro-orchestrator-neon",
   "gemini-pro-orchestrator",
   "gemini-pro-orchestrator-argon",
