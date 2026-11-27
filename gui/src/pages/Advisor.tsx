@@ -96,7 +96,6 @@ export function AdvisorEditor({
     setSavedFlash(false);
     setSaving(true);
     setSaveError("");
-    setMcpSyncErrors([]);
     const submitted = draft;
     try {
       const response = await fetch(`${apiBase}/api/advisor/settings`, {
@@ -128,10 +127,9 @@ export function AdvisorEditor({
       // Edits made while the PUT was in flight stay in the draft: only overwrite the draft
       // when the user has not touched it since this save started.
       setDraft(current => (JSON.stringify(current) === JSON.stringify(submitted) ? body.settings : current));
-      const syncErrors = Array.isArray(body.mcpSync?.errors) ? body.mcpSync.errors : [];
-      if (syncErrors.length > 0) {
-        setMcpSyncErrors(syncErrors);
-      } else {
+      const syncErrors = Array.isArray(body.mcpSync?.errors) ? body.mcpSync.errors : null;
+      if (syncErrors !== null) setMcpSyncErrors(syncErrors);
+      if (syncErrors?.length === 0 || (syncErrors === null && mcpSyncErrors.length === 0)) {
         setSavedFlash(true);
         savedFlashTimerRef.current = setTimeout(() => {
           savedFlashTimerRef.current = null;
@@ -143,14 +141,11 @@ export function AdvisorEditor({
     } finally {
       setSaving(false);
     }
-  }, [apiBase, draft]);
+  }, [apiBase, draft, mcpSyncErrors.length]);
 
-  // Every field edit invalidates the previous failure notice: it describes the state that was
-  // submitted, and it must not outlive the field the operator is now correcting. A revert to the
-  // saved value would otherwise leave the notice with no way to clear at all.
+  // Reconciliation errors remain actionable until a successful save confirms they are cleared.
   const edit = useCallback((patch: Partial<AdvisorSettings>) => {
     setSaveError("");
-    setMcpSyncErrors([]);
     setDraft(current => ({ ...current, ...patch }));
   }, []);
 

@@ -392,6 +392,7 @@ test("partial MCP sync error on HTTP 200 save shows warning with retry without n
     const url = typeof input === "string" ? input : input.toString();
     if (url.endsWith("/api/advisor/settings") && init?.method === "PUT") {
       putCalls += 1;
+      if (putCalls === 2) return new Response(null, { status: 503 });
       return new Response(
         JSON.stringify({
           settings: { ...initialSettings, model: "expert/gpt-first" },
@@ -441,6 +442,10 @@ test("partial MCP sync error on HTTP 200 save shows warning with retry without n
   await act(async () => { retryBtn!.click(); });
 
   expect(putCalls).toBe(2);
+  const retryAfterFailure = [...container.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === "Retry");
+  expect(retryAfterFailure).toBeDefined();
+  await act(async () => { retryAfterFailure!.click(); });
+  expect(putCalls).toBe(3);
   expect(container.querySelector(".notice-ok")?.textContent).toContain("Advisor settings saved.");
   await act(async () => root.unmount());
 });
