@@ -484,6 +484,87 @@ describe("Windows failing-taskkill fallback terminates pending descendants", () 
       if (psKill?.pid) { try { process.kill(psKill.pid, "SIGKILL"); } catch {} }
     }
   }, 15_000);
+
+  test("root exiting while async taskkill is pending switches PowerShell fallback to exited-root mode", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-advisory-exit-during-taskkill-"));
+    const descendantPidFile = join(dir, "descendant.pid");
+    let child!: ChildProcess;
+    let descendantPid = 0;
+    const psScripts: string[] = [];
+    const beforeLaunchMs = Date.now();
+    const cancel = startForegroundAdvisory(() => {}, {
+      platform: "win32",
+      timeoutMs: 10_000,
+      killDeadlineMs: 2_000,
+      resolveTaskkill: () => "C:\\Windows\\System32\\taskkill.exe",
+      resolvePowerShell: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      spawnKill: ((cmd: string, args: readonly string[]) => {
+        if (cmd.toLowerCase().includes("taskkill")) {
+          // Simulate the probe root exiting while taskkill is still pending, then taskkill failing.
+          const slowFail = spawn(process.execPath, ["-e", "setTimeout(() => process.exit(1), 120)"], {
+            stdio: "ignore",
+            windowsHide: true,
+          });
+          try { child.kill("SIGKILL"); } catch {}
+          return slowFail;
+        }
+        psScripts.push(args[4] ?? "");
+        if (process.platform === "win32") {
+          return spawn(cmd, args, { stdio: "ignore", windowsHide: true });
+        }
+        return spawn(process.execPath, ["-e", `try { process.kill(-${child.pid!}, "SIGKILL"); } catch {}`], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+      }) as typeof spawn,
+      launch: () => {
+        const script = [
+          'const { spawn } = require("node:child_process");',
+          'const { writeFileSync } = require("node:fs");',
+          'const d = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: ["ignore", 1, "ignore"], windowsHide: true });',
+          `writeFileSync(${JSON.stringify(descendantPidFile)}, String(d.pid));`,
+          'console.log("ready");',
+          "setInterval(() => {}, 60000);",
+        ].join(" ");
+        return (child = fakeProbe(script));
+      },
+    });
+    try {
+      await once(child.stdout!, "data");
+      descendantPid = Number(readFileSync(descendantPidFile, "utf8").trim());
+      expect(descendantPid).toBeGreaterThan(0);
+      // Root is still alive here, so stop(false) starts taskkill; root then exits before taskkill fails.
+      cancel(false);
+      await once(child, "close");
+      expect(await waitUntilDead(descendantPid)).toBe(true);
+      expect(psScripts).toHaveLength(1);
+      // Fallback MUST have re-evaluated rootExited lazily and refused to enqueue $root.
+      expect(psScripts[0]).not.toContain("$queue.Enqueue($root)");
+      expect(psScripts[0]).toContain("$c -le $maxChildCreated");
+      expect(psScripts[0]).toContain("$c -lt $rootCreated");
+      // $minCreated must never reach backward before probe launch.
+      const minMatch = psScripts[0]!.match(/\$minCreated = \[DateTimeOffset\]::Parse\('([^']+)'\)/);
+      expect(minMatch).not.toBeNull();
+      expect(Date.parse(minMatch![1]!)).toBeGreaterThanOrEqual(beforeLaunchMs);
+    } finally {
+      cancel(true);
+      if (descendantPid > 0) { try { process.kill(descendantPid, "SIGKILL"); } catch {} }
+      await removeTreeAfterBackgroundWork(dir);
+    }
+  }, 15_000);
+
+  test("windowsPowerShellTreeKillArgs pins exact creation window and command-line marker when available", () => {
+    const exactCreated = 1_760_000_000_500;
+    const args = windowsPowerShellTreeKillArgs(4242, {
+      launchedAtMs: exactCreated - 10,
+      rootCreatedAtMs: exactCreated,
+      advisoryMarker: "12345678-1234-1234-1234-123456789abc",
+    });
+    const script = args[4]!;
+    expect(script).toContain("$rootProc.CommandLine.Contains('12345678-1234-1234-1234-123456789abc')");
+    expect(script).toContain(`$minCreated = [DateTimeOffset]::Parse('${new Date(exactCreated).toISOString()}').UtcDateTime`);
+    expect(script).toContain(`$maxRootCreated = [DateTimeOffset]::Parse('${new Date(exactCreated + 1).toISOString()}').UtcDateTime`);
+  });
 });
 
 function fakeProbe(body: string) {

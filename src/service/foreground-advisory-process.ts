@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsTaskkillExe } from "../lib/windows-elevation";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { windowsProcessNative } from "./windows-process-native";
@@ -71,26 +72,33 @@ export interface WindowsTreeKillIdentity {
   rootCreatedAtMs?: number | null;
   /** Non-null when the probe root has already exited before cleanup started. */
   rootExitedAtMs?: number | null;
+  /** Per-invocation non-secret command-line marker emitted by the default launcher. */
+  advisoryMarker?: string;
 }
 
 export function windowsPowerShellTreeKillArgs(pid: number, identity?: WindowsTreeKillIdentity): string[] {
   const safePid = Math.trunc(pid);
   const rootExited = identity?.rootExitedAtMs != null;
-  const minCreatedIso = identity
-    ? new Date(Math.max(0, (identity.rootCreatedAtMs ?? identity.launchedAtMs) - 2_000)).toISOString()
+  const safeMarker = identity?.advisoryMarker && /^[0-9a-f-]+$/i.test(identity.advisoryMarker)
+    ? identity.advisoryMarker
     : null;
+  // Never widen backward before the parent's creation/launch time: a child cannot exist
+  // before its parent started, and GetProcessTimes/CIM share the Windows system clock.
+  const minCreatedIso = identity
+    ? new Date(Math.max(0, identity.rootCreatedAtMs ?? identity.launchedAtMs)).toISOString()
+    : null;
+  // Exact 1 ms tolerance when GetProcessTimes captured the kernel creation time; otherwise
+  // rely on advisoryMarker + bounded launch window.
   const maxRootCreatedIso = identity?.rootCreatedAtMs != null
-    ? new Date(identity.rootCreatedAtMs + 2_000).toISOString()
+    ? new Date(identity.rootCreatedAtMs + 1).toISOString()
     : identity
-      ? new Date(identity.launchedAtMs + 10_000).toISOString()
+      ? new Date(identity.launchedAtMs + 5_000).toISOString()
       : null;
   const maxChildCreatedIso = identity?.rootExitedAtMs != null
-    ? new Date(identity.rootExitedAtMs + 2_000).toISOString()
+    ? new Date(identity.rootExitedAtMs).toISOString()
     : null;
 
-  const childPredicates = [
-    "[int]$p.ParentProcessId -eq $root",
-    "$p.CreationDate",
+  const childChecks = [
     ...(minCreatedIso ? ["$c -ge $minCreated"] : []),
     ...(maxChildCreatedIso ? ["$c -le $maxChildCreated"] : []),
     "(-not $rootCreated -or $c -lt $rootCreated)",
@@ -99,7 +107,7 @@ export function windowsPowerShellTreeKillArgs(pid: number, identity?: WindowsTre
     "foreach ($p in $procs) {",
     "if ([int]$p.ParentProcessId -eq $root -and $p.CreationDate) {",
     "$c = ([DateTime]$p.CreationDate).ToUniversalTime();",
-    `if (${childPredicates.slice(2).join(" -and ")} -and $seen.Add([int]$p.ProcessId)) { $queue.Enqueue([int]$p.ProcessId) }`,
+    `if (${childChecks.join(" -and ")} -and $seen.Add([int]$p.ProcessId)) { $queue.Enqueue([int]$p.ProcessId) }`,
     "}",
     "}",
   ].join(" ");
@@ -124,6 +132,7 @@ export function windowsPowerShellTreeKillArgs(pid: number, identity?: WindowsTre
     const rootChecks = [
       "$rootProc -ne $null",
       "$rootCreated -ne $null",
+      ...(safeMarker ? [`$rootProc.CommandLine -and $rootProc.CommandLine.Contains('${safeMarker}')`] : []),
       ...(minCreatedIso ? ["$rootCreated -ge $minCreated"] : []),
       ...(maxRootCreatedIso ? ["$rootCreated -le $maxRootCreated"] : []),
     ].join(" -and ");
@@ -142,6 +151,7 @@ interface ProbeKillerState {
   launchedAtMs: number;
   rootCreatedAtMs: number | null;
   rootExitedAtMs: number | null;
+  advisoryMarker?: string;
   cancelAsync?: () => void;
 }
 
@@ -169,12 +179,18 @@ function stopProbe(
     return;
   }
   const killDeadlineMs = deps.killDeadlineMs ?? KILL_DEADLINE_MS;
-  const rootExited = child.exitCode !== null || child.signalCode !== null || state.rootExitedAtMs !== null;
-  const psArgs = windowsPowerShellTreeKillArgs(pid, {
-    launchedAtMs: state.launchedAtMs,
-    rootCreatedAtMs: state.rootCreatedAtMs,
-    rootExitedAtMs: rootExited ? (state.rootExitedAtMs ?? Date.now()) : null,
-  });
+  const isRootExited = () => child.exitCode !== null || child.signalCode !== null || state.rootExitedAtMs !== null;
+  // Evaluate rootExited lazily right before PowerShell runs, so a root exit occurring while
+  // taskkill is pending switches fallback to the exited-root branch rather than targeting $root.
+  const buildPsArgs = () => {
+    const exited = isRootExited();
+    return windowsPowerShellTreeKillArgs(pid, {
+      launchedAtMs: state.launchedAtMs,
+      rootCreatedAtMs: state.rootCreatedAtMs,
+      rootExitedAtMs: exited ? (state.rootExitedAtMs ?? Date.now()) : null,
+      advisoryMarker: state.advisoryMarker,
+    });
+  };
   if (sync) {
     state.cancelAsync?.();
     state.cancelAsync = undefined;
@@ -183,7 +199,7 @@ function stopProbe(
     const syncOpts = { stdio: "ignore" as const, windowsHide: true, timeout: killDeadlineMs };
     let taskkillOk = false;
     // Never invoke bare-PID taskkill after the probe root has exited: Windows can reuse the PID.
-    if (!rootExited) {
+    if (!isRootExited()) {
       try {
         const taskkill = (deps.resolveTaskkill ?? resolveTrustedWindowsTaskkillExe)();
         execSync(taskkill, ["/F", "/T", "/PID", String(pid)], syncOpts);
@@ -193,7 +209,7 @@ function stopProbe(
     if (!taskkillOk) {
       try {
         const ps = (deps.resolvePowerShell ?? resolveTrustedWindowsPowerShellExe)();
-        execSync(ps, psArgs, syncOpts);
+        execSync(ps, buildPsArgs(), syncOpts);
       } catch { /* fall back to child kill */ }
     }
     killChild();
@@ -229,7 +245,7 @@ function stopProbe(
     fallbackStarted = true;
     try {
       const ps = (deps.resolvePowerShell ?? resolveTrustedWindowsPowerShellExe)();
-      const psKill = spawnKill(ps, psArgs, { stdio: "ignore", windowsHide: true });
+      const psKill = spawnKill(ps, buildPsArgs(), { stdio: "ignore", windowsHide: true });
       let psHandled = false;
       activeKiller = psKill;
       const psTimer = setTimeout(() => {
@@ -257,7 +273,7 @@ function stopProbe(
       finish();
     }
   };
-  if (rootExited) {
+  if (isRootExited()) {
     // Root already exited: skip bare-PID taskkill and use incarnation-checked child cleanup.
     fallbackTreeKill();
     return;
@@ -304,9 +320,10 @@ export function startForegroundAdvisory(
   const timeoutMs = deps.timeoutMs ?? TIMEOUT_MS;
   const expires = performance.now() + timeoutMs;
   const launchedAtMs = Date.now();
+  const advisoryMarker = deps.launch ? undefined : randomUUID();
   let child: ReturnType<typeof spawn>;
   try {
-    child = (deps.launch ?? (() => spawn(process.execPath, selfLaunchArgv([FOREGROUND_ADVISORY_ARG]), {
+    child = (deps.launch ?? (() => spawn(process.execPath, selfLaunchArgv([FOREGROUND_ADVISORY_ARG, advisoryMarker!]), {
       detached: process.platform !== "win32", stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
     })))();
   } catch { return () => {}; }
@@ -317,7 +334,7 @@ export function startForegroundAdvisory(
   let settled = false;
   let bytes = 0;
   const chunks: Buffer[] = [];
-  const killerState: ProbeKillerState = { done: false, launchedAtMs, rootCreatedAtMs, rootExitedAtMs: null };
+  const killerState: ProbeKillerState = { done: false, launchedAtMs, rootCreatedAtMs, rootExitedAtMs: null, advisoryMarker };
   child.once("exit", () => { killerState.rootExitedAtMs ??= Date.now(); });
   const stop: StopForegroundAdvisory = (sync = false) => {
     settled = true;
