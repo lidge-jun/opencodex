@@ -923,8 +923,9 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
 - **Refresh models:** In the provider settings, enable **Discover models from provider** and click
   **Discover now**, or run `ocx provider edit antigravity-acp --live-models on` followed by
   `ocx models discover antigravity-acp`. OpenCodex opens a sandboxed ACP session using the selected
-  login and reads its advertised Gemini model IDs before sending a prompt. A successful manual refresh
-  also syncs the Codex catalog. An unsuccessful discovery falls back to the last successful list for
+  login and selects each advertised Gemini model to read its thinking levels, without sending a prompt.
+  The refresh saves those choices and the CLI's selected level for each visible model in the Codex catalog.
+  Models without a thinking-level selector have no effort choices. An unsuccessful discovery falls back to the last successful list for
   that login or the configured seed. The model selection and new-model visibility settings still apply.
 - **Manual account selection (macOS and Linux, agy 1.5.18+):** On the machine that runs the proxy, use
   `ocx account agy add personal` and `ocx account agy add work`. Complete Google's terminal sign-in

@@ -347,10 +347,10 @@ async function fetchProviderModelsUncached(
     if (fresh) return observed(project(fresh), "authoritative");
     if (!isModelsFetchCoolingDown(name, undefined, undefined, authority)) {
       const { discoverAgyModels } = await import("../../adapters/agy-acp/live-models");
-      const ids = await discoverAgyModels(metadataConfigDir, selection);
+      const discovered = await discoverAgyModels(metadataConfigDir, selection);
       if (agyCatalogSelection(metadataConfigDir)?.authority !== authority) return observed(configured, "degraded", false);
-      if (ids.length) {
-        const rows = ids.map(id => ({ id, provider: name }));
+      if (discovered.length) {
+        const rows = discovered.map(model => ({ ...model, provider: name }));
         if (!publishCache(rows, authority)) return supersededSuccess(project(rows));
         markProviderDiscoveryOk(name, rows.length);
         return observed(project(rows), "authoritative");

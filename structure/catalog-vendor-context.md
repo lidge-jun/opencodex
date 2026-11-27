@@ -79,3 +79,5 @@ near-limit generation test for every model or account. The [official API model t
 also lists 500k context tokens for 4.5, 4.6 and 4.7 (checked 2026-10-26), independently of subscription entitlement.
 No equivalent 4.5/4.6 boundary probe is recorded here. Effort and Fast/Flex policy projection remain
 independent of context parsing; xAI rows retain `supportsFlexTier: false` unless explicitly eligible.
+
+The ACP model selector supplies an exact per-model reasoning ladder and selected level. Provider-wide seeds do not widen it. Model-specific settings and custom rows can narrow it. A retained Codex row keeps its exact ladder across rebuilds.

@@ -965,7 +965,8 @@ export function mergeCatalogEntriesFromObservedState({
     // without persisted provenance, only a healthy provider rebuild can distinguish and remove
     // an older synthetic rung from a real provider-declared rung. max only: 5.6 exact ladders
     // (luna: no ultra) stay intact.
-    if (!freshCustomEntries.has(m) && !exactCombo && !reserveProjection && !String(e.slug ?? "").startsWith("opencode-go/")) {
+    if (!freshCustomEntries.has(m) && !exactCombo && !reserveProjection && e.opencodex_acp_thought_levels !== true
+      && !String(e.slug ?? "").startsWith("opencode-go/")) {
       const levels = Array.isArray(e.supported_reasoning_levels)
         ? e.supported_reasoning_levels as Array<Partial<CodexReasoningLevel>>
         : [];

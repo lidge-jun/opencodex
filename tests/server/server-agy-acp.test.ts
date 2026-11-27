@@ -113,12 +113,18 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
     const { fetchProviderModels } = await import("../../src/codex/catalog/provider-models");
     const { clearModelCache, expireModelCache } = await import("../../src/codex/model-cache");
     const name = "antigravity-acp";
-    const prov = { ...config().providers[name]!, liveModels: true, models: ["gemini-stale"] };
+    const prov = { ...config().providers[name]!, liveModels: true, models: ["gemini-stale"], reasoningEfforts: ["medium", "max"] };
     saveConfig(config());
     clearModelCache(name);
     try {
       const list = async () => (await fetchProviderModels(name, prov, 60_000)).map(row => row.id);
       expect(await list()).toEqual(["gemini-3.8-flash", "gemini-4-argon"]);
+      const { deriveEntry } = await import("../../src/codex/catalog/derive-entry");
+      const rows = await fetchProviderModels(name, prov, 60_000);
+      const picker = rows.map(row => deriveEntry(null, name + "/" + row.id, "", 1, row));
+      expect(picker.map(row => row.supported_reasoning_levels.map((level: { effort: string }) => level.effort)))
+        .toEqual([["low", "xhigh"], []]);
+      expect(picker.map(row => row.default_reasoning_level)).toEqual(["xhigh", undefined]);
       const initial = recordedLaunches().length;
       expect(await list()).toEqual(["gemini-3.8-flash", "gemini-4-argon"]);
       expect(recordedLaunches()).toHaveLength(initial);

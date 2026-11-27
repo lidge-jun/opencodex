@@ -367,6 +367,23 @@ describe("workspace and reaping", () => {
 });
 
 describe("ACP model discovery", () => {
+  test("only distinct routable thought levels survive discovery and per-model overrides", async () => {
+    const { readThoughtLevels, parseConfigOptions, projectThoughtLevels } = await import("../../src/adapters/agy-acp/options");
+    const state = parseConfigOptions([{
+      id: "thinking", category: "thought_level", type: "select", currentValue: "opaque",
+      options: [
+        { value: "low", name: "High" }, { value: "opaque", name: "Extra" },
+        { value: "m1", name: "Medium" }, { value: "m2", name: "Medium" },
+      ],
+    }])!;
+    const observed = readThoughtLevels(state);
+    expect(observed).toEqual({ efforts: ["low", "xhigh"], current: "xhigh" });
+    expect(projectThoughtLevels(observed, ["low", "max"], "low")).toMatchObject({
+      reasoningEfforts: ["low"], defaultReasoningEffort: "low", supportsThinkingToggle: false,
+    });
+    expect(projectThoughtLevels(readThoughtLevels([]))).toMatchObject({ reasoningEfforts: [], supportsReasoningEffort: false });
+  });
+
   test("uses the same model selector as a turn and excludes unsupported, ambiguous and non-routing IDs", async () => {
     const { catalogIds } = await import("../../src/adapters/agy-acp/live-models");
     const option = { id: "model", type: "select", category: "model", currentValue: "gemini-4-neon" };

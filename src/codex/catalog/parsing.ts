@@ -107,6 +107,7 @@ export interface CatalogModel {
    */
   description?: string;
   owned_by?: string;
+  agyThoughtLevels?: import("../../adapters/agy-acp/options").AgyThoughtLevels;
   reasoningEfforts?: string[];
   supportsReasoning?: boolean;
   supportsThinkingToggle?: boolean;

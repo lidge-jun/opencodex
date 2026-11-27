@@ -141,6 +141,12 @@ export const ROUTED_REASONING_LEVELS = [...CODEX_REASONING_LEVELS];
 export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel): void {
   if (!model) return;
   applyClientReasoningCapabilities(entry, model);
+  if (model.agyThoughtLevels) {
+    entry.opencodex_acp_thought_levels = true;
+    if (!model.defaultReasoningEffort) delete entry.default_reasoning_level;
+  } else {
+    delete entry.opencodex_acp_thought_levels;
+  }
   if (model.supportsThinkingToggle === true && model.supportsReasoningEffort === false
     && Array.isArray(entry.supported_reasoning_levels)) {
     entry.supported_reasoning_levels = entry.supported_reasoning_levels.map(level => ({
@@ -460,12 +466,13 @@ export function clampEntryToCodexSupportedEfforts(
     // `catalogEffortCompatibility` below.
     const kept = levels.filter(level => typeof level?.effort === "string"
       && (supported.has(level.effort) || UNCLAMPABLE_REASONING_EFFORTS.has(level.effort)));
-    if (requiresExactReserveEfforts(entry)) {
+    if (requiresExactReserveEfforts(entry) || entry.opencodex_acp_thought_levels === true) {
       entry.supported_reasoning_levels = kept;
       if (kept.length === 0) {
         // The list-level clamp removes this incompatible row; never invent another ladder.
         delete entry.default_reasoning_level;
-      } else if (!kept.some(level => level.effort === entry.default_reasoning_level)) {
+      } else if ((entry.opencodex_acp_thought_levels !== true || typeof entry.default_reasoning_level === "string")
+        && !kept.some(level => level.effort === entry.default_reasoning_level)) {
         entry.default_reasoning_level = clampedDefaultEffort(
           typeof entry.default_reasoning_level === "string" ? entry.default_reasoning_level : "",
           kept.map(level => level.effort!),

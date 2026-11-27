@@ -1,14 +1,15 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { baseScopedEnv } from "../coding-agent/turn";
-import { classifyFrame, initializeFrame, methodNotFoundFrame, permissionCancelledFrame, sessionNewFrame } from "./acp";
+import { classifyFrame, initializeFrame, methodNotFoundFrame, permissionCancelledFrame, sessionNewFrame, setConfigOptionFrame } from "./acp";
 import { probeAgyVersion, readAgyExecutable, resolveAgyBinary } from "./binary";
-import { currentSelection, findSelector, isGeminiValue, matchValue, normalizeLabel, parseConfigOptions } from "./options";
+import { currentSelection, findSelector, isGeminiValue, matchValue, normalizeLabel, parseConfigOptions, proveModel, readThoughtLevels, type AgyThoughtLevels } from "./options";
 import { createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild } from "./process";
 import { launchForProfile } from "./profiles";
 
 const run = promisify(execFile);
-const flights = new Map<string, Promise<string[]>>();
+type DiscoveredModel = { id: string; agyThoughtLevels: AgyThoughtLevels };
+const flights = new Map<string, Promise<DiscoveredModel[]>>();
 
 /** Publish only IDs that the adapter can subsequently request from this selector. */
 export function catalogIds(options: unknown): string[] {
@@ -33,18 +34,21 @@ export function catalogIds(options: unknown): string[] {
   return [...ids];
 }
 
-/** Read session/new and stop before session/prompt. Never accept client tool requests. */
-function readCatalog(child: AgyAcpChild, cwd: string): Promise<string[]> {
+/** Read selectors in one empty session. A failed model acknowledgement invalidates the snapshot. */
+function readCatalog(child: AgyAcpChild, cwd: string): Promise<DiscoveredModel[]> {
   return new Promise(resolve => {
     let expected = 1;
+    let sessionId = "";
+    let ids: string[] = [];
+    const rows: DiscoveredModel[] = [];
     let buffer = "";
     let bytes = 0;
     let done = false;
-    const finish = (ids: string[] = []) => {
+    const finish = (models: DiscoveredModel[] = []) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      resolve(ids);
+      resolve(models);
     };
     const timer = setTimeout(finish, 15_000);
     const send = (frame: object) => child.stdin?.write(JSON.stringify(frame) + "\n");
@@ -72,10 +76,27 @@ function readCatalog(child: AgyAcpChild, cwd: string): Promise<string[]> {
           }
           if (frame.kind !== "response" || frame.id !== expected || frame.error) return finish();
           const result = frame.result as { protocolVersion?: unknown; configOptions?: unknown; sessionId?: unknown } | null;
-          if (expected === 2) return finish(typeof result?.sessionId === "string" ? catalogIds(result.configOptions) : []);
-          if (result?.protocolVersion !== 1) return finish();
-          expected = 2;
-          send(sessionNewFrame(2, cwd));
+          if (expected === 1) {
+            if (result?.protocolVersion !== 1) return finish();
+            send(sessionNewFrame(++expected, cwd));
+            continue;
+          }
+          const state = parseConfigOptions(result?.configOptions);
+          if (!state) return finish();
+          if (expected === 2) {
+            if (typeof result?.sessionId !== "string" || !result.sessionId) return finish();
+            sessionId = result.sessionId;
+            ids = catalogIds(result.configOptions);
+          } else if (!proveModel(state, "selected", ids[rows.length]).ok) {
+            return finish();
+          }
+          const id = ids[rows.length];
+          if (id && proveModel(state, "selected", id).ok) rows.push({ id, agyThoughtLevels: readThoughtLevels(state) });
+          const next = ids[rows.length];
+          if (!next) return finish(rows);
+          const proof = proveModel(state, "initial", next);
+          if (!proof.ok || !proof.target) return finish();
+          send(setConfigOptionFrame(++expected, sessionId, proof.selector.id, proof.target.value));
         } catch { return finish(); }
       }
     });
@@ -83,7 +104,7 @@ function readCatalog(child: AgyAcpChild, cwd: string): Promise<string[]> {
   });
 }
 
-async function probe(configDir: string, name: string): Promise<string[]> {
+async function probe(configDir: string, name: string): Promise<DiscoveredModel[]> {
   const binary = resolveAgyBinary();
   const executable = binary && readAgyExecutable(binary);
   if (!executable) return [];
@@ -106,7 +127,7 @@ async function probe(configDir: string, name: string): Promise<string[]> {
   }
 }
 
-export function discoverAgyModels(configDir: string, selection: { name: string; authority: string }): Promise<string[]> {
+export function discoverAgyModels(configDir: string, selection: { name: string; authority: string }): Promise<DiscoveredModel[]> {
   const { name, authority } = selection;
   const pending = flights.get(authority);
   if (pending) return pending;

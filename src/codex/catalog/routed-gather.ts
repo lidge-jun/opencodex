@@ -1,3 +1,4 @@
+import { projectThoughtLevels } from "../../adapters/agy-acp/options";
 import { canInferVendorContext } from "./vendor-context";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
@@ -726,6 +727,11 @@ async function gatherRoutedModelsUncached(
       ...(base.supportsReasoningSummaries === undefined && replaced.supportsReasoningSummaries !== undefined ? { supportsReasoningSummaries: replaced.supportsReasoningSummaries } : {}),
       ...(base.codexToolMode === undefined && replaced.codexToolMode !== undefined ? { codexToolMode: replaced.codexToolMode } : {}),
       ...(base.capabilities === undefined && replaced.capabilities !== undefined ? { capabilities: replaced.capabilities } : {}),
+      ...(replaced.agyThoughtLevels ? {
+        agyThoughtLevels: replaced.agyThoughtLevels,
+        ...projectThoughtLevels({ efforts: replaced.reasoningEfforts ?? [], current: replaced.defaultReasoningEffort },
+          cm.reasoningEfforts, cm.defaultReasoningEffort),
+      } : {}),
     } : base;
     // A custom-only model may never appear in /models or the provider's configured roster.
     // Fill only its absent context; a full hint overlay would overwrite custom capabilities.
