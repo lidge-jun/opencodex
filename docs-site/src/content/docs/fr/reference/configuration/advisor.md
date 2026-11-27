@@ -16,7 +16,7 @@ sidecar côté proxy invisible du client pour les workers routés — même un w
 
 ## Clients externes et contexte complet
 
-`autoMountMcp` est désactivé par défaut. Activez-le avec `ocx advisor set --auto-mount-mcp on` pour suivre les routes compatibles, ou choisissez les clients avec `--mcp-clients <ids>`. `auto` efface la liste explicite et `none` ne sélectionne aucun client. Les clients externes peuvent utiliser `consult_advisor` via `ocx advisor mcp`, ou démarrer avec `ocx advisor consult --question "..."` puis consulter le résultat avec `--consultation-id <id>`. Un consentement à jour est requis.
+`autoMountMcp` est désactivé par défaut. Activez-le avec `ocx advisor set --auto-mount-mcp on` pour suivre les routes compatibles, ou choisissez les clients avec `--mcp-clients <ids>`. `auto` efface la liste explicite et `none` ne sélectionne aucun client. Les clients externes peuvent utiliser `consult_advisor` via `ocx advisor mcp`, ou démarrer avec `ocx advisor consult --question "..."` puis consulter le résultat avec `ocx advisor consult --consultation-id <id>`. Un consentement à jour est requis.
 
 `context` partage un contexte limité ; `question-only` envoie seulement la question et suspend les consultations automatiques ; `full` élargit les limites et peut joindre une transcription locale correspondante lorsqu’une session, tâche ou voie autorisée est fournie. Le texte et les résultats d’outils peuvent être envoyés au fournisseur conseiller ; la découverte de transcription n’est pas garantie.
 

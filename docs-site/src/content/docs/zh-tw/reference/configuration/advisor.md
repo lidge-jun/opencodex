@@ -9,7 +9,7 @@ description: 獨立專家諮詢，支援 manual、preflight 與依據證據的 a
 
 ## 外部用戶端與完整上下文
 
-`autoMountMcp` 預設為 `false`。使用 `ocx advisor set --auto-mount-mcp on` 跟隨相容路由，或以 `--mcp-clients <ids>` 指定用戶端。`auto` 清除明確清單，`none` 不選擇用戶端。外部用戶端可透過 `ocx advisor mcp` 使用 `consult_advisor`，或以 `ocx advisor consult --question "..."` 啟動並用 `--consultation-id <id>` 查詢。需要目前版本的同意。
+`autoMountMcp` 預設為 `false`。使用 `ocx advisor set --auto-mount-mcp on` 跟隨相容路由，或以 `--mcp-clients <ids>` 指定用戶端。`auto` 清除明確清單，`none` 不選擇用戶端。外部用戶端可透過 `ocx advisor mcp` 使用 `consult_advisor`，或以 `ocx advisor consult --question "..."` 啟動並用 `ocx advisor consult --consultation-id <id>` 查詢。需要目前版本的同意。
 
 `context` 分享受限上下文；`question-only` 只傳送問題並暫停自動諮詢；`full` 擴大限制，並可在提供工作階段、任務 ID 或允許路徑時附加相符的本機紀錄。紀錄和工具結果可能傳送給顧問供應商，不能保證找到紀錄。
 

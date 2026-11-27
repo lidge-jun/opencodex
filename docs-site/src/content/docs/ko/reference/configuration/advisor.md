@@ -9,7 +9,7 @@ description: manual, preflight 및 증거 기반 adaptive 정책을 제공하는
 
 ## 외부 클라이언트와 전체 맥락
 
-`autoMountMcp` 기본값은 `false`입니다. `ocx advisor set --auto-mount-mcp on`으로 호환 라우트를 자동 연결하거나 `--mcp-clients <ids>`로 직접 선택합니다. `auto`는 명시적 목록을 지우고 `none`은 아무 클라이언트도 선택하지 않습니다. 외부 클라이언트는 `ocx advisor mcp`의 `consult_advisor` 도구를 쓰거나 `ocx advisor consult --question "..."`로 시작하고 `--consultation-id <id>`로 결과를 확인할 수 있습니다. 현재 버전의 동의가 필요합니다.
+`autoMountMcp` 기본값은 `false`입니다. `ocx advisor set --auto-mount-mcp on`으로 호환 라우트를 자동 연결하거나 `--mcp-clients <ids>`로 직접 선택합니다. `auto`는 명시적 목록을 지우고 `none`은 아무 클라이언트도 선택하지 않습니다. 외부 클라이언트는 `ocx advisor mcp`의 `consult_advisor` 도구를 쓰거나 `ocx advisor consult --question "..."`로 시작하고 `ocx advisor consult --consultation-id <id>`로 결과를 확인할 수 있습니다. 현재 버전의 동의가 필요합니다.
 
 `context`는 제한된 맥락을 공유하고, `question-only`는 질문만 보내며 자동 상담을 중지합니다. `full`은 제한을 늘리고 세션·작업 ID 또는 허용된 경로가 제공되면 일치하는 로컬 기록을 첨부할 수 있습니다. 기록과 도구 결과가 어드바이저 제공자에게 전송될 수 있으며 기록을 찾는다고 보장하지 않습니다.
 

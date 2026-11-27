@@ -11,7 +11,7 @@ Es distinto de los [subagentes](/es/reference/configuration/agents/), que el mod
 
 ## Clientes externos y contexto completo
 
-`autoMountMcp` está desactivado por defecto. Actívalo con `ocx advisor set --auto-mount-mcp on` para seguir rutas compatibles, o elige clientes con `--mcp-clients <ids>`. `auto` borra la lista explícita y `none` no selecciona clientes. Los clientes externos pueden usar `consult_advisor` mediante `ocx advisor mcp`, o `ocx advisor consult --question "..."` y consultar el resultado con `--consultation-id <id>`. Se exige consentimiento vigente.
+`autoMountMcp` está desactivado por defecto. Actívalo con `ocx advisor set --auto-mount-mcp on` para seguir rutas compatibles, o elige clientes con `--mcp-clients <ids>`. `auto` borra la lista explícita y `none` no selecciona clientes. Los clientes externos pueden usar `consult_advisor` mediante `ocx advisor mcp`, o `ocx advisor consult --question "..."` y consultar el resultado con `ocx advisor consult --consultation-id <id>`. Se exige consentimiento vigente.
 
 `context` comparte contexto limitado; `question-only` envía solo la pregunta y pausa consultas automáticas; `full` amplía los límites y puede adjuntar una transcripción local coincidente si se indica una sesión, tarea o ruta permitida. El texto y los resultados de herramientas pueden enviarse al proveedor asesor; no se garantiza encontrar la transcripción.
 

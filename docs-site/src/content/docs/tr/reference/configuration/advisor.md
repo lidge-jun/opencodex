@@ -9,7 +9,7 @@ Bu, alt ajan yüzeyinden farklıdır (bkz. [Ajan yapılandırması](/tr/referenc
 
 ## Harici istemciler ve tam bağlam
 
-`autoMountMcp` varsayılan olarak `false` değerindedir. Uyumlu rotaları izlemek için `ocx advisor set --auto-mount-mcp on`, istemci seçmek için `--mcp-clients <ids>` kullanın. `auto` açık listeyi temizler, `none` hiçbir istemci seçmez. Harici istemciler `ocx advisor mcp` üzerinden `consult_advisor` kullanabilir veya `ocx advisor consult --question "..."` ile başlayıp `--consultation-id <id>` ile sonucu sorgulayabilir. Güncel onay gerekir.
+`autoMountMcp` varsayılan olarak `false` değerindedir. Uyumlu rotaları izlemek için `ocx advisor set --auto-mount-mcp on`, istemci seçmek için `--mcp-clients <ids>` kullanın. `auto` açık listeyi temizler, `none` hiçbir istemci seçmez. Harici istemciler `ocx advisor mcp` üzerinden `consult_advisor` kullanabilir veya `ocx advisor consult --question "..."` ile başlayıp `ocx advisor consult --consultation-id <id>` ile sonucu sorgulayabilir. Güncel onay gerekir.
 
 `context` sınırlı bağlam paylaşır; `question-only` yalnızca soruyu gönderir ve otomatik danışmaları duraklatır; `full` sınırları genişletir ve oturum, görev kimliği veya izin verilen yol sağlanırsa eşleşen yerel dökümü ekleyebilir. Metin ve araç sonuçları danışman sağlayıcısına gönderilebilir; dökümün bulunması garanti değildir.
 

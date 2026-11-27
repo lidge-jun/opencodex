@@ -9,7 +9,7 @@ description: 独立专家咨询，支持 manual、preflight 与基于证据的 a
 
 ## 外部客户端与完整上下文
 
-`autoMountMcp` 默认是 `false`。通过 `ocx advisor set --auto-mount-mcp on` 跟随兼容路由，或用 `--mcp-clients <ids>` 指定客户端。`auto` 清除显式列表，`none` 不选择客户端。外部客户端可通过 `ocx advisor mcp` 使用 `consult_advisor`，或用 `ocx advisor consult --question "..."` 发起并用 `--consultation-id <id>` 查询。需要当前版本的同意。
+`autoMountMcp` 默认是 `false`。通过 `ocx advisor set --auto-mount-mcp on` 跟随兼容路由，或用 `--mcp-clients <ids>` 指定客户端。`auto` 清除显式列表，`none` 不选择客户端。外部客户端可通过 `ocx advisor mcp` 使用 `consult_advisor`，或用 `ocx advisor consult --question "..."` 发起并用 `ocx advisor consult --consultation-id <id>` 查询。需要当前版本的同意。
 
 `context` 共享受限上下文；`question-only` 只发送问题并暂停自动咨询；`full` 扩大限制，并可在提供会话、任务 ID 或允许的路径时附加匹配的本地记录。记录和工具结果可能发送给顾问提供商，不能保证找到记录。
 

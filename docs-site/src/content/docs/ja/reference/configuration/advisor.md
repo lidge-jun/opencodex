@@ -9,7 +9,7 @@ description: manual、preflight、証拠に基づく adaptive ポリシーによ
 
 ## 外部クライアントと全コンテキスト
 
-`autoMountMcp` の既定値は `false` です。`ocx advisor set --auto-mount-mcp on` で対応ルートに自動接続するか、`--mcp-clients <ids>` で選択します。`auto` は明示リストを解除し、`none` は選択を空にします。外部クライアントは `ocx advisor mcp` の `consult_advisor`、または `ocx advisor consult --question "..."` と `--consultation-id <id>` による取得を使えます。現在の同意が必要です。
+`autoMountMcp` の既定値は `false` です。`ocx advisor set --auto-mount-mcp on` で対応ルートに自動接続するか、`--mcp-clients <ids>` で選択します。`auto` は明示リストを解除し、`none` は選択を空にします。外部クライアントは `ocx advisor mcp` の `consult_advisor`、または `ocx advisor consult --question "..."` と `ocx advisor consult --consultation-id <id>` による取得を使えます。現在の同意が必要です。
 
 `context` は制限されたコンテキスト、`question-only` は質問のみを送り自動相談を停止します。`full` は上限を拡張し、セッション・タスクIDまたは許可パスがあれば一致するローカル記録を添付できる場合があります。記録やツール結果は相談先プロバイダーへ送信されることがあり、記録の発見は保証されません。
 
