@@ -59,7 +59,7 @@ import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustom
 import type { DesktopProfileModel } from "../../claude/desktop-profile";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
-import { creditChargeUnrepresentable, estimateAttemptCost, estimateComboCost, estimateRequestCost, serviceTierContext, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
+import { creditChargeUnrepresentable, estimateAttemptCost, estimateComboCost, estimateRequestCost, serviceTierContext, normalizeCostTokens, tokensPerSecond, type MatchedPrice } from "../../usage/cost";
 import { costTokensWithinBound, isRepresentableCreditCount } from "../../usage/credit-billing";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { usageModelPriceOptions } from "../../usage/model-identity";
@@ -108,6 +108,9 @@ export type CostEstimateReason =
   | "cache_detail_missing"
   | "expected_price_overlay"
   | "provider_cost_overlay"
+  | "online_price_catalog"
+  | "relay_price_multiplier"
+  | "subscription_api_equivalent"
   | "priority_lower_bound";
 
 export type CostResult =
@@ -285,17 +288,23 @@ export function costResult(entry: MetricSource): CostResult {
       ? tokenPricedLegs.some(leg =>
         cacheObservationFromUsage(leg.source?.usage, leg.source?.cacheProvenance).provenance !== "observed")
       : !!entry.usage && cacheObservationFromUsage(entry.usage, entry.cacheProvenance).provenance !== "observed";
-  const priceSources = creditOnly
+  const tokenPrices: MatchedPrice[] = creditOnly
     ? []
     : tokenPricedLegs
-      ? tokenPricedLegs.map(leg => leg.attempt.price.source)
-      : [estimate.price?.source, ...(estimate.attempts?.map(attempt => attempt.price.source) ?? [])];
+      ? tokenPricedLegs.map(leg => leg.attempt.price)
+      : [estimate.price, ...(estimate.attempts?.map(attempt => attempt.price) ?? [])]
+        .filter((price): price is MatchedPrice => price !== undefined);
+  const priceSources = tokenPrices.map(price => price.source);
   const estimateReasons = [
     // The row's own usage reading still qualifies a credit charge: the credits came from it.
     entry.usageStatus === "estimated" || entry.usage?.estimated ? "usage_estimated" as const : undefined,
     cacheDetailMissing ? "cache_detail_missing" as const : undefined,
     priceSources.includes("expected") ? "expected_price_overlay" as const : undefined,
     priceSources.includes("user") ? "provider_cost_overlay" as const : undefined,
+    tokenPrices.some(price => price.source === "models-dev" || price.source === "openrouter")
+      ? "online_price_catalog" as const : undefined,
+    tokenPrices.some(price => price.multiplier !== undefined) ? "relay_price_multiplier" as const : undefined,
+    tokenPrices.some(price => price.apiEquivalent === true) ? "subscription_api_equivalent" as const : undefined,
     estimate.priorityLowerBound ? "priority_lower_bound" as const : undefined,
   ].filter((reason): reason is CostEstimateReason => reason !== undefined);
   return { kind: "value", estimate, estimateReasons };

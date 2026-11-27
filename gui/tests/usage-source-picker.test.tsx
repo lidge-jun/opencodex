@@ -17,7 +17,7 @@ let host: HTMLElement;
 let calls: { url: string; init?: RequestInit }[];
 const originalFetch = globalThis.fetch;
 let serial = 0;
-const counts = { all: 90, codex: 30, claude_code: 20, claude_desktop: 10, grok: 3, opencode: 4, aside: 5, other: 6, unknown: 12 };
+const counts = { all: 90, codex: 30, claude_code: 20, claude_desktop: 10, grok: 3, opencode: 4, aside: 5, antigravity: 2, agy: 1, other: 6, unknown: 12 };
 function echo(url: string) {
   const query = new URL(url).searchParams;
   return { client: query.get("client"), device: query.get("device") === "key" ? { kind: "key", id: query.get("apiKeyId") } : { kind: query.get("device") } };

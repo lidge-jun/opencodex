@@ -95,7 +95,7 @@ interface MatchedPriceInfo {
   provider: string;
   modelId: string;
   jawcodeProvider?: string;
-  source: "jawcode" | "expected" | "user";
+  source: "jawcode" | "expected" | "user" | "models-dev" | "openrouter";
   sourceRef?: string;
   verifiedAt?: string;
   status: "verified" | "verified-derived";
@@ -353,6 +353,9 @@ const ESTIMATE_REASON_KEYS = {
   expected_price_overlay: "logs.detail.estimate.expected_price_overlay",
   provider_cost_overlay: "logs.detail.estimate.provider_cost_overlay",
   priority_lower_bound: "logs.detail.estimate.priority_lower_bound",
+  online_price_catalog: "logs.detail.estimate.online_price_catalog",
+  relay_price_multiplier: "logs.detail.estimate.relay_price_multiplier",
+  subscription_api_equivalent: "logs.detail.estimate.subscription_api_equivalent",
 } as const satisfies Record<CostEstimateReason, string>;
 
 /**

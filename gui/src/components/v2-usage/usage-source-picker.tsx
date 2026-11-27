@@ -14,11 +14,11 @@ import { matchesFacetWindow, matchesSource, noStore, sourceQuery, SOURCE_CLIENTS
 type Facets = { sourceFilter: unknown; window: { since: number; until: number; timeZone: string }; apps: Record<SourceClient, number>;
   devices: { device: SourceDevice; requests: number }[]; legacyUnclassifiedRequests: number; usageIncomplete: boolean; unavailableConfiguredKeys?: number };
 type Inventory = { apiKeyId: string; alias: string | null }[];
-const clientNames: Record<SourceClient, string> = { all: "", codex: "Codex", claude_code: "Claude Code", claude_desktop: "Claude Desktop", grok: "Grok", opencode: "OpenCode", aside: "Aside", other: "", unknown: "" };
+const clientNames: Record<SourceClient, string> = { all: "", codex: "Codex", claude_code: "Claude Code", claude_desktop: "Claude Desktop", grok: "Grok", opencode: "OpenCode", aside: "Aside", antigravity: "Antigravity", agy: "Antigravity CLI (agy)", other: "", unknown: "" };
 const sameDevice = (a: SourceDevice, b: SourceDevice) => a.kind === b.kind && (a.kind !== "key" || (b.kind === "key" && a.id === b.id));
 const validCount = (n: unknown) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
 const defaultDevices: SourceDevice[] = [{ kind: "all" }, { kind: "no-key" }, { kind: "unconfigured" }];
-const clientMarks: Partial<Record<SourceClient, string>> = { codex: "openai.svg", claude_code: "claude-color.svg", claude_desktop: "claude-color.svg", grok: "grok.svg", opencode: "opencode.svg", aside: "aside.svg" };
+const clientMarks: Partial<Record<SourceClient, string>> = { codex: "openai.svg", claude_code: "claude-color.svg", claude_desktop: "claude-color.svg", grok: "grok.svg", opencode: "opencode.svg", aside: "aside.svg", antigravity: "antigravity-color.svg", agy: "antigravity-color.svg" };
 function appMark(client: SourceClient) {
   const mark = clientMarks[client];
   return mark ? <img className={clientIconClass(mark)} src={`/provider-icons/${mark}`} alt="" /> : <IconGlobe width={16} height={16} aria-hidden="true" />;

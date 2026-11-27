@@ -55,6 +55,9 @@ export function costEvidenceForCandidate(input: CostEvidenceInput): RouteCostEvi
     };
   }
   const priceSource = estimate.price?.source ?? "registry";
+  if (priceSource === "models-dev" || priceSource === "openrouter") {
+    return { priceSource, incomplete: true, ...(limitUsd !== undefined ? { limitUsd } : {}) };
+  }
   return {
     estimatedUsd: estimate.cost.total,
     priceSource,

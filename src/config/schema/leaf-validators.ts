@@ -14,6 +14,7 @@ import {
   normalizeNonBlankStringArray,
   normalizeAutoReviewModelOverrides,
   modelCapabilitiesConfigError,
+  modelCapabilityProbesConfigError,
   providerInputModalitiesConfigError,
   contextTierRecordConfigError,
   mergeModelCapabilities,
@@ -41,7 +42,7 @@ import {
 import { fastWireDeclarationError } from "../../providers/fastwire";
 import { getProviderRegistryEntry, providerMatchesRegistryTransport, providerModelWireDefault } from "../../providers/registry";
 import { resolveOpenAiVirtualModel } from "../../providers/openai-virtual-models";
-import { COST4_RATE_KEYS, isValidCost4Rate, isValidPromptLengthPricing, copyPromptLengthPricing } from "../../usage/user-cost-overlays";
+import { COST4_RATE_KEYS, isValidCost4Rate, isValidPriceMultiplier, isValidPromptLengthPricing, copyPromptLengthPricing } from "../../usage/user-cost-overlays";
 import { MAX_COST4_RATE } from "../../usage/expected-prices";
 import { isValidCreditPriceBound } from "../../usage/credit-billing";
 import {
@@ -356,6 +357,10 @@ export const providerConfigSchema = z.object({
   // Raw diagnostics/writes reject malformed provenance; tolerant loads preserve the custom row.
   anthropicOAuthInstance: z.literal("anthropic2").optional().catch(undefined),
   modelCapabilities: modelCapabilitiesSchema.optional(),
+  modelCapabilityProbes: z.unknown().superRefine((value, ctx) => {
+    const error = modelCapabilityProbesConfigError(value);
+    if (error) ctx.addIssue({ code: "custom", message: error });
+  }).optional().transform(value => value as OcxProviderConfig["modelCapabilityProbes"]),
   inputModalities: z.unknown().superRefine((value, ctx) => {
     const error = providerInputModalitiesConfigError(value);
     if (error) ctx.addIssue({ code: "custom", message: error });
@@ -559,6 +564,12 @@ export function providerModelCostsConfigError(value: unknown, field = "modelCost
     }
   }
   return null;
+}
+
+/** Validate `providers.<name>.priceMultiplier`: absent, or a finite number in (0, 1000]. */
+export function priceMultiplierConfigError(value: unknown, field = "priceMultiplier"): string | null {
+  if (value === undefined) return null;
+  return isValidPriceMultiplier(value) ? null : `${field} must be a finite number greater than 0 and at most 1000`;
 }
 
 /**

@@ -12,6 +12,9 @@ import { listManagementModelRows, type ManagementModelRow } from "../../src/serv
 import { routedSlug } from "../../src/providers/slug-codec";
 import { clearModelCache } from "../../src/codex/model-cache";
 import { fetchAllModels } from "../../src/server/management/shared";
+import { modelRowPrice } from "../../src/server/management/model-row-price";
+import { refreshUserCostOverlays } from "../../src/usage/user-cost-overlays";
+import type { OcxConfig } from "../../src/types";
 
 const TEST_DIR = join(import.meta.dir, `.tmp-model-visibility-management-${process.pid}`);
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -488,6 +491,32 @@ test("manual models replace management rows with the same provider/id and deleti
   expect(restored.filter(row=>row.provider==="openai" && row.id==="gpt-5.5")).toEqual([
     expect.objectContaining({namespaced:"gpt-5.5",native:true}),
   ]);
+});
+
+test("an account-bound native row is priced as its underlying model", async () => {
+  const config = loadConfig();
+  const accountModel = "gpt-5.5-account-fixture";
+  config.providers.openai = {adapter:"openai-responses",authMode:"forward",baseUrl:"https://chatgpt.com/backend-api/codex",liveModels:false,
+    modelCosts: { [accountModel]: { input: 3, output: 7, cacheRead: 0, cacheWrite: 0 } }};
+  config.codexAccountNamespaces = { desktop: "@main" };
+  config.codexAccountPickerEnabled = true;
+  writeFileSync(join(isolatedCodexHome!.path, "models_cache.json"), JSON.stringify({
+    models: [{
+      slug: accountModel, supported_in_api: true, visibility: "list",
+      base_instructions: "You are Codex.", comp_hash: null, shell_type: "unified_exec",
+      supported_reasoning_levels: [{ effort: "medium" }], model_messages: {},
+    }],
+  }));
+  saveConfig(config);
+  refreshUserCostOverlays(config);
+  try {
+    const rows = await listManagementModelRows(config, { entitlementWaitMs: 0 });
+    const row = rows.find(candidate => candidate.id === `desktop/${accountModel}` && candidate.native);
+    expect(row?.price).toEqual(modelRowPrice("openai", accountModel));
+    expect(row?.price).toMatchObject({ source: "manual", input: 3, output: 7 });
+  } finally {
+    refreshUserCostOverlays({ port: 0, defaultProvider: "none", providers: {} } as OcxConfig);
+  }
 });
 
 test("drifted file-backed model reads project arrival disables without changing live config or disk", async () => {

@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classifyUsageClient, normalizeRecordedClient } from "../../src/usage/client";
+import { classifyUsageClient, normalizeRecordedClient, usageClientLogContext, usageClientName } from "../../src/usage/client";
+import { MAX_PARTITION_APP_KEYS, MAX_USAGE_APP_NAMES, usageAppIdentity } from "../../src/usage/app-breakdown";
 import { normalizePersistedUsageRow, readUsageEntries, resetUsageReadCacheForTests, usageLogPath } from "../../src/usage/log";
 import { createUsageSummaryAccumulator, projectUsageSummary, summarizeUsage } from "../../src/usage/summary";
 import { parseUsageSource } from "../../src/usage/source-filter";
@@ -10,6 +11,7 @@ import { createSourceFacetAccumulator } from "../../src/usage/source-facets";
 import { addFinalRequestLog, addRequestLog, aggregateAttemptUsage, clearRequestLogsForTests, getRequestLogEntries, requestLogEntryFromPersistedUsage, type RequestLogEntry } from "../../src/server/request-log";
 import { log } from "../helpers/request-log-entry";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath, repoRoot } from "../helpers/repo-root";
 
 describe("usage client attribution", () => {
   test("report groups accepted usage by bounded app and preserves legacy absence", () => {
@@ -30,6 +32,66 @@ describe("usage client attribution", () => {
     clone.add({ ...base, requestId: "grok", client: "grok" });
     expect(clone.summarize("30d", now).apps.find(row => row.client === "grok")?.requests).toBe(1);
     expect(accumulator.summarize("30d", now).apps.some(row => row.client === "grok")).toBe(false);
+  });
+
+  test("an unrecognized client is named by the first product token of its headers", () => {
+    const named = (headers: Record<string, string>) => usageClientName(new Headers(headers));
+    expect(named({ "user-agent": "curl/8.7.1" })).toBe("curl");
+    expect(named({ "user-agent": "multica-agent-sdk/0.4.2 (node 22)" })).toBe("multica-agent-sdk");
+    expect(named({ "user-agent": "claude-cli/2.1.3 (external, sdk-ts, agent-sdk/0.2)" })).toBe("claude-agent-sdk");
+    expect(named({ "user-agent": "claude-cli/2.1.3 (external, mystery-entry)" })).toBe("claude-cli-mystery-entry");
+    expect(named({ originator: "Some_Tool", "user-agent": "curl/8" })).toBe("some_tool");
+    expect(named({ "user-agent": "x".repeat(41) })).toBeUndefined();
+    expect(named({ "user-agent": "" })).toBeUndefined();
+    expect(named({ "user-agent": `curl/${"9".repeat(1100)}` })).toBeUndefined();
+    expect(usageClientLogContext(new Headers({ originator: "codex_cli_rs", "user-agent": "curl/8" }))).toEqual({ client: "codex_cli" });
+    expect(usageClientLogContext(new Headers({ "user-agent": "curl/8" }))).toEqual({ client: "unknown", clientName: "curl" });
+  });
+
+  test("apps rows name unknown clients and split legacy rows by the wire they used", () => {
+    const now = Date.now();
+    const base = { timestamp: now, provider: "openai", model: "gpt-test", status: 200,
+      durationMs: 10, usageStatus: "reported" as const, usage: { inputTokens: 10, outputTokens: 5 } };
+    const accumulator = createUsageSummaryAccumulator({ mode: "row-unique" });
+    accumulator.add({ ...base, requestId: "curl", client: "unknown", clientName: "curl" });
+    accumulator.add({ ...base, requestId: "curl-2", client: "unknown", clientName: "curl" });
+    accumulator.add({ ...base, requestId: "bare", client: "unknown" });
+    accumulator.add({ ...base, requestId: "bad-name", client: "unknown", clientName: "Not A Name" });
+    accumulator.add({ ...base, requestId: "codex", client: "codex_cli", clientName: "ignored" });
+    accumulator.add({ ...base, requestId: "old-responses", inboundProtocol: "responses" });
+    accumulator.add({ ...base, requestId: "old-claude", surface: "claude", inboundProtocol: "messages" });
+    accumulator.add({ ...base, requestId: "old-bare" });
+    const rows = accumulator.summarize("30d", now).apps.map(row => [row.client, row.name ?? row.legacyWire ?? "", row.requests]);
+    expect(rows.sort()).toEqual([
+      ["codex", "", 1], ["unclassified", "", 1], ["unclassified", "claude", 1], ["unclassified", "responses", 1],
+      ["unknown", "", 2], ["unknown", "curl", 2],
+    ]);
+  });
+
+  test("named clients past the report budget fold into the plain unknown row", () => {
+    const now = Date.now();
+    const accumulator = createUsageSummaryAccumulator({ mode: "row-unique" });
+    for (let index = 0; index < MAX_USAGE_APP_NAMES + 5; index++) {
+      accumulator.add({ timestamp: now, provider: "openai", model: "gpt-test", status: 200, durationMs: 10,
+        usageStatus: "reported", usage: { inputTokens: 100 + index, outputTokens: 1 }, requestId: `r${index}`,
+        client: "unknown", clientName: `tool-${index}` });
+    }
+    const apps = accumulator.summarize("30d", now).apps;
+    expect(apps.filter(row => row.name).length).toBe(MAX_USAGE_APP_NAMES);
+    expect(apps.find(row => row.client === "unknown" && !row.name)?.requests).toBe(5);
+    expect(apps.reduce((sum, row) => sum + row.requests, 0)).toBe(MAX_USAGE_APP_NAMES + 5);
+  });
+
+  test("a name the partition already holds keeps its row after the partition fills", () => {
+    const now = Date.now();
+    const accumulator = createUsageSummaryAccumulator({ mode: "row-unique" });
+    const add = (index: number, requestId: string, inputTokens: number) => accumulator.add({ timestamp: now,
+      provider: "openai", model: "gpt-test", status: 200, durationMs: 10, usageStatus: "reported",
+      usage: { inputTokens, outputTokens: 1 }, requestId, client: "unknown", clientName: `tool-${index}` });
+    for (let index = 0; index < MAX_PARTITION_APP_KEYS; index++) add(index, `fill-${index}`, 1);
+    for (let index = 0; index < 50; index++) add(0, `again-${index}`, 1000);
+    const row = accumulator.summarize("30d", now).apps.find(app => app.name === "tool-0");
+    expect(row).toMatchObject({ requests: 51, totalTokens: 2 + 50 * 1001 });
   });
 
   test("app totals follow projected combo attempts and inclusive custom bounds", () => {
@@ -150,6 +212,40 @@ describe("usage client attribution", () => {
     expect(classifyUsageClient(new Headers({ "user-agent": "claude-cli/2.1.282 (external, claude-desktop)" }))).toBe("claude_desktop");
     expect(classifyUsageClient(new Headers({ originator: "opencode" }))).toBe("opencode");
     expect(classifyUsageClient(new Headers({ "user-agent": "opencode/1.2.3 runtime/bun" }))).toBe("opencode");
+    expect(classifyUsageClient(new Headers({ "user-agent": "antigravity/hub/2.15.3 (aidev_client; os_type=windows)" }))).toBe("antigravity");
+    expect(classifyUsageClient(new Headers({ "user-agent": "google-genai-sdk/1.30.0 gl-node/v22.11.0" }))).toBe("agy");
+  });
+
+  test("every request-log context records the unknown client's product name", () => {
+    // `client: classifyUsageClient(...)` drops the name an unknown client sent; an inbound route
+    // that lands on another branch (Gemini, Ollama, ...) has to spread usageClientLogContext instead.
+    const offenders = [...new Bun.Glob("src/**/*.ts").scanSync({ cwd: repoRoot() })]
+      .filter((file) => /\bclient:\s*classifyUsageClient\(/.test(readFileSync(repoPath(file), "utf8")));
+    expect(offenders).toEqual([]);
+  });
+
+  test("Antigravity clients are named rows in the apps report, not unknown", () => {
+    const now = Date.now();
+    const base = { timestamp: now, provider: "google-antigravity", model: "gemini-test", status: 200,
+      durationMs: 10, usageStatus: "reported" as const, usage: { inputTokens: 10, outputTokens: 5 } };
+    const accumulator = createUsageSummaryAccumulator({ mode: "row-unique" });
+    for (const [ua, client] of [["antigravity/hub/2.15.3 (aidev_client; os_type=windows)", "antigravity"], ["google-genai-sdk/1.30.0 gl-node/v22.11.0", "agy"]] as const) {
+      const context = usageClientLogContext(new Headers({ "user-agent": ua }));
+      expect(context).toEqual({ client });
+      expect(usageAppIdentity(context)).toEqual({ client });
+      accumulator.add({ ...base, requestId: client, ...context });
+    }
+    expect(accumulator.summarize("30d", now).apps.map(row => [row.client, row.name ?? "", row.requests]).sort())
+      .toEqual([["agy", "", 1], ["antigravity", "", 1]]);
+    const facets = new URLSearchParams({ client: "agy", device: "all" });
+    expect(parseUsageSource(facets)).toEqual({ kind: "filtered", filter: { client: "agy", device: { kind: "all" } } });
+    // The product-name capture still names a near miss instead of misclassifying it.
+    expect(usageClientLogContext(new Headers({ "user-agent": "antigravity-tools/4.1" }))).toEqual({ client: "unknown", clientName: "antigravity-tools" });
+    expect(classifyUsageClient(new Headers({ "user-agent": "antigravity/hub/" }))).toBe("unknown");
+    expect(classifyUsageClient(new Headers({ originator: "codex_cli_rs", "user-agent": "google-genai-sdk/1.30.0" }))).toBe("unknown");
+    // The GenAI SDK prefix alone does not make a self-named caller agy.
+    expect(usageClientLogContext(new Headers({ originator: "my-agent", "user-agent": "google-genai-sdk/1.30.0 gl-node/v22.11.0" })))
+      .toEqual({ client: "unknown", clientName: "my-agent" });
   });
 
   test("does not infer an app from unknown, malformed, conflicting or oversized headers", () => {
@@ -184,7 +280,7 @@ describe("usage client attribution", () => {
     process.env.OPENCODEX_HOME = testDir;
     clearRequestLogsForTests();
     try {
-      const raw = Object.assign(log({ requestId: "invalid-client" }), { client: "private-header-marker" });
+      const raw = Object.assign(log({ requestId: "invalid-client" }), { client: "private-header-marker", clientName: "invalid\nname" });
       addRequestLog(raw as unknown as RequestLogEntry);
       const finalized: RequestLogEntry[] = [];
       addFinalRequestLog("valid-client", 1, { model: "gpt-test", provider: "openai", client: "codex_cli" },
@@ -194,6 +290,9 @@ describe("usage client attribution", () => {
       expect(requestLogEntryFromPersistedUsage(readUsageEntries()[0]!)?.client).toBe("unknown");
       expect(finalized[0]?.client).toBe("codex_cli");
       expect(readFileSync(usageLogPath(), "utf8")).not.toContain("private-header-marker");
+      // The exported ingress drops an invalid name from the retained row as the disk row does.
+      expect(getRequestLogEntries().find(row => row.requestId === "invalid-client")).not.toHaveProperty("clientName");
+      expect(readUsageEntries().find(row => row.requestId === "invalid-client")).not.toHaveProperty("clientName");
     } finally {
       clearRequestLogsForTests();
       resetUsageReadCacheForTests();

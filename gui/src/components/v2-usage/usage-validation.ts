@@ -1,5 +1,5 @@
 import type { UsageResponse } from "./usage-model";
-import { USAGE_APPS } from "../../../../src/usage/app-breakdown";
+import { MAX_PARTITION_APP_KEYS, USAGE_APPS, USAGE_LEGACY_WIRES, usageAppKey, type UsageAppIdentity } from "../../../../src/usage/app-breakdown";
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const integer = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -10,14 +10,16 @@ const appClients = new Set<string>(USAGE_APPS);
 
 function validApps(value: unknown): boolean {
   if (value === undefined) return true;
-  if (!Array.isArray(value) || value.length > appClients.size) return false;
+  if (!Array.isArray(value) || value.length > MAX_PARTITION_APP_KEYS) return false;
   const seen = new Set<string>();
   return value.every(row => {
-    if (!record(row) || typeof row.client !== "string" || !appClients.has(row.client) || seen.has(row.client)
+    if (!record(row) || typeof row.client !== "string" || !appClients.has(row.client) || seen.has(usageAppKey(row as UsageAppIdentity))
+      || !(row.name === undefined || (typeof row.name === "string" && /^[a-z0-9][a-z0-9._-]{0,39}$/.test(row.name)))
+      || !(row.legacyWire === undefined || (USAGE_LEGACY_WIRES as readonly unknown[]).includes(row.legacyWire))
       || !numeric(row, ["requests", "measuredRequests", "pricedRequests", "unpricedRequests"])
       || !finite(row.totalTokens) || !finite(row.shareRatio) || (row.shareRatio as number) > 1
       || !(row.estimatedCostUsd === undefined && row.pricedRequests === 0 || finite(row.estimatedCostUsd))) return false;
-    seen.add(row.client);
+    seen.add(usageAppKey(row as UsageAppIdentity));
     return true;
   });
 }

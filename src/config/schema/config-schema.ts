@@ -50,6 +50,7 @@ import {
   memoryModelSettingSchema,
   memoryModelsSchema,
   modelPreferHostedToolsConfigError,
+  priceMultiplierConfigError,
   providerModelCostsConfigError,
   providerRelativeSendPathConfigError,
   isValidCreditPriceUsd,
@@ -683,6 +684,14 @@ export const configSchema = z.object({
         // before schemaDiagnosticsError serializes the path (ocx config validate/import).
         path: ["providers", redactSecretString(name), "modelCosts"],
         message: modelCostsError,
+      });
+    }
+    const priceMultiplierError = priceMultiplierConfigError((provider as { priceMultiplier?: unknown }).priceMultiplier);
+    if (priceMultiplierError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "priceMultiplier"],
+        message: priceMultiplierError,
       });
     }
     const modelDisplayNamesError = modelDisplayNamesConfigError(

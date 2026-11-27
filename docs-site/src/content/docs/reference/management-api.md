@@ -592,6 +592,39 @@ All four rates must be finite numbers from 0 through 1,000,000, in USD per 1M to
 Unknown fields and malformed rates are rejected. A write preserves other models' overrides
 and returns `{ ok: true, provider, modelId, cost }`; reset returns `cost: null`.
 
+### Automatic prices
+
+A model with no manual price is priced, in this order, from a verified official price, then the
+public models.dev list, then the public OpenRouter list. The lists refresh daily on dashboard reads,
+and seeing an unpriced model can trigger a background fetch. A confirmed miss can trigger another
+fetch after six hours; a failed source can retry after 60 seconds. No request waits on these
+automatic background fetches; only `POST /api/pricing/refresh` waits for both feeds to finish.
+Lists are cached in `price-catalog-cache.json` in the OpenCodex home, so the last snapshot
+remains available offline. Public-list prices are estimates and do not affect routing caps or
+ranking. A manual price always wins and is never scaled.
+
+Each non-combo row of `GET /api/models` carries `price` when a price is known and omits it when not:
+`{ source, input, output, cacheRead, cacheWrite }` in USD per 1M tokens, where `source` is `manual`,
+`official`, `models-dev` or `openrouter`. A public-list price also carries `fetchedAt` (ISO time).
+`multiplier` appears when the provider's relay multiplier was applied, and `apiEquivalent: true` when
+the provider bills through a subscription, so the figure is what the same tokens would cost on the API.
+
+`POST /api/pricing/refresh` forces an immediate refresh of both public lists, waits for both catalog
+fetches to finish, clears the retry cooldowns for models that could not be priced, and returns
+`{ ok: true, sources: { "models-dev": status, "openrouter": status } }`. A source `status` is
+`{ ok: true, fetchedAt, count }` or `{ ok: false, error }`, where `error` is a short code such as
+`fetch_failed`, `bad_json`, `empty` or `http_503`, never a response body.
+
+`PUT /api/providers/{provider}/price-multiplier` accepts `{ multiplier }`, a finite number greater
+than 0 and at most 1000, or `null` to remove it, and returns `{ ok: true, provider, multiplier }`.
+The multiplier models a relay that charges a markup or discount over the vendor's list price. It
+scales official, models.dev and OpenRouter prices for that provider and never a manual price.
+`GET /api/providers/{provider}/model-costs` also returns `priceMultiplier` when one is set. An unset
+multiplier is absent from `config.json`; an invalid stored value is ignored at load with a warning.
+
+`/api/logs` and `/api/usage` cost results add the reasons `online_price_catalog`,
+`relay_price_multiplier` and `subscription_api_equivalent` to `estimateReasons` when they apply.
+
 The **Model price** dialog offers **Automatic**, **Flat rate**, and **Custom threshold**
 prompt-length pricing. Automatic (also the default when the policy is absent) retains catalog
 context rules with the saved base rates. Flat disables context adjustments. Custom selects four
@@ -687,7 +720,21 @@ maps these facts come from. Display name is not part of this route; use
 
 `GET /api/models` reports the exact stored `contextWindowDeclared` separately from the
 effective `contextWindow`. The Models editor starts from the declaration and shows the effective
-window as an inherited hint when no declaration exists. If a save outcome is unknown, or the
+window as an inherited hint when no declaration exists.
+
+Routed rows also carry `capabilitySources`, one label per axis (`contextWindow`,
+`inputModalities`, `reasoningEfforts`): `manual` (an operator declaration), `probed` (a
+declaration written by the capability probe), `reported` (discovery, the registry or provider
+metadata), `inferred` (a context window the catalog estimated under `inferContextWindow`), or
+`unknown`. When the same model id is known elsewhere, `inferredCapabilities` carries the estimate
+for each axis as `{ value, basis: { source, provider, modelId } }`, where `source` is `registry`
+(a built-in original-vendor provider), `vendor` (bundled vendor metadata), `provider` (another
+configured provider's declaration) or `aggregator` (bundled aggregator metadata), in that order of
+authority. Ids match ignoring case, a `vendor/` prefix, dot-versus-hyphen spelling and a `[...]`
+suffix; two sources of the same authority that disagree give no estimate. These estimates are
+display data: they never route a request and never enter the Codex catalog on their own. To use
+one, save it as a declaration (the model-settings route, `modelCapabilities`, or
+`modelReasoningEfforts`) or, for the context window, enable `inferContextWindow`. If a save outcome is unknown, or the
 save succeeded but the model list did not reload, the dialog disables further writes and offers
 a read-only Reload. After a successful reload, reopen the row to inspect the stored values.
 A `catalogRefresh` that failed, or was skipped with `retryable: true`, leaves the save in place and
@@ -811,6 +858,7 @@ already read.
 | `PATCH /api/providers?name=...` | Update allowed provider fields (including a merged `headers` block), enabled/default state, or OpenAI account mode | 400 invalid field or transition; 404 unknown provider |
 | `DELETE /api/providers?name=...` | Delete a provider, reassigning the default when possible | 404 unknown provider; 409 `last_provider`; 409 `provider_has_dependent_combos` |
 | `POST /api/providers/test?name=...` | Perform a bounded live provider connectivity/model-discovery probe | 404 unknown provider; failures are normally returned as `ok: false` evidence |
+| `POST /api/providers/probe-capabilities` | Probe whether one model accepts an image input and which reasoning efforts it accepts, optionally writing the conclusive results back as labeled declarations (see [Capability probe](#capability-probe)) | 400 invalid request; 404 unknown provider; 409 probe already running for that provider |
 | `GET /api/provider-quotas` | Read provider quota reports; `refresh=1` forces refresh | — |
 | `GET /api/quota-pool` | Read the passive `ocx.quota-pool/1` account quota pool (per-account and pooled windows, opaque account references) from cached evidence only; never probes or refreshes, and ignores `refresh`. Pooled windows are a plan-weighted estimate over the routable accounts' readings from the last 30 minutes, plus an `availability` window while no account can run. Also readable from a Remote Link Child or Hub client at `/api/machine/hub-relay/api/quota-pool` | — |
 | `GET /api/quota-resets` | List recently detected quota-window resets and whether detection is enabled; `limit=<n>` caps the count | 400 invalid `limit` |
@@ -824,6 +872,65 @@ accepts only a boolean or `null` to clear this setting; omission preserves it. A
 also preserves an omitted setting, including the latest stored `false`; an explicit submitted
 boolean wins. See [Context windows on custom providers](/reference/configuration/providers/#context-windows-on-custom-providers)
 for its default-off, custom-provider-only behavior.
+
+#### Capability probe
+
+`POST /api/providers/probe-capabilities` sends a few tiny live requests to one model on one
+configured provider. It reuses the explicit completion diagnostic (`openai-chat` and
+`openai-responses` wires only, 32-token output cap, 20-second deadline per request, no retries),
+changing only the request body. A plain prompt is sent first as a baseline; one probe adds a 1x1 PNG image beside the prompt, and one probe
+per reasoning effort adds `reasoning_effort` (Chat) or `reasoning.effort` (Responses).
+
+Request body:
+
+```json
+{ "name": "my-provider", "model": "vendor/model", "checks": ["image", "reasoning"],
+  "efforts": ["low", "medium", "high"], "confirmMetered": true, "apply": false }
+```
+
+- `checks` defaults to both. `efforts` is valid only with the `reasoning` check, accepts declared
+  effort names (`none`, `minimal`, `low` … `ultra`, at most 6), and defaults to the model's
+  configured ladder, else `low`, `medium`, `high`.
+- A provider that authenticates with an API key and points at a non-local destination is
+  **metered**. Without `confirmMetered: true` nothing is sent and the response is
+  `{ "applicable": true, "sent": false, "requiresConfirmation": true, "metered": true, "plannedRequests": n }`.
+- OAuth, forward-auth, disabled, and unsupported-adapter providers answer
+  `{ "applicable": false, "reason": ..., "sent": false }` without sending.
+
+When sent, the response is `{ applicable: true, sent: true, metered, provider, model, baseline, image?, reasoning?, applied? }`:
+
+- `baseline.status` reports the plain prompt. Unless it is `accepted`, no variant is sent and every
+  check is `inconclusive`, so an unrelated 400 (an unknown model, say) is never read as "this model
+  rejects images". A baseline that completes without text still counts as accepted. `plannedRequests`
+  counts the baseline.
+
+- `image.status` is `accepted` (the request completed with a text delta), `rejected` (HTTP 400 or 422), or
+  `inconclusive` (timeout, network, 401/403/429/5xx, an incomplete stream, or a completed response
+  with no text delta, which returns `no_content`); `image.error` carries only `{ code, status? }`.
+- `reasoning` lists efforts under `accepted`, `rejected`, and `inconclusive`. A reasoning probe that
+  finishes without text still counts as accepted: the request was admitted and the small output cap
+  can be spent entirely on reasoning.
+- Probes run one at a time. A 401, 403, or 429 (or a missing or changed credential) stops the run,
+  and the remaining efforts are reported as inconclusive.
+- "Accepted" means the upstream did not refuse the field; a gateway that silently ignores
+  `reasoning_effort` reads as accepting every effort. Upstream response and error bodies are never
+  returned or logged.
+
+With `apply: true`, conclusive results are saved. The Codex catalog refresh is best effort; run
+Sync if the catalog remains stale. An accepted image adds `image` to `modelCapabilities[model].inputModalities`; a
+rejected image removes it. Other declared modalities and capability axes are untouched. With no
+declaration, the starting modality is `text`; it is also retained if removing `image` would leave
+no modalities. The reasoning ladder is written to
+`modelReasoningEfforts[model]` (accepted efforts in ladder order) only when every probed effort was
+conclusive. If the stored default is not among the accepted efforts, the probe removes
+`modelDefaultReasoningEfforts[model]`; this removal is not listed in `applied`. A configured alias uses the native model's ladder if efforts are omitted and writes
+under that native model ID; `model` in the response stays as submitted. If the handler's authority check detects that the provider's destination, auth mode, or the model's alias
+target changed while the probe ran (before a later variant probe or before writing conclusive results), nothing is written and the response is 409 with the results; an inconclusive probe with nothing to write can still return 200 with an empty `applied` if no change was already detected.
+`applied` reports what was written. Each written axis is labeled in the provider's
+`modelCapabilityProbes` field; a later manual edit of that axis through `PATCH /api/providers`
+(`modelCapabilities`) or `PUT /api/model-settings` removes the label, as does a provider save that
+changes the labeled declaration or the destination. A provider-form save to the same destination keeps a probe-written
+reasoning ladder and its label.
 
 When Antigravity's quota-summary endpoint has no usable response, quota reports may also include
 per-model Cloud Code Assist usage windows when the model-discovery response provides them. These

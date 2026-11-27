@@ -4,6 +4,14 @@ The explicit, user-confirmed single-model completion test that complements the n
 
 Provider routes lazily dispatch `POST /api/providers/test-completion?name=...` to the completion runner. The registry assigns the mutating route to `src/server/management/provider-routes.ts`; normal management authentication, Origin admission and dashboard CSRF apply. Exact input is `{ model, confirm: true }`; invalid input, unknown providers and concurrent tests return 400, 404 and 409. A process-local slot is released in `finally` on every outcome.
 
+The separate dashboard capability probe (`POST /api/providers/probe-capabilities`) has no CLI verb
+and requires confirmation for metered requests. It uses the native model's reasoning ladder when
+an alias omits efforts.
+Applying a conclusive image result changes image membership without dropping other declared
+modalities. Provider overwrites and PATCH do not retain probe provenance across a destination
+change. Applying a new ladder clears an incompatible stored default. Codex catalog refresh is
+best effort after a successful save.
+
 Applicability checks disabled state, forwarded/OAuth auth, unsupported transports and effective per-model wire before credentials. TLS profiles, HTTP-version pins, enabled pacing and custom executors with provider proxy overrides are unsupported. Metadata routing removes stored keys/pools; destination policy precedes real key resolution. Only OpenAI Chat and Responses execute, through existing transport builders and `providerOutboundPost`, without redirects, retries or failover. Both applicability and authority derivation resolve aliases to native model ids before selecting per-model wires, then apply wire-model suffix stripping through existing helpers.
 
 Local HTTP probes materialize the existing effective private-network policy (operator opt-in or a registry-local default) and enable `providerOutboundPost`'s local-cleartext safeguard. Its narrow host/address allowlist, DNS-answer checks and proxy refusal still apply; public HTTP and private destinations without admission are refused. Chat probes resolve OpenRouter and Vercel AI Gateway routing with the same helpers as the chat adapter, keyed by the native model before suffix stripping, and serialize the resulting `provider` field. Responses does not synthesize that chat-only field. Canonical OpenCode Go Chat and Responses probes derive a stable provider/model and wire-scoped `x-opencode-session` value; an explicitly configured header takes precedence, and other destinations receive no generated Go header.
