@@ -117,4 +117,16 @@ describe("Ultrafast pricing", () => {
     expect(dto.displayMetrics.cost.estimate.cost.total).toBeCloseTo(0.18, 10);
     expect(dto.attempts[0]!.displayMetrics.cost.estimate.cost.total).toBeCloseTo(0.18, 10);
   });
+  test("an expanded attempt without its own tier record does not borrow the parent's Ultrafast response", () => {
+    const confirmed: AttemptTierOutcome = { ...transmitted, fastOutcome: "unknown", confirmation: "unknown", responseServiceTier: "ultrafast", responseTierAuthoritative: true };
+    delete confirmed.fastDowngradeReason;
+    const plain = { provider: "openai", model: "gpt-6.2-sol", usageStatus: "reported", usage, durationMs: 1000, status: 200, sendCount: 1, recoveryKinds: [] };
+    const entry = {
+      requestId: "r", timestamp: NOV_2026, ...plain, responseServiceTier: "ultrafast", tierOutcome: confirmed,
+      attempts: [{ ordinal: 1, ...plain }, { ordinal: 2, ...plain, tierOutcome: confirmed }],
+    } as unknown as RequestLogEntry;
+    const dto = requestLogDto(entry) as { displayMetrics: { cost: { estimate: { cost: { total: number } } } }; attempts: Array<{ displayMetrics: { cost: { estimate: { cost: { total: number } } } } }> };
+    expect(dto.attempts.map(a => Number(a.displayMetrics.cost.estimate.cost.total.toFixed(6)))).toEqual([0.03, 0.09]);
+    expect(dto.displayMetrics.cost.estimate.cost.total).toBeCloseTo(0.12, 10);
+  });
 });

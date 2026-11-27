@@ -632,7 +632,9 @@ export interface ServiceTierPricing {
 /**
  * Ultrafast evidence, strongest first: an authoritative response tier decides; an explicit
  * refusal rules Ultrafast out; otherwise the serialized wire value counts. A tier the caller only
- * requested proves nothing about what was sent, so it never selects the Ultrafast price.
+ * requested proves nothing about what was sent, so it never selects the Ultrafast price. Evidence
+ * comes only from a tier-outcome record: a scalar tier copied from a parent row may describe a
+ * different attempt, and every Ultrafast-capable release records outcomes.
  */
 function ultrafastBasis(tier: ServiceTierInput | undefined, outcome: AttemptTierOutcome | undefined): ServiceTierPricing["basis"] | undefined {
   const evidence = outcome ?? (typeof tier === "object" ? tier.tierOutcome : undefined);
@@ -647,7 +649,7 @@ function ultrafastBasis(tier: ServiceTierInput | undefined, outcome: AttemptTier
       ? "transmitted"
       : undefined;
   }
-  return typeof tier === "object" && canonicalFastTierMarker(tier.responseServiceTier) === "ultrafast" ? "confirmed" : undefined;
+  return undefined;
 }
 
 /**

@@ -43,7 +43,7 @@ step from `ServiceTierContext.pricedAt`, which `serviceTierContext()` takes from
 (`computeEntryCost` in `src/usage/summary.ts`) price a row by its own request time; without a
 timestamp the current time applies.
 
-Evidence is read per attempt, strongest first. An authoritative response tier decides: an
+Evidence is read per attempt from its own tier-outcome record, strongest first; a scalar tier copied from a parent row or the request context never selects Ultrafast, and the context contributes only the timestamp. An authoritative response tier decides: an
 Ultrafast echo is `confirmed`, any other tier keeps Standard. An explicit `response-declined`
 refusal keeps Standard. Otherwise an attempt whose adapter serialized `service_tier: ultrafast`
 (`wireKind: "service-tier"`) is priced as `transmitted`: the estimate is marked `estimated` and
