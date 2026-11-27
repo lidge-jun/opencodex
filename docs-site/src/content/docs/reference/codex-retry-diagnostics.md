@@ -59,6 +59,11 @@ that the account pool routed to the main account, the earliest known time anothe
 pool account recovers, whichever comes first (never sooner than one minute).
 Resume the Goal after that time; routing then picks an account from fresh state.
 
+The same refusal is returned when another pool account was tried first and
+answered that it does not support the requested model. The client sees the main
+account's limit and reset rather than that account's model error. A quota refusal
+from the other account is still returned as before.
+
 ## Stored-account credit metadata retries
 
 An explicitly selected stored account can reach its included usage limit while its last
