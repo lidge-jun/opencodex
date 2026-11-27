@@ -57,7 +57,7 @@ L’application demande à son CLI intégré d’exécuter `ocx resolve --json` 
 
 Utilisez l’action **Open dashboard** ou **Open in browser** de la zone de notification pour passer du tableau de bord intégré à votre navigateur habituel. Le menu permet aussi de rechercher les mises à jour.
 
-Sur macOS, fermer le tableau de bord laisse l’application active dans la barre des menus. Ouvrez à nouveau OpenCodex depuis le Dock ou le Finder pour réafficher le tableau de bord sans redémarrer le proxy.
+Sur macOS, fermer le tableau de bord laisse l’application active dans la barre des menus. Choisissez **Open Dashboard** dans la barre des menus ou rouvrez OpenCodex depuis le Finder pour réafficher le tableau de bord sans redémarrer le proxy. Activez **Hide Dock icon** dans le même menu pour masquer l’icône du Dock même lorsque le tableau de bord est ouvert.
 
 ## Utilisation dans la zone de notification
 

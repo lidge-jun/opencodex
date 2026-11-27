@@ -72,7 +72,7 @@ Usa **Open dashboard** (abrir dashboard) u **Open in browser** (abrir en el nave
 
 En Windows, aceptar **Take over** (tomar el control) permite hasta 90 segundos para detener de forma segura el entorno de ejecución existente, transferir su control e iniciar el que incluye la aplicación. El tiempo que tardes en decidir no cuenta para ese límite. Mantén la aplicación abierta mientras termina; si falla, usa **Retry** (reintentar) para volver a buscar el entorno de ejecución actual.
 
-En macOS, cerrar el dashboard mantiene la aplicación en la barra de menús. Vuelve a abrir OpenCodex desde el Dock o Finder para recuperar el dashboard sin reiniciar el proxy.
+En macOS, cerrar el dashboard mantiene la aplicación en la barra de menús. Elige **Open Dashboard** en la barra de menús o vuelve a abrir OpenCodex desde Finder para recuperar el dashboard sin reiniciar el proxy. Activa **Hide Dock icon** en el mismo menú si quieres ocultar el icono del Dock incluso con el dashboard abierto.
 
 En Windows, **Start at Login** (iniciar al abrir sesión) registra la ruta del ejecutable entre comillas para el usuario actual, incluidas las instalaciones en `Program Files`. Los registros habilitados se actualizan una vez al iniciar la aplicación. Las entradas que hayas deshabilitado desde la bandeja o el Administrador de tareas permanecen deshabilitadas.
 
