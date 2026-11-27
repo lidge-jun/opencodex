@@ -132,12 +132,41 @@ export function resolvedProxyEnv(
     const outbound = key !== "NO_PROXY";
     const value = [env[key]?.trim(), env[key.toLowerCase()]?.trim()].find(v => v && (
       ownClaudeInterceptProxy === undefined
-        ? !isOwnedClaudeInterceptProxy(v, token) && !(outbound && v.replace(/\/$/, "") === picker)
+        ? !isOwnedClaudeInterceptProxy(v, token) && !(outbound && isOwnedDesktopPickerProxy(v, picker))
         : v !== ownClaudeInterceptProxy
     ));
     if (value) resolved.push({ name: key, value });
   }
   return resolved;
+}
+
+interface PickerProxyEndpoint {
+  protocol: string;
+  hostname: string;
+  port: string;
+}
+
+function parsePickerProxyEndpoint(value: string): PickerProxyEndpoint | null {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.includes("@") || /[?#]/.test(trimmed)) return null;
+  if (/\/\/+$/.test(trimmed)) return null;
+  let url: URL;
+  try { url = new URL(trimmed); } catch { return null; }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (url.username || url.password || url.search || url.hash) return null;
+  if (url.pathname !== "" && url.pathname !== "/") return null;
+  const port = url.port || (url.protocol === "http:" ? "80" : "443");
+  if (!/^\d{1,5}$/.test(port) || Number(port) <= 0 || Number(port) > 65535) return null;
+  return { protocol: url.protocol, hostname: url.hostname.toLowerCase(), port };
+}
+
+function isOwnedDesktopPickerProxy(value: string, picker: PickerProxyEndpoint | null): boolean {
+  if (!picker) return false;
+  const candidate = parsePickerProxyEndpoint(value);
+  return candidate !== null
+    && candidate.protocol === picker.protocol
+    && candidate.hostname === picker.hostname
+    && candidate.port === picker.port;
 }
 
 /**
@@ -147,10 +176,10 @@ export function resolvedProxyEnv(
  * from a Desktop Code session would otherwise bake it and the service would tunnel every
  * provider request back into itself.
  */
-function ownDesktopPickerProxy(): string | null {
+function ownDesktopPickerProxy(): PickerProxyEndpoint | null {
   try {
     const profile = inspectDesktopPickerProfile();
-    return profile.kind === "applied" ? profile.proxyUrl.replace(/\/$/, "") : null;
+    return profile.kind === "applied" ? parsePickerProxyEndpoint(profile.proxyUrl) : null;
   } catch {
     return null;
   }
