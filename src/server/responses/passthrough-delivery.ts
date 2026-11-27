@@ -5,7 +5,7 @@ import { noteRelaySyntheticTail, noteRequestSentValueGuard } from "../request-lo
 import { createSentValueGuard } from "../../lib/outbound-credential-registry";
 import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { markProxyError, rememberProxyErrorMessage, carryProxyError } from "../../lib/client-error-body";
-import { markUndeclaredToolGuardRefusal, undeclaredToolGuardRefused } from "../../lib/errors";
+import { markUndeclaredToolGuardRefusal } from "../../lib/errors";
 import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
@@ -1083,11 +1083,7 @@ export async function deliverPassthroughResponse(
             status, JSON.stringify({ error: clientError }), { headers: failureHeaders },
           ));
           // The provider already ended the turn before this JSON projection chose an HTTP status.
-          // A guard-generated refusal reaching this projection never sent output to the client, so
-          // it must stay replayable for the combo to hop (the guard's mark on logCtx is the
-          // provenance #9163); a provider failure returns before the client rewrite runs and
-          // never carries that provenance, so it keeps the non-replayable mark.
-          if (!undeclaredToolGuardRefused(logCtx)) markResponseNonReplayable(response);
+          markResponseNonReplayable(response);
           return response;
         };
         const failBufferedTurn = (

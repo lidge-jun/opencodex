@@ -200,22 +200,6 @@ describe("combo hop on the undeclared-tool guard's refusal (#9163)", () => {
     });
   }
 
-  // The buffered Responses relay rewrites the upstream transcript through the guard's block
-  // rewrite, so a refusal arrives as a rewritten response.failed: deliverFailedCompletion must
-  // keep that failure replayable (the guard marked logCtx) or core-combo stops on the
-  // non-replayable mark before the undeclared-tool hop ever runs (#9163, CodeRabbit round 5).
-  test("Responses: a rewritten buffered-SSE refusal stays replayable and hops", async () => {
-    const hits: string[] = [];
-    const config = comboConfig(callOnly("code_runner/bash"), 2, hits);
-    // stream=false forces the buffered (non-eager) relay: the upstream SSE is fully buffered,
-    // rewritten through the guard, and the refusal is projected as a JSON failure response.
-    const response = await handleResponses(responsesRequest(false), config, { model: "", provider: "" });
-    const body = await response.text();
-    expect(hits).toEqual(["a", "b"]);
-    expect(body).toContain("BACKUP_OK");
-    expect(firstTargetCooled()).toBe(false);
-  });
-
   test("Responses: an upstream error before an undeclared call keeps its own cooldown", async () => {
     // The guard trips on the later call, but the failure the combo judges is the upstream's own
     // rate-limit error: that verdict, not the guard's, decides the cooldown.
