@@ -81,7 +81,9 @@ describe("StepCode tool-result matching", () => {
         { role: "user", content: "actually, do this instead", timestamp: 2 },
       ]),
     );
-    expect(stale).toBeUndefined();
+    expect(stale?.toolCallId).toBe("call-OLD");
+    // The caller compares this against the held call id; a mismatch must refuse rather than deliver.
+    expect(stale?.toolCallId === "call-NEW").toBe(false);
   });
 
   test("has no result to deliver when the turn carries none", () => {

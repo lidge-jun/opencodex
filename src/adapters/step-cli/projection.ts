@@ -92,7 +92,11 @@ export function projectToolResultContent(
 export function latestToolResult(
   parsed: OcxParsedRequest,
 ): { content: readonly unknown[]; isError?: boolean; toolCallId: string } | undefined {
-  const message = latestCurrentMessage(parsed);
+  // The newest CURRENT result, not only the newest message: Codex records text the user steers
+  // with during a tool call after the call's output, so a turn can end [toolResult, user]. The
+  // caller matches this against the held call id; a result restored from history sits before the
+  // current-input start and never matches.
+  const message = latestCurrentMessage(parsed, candidate => candidate.role === "toolResult");
   if (message?.role !== "toolResult") return undefined;
   return {
     content: projectToolResultContent(message.content),
@@ -188,7 +192,10 @@ export function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function latestCurrentMessage(parsed: OcxParsedRequest) {
+function latestCurrentMessage(
+  parsed: OcxParsedRequest,
+  accept: (message: OcxParsedRequest["context"]["messages"][number]) => boolean = () => true,
+) {
   const messages = parsed.context.messages;
   const start = parsed._currentInputMessageStart ?? (parsed._replayPrefixLen ? messages.length : 0);
   const cells = parsed._replayedWebSearchCells;
@@ -196,7 +203,8 @@ function latestCurrentMessage(parsed: OcxParsedRequest) {
   for (let index = messages.length - 1; index >= start; index--) {
     const message = messages[index];
     if (!message || message.role === "developer") continue;
-    if (!replayedIds || !isReplayedSearchResult(message, replayedIds)) return message;
+    if (replayedIds && isReplayedSearchResult(message, replayedIds)) continue;
+    if (accept(message)) return message;
   }
 }
 

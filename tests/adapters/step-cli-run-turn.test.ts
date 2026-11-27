@@ -458,7 +458,8 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     expect(second.find(event => event.type === "done")).toMatchObject({ stopReason: "stop" });
   });
 
-  test.each(["call-SOMEONE-ELSE", "call-9"])("new user text after result %s replaces the held call", async staleCall => {
+  test("new user text after another call's result replaces the held call", async () => {
+    const staleCall = "call-SOMEONE-ELSE";
     // Regression: the code set `continuedQuery = true` whenever a held call existed, so a client that
     // sent a new user message instead of the result had that message swallowed and its request
     // answered with `step_cli_turn_abandoned`.
@@ -496,6 +497,45 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     expect(session.interrupts).toEqual(["q_1"]);
     expect(session.queries).toHaveLength(2);
     expect(session.inputs.at(-1)?.text).toContain("actually do this instead");
+  });
+
+  test("the held call's own result followed by steering text is delivered, not discarded", async () => {
+    // Codex records text the user steers with during a tool call after the call's output, so the
+    // turn ends [toolResult call-9, user]. The tool already ran: answering it with an empty error
+    // would tell the model it failed and invite a second run of whatever side effects it had.
+    const session = new FakeSession();
+    const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
+    session.stream = [
+      requestFrame("req_101", "permission.request", {
+        toolName: "ocx__shell", input: {}, toolUseId: "perm_100",
+        decisionReason: "tool execution requires approval", timeoutMs: 60_000,
+      }),
+      requestFrame("req_102", "sdk_tool.invoke", {
+        serverName: "ocx",
+        toolName: "shell",
+        input: { cmd: "echo LIVE_BRIDGE_OK" },
+        toolUseId: "call-9", timeoutMs: 120_000,
+      }),
+    ];
+    await adapter.runTurn!(parsed(USER_ASK), THREAD_META, () => {});
+
+    session.stream = [TURN_COMPLETE];
+    await adapter.runTurn!(
+      parsed([
+        ...USER_ASK,
+        { role: "toolResult", toolCallId: "call-9", toolName: "shell", content: "LIVE_BRIDGE_OK", isError: false, timestamp: 1 },
+        { role: "user", content: "and then summarize it", timestamp: 2 },
+      ]),
+      THREAD_META,
+      () => {},
+    );
+
+    const delivered = session.delivered[0]?.result as { content: Array<{ text: string }>; isError?: boolean };
+    expect(delivered.isError).toBeUndefined();
+    expect(delivered.content[0]?.text).toBe("LIVE_BRIDGE_OK");
+    // The held query continues; nothing is interrupted or restarted.
+    expect(session.interrupts).toEqual([]);
+    expect(session.queries).toHaveLength(1);
   });
 
   test("an identity-less request is not routed onto the conversation host's own handle", async () => {
