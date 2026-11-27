@@ -8,6 +8,7 @@ import { markPassiveKeyTransparent } from "../../src/lib/passive-key-fetch-proof
 import { anthropicBillingPhysicalFetch } from "../../src/providers/anthropic-billing-ownership";
 import { distributedKeyPhysicalFetch } from "../../src/providers/api-key-response-ownership";
 import { passiveKeyPhysicalFetch } from "../../src/providers/passive-key-observation";
+import { resolveProviderTransport } from "../../src/providers/xai-transport";
 
 const originalHosts = process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS;
 const builtinBinding = { providerName: "fixture", provider: {} };
@@ -229,5 +230,64 @@ describe("host-scoped classical TLS groups", () => {
     registerUpstreamRewriter("test-rewrite", target => { target.url = "https://other.example/v1"; });
     await sendWithConnectionPolicy(builtinFetch(fetcher), "https://relay.example/v1", undefined, builtinBinding);
     expect(observed?.tls).toBeUndefined();
+  });
+
+  test("preserves TLS transparency through resolved built-in Mistral and xAI transports while rejecting opaque inner executors", async () => {
+    const originalFetch = globalThis.fetch;
+    const observed: Array<{ url: string; ecdhCurve?: unknown }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: BunFetchRequestInit) => {
+      observed.push({
+        url: input instanceof Request ? input.url : String(input),
+        ecdhCurve: (init?.tls as Record<string, unknown> | undefined)?.ecdhCurve,
+      });
+      return new Response("ok");
+    }) as typeof fetch;
+    try {
+      process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS = "api.mistral.ai, api.x.ai";
+      const mistral = resolveProviderTransport("mistral", {
+        adapter: "openai-chat",
+        baseUrl: "https://api.mistral.ai/v1",
+        apiKey: "test-mistral-key",
+        models: ["mistral-large-latest"],
+      } as OcxProviderConfig);
+      const xai = resolveProviderTransport("xai", {
+        adapter: "openai-responses",
+        baseUrl: "https://api.x.ai/v1",
+        apiKey: "test-xai-key",
+        models: ["grok-4"],
+      } as OcxProviderConfig);
+
+      expect((await providerFetch(mistral, undefined, { providerName: "mistral" })("https://api.mistral.ai/v1/chat/completions", { method: "POST", body: "{}" })).status).toBe(200);
+      expect((await providerFetch(xai, undefined, { providerName: "xai" })("https://api.x.ai/v1/responses", { method: "POST", body: "{}" })).status).toBe(200);
+      expect(observed).toEqual([
+        { url: "https://api.mistral.ai/v1/chat/completions", ecdhCurve: "X25519:P-256:P-384" },
+        { url: "https://api.x.ai/v1/responses", ecdhCurve: "X25519:P-256:P-384" },
+      ]);
+
+      let opaqueCalled = false;
+      const opaque = (async () => { opaqueCalled = true; return new Response("ok"); }) as typeof fetch;
+      const opaqueMistral = resolveProviderTransport("mistral", {
+        adapter: "openai-chat",
+        baseUrl: "https://api.mistral.ai/v1",
+        apiKey: "test-mistral-key",
+        models: ["mistral-large-latest"],
+        fetch: opaque,
+      } as OcxProviderConfig & { fetch: typeof fetch });
+      const opaqueXai = resolveProviderTransport("xai", {
+        adapter: "openai-responses",
+        baseUrl: "https://api.x.ai/v1",
+        apiKey: "test-xai-key",
+        models: ["grok-4"],
+        fetch: opaque,
+      } as OcxProviderConfig & { fetch: typeof fetch });
+
+      await expect(providerFetch(opaqueMistral, undefined, { providerName: "mistral" })("https://api.mistral.ai/v1/chat/completions"))
+        .rejects.toThrow(/custom.*transport/i);
+      await expect(providerFetch(opaqueXai, undefined, { providerName: "xai" })("https://api.x.ai/v1/responses"))
+        .rejects.toThrow(/custom.*transport/i);
+      expect(opaqueCalled).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

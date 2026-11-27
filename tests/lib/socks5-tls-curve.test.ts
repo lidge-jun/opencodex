@@ -12,16 +12,21 @@ afterEach(() => {
 const HYBRID_GROUP = 0x11ec; // X25519MLKEM768
 const X25519 = 0x1d;
 
-/** Walk the ClientHello extension list once, returning key-share groups and whether ALPN was offered. */
-function parseHello(hello: Buffer): { keyShareGroups: number[]; alpnOffered: boolean } {
+/** Walk the ClientHello extension list once, returning key-share groups, SNI, and whether ALPN was offered. */
+function parseHello(hello: Buffer): { keyShareGroups: number[]; alpnOffered: boolean; serverName?: string } {
   let p = 5 + 4 + 2 + 32;
   const u16 = () => { const n = hello.readUInt16BE(p); p += 2; return n; };
   let n = hello[p]!; p += 1 + n; n = u16(); p += n; n = hello[p]!; p += 1 + n;
   const end = p + 2 + hello.readUInt16BE(p); p += 2;
   const keyShareGroups: number[] = [];
   let alpnOffered = false;
+  let serverName: string | undefined;
   while (p + 4 <= end) {
     const type = u16(); const len = u16(); const stop = p + len;
+    if (type === 0 && p + 5 <= stop && hello[p + 2] === 0) {
+      const nameLen = hello.readUInt16BE(p + 3);
+      if (p + 5 + nameLen <= stop) serverName = hello.subarray(p + 5, p + 5 + nameLen).toString("ascii");
+    }
     if (type === 51) {
       let q = p + 2;
       while (q + 4 <= stop) { keyShareGroups.push(hello.readUInt16BE(q)); q += 4 + hello.readUInt16BE(q + 2); }
@@ -29,7 +34,7 @@ function parseHello(hello: Buffer): { keyShareGroups: number[]; alpnOffered: boo
     if (type === 16) alpnOffered = true;
     p = stop;
   }
-  return { keyShareGroups, alpnOffered };
+  return { keyShareGroups, alpnOffered, serverName };
 }
 
 /**
@@ -40,7 +45,7 @@ function parseHello(hello: Buffer): { keyShareGroups: number[]; alpnOffered: boo
 async function captureClientHello(
   init?: RequestInit,
   options: { deadlineMs?: number; holdAfterHello?: boolean; controller?: AbortController; target?: string } = {},
-): Promise<{ keyShareGroups: number[]; alpnOffered: boolean }> {
+): Promise<{ keyShareGroups: number[]; alpnOffered: boolean; serverName?: string }> {
   let resolveHello: (hello: Buffer) => void;
   const hello = new Promise<Buffer>(resolve => { resolveHello = resolve; });
   const sockets = new Set<Socket>();
@@ -175,6 +180,7 @@ describe("socks5Fetch TLS options", () => {
       },
     } as BunFetchRequestInit);
     assert.equal(captured.alpnOffered, false, "caller ALPN must not be advertised; this transport speaks HTTP/1.1 only");
+    assert.equal(captured.serverName, "destination.invalid", "caller servername must not replace the destination SNI");
     assert.ok(!captured.keyShareGroups.includes(HYBRID_GROUP), "the curve override itself must still apply");
   });
 });

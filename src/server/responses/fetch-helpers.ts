@@ -250,7 +250,8 @@ export function sendWithConnectionPolicy(
   const providerTransport = egress?.provider as { fetch?: unknown; tlsProfile?: unknown } | undefined;
   if (classicalTls && (
     !isTlsContextTransparentExecutor(physicalFetch)
-    || typeof providerTransport?.fetch === "function" || providerTransport?.tlsProfile !== undefined
+    || (typeof providerTransport?.fetch === "function" && !isTlsContextTransparentExecutor(providerTransport.fetch))
+    || providerTransport?.tlsProfile !== undefined
   )) {
     return Promise.reject(new Error("Cannot apply classical TLS groups to a custom provider transport"));
   }
@@ -596,6 +597,8 @@ export function providerFetch(
     unpacedFetch: markPhysicalSendReceiptExecutor(Object.assign(unpaced, { preconnect }) as typeof globalThis.fetch),
   });
   markEgressTransparentExecutor(paceAware as unknown as typeof globalThis.fetch);
+  inheritTlsContextProof(paceAware as unknown as typeof globalThis.fetch, transport);
+  inheritTlsContextProof(paceAware.unpacedFetch, transport);
   if (customExecutor === undefined && transport === base && !options.dispatchOverride) bindProviderSocketRoute(paceAware, providerName, provider);
   const { onPhysicalDispatch, dispatchOverride, beforeDispatch, accountAutoPause, ...supportOptions } = options;
   if (onPhysicalDispatch || dispatchOverride || beforeDispatch || accountAutoPause) {
