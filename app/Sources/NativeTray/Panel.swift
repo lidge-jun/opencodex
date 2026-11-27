@@ -4,6 +4,16 @@ public enum NativeTrayHitTest {
     public static func isNearButton(buttonFrame: NSRect, point: NSPoint, tolerance: CGFloat = 4) -> Bool {
         buttonFrame.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
     }
+
+    /// Where a mouse event happened, in screen coordinates. Global-monitor events arrive after the
+    /// fact, so the live pointer (`NSEvent.mouseLocation`) may already have left the icon; the event
+    /// keeps its own position. A windowless event, which is what a global monitor delivers, already
+    /// reports `locationInWindow` in screen coordinates.
+    @MainActor
+    public static func screenLocation(of event: NSEvent) -> NSPoint {
+        guard let window = event.window else { return event.locationInWindow }
+        return window.convertPoint(toScreen: event.locationInWindow)
+    }
 }
 
 /// Adapted from the native companion's PopoverPanel in commit 38a5ab9fc4.
@@ -53,7 +63,7 @@ final class NativeTrayPanel: NSPanel {
             outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
                 guard let self else { return }
                 if event.type == .leftMouseDown, let button = self.statusButton, let buttonWindow = button.window {
-                    let mouse = NSEvent.mouseLocation
+                    let mouse = NativeTrayHitTest.screenLocation(of: event)
                     let buttonFrame = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
                     if NativeTrayHitTest.isNearButton(buttonFrame: buttonFrame, point: mouse) {
                         self.buttonPress.record()

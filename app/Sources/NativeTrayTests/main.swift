@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import NativeTray
 
@@ -188,6 +189,14 @@ let buttonRect = NSRect(x: 100, y: 100, width: 30, height: 22)
 check(NativeTrayHitTest.isNearButton(buttonFrame: buttonRect, point: NSPoint(x: 110, y: 110)), "Inside button frame hits")
 check(NativeTrayHitTest.isNearButton(buttonFrame: buttonRect, point: NSPoint(x: 98, y: 100)), "Within button margin hits")
 check(!NativeTrayHitTest.isNearButton(buttonFrame: buttonRect, point: NSPoint(x: 50, y: 50)), "Outside button frame misses")
+
+// A global monitor's press keeps the position it happened at, wherever the pointer is now.
+let pressPoint = NSPoint(x: NSEvent.mouseLocation.x + 400, y: NSEvent.mouseLocation.y + 300)
+let windowlessPress = NSEvent.mouseEvent(
+    with: .leftMouseDown, location: pressPoint, modifierFlags: [], timestamp: 0,
+    windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+check(MainActor.assumeIsolated { NativeTrayHitTest.screenLocation(of: windowlessPress) } == pressPoint,
+      "A windowless press is hit-tested where it happened, not at the live pointer")
 
 // Button-press sequences, in the order AppKit and Tauri deliver them.
 var press = NativeTrayButtonPress()
