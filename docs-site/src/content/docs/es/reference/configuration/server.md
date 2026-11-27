@@ -242,7 +242,9 @@ Algunas rutas de red ascendentes restablecen las conexiones cuando el protocolo 
 OCX_TLS_CLASSICAL_GROUPS_HOSTS="api.example.com" ocx start
 ```
 
-El valor es una lista separada por comas de nombres de host. La coincidencia no distingue entre mayúsculas y minúsculas e incluye subdominios; omita esquemas, puertos y rutas. La opción afecta solo a las solicitudes HTTPS a los hosts coincidentes y conserva la verificación de certificados. Elimina el grupo híbrido poscuántico para esas conexiones, así que úsela solo para los extremos que necesiten esta solución de compatibilidad. Sin definir o vacía mantiene el comportamiento TLS predeterminado del entorno de ejecución.
+El valor es una lista separada por comas de nombres de host. La coincidencia no distingue entre mayúsculas y minúsculas, incluye subdominios e ignora un punto DNS final; omita esquemas, puertos y rutas. La opción afecta solo a las solicitudes HTTPS a los hosts coincidentes y conserva la verificación de certificados. Elimina el grupo híbrido poscuántico para esas conexiones, así que úsela solo para los extremos que necesiten esta solución de compatibilidad. Sin definir o vacía mantiene el comportamiento TLS predeterminado del entorno de ejecución.
+
+Una solicitud coincidente que use `FetchSession` debe proporcionar su configuración TLS en la propia solicitud. Las solicitudes coincidentes que usan transportes personalizados o perfiles TLS se rechazan porque no se pueden inspeccionar sus ajustes de seguridad. Las demás solicitudes no se ven afectadas.
 
 <a id="remote-access"></a>
 

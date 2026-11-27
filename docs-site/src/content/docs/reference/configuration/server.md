@@ -331,10 +331,14 @@ OCX_TLS_CLASSICAL_GROUPS_HOSTS="api.example.com" ocx start
 ```
 
 The value is a comma-separated list of hostnames. Matching is case-insensitive and includes
-subdomains; omit schemes, ports and paths. The option affects HTTPS requests to matching hosts
+subdomains, ignoring a trailing DNS root dot; omit schemes, ports and paths. The option affects HTTPS requests to matching hosts
 only and preserves certificate verification. It removes the hybrid post-quantum group for
 those connections, so use it only for endpoints that need this compatibility workaround.
 Unset or empty means the runtime's default TLS behavior.
+
+A matching request using a `FetchSession` must supply its TLS settings on the request itself.
+Matching requests using custom provider transports or TLS profiles are refused because their
+connection security settings cannot be safely inspected. Other requests are unaffected.
 
 ## Remote access
 

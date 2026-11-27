@@ -153,10 +153,10 @@ export function wantsFreshConnection(
   if (!hostsEnv) return false;
   try {
     const rawUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const host = new URL(rawUrl).hostname.toLowerCase();
+    const host = new URL(rawUrl).hostname.toLowerCase().replace(/\.$/, "");
     const targets = hostsEnv
       .split(",")
-      .map(h => h.trim().toLowerCase().replace(/^\.+/, ""))
+      .map(h => h.trim().toLowerCase().replace(/^\.+/, "").replace(/\.$/, ""))
       .filter(Boolean);
     for (const target of targets) {
       if (host === target || host.endsWith(`.${target}`)) return true;
@@ -242,6 +242,16 @@ export function sendWithConnectionPolicy(
   const classicalTlsHosts = process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS;
   const classicalTls = classicalTlsHosts && wantsFreshConnection(input, classicalTlsHosts)
     && new URL(target).protocol === "https:";
+  const requestTls = (init as BunFetchRequestInit | undefined)?.tls;
+  if (classicalTls && (init as BunFetchRequestInit | undefined)?.session && !requestTls) {
+    return Promise.reject(new Error("Cannot apply classical TLS groups to a FetchSession without explicit request TLS settings"));
+  }
+  const providerTransport = egress?.provider as { fetch?: unknown; tlsProfile?: unknown } | undefined;
+  if (classicalTls && (egress
+    ? typeof providerTransport?.fetch === "function" || providerTransport?.tlsProfile !== undefined
+    : physicalFetch !== globalThis.fetch)) {
+    return Promise.reject(new Error("Cannot apply classical TLS groups to a custom provider transport"));
+  }
   const body = init?.body;
   const compressed = compressUpstreamRequestBody(target, body, headers);
   if (compressed) {

@@ -311,9 +311,9 @@ function requestHeaders(request: Request, target: URL): { text: string; chunked:
 
 function hostOptedIntoClassicalTls(hostname: string, hostsEnv = process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS): boolean {
   if (!hostsEnv) return false;
-  const host = hostname.toLowerCase();
+  const host = hostname.toLowerCase().replace(/\.$/, "");
   for (const entry of hostsEnv.split(",")) {
-    const target = entry.trim().toLowerCase().replace(/^\.+/, "");
+    const target = entry.trim().toLowerCase().replace(/^\.+/, "").replace(/\.$/, "");
     if (target && (host === target || host.endsWith(`.${target}`))) return true;
   }
   return false;

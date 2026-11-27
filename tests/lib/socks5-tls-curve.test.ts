@@ -37,11 +37,14 @@ function parseHello(hello: Buffer): { keyShareGroups: number[]; alpnOffered: boo
  * A fetch failure before any ClientHello rejects instead of hanging, and a capture deadline
  * bounds the wait so the fixture always reaches cleanup.
  */
-async function captureClientHello(init?: RequestInit): Promise<{ keyShareGroups: number[]; alpnOffered: boolean }> {
+async function captureClientHello(
+  init?: RequestInit,
+  options: { deadlineMs?: number; holdAfterHello?: boolean; controller?: AbortController; target?: string } = {},
+): Promise<{ keyShareGroups: number[]; alpnOffered: boolean }> {
   let resolveHello: (hello: Buffer) => void;
-  let rejectHello: (error: Error) => void;
-  const hello = new Promise<Buffer>((resolve, reject) => { resolveHello = resolve; rejectHello = reject; });
+  const hello = new Promise<Buffer>(resolve => { resolveHello = resolve; });
   const sockets = new Set<Socket>();
+  let capturedHello = false;
   const server = createServer(socket => {
     sockets.add(socket);
     socket.once("error", () => {});
@@ -62,32 +65,64 @@ async function captureClientHello(init?: RequestInit): Promise<{ keyShareGroups:
         stage = "tls";
       }
       if (stage === "tls" && buffer.length >= 5 && buffer.length >= 5 + buffer.readUInt16BE(3)) {
+        capturedHello = true;
         resolveHello(buffer.subarray(0, 5 + buffer.readUInt16BE(3)));
-        socket.destroy();
+        if (!options.holdAfterHello) socket.destroy();
       }
     });
   });
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  const controller = options.controller ?? new AbortController();
   let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
     const port = (server.address() as AddressInfo).port;
-    const outcome = socks5Fetch("https://destination.invalid/", init, `socks5://127.0.0.1:${port}`).catch(() => "settled");
-    deadline = setTimeout(() => rejectHello(new Error("ClientHello capture deadline expired")), 5_000);
-    // A fetch that settles before any ClientHello is a fixture failure, not a tolerated teardown.
+    const outcome = socks5Fetch(options.target ?? "https://destination.invalid/", { ...init, signal: controller.signal }, `socks5://127.0.0.1:${port}`)
+      .then(() => ({ ok: true as const }), error => ({ ok: false as const, error }));
+    const timedOut = new Promise<never>((_, reject) => {
+      deadline = setTimeout(() => {
+        const error = new Error(capturedHello ? "TLS teardown deadline expired" : "ClientHello capture deadline expired");
+        reject(error);
+        controller.abort(error);
+      }, options.deadlineMs ?? 5_000);
+    });
     const captured = await Promise.race([
       hello,
-      outcome.then(() => { throw new Error("socks5Fetch settled before sending a ClientHello"); }),
+      outcome.then(result => {
+        if (result.ok) throw new Error("socks5Fetch succeeded before sending a ClientHello");
+        throw result.error;
+      }),
+      timedOut,
     ]);
-    await outcome;
+    const result = await Promise.race([outcome, timedOut]);
+    assert.equal(result.ok, false, "the stand-in must close the TLS connection after capture");
     return parseHello(captured);
   } finally {
     clearTimeout(deadline);
+    controller.abort();
     for (const socket of sockets) socket.destroy();
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 }
 
 describe("socks5Fetch TLS options", () => {
+  test("preserves failures before ClientHello capture", async () => {
+    process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS = "destination.invalid";
+    await assert.rejects(
+      captureClientHello({ tls: { ecdhCurve: "invalid-curve" } } as BunFetchRequestInit),
+      /curve|group/i,
+    );
+  });
+
+  test("aborts a stalled fetch even after capturing ClientHello", async () => {
+    const controller = new AbortController();
+    await assert.rejects(
+      captureClientHello(undefined, { deadlineMs: 1_000, holdAfterHello: true, controller }),
+      /TLS teardown deadline expired/,
+    );
+    assert.ok(controller.signal.aborted);
+    assert.match(controller.signal.reason.message, /TLS teardown deadline expired/);
+  }, 10_000);
+
   test("the pinned runtime default offers the hybrid share, so the override below is distinguishable", async () => {
     delete process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS;
     const byDefault = await captureClientHello();
@@ -113,6 +148,20 @@ describe("socks5Fetch TLS options", () => {
     const overridden = await captureClientHello({ tls: { ecdhCurve: "X25519:P-256:P-384" } } as BunFetchRequestInit);
     assert.ok(overridden.keyShareGroups.includes(X25519), "a classical key share must be offered");
     assert.ok(!overridden.keyShareGroups.includes(HYBRID_GROUP), "the hybrid share must not be offered");
+  });
+
+  test("accepts a trailing root dot in the configured and destination hostnames", async () => {
+    const init = { tls: { ecdhCurve: "X25519:P-256:P-384" } } as BunFetchRequestInit;
+    for (const [configured, target] of [
+      ["destination.invalid", "https://destination.invalid./"],
+      ["destination.invalid.", "https://destination.invalid/"],
+      [".DESTINATION.INVALID.", "https://sub.destination.invalid./"],
+    ]) {
+      process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS = configured;
+      const captured = await captureClientHello(init, { target });
+      assert.ok(!captured.keyShareGroups.includes(HYBRID_GROUP), "the opted-in host must use classical groups");
+      assert.ok(captured.keyShareGroups.includes(X25519));
+    }
   });
 
   test("only ecdhCurve crosses the boundary: caller ALPN and verification options do not reach the handshake", async () => {
