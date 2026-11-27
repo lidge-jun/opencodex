@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { createServer as createHttpServer } from "node:http";
 import net, { createConnection, createServer as createTcpServer, Socket, type Server as TcpServer } from "node:net";
@@ -143,6 +143,30 @@ function socksProxy(options: {
 }
 
 describe("socks5Fetch", () => {
+  test("sets the response idle deadline on the established tunnel", async () => {
+    const target = createHttpServer((_req, res) => res.end("ok"));
+    const proxy = socksProxy();
+    const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+    const timer = spyOn(Socket.prototype, "setTimeout");
+    try {
+      for (const [init, expectedMs] of [
+        [undefined, 200_000], [{ timeout: 0 }, 200_000], [{ timeout: 450_000 }, 450_000],
+      ] as const) {
+        timer.mockClear();
+        const response = await socks5Fetch(
+          `http://provider.invalid:${targetPort}/search`, init, `socks5://127.0.0.1:${proxyPort}`,
+        );
+        expect(await response.text()).toBe("ok");
+        const delays = timer.mock.calls.map(([delay]) => delay);
+        expect(delays).toContain(30_000);
+        expect(delays.filter(ms => ms >= 200_000)).toEqual([expectedMs]);
+      }
+    } finally {
+      timer.mockRestore();
+      await Promise.all([close(proxy), close(target)]);
+    }
+  });
+
   test("performs a real domain CONNECT and streams the HTTP response", async () => {
     const target = createHttpServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/plain" });
