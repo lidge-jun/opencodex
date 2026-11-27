@@ -39,7 +39,7 @@ description: 提高請求主體上限如何影響並行 HTTP 請求、重試與�
 涵蓋的 POST 端點包括 `/v1/responses`、`/v1/responses/compact`、
 `/v1/chat/completions`、`/v1/messages`、`/v1/messages/count_tokens`、
 `/v1/images/generations`、`/v1/images/edits` 與 `/v1/alpha/search`。
-圖片、搜尋與 token 計數仍沿用各自可設定的單一主體上限。內部直接轉譯與 combo 呼叫不會再次預留 HTTP 額度。管理、音訊、上下文歷史及 WebSocket 的上限不變。
+圖片、搜尋與 token 計數仍沿用各自可設定的單一主體上限。經 xAI 橋接的圖片編輯請求另有 100 MiB 的固定上限，取兩者中較小的值。內部直接轉譯與 combo 呼叫不會再次預留 HTTP 額度。管理、音訊、上下文歷史及 WebSocket 的上限不變。
 
 這道額外的並行閘門只在實際生效的 `maxInboundBodyBytes` 超過 256 MiB 時啟用。省略該單次請求設定或設為 `0`，會保留其 256 MiB 預設值，因此不會啟用閘門。省略 `maxConcurrentInboundBodyBytes` 或設為 `0`，則會選擇 512 MiB 共用預設值，不會關閉已啟用的閘門。現有的請求數及其他資源限制仍然適用。
 

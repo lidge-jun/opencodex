@@ -18,6 +18,8 @@ Cuando enrutas Codex mediante un modelo distinto de OpenAI (Claude, Gemini, Grok
 
   El relé solo administra esa ruta si no se ha configurado un proveedor de imágenes: requiere `images.bridgeEnabled` en `true` y que se omita `images.provider`. Si estableces `images.provider` explícitamente, `/v1/images` usa ese proveedor y devuelve sus errores de validación sin volver a intentar mediante xAI.
 
+  En las ediciones enrutadas a xAI, el menor entre `maxInboundBodyBytes` y 100 MiB limita la solicitud JSON descomprimida. Cada imagen en línea puede contener unos 66,7 MiB de texto base64. Las imágenes en línea distintas comparten un presupuesto de 100 MiB de datos codificados. Las URL de imagen HTTPS cuentan para el límite de cinco fuentes y no añaden datos de imagen en línea.
+
   ```json
   {
     "providers": {
