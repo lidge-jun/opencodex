@@ -551,12 +551,30 @@ describe("ocx opencode proxy model catalog", () => {
     // the management catalog must not list it either. `ocx export --client opencode` and
     // `ocx opencode` both read this function.
     const disabled = cfg({
+      codexAccountNamespaces: { main: "acct_primary" },
       providers: {
         mock: { adapter: "openai-chat", baseUrl: "http://x/v1" },
         openai: { ...poolConfig.providers.openai!, disabled: true },
       },
     });
     expect(opencodeCatalogFromProxyRows(rows, disabled).map(m => m.namespaced)).toEqual(["kiro/glm-5"]);
+
+    const directWithAccount = cfg({
+      codexAccountNamespaces: { main: "acct_primary" },
+      providers: directConfig.providers,
+    });
+    const accountRows = [
+      ...rows,
+      { namespaced: "main/gpt-5.6-sol", native: true, disabled: false, provider: "openai", id: "main/gpt-5.6-sol", fastRowAvailable: true },
+      { namespaced: "main/gpt-5.6-sol--fast", native: true, disabled: false, provider: "openai", id: "main/gpt-5.6-sol--fast" },
+    ];
+    expect(opencodeCatalogFromProxyRows(accountRows, directWithAccount).map(m => m.namespaced)).toEqual([
+      "kiro/glm-5",
+      "main/gpt-5.6-sol",
+      "main/gpt-5.6-sol--fast",
+    ]);
+    // When providers.openai is disabled, account-qualified native rows are dropped too.
+    expect(opencodeCatalogFromProxyRows(accountRows, disabled).map(m => m.namespaced)).toEqual(["kiro/glm-5"]);
   });
 });
 

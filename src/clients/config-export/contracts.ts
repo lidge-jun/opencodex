@@ -195,6 +195,27 @@ export function knownReasoningSupport(evidence: ExportCapabilityEvidence): boole
   return undefined;
 }
 
+/**
+ * A native row addressed by its bare `gpt-*` slug, as opposed to an account-qualified
+ * `<namespace>/<gpt-*>` row. Only the bare form rides the caller's own credential in Codex
+ * Direct; the qualified form is pinned to an exact account and dispatched from the pool.
+ *
+ * A row is account-qualified when its first path segment is a configured Codex account
+ * namespace — the same spelling `routeModelInternal` uses to resolve
+ * `config.codexAccountNamespaces` — so this tracks the router rather than guessing from a
+ * slash that a routed row could also carry.
+ */
+export function isBareNativeRow(
+  model: { native?: boolean; namespaced: string },
+  config?: Pick<OcxConfig, "codexAccountNamespaces">,
+): boolean {
+  if (model.native !== true) return false;
+  const slash = model.namespaced.indexOf("/");
+  if (slash <= 0) return true;
+  const namespace = model.namespaced.slice(0, slash);
+  return !Object.keys(config?.codexAccountNamespaces ?? {}).includes(namespace);
+}
+
 export interface ExportContext {
   modelNames?: ExportModelNames;
   /** `http://host:port/v1` — the OpenAI-compatible surface the client dials. */

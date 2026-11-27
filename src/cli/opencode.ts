@@ -26,6 +26,7 @@ import {
   OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG,
   OPENCODE_PROVIDER_ID,
   buildOpencodeProviderBlockFromCatalog,
+  isBareNativeRow,
   opencodeGlobalConfigPath,
   opencodeProviderBlocks,
   opencodeProxyBaseUrl,
@@ -375,8 +376,8 @@ export function opencodeCatalogFromProxyRows(
   rows: readonly OpencodeProxyModelRow[],
   config: OcxConfig,
 ): OpencodeCatalogModel[] {
-  const omitNative = !isNativeOpenAiProviderEnabled(config)
-    || providerCodexAccountMode("openai", config.providers?.openai) === "direct";
+  const omitAllNative = !isNativeOpenAiProviderEnabled(config);
+  const omitBareNative = providerCodexAccountMode("openai", config.providers?.openai) === "direct";
   const routedRows = rows.filter((row): row is OpencodeProxyModelRow & { provider: string; id: string } =>
     row.native !== true && typeof row.provider === "string" && typeof row.id === "string");
   const visibleRouted = new Set<OpencodeProxyModelRow>(filterCatalogVisibleModels(routedRows, config));
@@ -385,7 +386,7 @@ export function opencodeCatalogFromProxyRows(
   for (const row of rows) {
     const namespaced = row.namespaced?.trim();
     if (!namespaced || row.disabled === true) continue;
-    if (omitNative && row.native === true) continue;
+    if (row.native === true && (omitAllNative || (omitBareNative && isBareNativeRow({ native: true, namespaced }, config)))) continue;
     if (row.native !== true && typeof row.provider === "string" && typeof row.id === "string"
       && !visibleRouted.has(row)) continue;
     if (seen.has(namespaced)) continue;

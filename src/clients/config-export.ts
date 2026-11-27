@@ -897,26 +897,8 @@ export function buildOpencodeProviderBlockFromCatalog(
  * opencode's decision, not a consequence of where we write it. Both blocks are generated in
  * one pass so they cannot disagree about the model set, the names, or the connection.
  */
-/**
- * A native row addressed by its bare `gpt-*` slug, as opposed to an account-qualified
- * `<namespace>/<gpt-*>` row. Only the bare form rides the caller's own credential in Codex
- * Direct; the qualified form is pinned to an exact account and dispatched from the pool.
- *
- * A row is account-qualified when its first path segment is a configured Codex account
- * namespace — the same spelling `routeModelInternal` uses to resolve
- * `config.codexAccountNamespaces` — so this tracks the router rather than guessing from a
- * slash that a routed row could also carry.
- */
-function isBareNativeRow(
-  model: OpencodeCatalogModel,
-  config: Pick<OcxConfig, "codexAccountNamespaces">,
-): boolean {
-  if (model.native !== true) return false;
-  const slash = model.namespaced.indexOf("/");
-  if (slash <= 0) return true;
-  const namespace = model.namespaced.slice(0, slash);
-  return !Object.keys(config.codexAccountNamespaces ?? {}).includes(namespace);
-}
+export { isBareNativeRow } from "./config-export/contracts";
+import { isBareNativeRow } from "./config-export/contracts";
 
 function buildOpencodeClientConfig(ctx: ExportContext): OpencodeGeneratedConfig {
   const config = ctx.config ?? OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG;
@@ -1145,10 +1127,10 @@ export interface GajaeGeneratedConfig {
 function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}): PiGeneratedConfig {
   const models: PiModelEntry[] = [];
   const roster = options.rawNestedModelIds ? selectNestedSelectors(ctx.models) : ctx.models;
-  const omitNative = options.omitNativeInCodexDirect === true
+  const omitBareNative = options.omitNativeInCodexDirect === true
     && providerCodexAccountMode("openai", ctx.config?.providers?.openai) === "direct";
   for (const model of normalizeExportModels(roster)) {
-    if (omitNative && model.native === true) continue;
+    if (omitBareNative && isBareNativeRow(model, ctx.config)) continue;
     // Text is the one modality every routed model supports; anything richer must come
     // from the catalog rather than an assumption — and must still be inside the enum
     // Pi accepts, because one rejected value empties the whole config.
