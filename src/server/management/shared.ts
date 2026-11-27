@@ -108,7 +108,8 @@ export type CostEstimateReason =
   | "cache_detail_missing"
   | "expected_price_overlay"
   | "provider_cost_overlay"
-  | "priority_lower_bound";
+  | "priority_lower_bound"
+  | "service_tier_transmitted";
 
 export type CostResult =
   | { kind: "value"; estimate: NonNullable<ReturnType<typeof estimateRequestCost>>; estimateReasons: CostEstimateReason[] }
@@ -116,6 +117,8 @@ export type CostResult =
   | { kind: "unavailable"; reason: MetricUnavailableReason };
 
 export type MetricSource = Pick<RequestLogEntry, "provider" | "model" | "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "protocolTrace" | "usageStatus" | "usage" | "requestedServiceTier" | "configuredServiceTier" | "responseServiceTier" | "tierOutcome" | "routeDecision" | "cacheProvenance"> & {
+  /** Request time; selects dated tier prices such as the Ultrafast schedule. */
+  timestamp?: number;
   attempts?: readonly PersistedUsageAttempt[];
 };
 
@@ -297,6 +300,8 @@ export function costResult(entry: MetricSource): CostResult {
     priceSources.includes("expected") ? "expected_price_overlay" as const : undefined,
     priceSources.includes("user") ? "provider_cost_overlay" as const : undefined,
     estimate.priorityLowerBound ? "priority_lower_bound" as const : undefined,
+    // A credit charge never used the token rates the Ultrafast multiplier scaled.
+    !creditOnly && estimate.serviceTierPricing?.basis === "transmitted" ? "service_tier_transmitted" as const : undefined,
   ].filter((reason): reason is CostEstimateReason => reason !== undefined);
   return { kind: "value", estimate, estimateReasons };
 }
@@ -336,6 +341,7 @@ export function requestLogDto(
   entry: RequestLogEntry,
   { includeDecodeRate = true }: { includeDecodeRate?: boolean } = {},
 ): Record<string, unknown> {
+  const requestTier = serviceTierContext(entry);
   return {
     ...entry,
     ...publicLogUsage(entry.usage),
@@ -358,7 +364,10 @@ export function requestLogDto(
             tokPerSecond: tokPerSecondResult(attempt),
             // Each attempt measures its own attempt-relative TTFT.
             ...(includeDecodeRate ? { decodeTokPerSecond: decodeTokPerSecondResult(attempt) } : {}),
-            cost: costResult({ ...attempt, attempts: undefined, routeDecision: entry.routeDecision, requestedServiceTier: entry.requestedServiceTier, configuredServiceTier: entry.configuredServiceTier, responseServiceTier: entry.responseServiceTier }),
+            // Attempts carry no time of their own; dated tier prices follow the request's.
+            // An attempt without its own tier record gets the tier the request total gives it (estimateComboCost):
+            // the request's derived context, never a raw parent scalar that may describe an earlier response.
+            cost: costResult({ ...attempt, attempts: undefined, timestamp: entry.timestamp, routeDecision: entry.routeDecision, requestedServiceTier: requestTier.requestedServiceTier, configuredServiceTier: requestTier.configuredServiceTier, responseServiceTier: requestTier.responseServiceTier }),
           },
         })),
       }

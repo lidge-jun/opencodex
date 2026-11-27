@@ -1430,6 +1430,7 @@ export const ru: Record<TKey, string> = {
   "logs.detail.estimate.expected_price_overlay": "Использована подтверждённая ожидаемая цена из прайс-листа.",
   "logs.detail.estimate.provider_cost_overlay": "Использован ценовой оверлей провайдера.",
   "logs.detail.estimate.priority_lower_bound": "Подтверждённая цена Priority недоступна; показанная оценка является известной нижней границей.",
+  "logs.detail.estimate.service_tier_transmitted": "Хотя бы одна попытка рассчитана по тарифу уровня Ultrafast, который отправил прокси; ответ upstream не подтвердил этот уровень.",
   "logs.col.error": "Ошибка",
   "logs.col.upstreamReason": "Причина от провайдера",
   "logs.col.failureDetail": "Подробности сбоя",
