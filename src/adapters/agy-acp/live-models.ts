@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { baseScopedEnv } from "../coding-agent/turn";
 import { classifyFrame, initializeFrame, methodNotFoundFrame, permissionCancelledFrame, sessionNewFrame } from "./acp";
 import { probeAgyVersion, readAgyExecutable, resolveAgyBinary } from "./binary";
-import { findSelector, isGeminiValue, parseConfigOptions } from "./options";
+import { currentSelection, findSelector, isGeminiValue, matchValue, normalizeLabel, parseConfigOptions } from "./options";
 import { createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild } from "./process";
 import { launchForProfile } from "./profiles";
 
@@ -14,15 +14,23 @@ const flights = new Map<string, Promise<string[]>>();
 export function catalogIds(options: unknown): string[] {
   const state = parseConfigOptions(options);
   const selector = state && findSelector(state, "model");
-  if (!selector?.ok) return [];
-  const seen = new Set<string>();
-  const ambiguous = new Set<string>();
-  for (const item of selector.selector.values.filter(isGeminiValue)) {
-    if (!/^gemini[-.][a-z0-9][a-z0-9.-]{0,126}$/i.test(item.value)) continue;
-    if (seen.has(item.value)) ambiguous.add(item.value);
-    seen.add(item.value);
+  if (!selector?.ok || !currentSelection(selector.selector)) return [];
+  const choices = selector.selector.values.filter(isGeminiValue);
+  const ids = new Set<string>();
+  for (const item of choices) {
+    if (selector.selector.values.filter(option => option.value === item.value).length !== 1) continue;
+    // Some ACP versions use opaque wire values. Advertise a label only if the
+    // turn adapter resolves it unambiguously back to this specific option.
+    for (const id of [item.value, normalizeLabel(item.name)]) {
+      if (!/^gemini[-.][a-z0-9][a-z0-9.-]{0,126}$/i.test(id)) continue;
+      const match = matchValue(choices, [id]);
+      if (match.ok && match.value === item) {
+        ids.add(id);
+        break;
+      }
+    }
   }
-  return [...seen].filter(id => !ambiguous.has(id));
+  return [...ids];
 }
 
 /** Read session/new and stop before session/prompt. Never accept client tool requests. */
