@@ -655,7 +655,7 @@ Es una medida de compatibilidad, no una afirmación de que cada backend personal
 
 **Detener el mapeo de la razón:** `completed` → `tool_use` (si se llama alguna herramienta) o `end_turn`; `incomplete/max_output_tokens` → `max_tokens` `incomplete/content_filter` → `refusal`.
 
-**Taxonomía de error:** 400 `invalid_request_error`, 401 `authentication_error`, 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409 `conflict_error`, 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`, otros 5xx `api_error`. El encabezado `Retry-After` se envía como segundos enteros (una fecha HTTP se convierte en los segundos restantes), con un máximo de ocho días.
+**Taxonomía de error:** 400 `invalid_request_error`, 401 `authentication_error`, 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409 `conflict_error`, 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`, otros 5xx `api_error`. El encabezado `Retry-After` se envía como segundos enteros (una fecha HTTP se convierte en los segundos restantes, trasladando un segundo intercalar de fin de mes `23:59:60` al día UTC siguiente), con un máximo de ocho días.
 
 <a id="prompt-caching-and-token-usage"></a>
 
