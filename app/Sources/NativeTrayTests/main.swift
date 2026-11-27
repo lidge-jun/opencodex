@@ -189,4 +189,30 @@ check(NativeTrayHitTest.isNearButton(buttonFrame: buttonRect, point: NSPoint(x: 
 check(NativeTrayHitTest.isNearButton(buttonFrame: buttonRect, point: NSPoint(x: 98, y: 100)), "Within button margin hits")
 check(!NativeTrayHitTest.isNearButton(buttonFrame: buttonRect, point: NSPoint(x: 50, y: 50)), "Outside button frame misses")
 
+// Button-press sequences, in the order AppKit and Tauri deliver them.
+var press = NativeTrayButtonPress()
+press.record(at: testNow)
+check(press.toggle(isVisible: true, now: testNow.addingTimeInterval(0.05)) == .dismiss,
+      "A press on the icon followed by its toggle closes the open panel")
+check(press.toggle(isVisible: false, now: testNow.addingTimeInterval(0.1)) == .present,
+      "That toggle consumed the press, so the next click on the icon opens the panel")
+
+press = NativeTrayButtonPress()
+press.record(at: testNow)
+press.clear()
+check(press.toggle(isVisible: false, now: testNow.addingTimeInterval(0.1)) == .present,
+      "An outside or right click dismissal forgets an earlier press, so a quick click reopens")
+
+press = NativeTrayButtonPress()
+press.record(at: testNow)
+check(press.toggle(isVisible: false, now: testNow.addingTimeInterval(0.1)) == .ignoreRecentDismissal,
+      "A panel hidden between the icon's press and its toggle stays closed")
+check(press.toggle(isVisible: false, now: testNow.addingTimeInterval(0.15)) == .present,
+      "Only one toggle is absorbed per press")
+
+press = NativeTrayButtonPress()
+press.record(at: testNow)
+check(press.toggle(isVisible: false, now: testNow.addingTimeInterval(1)) == .present,
+      "An expired press does not suppress a later click")
+
 print("PASS: \(assertions) native tray contract/formatting assertions")
