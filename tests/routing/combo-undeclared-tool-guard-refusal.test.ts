@@ -176,6 +176,22 @@ describe("combo hop on the undeclared-tool guard's refusal (#9163)", () => {
     });
   }
 
+  test("Responses: an upstream error before an undeclared call keeps its own cooldown", async () => {
+    // The guard trips on the later call, but the failure the combo judges is the upstream's own
+    // rate-limit error: that verdict, not the guard's, decides the cooldown.
+    const hits: string[] = [];
+    const config = comboConfig([
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "error", error: { type: "rate_limit_error", code: "rate_limit_exceeded", message: "Rate limit reached" } },
+      { type: "response.output_item.added", output_index: 0, item: call("fc_9", "code_runner/bash") },
+    ], 2, hits);
+    const response = await handleResponses(responsesRequest(true), config, { model: "", provider: "" });
+    const body = await response.text();
+    expect(hits).toEqual(["a", "b"]);
+    expect(body).toContain("BACKUP_OK");
+    expect(firstTargetCooled()).toBe(true);
+  });
+
   test("Responses: text the client already received keeps the child committed", async () => {
     const hits: string[] = [];
     const config = comboConfig(textThenUndeclared, 2, hits);

@@ -36,6 +36,7 @@ import {
   CYBER_POLICY_FALLBACK_MESSAGE,
   isModelNotInPlanRefusal,
   undeclaredToolGuardRefused,
+  UNDECLARED_TOOL_CALL_ERROR_CODE,
   markVerifiedModelNotInPlanResponse,
   namesModelNotInPlanCode,
 } from "../../lib/errors";
@@ -450,8 +451,11 @@ export async function consumeComboFailure(
     classificationText = fallback;
   }
   // Read after the body: the passthrough guard rewrites a buffered body lazily, so it may trip
-  // during the read above. Its own mark on this attempt's context is the provenance (#9163).
-  const undeclaredToolCallRefusal = undeclaredToolGuardRefused(logCtx) || undefined;
+  // during the read above. Its own mark on this attempt's context is the provenance (#9163), and
+  // the failure judged here must be that refusal: an upstream error the stream carried before the
+  // undeclared call is still the upstream's verdict and keeps its cooldown.
+  const undeclaredToolCallRefusal = (undeclaredToolGuardRefused(logCtx)
+    && upstreamCode === UNDECLARED_TOOL_CALL_ERROR_CODE) || undefined;
   const cyberFailure = isCyberPolicyCode(upstreamCode) || isCyberPolicyMessage(classificationText);
   const normalizedUpstreamCode = cyberFailure ? CYBER_POLICY_ERROR_CODE
     : replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : upstreamCode;
