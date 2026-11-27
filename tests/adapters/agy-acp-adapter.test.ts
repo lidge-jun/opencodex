@@ -218,10 +218,12 @@ describe("agy acp turn", () => {
   test.each([
     ["gemini-3.8-flash", "GPT-5", "gemini-3.8-flash", false],
     ["gpt-5", "Gemini 3.8 Flash", "gemini-3.8-flash", false],
+    ["gemini-3.8-flash", "Claude Opus 5.5", "claude-opus-5-5", false],
+    ["claude-opus-5-5", "Gemini 3.8 Flash", "claude-opus-5-5", false],
     ["claude-opus-5-5", "Claude Opus 5.5", "claude-opus-5-5", true],
     ["gemini-3.8-flash", "Recommended", "gemini-3.8-flash", true],
     ["opaque", "Gemini 3.8 Flash", "gemini-3.8-flash", true],
-  ] as const)("requires consistent Gemini/Claude evidence for %s / %s", async (value, name, modelId, allowed) => {
+  ] as const)("requires consistent Gemini/Claude evidence for %s / %s (%s)", async (value, name, modelId, allowed) => {
     const h = await run(script(undefined, { initial: [modelOption(value, [], { options: [{ value, name }] })] }), { parsed: parsed({ modelId }) });
     expect(methods(h).includes("session/prompt")).toBe(allowed);
     expect(terminal(h)).toEqual(allowed ? [{ type: "done" }] : [expect.objectContaining({ code: "agy_acp_model_not_offered" })]);
@@ -655,7 +657,7 @@ describe("agy acp turn", () => {
     const agent = script(undefined, { initial: [model, thought] });
     const modelError = await run(agent, { parsed: parsed({ modelId: "gemini-" + adminShape }) });
     const thoughtError = await run(agent, { parsed: parsed({}, "max") });
-    expect(terminal(modelError)[0]).toMatchObject({ message: "The requested Gemini model is not offered by this Antigravity CLI." });
+    expect(terminal(modelError)[0]).toMatchObject({ message: "The requested model is not offered by this Antigravity CLI." });
     expect(terminal(thoughtError)[0]).toMatchObject({ message: "The requested reasoning effort is not offered by this Antigravity CLI." });
   });
 
@@ -976,7 +978,7 @@ describe("agy acp turn", () => {
     const missing = await run(script(), { parsed: parsed({ modelId: "gemini-9-ultra" }) });
     const error = terminal(missing)[0] as { status: number; code: string; message: string };
     expect(error).toMatchObject({ status: 400, code: "agy_acp_model_not_offered" });
-    expect(error.message).toBe("The requested Gemini model is not offered by this Antigravity CLI.");
+    expect(error.message).toBe("The requested model is not offered by this Antigravity CLI.");
     expect(methods(missing)).not.toContain("session/prompt");
   });
 

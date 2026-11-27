@@ -96,13 +96,27 @@ export function matchValue(values: readonly AcpSelectValue[], wanted: readonly s
   return { ok: false, reason: loose.length > 1 ? "ambiguous" : "none" };
 }
 
-const GEMINI_MODEL = /^(?:gemini|claude)[-\s.]/i;
-const NON_GEMINI_MODEL = /^(?:gpt|o[134]|grok|deepseek|qwen|llama|gemma|mistral|mixtral)(?:[-\s./]|$)/i;
+const GEMINI_MODEL = /^gemini[-\s.]/i;
+const CLAUDE_MODEL = /^claude[-\s.]/i;
+const NON_ALLOWED_MODEL = /^(?:gpt|o[134]|grok|deepseek|qwen|llama|gemma|mistral|mixtral)(?:[-\s./]|$)/i;
 
-/** Either field can establish the family, unless the other explicitly contradicts it. */
+type ModelFamily = "gemini" | "claude" | "other" | null;
+
+function classifyModelFamily(raw: string): ModelFamily {
+  const field = raw.trim();
+  if (GEMINI_MODEL.test(field)) return "gemini";
+  if (CLAUDE_MODEL.test(field)) return "claude";
+  if (NON_ALLOWED_MODEL.test(field)) return "other";
+  return null;
+}
+
+/** Either field can establish an allowed family (Gemini or Claude), unless the other contradicts it. */
 export function isGeminiValue(value: AcpSelectValue): boolean {
-  const fields = [value.value.trim(), value.name.trim()];
-  return fields.some(field => GEMINI_MODEL.test(field)) && !fields.some(field => NON_GEMINI_MODEL.test(field));
+  const vf = classifyModelFamily(value.value);
+  const nf = classifyModelFamily(value.name);
+  if (vf === "other" || nf === "other") return false;
+  if (vf && nf && vf !== nf) return false;
+  return vf === "gemini" || vf === "claude" || nf === "gemini" || nf === "claude";
 }
 
 /** The advertised value the selector currently holds, when it resolves to exactly one. */
