@@ -93,23 +93,13 @@ function pruneExpiredEntries(store: Map<string, ConsultationEntry>, nowMs: numbe
 }
 
 /**
- * Reserve space for ONE new consultation without ever evicting an active (pending) entry.
- * Returns false when every slot is occupied by a running consultation.
+ * Reserve space for ONE new consultation. Only entries past their retention TTL are removed: a running
+ * consultation, and a completed one a client may still poll within COMPLETED_TTL_MS, keep their slot.
+ * Returns false when every slot is still retained, so the caller reports the capacity limit.
  */
 function ensureStoreCapacity(store: Map<string, ConsultationEntry>, nowMs: number): boolean {
   pruneExpiredEntries(store, nowMs);
-  while (store.size >= MAX_STORE_ENTRIES) {
-    let victim: ConsultationEntry | undefined;
-    for (const entry of store.values()) {
-      if (entry.finishedAt !== undefined) {
-        victim = entry;
-        break;
-      }
-    }
-    if (!victim) return false;
-    store.delete(victim.id);
-  }
-  return true;
+  return store.size < MAX_STORE_ENTRIES;
 }
 
 function isRec(value: unknown): value is Record<string, unknown> {
@@ -722,7 +712,7 @@ export async function runExternalAdvisorConsult(
     return errorResponse(
       429,
       "advisor_capacity_exceeded",
-      `Maximum concurrent advisor consultations (${MAX_STORE_ENTRIES}) reached. Retry after an active consultation completes.`,
+      `Maximum concurrent advisor consultations (${MAX_STORE_ENTRIES}) reached. Retry after an active consultation completes or a completed result's retention expires.`,
       formatAdvisorUnavailable("limit", "maximum concurrent advisor consultations reached"),
     );
   }

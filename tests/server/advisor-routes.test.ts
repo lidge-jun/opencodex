@@ -667,7 +667,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
       mkdirSync(join(fakeHome, ".cline", "data", "settings"), { recursive: true });
 
       const cfg = baseConfig();
-      (cfg as { advisor?: unknown }).advisor = { enabled: true, model: "xai/grok-4.7", contextSharingConsent: "v1" };
+      (cfg as { advisor?: unknown }).advisor = { enabled: true, model: "xai/grok-4.7", contextSharingConsent: "v1", autoMountMcp: true };
 
       const syncRes = syncAdvisorMcpClients(cfg, { homeDir: fakeHome, configDir: ocxDir, env });
       expect(syncRes.errors).toEqual([]);
@@ -1156,13 +1156,17 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
       }, intDir);
 
       // Mount Advisor MCP: sibling user hook + matcher must survive; journal Undo stays valid.
-      const mountRes = mountAdvisorMcpForClient("qoder", { homeDir, configDir });
+      const mountRes = mountAdvisorMcpForClient("qoder", { homeDir, configDir, env: {} });
       expect(mountRes.ok).toBe(true);
       const afterMountText = readFileSync(qoderPath, "utf8");
       const afterMountDoc = JSON.parse(afterMountText) as { hooks: { UserPromptSubmit: Array<{ matcher?: string; hooks: Array<{ command: string }> }> } };
       const siblingGroup = afterMountDoc.hooks.UserPromptSubmit.find(g => g.matcher === "custom-matcher");
       expect(siblingGroup).toBeDefined();
-      expect(siblingGroup!.hooks).toEqual([{ type: "command", command: "/usr/local/bin/user-hook.sh" }]);
+      // A hook with the same file name at another path is not the command OpenCodex registered, so it stays.
+      expect(siblingGroup!.hooks).toEqual([
+        { type: "command", command: "/usr/local/bin/user-hook.sh" },
+        { type: "command", command: "/old/path/opencodex-advisor-notice.sh" },
+      ]);
 
       const opAfterMount = findOperation(opId, intDir)!;
       expect(matchesOperationResult(opAfterMount, afterMountText)).toBe(true);
@@ -1170,11 +1174,14 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
       expect(matchesOperationResult(opAfterMount, `${afterMountText}\n// external edit`)).toBe(false);
 
       // Unmount Advisor MCP: sibling user hook still preserved.
-      const unmountRes = unmountAdvisorMcpForClient("qoder", { homeDir, configDir });
+      const unmountRes = unmountAdvisorMcpForClient("qoder", { homeDir, configDir, env: {} });
       expect(unmountRes.ok).toBe(true);
       const afterUnmountDoc = JSON.parse(readFileSync(qoderPath, "utf8")) as { hooks: { UserPromptSubmit: Array<{ matcher?: string; hooks: Array<{ command: string }> }> } };
       expect(afterUnmountDoc.hooks.UserPromptSubmit).toEqual([
-        { matcher: "custom-matcher", hooks: [{ type: "command", command: "/usr/local/bin/user-hook.sh" }] },
+        { matcher: "custom-matcher", hooks: [
+          { type: "command", command: "/usr/local/bin/user-hook.sh" },
+          { type: "command", command: "/old/path/opencodex-advisor-notice.sh" },
+        ] },
       ]);
 
       // Per-client error isolation: block workbuddy config path with a directory while qoder still succeeds.
@@ -1186,7 +1193,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
         contextSharingConsent: "v1",
         mcpClients: ["workbuddy", "qoder"],
       };
-      const syncRes = syncAdvisorMcpClients(syncCfg, { homeDir, configDir });
+      const syncRes = syncAdvisorMcpClients(syncCfg, { homeDir, configDir, env: {} });
       expect(syncRes.errors.some(e => e.clientId === "workbuddy")).toBe(true);
       expect(syncRes.mounted).toContain("qoder");
     } finally {
@@ -1239,7 +1246,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
 
       // Refusal when attempting to mount over an unowned SKILL.md
       const enabledCfg = baseConfig();
-      (enabledCfg as { advisor?: unknown }).advisor = { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1" };
+      (enabledCfg as { advisor?: unknown }).advisor = { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", autoMountMcp: true };
       const unownedMountSync = syncAdvisorMcpClients(enabledCfg, { homeDir: fakeHome, configDir: customConfigDir, env: {} });
       expect(unownedMountSync.errors.some(e => e.clientId === "workbuddy" && e.message.includes("unowned skill file"))).toBe(true);
       expect(readFileSync(join(userSkillDir, "SKILL.md"), "utf8")).toBe("# Custom user skill without marker\n");
@@ -1288,7 +1295,8 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
       expect(binCmd.args).toEqual(["advisor", "mcp"]);
       expect(binCmd.env.OPENCODEX_HOME).toBe(customConfigDir);
       const standaloneHook = buildNoticeHookScript(customConfigDir, "/usr/local/bin/ocx");
-      expect(standaloneHook).toContain('BUN_BIN="/usr/local/bin/ocx"');
+      // Single-quoted: a path with spaces, `$()` or backticks stays literal when the hook runs.
+      expect(standaloneHook).toContain("BUN_BIN='/usr/local/bin/ocx'");
       expect(standaloneHook).toContain("BUN_BE_BUN=1");
       expect(standaloneHook).toContain('adv?.contextSharingConsent === "v1"');
 

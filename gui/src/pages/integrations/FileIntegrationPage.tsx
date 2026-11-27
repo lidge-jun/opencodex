@@ -194,7 +194,7 @@ function FileIntegrationControls({
         client,
         enabled: advisorDto.settings.enabled,
         runnable: advisorDto.runnable,
-        autoMountMcp: advisorDto.settings.autoMountMcp ?? true,
+        autoMountMcp: advisorDto.settings.autoMountMcp ?? false,
         mcpClients: advisorDto.settings.mcpClients,
         entry: advisorDto.mcpClients?.find(item => item.clientId === client),
       }

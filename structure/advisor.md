@@ -524,13 +524,19 @@ accepts any nonnegative integer cursor alongside `notifications/progress` heartb
 
 `src/advisor/client-mcp.ts` manages per-client `opencodex-advisor` MCP registration (`selfLaunchArgv`
 for both source-entrypoint and standalone executable installs plus explicit `OPENCODEX_HOME` and `BUN_BE_BUN=1`
-propagation), hooks (stripping only Advisor commands while preserving sibling commands in shared hook
-groups), and skills across compatible clients (`workbuddy`, `workbuddy-ai`, `qoder`, `qoder-cn`,
+propagation), hooks (stripping only the exact command OpenCodex registers, the POSIX single-quoted script path,
+while preserving sibling commands and same-named hooks at other paths in shared hook groups; the hook
+script's own path assignments are single-quoted too), and skills across compatible clients (`workbuddy`, `workbuddy-ai`, `qoder`, `qoder-cn`,
 `commandcode`, `cline` with 900s timeout and explicit user confirmation, `opencode` with 900_000ms
 timeout and `skills/`, optional `claude`). Skill files (`ADVISOR_SKILL_MARKER`) and hook scripts
 (`ADVISOR_HOOK_MARKER`) carry explicit ownership markers: unowned files and symlinks are never
 overwritten or counted as mounted, and unmounting deletes only verified OpenCodex files (never recursive
-directory removal, preserving sibling user files). Sync targets are gated on `advisorRunnable` (so
+directory removal, preserving sibling user files). An `opencodex-advisor` MCP entry is replaced or removed only when it is
+exactly what OpenCodex writes now or what it recorded writing in `<configDir>/advisor-mcp-entries.json`; a
+same-named entry the user created is refused on mount and left in place on unmount. `autoMountMcp` defaults
+to off: writing into another tool's configuration needs that explicit opt-in or a manual `mcpClients`
+selection. An explicit `homeDir` without an explicit `env` ignores the host's client config-directory
+overrides, so tests and previews cannot reach a real client configuration. Sync targets are gated on `advisorRunnable` (so
 missing or revoked consent unmounts existing MCP registrations, hooks, and owned skills), reconciled
 by resolved filesystem path (`collectProtectedPaths`) so shared custom directories (e.g. `WORKBUDDY_CONFIG_DIR`)
 are never unmounted by an unselected sibling client, isolated per client for errors, backed up once

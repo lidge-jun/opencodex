@@ -313,6 +313,15 @@ function resolveSafeHome(options?: AdvisorMcpSyncOptions): string | undefined {
   return homedir();
 }
 
+/**
+ * Client config-directory overrides (QODER_CONFIG_DIR, WORKBUDDY_CONFIG_DIR, ...) come from the real environment only
+ * when the caller also uses the real home. An explicit homeDir (tests, previews) without an explicit env never picks up
+ * the host's overrides, so it cannot reach a real client configuration.
+ */
+function advisorClientEnv(options?: AdvisorMcpSyncOptions): NodeJS.ProcessEnv {
+  return options?.env ?? (options?.homeDir ? {} : process.env);
+}
+
 function resolveOpencodeConfigDir(options?: AdvisorMcpSyncOptions): string {
   if (options?.configDir) return resolve(options.configDir);
   const envHome = options?.env?.OPENCODEX_HOME?.trim();
@@ -443,9 +452,14 @@ function syncOwnershipFingerprintIfClean(
   }
 }
 
+/** POSIX single-quoting: no expansion, command substitution or word splitting happens inside the quotes. */
+export function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 export function buildNoticeHookScript(configDir: string, execPath = process.execPath): string {
-  const configFileLiteral = JSON.stringify(join(configDir, "config.json"));
-  const bunLiteral = JSON.stringify(execPath);
+  const configFileLiteral = shellQuote(join(configDir, "config.json"));
+  const bunLiteral = shellQuote(execPath);
   return `#!/bin/sh
 ${ADVISOR_HOOK_MARKER}
 # Remind external client models that OpenCodex Advisor MCP (\`consult_advisor\`) is active.
@@ -526,10 +540,16 @@ You have access to the stronger OpenCodex Advisor model via \`consult_advisor\` 
 - If the call returns \`status: "in_progress"\` with \`consultationId\` and \`elapsedMs\`, immediately poll again with \`{ "consultationId": "...", "afterElapsedMs": <elapsedMs> }\` (updating \`afterElapsedMs\` each round avoids duplicate-tool-call guards).
 `;
 
+/** The hook command OpenCodex registers: the quoted script path, so spaces and shell metacharacters stay literal. */
+export function advisorHookCommand(hookScriptPath: string): string {
+  return shellQuote(hookScriptPath);
+}
+
+/** Only the exact command OpenCodex registers (or the unquoted path an earlier build wrote) is owned; a same-named user hook is not. */
 function isAdvisorHookItem(item: unknown, hookScriptPath: string): boolean {
   return isPlainObject(item)
     && typeof item.command === "string"
-    && (item.command === hookScriptPath || item.command.endsWith("opencodex-advisor-notice.sh"));
+    && (item.command === advisorHookCommand(hookScriptPath) || item.command === hookScriptPath);
 }
 
 function entryMatchesAdvisorHook(entry: unknown, hookScriptPath: string): boolean {
@@ -620,10 +640,10 @@ function mountHooksAndSkill(
         && Array.isArray(matchingEntries[0].hooks)
         && matchingEntries[0].hooks.length === 1
         && isPlainObject(matchingEntries[0].hooks[0])
-        && matchingEntries[0].hooks[0].command === paths.hookScriptPath;
+        && matchingEntries[0].hooks[0].command === advisorHookCommand(paths.hookScriptPath);
       const { next: stripped } = stripAdvisorHooksFromEntries(existing, paths.hookScriptPath);
       stripped.push({
-        hooks: [{ type: "command", command: paths.hookScriptPath }],
+        hooks: [{ type: "command", command: advisorHookCommand(paths.hookScriptPath) }],
       });
       hooks.UserPromptSubmit = stripped;
       next.hooks = hooks;
@@ -747,7 +767,7 @@ export function inspectAdvisorMcpClientStatus(
 ): AdvisorMcpClientStatus {
   const spec = CLIENT_SPECS[clientId];
   const home = resolveSafeHome(options);
-  const env = options?.env ?? process.env;
+  const env = advisorClientEnv(options);
   if (!home) {
     const settings = resolveAdvisorSettings(config);
     return {
@@ -826,6 +846,38 @@ export function listAdvisorMcpClientStatuses(
   return ADVISOR_MCP_CLIENT_IDS.map(clientId => inspectAdvisorMcpClientStatus(clientId, config, options, routedSet));
 }
 
+const ADVISOR_MCP_OWNERSHIP_FILE = "advisor-mcp-entries.json";
+type OwnedAdvisorEntries = Record<string, { configPath: string; entry: string }>;
+
+/** The exact `opencodex-advisor` entries this computer wrote, so an entry a user created under that name is never replaced or removed. */
+function readOwnedAdvisorEntries(configDir: string): OwnedAdvisorEntries {
+  try {
+    const parsed = JSON.parse(readFileSync(join(configDir, ADVISOR_MCP_OWNERSHIP_FILE), "utf8")) as unknown;
+    if (!isPlainObject(parsed)) return {};
+    const owned: OwnedAdvisorEntries = {};
+    for (const [clientId, value] of Object.entries(parsed)) {
+      if (isPlainObject(value) && typeof value.configPath === "string" && typeof value.entry === "string") {
+        owned[clientId] = { configPath: value.configPath, entry: value.entry };
+      }
+    }
+    return owned;
+  } catch {
+    return {};
+  }
+}
+
+function writeOwnedAdvisorEntries(configDir: string, owned: OwnedAdvisorEntries): void {
+  mkdirSync(configDir, { recursive: true, mode: 0o700 });
+  atomicWriteFile(join(configDir, ADVISOR_MCP_OWNERSHIP_FILE), `${JSON.stringify(owned, null, 2)}\n`);
+}
+
+/** An existing entry is ours when it is exactly what we would write now or exactly what we recorded writing. */
+function ownsAdvisorEntry(owned: OwnedAdvisorEntries, clientId: string, configPath: string, currentText: string, desiredText: string): boolean {
+  if (currentText === desiredText) return true;
+  const record = owned[clientId];
+  return record !== undefined && record.configPath === resolve(configPath) && record.entry === currentText;
+}
+
 export function mountAdvisorMcpForClient(
   clientId: AdvisorMcpClientId,
   options?: AdvisorMcpSyncOptions,
@@ -833,7 +885,7 @@ export function mountAdvisorMcpForClient(
   const home = resolveSafeHome(options);
   if (!home) return { ok: true, changed: false };
   const spec = CLIENT_SPECS[clientId];
-  const env = options?.env ?? process.env;
+  const env = advisorClientEnv(options);
   const configDir = resolveOpencodeConfigDir(options);
   const paths = spec.resolvePaths(home, env);
 
@@ -868,6 +920,11 @@ export function mountAdvisorMcpForClient(
   const desired = buildMcpEntry(spec, configDir, options);
   const currentText = JSON.stringify(container[ADVISOR_MCP_SERVER_NAME] ?? null);
   const desiredText = JSON.stringify(desired);
+  const owned = readOwnedAdvisorEntries(configDir);
+  if (Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME)
+    && !ownsAdvisorEntry(owned, clientId, paths.mcpConfigPath, currentText, desiredText)) {
+    return { ok: false, changed: false, error: `Refused to replace the ${ADVISOR_MCP_SERVER_NAME} MCP entry in ${paths.mcpConfigPath}: OpenCodex did not write it` };
+  }
   let changed = false;
 
   if (currentText !== desiredText) {
@@ -881,6 +938,10 @@ export function mountAdvisorMcpForClient(
       syncOwnershipFingerprintIfClean(configDir, clientId, paths.mcpConfigPath, read.text, nextText);
     }
     changed = true;
+  }
+  const record = { configPath: resolve(paths.mcpConfigPath), entry: desiredText };
+  if (owned[clientId]?.configPath !== record.configPath || owned[clientId]?.entry !== record.entry) {
+    writeOwnedAdvisorEntries(configDir, { ...owned, [clientId]: record });
   }
 
   const hookSkillRes = mountHooksAndSkill(spec, paths, configDir, options);
@@ -896,7 +957,7 @@ export function unmountAdvisorMcpForClient(
   const home = resolveSafeHome(options);
   if (!home) return { ok: true, changed: false };
   const spec = CLIENT_SPECS[clientId];
-  const env = options?.env ?? process.env;
+  const env = advisorClientEnv(options);
   const configDir = resolveOpencodeConfigDir(options);
   const paths = spec.resolvePaths(home, env);
 
@@ -908,7 +969,11 @@ export function unmountAdvisorMcpForClient(
     }
     if (isPlainObject(read.doc[spec.mcpContainer])) {
       const container = { ...(read.doc[spec.mcpContainer] as JsonObj) };
-      if (ADVISOR_MCP_SERVER_NAME in container) {
+      const owned = readOwnedAdvisorEntries(configDir);
+      const currentText = JSON.stringify(container[ADVISOR_MCP_SERVER_NAME] ?? null);
+      const desiredText = JSON.stringify(buildMcpEntry(spec, configDir, options));
+      // A same-named entry OpenCodex did not write is the user's: leave it in place.
+      if (Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) && ownsAdvisorEntry(owned, clientId, paths.mcpConfigPath, currentText, desiredText)) {
         backupOnceBeforeEdit(configDir, spec.id, paths.mcpConfigPath, read.text);
         delete container[ADVISOR_MCP_SERVER_NAME];
         const nextDoc = { ...read.doc, [spec.mcpContainer]: container };
@@ -918,6 +983,10 @@ export function unmountAdvisorMcpForClient(
           syncOwnershipFingerprintIfClean(configDir, clientId, paths.mcpConfigPath, read.text, nextText);
         }
         changed = true;
+      }
+      if (owned[clientId]) {
+        const { [clientId]: _dropped, ...rest } = owned;
+        writeOwnedAdvisorEntries(configDir, rest);
       }
     }
   }
@@ -991,7 +1060,7 @@ export function reconcileAdvisorMcpForRoutedClient(
   if (!settings.autoMountMcp || settings.mcpClients !== undefined) {
     return { ok: true, changed: false };
   }
-  const env = options?.env ?? process.env;
+  const env = advisorClientEnv(options);
   const configDir = resolveOpencodeConfigDir(options);
   const routedSet = readRoutedClientSet(configDir);
   routedSet.delete(clientId);
@@ -1017,7 +1086,7 @@ export function syncAdvisorMcpClients(
       statuses: listAdvisorMcpClientStatuses(config, options),
     };
   }
-  const env = options?.env ?? process.env;
+  const env = advisorClientEnv(options);
   const configDir = resolveOpencodeConfigDir(options);
   const routedSet = readRoutedClientSet(configDir);
   const desiredTargets = computeDesiredAdvisorMcpTargets(config, routedSet);

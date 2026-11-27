@@ -317,7 +317,7 @@ export function AdvisorEditor({
 
       <AdvisorClientMcpPanel
         clients={mcpStatus}
-        autoMountMcp={draft.autoMountMcp ?? true}
+        autoMountMcp={draft.autoMountMcp ?? false}
         explicitClients={draft.mcpClients}
         disabled={saving}
         onChangeAutoMount={enabled => edit({ autoMountMcp: enabled })}

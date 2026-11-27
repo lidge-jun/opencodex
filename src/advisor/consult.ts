@@ -215,6 +215,15 @@ export function advisorBaseUrl(
   return advisorDestinationOrigin(config);
 }
 
+/** Terminal stream events across the Chat Completions and Responses shapes the Advisor can receive. */
+function isTerminalStreamChunk(chunk: unknown): boolean {
+  if (!chunk || typeof chunk !== "object") return false;
+  const record = chunk as { type?: unknown; choices?: unknown };
+  if (record.type === "response.completed" || record.type === "response.done") return true;
+  return Array.isArray(record.choices) && record.choices.some(choice =>
+    !!choice && typeof choice === "object" && typeof (choice as { finish_reason?: unknown }).finish_reason === "string");
+}
+
 export async function consultAdvisor(
   input: AdvisorContextInput,
   config: Pick<OcxConfig, "port" | "hostname" | "apiKeys" | "unauthenticatedLoopbackListener">,
@@ -302,6 +311,8 @@ export async function consultAdvisor(
       let sawMalformedSseJson = false;
       let sawAnySseData = false;
       let sawDone = false;
+      // A stream is complete only with a terminal signal: [DONE], a finish_reason, or response.completed.
+      let sawTerminal = false;
 
       const processSseLine = (line: string) => {
         const trimmed = line.trim();
@@ -311,7 +322,7 @@ export async function consultAdvisor(
         sawAnySseData = true;
         const dataStr = trimmed.slice(5).trim();
         if (dataStr === "" || dataStr === "[DONE]") {
-          if (dataStr === "[DONE]") sawDone = true;
+          if (dataStr === "[DONE]") { sawDone = true; sawTerminal = true; }
           return;
         }
         let chunk: unknown;
@@ -325,6 +336,7 @@ export async function consultAdvisor(
           streamError = true;
           return;
         }
+        if (isTerminalStreamChunk(chunk)) sawTerminal = true;
         const delta = extractDeltaContent(chunk);
         if (delta) streamedText += delta;
         const fullMsg = extractContent(chunk);
@@ -408,8 +420,13 @@ export async function consultAdvisor(
         if (streamError) {
           return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor HTTP 502", durationMs };
         }
-        if (sawMalformedSseJson && !sawDone && streamedText.trim().length === 0 && !fallbackMessageText) {
+        // A malformed event lost part of the answer, and a stream without a terminal signal was cut off:
+        // either way the text is incomplete and must not be presented as finished advice.
+        if (sawMalformedSseJson) {
           return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor returned non-JSON", durationMs };
+        }
+        if (sawAnySseData && !sawTerminal) {
+          return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor stream ended before completion", durationMs };
         }
         if (!sawAnySseData && !explicitSse) {
           return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor returned non-JSON", durationMs };

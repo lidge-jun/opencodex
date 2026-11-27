@@ -89,7 +89,8 @@ export const DEFAULT_ADVISOR_SETTINGS: Readonly<AdvisorSettings> = Object.freeze
   timeoutMs: 600_000,
   maxConsultationsPerTask: 3,
   contextSharingConsent: null,
-  autoMountMcp: true,
+  // Writing into other tools' configuration is an explicit opt-in (AGENTS.md user-consent actions).
+  autoMountMcp: false,
   sources: Object.freeze({
     enabled: "default",
     model: "default",
