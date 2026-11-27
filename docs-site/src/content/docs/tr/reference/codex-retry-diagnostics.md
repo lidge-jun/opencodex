@@ -48,6 +48,10 @@ yönlendirdiği isteklerde başka havuz hesabının bilinen en erken düzelme za
 daha erkense o kullanılır. Süre hiçbir zaman bir dakikadan kısa değildir.
 Goal'ı o zamandan sonra sürdürün; yönlendirme güncel durumdan hesap seçer.
 
+Önce başka bir havuz hesabı denenip istenen modeli desteklemediğini
+söylediğinde de aynı ret döner. İstemci o hesabın model hatası yerine ana hesabın
+sınırını ve sıfırlanma zamanını görür. Diğer hesabın kota reddi önceki gibi döner.
+
 ## İlk yeniden bağlanma satırı neden görünmeyebilir?
 
 Herkese açık Codex `rust-v0.158.0-alpha.2.1` kaynaklarında normal akış yeniden
