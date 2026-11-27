@@ -37,6 +37,7 @@ import {
   type ProviderEgressBinding,
 } from "../../lib/provider-egress";
 import { redactSecretString } from "../../lib/redact";
+import { inheritTlsContextProof, isTlsContextTransparentExecutor, markTlsContextTransparentExecutor } from "../../lib/tls-context-proof";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
 import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
 import { redeemOutboundTurnState, TURN_STATE_BINDING_INIT, turnStateBinding } from "../turn-state-handles";
@@ -153,10 +154,10 @@ export function wantsFreshConnection(
   if (!hostsEnv) return false;
   try {
     const rawUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const host = new URL(rawUrl).hostname.toLowerCase();
+    const host = new URL(rawUrl).hostname.toLowerCase().replace(/\.$/, "");
     const targets = hostsEnv
       .split(",")
-      .map(h => h.trim().toLowerCase().replace(/^\.+/, ""))
+      .map(h => h.trim().toLowerCase().replace(/^\.+/, "").replace(/\.$/, ""))
       .filter(Boolean);
     for (const target of targets) {
       if (host === target || host.endsWith(`.${target}`)) return true;
@@ -239,6 +240,21 @@ export function sendWithConnectionPolicy(
   // retry and HTTP fallback re-enters here with the caller's original string, so each send derives
   // its own coded bytes; `headers` is already this send's private copy.
   const target = input instanceof Request ? input.url : String(input);
+  const classicalTlsHosts = process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS;
+  const classicalTls = classicalTlsHosts && wantsFreshConnection(input, classicalTlsHosts)
+    && new URL(target).protocol === "https:";
+  const requestTls = (init as BunFetchRequestInit | undefined)?.tls;
+  if (classicalTls && (init as BunFetchRequestInit | undefined)?.session && !requestTls) {
+    return Promise.reject(new Error("Cannot apply classical TLS groups to a FetchSession without explicit request TLS settings"));
+  }
+  const providerTransport = egress?.provider as { fetch?: unknown; tlsProfile?: unknown } | undefined;
+  if (classicalTls && (
+    !isTlsContextTransparentExecutor(physicalFetch)
+    || (typeof providerTransport?.fetch === "function" && !isTlsContextTransparentExecutor(providerTransport.fetch))
+    || providerTransport?.tlsProfile !== undefined
+  )) {
+    return Promise.reject(new Error("Cannot apply classical TLS groups to a custom provider transport"));
+  }
   const body = init?.body;
   const compressed = compressUpstreamRequestBody(target, body, headers);
   if (compressed) {
@@ -254,6 +270,7 @@ export function sendWithConnectionPolicy(
     headers,
     redirect: "manual",
     ...(fresh ? { keepalive: false } : {}),
+    ...(classicalTls ? { tls: { ...(init as BunFetchRequestInit | undefined)?.tls, ecdhCurve: "X25519:P-256:P-384" } } : {}),
     ...egressInit,
     ...(decide || redirectedToLoopback ? { [EGRESS_DECIDED]: true } : {}),
     ...{ [UPSTREAM_REWRITTEN]: true },
@@ -379,6 +396,7 @@ export function providerFetch(
     { preconnect: globalThis.fetch.preconnect?.bind(globalThis.fetch) },
   ) as typeof globalThis.fetch);
   markPassiveKeyTransparent(configuredFetch);
+  markTlsContextTransparentExecutor(configuredFetch);
   const base = customExecutor ?? configuredFetch;
   const transport = options.providerName ? providerTlsFetch(options.providerName, provider, base) : base;
   const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
@@ -400,6 +418,7 @@ export function providerFetch(
     { preconnect },
   ) as typeof globalThis.fetch);
   inheritPassiveKeyProof(dispatch, transport);
+  inheritTlsContextProof(dispatch, transport);
   const httpFetch = Object.assign(
     async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
       reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>,
@@ -578,6 +597,8 @@ export function providerFetch(
     unpacedFetch: markPhysicalSendReceiptExecutor(Object.assign(unpaced, { preconnect }) as typeof globalThis.fetch),
   });
   markEgressTransparentExecutor(paceAware as unknown as typeof globalThis.fetch);
+  inheritTlsContextProof(paceAware as unknown as typeof globalThis.fetch, transport);
+  inheritTlsContextProof(paceAware.unpacedFetch, transport);
   if (customExecutor === undefined && transport === base && !options.dispatchOverride) bindProviderSocketRoute(paceAware, providerName, provider);
   const { onPhysicalDispatch, dispatchOverride, beforeDispatch, accountAutoPause, ...supportOptions } = options;
   if (onPhysicalDispatch || dispatchOverride || beforeDispatch || accountAutoPause) {

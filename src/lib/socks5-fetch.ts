@@ -309,7 +309,22 @@ function requestHeaders(request: Request, target: URL): { text: string; chunked:
   };
 }
 
-async function secureSocket(socket: Socket, target: URL, signal: AbortSignal): Promise<TLSSocket> {
+function hostOptedIntoClassicalTls(hostname: string, hostsEnv = process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS): boolean {
+  if (!hostsEnv) return false;
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  for (const entry of hostsEnv.split(",")) {
+    const target = entry.trim().toLowerCase().replace(/^\.+/, "").replace(/\.$/, "");
+    if (target && (host === target || host.endsWith(`.${target}`))) return true;
+  }
+  return false;
+}
+
+async function secureSocket(
+  socket: Socket,
+  target: URL,
+  signal: AbortSignal,
+  ecdhCurve: string | undefined,
+): Promise<TLSSocket> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
       socket.destroy();
@@ -320,6 +335,8 @@ async function secureSocket(socket: Socket, target: URL, signal: AbortSignal): P
       socket,
       servername: target.hostname,
       rejectUnauthorized: true,
+      // shortcut: only the curve override crosses this boundary; the transport owns verification and server name.
+      ...(ecdhCurve ? { ecdhCurve } : {}),
     });
     let settled = false;
     // Absolute deadline: a peer sending occasional TLS bytes must not extend the handshake.
@@ -691,7 +708,13 @@ export async function socks5Fetch(
   };
   request.signal.addEventListener("abort", onAbort, { once: true });
   try {
-    if (target.protocol === "https:") socket = await secureSocket(tunnel, target, request.signal);
+    if (target.protocol === "https:") {
+      const requestedCurve = (init?.tls as { ecdhCurve?: string } | undefined)?.ecdhCurve;
+      const ecdhCurve = typeof requestedCurve === "string" && requestedCurve && hostOptedIntoClassicalTls(target.hostname)
+        ? requestedCurve
+        : undefined;
+      socket = await secureSocket(tunnel, target, request.signal, ecdhCurve);
+    }
     // A positive Bun fetch timeout is the request's socket idle budget. Keep the tunnel's
     // existing bound for callers that didn't request a positive timeout.
     const idleMs = init?.timeout;

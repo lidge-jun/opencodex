@@ -6,6 +6,7 @@ import type { OcxConfig } from "../types";
 import { registerProviderResponseProvenance } from "./request-pacing";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
 import { inheritPassiveKeyProof } from "../lib/passive-key-fetch-proof";
+import { inheritTlsContextProof } from "../lib/tls-context-proof";
 
 interface BillingSendOwnership {
   readonly providerName: string;
@@ -47,6 +48,7 @@ export function anthropicBillingPhysicalFetch(
     return response;
   }) as typeof globalThis.fetch;
   inheritPassiveKeyProof(wrapped, physicalFetch);
+  inheritTlsContextProof(wrapped, physicalFetch);
   return isEgressTransparentExecutor(physicalFetch) ? markEgressTransparentExecutor(wrapped) : wrapped;
 }
 

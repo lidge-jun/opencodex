@@ -223,6 +223,7 @@ describe("Responses fetch-helper import boundary", () => {
       "../../lib/provider-tls-profile",
       "../../lib/proxy-env",
       "../../lib/redact",
+      "../../lib/tls-context-proof",
       "../../lib/upstream-http-version",
       // Import-free plugin rewrite slot (src/plugins/upstream-hooks.ts).
       "../../plugins/upstream-hooks",
@@ -247,6 +248,10 @@ describe("Responses fetch-helper import boundary", () => {
 
   test("the passive key transport proof is an import-free runtime leaf", () => {
     expect(expectRuntimeImportBoundary(readFileSync(resolve(repoRoot, "src/lib/passive-key-fetch-proof.ts"), "utf8"))).toEqual([]);
+  });
+
+  test("the TLS context proof is an import-free runtime leaf", () => {
+    expect(expectRuntimeImportBoundary(readFileSync(resolve(repoRoot, "src/lib/tls-context-proof.ts"), "utf8"))).toEqual([]);
   });
 
   test("the guard recognizes runtime edges and ignores type-only imports", () => {
