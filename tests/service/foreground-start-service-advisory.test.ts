@@ -224,10 +224,13 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
     exitCode?: number | null;
     setupFailure?: string | null;
     processHandle?: bigint;
+    processSignaled?: boolean;
     onTerminateJob?: (job: bigint, code: number) => boolean | void;
+    onReapUnstarted?: () => boolean;
   } = {}) {
     let eof = false;
     let terminal = options.terminal ?? false;
+    let processSignaled = options.processSignaled ?? terminal;
     let exitCode = options.exitCode ?? 0;
     const queued = [...(options.outputChunks ?? [])];
     const terminatedJobs: Array<{ job: bigint; code: number }> = [];
@@ -256,9 +259,13 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
             const outcome = options.onTerminateJob?.(job, code);
             if (outcome === false) return 0;
             terminal = true;
+            processSignaled = true;
             exitCode = code;
             eof = true;
             return 1;
+          },
+          WaitForSingleObject() {
+            return processSignaled ? 0 : 258;
           },
         },
         close(handle) { closedHandles.push(handle); },
@@ -269,13 +276,15 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
       },
       reapUnstarted() {
         reapedUnstarted += 1;
-        return true;
+        const ok = options.onReapUnstarted ? options.onReapUnstarted() : true;
+        if (ok) processSignaled = true;
+        return ok;
       },
     };
 
     return {
       child,
-      setTerminal(nextExitCode: number) { terminal = true; exitCode = nextExitCode; },
+      setTerminal(nextExitCode: number) { terminal = true; processSignaled = true; exitCode = nextExitCode; },
       state: () => ({ terminatedJobs, closedHandles, pipeDisposed, nativeDisposed, reapedUnstarted }),
     };
   }
@@ -424,18 +433,68 @@ describe("Windows pre-resume Job-contained advisory teardown", () => {
     });
     expect(() => unsupportedStop(true)).not.toThrow();
 
-    const failedSetup = createFakeContainedWindowsChild({
+    // Setup failure where startWindowsCliChild already terminated the suspended process
+    // (WaitForSingleObject === 0): a second reapUnstarted() is skipped (even if it would return false),
+    // and handles are disposed immediately without leaking.
+    const alreadyReaped = createFakeContainedWindowsChild({
       setupFailure: "job_assignment",
       processHandle: 0x200n,
+      processSignaled: true,
+      onReapUnstarted: () => false,
     });
-    const failedStop = startForegroundAdvisory(line => warnings.push(line), {
+    const alreadyReapedStop = startForegroundAdvisory(line => warnings.push(line), {
       platform: "win32",
-      launchWindows: () => failedSetup.child,
+      launchWindows: () => alreadyReaped.child,
     });
     await Bun.sleep(20);
-    expect(failedSetup.state().reapedUnstarted).toBe(1);
-    expect(failedSetup.state().pipeDisposed).toBe(1);
-    expect(failedSetup.state().closedHandles).toEqual([0x200n, 0x100n]);
+    expect(alreadyReaped.state().reapedUnstarted).toBe(0);
+    expect(alreadyReaped.state().pipeDisposed).toBe(1);
+    expect(alreadyReaped.state().closedHandles).toEqual([0x200n, 0x100n]);
+    expect(alreadyReaped.state().nativeDisposed).toBe(1);
+    alreadyReapedStop(true);
+
+    // Setup failure (AssignProcessToJobObject failed after CreateProcessW) combined with failed
+    // TerminateProcess: original process handle stays retained and unclosed while unsignaled,
+    // backoff polling retries reapUnstarted(), and handles are disposed only once WaitForSingleObject === 0.
+    let allowUnstartedReap = false;
+    const failedReapSetup = createFakeContainedWindowsChild({
+      setupFailure: "job_assignment",
+      processHandle: 0x200n,
+      processSignaled: false,
+      onReapUnstarted: () => allowUnstartedReap,
+    });
+    const failedReapStop = startForegroundAdvisory(line => warnings.push(line), {
+      platform: "win32",
+      pollMs: 5,
+      reapMs: 20,
+      settlePollMs: 10,
+      launchWindows: () => failedReapSetup.child,
+    });
+    try {
+      await Bun.sleep(45);
+      const reapRetries = failedReapSetup.state().reapedUnstarted;
+      expect(reapRetries).toBeGreaterThanOrEqual(2);
+      expect(failedReapSetup.state().closedHandles).toEqual([]);
+      expect(failedReapSetup.state().pipeDisposed).toBe(0);
+
+      // Once TerminateProcess finally succeeds and process signals, handles are disposed cleanly
+      // and later stop() calls never touch the closed handle.
+      allowUnstartedReap = true;
+      await Bun.sleep(35);
+      expect(failedReapSetup.state().reapedUnstarted).toBeGreaterThanOrEqual(reapRetries + 1);
+      expect(failedReapSetup.state().pipeDisposed).toBe(1);
+      expect(failedReapSetup.state().closedHandles).toEqual([0x200n, 0x100n]);
+      expect(failedReapSetup.state().nativeDisposed).toBe(1);
+
+      const reapsAfterDispose = failedReapSetup.state().reapedUnstarted;
+      failedReapStop(false);
+      failedReapStop(true);
+      expect(failedReapSetup.state().reapedUnstarted).toBe(reapsAfterDispose);
+    } finally {
+      failedReapStop(true);
+    }
+
+    const failedStop = alreadyReapedStop;
 
     // Real startWindowsCliChildWithNative fault injection: SetInformationJobObject fails BEFORE
     // CreateProcessW/ResumeThread even run, and TerminateJobObject also returns 0. Verify no process

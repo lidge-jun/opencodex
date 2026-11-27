@@ -32,6 +32,7 @@ export interface ContainedWindowsAdvisoryChild {
   readonly native: {
     readonly k: {
       TerminateJobObject?: (job: bigint, code: number) => number;
+      WaitForSingleObject?: (handle: bigint, ms: number) => number;
     };
     close(handle: bigint): void;
     dispose(): boolean;
@@ -109,6 +110,97 @@ function disposeWindowsHandlesAsync(child: ContainedWindowsAdvisoryChild): void 
   }).catch(() => { /* best-effort async handle cleanup */ });
 }
 
+function isWindowsProcessSignaled(child: ContainedWindowsAdvisoryChild): boolean {
+  if (!child.process) return true;
+  try {
+    return Number(child.native.k.WaitForSingleObject?.(child.process, 0)) === 0;
+  } catch {
+    return false;
+  }
+}
+
+function reapFailedSetupWindowsChild(
+  child: ContainedWindowsAdvisoryChild,
+  pollMs: number,
+  reapMs: number,
+  settlePollMs: number,
+): StopForegroundAdvisory {
+  if (!child.process) {
+    disposeWindowsHandlesAsync(child);
+    return () => { /* setup failed before CreateProcessW; nothing running */ };
+  }
+
+  let disposed = false;
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  const startedAt = performance.now();
+
+  const clearPoll = () => {
+    if (pollTimer !== undefined) {
+      clearTimeout(pollTimer);
+      pollTimer = undefined;
+    }
+  };
+
+  const finalizeAsync = () => {
+    if (disposed) return;
+    disposed = true;
+    clearPoll();
+    disposeWindowsHandlesAsync(child);
+  };
+
+  const tryReap = (): boolean => {
+    if (disposed) return true;
+    if (isWindowsProcessSignaled(child)) return true;
+    try { child.reapUnstarted(); } catch { /* retry until process handle signals */ }
+    return isWindowsProcessSignaled(child);
+  };
+
+  const schedulePoll = (delayMs: number) => {
+    if (disposed) return;
+    clearPoll();
+    pollTimer = setTimeout(tick, delayMs);
+    pollTimer.unref();
+  };
+
+  const tick = () => {
+    pollTimer = undefined;
+    if (disposed) return;
+    if (tryReap()) {
+      finalizeAsync();
+      return;
+    }
+    schedulePoll(performance.now() - startedAt >= reapMs ? settlePollMs : pollMs);
+  };
+
+  // Check WaitForSingleObject first: startWindowsCliChild's catch block already ran reapUnstarted()
+  // once, and a second TerminateProcess on an already-terminated process can return false.
+  // Gate handle disposal strictly on WaitForSingleObject(child.process, 0) === 0, retaining the
+  // original process handle and retrying reapUnstarted() until termination is confirmed.
+  if (tryReap()) {
+    finalizeAsync();
+    return () => { /* failed-setup process already confirmed terminal and disposed */ };
+  }
+
+  schedulePoll(pollMs);
+  return (sync = false) => {
+    if (disposed) return;
+    if (tryReap()) {
+      if (sync) {
+        clearPoll();
+        disposed = true;
+      } else {
+        finalizeAsync();
+      }
+      return;
+    }
+    if (sync) {
+      clearPoll();
+      return;
+    }
+    if (pollTimer === undefined) schedulePoll(pollMs);
+  };
+}
+
 function startWindowsContainedAdvisory(
   warn: (line: string) => void,
   deps: ForegroundAdvisoryDeps,
@@ -136,11 +228,7 @@ function startWindowsContainedAdvisory(
   }
 
   if (child.setupFailure || !child.process || !child.job) {
-    const reaped = !child.process || (() => {
-      try { return child.reapUnstarted(); } catch { return false; }
-    })();
-    if (reaped) disposeWindowsHandlesAsync(child);
-    return () => { /* setup failed before ResumeThread; nothing running */ };
+    return reapFailedSetupWindowsChild(child, pollMs, reapMs, settlePollMs);
   }
 
   let settled = false;
