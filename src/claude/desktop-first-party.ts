@@ -211,7 +211,7 @@ export function observeClaudeDesktopMode(
     const kind = inspectDesktopFirstParty(config, options).settings.kind;
     observed.ownedFirstPartySettings = config.claudeCode?.cliFirstParty === true
       ? false : kind === "applied" || kind === "stale";
-    observed.firstPartySettingsUnreadable = kind === "unreadable";
+    if (kind === "unreadable") observed.firstPartySettingsUnreadable = true;
   } catch { // no-excuse-ok: catch -- unreadable settings are no first-party evidence.
     observed.ownedFirstPartySettings = false;
     observed.firstPartySettingsUnreadable = true;
