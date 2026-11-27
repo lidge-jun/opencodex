@@ -513,6 +513,7 @@ content-hashed request dedup (including `taskId` and transcript digest), explici
 `.jsonl` session transcript attachment in `contextMode: "full"` across `~/.workbuddy`,
 `~/.workbuddy-ai`, `~/.qoder`, `~/.qoder-cn`, `~/.commandcode`, and `~/.claude/projects`,
 preferring exact session IDs over task-ID fallbacks and excluding prior Advisor calls and results
+with a hard 4 MiB plus one-byte read bound even when an active transcript grows after discovery,
 (`loadWorkBuddySessionMessages`), and a bounded 32-entry 30-minute consultation store that never
 evicts pending entries (returning `429 advisor_capacity_exceeded` when saturated) and separates
 TTL expiry pruning from insertion eviction. Long-poll `waitMs` is capped at `240_000` ms across

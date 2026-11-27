@@ -7,7 +7,7 @@
  * bounded, consent-checked, long-pollable consultation store here lets external MCP tools wait
  * up to ~45s per round trip and resume via `consultationId` without hitting MCP 60s timeouts.
  */
-import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import type { OcxConfig, OcxMessage, OcxParsedRequest } from "../types";
@@ -19,6 +19,7 @@ import { createAdvisorTaskBudget, type AdvisorTaskBudget } from "./budget";
 import { consultAdvisor, type AdvisorConsultationResult } from "./consult";
 import { formatAdvisorAdvice, formatAdvisorUnavailable, stripHarnessSystemReminders } from "./context";
 import { resolveAdvisorSettings, type AdvisorContextMode, type AdvisorSettings } from "./settings";
+import { MAX_TRANSCRIPT_FILE_BYTES, readBoundedTranscriptFile } from "./transcript-read";
 
 const MAX_QUESTION_CHARS = 32_000;
 const MAX_CONTEXT_CHARS = 400_000;
@@ -29,7 +30,6 @@ const MAX_TASK_ID_CHARS = 256;
 const MAX_CONSULTATION_ID_CHARS = 128;
 const MAX_SESSION_ID_CHARS = 128;
 const MAX_TRANSCRIPT_PATH_CHARS = 1_024;
-const MAX_TRANSCRIPT_FILE_BYTES = 4 * 1024 * 1024;
 // Stay safely below Bun's HTTP listener idleTimeout (255s in src/server/index/serve-options.ts).
 const MAX_WAIT_MS = 240_000;
 const DEFAULT_MAX_WAIT_MS = 240_000;
@@ -274,12 +274,8 @@ export function loadWorkBuddySessionMessages(options: {
 }): { messages: OcxMessage[]; detectedWorkerModel?: string } {
   const filePath = findTranscriptFile(options);
   if (!filePath) return { messages: [] };
-  let raw = "";
-  try {
-    raw = readFileSync(filePath, "utf8");
-  } catch {
-    return { messages: [] };
-  }
+  const raw = readBoundedTranscriptFile(filePath);
+  if (raw === undefined) return { messages: [] };
   const messages: OcxMessage[] = [];
   const skippedCallIds = new Set<string>();
   const toolNamesById = new Map<string, string>();

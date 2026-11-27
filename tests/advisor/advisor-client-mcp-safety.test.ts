@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -28,6 +28,16 @@ function tempHome(prefix: string): string {
 }
 
 describe("Advisor client MCP safety", () => {
+  test("transcript reading remains bounded when a file grows after discovery", async () => {
+    const { readBoundedTranscriptFile } = await import("../../src/advisor/transcript-read");
+    const home = tempHome("ocx-advisor-transcript-bound-");
+    const path = join(home, "session.jsonl");
+    writeFileSync(path, "small");
+    expect(statSync(path).size).toBeLessThan(4 * 1024 * 1024);
+    expect(readBoundedTranscriptFile(path)).toBe("small");
+    appendFileSync(path, Buffer.alloc(4 * 1024 * 1024));
+    expect(readBoundedTranscriptFile(path)).toBeUndefined();
+  });
   test("MCP call bounds a stalled local HTTP response body", async () => {
     const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = new ReadableStream<Uint8Array>({
