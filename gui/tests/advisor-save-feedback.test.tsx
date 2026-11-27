@@ -478,6 +478,7 @@ test("auto mode client selection reflects draft autoMountMcp toggle immediately"
         disabled={false}
         onChangeAutoMount={() => {}}
         onChangeClients={() => {}}
+        onUseAutoMode={() => {}}
       />
     </LanguageProvider>,
   );
@@ -490,6 +491,7 @@ test("auto mode client selection reflects draft autoMountMcp toggle immediately"
         disabled={false}
         onChangeAutoMount={() => {}}
         onChangeClients={() => {}}
+        onUseAutoMode={() => {}}
       />
     </LanguageProvider>,
   );
@@ -498,6 +500,21 @@ test("auto mode client selection reflects draft autoMountMcp toggle immediately"
   expect((offHtml.match(/checked=""/g) ?? []).length).toBe(0);
   // The mode badge says auto-connect is off instead of claiming it follows routes.
   expect(onHtml).toContain("Auto — follows active compatible routes");
+  expect(onHtml).toContain('aria-labelledby="advisor-mcp-client-qoder"');
+  expect(onHtml).toContain('aria-describedby="advisor-mcp-note-qoder"');
   expect(offHtml).toContain("Off — choose clients below or turn on auto-connect");
   expect(offHtml).not.toContain("Auto — follows active compatible routes");
+  const calls: string[] = [];
+  const container = testWindow.document.createElement("div") as unknown as HTMLElement;
+  testWindow.document.body.append(container as never);
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(container);
+  await act(async () => root.render(<LanguageProvider><AdvisorClientMcpPanel clients={[qoder]} autoMountMcp={false}
+    explicitClients={["qoder"]} disabled={false} onChangeAutoMount={v => calls.push(`auto:${v}`)}
+    onChangeClients={v => calls.push(`clients:${v}`)} onUseAutoMode={() => calls.push("auto-mode")} /></LanguageProvider>));
+  const auto = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.includes("Use automatic sync"));
+  expect(auto).toBeDefined();
+  await act(async () => { auto!.click(); });
+  expect(calls).toEqual(["auto-mode"]);
+  await act(async () => root.unmount());
 });

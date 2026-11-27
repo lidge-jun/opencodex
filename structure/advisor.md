@@ -522,6 +522,7 @@ to stay below the 255s HTTP listener idle timeout; `nextCallArguments` (`{ consu
 accepts any nonnegative integer cursor alongside `notifications/progress` heartbeats.
 Advisor CLI settings output reports MCP reconciliation errors separately from mounted-client trust status; JSON retains the management response.
 The dashboard keeps a failed MCP reconciliation retry available across edits and failed saves, until a response confirms successful reconciliation.
+Choosing automatic client sync enables auto-mount and clears manual selection together; client checkboxes use their client names as accessible labels.
 `contextMode: "full"` expands bounded per-message/transcript caps (128k/512k chars) and strips
 `<system-reminder>` wrappers before clipping.
 

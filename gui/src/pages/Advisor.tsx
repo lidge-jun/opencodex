@@ -317,6 +317,7 @@ export function AdvisorEditor({
         disabled={saving}
         onChangeAutoMount={enabled => edit({ autoMountMcp: enabled })}
         onChangeClients={mcpClients => edit({ mcpClients })}
+        onUseAutoMode={() => edit({ mcpClients: null, autoMountMcp: true })}
       />
 
       <div className="flex flex-col gap-2">

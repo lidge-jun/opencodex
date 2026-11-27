@@ -38,6 +38,7 @@ interface AdvisorClientMcpPanelProps {
   disabled: boolean;
   onChangeAutoMount: (enabled: boolean) => void;
   onChangeClients: (clients: AdvisorMcpClientId[] | null) => void;
+  onUseAutoMode: () => void;
 }
 
 function trustBadgeClass(status: AdvisorMcpClientStatusDto["trustStatus"]): string {
@@ -59,6 +60,7 @@ export function AdvisorClientMcpPanel({
   disabled,
   onChangeAutoMount,
   onChangeClients,
+  onUseAutoMode,
 }: AdvisorClientMcpPanelProps) {
   const t = useT();
   const isManual = Array.isArray(explicitClients);
@@ -134,7 +136,7 @@ export function AdvisorClientMcpPanel({
                 type="button"
                 className="btn btn-ghost btn-sm"
                 disabled={disabled}
-                onClick={() => onChangeClients(null)}
+                onClick={onUseAutoMode}
               >
                 {t("advisor.mcp.useAutoMode")}
               </button>
@@ -178,9 +180,11 @@ export function AdvisorClientMcpPanel({
                       className="advisor-consent-check size-4 shrink-0 cursor-pointer"
                       checked={checked}
                       disabled={disabled}
+                      aria-labelledby={`advisor-mcp-client-${client.clientId}`}
+                      aria-describedby={`advisor-mcp-note-${client.clientId}`}
                       onChange={event => toggleClient(client.clientId, event.target.checked)}
                     />
-                    <span className="text-[13px] font-semibold text-fg">{client.label}</span>
+                    <span id={`advisor-mcp-client-${client.clientId}`} className="text-[13px] font-semibold text-fg">{client.label}</span>
                     {client.routed && (
                       <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] font-medium text-fg-muted ring-1 ring-line">
                         {t("advisor.mcp.badgeRouted")}
@@ -209,6 +213,7 @@ export function AdvisorClientMcpPanel({
                     <code className="mono break-all pl-6 text-[11px] text-fg-muted">{client.configPath}</code>
                   )}
                   <span
+                    id={`advisor-mcp-note-${client.clientId}`}
                     className={cn(
                       "pl-6 text-[12px] leading-[17px]",
                       client.trustStatus === "action_required" ? "font-medium text-warning" : "text-fg-muted",
