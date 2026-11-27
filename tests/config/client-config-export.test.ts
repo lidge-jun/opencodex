@@ -26,6 +26,12 @@ import { buildOpencodeProviderBlockFromCatalog, opencodeCatalogFromProxyRows, op
 import { exportModelsFromProxyRows } from "../../src/cli/export-command";
 import { attachNestedSelectors } from "../../src/clients/config-export/nested-selectors";
 import { routeModel } from "../../src/router";
+import { codexRouteCredentialOwnership } from "../../src/server/responses/core-auth";
+import { resolveCodexAuthContext } from "../../src/codex/auth-context";
+import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { clearMainAccountInfoCache } from "../../src/codex/main-account-cache";
+import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex/routing";
+import { clearAccountQuota } from "../../src/codex/quota";
 import type { OcxConfig } from "../../src/types";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -155,33 +161,180 @@ test("OpenCode managed document drops native rows in Codex Direct and keeps them
   }
 });
 
-test("OpenCode, Pi, and DSH keep account-qualified native rows (and their Fast rows) in Direct mode", () => {
-  // An account-qualified selector (`main/gpt-5.6-luna`) is pinned to one account and served
-  // from the pool credential (`codexAccountMode: "pool"` on the route), so it does not ride
-  // the caller's own bearer and works in Direct mode. Only the bare form must be dropped.
+test("OpenCode, Pi-family (pi/prime/aside/omo/gentle-shell), and DSH drop bare native rows and keep account-qualified rows in Direct mode", () => {
+  // Bare native `gpt-*` rows require a caller-owned bearer in Codex Direct and 401 for
+  // proxy-key / loopback clients. Account-qualified `<namespace>/gpt-*` rows route with
+  // `codexAccountMode: "pool"` and a fixed account, so every proxy-key/loopback export
+  // keeps them while omitting only the bare form.
   const models: ExportModel[] = [
     { namespaced: "gpt-5.6-luna", provider: "openai", id: "gpt-5.6-luna", native: true, fastRowAvailable: true },
     { namespaced: "main/gpt-5.6-luna", provider: "openai", id: "main/gpt-5.6-luna", native: true, fastRowAvailable: true },
+    { namespaced: "work/gpt-5.6-luna", provider: "openai", id: "work/gpt-5.6-luna", native: true, fastRowAvailable: true },
     { namespaced: "safe/model", provider: "safe", id: "model" },
   ];
   const direct = cfg({
-    codexAccountNamespaces: { main: "acct_primary" },
+    codexAccountNamespaces: { main: "__main__", work: "acct_work" },
     providers: {
       openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", codexAccountMode: "direct" },
       safe: { adapter: "openai-chat", baseUrl: "https://safe.example/v1" },
     },
   });
+  const pool = cfg({
+    ...direct,
+    providers: { ...direct.providers, openai: { ...direct.providers.openai!, codexAccountMode: "pool" } },
+  });
+  const directExpected = [
+    "main/gpt-5.6-luna", "main/gpt-5.6-luna--fast",
+    "safe/model",
+    "work/gpt-5.6-luna", "work/gpt-5.6-luna--fast",
+  ];
+  const poolExpected = ["gpt-5.6-luna", "gpt-5.6-luna--fast", ...directExpected].sort();
 
   const doc = opencodeConfig(ctx({ models, config: direct }));
   for (const block of [doc.provider.opencodex!.models, doc.providers.opencodex!.models]) {
-    expect(Object.keys(block).sort()).toEqual(["main/gpt-5.6-luna", "main/gpt-5.6-luna--fast", "safe/model"]);
+    expect(Object.keys(block).sort()).toEqual(directExpected);
   }
 
-  const pi = piConfig(ctx({ models, config: direct }));
-  expect(pi.providers.opencodex.models.map(m => m.id).sort()).toEqual(["main/gpt-5.6-luna", "main/gpt-5.6-luna--fast", "safe/model"]);
+  for (const client of ["pi", "prime", "aside", "omo", "gentle-shell"] as const) {
+    const directExport = buildClientConfig(client, ctx({ models, config: direct })) as PiGeneratedConfig;
+    expect(directExport.providers.opencodex.models.map(m => m.id).sort()).toEqual(directExpected);
+    const directContrib = buildClientContribution(client, ctx({ models, config: direct }));
+    const contribModels = (directContrib.fragments[0]!.value as { models: Array<{ id: string }> }).models;
+    expect(contribModels.map(m => m.id).sort()).toEqual(directExpected);
+
+    const poolExport = buildClientConfig(client, ctx({ models, config: pool })) as PiGeneratedConfig;
+    expect(poolExport.providers.opencodex.models.map(m => m.id).sort()).toEqual(poolExpected);
+  }
 
   const dsh = dshConfig(ctx({ models, config: direct }));
-  expect(dsh["llm-pi-ai"].providers.opencodex!.models.map(m => m.id).sort()).toEqual(["main/gpt-5.6-luna", "main/gpt-5.6-luna--fast", "safe/model"]);
+  expect(dsh["llm-pi-ai"].providers.opencodex!.models.map(m => m.id).sort()).toEqual(directExpected);
+});
+
+test("Direct-mode account-qualified credential routing distinguishes caller JWT, stored main-pool, and exact non-main pool accounts", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ocx-direct-cred-routing-"));
+  const oldCodex = process.env.CODEX_HOME;
+  const oldOcx = process.env.OPENCODEX_HOME;
+  process.env.CODEX_HOME = dir;
+  process.env.OPENCODEX_HOME = dir;
+  clearThreadAccountMap();
+  clearCodexUpstreamHealth();
+  clearAccountQuota();
+  clearMainAccountInfoCache();
+  try {
+    const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const makeJwt = (sub: string, accountId: string) =>
+      `${part({ alg: "none" })}.${part({ sub, exp: Math.floor(Date.now() / 1000) + 3600, "https://api.openai.com/auth": { chatgpt_account_id: accountId } })}.sig`;
+
+    const callerJwt = makeJwt("caller-user", "acct-caller-distinct");
+    const storedMainJwt = makeJwt("stored-main-user", "acct-stored-main-distinct");
+    const storedWorkJwt = makeJwt("stored-work-user", "acct-stored-work-distinct");
+
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({
+      tokens: { access_token: storedMainJwt, refresh_token: "fake-main-refresh", account_id: "acct-stored-main-distinct" },
+    }));
+    clearMainAccountInfoCache();
+    saveCodexAccountCredential("acct_work", {
+      accessToken: storedWorkJwt,
+      refreshToken: "fake-work-refresh",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-stored-work-distinct",
+    });
+
+    const directConfig = cfg({
+      codexAccounts: [{ id: "acct_work", email: "work@example.test", chatgptAccountId: "acct-stored-work-distinct", isMain: false }],
+      codexAccountNamespaces: { main: "__main__", work: "acct_work" },
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", codexAccountMode: "direct" },
+      },
+    });
+    let mainReads = 0;
+    const mainTokenOpts = {
+      isMainAccountTokenLive: () => true,
+      getValidMainAccountToken: async () => {
+        mainReads += 1;
+        return { accessToken: storedMainJwt, chatgptAccountId: "acct-stored-main-distinct" };
+      },
+    };
+
+    // 1. Proxy-key / loopback client (no caller Codex JWT) calling `main/gpt-5.6-luna`:
+    //    resolves to stored `main-pool` with the distinct stored main credential.
+    const mainRoute = routeModel(directConfig, "main/gpt-5.6-luna");
+    expect(mainRoute.codexAccountMode).toBe("pool");
+    expect(mainRoute.codexAccountId).toBe("__main__");
+    const loopbackHeaders = new Headers({ authorization: `Bearer ${LOOPBACK_API_KEY_PLACEHOLDER}` });
+    const loopbackOwnership = codexRouteCredentialOwnership(loopbackHeaders, directConfig, mainRoute, {});
+    expect(loopbackOwnership.requestScopedMainCredential).toBe(false);
+    const storedMainCtx = await resolveCodexAuthContext(loopbackHeaders, directConfig, mainRoute.codexAccountMode!, {
+      ...mainTokenOpts,
+      accountId: mainRoute.codexAccountId,
+      requestScopedMainCredential: loopbackOwnership.requestScopedMainCredential,
+    });
+    expect(storedMainCtx).toMatchObject({
+      kind: "main-pool",
+      accountId: "__main__",
+      fixedAccount: true,
+      accessToken: storedMainJwt,
+      chatgptAccountId: "acct-stored-main-distinct",
+    });
+    expect(mainReads).toBe(1);
+
+    // 2. Caller carrying its own distinct Codex JWT calling `work/gpt-5.6-luna` (non-main namespace):
+    //    resolves strictly to the exact stored pool account `acct_work`, never the caller JWT or stored main.
+    const workRoute = routeModel(directConfig, "work/gpt-5.6-luna");
+    expect(workRoute.codexAccountMode).toBe("pool");
+    expect(workRoute.codexAccountId).toBe("acct_work");
+    const callerHeaders = new Headers({
+      authorization: `Bearer ${callerJwt}`,
+      "chatgpt-account-id": "acct-caller-distinct",
+    });
+    const workOwnership = codexRouteCredentialOwnership(callerHeaders, directConfig, workRoute, {});
+    const workCtx = await resolveCodexAuthContext(callerHeaders, directConfig, workRoute.codexAccountMode!, {
+      ...mainTokenOpts,
+      accountId: workRoute.codexAccountId,
+      requestScopedMainCredential: workOwnership.requestScopedMainCredential,
+    });
+    expect(workCtx).toMatchObject({
+      kind: "pool",
+      accountId: "acct_work",
+      fixedAccount: true,
+      accessToken: storedWorkJwt,
+      chatgptAccountId: "acct-stored-work-distinct",
+    });
+    expect(mainReads).toBe(1);
+
+    // 3. Caller carrying its own distinct Codex JWT calling `main/gpt-5.6-luna`:
+    //    preserves the documented caller-owned `main` context (`kind: "main"`, never reads stored main or pool).
+    const callerMainOwnership = codexRouteCredentialOwnership(callerHeaders, directConfig, mainRoute, {});
+    expect(callerMainOwnership.requestScopedMainCredential).toBe(true);
+    const callerMainCtx = await resolveCodexAuthContext(callerHeaders, directConfig, mainRoute.codexAccountMode!, {
+      ...mainTokenOpts,
+      accountId: mainRoute.codexAccountId,
+      requestScopedMainCredential: callerMainOwnership.requestScopedMainCredential,
+    });
+    expect(callerMainCtx).toMatchObject({ kind: "main", accountId: null });
+    expect(mainReads).toBe(1);
+
+    // 4. Bare `gpt-5.6-luna` in Direct mode routes as `direct` (no fixed account) and never falls
+    //    back to stored pool credentials for a loopback placeholder client.
+    const bareRoute = routeModel(directConfig, "gpt-5.6-luna");
+    expect(bareRoute.codexAccountMode).toBe("direct");
+    expect(bareRoute.codexAccountId).toBeUndefined();
+    const bareCtx = await resolveCodexAuthContext(loopbackHeaders, directConfig, bareRoute.codexAccountMode!, {
+      ...mainTokenOpts,
+      accountId: bareRoute.codexAccountId,
+      requestScopedMainCredential: false,
+    });
+    expect(bareCtx).toMatchObject({ kind: "main", accountId: null });
+    expect(mainReads).toBe(1);
+  } finally {
+    clearThreadAccountMap();
+    clearCodexUpstreamHealth();
+    clearAccountQuota();
+    clearMainAccountInfoCache();
+    if (oldCodex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodex;
+    if (oldOcx === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcx;
+    removeTreeWithRetry(dir);
+  }
 });
 
 function piConfig(context: ExportContext = ctx()): PiGeneratedConfig {

@@ -197,8 +197,11 @@ export function knownReasoningSupport(evidence: ExportCapabilityEvidence): boole
 
 /**
  * A native row addressed by its bare `gpt-*` slug, as opposed to an account-qualified
- * `<namespace>/<gpt-*>` row. Only the bare form rides the caller's own credential in Codex
- * Direct; the qualified form is pinned to an exact account and dispatched from the pool.
+ * `<namespace>/<gpt-*>` row. Bare rows require a caller-owned bearer in Codex Direct and 401
+ * for proxy-key / loopback clients. Account-qualified rows route with `codexAccountMode: "pool"`
+ * and a fixed account: non-main namespaces always use that exact stored pool account, and the
+ * `__main__` namespace uses stored `main-pool` for proxy-key / loopback clients (while preserving
+ * the existing caller-owned `main` context when a caller supplies its own Codex JWT).
  *
  * A row is account-qualified when its first path segment is a configured Codex account
  * namespace — the same spelling `routeModelInternal` uses to resolve
