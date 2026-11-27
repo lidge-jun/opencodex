@@ -176,6 +176,11 @@ The routes take the same authentication and origin checks as `/v1/images/generat
 is held to its providers and models on all three, and each call is recorded in `usage.jsonl`. List,
 delete, remix, edit and extension routes are not served.
 
+Creating a job, checking its status and downloading its content each use an active request slot.
+A download holds its slot until the stream ends. If all slots are busy, retry after the delay in
+the `Retry-After` header of the HTTP 503 response. An existing job can still be checked or
+downloaded when its creation workflow has reached its budget.
+
 ## How It Works
 
 1. opencodex detects a non-OpenAI routed model with `videoBridgeEnabled: true`

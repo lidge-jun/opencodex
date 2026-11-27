@@ -1,7 +1,12 @@
-import type { OcxTool } from "../types";
+import type { OcxMessage, OcxTool } from "../types";
 
 /** The function name the chat model sees + the name the loop intercepts. */
 export const WEB_SEARCH_TOOL_NAME = "web_search";
+
+/** True only for the result half of a hosted search pair constructed by the parser. */
+export function isReplayedSearchResult(message: OcxMessage, callIds: ReadonlySet<string>): boolean {
+  return message.role === "toolResult" && message.toolName === WEB_SEARCH_TOOL_NAME && callIds.has(message.toolCallId);
+}
 
 /**
  * Find the hosted `{type:"web_search", ...}` entry in a Responses request's `tools[]` and return it

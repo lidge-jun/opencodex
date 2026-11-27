@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { OcxProviderConfig } from "../types";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
 import { isPassiveKeyTransparent, markPassiveKeyTransparent, markPassiveKeyDeferred, PASSIVE_KEY_SEND } from "../lib/passive-key-fetch-proof";
+import { inheritTlsContextProof, markTlsContextTransparentExecutor } from "../lib/tls-context-proof";
 import { configuredOutboundFetch } from "../lib/proxy-env";
 import { waitOutsideProviderHeaderDeadline } from "../lib/provider-admission-wait";
 import { markSameTargetRetryHold, sleepWithAbort } from "../lib/upstream-retry";
@@ -199,7 +200,10 @@ export function resolveMistralTransport(
   if (!isCanonicalMistralChat(provider) || (provider.fetch && wrapped.has(provider.fetch))) return provider;
   const baseFetch = provider.fetch
     ?? markEgressTransparentExecutor(((input, init) => configuredOutboundFetch(input, init)) as typeof globalThis.fetch);
-  if (!provider.fetch) markPassiveKeyTransparent(baseFetch);
+  if (!provider.fetch) {
+    markPassiveKeyTransparent(baseFetch);
+    markTlsContextTransparentExecutor(baseFetch);
+  }
   const attemptFetch = (async (input, init) => {
     const send = () => {
       const observe = (init as (RequestInit & { [PASSIVE_KEY_SEND]?: (input: RequestInfo | URL, init: RequestInit) => void }) | undefined)?.[PASSIVE_KEY_SEND];
@@ -244,6 +248,7 @@ export function resolveMistralTransport(
     return response;
   }) as typeof globalThis.fetch;
   if (isEgressTransparentExecutor(baseFetch)) markEgressTransparentExecutor(attemptFetch);
+  inheritTlsContextProof(attemptFetch, baseFetch);
   if (isPassiveKeyTransparent(baseFetch)) {
     markPassiveKeyTransparent(attemptFetch);
     markPassiveKeyDeferred(attemptFetch);

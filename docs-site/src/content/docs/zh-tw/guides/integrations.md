@@ -91,7 +91,7 @@ opencodex 從自己的環境讀取這些變數。如果你的 gateway 以 profil
 - **Restore this point…** 會出現在較舊的操作上，或當檔案在那次操作之後有變更時。跨過這樣的變更做回復會再詢問一次，才覆蓋你的較新編輯——並且也會備份它們，所以那次的回復本身也可以復原。
 - 每個客戶端保留十份備份。超過之後，最舊的快照檔案會被移除，其歷史列顯示為 **Backup expired**。
 
-停用只移除 opencodex 記錄為自己寫入的條目。如果你的檔案在我們寫入之後有變更，後續行為取決於我們自己的條目是否完好，以及檔案的格式。對於嚴格 JSON 設定檔（OpenCode、Pi），在我們的區塊**旁邊**進行的編輯——例如新增 MCP 伺服器或你自己的 provider——會顯示為**需要更新**：重新整理會在保留你的條目的前提下合併寫入，但格式可能會被正規化。例外情況是 JSON 無法精確重寫的內容——例如 `1e999` 這類非有限數字、重寫會被四捨五入的數字（極大的整數，或小到會塌縮成零的數字）、`-0`、同一個物件裡重複出現的鍵，或巢狀層數超過 1000 層——此時開關會鎖定，確保沒有任何值被悄悄改動或刪除。**OMP、DSH 與 Hermes** 同樣不受旁邊編輯影響，但原因不同：它們的 writer 只逐位元組修補自己管理的 provider 片段，檔案其餘部分從不會被重寫。至於其餘可以包含註解的格式（OpenClaw、Kimi Code、gjc、MiniMax Code、Raycast——以整份文件寫出的 YAML、JSON5 與 TOML），或當我們自己的條目被編輯過時，開關會鎖定，停用會拒絕執行，而不是猜測哪些編輯是你的。
+停用只移除 opencodex 記錄為自己寫入的條目。如果你的檔案在我們寫入之後有變更，後續行為取決於我們自己的條目是否完好，以及檔案的格式。對於嚴格 JSON 設定檔（OpenCode、Pi），在我們的區塊**旁邊**進行的編輯——例如新增 MCP 伺服器或你自己的 provider——會顯示為**需要更新**：重新整理會在保留你的條目的前提下合併寫入，但格式可能會被正規化。例外情況是 JSON 無法精確重寫的內容——例如 `1e999` 這類非有限數字、重寫會被四捨五入的數字（極大的整數，或小到會塌縮成零的數字）、`-0`、同一個物件裡重複出現的鍵，或巢狀層數超過 1000 層——此時開關會鎖定，確保沒有任何值被悄悄改動或刪除。**OMP、DSH、Hermes 與 Kimi Code** 同樣不受旁邊編輯影響，但原因不同：它們的 writer 只逐位元組修補自己管理的 provider 片段，檔案其餘部分從不會被重寫。至於其餘可以包含註解的格式（OpenClaw、gjc、MiniMax Code、Raycast——以整份文件寫出的 YAML 與 JSON5），或當我們自己的條目被編輯過時，開關會鎖定，停用會拒絕執行，而不是猜測哪些編輯是你的。
 
 Hermes 的會話標識升級是上述衝突規則的特例：既有受管設定僅新增 `session_affinity_header: session-id` 時，可透過 **Apply** 接納；其他受管欄位的修改仍會衝突。升級前，背景重新整理也會暫停此整合的模型清單更新。此設定適用於該 provider 的所有模型，需要支援此能力的 Hermes 版本，且不保證快取命中率。詳見[英文升級說明](/guides/integrations/#hermes-session-affinity)。
 
@@ -113,7 +113,7 @@ Aside 會對一次選取的單一設定檔使用相同的預覽與確認流程�
 
 ## 誠實的預期
 
-**格式通常不會被保留。** 套用會解析設定並重新寫出，所以 JSON、JSON5 與 TOML 可能被重新格式化，JSON5 或 TOML 中的註解會遺失。OMP 與 DSH 是例外：OMP 的 YAML writer 只修補 `providers.opencodex`。DSH 在 Desktop profile 存在時修補 `$DSH_HOME/profiles/desktop/cordis.patch.yml` 中的 `[id=llm-pi-ai].config.providers.opencodex` 列；僅在沒有該 profile 時，才修補 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers.opencodex`。這些 writer 逐位元組保留無關的 provider 註解與格式。如果無法安全地識別那個確切的來源範圍，操作會拒絕執行。對其他客戶端，當你需要先前的檔案位元組時請使用 Restore：快照是逐字的副本。
+**格式通常不會被保留。** 套用會解析設定並重新寫出，所以 JSON 與 JSON5 可能被重新格式化，JSON5 中的註解會遺失。OMP、DSH、Hermes 與 Kimi Code 是例外：OMP 與 Hermes 的 YAML writer 只修補 `providers.opencodex`。DSH 在 Desktop profile 存在時修補 `$DSH_HOME/profiles/desktop/cordis.patch.yml` 中的 `[id=llm-pi-ai].config.providers.opencodex` 列；僅在沒有該 profile 時，才修補 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers.opencodex`。這些 writer 逐位元組保留無關的 provider 註解與格式。如果無法安全地識別那個確切的來源範圍，操作會拒絕執行。Kimi Code 的 writer 只取代 `config.toml` 中自己的 `[providers.opencodex]` 與 `[models."opencodex/…"]` 表格，保留註解與 `[[hooks]]` 表格；若這些表格以其他方式寫入，則拒絕執行。對其他客戶端，當你需要先前的檔案位元組時請使用 Restore：快照是逐字的副本。
 
 **如果某個值無法忠實重寫，開關會拒絕執行。** 往返覆蓋這些格式在實務上會用到的值種類；當它做不到時——例如使用 `inf` 或 `nan` 的 TOML 檔案，我們可用的 parser 無法準確讀回——套用會停止並說明，而不是寫入被改動的值然後宣稱成功。你會看到檔案被指名，磁碟上沒有任何東西被移動。手動編輯那個檔案仍然有效；只有我們的自動重寫會拒絕。
 

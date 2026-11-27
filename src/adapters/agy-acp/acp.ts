@@ -12,6 +12,7 @@
  * directions may reuse an id), stop reasons map through a complete terminal table instead of passing
  * through, and nothing child-authored ever reaches an error message.
  */
+import { parseDataUrl } from "../image";
 import type { AdapterEvent, OcxParsedRequest, OcxToolCall, OcxUsage } from "../../types";
 
 /** Hard ceiling on a single buffered stdout line. */
@@ -20,6 +21,10 @@ export const MAX_ACP_LINE_BYTES = 8 * 1024 * 1024;
 export const MAX_ACP_TOTAL_BYTES = 64 * 1024 * 1024;
 /** Ceiling on the flattened conversation handed to one ACP prompt. */
 export const MAX_ACP_PROMPT_CHARS = 200_000;
+/** Hard ceiling on base64-encoded bytes for one inline ACP image block. */
+export const MAX_ACP_IMAGE_ENCODED_BYTES = 4 * 1024 * 1024;
+/** Hard ceiling on aggregate base64-encoded bytes across all inline ACP image blocks in one prompt. */
+export const MAX_ACP_TOTAL_IMAGE_ENCODED_BYTES = 6 * 1024 * 1024;
 /** ACP v1 "Authentication required". */
 export const ACP_AUTH_REQUIRED = -32000;
 /** JSON-RPC "Method not found". */
@@ -36,8 +41,8 @@ export function initializeFrame(id: JsonRpcId, clientVersion: string): Frame {
   };
 }
 
-export function sessionNewFrame(id: JsonRpcId, cwd: string, systemPrompt?: string): Frame {
-  const params: Frame = { cwd, mcpServers: [] };
+export function sessionNewFrame(id: JsonRpcId, cwd: string, systemPrompt?: string, mcpServers: readonly object[] = []): Frame {
+  const params: Frame = { cwd, mcpServers };
   if (systemPrompt) params.systemPrompt = { mode: "append", content: [{ type: "text", text: systemPrompt }] };
   return { jsonrpc: "2.0", id, method: "session/new", params };
 }
@@ -46,8 +51,8 @@ export function setConfigOptionFrame(id: JsonRpcId, sessionId: string, configId:
   return { jsonrpc: "2.0", id, method: "session/set_config_option", params: { sessionId, configId, value } };
 }
 
-export function sessionPromptFrame(id: JsonRpcId, sessionId: string, text: string): Frame {
-  return { jsonrpc: "2.0", id, method: "session/prompt", params: { sessionId, prompt: [{ type: "text", text }] } };
+export function sessionPromptFrame(id: JsonRpcId, sessionId: string, prompt: string | AcpPromptBlock[]): Frame {
+  return { jsonrpc: "2.0", id, method: "session/prompt", params: { sessionId, prompt: typeof prompt === "string" ? [{ type: "text", text: prompt }] : prompt } };
 }
 
 export function sessionCancelFrame(sessionId: string): Frame {
@@ -102,40 +107,152 @@ export function acpSystemText(parsed: OcxParsedRequest): string {
   return parsed.context.systemPrompt?.filter(line => line.trim().length > 0).join("\n") ?? "";
 }
 
+/** Keep both ends of a priority block and preserve image placeholders as indivisible units. */
+function clipPromptBlock(text: string, limit: number, imagePattern?: RegExp): string {
+  if (text.length <= limit) return text;
+  const cut = "\n[...truncated...]\n";
+  const images = imagePattern ? Array.from(text.matchAll(imagePattern)) : [];
+  const imageChars = images.reduce((sum, image) => sum + image[0].length, 0);
+  const half = Math.floor((limit - cut.length - imageChars) / 2);
+  if (half < 1) throw new UnsupportedAcpMedia("The inline images exceed the ACP replay budget.");
+  let left = half;
+  let right = text.length - half;
+  const middle: string[] = [];
+  for (const image of images) {
+    const start = image.index;
+    const end = start + image[0].length;
+    if (end <= left || start >= right) continue;
+    left = Math.min(left, start);
+    right = Math.max(right, end);
+    middle.push(image[0]);
+  }
+  return text.slice(0, left) + cut + middle.join("") + text.slice(right);
+}
+
 /**
  * Flatten the conversation into the single text block one ACP prompt carries. ACP has no
  * multi-message history on session/prompt. System text is included only when the CLI did not
  * advertise `sessionCapabilities.systemPrompt` (then it travels on session/new instead, never both).
  */
-export function buildAcpPrompt(parsed: OcxParsedRequest, includeSystem: boolean): string {
-  const blocks: string[] = [];
+export function buildAcpPrompt(parsed: OcxParsedRequest, includeSystem: boolean, imagePattern?: RegExp): string {
+  const messages = parsed.context.messages;
+  const latestUser = messages.findLastIndex(message => message.role === "user");
+  const blocks: { text: string; priority: boolean }[] = [];
+  const add = (text: string, priority = false) => blocks.push({ text, priority });
   const system = includeSystem ? acpSystemText(parsed) : "";
-  if (system) blocks.push(fence("System", system));
-  for (const message of parsed.context.messages) {
+  if (system) add(fence("System", system), true);
+
+  // A short "go ahead" can refer to both an earlier request and the preceding proposal.
+  const before = messages.slice(0, Math.max(latestUser, 0));
+  const priorUser = before.findLastIndex(m => m.role === "user");
+  const priorReply = before.findLastIndex(m => m.role === "assistant" && m.content.some(p => p.type === "text"));
+  const final = messages.at(-1);
+  const pairedCall = final?.role === "toolResult" ? messages.findLastIndex(m =>
+    m.role === "assistant" && m.content.some(p => p.type === "toolCall" && p.id === final.toolCallId)) : -1;
+  for (const [index, message] of messages.entries()) {
+    const priority = index === latestUser || index === priorUser || index === priorReply
+      || index === pairedCall || index === messages.length - 1;
     if (message.role === "toolResult") {
       const body = typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? "");
-      blocks.push(fence("Tool", `[result id=${message.toolCallId}]\n${body}`));
+      const status = message.isError ? " error" : "";
+      add(fence("Tool", `[result${status} id=${message.toolCallId}]\n${body}`), priority);
       continue;
     }
     const parts = typeof message.content === "string" ? [] : message.content;
-    let text = typeof message.content === "string"
-      ? message.content
-      : parts.map(p => (p.type === "text" ? p.text : "")).filter(Boolean).join("\n");
-    if (message.role === "assistant" && Array.isArray(parts)) {
-      const calls = parts
-        .filter((p): p is OcxToolCall => p.type === "toolCall")
-        .map(c => `[call ${c.name} id=${c.id}]\n${JSON.stringify(c.arguments ?? {})}`)
-        .join("\n\n");
-      if (calls) text = text ? `${text}\n\n${calls}` : calls;
+    let text = typeof message.content === "string" ? message.content
+      : parts.map(p => p.type === "text" ? p.text : "").filter(Boolean).join("\n");
+    if (message.role === "assistant") {
+      const calls = message.content.filter((p): p is OcxToolCall => p.type === "toolCall")
+        .map(c => `[call ${c.name} id=${c.id}]\n${JSON.stringify(c.arguments ?? {})}`);
+      text = [text, ...calls].filter(Boolean).join("\n\n");
     }
     if (!text.trim()) continue;
     const label = message.role === "assistant" ? "Assistant" : message.role === "developer" ? "System" : "User";
-    blocks.push(fence(label, text));
+    add(fence(label, text), priority);
   }
-  if (blocks.length === 0) return "(empty)";
-  const joined = blocks.join("\n\n");
-  // Keep the newest turns when trimming: the tail is what the agent is answering.
-  return joined.length > MAX_ACP_PROMPT_CHARS ? `[truncated]\n${joined.slice(joined.length - MAX_ACP_PROMPT_CHARS)}` : joined;
+  if (!blocks.length) return "(empty)";
+  const joined = blocks.map(block => block.text).join("\n\n");
+  if (joined.length <= MAX_ACP_PROMPT_CHARS) return joined;
+
+  // Keep the decision, approved scope, paired call and outcome in order under pressure.
+  // Reserve space for both ends of each anchor (a command result often ends with its exit status).
+  const header = "[truncated]\n";
+  let remaining = MAX_ACP_PROMPT_CHARS - header.length;
+  const count = Math.max(1, blocks.filter(b => b.priority).length);
+  const allowance = Math.floor(remaining / count) - 2;
+  const kept = new Map<number, string>();
+  for (const [i, block] of blocks.entries()) {
+    if (!block.priority) continue;
+    const text = clipPromptBlock(block.text, allowance, imagePattern);
+    kept.set(i, text);
+    remaining -= text.length + 2;
+  }
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i]!;
+    if (block.priority || block.text.length + 2 > remaining) continue;
+    kept.set(i, block.text);
+    remaining -= block.text.length + 2;
+  }
+  return header + blocks.flatMap((_, i) => kept.has(i) ? [kept.get(i)!] : []).join("\n\n");
+}
+
+export type AcpPromptBlock = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
+export class UnsupportedAcpMedia extends Error {}
+
+const SAFE_ACP_IMAGE_MIME = /^image\/[a-z0-9.+-]+$/i;
+const MAX_ACP_IMAGE_MIME_LENGTH = 64;
+const VALID_ACP_IMAGE_BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/** Preserve the transcript positions of images, including MCP tool results.
+ * Compact text with the existing history policy before substituting image bytes.
+ */
+export function acpPromptBlocks(parsed: OcxParsedRequest, includeSystem: boolean, prefix?: string): AcpPromptBlock[] {
+  const images: AcpPromptBlock[] = [];
+  let totalImageBytes = 0;
+  const marker = crypto.randomUUID();
+  const messages = parsed.context.messages.map(message => {
+    if (message.role === "assistant" || typeof message.content === "string") return message;
+    const content = message.content.map(part => {
+      if (part.type === "document") return { type: "text" as const, text: part.text };
+      if (part.type !== "image") return part;
+      const image = parseDataUrl(part.imageUrl);
+      if (
+        message.role === "developer"
+        || !image
+        || image.mediaType.length > MAX_ACP_IMAGE_MIME_LENGTH
+        || !SAFE_ACP_IMAGE_MIME.test(image.mediaType)
+        || !image.base64
+        || image.base64.length % 4 === 1
+        || (image.base64.includes("=") && image.base64.length % 4 !== 0)
+        || !VALID_ACP_IMAGE_BASE64.test(image.base64)
+      ) {
+        throw new UnsupportedAcpMedia("Gemini ACP requires inline image attachments in user messages or tool results.");
+      }
+      const encodedBytes = Buffer.byteLength(image.base64, "utf8");
+      if (encodedBytes > MAX_ACP_IMAGE_ENCODED_BYTES) {
+        throw new UnsupportedAcpMedia("An inline image exceeds the ACP per-image encoded byte limit.");
+      }
+      totalImageBytes += encodedBytes;
+      if (totalImageBytes > MAX_ACP_TOTAL_IMAGE_ENCODED_BYTES) {
+        throw new UnsupportedAcpMedia("Inline images exceed the ACP aggregate encoded byte limit.");
+      }
+      const index = images.push({ type: "image", data: image.base64, mimeType: image.mediaType }) - 1;
+      return { type: "text" as const, text: marker + index + marker };
+    });
+    return { ...message, content };
+  });
+  const pattern = new RegExp(marker + "(\\d+)" + marker, "g");
+  const text = buildAcpPrompt({ ...parsed, context: { ...parsed.context, messages } }, includeSystem, images.length ? pattern : undefined);
+  const blocks: AcpPromptBlock[] = [];
+  if (prefix) blocks.push({ type: "text", text: prefix + "\n\n" });
+  let offset = 0;
+  for (const match of text.matchAll(pattern)) {
+    if (match.index > offset) blocks.push({ type: "text", text: text.slice(offset, match.index) });
+    blocks.push(images[Number(match[1])]!);
+    offset = match.index + match[0].length;
+  }
+  if (offset < text.length) blocks.push({ type: "text", text: text.slice(offset) });
+  return blocks;
 }
 
 function chunkText(content: unknown): string {

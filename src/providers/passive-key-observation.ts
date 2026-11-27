@@ -1,6 +1,7 @@
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { getConfigDir } from "../config/paths";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
+import { inheritTlsContextProof } from "../lib/tls-context-proof";
 import { isPassiveKeyDeferred, isPassiveKeyTransparent, PASSIVE_KEY_SEND } from "../lib/passive-key-fetch-proof";
 import { isKeychainReference, passiveKeychainGeneration, peekResolvedProviderKey, resolveProviderApiKeyPassively } from "./api-key-resolve";
 import { passiveKeyLimits, type PassiveKeyProvider } from "./quota/passive-key-limits";
@@ -209,6 +210,7 @@ export function passiveKeyPhysicalFetch(
       return response;
     } finally { reservation?.cancel(); }
   }) as typeof globalThis.fetch;
+  inheritTlsContextProof(wrapped, physicalFetch);
   return isEgressTransparentExecutor(physicalFetch) ? markEgressTransparentExecutor(wrapped) : wrapped;
 }
 

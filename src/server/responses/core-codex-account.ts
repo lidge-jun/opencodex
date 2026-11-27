@@ -69,6 +69,8 @@ import {
   CodexAuthContextError,
   CodexAccountCooldownError,
   CodexMainProfileDrainingError,
+  CodexMainAccountHardLockError,
+  CodexMainAccountCreditsOffError,
   headersForCodexAuthContext,
   applyCodexAuthContextToProvider,
   stripCodexRuntimeProviderFields,
@@ -836,6 +838,17 @@ export async function retryCodexPoolOnAlternateAccount(
       await firstResponse.body?.cancel().catch(() => undefined);
       releaseCodexAuthContextProbeLease(firstAuthCtx);
       throw error;
+    }
+    // The only alternate was main, and main's own policy refused it. The first account declined
+    // the model, so its 400 is not why this request cannot be served: returning it reports the
+    // model as unsupported while the login that can serve it is waiting for a reset. Let the
+    // owner map the policy refusal instead, which names that reset.
+    if ((error instanceof CodexMainAccountHardLockError || error instanceof CodexMainAccountCreditsOffError)
+      && await shouldRetryCodexPoolAccountModel400(firstResponse, route.modelId, options.abortSignal, parsed.modelId)) {
+      accountMovePermit?.release();
+      releaseCodexAuthContextProbeLease(firstAuthCtx);
+      await firstResponse.body?.cancel().catch(() => undefined);
+      return { kind: "transport", error, authCtx: firstAuthCtx };
     }
   }
   // A validated request-owned main bearer is a real alternate when the failed credential was a

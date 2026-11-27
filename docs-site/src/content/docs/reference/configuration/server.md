@@ -320,6 +320,26 @@ transport rewrites the destination after credential selection. Per-request laten
 for those hosts, since each request pays a fresh TCP and TLS handshake; name only the hosts that
 need it.
 
+## TLS compatibility for specific upstream hosts
+
+Some upstream network paths reset connections when the TLS handshake offers a hybrid
+post-quantum key exchange. To try a classical-only key exchange for named hosts on the
+Responses and native Chat HTTP paths, set this environment variable before starting OpenCodex:
+
+```bash
+OCX_TLS_CLASSICAL_GROUPS_HOSTS="api.example.com" ocx start
+```
+
+The value is a comma-separated list of hostnames. Matching is case-insensitive and includes
+subdomains, ignoring a trailing DNS root dot; omit schemes, ports and paths. The option affects HTTPS requests to matching hosts
+only and preserves certificate verification. It removes the hybrid post-quantum group for
+those connections, so use it only for endpoints that need this compatibility workaround.
+Unset or empty means the runtime's default TLS behavior.
+
+A matching request using a `FetchSession` must supply its TLS settings on the request itself.
+Matching requests using custom provider transports or TLS profiles are refused because their
+connection security settings cannot be safely inspected. Other requests are unaffected.
+
 ## Remote access
 
 The default `127.0.0.1` bind is loopback-only. A non-loopback address such as `0.0.0.0` or a tailnet IP requires a data-admission credential for model requests: a configured client key in `config.apiKeys` or a shared data token. Management routes `/api/*` use the independent `OPENCODEX_ADMIN_AUTH_TOKEN` or generated admin token, including on loopback. A data credential does not grant management access; never give the admin token to a model client.

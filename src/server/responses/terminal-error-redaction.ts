@@ -28,7 +28,7 @@ const PROTOCOL_EVENT_LINE = /^event:[ \t]*(?:response\.[a-z_.]+|error|done|ping)
 const PROTOCOL_KEYS = new Set([
   "type", "response", "error", "last_error", "message", "code", "param", "status", "id", "object",
   "incomplete_details", "reason", "output", "usage", "metadata", "sequence_number", "model", "created_at",
-  "retryable",
+  "retryable", "refusal",
 ]);
 
 function withEscapedSpelling(part: string): string[] {
@@ -195,6 +195,79 @@ function createRedactionTools(outboundHeaders: Record<string, string>, maskCrede
   return { redactDiagnostic, maskExtensionLines, maskUnstructuredBlock, redactUpstreamCopyBlock };
 }
 
+const EARLY_REFUSAL_EVENTS = new Set([
+  "response.refusal.delta", "response.refusal.done", "response.content_part.added",
+  "response.content_part.done", "response.output_item.added", "response.output_item.done",
+]);
+
+/** Refusal diagnostics can share a frame with ordinary output and tool arguments. */
+function maskResponseDiagnostics(
+  event: Record<string, unknown>,
+  redactDiagnostic: (value: unknown) => unknown,
+): { present: boolean; changed: boolean } {
+  let present = false;
+  let changed = false;
+  const maskPart = (part: unknown): unknown => {
+    if (!part || typeof part !== "object" || !("type" in part) || part.type !== "refusal") return part;
+    present = true;
+    const safe = redactDiagnostic(part);
+    if (JSON.stringify(part) !== JSON.stringify(safe)) changed = true;
+    return safe;
+  };
+  const maskItem = (item: unknown) => {
+    if (!item || typeof item !== "object" || !("type" in item) || item.type !== "message"
+      || !("content" in item) || !Array.isArray(item.content)) return;
+    for (const [index, part] of item.content.entries()) item.content[index] = maskPart(part);
+  };
+  switch (event.type) {
+    case "response.refusal.delta":
+    case "response.refusal.done": {
+      const key = event.type === "response.refusal.delta" ? "delta" : "refusal";
+      if (typeof event[key] !== "string") return { present: false, changed: false };
+      // Each wire field is independent here. Ordinary output deltas take no diagnostic rewrite.
+      const safe = redactDiagnostic({ refusal: event[key] }) as { refusal: string };
+      changed = safe.refusal !== event[key];
+      event[key] = safe.refusal;
+      return { present: true, changed };
+    }
+    case "response.content_part.added":
+    case "response.content_part.done":
+      event.part = maskPart(event.part);
+      return { present, changed };
+    case "response.output_item.added":
+    case "response.output_item.done":
+      maskItem(event.item);
+      return { present, changed };
+    case "response.completed": break;
+    default: return { present: false, changed: false };
+  }
+  const maskField = (entry: Record<string, unknown>, key: string) => {
+    if (entry[key] == null) return;
+    present = true;
+    // Use a diagnostic envelope so the error's type is treated as an error class,
+    // not the protocol type of the SSE event.
+    const envelope = { error: entry[key] };
+    const safe = keepPolicyEvidence(envelope, redactDiagnostic(envelope)) as { error: unknown };
+    if (JSON.stringify(entry[key]) !== JSON.stringify(safe.error)) {
+      entry[key] = safe.error;
+      changed = true;
+    }
+  };
+  for (const carrier of [event, event.response]) {
+    if (!carrier || typeof carrier !== "object" || Array.isArray(carrier)) continue;
+    const entry = carrier as Record<string, unknown>;
+    maskField(entry, "error");
+    maskField(entry, "last_error");
+    const details = entry.incomplete_details;
+    if (carrier === event.response && details && typeof details === "object" && !Array.isArray(details)) {
+      const diagnostic = details as Record<string, unknown>;
+      if (typeof diagnostic.message === "string") maskField(diagnostic, "message");
+    }
+    if (Array.isArray(entry.output)) for (const item of entry.output) maskItem(item);
+  }
+  return { present, changed };
+}
+
 /**
  * Redaction the terminal boundary applies to a typed bare `error` frame it forwards to the client,
  * after it has reduced the frame's verdict from the original. Running it inside the boundary keeps
@@ -238,6 +311,11 @@ export function createTerminalErrorRedactionBlockRewrite(
       return [terminalFrame ? maskUnstructuredBlock(block, payload) : block];
     }
     if (isUntypedBareUpstreamError(event) || event?.type === "error") return [block];
+    if (!terminalFrame && (event?.type === "response.completed"
+      || (typeof event?.type === "string" && EARLY_REFUSAL_EVENTS.has(event.type)))) {
+      const { present, changed } = maskResponseDiagnostics(event, redactDiagnostic);
+      if (present) return [maskExtensionLines(changed ? replaceSseDataPayload(block, JSON.stringify(event)) : block)];
+    }
     if (event?.type !== "response.failed" && event?.type !== "response.incomplete") {
       // A terminal event line over another JSON payload is upstream copy throughout, masked field by
       // field so recognized classes survive for every reader.

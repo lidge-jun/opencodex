@@ -20,7 +20,12 @@ import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmColdSpawn } from "../helpers/cold
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
-import { codexShimReadinessLine, connectCompletionReport } from "../../src/cli/connect";
+import {
+  clientConnectionStatusLines,
+  codexShimReadinessLine,
+  connectCompletionReport,
+  hubCodexDesktopReadinessLine,
+} from "../../src/cli/connect";
 import { codexConnectShimReadiness, inspectCodexShimForConnect } from "../../src/cli/codex-shim-readiness";
 import { findFirstCodexOnPath } from "../../src/codex/shim-path-resolution";
 import { dispatchCommand } from "../../src/cli/dispatch";
@@ -429,6 +434,8 @@ describe("#4207 connected-client readiness", () => {
     expect(probe.status.readiness).toBe("ready");
     expect(probe.status.readinessReason).toBeUndefined();
     expect(probe.lines[1]).toBe("Local Codex CLI: ready");
+    expect(probe.lines.at(-1)).toContain("Codex Desktop / GUI apps:");
+    expect(probe.lines.at(-1)).toContain("Missing environment variable: OPENCODEX_API_AUTH_TOKEN");
   });
 
   test("an unobservable runtime is unverified, never incompatible", () => {
@@ -759,6 +766,51 @@ describe("Codex shim readiness on connect", () => {
       throw new Error("Codex shim must not be inspected for Claude-only connect");
     });
     expect(line).toBeNull();
+  });
+
+  test("Hub-mode connect and status surface the Codex Desktop env_key caveat (#9171)", () => {
+    const hubLine = hubCodexDesktopReadinessLine(["codex"], "hub");
+    expect(hubLine).not.toBeNull();
+    expect(hubLine).toContain("Codex Desktop");
+    expect(hubLine).toContain("OPENCODEX_API_AUTH_TOKEN");
+    expect(hubLine).toContain("Missing environment variable: OPENCODEX_API_AUTH_TOKEN");
+    expect(hubLine).toContain("Remote Link");
+    expect(hubLine).toContain("--desktop-authless");
+    expect(hubLine).not.toContain("ocx_data_");
+
+    // Default/legacy hub connections (omitted transport) also carry the notice.
+    expect(hubCodexDesktopReadinessLine(["codex"], undefined)).toBe(hubLine);
+    // Remote Link runs a local loopback relay without env_key, and Claude-only does not touch Codex.
+    expect(hubCodexDesktopReadinessLine(["codex"], "link")).toBeNull();
+    expect(hubCodexDesktopReadinessLine(["claude"], "hub")).toBeNull();
+
+    const baseStatus = {
+      state: "connected" as const,
+      serverUrl: "https://hub.example.test",
+      managementUrl: "https://hub.example.test",
+      managementTransport: "direct" as const,
+      protocolVersion: 1,
+      apiKeyId: "client-key-1",
+      selectedClients: ["codex"] as ("codex" | "claude")[],
+      catalog: "present" as const,
+      token: "owned" as const,
+      rotation: "clean" as const,
+      readiness: "ready" as const,
+    };
+    const hubLines = clientConnectionStatusLines({ ...baseStatus, transport: "hub" });
+    expect(hubLines[0]).toBe("Connection: connected");
+    expect(hubLines[1]).toBe("Local Codex CLI: ready");
+    expect(hubLines.at(-1)).toBe(hubLine);
+
+    const linkLines = clientConnectionStatusLines({ ...baseStatus, transport: "link" });
+    expect(linkLines.join("\n")).not.toContain("Codex Desktop / GUI apps");
+
+    const claudeOnlyLines = clientConnectionStatusLines({
+      ...baseStatus,
+      transport: "hub",
+      selectedClients: ["claude"],
+    });
+    expect(claudeOnlyLines.join("\n")).not.toContain("Codex Desktop / GUI apps");
   });
 });
 

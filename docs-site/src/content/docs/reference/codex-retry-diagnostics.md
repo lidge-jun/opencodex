@@ -56,8 +56,17 @@ A hard-lock refusal is reported as `usage_limit_reached`, so Codex ends the turn
 and marks an active Goal as usage-limited instead of waiting for days in a
 retry. The suggested retry time is the main account's reset or, for a request
 that the account pool routed to the main account, the earliest known time another
-pool account recovers, whichever comes first (never sooner than one minute).
+pool account recovers, whichever comes first (a pool account's time is never
+sooner than one minute away; the main reset is used as is).
 Resume the Goal after that time; routing then picks an account from fresh state.
+
+The same refusal is returned when another pool account was tried first, answered
+that it does not support the requested model, and the request could move to
+another account. The client sees the main account's limit, with the suggested
+retry time described above, rather than that account's model error. A request
+that carries an uploaded file, is held to one account, or has no send left for
+an account move still gets that account's model error, and a quota refusal from
+the other account is returned as before.
 
 ## Stored-account credit metadata retries
 
@@ -112,6 +121,8 @@ sends no pings. All three keep the client's idle deadline on purpose.
 `ocx logs get <request-id> --json` shows the attempt's `codexWsStage` with its
 `pings` and `pongs` counts, which tell the three apart. Raising
 `stream_idle_timeout_ms` only makes them wait longer.
+
+In the dashboard request log, **Stream interrupted** means the upstream WebSocket closed abnormally (1006) after the proxy relayed response events and before it observed a terminal event. The request details show this distinction. To inspect subsequent activity, use the filter beside the conversation ID and clear any status filter. The resulting rows belong to the same conversation, which can include multiple turns. Their timing and sizes alone cannot establish an automatic retry or successful recovery.
 
 ## Why the first reconnect row can be absent
 

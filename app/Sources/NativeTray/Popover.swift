@@ -1,6 +1,61 @@
 import AppKit
 import SwiftUI
 
+public enum NativeTrayToggleAction: Equatable {
+    case dismiss
+    case ignoreRecentDismissal
+    case present
+}
+
+public enum NativeTrayTogglePolicy {
+    public static let dismissGrace: TimeInterval = 0.35
+
+    public static func evaluate(
+        toggle: Bool,
+        isVisible: Bool,
+        unconsumedButtonMouseDown: Bool,
+        lastDismissedAt: Date?,
+        now: Date = Date()
+    ) -> NativeTrayToggleAction {
+        if toggle && isVisible {
+            return .dismiss
+        }
+        if toggle && unconsumedButtonMouseDown, let lastDismissed = lastDismissedAt,
+           now.timeIntervalSince(lastDismissed) < dismissGrace {
+            return .ignoreRecentDismissal
+        }
+        return .present
+    }
+}
+
+/// A left press on the panel's own status button while the panel is open.
+///
+/// The panel's global outside-click monitor sees that press before Tauri delivers the matching
+/// mouse-up toggle, so the press is recorded instead of dismissing; the toggle that follows then
+/// closes the panel once instead of reopening it. Any other dismissal forgets the press, so a
+/// stale press can never swallow a later, unrelated click on the icon.
+public struct NativeTrayButtonPress: Equatable {
+    public private(set) var pressedAt: Date?
+
+    public init() {}
+
+    public mutating func record(at now: Date = Date()) { pressedAt = now }
+
+    public mutating func clear() { pressedAt = nil }
+
+    /// Decides one toggle and consumes the recorded press.
+    public mutating func toggle(isVisible: Bool, now: Date = Date()) -> NativeTrayToggleAction {
+        defer { pressedAt = nil }
+        return NativeTrayTogglePolicy.evaluate(
+            toggle: true,
+            isVisible: isVisible,
+            unconsumedButtonMouseDown: pressedAt != nil,
+            lastDismissedAt: pressedAt,
+            now: now
+        )
+    }
+}
+
 // All ABI calls run on Tauri's AppKit main thread. Swift copies the borrowed JSON
 // synchronously and never retains a Rust buffer or owns an application/run loop.
 @MainActor
@@ -31,7 +86,17 @@ private final class NativeTrayPopover: NSObject {
 
     func show(_ pointer: UnsafeMutableRawPointer, toggle: Bool, callback: @escaping @convention(c) (Int32) -> Void) {
         self.callback = callback
-        if toggle && panel.isVisible { panel.dismiss(); return }
+        if toggle {
+            switch panel.buttonPress.toggle(isVisible: panel.isVisible) {
+            case .dismiss:
+                panel.dismiss()
+                return
+            case .ignoreRecentDismissal:
+                return
+            case .present:
+                break
+            }
+        }
         let item = Unmanaged<NSStatusItem>.fromOpaque(pointer).takeUnretainedValue()
         guard let button = item.button, button.window != nil else { return }
         if panel.isVisible { return }

@@ -7,12 +7,13 @@ import { clearStepCliSessions, createStepCliAdapter } from "../../src/adapters/s
 import { withConversationLock } from "../../src/adapters/step-cli/conversation";
 import { handleReverseRequest, handleRuntimeEvent } from "../../src/adapters/step-cli/events";
 import { classifyStepChildError } from "../../src/adapters/step-cli/errors";
-import { latestToolResult, projectToolResultContent } from "../../src/adapters/step-cli/projection";
-import type {
-  StepConversationHost,
-  StepConversationRef,
-  StepConversationSession,
-  StepHeldTool,
+import { latestToolResult, pendingUserText, projectToolResultContent } from "../../src/adapters/step-cli/projection";
+import {
+  StepSessionPool,
+  type StepConversationHost,
+  type StepConversationRef,
+  type StepConversationSession,
+  type StepHeldTool,
 } from "../../src/adapters/step-cli/session-pool";
 import {
   encodeStepFrame,
@@ -28,6 +29,9 @@ import {
   runOptionalShutdownHooks,
 } from "../../src/lib/optional-shutdown-hooks";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
+import { parseRequest } from "../../src/responses/parser";
+import { expandPreviousResponseInput, rememberResponseState } from "../../src/responses/state";
+import { stripReplayedSearchPairs } from "../../src/web-search/sidecar-search-replay";
 
 /**
  * A fake StepCode process.
@@ -200,6 +204,76 @@ function parsed(messages: unknown[]): OcxParsedRequest {
 
 const USER_ASK = [{ role: "user", content: "run it", timestamp: 0 }];
 
+test("starting a conversation without user text refuses before preparing a StepCode session", async () => {
+  let preparations = 0;
+  const pool = new StepSessionPool({
+    openCodexHome: "unused", idleTimeoutMs: 60_000,
+    buildOptions() { preparations++; throw new Error("unexpected session preparation"); },
+  }, { onEvent() {} });
+  const adapter = createStepCliAdapter(provider(), { openSession: pool });
+  try {
+    const noInput = [
+      [],
+      [...USER_ASK, { role: "assistant", content: "Earlier reply" }],
+      [...USER_ASK, { role: "toolResult", toolCallId: "call-9", toolName: "shell", content: "done" }],
+      [...USER_ASK, { role: "user", content: "  " }],
+      [...USER_ASK, { role: "user", content: [{ type: "text", text: "\n" }] }],
+    ];
+    const replayOnly = { ...parsed(USER_ASK), previousResponseId: "prev", _replayPrefixLen: 3 };
+    for (const turn of [...noInput.map(parsed), replayOnly]) {
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn!(turn, THREAD_META, event => events.push(event));
+      expect(events).toMatchObject([{ type: "error", status: 400, code: "step_cli_no_user_text",
+        errorType: "invalid_request_error", retryable: false }]);
+    }
+    expect(preparations).toBe(0);
+  } finally { await pool.closeAll(); }
+});
+
+function hostedSearchHistory() {
+  return { type: "web_search_call", id: "ws_history", status: "completed", action: { type: "search", query: "old search" } };
+}
+
+test("fresh user input survives stripping restored search history and copying the remaining messages", () => {
+  const model = "step-5-preview";
+  const prior = `resp_${crypto.randomUUID()}`;
+  rememberResponseState({ model, input: [{ role: "user", content: "Old question" }] },
+    { id: prior, status: "completed", output: [hostedSearchHistory()] });
+  const body = expandPreviousResponseInput({
+    model, previous_response_id: prior, tools: [{ type: "web_search" }],
+    input: [{ role: "user", content: "Next question" }, { role: "developer", content: "Answer briefly" }],
+  });
+  const turn = parseRequest(body);
+  expect(turn._replayedWebSearchCells).toHaveLength(1);
+  expect(pendingUserText(turn)).toBe("Next question");
+  stripReplayedSearchPairs(turn);
+  expect(turn.context.messages.map(m => m.role)).toEqual(["user", "user", "developer"]);
+  const copied = { ...turn, context: { ...turn.context, messages: turn.context.messages.map(m => ({ ...m })) } };
+  expect(pendingUserText(copied)).toBe("Next question");
+  // A later sidecar iteration appends an actual, current tool result to the parsed context.
+  copied.context.messages.push({ role: "toolResult", toolCallId: "sidecar-1", toolName: "web_search", content: "found", isError: false, timestamp: 1 });
+  expect(latestToolResult(copied)?.toolCallId).toBe("sidecar-1");
+});
+
+test.each([false, true])("stateless hosted search history never shadows fresh input (stripped=%s)", strip => {
+  const tools = [{ type: "function", name: "shell", parameters: { type: "object" } }, { type: "web_search" }];
+  const withResult = parseRequest({ model: "step-5-preview", tools, input: [
+    { role: "user", content: "run it" },
+    { type: "function_call", name: "shell", call_id: "call-1", arguments: "{}" },
+    hostedSearchHistory(),
+    { type: "function_call_output", call_id: "call-1", output: "done" },
+  ] });
+  const searchOnly = parseRequest({ model: "step-5-preview", tools, input: [
+    { role: "user", content: "Old question" }, hostedSearchHistory(),
+  ] });
+  expect(withResult._replayedWebSearchCells).toHaveLength(1);
+  expect(searchOnly._replayedWebSearchCells).toHaveLength(1);
+  if (strip) { stripReplayedSearchPairs(withResult); stripReplayedSearchPairs(searchOnly); }
+  expect(latestToolResult(withResult)?.toolCallId).toBe("call-1");
+  // The answered question sits before the search the model already ran; it is not pending input.
+  expect(pendingUserText(searchOnly)).toBeUndefined();
+});
+
 describe("StepCode reverse requests are always answered", () => {
   test("a permission request with no turn is denied", () => {
     const session = new FakeSession();
@@ -268,7 +342,79 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     expect(session.delivered).toHaveLength(0);
   });
 
-  test("turn 2 with the matching result continues the same query", async () => {
+  test.each([
+    ["function_call_output", false], ["function_call_output", true],
+    ["custom_tool_call_output", false], ["custom_tool_call_output", true],
+  ] as const)("fresh %s resumes the held query with stripped hosted search=%s", async (outputType, strip) => {
+    const session = new FakeSession();
+    const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
+    session.stream = [
+      requestFrame("req_101", "permission.request", {
+        toolName: "ocx__shell", input: {}, toolUseId: "perm_100",
+        decisionReason: "tool execution requires approval", timeoutMs: 60_000,
+      }),
+      requestFrame("req_102", "sdk_tool.invoke", {
+        serverName: "ocx", toolName: "shell", input: {}, toolUseId: "call-9", timeoutMs: 120_000,
+      }),
+    ];
+    await adapter.runTurn!(parsed(USER_ASK), THREAD_META, () => {});
+    expect(session.queries).toHaveLength(1);
+    const heldResult = { role: "toolResult", toolCallId: "call-9", toolName: "shell", content: "done", isError: false, timestamp: 1 };
+    const continuation = { previousResponseId: "resp-1", _replayPrefixLen: 3 };
+    const blank = [" \t ", [{ type: "text", text: " \n " }], []];
+    const unusable = [
+      ...blank.map(content => parsed([...USER_ASK, { role: "user", content }])),
+      { ...parsed(USER_ASK), ...continuation },
+      { ...parsed([...USER_ASK, heldResult]), ...continuation },
+      { ...parsed([...USER_ASK, { ...heldResult, toolCallId: "other" }]), ...continuation, _currentInputMessageStart: 1 },
+    ];
+    for (const turn of unusable) {
+      const events: AdapterEvent[] = [];
+      session.stream = [TURN_COMPLETE];
+      await adapter.runTurn!(turn, THREAD_META, e => events.push(e));
+      expect(events).toMatchObject([{ type: "error", code: "step_cli_no_user_text" }]);
+      expect(session.queries).toHaveLength(1);
+      expect(session.inputs).toHaveLength(1);
+      expect(session.interrupts).toHaveLength(0);
+      expect(session.delivered).toHaveLength(0);
+    }
+    const result: AdapterEvent[] = [];
+    const model = "step-5-preview";
+    const prior = `resp_${crypto.randomUUID()}`;
+    rememberResponseState(
+      { model, input: [{ role: "user", content: "run it" }] },
+      { id: prior, status: "completed", output: [
+        { type: "function_call", name: "shell", call_id: "call-9", arguments: "{}" }, hostedSearchHistory(),
+      ] },
+    );
+    const continuationBody = {
+      model, previous_response_id: prior,
+      tools: [{ type: "function", name: "shell", description: "run", parameters: { type: "object" } }, { type: "web_search" }],
+    };
+    const restored = parseRequest(expandPreviousResponseInput({ ...continuationBody, input: [] }));
+    expect(restored._replayPrefixLen).toBeGreaterThan(0);
+    restored._reasoningReplayScope = parsed(USER_ASK)._reasoningReplayScope;
+    const declined: AdapterEvent[] = [];
+    await adapter.runTurn!(restored, THREAD_META, e => declined.push(e));
+    expect(declined).toMatchObject([{ type: "error", code: "step_cli_no_user_text" }]);
+    const fresh = parseRequest(expandPreviousResponseInput({
+      ...continuationBody, input: [{ type: outputType, call_id: "call-9", output: "done" }],
+    }));
+    expect(fresh._replayPrefixLen).toBeGreaterThan(0);
+    expect(fresh._replayedWebSearchCells).toHaveLength(1);
+    expect(fresh.context.messages.filter(m => m.role === "toolResult").map(m => m.toolCallId)).toEqual([
+      "call-9", fresh._replayedWebSearchCells![0]!.callId,
+    ]);
+    expect(fresh._continuationConversationMessageIndex).toBe(fresh.context.messages.length);
+    if (strip) stripReplayedSearchPairs(fresh);
+    fresh._reasoningReplayScope = parsed(USER_ASK)._reasoningReplayScope;
+    await adapter.runTurn!(fresh, THREAD_META, e => result.push(e));
+    expect(result.find(e => e.type === "done")).toMatchObject({ stopReason: "stop" });
+    expect(session.delivered).toHaveLength(1);
+    expect(session.queries).toHaveLength(1);
+  });
+
+  test.each([true, false])("a matching tool result continues the same query (user history: %s)", async includeHistory => {
     const session = new FakeSession();
     const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
 
@@ -293,7 +439,7 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     ];
     await adapter.runTurn!(
       parsed([
-        ...USER_ASK,
+        ...(includeHistory ? USER_ASK : []),
         { role: "toolResult", toolCallId: "call-9", toolName: "shell", content: "LIVE_BRIDGE_OK", isError: false, timestamp: 1 },
       ]),
       THREAD_META,
@@ -312,7 +458,8 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     expect(second.find(event => event.type === "done")).toMatchObject({ stopReason: "stop" });
   });
 
-  test("turn 2 that does NOT answer the held call refuses it and keeps the user's message", async () => {
+  test("new user text after another call's result replaces the held call", async () => {
+    const staleCall = "call-SOMEONE-ELSE";
     // Regression: the code set `continuedQuery = true` whenever a held call existed, so a client that
     // sent a new user message instead of the result had that message swallowed and its request
     // answered with `step_cli_turn_abandoned`.
@@ -337,7 +484,7 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     await adapter.runTurn!(
       parsed([
         ...USER_ASK,
-        { role: "toolResult", toolCallId: "call-SOMEONE-ELSE", toolName: "shell", content: "stale", isError: false, timestamp: 1 },
+        { role: "toolResult", toolCallId: staleCall, toolName: "shell", content: "stale", isError: false, timestamp: 1 },
         { role: "user", content: "actually do this instead", timestamp: 2 },
       ]),
       THREAD_META,
@@ -350,6 +497,45 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     expect(session.interrupts).toEqual(["q_1"]);
     expect(session.queries).toHaveLength(2);
     expect(session.inputs.at(-1)?.text).toContain("actually do this instead");
+  });
+
+  test("the held call's own result followed by steering text is delivered, not discarded", async () => {
+    // Codex records text the user steers with during a tool call after the call's output, so the
+    // turn ends [toolResult call-9, user]. The tool already ran: answering it with an empty error
+    // would tell the model it failed and invite a second run of whatever side effects it had.
+    const session = new FakeSession();
+    const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
+    session.stream = [
+      requestFrame("req_101", "permission.request", {
+        toolName: "ocx__shell", input: {}, toolUseId: "perm_100",
+        decisionReason: "tool execution requires approval", timeoutMs: 60_000,
+      }),
+      requestFrame("req_102", "sdk_tool.invoke", {
+        serverName: "ocx",
+        toolName: "shell",
+        input: { cmd: "echo LIVE_BRIDGE_OK" },
+        toolUseId: "call-9", timeoutMs: 120_000,
+      }),
+    ];
+    await adapter.runTurn!(parsed(USER_ASK), THREAD_META, () => {});
+
+    session.stream = [TURN_COMPLETE];
+    await adapter.runTurn!(
+      parsed([
+        ...USER_ASK,
+        { role: "toolResult", toolCallId: "call-9", toolName: "shell", content: "LIVE_BRIDGE_OK", isError: false, timestamp: 1 },
+        { role: "user", content: "and then summarize it", timestamp: 2 },
+      ]),
+      THREAD_META,
+      () => {},
+    );
+
+    const delivered = session.delivered[0]?.result as { content: Array<{ text: string }>; isError?: boolean };
+    expect(delivered.isError).toBeUndefined();
+    expect(delivered.content[0]?.text).toBe("LIVE_BRIDGE_OK");
+    // The held query continues; nothing is interrupted or restarted.
+    expect(session.interrupts).toEqual([]);
+    expect(session.queries).toHaveLength(1);
   });
 
   test("an identity-less request is not routed onto the conversation host's own handle", async () => {

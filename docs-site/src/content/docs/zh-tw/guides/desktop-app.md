@@ -57,7 +57,7 @@ sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 
 透過系統匣的 **Open dashboard** 或 **Open in browser**，可以在內嵌儀表板與一般瀏覽器間切換。系統匣也提供更新檢查。
 
-在 macOS 上，關閉儀表板後，應用程式會繼續在選單列中執行。從 Dock 或 Finder 再次開啟 OpenCodex 即可恢復儀表板，無須重新啟動代理。
+在 macOS 上，關閉儀表板後，應用程式會繼續在選單列中執行。在選單列選擇 **Open Dashboard**，或從 Finder 重新開啟 OpenCodex，即可恢復儀表板，無須重新啟動代理。在同一選單中啟用 **Hide Dock icon**，便可在儀表板開啟時繼續隱藏 Dock 圖示。
 
 ## 系統匣中的用量資訊
 

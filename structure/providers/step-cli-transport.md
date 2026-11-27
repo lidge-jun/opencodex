@@ -32,6 +32,10 @@ that query's declared catalog. Other permissions are denied. A
 `sdk_tool.invoke` is answered on the client's **next** request, with the original query and catalog.
 Changing the catalog while returning a held result closes the session. Abandoning a held call
 detaches its owner, interrupts it and confirms its input end before registering a replacement turn.
+An empty user follow-up returns `step_cli_no_user_text` and preserves the hold for a matching result.
+Restored Responses history supplies neither replacement text nor an answer to a held call.
+The parser marks where current input starts in parsed history. Removing hosted-search pairs adjusts that position;
+retaining the pairs keeps their generated results out of held-call matching. A new result can resume the call without user text.
 After acquiring the conversation lock, a cancelled turn leaves held state untouched. Cancellation
 also stops new query starts, busy retries and input that has yet to be sent.
 
@@ -43,6 +47,8 @@ permission denials.
 each session before workspace setup, so shutdown can close an opening session before it spawns.
 At eight owned sessions a home pool refuses new conversations with retryable `step_cli_pool_full`.
 Existing handles and coalesced opens still work. Only confirmed cleanup releases capacity.
+A fresh session requires user text. A turn containing only a tool result can join its existing or
+opening conversation, where the conversation lock and held-call checks decide whether it resumes.
 The pool retains ownership of adapter, idle-timer and sweep closes until termination is
 confirmed. Shutdown drains those receipts and propagates failures.
 Closing handles refuse replacement. Session close is idempotent and clears held-request timers.

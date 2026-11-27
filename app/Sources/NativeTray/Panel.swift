@@ -1,12 +1,30 @@
 import AppKit
 
+public enum NativeTrayHitTest {
+    public static func isNearButton(buttonFrame: NSRect, point: NSPoint, tolerance: CGFloat = 4) -> Bool {
+        buttonFrame.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
+    }
+
+    /// Where a mouse event happened, in screen coordinates. Global-monitor events arrive after the
+    /// fact, so the live pointer (`NSEvent.mouseLocation`) may already have left the icon; the event
+    /// keeps its own position. A windowless event, which is what a global monitor delivers, already
+    /// reports `locationInWindow` in screen coordinates.
+    @MainActor
+    public static func screenLocation(of event: NSEvent) -> NSPoint {
+        guard let window = event.window else { return event.locationInWindow }
+        return window.convertPoint(toScreen: event.locationInWindow)
+    }
+}
+
 /// Adapted from the native companion's PopoverPanel in commit 38a5ab9fc4.
 /// A key-capable panel avoids the accessory NSPopover keyboard failure measured
 /// there on macOS 27, while leaving application/runtime ownership with Tauri.
 @MainActor
 final class NativeTrayPanel: NSPanel {
     var onDismiss: (() -> Void)?
+    var buttonPress = NativeTrayButtonPress()
     private var outsideMonitor: Any?
+    private weak var statusButton: NSStatusBarButton?
 
     init() {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 420, height: 660),
@@ -28,6 +46,8 @@ final class NativeTrayPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     func present(from button: NSStatusBarButton) {
+        buttonPress.clear()
+        statusButton = button
         guard let buttonWindow = button.window else { return }
         let visible = (buttonWindow.screen ?? NSScreen.main)?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1024, height: 768)
@@ -40,8 +60,19 @@ final class NativeTrayPanel: NSPanel {
             y: max(visible.minY + 8, anchor.minY - size.height - 6)))
         makeKeyAndOrderFront(nil)
         if outsideMonitor == nil {
-            outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-                self?.dismiss()
+            outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                guard let self else { return }
+                if event.type == .leftMouseDown, let button = self.statusButton, let buttonWindow = button.window {
+                    let mouse = NativeTrayHitTest.screenLocation(of: event)
+                    let buttonFrame = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
+                    if NativeTrayHitTest.isNearButton(buttonFrame: buttonFrame, point: mouse) {
+                        self.buttonPress.record()
+                        return
+                    }
+                }
+                // An outside or right click is not the status button's toggle.
+                self.buttonPress.clear()
+                self.dismiss()
             }
         }
     }
@@ -50,11 +81,15 @@ final class NativeTrayPanel: NSPanel {
         guard isVisible else { return }
         if let outsideMonitor { NSEvent.removeMonitor(outsideMonitor) }
         outsideMonitor = nil
+        statusButton = nil
         orderOut(nil)
         onDismiss?()
     }
 
-    override func cancelOperation(_ sender: Any?) { dismiss() }
+    override func cancelOperation(_ sender: Any?) {
+        buttonPress.clear()
+        dismiss()
+    }
     override func resignKey() {
         super.resignKey()
         dismiss()
