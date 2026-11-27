@@ -69,6 +69,14 @@ const IMAGE_BODY = {
 };
 
 describe("native Messages decline reasons", () => {
+  test("Advisor self-route is limited to its resolved provider and model", () => {
+    const cfg = config({ ...ON, defaultProvider: "expert", advisor: { enabled: true, model: "shared" }, providers: {
+      expert: { adapter: "anthropic", baseUrl: "https://expert.invalid", apiKey: "x", models: ["shared"] },
+      anth: { adapter: "anthropic", baseUrl: "https://worker.invalid", apiKey: "x", models: ["shared"] },
+    } });
+    expect(nativeMessagesDeclineReason(route({ modelId: "shared" }), TEXT_BODY, cfg)).toBe("bridge-only-policy");
+    expect(nativeMessagesDeclineReason(route({ providerName: "expert", modelId: "shared" }), TEXT_BODY, cfg)).toBeUndefined();
+  });
   test("the switch is checked first and defaults off", () => {
     expect(nativeMessagesDeclineReason(route(), TEXT_BODY, config())).toBe("rollout-disabled");
     expect(isNativeMessagesRouteEligible(route(), TEXT_BODY, config())).toBe(false);

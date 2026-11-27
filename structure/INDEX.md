@@ -503,6 +503,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/admission-model-scope.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/admitted-http-turn.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
 | `src/server/advisor-admission-scope.ts` | [`advisor.md`](advisor.md) |
+| `src/server/advisor-destination.ts` | [`advisor.md`](advisor.md) |
 | `src/server/anthropic-rate-limit-headers.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/audio-dictation.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/audio-live.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |

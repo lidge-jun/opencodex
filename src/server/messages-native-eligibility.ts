@@ -13,6 +13,7 @@ import { credentialDomainFor } from "../protocols/opaque-state";
 import { resolveProtocolSettings } from "../protocols/settings";
 import type { RouteResult } from "../router";
 import type { OcxConfig } from "../types";
+import { isAdvisorDestination } from "./advisor-destination";
 import { configuredAnthropicInstance } from "../providers/anthropic-instance";
 import { isCommandCodeDecisionRoute } from "../providers/command-code-decision-models";
 import { requiresVisionPreprocessing } from "../vision";
@@ -93,8 +94,7 @@ function bridgeOnlyPolicyApplies(
   if (resolvePinnedEffort(route, selector.routeSelector, config) !== undefined) return true;
   if (anthropicBodyElidesBlockedSkill(body, selector.claudeCode ?? config.claudeCode)) return true;
   const advisorModel = typeof config.advisor?.model === "string" ? config.advisor.model.trim() : "";
-  const isSelfAdvisorRoute = advisorModel !== ""
-    && (advisorModel === route.modelId || advisorModel === `${route.providerName}/${route.modelId}`);
+  const isSelfAdvisorRoute = advisorModel !== "" && isAdvisorDestination(route, config, advisorModel);
   // Preserve explicit managedMessagesNativeOAuth first-party OAuth wire fidelity; only decline
   // native Messages for advisor on API-key / local routes (OAuth default already uses the bridge).
   if (route.provider.authMode !== "oauth" && config.advisor?.enabled === true && advisorModel !== "" && !isSelfAdvisorRoute) return true;

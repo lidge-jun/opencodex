@@ -5,6 +5,7 @@ import type { RouteResult } from "../router";
 import type { OcxConfig } from "../types";
 import { isModelTextOnly, requiresVisionPreprocessing } from "../vision";
 import { isCommandCodeDecisionRoute } from "../providers/command-code-decision-models";
+import { isAdvisorDestination } from "./advisor-destination";
 
 type Rec = Record<string, unknown>;
 
@@ -50,8 +51,7 @@ export function nativeChatDeclineReason(
   // turn through the translated lane instead (except advisor's own internal loopback hops, which
   // never recurse and can travel natively on openai-chat destinations).
   const advisorModel = typeof config?.advisor?.model === "string" ? config.advisor.model.trim() : "";
-  const isSelfAdvisorRoute = advisorModel !== ""
-    && (advisorModel === route.modelId || advisorModel === `${route.providerName}/${route.modelId}`);
+  const isSelfAdvisorRoute = advisorModel !== "" && config !== undefined && isAdvisorDestination(route, config, advisorModel);
   if (config?.advisor?.enabled === true && advisorModel !== "" && !options?.advisorInternal && !isSelfAdvisorRoute) {
     return "responses-only-feature";
   }

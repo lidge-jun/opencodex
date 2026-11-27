@@ -503,6 +503,7 @@ yields `{ type: "heartbeat" }` events so the worker SSE stall timer stays alive 
 expert turns. `src/advisor/consult.ts` sends `stream: true`, detects headerless SSE incrementally
 while streaming; it assembles multiline SSE data fields per event and stops at `[DONE]`. Data fields reset `createInactivitySignal` before EOF (ignoring `: ` heartbeat
 comments; default `timeoutMs` is `600_000` ms / 10 min, max `1_800_000` ms / 30 min).
+`src/server/advisor-destination.ts` compares the Advisor selector's resolved provider and model with the actual route for native Chat and Messages self-route exemptions; unresolved, combo and policy selectors stay on the bridge.
 
 For harnesses whose built-in models bypass the OpenCodex proxy,
 `src/server/management/advisor-routes.ts` exposes `POST /api/advisor/consult`, backed by `src/advisor/external-consult.ts` with uniform consent checks
