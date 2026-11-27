@@ -899,9 +899,11 @@ from the URL and headers before the request is logged or forwarded. Errors use G
   for at most 24 hours after the last write, and only the key that created one can read, continue or
   delete it; a keyless loopback caller shares one owner. Retention is best effort: each key keeps at most
   200 interactions and 16 MiB, the proxy keeps at most 1,000 and 64 MiB in total, and the proxy's memory
-  budget can remove interactions earlier. When the store is full, a key with nothing of its own to make
-  room with gets its answer without the interaction being kept, and so does an interaction larger than
-  8 MiB or the configured inbound body limit, whichever is smaller. A buffered answer reports whether it
+  budget can remove interactions earlier. Keys make room only by removing their own oldest interactions;
+  new keyless loopback writes leave retained interactions in place. At the shared or global limit,
+  the proxy returns the answer without storing the new interaction. A key with nothing of its own to make room
+  with at the global limit likewise gets its answer without the interaction being kept, as does one larger
+  than 8 MiB or the configured inbound body limit, whichever is smaller. A buffered answer reports whether it
   was kept in `x-opencodex-interaction-stored: true|false`. A restart forgets them all, and a missing
   or expired id answers 404, so a client should keep its history to resend it. A request with
   `store: false` is not kept. `GET /v1beta/interactions/{id}` returns a stored interaction, `DELETE`

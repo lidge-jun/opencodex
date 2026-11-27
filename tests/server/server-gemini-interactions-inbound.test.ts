@@ -7,7 +7,10 @@ import { startServer } from "../../src/server";
 import { clearRequestLogsForTests, getRequestLogEntries } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { interactionsRetainedStoreSnapshot } from "../../src/server/gemini-interactions-store";
+import {
+  KEYLESS_INTERACTION_OWNER, MAX_OWNER_INTERACTIONS, clearInteractionsForTests,
+  interactionsRetainedStoreSnapshot, rememberInteraction,
+} from "../../src/server/gemini-interactions-store";
 
 const DATA_TOKEN = "ocx_data_interactionsfixture";
 const ADMIN_TOKEN = "admin-secret-for-interactions";
@@ -426,6 +429,42 @@ describe("Gemini Interactions state: ownership and chaining rules", () => {
       expect((await fetch(new URL("/v1beta/interactions/" + keyless.id, base))).status).toBe(200);
       expect((await fetch(new URL("/v1beta/interactions/" + keyless.id, base), { headers: { "x-goog-api-key": KEY_A } })).status).toBe(404);
     });
+  });
+
+  test("a full keyless store still returns the answer and preserves earlier interactions", async () => {
+    const path = "/v1beta/interactions";
+    const turn = { model: "fx/m1", input: "hi" };
+    clearInteractionsForTests();
+    try {
+      await withServer(async base => {
+        const first = await post(base, path, turn, {});
+        expect(first.headers.get("x-opencodex-interaction-stored")).toBe("true");
+        const { id: firstId } = await first.json() as { id: string };
+        for (let i = 1; i < MAX_OWNER_INTERACTIONS; i++) {
+          const id = `capacity-fixture-${i}`;
+          expect(rememberInteraction({ id, owner: KEYLESS_INTERACTION_OWNER, history: [], resource: { id } })).toBe(true);
+        }
+
+        const next = await post(base, path, turn, {});
+        expect(next.status).toBe(200);
+        expect(next.headers.get("x-opencodex-interaction-stored")).toBe("false");
+        const answer = await next.json() as { id: string; status: string };
+        expect(answer.status).toBe("completed");
+        const missing = await fetch(new URL(path + "/" + answer.id, base));
+        expect(missing.status).toBe(404);
+        await missing.text();
+        const prior = await fetch(new URL(path + "/" + firstId, base));
+        expect(prior.status).toBe(200);
+        expect(await prior.json()).toMatchObject({ id: firstId, status: "completed" });
+
+        const keyed = await post(base, path, turn, googKey);
+        expect(keyed.status).toBe(200);
+        expect(keyed.headers.get("x-opencodex-interaction-stored")).toBe("true");
+        await keyed.text();
+      });
+    } finally {
+      clearInteractionsForTests();
+    }
   });
 
   test("a stored answer reports x-opencodex-interaction-stored and exposes it to browsers", async () => {
