@@ -2,7 +2,7 @@
  * Antigravity CLI over the Agent Client Protocol (`agy acp`): one ACP session per turn (plan 080).
  *
  * The official binary owns its own sign-in; this adapter never reads, stores or forwards a Google
- * credential. One account (the CLI's), no rotation, local requests only, Gemini models only, and
+ * credential. One account (the CLI's), no rotation, local requests only, Gemini and Claude models only, and
  * interactive use only (see ./policy.ts). runTurn-only: a JSON-RPC session over a child process has no
  * fetch-shaped request, so buildRequest is an identity placeholder and parseStream is disabled.
  *
@@ -50,9 +50,9 @@ const FAILURE_MESSAGES: Record<Exclude<AcpFailureCode, "agy_login_required">, st
   agy_acp_turn_limit: "The Antigravity CLI stopped at its turn request limit before finishing the answer.",
   agy_acp_cancelled: "The Antigravity CLI cancelled the turn (for example after a refused permission request).",
   agy_acp_protocol: "The Antigravity CLI ended the turn without a valid ACP answer.",
-  agy_acp_model_unproven: "The Antigravity CLI did not confirm the selected Gemini model, so the turn was not sent.",
-  agy_acp_model_switched: "The Antigravity CLI switched away from the selected Gemini model during the turn; the turn was cancelled.",
-  agy_acp_unsupported_selection: "The Antigravity CLI did not advertise a single model selector, so a Gemini model cannot be selected.",
+  agy_acp_model_unproven: "The Antigravity CLI did not confirm the selected model, so the turn was not sent.",
+  agy_acp_model_switched: "The Antigravity CLI switched away from the selected model during the turn; the turn was cancelled.",
+  agy_acp_unsupported_selection: "The Antigravity CLI did not advertise a single model selector, so a supported model cannot be selected.",
   agy_acp_unavailable: "The Antigravity CLI could not be started.",
 };
 
@@ -192,8 +192,8 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       if (incoming.abortSignal?.aborted) return;
 
       const requested = wireModelId(parsed.modelId);
-      if (!/^gemini[-.]/i.test(requested)) {
-        emit(invalidRequest("agy_acp_model_not_gemini", "The Antigravity CLI (ACP) provider serves Gemini models only."));
+      if (!/^(?:gemini|claude)[-.]/i.test(requested)) {
+        emit(invalidRequest("agy_acp_model_not_gemini", "The Antigravity CLI (ACP) provider serves Gemini and Claude models only."));
         return;
       }
       const effort = parsed.options.reasoning;
@@ -430,7 +430,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         if (!proof.ok) {
           if (proof.reason === "no_selector" || proof.reason === "ambiguous_selector") return fail("agy_acp_unsupported_selection");
           if (proof.reason === "requested_not_offered" || proof.reason === "requested_ambiguous") {
-            return finish(invalidRequest("agy_acp_model_not_offered", "The requested Gemini model is not offered by this Antigravity CLI."));
+            return finish(invalidRequest("agy_acp_model_not_offered", "The requested model is not offered by this Antigravity CLI."));
           }
           return fail("agy_acp_model_unproven");
         }

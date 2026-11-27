@@ -216,12 +216,19 @@ describe("agy acp turn", () => {
   });
 
   test.each([
-    ["gemini-3.8-flash", "Claude Opus 5.5", false],
-    ["claude-opus-5-5", "Gemini 3.8 Flash", false],
-    ["gemini-3.8-flash", "Recommended", true],
-    ["opaque", "Gemini 3.8 Flash", true],
-  ] as const)("requires consistent Gemini evidence for %s / %s", async (value, name, allowed) => {
-    const h = await run(script(undefined, { initial: [modelOption(value, [], { options: [{ value, name }] })] }));
+    ["gemini-3.8-flash", "GPT-5", "gemini-3.8-flash", false],
+    ["gpt-5", "Gemini 3.8 Flash", "gemini-3.8-flash", false],
+    ["openai/gpt-4o", "Claude Opus 5.5", "claude-opus-5-5", false],
+    ["gemini-a/claude-x", "Gemini A", "gemini-a", false],
+    ["provider/gpt-5/claude-x", "Claude X", "claude-x", false],
+    ["gemini-3.8-flash", "Claude Opus 5.5", "claude-opus-5-5", false],
+    ["claude-opus-5-5", "Gemini 3.8 Flash", "claude-opus-5-5", false],
+    ["claude-opus-5-5", "Claude Opus 5.5", "claude-opus-5-5", true],
+    ["opaque-claude", "Claude Opus 5.5", "claude-opus-5-5", true],
+    ["gemini-3.8-flash", "Recommended", "gemini-3.8-flash", true],
+    ["opaque", "Gemini 3.8 Flash", "gemini-3.8-flash", true],
+  ] as const)("requires consistent Gemini/Claude evidence for %s / %s (%s)", async (value, name, modelId, allowed) => {
+    const h = await run(script(undefined, { initial: [modelOption(value, [], { options: [{ value, name }] })] }), { parsed: parsed({ modelId }) });
     expect(methods(h).includes("session/prompt")).toBe(allowed);
     expect(terminal(h)).toEqual(allowed ? [{ type: "done" }] : [expect.objectContaining({ code: "agy_acp_model_not_offered" })]);
   });
@@ -654,7 +661,7 @@ describe("agy acp turn", () => {
     const agent = script(undefined, { initial: [model, thought] });
     const modelError = await run(agent, { parsed: parsed({ modelId: "gemini-" + adminShape }) });
     const thoughtError = await run(agent, { parsed: parsed({}, "max") });
-    expect(terminal(modelError)[0]).toMatchObject({ message: "The requested Gemini model is not offered by this Antigravity CLI." });
+    expect(terminal(modelError)[0]).toMatchObject({ message: "The requested model is not offered by this Antigravity CLI." });
     expect(terminal(thoughtError)[0]).toMatchObject({ message: "The requested reasoning effort is not offered by this Antigravity CLI." });
   });
 
@@ -962,18 +969,24 @@ describe("agy acp turn", () => {
     expect(terminal(h)).toEqual([{ type: "done" }]);
   });
 
-  test("Gemini only: a non-Gemini request never spawns and an unoffered model returns a fixed error", async () => {
-    const claude = await run(script(), { parsed: parsed({ modelId: "claude-opus-5-5" }) });
-    expect(claude.spawned).toBe(0);
-    expect(errorCode(claude)).toBe("agy_acp_model_not_gemini");
+  test("Gemini and Claude only: an unsupported model request never spawns, Claude succeeds, and an unoffered model returns a fixed error", async () => {
+    const gpt = await run(script(), { parsed: parsed({ modelId: "gpt-5" }) });
+    expect(gpt.spawned).toBe(0);
+    expect(errorCode(gpt)).toBe("agy_acp_model_not_gemini");
+    const claude = await run(
+      script(undefined, { initial: [modelOption("gemini-3.8-flash", OFFERED)] }),
+      { parsed: parsed({ modelId: "claude-opus-5-5" }) },
+    );
+    expect(claude.sent[2]!.params).toEqual({ sessionId: "s1", configId: "model", value: "claude-opus-5-5" });
+    expect(terminal(claude)).toEqual([{ type: "done" }]);
     const missing = await run(script(), { parsed: parsed({ modelId: "gemini-9-ultra" }) });
     const error = terminal(missing)[0] as { status: number; code: string; message: string };
     expect(error).toMatchObject({ status: 400, code: "agy_acp_model_not_offered" });
-    expect(error.message).toBe("The requested Gemini model is not offered by this Antigravity CLI.");
+    expect(error.message).toBe("The requested model is not offered by this Antigravity CLI.");
     expect(methods(missing)).not.toContain("session/prompt");
   });
 
-  test("the CLI's non-Gemini default is never used", async () => {
+  test("the CLI's default is never used when another model is requested", async () => {
     const h = await run(script(undefined, { initial: [modelOption("claude-opus-5-5", OFFERED)] }));
     // The requested Gemini model is selected instead, then proved.
     expect(h.sent[2]!.params.value).toBe("gemini-3.8-flash");
@@ -998,7 +1011,7 @@ describe("agy acp turn", () => {
     for (const h of [unknown, none]) expect(methods(h)).not.toContain("session/prompt");
   });
 
-  test("a mid-turn switch to a non-Gemini model, or a removed selector, cancels the turn", async () => {
+  test("a mid-turn switch to a different model, or a removed selector, cancels the turn", async () => {
     for (const replacement of [[modelOption("claude-opus-5-5", OFFERED)], [thoughtOption("high")]]) {
       const h = await run(script((frame, api) => {
         if (frame.method !== "session/prompt") return;
