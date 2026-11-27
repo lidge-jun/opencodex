@@ -1250,7 +1250,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
       const enabledCfg = baseConfig();
       (enabledCfg as { advisor?: unknown }).advisor = { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", autoMountMcp: true };
       const unownedMountSync = syncAdvisorMcpClients(enabledCfg, { homeDir: fakeHome, configDir: customConfigDir, env: {} });
-      expect(unownedMountSync.errors.some(e => e.clientId === "workbuddy" && e.message.includes("unowned skill file"))).toBe(true);
+      expect(unownedMountSync.errors.some(e => e.clientId === "workbuddy" && e.message.includes("skill file OpenCodex did not record writing"))).toBe(true);
       expect(readFileSync(join(userSkillDir, "SKILL.md"), "utf8")).toBe("# Custom user skill without marker\n");
       expect(existsSync(join(userSkillDir, "my-notes.md"))).toBe(true);
 

@@ -2,6 +2,7 @@
  * Manage per-client `opencodex-advisor` MCP registration, anti-forgetting hooks/skills, and
  * bidirectional Advisor <-> Routing synchronization for compatible external coding clients.
  */
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -577,9 +578,51 @@ function entryMatchesAdvisorHook(entry: unknown, hookScriptPath: string): boolea
  */
 const ADVISOR_ARTIFACT_OWNERSHIP_FILE = "advisor-hook-registrations.json";
 /** `scriptHookConfigPath` is the hook config that may run the script, recorded even when the registration is the user's. */
-interface OwnedArtifacts { hookConfigPath?: string; command?: string; hookScriptPath?: string; scriptHookConfigPath?: string; skillPath?: string }
+interface OwnedArtifacts {
+  hookConfigPath?: string;
+  command?: string;
+  hookScriptPath?: string;
+  hookScriptSha256?: string;
+  scriptHookConfigPath?: string;
+  skillPath?: string;
+  skillSha256?: string;
+}
 type OwnedArtifactRecords = Record<string, OwnedArtifacts>;
-const ARTIFACT_FIELDS = ["hookConfigPath", "command", "hookScriptPath", "scriptHookConfigPath", "skillPath"] as const;
+const ARTIFACT_FIELDS = ["hookConfigPath", "command", "hookScriptPath", "hookScriptSha256", "scriptHookConfigPath", "skillPath", "skillSha256"] as const;
+
+function contentSha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/** A regular, non-symlink file's text; null when missing, undefined when it is something else or unreadable. */
+function readPlainTextFile(path: string): string | null | undefined {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) return undefined;
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    return (error as { code?: string }).code === "ENOENT" ? null : undefined;
+  }
+}
+
+/**
+ * A hook script or skill file is OpenCodex's only when a record names this path with the hash of exactly this content;
+ * a marker alone is not ownership. "same" is unrecorded content identical to what OpenCodex would write.
+ */
+function managedFileState(
+  artifacts: OwnedArtifactRecords, path: string, desired: string, kind: "hook" | "skill",
+): "missing" | "owned" | "same" | "foreign" {
+  const text = readPlainTextFile(path);
+  if (text === null) return "missing";
+  if (text === undefined) return "foreign";
+  const target = canonicalClientPath(path);
+  const sha = contentSha256(text);
+  const recorded = Object.values(artifacts).some(record => kind === "hook"
+    ? !!record.hookScriptPath && canonicalClientPath(record.hookScriptPath) === target && record.hookScriptSha256 === sha
+    : !!record.skillPath && canonicalClientPath(record.skillPath) === target && record.skillSha256 === sha);
+  if (recorded) return "owned";
+  return text === desired ? "same" : "foreign";
+}
 
 function readOwnedArtifacts(configDir: string): OwnedArtifactRecords {
   try {
@@ -610,6 +653,17 @@ function advisorHookGroupText(command: string): string {
 }
 
 /** Where `command` appears: whole groups exactly as OpenCodex writes them, and how many other items run it. */
+/** The script path inside a command OpenCodex built with `shellQuote`. */
+function scriptPathOfCommand(command: string): string {
+  return command.startsWith("'") && command.endsWith("'") ? command.slice(1, -1).replaceAll("'\\''", "'") : command;
+}
+
+/** Any hook item that invokes the script, quoted or not, or as part of a longer command. */
+function hookItemRunsScript(item: unknown, command: string): boolean {
+  if (!isPlainObject(item) || typeof item.command !== "string") return false;
+  return item.command === command || item.command.includes(scriptPathOfCommand(command));
+}
+
 function locateHookCommand(entries: readonly unknown[], command: string): { exact: number[]; other: number } {
   const groupText = advisorHookGroupText(command);
   const exact: number[] = [];
@@ -620,18 +674,18 @@ function locateHookCommand(entries: readonly unknown[], command: string): { exac
       return;
     }
     if (isPlainObject(entry) && Array.isArray(entry.hooks)) {
-      other += entry.hooks.filter(item => isHookItemWithCommand(item, command)).length;
+      other += entry.hooks.filter(item => hookItemRunsScript(item, command)).length;
     }
   });
   return { exact, other };
 }
 
-/** Whether any hook in the file still runs `command`; an unreadable file counts as yes. */
+/** Whether any hook in the file still invokes the script of `command`, in any form; an unreadable file counts as yes. */
 function hookStillRegistered(hookConfigPath: string, command: string): boolean {
   const read = readJsonObject(hookConfigPath);
   if (read.parseError || !read.doc) return true;
   const list = isPlainObject(read.doc.hooks) && Array.isArray(read.doc.hooks.UserPromptSubmit) ? read.doc.hooks.UserPromptSubmit : [];
-  return list.some(entry => isPlainObject(entry) && Array.isArray(entry.hooks) && entry.hooks.some(item => isHookItemWithCommand(item, command)));
+  return list.some(entry => isPlainObject(entry) && Array.isArray(entry.hooks) && entry.hooks.some(item => hookItemRunsScript(item, command)));
 }
 
 /**
@@ -643,7 +697,7 @@ const ADVISOR_PENDING_CLEANUP_FILE = "advisor-pending-cleanup.json";
 type PendingCleanup =
   | { kind: "mcp"; clientId: string; container: string; configPath: string; entry: string; routingShared?: boolean }
   | { kind: "hook"; clientId: string; hookConfigPath: string; command: string; routingShared?: boolean }
-  | { kind: "file"; clientId: string; path: string; marker: "hook" | "skill"; hookConfigPath?: string; command?: string };
+  | { kind: "file"; clientId: string; path: string; marker: "hook" | "skill"; sha256?: string; hookConfigPath?: string; command?: string };
 
 function pendingKey(item: PendingCleanup): string {
   if (item.kind === "mcp") return `mcp:${canonicalClientPath(item.configPath)}:${item.entry}`;
@@ -708,13 +762,17 @@ function queueRecordedArtifacts(spec: ClientSpec, paths: ResolvedClientPaths, co
     // The script stays while any hook in the config that may run it still does, whoever registered that hook.
     const scriptConfig = record.scriptHookConfigPath ?? record.hookConfigPath;
     items.push({ kind: "file", clientId: spec.id, path: record.hookScriptPath, marker: "hook",
+      ...(record.hookScriptSha256 ? { sha256: record.hookScriptSha256 } : {}),
       ...(scriptConfig ? { hookConfigPath: scriptConfig, command: advisorHookCommand(record.hookScriptPath) } : {}) });
     delete record.hookScriptPath;
+    delete record.hookScriptSha256;
     delete record.scriptHookConfigPath;
   }
   if (record.skillPath && !(keepCurrent && same(record.skillPath, paths.skillPath))) {
-    items.push({ kind: "file", clientId: spec.id, path: record.skillPath, marker: "skill" });
+    items.push({ kind: "file", clientId: spec.id, path: record.skillPath, marker: "skill",
+      ...(record.skillSha256 ? { sha256: record.skillSha256 } : {}) });
     delete record.skillPath;
+    delete record.skillSha256;
   }
   if (hookMoved) {
     delete record.hookConfigPath;
@@ -821,8 +879,9 @@ function reconcilePendingCleanup(
       .some(path => !!path && canonicalClientPath(path) === target))) return;
     const protectedSet = item.marker === "hook" ? protectedPaths?.hookScriptPaths : protectedPaths?.skillPaths;
     if (protectedSet?.has(target)) { keep.push(item); return; }
-    const state = inspectManagedTextFile(item.path, item.marker === "hook" ? ADVISOR_HOOK_MARKER : ADVISOR_SKILL_MARKER);
-    if (state !== "owned") return;
+    // Only the exact content OpenCodex recorded writing is removed; a changed or unrecorded file is the user's.
+    const text = readPlainTextFile(item.path);
+    if (typeof text !== "string" || !item.sha256 || contentSha256(text) !== item.sha256) return;
     // A registration (the user's, or one whose ownership is ambiguous) still runs this script, or nothing says which
     // config could run it: keep it.
     if (item.marker === "hook" && (!item.hookConfigPath || !item.command || hookStillRegistered(item.hookConfigPath, item.command))) {
@@ -887,16 +946,20 @@ function mountHooksAndSkill(
   const artifacts = readOwnedArtifacts(configDir);
   const record: OwnedArtifacts = { ...(artifacts[spec.id] ?? {}) };
   if (spec.supportsHooks && paths.hookConfigPath && paths.hookScriptPath) {
-    mkdirSync(dirname(paths.hookScriptPath), { recursive: true, mode: 0o700 });
     const desiredHookScript = buildNoticeHookScript(configDir, options?.execPath ?? process.execPath);
-    const existingHookScript = existsSync(paths.hookScriptPath) ? readFileSync(paths.hookScriptPath, "utf8") : null;
-    if (existingHookScript !== desiredHookScript) {
-      atomicWriteFile(paths.hookScriptPath, desiredHookScript);
-      changed = true;
+    // Write only a missing script or one OpenCodex recorded unchanged; identical unrecorded content is used as it is.
+    const scriptState = managedFileState(artifacts, paths.hookScriptPath, desiredHookScript, "hook");
+    if (scriptState === "missing" || scriptState === "owned") {
+      mkdirSync(dirname(paths.hookScriptPath), { recursive: true, mode: 0o700 });
+      if (readPlainTextFile(paths.hookScriptPath) !== desiredHookScript) {
+        atomicWriteFile(paths.hookScriptPath, desiredHookScript);
+        changed = true;
+      }
+      chmodSync(paths.hookScriptPath, 0o755);
+      record.hookScriptPath = resolve(paths.hookScriptPath);
+      record.hookScriptSha256 = contentSha256(desiredHookScript);
+      record.scriptHookConfigPath = resolve(paths.hookConfigPath);
     }
-    chmodSync(paths.hookScriptPath, 0o755);
-    record.hookScriptPath = resolve(paths.hookScriptPath);
-    record.scriptHookConfigPath = resolve(paths.hookConfigPath);
 
     const command = advisorHookCommand(paths.hookScriptPath);
     const read = readJsonObject(paths.hookConfigPath);
@@ -930,13 +993,16 @@ function mountHooksAndSkill(
     }
   }
   if (spec.supportsSkills && paths.skillPath) {
-    mkdirSync(dirname(paths.skillPath), { recursive: true, mode: 0o700 });
-    const existingSkill = existsSync(paths.skillPath) ? readFileSync(paths.skillPath, "utf8") : null;
-    if (existingSkill !== ADVISOR_SKILL_CONTENT) {
-      atomicWriteFile(paths.skillPath, ADVISOR_SKILL_CONTENT);
-      changed = true;
+    const skillState = managedFileState(artifacts, paths.skillPath, ADVISOR_SKILL_CONTENT, "skill");
+    if (skillState === "missing" || skillState === "owned") {
+      mkdirSync(dirname(paths.skillPath), { recursive: true, mode: 0o700 });
+      if (readPlainTextFile(paths.skillPath) !== ADVISOR_SKILL_CONTENT) {
+        atomicWriteFile(paths.skillPath, ADVISOR_SKILL_CONTENT);
+        changed = true;
+      }
+      record.skillPath = resolve(paths.skillPath);
+      record.skillSha256 = contentSha256(ADVISOR_SKILL_CONTENT);
     }
-    record.skillPath = resolve(paths.skillPath);
   }
   if (JSON.stringify(record) !== JSON.stringify(artifacts[spec.id] ?? {})) {
     writeOwnedArtifacts(configDir, { ...artifacts, [spec.id]: record });
@@ -1110,8 +1176,9 @@ export function mountAdvisorMcpForClient(
     if (!isSafeTargetDir(dirname(paths.hookScriptPath))) {
       return { ok: false, changed: false, error: `Refused to write hook into unsafe directory ${dirname(paths.hookScriptPath)}` };
     }
-    if (inspectManagedTextFile(paths.hookScriptPath, ADVISOR_HOOK_MARKER) === "unowned") {
-      return { ok: false, changed: false, error: `Refused to overwrite unowned hook script in ${paths.hookScriptPath}` };
+    const desiredHookScript = buildNoticeHookScript(configDir, options?.execPath ?? process.execPath);
+    if (managedFileState(readOwnedArtifacts(configDir), paths.hookScriptPath, desiredHookScript, "hook") === "foreign") {
+      return { ok: false, changed: false, error: `Refused to overwrite a hook script OpenCodex did not record writing in ${paths.hookScriptPath}` };
     }
     if (paths.hookConfigPath !== paths.mcpConfigPath) {
       const hooksRead = readJsonObject(paths.hookConfigPath);
@@ -1124,8 +1191,8 @@ export function mountAdvisorMcpForClient(
     if (!isSafeTargetDir(dirname(paths.skillPath))) {
       return { ok: false, changed: false, error: `Refused to write skill into unsafe directory ${dirname(paths.skillPath)}` };
     }
-    if (inspectManagedTextFile(paths.skillPath, ADVISOR_SKILL_MARKER) === "unowned") {
-      return { ok: false, changed: false, error: `Refused to overwrite unowned skill file in ${paths.skillPath}` };
+    if (managedFileState(readOwnedArtifacts(configDir), paths.skillPath, ADVISOR_SKILL_CONTENT, "skill") === "foreign") {
+      return { ok: false, changed: false, error: `Refused to overwrite a skill file OpenCodex did not record writing in ${paths.skillPath}` };
     }
   }
 
@@ -1182,16 +1249,8 @@ export function unmountAdvisorMcpForClient(
   const configDir = resolveOpencodeConfigDir(options);
   const paths = spec.resolvePaths(home, env);
 
-  // Everything this client recorded, wherever it was recorded, goes through the cleanup queue. Marker-owned files at
-  // the current paths are queued too; each is removed only when nothing still runs it.
+  // Everything this client recorded, wherever it was recorded, goes through the cleanup queue; nothing unrecorded does.
   queueRecordedArtifacts(spec, paths, configDir, false);
-  const current: PendingCleanup[] = [];
-  if (spec.supportsHooks && paths.hookScriptPath) {
-    current.push({ kind: "file", clientId, path: paths.hookScriptPath, marker: "hook",
-      ...(paths.hookConfigPath ? { hookConfigPath: paths.hookConfigPath, command: advisorHookCommand(paths.hookScriptPath) } : {}) });
-  }
-  if (spec.supportsSkills && paths.skillPath) current.push({ kind: "file", clientId, path: paths.skillPath, marker: "skill" });
-  queuePendingCleanup(configDir, current);
   const cleanup = reconcilePendingCleanup(configDir, protectedPaths, clientId);
   if (cleanup.errors.length > 0) return { ok: false, changed: cleanup.changed, error: cleanup.errors[0]!.message };
   return { ok: true, changed: cleanup.changed };

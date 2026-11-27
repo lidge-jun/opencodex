@@ -335,6 +335,47 @@ describe("Advisor client MCP safety", () => {
     expect(syncAdvisorMcpClients({ advisor: { enabled: false } }, opts).errors).toEqual([]);
     expect(JSON.parse(readFileSync(join(qoderDir, "settings.json"), "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeUndefined();
   });
+  test("a user hook that runs the script by its unquoted path keeps the script and stops a second registration", () => {
+    const home = tempHome("ocx-advisor-unquoted-hook-");
+    const configDir = join(home, ".opencodex");
+    const dir = join(home, "qoder");
+    const opts = { homeDir: home, configDir, env: { QODER_CONFIG_DIR: dir } };
+    mkdirSync(dir, { recursive: true });
+    const script = join(dir, "hooks", "opencodex-advisor-notice.sh");
+    const userHooks = { UserPromptSubmit: [{ hooks: [{ type: "command", command: script }] }] };
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ hooks: userHooks, mcpServers: {} }));
+    expect(mountAdvisorMcpForClient("qoder", opts).ok).toBe(true);
+    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).hooks).toEqual(userHooks);
+    expect(existsSync(script)).toBe(true);
+    expect(unmountAdvisorMcpForClient("qoder", opts).ok).toBe(true);
+    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).hooks).toEqual(userHooks);
+    expect(existsSync(script)).toBe(true);
+  });
+  test("a user file carrying the OpenCodex marker is neither overwritten nor deleted without a record", () => {
+    const home = tempHome("ocx-advisor-marked-user-file-");
+    const configDir = join(home, ".opencodex");
+    const dir = join(home, "qoder");
+    const opts = { homeDir: home, configDir, env: { QODER_CONFIG_DIR: dir } };
+    const skill = join(dir, "skills", "opencodex-advisor", "SKILL.md");
+    mkdirSync(join(dir, "skills", "opencodex-advisor"), { recursive: true });
+    const userText = "<!-- ocx-managed:opencodex-advisor-skill:v1 -->\nMy own notes I wrote by hand.\n";
+    writeFileSync(skill, userText);
+    const mount = mountAdvisorMcpForClient("qoder", opts);
+    expect(mount.ok).toBe(false);
+    expect(mount.error).toContain("did not record writing");
+    expect(readFileSync(skill, "utf8")).toBe(userText);
+    expect(unmountAdvisorMcpForClient("qoder", opts).ok).toBe(true);
+    expect(readFileSync(skill, "utf8")).toBe(userText);
+    // A file OpenCodex wrote and the user then edited is the user's too: unmount leaves it.
+    const other = join(home, "qoder-two");
+    const otherOpts = { homeDir: home, configDir, env: { QODER_CONFIG_DIR: other } };
+    expect(mountAdvisorMcpForClient("qoder", otherOpts).ok).toBe(true);
+    const otherSkill = join(other, "skills", "opencodex-advisor", "SKILL.md");
+    appendFileSync(otherSkill, "\nMy addition.\n");
+    const edited = readFileSync(otherSkill, "utf8");
+    expect(unmountAdvisorMcpForClient("qoder", otherOpts).ok).toBe(true);
+    expect(readFileSync(otherSkill, "utf8")).toBe(edited);
+  });
   test("a user edit at the old recorded path is kept, and a removed old file only drops the record", () => {
     const home = tempHome("ocx-advisor-stale-path-edited-");
     const configDir = join(home, ".opencodex");
