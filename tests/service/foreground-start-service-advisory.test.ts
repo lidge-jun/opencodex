@@ -1,10 +1,19 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { startForegroundAdvisory } from "../../src/service/foreground-advisory-process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import {
+  FOREGROUND_ADVISORY_ARG,
+  maybeStartForegroundAdvisory,
+  shouldStartForegroundAdvisory,
+  startForegroundAdvisory,
+  windowsPowerShellTreeKillArgs,
+  type ForegroundAdvisoryEligibility,
+} from "../../src/service/foreground-advisory-process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { saveConfig } from "../../src/config";
+import { selfLaunchArgv } from "../../src/lib/self-launch-argv";
 import { startServer } from "../../src/server";
 import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
@@ -104,15 +113,169 @@ describe("foregroundStartServiceAdvisoryLines", () => {
 test("foreground advisory is wired after readiness initialization and uses the final sibling decision", () => {
   const cli = readFileSync(repoPath("src/cli/index.ts"), "utf8");
   const start = cli.slice(cli.indexOf("async function handleStart("), cli.indexOf("function detachedStartEnvironment("));
-  const probe = "startForegroundAdvisory(line =>";
+  const probe = "maybeStartForegroundAdvisory({";
   const probes = start.split(probe);
   expect(probes).toHaveLength(2);
   const beforeProbe = probes[0]!;
   expect(beforeProbe).toContain("await bindAndPublishStartOwnership(");
   expect(beforeProbe).toContain("await reconcileClientStartupBeforeReady(");
   expect(beforeProbe).toContain('console.log("Client startup work complete.")');
-  expect(beforeProbe.slice(beforeProbe.lastIndexOf('console.log("Client startup work complete.")'))).toContain(
-    "!cleaned && !shuttingDown && !siblingStart && !owner.live && !supervisedServiceChild",
+  expect(probes[1]!.slice(0, 240)).toContain("cleaned, shuttingDown, siblingStart, ownerLive: Boolean(owner.live), supervisedServiceChild, restartParentPid: restartParent.restartParentPid, stderrIsTTY: process.stderr?.isTTY");
+});
+
+describe("foreground advisory eligibility behavior", () => {
+  const eligible: ForegroundAdvisoryEligibility = {
+    cleaned: false,
+    shuttingDown: false,
+    siblingStart: false,
+    ownerLive: false,
+    supervisedServiceChild: false,
+    restartParentPid: null,
+    stderrIsTTY: true,
+  };
+
+  test.each([
+    ["non-interactive (stderrIsTTY=false)", { stderrIsTTY: false }],
+    ["non-interactive (stderrIsTTY=undefined)", { stderrIsTTY: undefined }],
+    ["supervised service child", { supervisedServiceChild: true }],
+    ["sibling start", { siblingStart: true }],
+    ["live owner", { ownerLive: true }],
+    ["restart handoff", { restartParentPid: 4242 }],
+    ["shutting down", { shuttingDown: true }],
+    ["already cleaned", { cleaned: true }],
+  ])("never launches the probe for %s", (_label, override) => {
+    let launches = 0;
+    const stop = maybeStartForegroundAdvisory({ ...eligible, ...override }, () => {}, {
+      launch: () => {
+        launches += 1;
+        return fakeProbe("console.log('[]')");
+      },
+    });
+    expect(stop).toBeUndefined();
+    expect(launches).toBe(0);
+    expect(shouldStartForegroundAdvisory({ ...eligible, ...override })).toBe(false);
+  });
+
+  test("launches the probe for an eligible interactive foreground owner", async () => {
+    const warnings: string[] = [];
+    let child!: ChildProcess;
+    let launches = 0;
+    const stop = maybeStartForegroundAdvisory(eligible, line => warnings.push(line), {
+      launch: () => {
+        launches += 1;
+        return (child = fakeProbe('console.log(JSON.stringify(["eligible advisory"]))'));
+      },
+    });
+    expect(stop).toBeDefined();
+    expect(launches).toBe(1);
+    try {
+      await once(child, "close");
+      expect(warnings).toEqual(["eligible advisory"]);
+    } finally { stop?.(); }
+  });
+});
+
+test("private advisory entrypoint launches cleanly from a path containing spaces", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ocx advisory spaces "));
+  const home = join(dir, "ocx home");
+  const entry = join(dir, "cli entry with spaces.ts");
+  const cliUrl = pathToFileURL(repoPath("src/cli/index.ts")).href;
+  writeFileSync(entry, `await import(${JSON.stringify(cliUrl)});\n`, "utf8");
+  const argv = selfLaunchArgv([FOREGROUND_ADVISORY_ARG], { isStandaloneExecutable: false, sourceEntrypoint: entry });
+  const child = spawn(process.execPath, argv, {
+    env: { ...process.env, OPENCODEX_HOME: home },
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  const chunks: Buffer[] = [];
+  child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+  try {
+    const [code] = await once(child, "close");
+    expect(code).toBe(0);
+    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    expect(Array.isArray(parsed)).toBe(true);
+    expect((parsed as unknown[]).length).toBeLessThanOrEqual(2);
+  } finally {
+    await removeTreeAfterBackgroundWork(dir);
+  }
+}, 15_000);
+
+describe("Windows failing-taskkill fallback terminates pending descendants", () => {
+  async function waitUntilDead(pid: number, timeoutMs = 3_000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try { process.kill(pid, 0); } catch { return true; }
+      await Bun.sleep(20);
+    }
+    return false;
+  }
+
+  test.each(["unresolvable", "nonzero-exit", "timeout"] as const)(
+    "falls back to PowerShell process-tree termination when taskkill fails (%s)",
+    async failureMode => {
+      const dir = mkdtempSync(join(tmpdir(), "ocx-advisory-tree-"));
+      const descendantPidFile = join(dir, "descendant.pid");
+      let child!: ChildProcess;
+      const killerCalls: Array<{ cmd: string; args: readonly string[] }> = [];
+      let descendantPid = 0;
+      const cancel = startForegroundAdvisory(() => {}, {
+        platform: "win32",
+        timeoutMs: 120,
+        killDeadlineMs: 80,
+        resolveTaskkill: () => {
+          if (failureMode === "unresolvable") throw new Error("taskkill unavailable");
+          return "C:\\Windows\\System32\\taskkill.exe";
+        },
+        resolvePowerShell: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        spawnKill: ((cmd: string, args: readonly string[]) => {
+          killerCalls.push({ cmd, args });
+          if (cmd.toLowerCase().includes("taskkill")) {
+            return failureMode === "nonzero-exit"
+              ? spawn(process.execPath, ["-e", "process.exit(1)"], { stdio: "ignore", windowsHide: true })
+              : spawn(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], { stdio: "ignore", windowsHide: true });
+          }
+          // Fallback PowerShell tree killer: on Windows run real PowerShell; on POSIX verify exact
+          // PowerShell tree-kill args and terminate the detached process group (child + descendant).
+          if (process.platform === "win32") {
+            return spawn(cmd, args, { stdio: "ignore", windowsHide: true });
+          }
+          expect(args).toEqual(windowsPowerShellTreeKillArgs(child.pid!));
+          return spawn(process.execPath, ["-e", `try { process.kill(-${child.pid!}, "SIGKILL"); } catch {}`], {
+            stdio: "ignore",
+            windowsHide: true,
+          });
+        }) as typeof spawn,
+        launch: () => {
+          const script = [
+            'const { spawn } = require("node:child_process");',
+            'const { writeFileSync } = require("node:fs");',
+            'const d = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: "ignore", windowsHide: true });',
+            `writeFileSync(${JSON.stringify(descendantPidFile)}, String(d.pid));`,
+            'console.log("ready");',
+            "setInterval(() => {}, 60000);",
+          ].join(" ");
+          return (child = fakeProbe(script));
+        },
+      });
+      try {
+        await once(child.stdout!, "data");
+        descendantPid = Number(readFileSync(descendantPidFile, "utf8").trim());
+        expect(descendantPid).toBeGreaterThan(0);
+        await once(child, "close");
+        expect(await waitUntilDead(descendantPid)).toBe(true);
+        expect(killerCalls.some(call => call.cmd.toLowerCase().includes("powershell"))).toBe(true);
+        if (failureMode === "unresolvable") {
+          expect(killerCalls.some(call => call.cmd.toLowerCase().includes("taskkill"))).toBe(false);
+        } else {
+          expect(killerCalls.some(call => call.cmd.toLowerCase().includes("taskkill"))).toBe(true);
+        }
+      } finally {
+        cancel();
+        if (descendantPid > 0) { try { process.kill(descendantPid, "SIGKILL"); } catch {} }
+        await removeTreeAfterBackgroundWork(dir);
+      }
+    },
+    15_000,
   );
 });
 

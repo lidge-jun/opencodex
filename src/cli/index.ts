@@ -175,7 +175,6 @@ import { handledSignalExitCode } from "../lib/handled-signal-exit";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS, RESTART_REOBSERVE_RESERVE_MS } from "../lib/system-restart-contract";
 import { startServiceLogging } from "../service/logging";
-import { FOREGROUND_ADVISORY_ARG, startForegroundAdvisory } from "../service/foreground-advisory-process";
 
 /**
  * A failed shell-hook reconcile is not cosmetic: a stale hook keeps sourcing
@@ -215,14 +214,7 @@ async function refreshOwnedRaycastCatalog(
   }
 }
 
-if (process.argv[2] === FOREGROUND_ADVISORY_ARG) {
-  const { foregroundStartServiceAdvisoryLines } = await import("../service/diagnostics");
-  let lines: readonly string[] = [];
-  try { lines = foregroundStartServiceAdvisoryLines(diagnoseService()); } catch { /* best effort */ }
-  // Await the write, so an explicit CLI exit cannot truncate the pipe.
-  await new Promise<void>((resolve, reject) => process.stdout.write(JSON.stringify(lines), error => error ? reject(error) : resolve()));
-  process.exit(0);
-}
+if (process.argv[2] === "__foreground-service-advisory") process.exit(await (await import("../service/foreground-advisory-process")).runForegroundAdvisoryEntrypoint());
 if (process.argv[2] === "__update-orchestrated-identity") process.exit(await (await import("../update/orchestrated-identity-probe-entry")).runIdentityProbe(process.argv.slice(2)));
 if (process.argv[2] === "start" && process.env.OCX_SERVICE) startServiceLogging(join(getConfigDir(), "service.log"));
 const updateRestartChild = admitUpdateRestartChild(process.argv.slice(2));
@@ -713,8 +705,7 @@ async function handleStart(options: { block?: boolean } = {}) {
       try { syncCleanup(); } catch { /* best-effort */ }
       process.exit(130);
     }
-    shuttingDown = true;
-    stopForegroundAdvisory?.();
+    shuttingDown = true; stopForegroundAdvisory?.();
     shutdownStartedAt = now;
     noteExplicitShutdownRequested(); // an automatic package restart must not hand off after this
     console.log("\n🛑 Shutting down opencodex proxy...");
@@ -809,12 +800,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     console.error(`⚠️  ${grokSyncFailureMessage(err)}`);
   }
   console.log("Client startup work complete.");
-  // Read service status in a separate process after readiness, using the final
-  // sibling decision. A stalled OS manager cannot block the published listener.
-  if (!cleaned && !shuttingDown && !siblingStart && !owner.live && !supervisedServiceChild
-      && restartParent.restartParentPid === null && process.stderr?.isTTY) {
-    stopForegroundAdvisory = startForegroundAdvisory(line => console.warn(line));
-  }
+  stopForegroundAdvisory = (await import("../service/foreground-advisory-process")).maybeStartForegroundAdvisory({ cleaned, shuttingDown, siblingStart, ownerLive: Boolean(owner.live), supervisedServiceChild, restartParentPid: restartParent.restartParentPid, stderrIsTTY: process.stderr?.isTTY }, line => console.warn(line));
   if (options.block ?? true) {
     setInterval(() => {}, 60_000);
     await new Promise<void>(() => {});
