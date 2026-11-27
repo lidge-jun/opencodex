@@ -119,7 +119,7 @@ State-changing: no. JSON mode: `envelope`.
 
 ### `ocx account agy`
 
-Usage: `ocx account agy list | add <name> | use <name|default>`
+Usage: `ocx account agy list | add <name> | use <name|default> | remove <name>`
 
 Register and manually select a host-local Antigravity ACP sign-in.
 
@@ -130,7 +130,7 @@ State-changing: yes. JSON mode: `none`.
 | GET | `/api/antigravity-acp/accounts` |
 | POST | `/api/antigravity-acp/accounts` |
 
-- List is read-only. Add opens agy's interactive login. Use applies to new ACP turns.
+- List is read-only. Add opens agy's interactive login. Use applies to new ACP turns. Remove deletes a named local profile. Removing the selected profile restores the default.
 
 ### `ocx account import-orca`
 

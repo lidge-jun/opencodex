@@ -189,7 +189,10 @@ test("the Antigravity account panel waits for completed login and explicitly swi
       const body = JSON.parse(String(init.body));
       posts.push({ path: url, body });
       if (body.action === "add") return Response.json({ pending: body.name }, { status: 202 });
-      selected = body.name;
+      if (body.action === "remove") {
+        names.splice(names.indexOf(body.name), 1);
+        if (selected === body.name) selected = "default";
+      } else selected = body.name;
     }
     return Response.json({ names, selected, canOpenTerminal: true });
   } });
@@ -218,4 +221,21 @@ test("the Antigravity account panel waits for completed login and explicitly swi
   await settle();
   expect(host.querySelector("li.pwi-auth-row--active")?.textContent).toContain("work");
   expect(posts.map(p => p.body)).toEqual([{ action: "add", name: "work" }, { action: "use", name: "work" }]);
+  expect(host.querySelector('button[aria-label="Remove default"]')).toBeNull();
+  const remove = () => host.querySelector<HTMLButtonElement>('button[aria-label="Remove work"]')!.click();
+  act(remove);
+  expect(posts).toHaveLength(2);
+  await act(async () => click("Cancel"));
+  expect(host.querySelector('[role="group"]')).toBeNull();
+  act(remove);
+  await act(async () => {
+    const group = host.querySelector('[role="group"]')!;
+    expect(group.textContent).toContain("local login and CLI data for work");
+    Array.from(group.querySelectorAll("button")).find(button => button.textContent === "Delete")!.click();
+  });
+  await settle();
+  expect(posts.at(-1)?.body).toEqual({ action: "remove", name: "work" });
+  expect(host.querySelectorAll("li")).toHaveLength(1);
+  expect(host.querySelector("li.pwi-auth-row--active")?.textContent).toContain("Default CLI account");
+
 });

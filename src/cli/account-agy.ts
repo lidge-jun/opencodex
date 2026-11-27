@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { baseScopedEnv } from "../adapters/coding-agent/turn";
 import { resolveAgyBinary } from "../adapters/agy-acp/binary";
-import { profileLaunch, profileNames, profileRoot, requireProfileVersion, selectedName, selectProfile, signedInProfile, validProfileName } from "../adapters/agy-acp/profiles";
+import { profileLaunch, profileNames, profileRoot, removeProfile, requireProfileVersion, selectedName, selectProfile, signedInProfile, validProfileName } from "../adapters/agy-acp/profiles";
 
-const usage = "Usage: ocx account agy list | add <name> | use <name|default>";
+const usage = "Usage: ocx account agy list | add <name> | use <name|default> | remove <name>";
 
 export function addProfile(root: string, name: string, login: (dir: string) => void): void {
   if (!validProfileName(name)) throw new Error("Use a lowercase account label starting with a letter (up to 32 letters, digits or hyphens).");
@@ -36,6 +36,11 @@ export function cmdAgyAccount(args: string[]): number {
   if (action === "use" && args.length === 2 && name) {
     selectProfile(name, getConfigDir(), root);
     console.log("Selected " + name + " for new Antigravity ACP turns.");
+    return 0;
+  }
+  if (action === "remove" && args.length === 2 && name) {
+    removeProfile(name, getConfigDir(), root);
+    console.log("Removed " + name + " from Antigravity ACP accounts.");
     return 0;
   }
   if (action === "add" && args.length === 2 && name) {
