@@ -1,4 +1,5 @@
 import { parseSegment } from "./merge";
+import { fingerprint } from "./ownership";
 import { quoteTomlKey, renderToml } from "./serialize";
 
 interface LineToken {
@@ -24,7 +25,7 @@ export function patchTomlTablesSource(
   remove: readonly (readonly string[])[],
   upsert: readonly { path: readonly string[]; value: unknown }[],
   expected: unknown,
-  options: { restoreAbsentTrailingNewline?: boolean } = {},
+  options: { restoreAbsentTrailingNewlineFingerprint?: string } = {},
 ): string | null {
   if ([...remove, ...upsert.map(item => item.path)].some(path => !path.every(isPlainKey))) return null;
   if (upsert.some(item => !isPlainRecord(item.value))) return null;
@@ -63,12 +64,17 @@ export function patchTomlTablesSource(
   const blocks = upsert.map(item => renderTable(item.path, item.value as Record<string, unknown>, eol));
   let text: string;
   if (blocks.length === 0) {
-    // Restore an absent EOF newline only from explicit ownership provenance, never by guessing
-    // from whether a blank separator remained above the removed table.
-    if (options.restoreAbsentTrailingNewline === true
+    // Restore an absent EOF newline only when ownership provenance proves the remaining bytes are
+    // identical to the original newline-less file we appended to.
+    if (options.restoreAbsentTrailingNewlineFingerprint !== undefined
       && insertKept !== undefined && insertKept === kept.length
-      && kept.length > 0 && kept[kept.length - 1]!.text.trim() !== "") {
-      kept[kept.length - 1]!.eol = "";
+      && kept.length > 0 && kept[kept.length - 1]!.eol !== "") {
+      const last = kept[kept.length - 1]!;
+      const originalEol = last.eol;
+      last.eol = "";
+      if (fingerprint(joinLines(kept)) !== options.restoreAbsentTrailingNewlineFingerprint) {
+        last.eol = originalEol;
+      }
     }
     text = joinLines(kept);
   } else if (insertKept !== undefined) {
@@ -90,7 +96,11 @@ export function patchTomlTablesSource(
     text = `${body}${separator}${blocks.join(eol)}`;
   }
   try {
-    return Bun.deepEquals(Bun.TOML.parse(text), withEmptyTables(expected, retained)) ? text : null;
+    const normalizedExpected = withEmptyTables(
+      withoutImplicitEmptyAncestors(expected, remove, headers),
+      retained,
+    );
+    return Bun.deepEquals(Bun.TOML.parse(text), normalizedExpected) ? text : null;
   } catch {
     return null;
   }
@@ -223,6 +233,49 @@ function prunedContainers(before: string, expected: unknown): Set<string> {
   };
   walk(current, expected, []);
   return pruned;
+}
+
+function withoutImplicitEmptyAncestors(
+  document: unknown,
+  removedPaths: readonly (readonly string[])[],
+  headers: readonly (string[] | "array" | null)[],
+): unknown {
+  if (removedPaths.length === 0 || !isPlainRecord(document)) return document;
+  const explicitHeaders = new Set<string>();
+  for (const header of headers) {
+    if (header !== null && header !== "array") explicitHeaders.add(pathKey(header));
+  }
+  const ancestors: string[][] = [];
+  const seen = new Set<string>();
+  for (const path of removedPaths) {
+    for (let depth = path.length - 1; depth >= 1; depth -= 1) {
+      const ancestor = path.slice(0, depth);
+      const key = pathKey(ancestor);
+      if (!seen.has(key) && !explicitHeaders.has(key)) {
+        seen.add(key);
+        ancestors.push(ancestor);
+      }
+    }
+  }
+  if (ancestors.length === 0) return document;
+  ancestors.sort((a, b) => b.length - a.length);
+  const copy = structuredClone(document);
+  for (const ancestor of ancestors) {
+    let parent: Record<string, unknown> = copy;
+    let reachable = true;
+    for (let i = 0; i < ancestor.length - 1; i += 1) {
+      const next = parent[ancestor[i]!];
+      if (!isPlainRecord(next)) { reachable = false; break; }
+      parent = next;
+    }
+    if (!reachable) continue;
+    const leafKey = ancestor[ancestor.length - 1]!;
+    const target = parent[leafKey];
+    if (isPlainRecord(target) && Object.keys(target).length === 0) {
+      delete parent[leafKey];
+    }
+  }
+  return copy;
 }
 
 function withEmptyTables(document: unknown, paths: readonly string[][]): unknown {

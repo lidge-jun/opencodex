@@ -100,11 +100,13 @@ export interface OwnershipRecord {
    */
   createdContainers?: readonly string[];
   /**
-   * True when a source-preserving writer first appended to a non-empty file
-   * that lacked a trailing newline, so disable can restore that exact EOF byte
-   * layout without guessing from blank lines.
+   * Hash of the original file when a source-preserving writer first appended
+   * to a non-empty file that lacked a trailing newline. Disable strips the
+   * added EOF newline only when the remaining bytes hash back to that exact
+   * original content, so an overwrite or later sibling edit never loses its
+   * own newline.
    */
-  sourceMissingTrailingNewline?: boolean;
+  sourceMissingTrailingNewlineFingerprint?: string;
   appliedAt: string;
   opId: string;
 }
@@ -123,12 +125,15 @@ export function isOwnershipRecord(value: unknown): value is OwnershipRecord {
     && hash(record.fileFingerprint) && hash(record.blockFingerprint)
     && (record.modelNames === undefined || record.modelNames === "routed" || record.modelNames === "alias")
     && paths(record.fragmentPaths) && (record.fragmentPaths as unknown[]).length > 0
-    && ["semanticBlockFingerprint", "protectedBlockFingerprint", "semanticProtectedBlockFingerprint"]
-      .every(key => record[key] === undefined || hash(record[key]))
+    && [
+      "semanticBlockFingerprint",
+      "protectedBlockFingerprint",
+      "semanticProtectedBlockFingerprint",
+      "sourceMissingTrailingNewlineFingerprint",
+    ].every(key => record[key] === undefined || hash(record[key]))
     && (record.refreshablePaths === undefined || paths(record.refreshablePaths))
     && (record.createdContainers === undefined || (Array.isArray(record.createdContainers)
-      && record.createdContainers.every(path => typeof path === "string")))
-    && (record.sourceMissingTrailingNewline === undefined || typeof record.sourceMissingTrailingNewline === "boolean");
+      && record.createdContainers.every(path => typeof path === "string")));
 }
 
 /** Missing is empty; corrupt/unreadable ownership is uncertainty and must abort recovery. */
