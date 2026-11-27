@@ -404,6 +404,11 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         if (!allowsImage && prompt.some(block => block.type === "image")) {
           return finish(invalidRequest("unsupported_input_modality", "This ACP session did not advertise image input."));
         }
+        const promptId = nextId++;
+        const promptLine = `${JSON.stringify(sessionPromptFrame(promptId, sessionId!, prompt))}\n`;
+        if (Buffer.byteLength(promptLine, "utf8") > MAX_ACP_LINE_BYTES) {
+          return finish(invalidRequest("unsupported_input_modality", "The ACP prompt exceeds the maximum frame size."));
+        }
         const decision = incoming.sendBudget?.reserveDispatch({ sendClass: "transient", targetKey: AGY_ACP_IDENTITY_URL });
         if (decision && !decision.allowed) return refuse(new SendBudgetExhaustedError());
         const permit = decision?.permit;
@@ -419,7 +424,8 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
             if (permit && !permit.use()) return refuse(new SendBudgetExhaustedError());
             prompting = true;
             incoming.onPhysicalSend?.({ ordinal: 1 });
-            request("prompt", id => sessionPromptFrame(id, sessionId!, prompt));
+            outstanding.set(promptId, "prompt");
+            stdin.write(promptLine);
           } catch (error) {
             refuse(error);
           }
@@ -534,6 +540,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         }
         if (rejectedToolCalls.has(id)) return true;
       }
+      if (deferredPromptOutcome) return false;
       const captured = tools.capture(call);
       if (!captured || !checkSelectedModel()) return false;
       if (permission && (!pendingTool || pendingTool.id === captured.id)) {
