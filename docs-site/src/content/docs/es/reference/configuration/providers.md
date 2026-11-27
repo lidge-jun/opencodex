@@ -709,6 +709,27 @@ Los proveedores de claves API pueden tener una clave literal o una referencia de
 
 OrcaRouter expone ambos formularios explícitamente: `orcarouter` es el proveedor de claves API manual y `orcarouter-oauth` ejecuta el consentimiento del navegador con S256 PKCE, luego almacena la clave API duradera devuelta como una credencial de cuenta. El público por defecto divide intencionalmente la autenticación (`https://www.orcarouter.ai`) de la inferencia (`https://api.orcarouter.ai/v1`). Establecer `ORCAROUTER_BASE_URL` antes del inicio de sesión de la primera cuenta para una implementación autohospedada de un origen, o usar `ORCAROUTER_AUTH_BASE_URL` y `ORCAROUTER_API_BASE_URL` para orígenes separados. Para un punto final autoalojado privado/loopback, **antes del primer inicio de sesión**, cree o actualice `providers["orcarouter-oauth"]` con `adapter: "openai-chat"`, el previsto `baseUrl`, `authMode: "oauth"` y un `allowPrivateNetwork: true` explícito. El inicio de sesión conserva esa configuración del operador y nunca la otorga una anulación de URL. Sin ella, la validación de destino rechaza el punto final local para la inferencia y el descubrimiento de modelos. El oyente de devolución de llamada del navegador OAuth en sí no requiere esta opción de proveedor. Ver el [Ejemplo de configuración de OrcaRouter](/es/guides/api-key-catalog/).
 
+### Open Design Cloud
+
+`opendesign` es el proveedor integrado de Open Design Cloud. Utiliza chat compatible con OpenAI en
+`https://amr-link.open-design.ai/v1` con una clave de inferencia (`sk-amr_…`) pegada en la
+configuración del proveedor, mientras que `ocx login opendesign` ejecuta la autorización por
+dispositivo de Open Design y guarda la clave separada del plano de control usada para consultar
+cuotas. Las dos credenciales nunca cruzan de plano: la clave de control nunca firma llamadas de
+modelos y la clave de inferencia no puede leer la cuota.
+
+La cuota de cuenta consulta el plano de control (`https://amr-api.open-design.ai`): un único
+informe de cuota de cuenta con una ventana por espacio de trabajo, etiquetada por su ID, desde
+`GET /api/v1/workspaces` y después `GET /api/v1/workspaces/{id}/billing/preflight` para cada uno —
+como máximo 25 espacios de trabajo; si la comprobación previa de un espacio de trabajo falla o no es
+válida, ese espacio de trabajo se omite de las ventanas devueltas mientras los demás siguen
+informando. Cada ventana del plan de programación (5 horas y 7 días) pasa a ser una ventana de cuota
+en ese informe. Estos puntos finales provienen de la CLI de Vela y del propio demonio de Open Design
+(`nexu-io/open-design`), no de una API pública oficial, por lo que los informes llevan la marca de
+ingeniería inversa. Los reinicios de ventana siguen calendarios recurrentes fijos
+(`resetMode: "anchored_recurring"`): el próximo reinicio es una hora fija del reloj, no un
+desplazamiento desde la última observación.
+
 <a id="provider-diagnostic-outbound-safety"></a>
 
 ## Seguridad de salida de diagnóstico del proveedor

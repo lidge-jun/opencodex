@@ -94,7 +94,7 @@ async function fetchWorkspacePreflight(
   workspaceId: string,
   deps: OpenDesignDeviceDeps,
   signal: AbortSignal,
-): Promise<{ windows: ProviderQuota["customWindows"]; tier: string | null } | null> {
+): Promise<ProviderQuota["customWindows"] | null> {
   const url = `${OPENDESIGN_CONTROL_API_URL}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/billing/preflight`;
   let response: Response;
   try {
@@ -126,7 +126,6 @@ async function fetchWorkspacePreflight(
   // preflight object itself (contracts WorkspaceBillingPreflightResponse unwraps it).
   const preflight = record(payload.preflight) ?? payload;
   const plan = record(preflight.codingPlan);
-  const tier = text(plan?.tier) ?? null;
   const rawWindows = Array.isArray(plan?.windows) ? plan.windows : [];
   const windows: ProviderQuota["customWindows"] = [];
   for (const raw of rawWindows.slice(0, MAX_WINDOWS_PER_WORKSPACE)) {
@@ -144,7 +143,7 @@ async function fetchWorkspacePreflight(
       ...(epochMs(window.resetsAt) ? { resetAt: epochMs(window.resetsAt) } : {}),
     });
   }
-  return { windows, tier };
+  return windows;
 }
 
 /**
@@ -176,8 +175,8 @@ export async function fetchOpenDesignAccountQuota(
   if (!workspaces.length) return null;
   const customWindows: ProviderQuota["customWindows"] = [];
   for (const workspace of workspaces.slice(0, MAX_WORKSPACES)) {
-    const preflight = await fetchWorkspacePreflight(controlKey, workspace.workspaceId, deps, signal);
-    if (preflight?.windows?.length) customWindows.push(...preflight.windows);
+    const windows = await fetchWorkspacePreflight(controlKey, workspace.workspaceId, deps, signal);
+    if (windows?.length) customWindows.push(...windows);
   }
   if (!customWindows.length) return null;
   const updatedAt = Date.now();
