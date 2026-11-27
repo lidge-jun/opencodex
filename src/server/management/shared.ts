@@ -341,6 +341,7 @@ export function requestLogDto(
   entry: RequestLogEntry,
   { includeDecodeRate = true }: { includeDecodeRate?: boolean } = {},
 ): Record<string, unknown> {
+  const requestTier = serviceTierContext(entry);
   return {
     ...entry,
     ...publicLogUsage(entry.usage),
@@ -364,7 +365,9 @@ export function requestLogDto(
             // Each attempt measures its own attempt-relative TTFT.
             ...(includeDecodeRate ? { decodeTokPerSecond: decodeTokPerSecondResult(attempt) } : {}),
             // Attempts carry no time of their own; dated tier prices follow the request's.
-            cost: costResult({ ...attempt, attempts: undefined, timestamp: entry.timestamp, routeDecision: entry.routeDecision, requestedServiceTier: entry.requestedServiceTier, configuredServiceTier: entry.configuredServiceTier, responseServiceTier: entry.responseServiceTier }),
+            // An attempt without its own tier record gets the tier the request total gives it (estimateComboCost):
+            // the request's derived context, never a raw parent scalar that may describe an earlier response.
+            cost: costResult({ ...attempt, attempts: undefined, timestamp: entry.timestamp, routeDecision: entry.routeDecision, requestedServiceTier: requestTier.requestedServiceTier, configuredServiceTier: requestTier.configuredServiceTier, responseServiceTier: requestTier.responseServiceTier }),
           },
         })),
       }

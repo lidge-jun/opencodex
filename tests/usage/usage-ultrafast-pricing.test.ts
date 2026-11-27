@@ -129,4 +129,15 @@ describe("Ultrafast pricing", () => {
     expect(dto.attempts.map(a => Number(a.displayMetrics.cost.estimate.cost.total.toFixed(6)))).toEqual([0.03, 0.09]);
     expect(dto.displayMetrics.cost.estimate.cost.total).toBeCloseTo(0.12, 10);
   });
+  test("an expanded attempt uses the request tier the total gives it, not a stale parent scalar", () => {
+    const plain = { provider: "openai", model: "gpt-6.2-sol", usageStatus: "reported", usage, durationMs: 1000, status: 200, sendCount: 1, recoveryKinds: [] };
+    const entry = {
+      requestId: "r", timestamp: NOV_2026, ...plain, responseServiceTier: "priority", tierOutcome: transmitted,
+      attempts: [{ ordinal: 1, ...plain }, { ordinal: 2, ...plain, tierOutcome: transmitted }],
+    } as unknown as RequestLogEntry;
+    const dto = requestLogDto(entry) as { displayMetrics: { cost: { estimate: { cost: { total: number }; attempts: Array<{ cost: { total: number } }> } } }; attempts: Array<{ displayMetrics: { cost: { estimate: { cost: { total: number } } } } }> };
+    const totals = dto.displayMetrics.cost.estimate.attempts.map(a => Number(a.cost.total.toFixed(6)));
+    expect(totals).toEqual([0.03, 0.09]);
+    expect(dto.attempts.map(a => Number(a.displayMetrics.cost.estimate.cost.total.toFixed(6)))).toEqual(totals);
+  });
 });
