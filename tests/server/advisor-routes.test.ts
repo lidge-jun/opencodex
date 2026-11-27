@@ -870,7 +870,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
       expect(parsedMcp.afterElapsedMs).toBe(45123);
       expect(parsedMcp.nextCallArguments).toEqual({ consultationId: "cid-qoder-1", afterElapsedMs: 45123 });
       expect(parsedMcp.instruction).toContain('"afterElapsedMs":45123');
-      expect(resolveDefaultMcpWaitMs(undefined)).toBe(45_000);
+      expect(resolveDefaultMcpWaitMs("")).toBe(45_000);
       expect(resolveDefaultMcpWaitMs("240000")).toBe(240_000);
       expect(resolveDefaultMcpWaitMs("9999999")).toBe(240_000);
 
@@ -1332,7 +1332,7 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
     const { runExternalAdvisorConsult } = await import("../../src/advisor/external-consult");
     const { CONSULT_ADVISOR_TOOL_ANNOTATIONS } = await import("../../src/advisor/mcp-server");
 
-    expect(CONSULT_ADVISOR_TOOL_ANNOTATIONS.readOnlyHint).toBe(true);
+    expect(CONSULT_ADVISOR_TOOL_ANNOTATIONS.readOnlyHint).toBe(false);
     expect(CONSULT_ADVISOR_TOOL_ANNOTATIONS.openWorldHint).toBe(true);
 
     const budgetDir = mkdtempSync(join(tmpdir(), "ocx-ext-adaptive-"));

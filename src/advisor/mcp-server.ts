@@ -38,7 +38,7 @@ export const consultAdvisorInput = {
 };
 
 export const CONSULT_ADVISOR_TOOL_ANNOTATIONS = {
-  readOnlyHint: true,
+  readOnlyHint: false,
   openWorldHint: true,
 } as const;
 

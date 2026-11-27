@@ -517,7 +517,7 @@ preferring exact session IDs over task-ID fallbacks and excluding prior Advisor 
 evicts pending entries (returning `429 advisor_capacity_exceeded` when saturated) and separates
 TTL expiry pruning from insertion eviction. Long-poll `waitMs` is capped at `240_000` ms across
 API, CLI (`ocx advisor consult`), and stdio MCP (`src/advisor/mcp-server.ts`, `ocx advisor mcp`,
-annotated `readOnlyHint: true, openWorldHint: true`)
+annotated `readOnlyHint: false, openWorldHint: true`)
 to stay below the 255s HTTP listener idle timeout; `nextCallArguments` (`{ consultationId, afterElapsedMs }`)
 accepts any nonnegative integer cursor alongside `notifications/progress` heartbeats.
 `contextMode: "full"` expands bounded per-message/transcript caps (128k/512k chars) and strips
