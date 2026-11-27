@@ -394,6 +394,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/providers/keys/alias", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/providers/keys/pause", module: "server/management/oauth-account-routes", mutates: true },
   // server/management/provider-routes
+  { method: "GET", path: "/api/antigravity-acp/accounts", module: "server/management/provider-routes", mutates: false },
+  { method: "POST", path: "/api/antigravity-acp/accounts", module: "server/management/provider-routes", mutates: true },
   { method: "DELETE", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
   { method: "GET", path: "/api/provider-context-caps", module: "server/management/provider-routes", mutates: false },
   { method: "GET", path: "/api/provider-presets", module: "server/management/provider-routes", mutates: false },

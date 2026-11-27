@@ -328,7 +328,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       liveModelCount: getProviderLiveModelCount(provider) ?? null,
       newArrivals: recentArrivals.filter(row => !before.has(arrivalKey(row))),
       recentArrivals,
-      catalogRefresh: { status: "skipped", reason: "not-requested", retryable: false },
+      catalogRefresh: config.providers[provider]?.adapter === "agy-acp" && discovery.status === "ok"
+        ? await convergeCodexCatalog()
+        : { status: "skipped", reason: "not-requested", retryable: false },
     });
   }
 

@@ -918,8 +918,27 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
   HTTP 401 with code `agy_login_required` before the response starts. If the response is already streaming,
   it carries `agy_login_required` in the event stream.
 - **No credential stored:** the CLI owns its Google sign-in. OpenCodex never reads, stores or forwards it, and the row
-  refuses an API key, a key pool, account failover or an OAuth setting. There is one account, the CLI's, and no rotation.
+  refuses an API key, a key pool, account failover or an OAuth setting. New turns use the host CLI login unless you manually select a named login.
   Selecting this preset in `ocx init` skips the API key prompt. Running `ocx login antigravity-acp` prints the host sign-in command.
+- **Refresh models:** In the provider settings, enable **Discover models from provider** and click
+  **Discover now**, or run `ocx provider edit antigravity-acp --live-models on` followed by
+  `ocx models discover antigravity-acp`. OpenCodex opens a sandboxed ACP session using the selected
+  login and selects each advertised Gemini model to read its thinking levels, without sending a prompt.
+  The refresh saves those choices and the CLI's selected level for each visible model in the Codex catalog.
+  Models without a thinking-level selector have no effort choices and run with CLI-managed thinking even if Codex sends a global effort. An unsuccessful discovery falls back to the last successful list for
+  that login or the configured seed. The model selection and new-model visibility settings still apply.
+- **Manual account selection (macOS and Linux, agy 1.5.18+):** On the machine that runs the proxy, use
+  `ocx account agy add personal` and `ocx account agy add work`. Complete Google's terminal sign-in
+  for each label. In the local dashboard, open **Providers → Antigravity ACP → Accounts** to select a login.
+  On macOS, enter a label and choose **Add account** to start Google sign-in in Terminal. Return to the list and select the new account.
+  Choose **Delete** beside a named account and confirm to remove its local login and CLI data, or run
+  `ocx account agy remove work`. Removing the selected account restores the default CLI account for new requests.
+  List them with `ocx account agy list` and select one with `ocx account agy use work`.
+  Selection applies to subsequent ACP turns, including turns in an existing chat. An in-flight turn
+  keeps its original login. Use `ocx account agy use default` to return to the host CLI sign-in.
+  Each named login has a private, separate agy settings and file-token directory under
+  `~/.gemini/opencodex-acp-profiles/`. OpenCodex stores only the selected label in its own home.
+  Switching is local and manual. Quota and request failures never change the selection.
 - **Interactive use only:** Google's staff answers on the developer forum permit a personal app to launch the official
   `agy acp` binary for the user's own account when use is interactive and user-directed, not an unattended worker pool
   or automated agent loop, and point programmatic workloads to a Gemini API key or Vertex AI ([forum answer](https://discuss.ai.google.dev/t/tos-clarification-is-t3-code-official-antigravity-acp-agent-permitted-under-the-antigravity-terms-of-service/192027/2),

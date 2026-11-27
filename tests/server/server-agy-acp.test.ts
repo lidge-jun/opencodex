@@ -109,6 +109,37 @@ async function responsesWebSocketTurn(base: string | URL, payload: unknown, head
 }
 
 describe.skipIf(process.platform === "win32")("antigravity-acp through the server", () => {
+  test("discovery replaces the static seed, scopes the cache, and renews it on manual refresh", async () => {
+    const { fetchProviderModels } = await import("../../src/codex/catalog/provider-models");
+    const { clearModelCache, expireModelCache } = await import("../../src/codex/model-cache");
+    const name = "antigravity-acp";
+    const prov = { ...config().providers[name]!, liveModels: true, models: ["gemini-stale"], reasoningEfforts: ["medium", "max"] };
+    saveConfig(config());
+    clearModelCache(name);
+    try {
+      const list = async () => (await fetchProviderModels(name, prov, 60_000)).map(row => row.id);
+      expect(await list()).toEqual(["gemini-3.8-flash", "gemini-4-argon"]);
+      const { deriveEntry } = await import("../../src/codex/catalog/derive-entry");
+      const rows = await fetchProviderModels(name, prov, 60_000);
+      const picker = rows.map(row => deriveEntry(null, name + "/" + row.id, "", 1, row));
+      expect(picker.map(row => row.supported_reasoning_levels.map((level: { effort: string }) => level.effort)))
+        .toEqual([["low", "xhigh"], []]);
+      expect(picker.map(row => row.default_reasoning_level)).toEqual(["xhigh", undefined]);
+      const initial = recordedLaunches().length;
+      expect(await list()).toEqual(["gemini-3.8-flash", "gemini-4-argon"]);
+      expect(recordedLaunches()).toHaveLength(initial);
+      expect(expireModelCache(name)).toBe(true);
+      expect(await list()).toEqual(["gemini-3.8-flash", "gemini-4-argon"]);
+      expect(recordedLaunches()).toHaveLength(initial + 1);
+      // Fail closed on a missing named login, even with a fresh default-login roster.
+      writeFileSync(join(process.env.OPENCODEX_HOME!, "agy-acp-selected-account"), "missing-fixture-account");
+      expect(await list()).toEqual(["gemini-stale"]);
+      expect(recordedLaunches()).toHaveLength(initial + 1);
+    } finally {
+      clearModelCache(name);
+    }
+  });
+
   test.each([
     ["old version", "1.5.2\n", 0, "found 1.5.2"],
     ["unparseable version", "unknown\n", 0, "version could not be read"],
@@ -145,6 +176,22 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
       expect(launches[1]!.cwd).toContain("ocx-agy-acp-");
       expect(launches[1]!.cwd.startsWith(process.env.OPENCODEX_HOME!)).toBe(false);
       // Removal after the reap is asserted deterministically in tests/adapters/agy-acp-adapter.test.ts.
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a Codex global effort does not block a model with no thought selector", async () => {
+    saveConfig(config());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...responsesBody, reasoning: { effort: "high" } }),
+      });
+      const text = await response.text();
+      expect(text).toContain("fake acp answer for gemini-4-argon");
+      expect(text).toContain("response.completed");
     } finally {
       await server.stop(true);
     }

@@ -15,7 +15,7 @@ const row = { name: "antigravity-acp", adapter: "agy-acp", baseUrl: "https://ant
 test("a configured Antigravity ACP row is ready without a key and is not free", () => {
   expect(binProviderStatus(row)).toBe("ready");
   expect(isFreeProvider(row)).toBe(false);
-  expect(providerAuthSurface(row as unknown as WorkspaceItem)).toBeNull();
+  expect(providerAuthSurface(row as unknown as WorkspaceItem)).toBe("agy-accounts");
 });
 
 test("its display name keeps the brand casing", () => {

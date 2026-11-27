@@ -127,6 +127,37 @@ export function effortLabels(effort: string): readonly string[] | undefined {
   return Object.hasOwn(EFFORT_LABELS, key) ? EFFORT_LABELS[key] : undefined;
 }
 
+export interface AgyThoughtLevels {
+  efforts: string[];
+  current?: string;
+}
+
+/** Only advertise strengths the turn adapter can match to one distinct wire value. */
+export function readThoughtLevels(state: readonly AcpConfigOption[]): AgyThoughtLevels {
+  const found = findSelector(state, "thought_level");
+  if (!found.ok) return { efforts: [] };
+  const { selector } = found;
+  const current = currentSelection(selector);
+  const levels: AgyThoughtLevels = { efforts: [] };
+  for (const [effort, labels] of Object.entries(EFFORT_LABELS)) {
+    const match = matchValue(selector.values, labels);
+    if (!match.ok || selector.values.filter(v => v.value === match.value.value).length !== 1) continue;
+    // A conflicting display label must not expose the same wire choice twice.
+    const wireEffort = Object.entries(EFFORT_LABELS).find(([, names]) => names.includes(normalizeLabel(match.value.value)))?.[0];
+    if (wireEffort && wireEffort !== effort) continue;
+    levels.efforts.push(effort);
+    if (current === match.value) levels.current = effort;
+  }
+  return levels;
+}
+
+/** A per-model override can narrow the CLI's choices or choose one of them as default. */
+export function projectThoughtLevels(levels: AgyThoughtLevels, allowed?: readonly string[], preferred?: string) {
+  const reasoningEfforts = levels.efforts.filter(effort => !allowed || allowed.includes(effort));
+  const defaultReasoningEffort = [preferred, levels.current].find(value => value && reasoningEfforts.includes(value));
+  return { reasoningEfforts, defaultReasoningEffort, supportsThinkingToggle: false, supportsReasoningEffort: reasoningEfforts.length > 0 };
+}
+
 export type ModelPhase = "initial" | "pending" | "selected";
 export type ModelProof =
   | { ok: true; selector: AcpConfigOption; target?: AcpSelectValue }

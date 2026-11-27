@@ -1,3 +1,4 @@
+import { projectThoughtLevels } from "../../adapters/agy-acp/options";
 import { canInferVendorContext, vendorContextInference } from "./vendor-context";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
@@ -409,6 +410,9 @@ export function applyProviderConfigHints(
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...reasoningCapabilities,
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    ...(model.agyThoughtLevels ? projectThoughtLevels(model.agyThoughtLevels,
+      reasoningCapabilities.supportsReasoningEffort === false ? [] : modelRecordValue(prov.modelReasoningEfforts, model.id),
+      modelRecordValue(prov.modelDefaultReasoningEfforts, model.id)) : {}),
     ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     ...(typeof supportsVerbosity === "boolean" ? { supportsVerbosity } : {}),
     ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),

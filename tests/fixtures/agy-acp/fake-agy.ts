@@ -16,6 +16,8 @@ if (args[0] !== "acp") process.exit(2);
 
 let config = [{ id: "model", name: "Model", category: "model", type: "select", currentValue: "gemini-3.8-flash", options: [
   { value: "gemini-3.8-flash", name: "Gemini 3.8 Flash" }, { value: "gemini-4-argon", name: "Gemini 4 Argon" },
+] }, { id: "thought_level", name: "Thinking", category: "thought_level", type: "select", currentValue: "extra", options: [
+  { value: "low", name: "Low" }, { value: "extra", name: "Extra" },
 ] }];
 const write = (frame: unknown) => process.stdout.write(JSON.stringify(frame) + "\n");
 let buffer = "";
@@ -30,6 +32,8 @@ process.stdin.on("data", (chunk: string) => {
     else if (frame.method === "session/new") write({ jsonrpc: "2.0", id: frame.id, result: { sessionId: "fake-1", configOptions: config } });
     else if (frame.method === "session/set_config_option") {
       config = config.map(option => option.id === frame.params.configId ? { ...option, currentValue: frame.params.value } : option);
+      // The second model has no user-selectable thinking level.
+      if (frame.params.value === "gemini-4-argon") config = config.filter(option => option.id !== "thought_level");
       write({ jsonrpc: "2.0", id: frame.id, result: { configOptions: config } });
     } else if (frame.method === "session/prompt") {
       const update = (sessionUpdate: string, text: string) =>
