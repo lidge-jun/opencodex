@@ -491,4 +491,8 @@ test("auto mode client selection reflects draft autoMountMcp toggle immediately"
   // Two checkboxes: auto-mount toggle + qoder client checkbox.
   expect((onHtml.match(/checked=""/g) ?? []).length).toBe(2);
   expect((offHtml.match(/checked=""/g) ?? []).length).toBe(0);
+  // The mode badge says auto-connect is off instead of claiming it follows routes.
+  expect(onHtml).toContain("Auto — follows active compatible routes");
+  expect(offHtml).toContain("Off — choose clients below or turn on auto-connect");
+  expect(offHtml).not.toContain("Auto — follows active compatible routes");
 });

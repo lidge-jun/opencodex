@@ -340,6 +340,7 @@ export const fr: Record<TKey, string> = {
   "advisor.mcp.autoMountLabel": "Connecter automatiquement opencodex-advisor MCP aux routes compatibles actives",
   "advisor.mcp.autoMountHint": "Synchronisation bidirectionnelle : quel que soit l'ordre d'activation (conseiller ou routage), le MCP est configuré automatiquement hors sélection manuelle.",
   "advisor.mcp.selectionModeAuto": "Automatique — suit les clients compatibles routés",
+  "advisor.mcp.selectionModeOff": "Désactivé — choisissez des clients ci-dessous ou activez la connexion automatique",
   "advisor.mcp.selectionModeManual": "Manuel — connecte uniquement les clients cochés",
   "advisor.mcp.useAutoMode": "Revenir à la synchro auto",
   "advisor.mcp.selectRouted": "Tout sélectionner (routés)",

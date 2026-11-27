@@ -341,6 +341,7 @@ export const vi: Record<TKey, string> = {
   "advisor.mcp.autoMountLabel": "Tự động kết nối opencodex-advisor MCP cho các định tuyến tương thích đang bật",
   "advisor.mcp.autoMountHint": "Đồng bộ hai chiều: bật Định tuyến trước hay bật Cố vấn trước đều tự động cấu hình (trừ khi bạn chọn thủ công bên dưới).",
   "advisor.mcp.selectionModeAuto": "Tự động — theo các định tuyến tương thích đang bật",
+  "advisor.mcp.selectionModeOff": "Tắt — chọn client bên dưới hoặc bật tự động kết nối",
   "advisor.mcp.selectionModeManual": "Thủ công — chỉ gắn các ứng dụng được tick bên dưới",
   "advisor.mcp.useAutoMode": "Dùng đồng bộ tự động",
   "advisor.mcp.selectRouted": "Chọn tất cả đang định tuyến",

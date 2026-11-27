@@ -540,9 +540,9 @@ overrides, so tests and previews cannot reach a real client configuration. Sync 
 missing or revoked consent unmounts existing MCP registrations, hooks, and owned skills), reconciled
 by resolved filesystem path (`collectProtectedPaths`) so shared custom directories (e.g. `WORKBUDDY_CONFIG_DIR`)
 are never unmounted by an unselected sibling client, isolated per client for errors, backed up once
-before edits, and synchronized via `OwnershipRecord.fileFingerprint` + append-only journal
-`JournalResultUpdate` on shared JSON configs so Routing Undo stays intact without masking external
-edits. Bidirectional sync links `PUT /api/advisor/settings` (`autoMountMcp` / `mcpClients`) with
+before edits. On shared JSON configs an Advisor write advances the Routing `OwnershipRecord.fileFingerprint`,
+so Routing toggles do not read it as a conflict, but not the Undo journal: Undo of the Routing apply sees
+the Advisor edit as drift and asks before restoring a snapshot that would remove it. Bidirectional sync links `PUT /api/advisor/settings` (`autoMountMcp` / `mcpClients`) with
 client route toggles in `src/server/management/integration-routes.ts` (`reconcileAdvisorMcpForRoutedClient`,
 wrapped so optional MCP failures degrade via `advisorMcp` without interrupting committed Routing
 mutations or Home route-intent recording). `gui/src/pages/Advisor.tsx`,

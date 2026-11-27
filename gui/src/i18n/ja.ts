@@ -342,6 +342,7 @@ export const ja: Record<TKey, string> = {
   "advisor.mcp.autoMountLabel": "対応ルートの有効化に合わせて opencodex-advisor MCP を自動設定",
   "advisor.mcp.autoMountHint": "双方向同期：ルーティングとアドバイザーのどちらを先にオンにしても自動設定されます（下で手動選択している場合は選択済みのみ）。",
   "advisor.mcp.selectionModeAuto": "自動 — ルーティング中の対応クライアントに追従",
+  "advisor.mcp.selectionModeOff": "オフ — 下でクライアントを選ぶか、自動接続をオンにしてください",
   "advisor.mcp.selectionModeManual": "手動 — 下で選んだクライアントのみ接続",
   "advisor.mcp.useAutoMode": "自動同期に戻す",
   "advisor.mcp.selectRouted": "ルーティング済みをすべて選択",

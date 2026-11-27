@@ -342,6 +342,7 @@ export const tr: Record<TKey, string> = {
   "advisor.mcp.autoMountLabel": "Etkin uyumlu yönlendirmeler için opencodex-advisor MCP'yi otomatik bağla",
   "advisor.mcp.autoMountHint": "Çift yönlü eşitleme: Önce Danışmanı ya da önce istemci rotasını açmanız fark etmez (aşağıda manuel seçim açık değilse otomatik bağlanır).",
   "advisor.mcp.selectionModeAuto": "Otomatik — etkin uyumlu rotaları izler",
+  "advisor.mcp.selectionModeOff": "Kapalı — aşağıdan istemci seçin veya otomatik bağlanmayı açın",
   "advisor.mcp.selectionModeManual": "Manuel — yalnızca aşağıda seçilenleri bağlar",
   "advisor.mcp.useAutoMode": "Otomatik eşitlemeye dön",
   "advisor.mcp.selectRouted": "Yönlendirilenleri seç",

@@ -342,6 +342,7 @@ export const ru: Record<TKey, string> = {
   "advisor.mcp.autoMountLabel": "Автоматически подключать opencodex-advisor MCP для активных маршрутов",
   "advisor.mcp.autoMountHint": "Двусторонняя синхронизация: работает независимо от порядка включения (советник или маршрут клиента), кроме ручного выбора ниже.",
   "advisor.mcp.selectionModeAuto": "Авто — следует за активными маршрутами",
+  "advisor.mcp.selectionModeOff": "Выключено — выберите клиентов ниже или включите автоподключение",
   "advisor.mcp.selectionModeManual": "Вручную — только отмеченные ниже клиенты",
   "advisor.mcp.useAutoMode": "Вернуть автосинхронизацию",
   "advisor.mcp.selectRouted": "Выбрать все маршрутизируемые",

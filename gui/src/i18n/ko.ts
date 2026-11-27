@@ -342,6 +342,7 @@ export const ko: Record<TKey, string> = {
   "advisor.mcp.autoMountLabel": "활성화된 호환 라우트에 opencodex-advisor MCP 자동 연결",
   "advisor.mcp.autoMountHint": "양방향 동기화: 라우팅과 어드바이저 중 무엇을 먼저 켜도 자동으로 설정됩니다(아래에서 수동 선택 시 선택한 항목만 반영).",
   "advisor.mcp.selectionModeAuto": "자동 — 활성화된 호환 라우트 추적",
+  "advisor.mcp.selectionModeOff": "끔 — 아래에서 클라이언트를 선택하거나 자동 연결을 켜세요",
   "advisor.mcp.selectionModeManual": "수동 — 아래에서 선택한 클라이언트만 연결",
   "advisor.mcp.useAutoMode": "자동 동기화 사용",
   "advisor.mcp.selectRouted": "라우팅된 클라이언트 모두 선택",

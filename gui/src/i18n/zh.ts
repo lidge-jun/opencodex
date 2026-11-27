@@ -342,6 +342,7 @@ export const zh: Record<TKey, string> = {
   "advisor.mcp.autoMountLabel": "开启路由时自动为兼容客户端接入顾问 MCP",
   "advisor.mcp.autoMountHint": "双向同步：无论是先开客户端路由再开顾问，还是先开顾问再开路由，都会自动写好配置（下方手动勾选特定客户端时按勾选项生效）。",
   "advisor.mcp.selectionModeAuto": "自动联动 — 跟随已开启路由的客户端",
+  "advisor.mcp.selectionModeOff": "已关闭 — 请在下方选择客户端，或开启自动连接",
   "advisor.mcp.selectionModeManual": "手动指定 — 仅挂载下方勾选的客户端",
   "advisor.mcp.useAutoMode": "切回自动跟随已开启路由的客户端",
   "advisor.mcp.selectRouted": "全选已开路由的兼容客户端",

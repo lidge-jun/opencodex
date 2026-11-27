@@ -88,7 +88,23 @@ describe("Advisor client MCP safety", () => {
     expect(unmountAdvisorMcpForClient("qoder", { homeDir: home, configDir, env: {}, execPath: "/new/bun" }).changed).toBe(true);
     expect(JSON.parse(readFileSync(settingsPath, "utf8")).mcpServers?.[ADVISOR_MCP_SERVER_NAME]).toBeUndefined();
   });
-});
+  test("an identical opencodex-advisor entry OpenCodex never recorded is used but never deleted", () => {
+    const home = tempHome("ocx-advisor-identical-");
+    const configDir = join(home, ".opencodex");
+    const settingsPath = join(home, ".qoder", "settings.json");
+    // Learn the exact bytes OpenCodex writes from a separate home, then plant them unrecorded.
+    const probe = tempHome("ocx-advisor-probe-");
+    expect(mountAdvisorMcpForClient("qoder", { homeDir: probe, configDir, env: {}, execPath: "/same/bun" }).ok).toBe(true);
+    removeTreeWithRetry(join(configDir, "advisor-mcp-entries.json"));
+    const entry = JSON.parse(readFileSync(join(probe, ".qoder", "settings.json"), "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME];
+    mkdirSync(join(home, ".qoder"), { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify({ mcpServers: { [ADVISOR_MCP_SERVER_NAME]: entry } }, null, 2) + "\n");
+    expect(mountAdvisorMcpForClient("qoder", { homeDir: home, configDir, env: {}, execPath: "/same/bun" }).ok).toBe(true);
+    expect(existsSync(join(configDir, "advisor-mcp-entries.json"))
+      && JSON.parse(readFileSync(join(configDir, "advisor-mcp-entries.json"), "utf8")).qoder).toBeFalsy();
+    unmountAdvisorMcpForClient("qoder", { homeDir: home, configDir, env: {}, execPath: "/same/bun" });
+    expect(JSON.parse(readFileSync(settingsPath, "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME]).toEqual(entry);
+  });});
 
 describe("Advisor stream completion", () => {
   const input = { parsed: parseRequest({ model: "worker", input: [{ role: "user", content: "Fix it" }] }), workerIdentity: "worker", advisorModel: "expert", reason: "manual" as const };

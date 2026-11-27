@@ -342,6 +342,7 @@ export const de: Record<TKey, string> = {
   "advisor.mcp.autoMountLabel": "opencodex-advisor-MCP automatisch für aktive kompatible Routen eintragen",
   "advisor.mcp.autoMountHint": "Zweiwege-Sync: Funktioniert unabhängig davon, ob Sie zuerst den Berater oder zuerst die Client-Route aktivieren (außer bei manueller Auswahl).",
   "advisor.mcp.selectionModeAuto": "Automatisch — folgt aktiven kompatiblen Routen",
+  "advisor.mcp.selectionModeOff": "Aus — Clients unten auswählen oder automatisches Verbinden einschalten",
   "advisor.mcp.selectionModeManual": "Manuell — verbindet nur unten gewählte Clients",
   "advisor.mcp.useAutoMode": "Automatischen Sync nutzen",
   "advisor.mcp.selectRouted": "Alle gerouteten Clients auswählen",

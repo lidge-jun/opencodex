@@ -88,38 +88,9 @@ export interface JournalTombstone {
   by: string;
 }
 
-/**
- * Append-only companion fingerprint advancement for an existing operation (for example when
- * Advisor MCP cleanly updates the same shared JSON config immediately after Routing Apply).
- * Chained via `fromFingerprint` so it never masks an unrecorded external edit.
- */
-export interface JournalResultUpdate {
-  resultUpdate: string;
-  fromFingerprint: string;
-  resultFingerprint: string;
-  at: string;
-}
-
-const FINGERPRINT_RE = /^[a-f0-9]{16}$/;
-
 function isTombstone(value: unknown): value is JournalTombstone {
   return typeof value === "object" && value !== null
     && typeof (value as { tombstone?: unknown }).tombstone === "string";
-}
-
-function isResultUpdate(value: unknown): value is JournalResultUpdate {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const rec = value as Record<string, unknown>;
-  return typeof rec.resultUpdate === "string"
-    && typeof rec.fromFingerprint === "string"
-    && typeof rec.resultFingerprint === "string";
-}
-
-function isValidResultUpdate(value: JournalResultUpdate): boolean {
-  return /^[a-zA-Z0-9-]+$/.test(value.resultUpdate)
-    && FINGERPRINT_RE.test(value.fromFingerprint)
-    && FINGERPRINT_RE.test(value.resultFingerprint)
-    && typeof value.at === "string" && Number.isFinite(Date.parse(value.at));
 }
 
 /** Retire one operation. Append-only, exactly like `appendOperation`. */
@@ -129,35 +100,6 @@ export function appendTombstone(
 ): void {
   ensureDir(journalPath(dir));
   appendFileSync(journalPath(dir), `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
-}
-
-/**
- * Advance the expected post-op fingerprint for `opId` if and only if its current recorded
- * fingerprint matches `fromFingerprint`. Append-only; never rewrites the journal.
- */
-export function appendResultFingerprintUpdate(
-  opId: string,
-  fromFingerprint: string,
-  resultFingerprint: string,
-  dir: string = integrationsDir(),
-): boolean {
-  if (!/^[a-zA-Z0-9-]+$/.test(opId) || !FINGERPRINT_RE.test(fromFingerprint) || !FINGERPRINT_RE.test(resultFingerprint)) {
-    return false;
-  }
-  if (fromFingerprint === resultFingerprint) return false;
-  const current = findOperation(opId, dir);
-  if (!current || current.resultAbsent || current.resultFingerprint !== fromFingerprint) {
-    return false;
-  }
-  const record: JournalResultUpdate = {
-    resultUpdate: opId,
-    fromFingerprint,
-    resultFingerprint,
-    at: new Date().toISOString(),
-  };
-  ensureDir(journalPath(dir));
-  appendFileSync(journalPath(dir), `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
-  return true;
 }
 
 /**
@@ -277,17 +219,12 @@ export function listOperations(
    * agree.
    */
   const retired = new Set<string>();
-  const updates: JournalResultUpdate[] = [];
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     try {
       const parsed: unknown = JSON.parse(line);
       if (isTombstone(parsed)) {
         retired.add(parsed.tombstone);
-        continue;
-      }
-      if (isResultUpdate(parsed)) {
-        if (isValidResultUpdate(parsed)) updates.push(parsed);
         continue;
       }
       const entry = parsed as JournalEntry;
@@ -301,16 +238,6 @@ export function listOperations(
    * appended after the row it retires, so an in-loop check would miss every one.
    */
   const live = retired.size === 0 ? rows : rows.filter(row => !retired.has(row.opId));
-  if (updates.length > 0 && live.length > 0) {
-    const byOpId = new Map<string, JournalEntry>();
-    for (const row of live) byOpId.set(row.opId, row);
-    for (const update of updates) {
-      const target = byOpId.get(update.resultUpdate);
-      if (target && !target.resultAbsent && target.resultFingerprint === update.fromFingerprint) {
-        target.resultFingerprint = update.resultFingerprint;
-      }
-    }
-  }
   return live.reverse().slice(0, limit);
 }
 
@@ -344,7 +271,6 @@ export function findCommittedOperation(opId: string, dir: string = integrationsD
     throw new Error("integration journal cannot be read for recovery");
   }
   let found: JournalEntry | null = null;
-  const updates: JournalResultUpdate[] = [];
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     let row: unknown;
@@ -355,24 +281,8 @@ export function findCommittedOperation(opId: string, dir: string = integrationsD
         || typeof row.by !== "string" || !row.by) throw new Error("integration journal contains invalid recovery metadata");
       continue;
     }
-    if (isResultUpdate(row)) {
-      if (!isValidResultUpdate(row)) throw new Error("integration journal contains invalid recovery metadata");
-      updates.push(row);
-      continue;
-    }
     if (!isJournalEntry(row)) throw new Error("integration journal contains invalid recovery metadata");
     if (row.opId === opId) found = row;
-  }
-  if (found && !found.resultAbsent) {
-    let resultFingerprint = found.resultFingerprint;
-    for (const update of updates) {
-      if (update.resultUpdate === found.opId && resultFingerprint === update.fromFingerprint) {
-        resultFingerprint = update.resultFingerprint;
-      }
-    }
-    if (resultFingerprint !== found.resultFingerprint) {
-      found = { ...found, resultFingerprint };
-    }
   }
   return found;
 }

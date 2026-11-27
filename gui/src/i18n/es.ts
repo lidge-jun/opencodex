@@ -338,6 +338,7 @@ export const es = {
   "advisor.mcp.autoMountLabel": "Conectar automáticamente opencodex-advisor MCP en rutas activas compatibles",
   "advisor.mcp.autoMountHint": "Sincronización bidireccional: activar Routing o Advisor en cualquier orden actualiza automáticamente la configuración de los clientes compatibles (salvo que uses selección manual abajo).",
   "advisor.mcp.selectionModeAuto": "Auto — sigue las rutas activas compatibles",
+  "advisor.mcp.selectionModeOff": "Desactivado: elige clientes abajo o activa la conexión automática",
   "advisor.mcp.selectionModeManual": "Manual — conecta solo los clientes marcados abajo",
   "advisor.mcp.useAutoMode": "Usar sincronización automática",
   "advisor.mcp.selectRouted": "Seleccionar todos los enrutados",

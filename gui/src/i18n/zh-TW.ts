@@ -334,6 +334,7 @@ export const zhTW: Record<TKey, string> = {
   "advisor.mcp.autoMountLabel": "開啟路由時自動為相容用戶端接入顧問 MCP",
   "advisor.mcp.autoMountHint": "雙向同步：無論先開路由或先開顧問皆會自動寫入設定（若下方改為手動勾選清單，則僅依勾選項套用）。",
   "advisor.mcp.selectionModeAuto": "自動連動 — 跟隨已開啟路由的相容用戶端",
+  "advisor.mcp.selectionModeOff": "已關閉 — 請在下方選擇用戶端，或開啟自動連線",
   "advisor.mcp.selectionModeManual": "手動指定 — 僅掛載下方勾選的用戶端",
   "advisor.mcp.useAutoMode": "切回自動跟隨已路由用戶端",
   "advisor.mcp.selectRouted": "全選已開啟路由的相容用戶端",

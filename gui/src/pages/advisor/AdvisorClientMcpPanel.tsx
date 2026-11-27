@@ -99,7 +99,7 @@ export function AdvisorClientMcpPanel({
           {t("advisor.mcp.title")}
         </h3>
         <span className="ml-auto rounded-full bg-raised px-2 py-0.5 text-[11px] font-semibold text-fg-muted">
-          {isManual ? t("advisor.mcp.selectionModeManual") : t("advisor.mcp.selectionModeAuto")}
+          {isManual ? t("advisor.mcp.selectionModeManual") : autoMountMcp ? t("advisor.mcp.selectionModeAuto") : t("advisor.mcp.selectionModeOff")}
         </span>
       </div>
       <p className="m-0 text-[13px] leading-[19px] text-fg-muted">{t("advisor.mcp.subtitle")}</p>

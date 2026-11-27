@@ -8,7 +8,6 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { atomicWriteFile } from "../config/atomic-write";
 import { getConfigDir } from "../config/paths";
-import { appendResultFingerprintUpdate } from "../integrations/journal";
 import {
   fingerprint,
   integrationsDir,
@@ -446,10 +445,10 @@ function syncOwnershipFingerprintIfClean(
   const beforeFp = fingerprint(beforeText);
   if (record.fileFingerprint !== beforeFp) return;
   const afterFp = fingerprint(afterText);
+  // The ownership record follows the file, so Routing does not read Advisor's edit as a conflict. The Undo journal
+  // deliberately does not: restoring the pre-routing snapshot would also remove Advisor's MCP entry and hooks, so Undo
+  // must see this edit as drift and ask before replacing the file (it backs the current file up first).
   writeRecord({ ...record, fileFingerprint: afterFp }, dir);
-  if (record.opId) {
-    appendResultFingerprintUpdate(record.opId, beforeFp, afterFp, dir);
-  }
 }
 
 /** POSIX single-quoting: no expansion, command substitution or word splitting happens inside the quotes. */
@@ -871,9 +870,8 @@ function writeOwnedAdvisorEntries(configDir: string, owned: OwnedAdvisorEntries)
   atomicWriteFile(join(configDir, ADVISOR_MCP_OWNERSHIP_FILE), `${JSON.stringify(owned, null, 2)}\n`);
 }
 
-/** An existing entry is ours when it is exactly what we would write now or exactly what we recorded writing. */
-function ownsAdvisorEntry(owned: OwnedAdvisorEntries, clientId: string, configPath: string, currentText: string, desiredText: string): boolean {
-  if (currentText === desiredText) return true;
+/** An existing entry is ours only when we recorded writing exactly these bytes at this path. Matching content alone is not ownership. */
+function ownsAdvisorEntry(owned: OwnedAdvisorEntries, clientId: string, configPath: string, currentText: string): boolean {
   const record = owned[clientId];
   return record !== undefined && record.configPath === resolve(configPath) && record.entry === currentText;
 }
@@ -921,8 +919,11 @@ export function mountAdvisorMcpForClient(
   const currentText = JSON.stringify(container[ADVISOR_MCP_SERVER_NAME] ?? null);
   const desiredText = JSON.stringify(desired);
   const owned = readOwnedAdvisorEntries(configDir);
-  if (Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME)
-    && !ownsAdvisorEntry(owned, clientId, paths.mcpConfigPath, currentText, desiredText)) {
+  const ownedEntry = Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) && ownsAdvisorEntry(owned, clientId, paths.mcpConfigPath, currentText);
+  // An unrecorded entry is the user's. If it already says exactly what we would write it serves Advisor as it is, but
+  // it stays unrecorded so OpenCodex never deletes it; any other content is refused.
+  const userEntry = Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) && !ownedEntry;
+  if (userEntry && currentText !== desiredText) {
     return { ok: false, changed: false, error: `Refused to replace the ${ADVISOR_MCP_SERVER_NAME} MCP entry in ${paths.mcpConfigPath}: OpenCodex did not write it` };
   }
   let changed = false;
@@ -940,7 +941,7 @@ export function mountAdvisorMcpForClient(
     changed = true;
   }
   const record = { configPath: resolve(paths.mcpConfigPath), entry: desiredText };
-  if (owned[clientId]?.configPath !== record.configPath || owned[clientId]?.entry !== record.entry) {
+  if (!userEntry && (owned[clientId]?.configPath !== record.configPath || owned[clientId]?.entry !== record.entry)) {
     writeOwnedAdvisorEntries(configDir, { ...owned, [clientId]: record });
   }
 
@@ -971,9 +972,8 @@ export function unmountAdvisorMcpForClient(
       const container = { ...(read.doc[spec.mcpContainer] as JsonObj) };
       const owned = readOwnedAdvisorEntries(configDir);
       const currentText = JSON.stringify(container[ADVISOR_MCP_SERVER_NAME] ?? null);
-      const desiredText = JSON.stringify(buildMcpEntry(spec, configDir, options));
-      // A same-named entry OpenCodex did not write is the user's: leave it in place.
-      if (Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) && ownsAdvisorEntry(owned, clientId, paths.mcpConfigPath, currentText, desiredText)) {
+      // A same-named entry OpenCodex did not record writing is the user's, even with identical content: leave it.
+      if (Object.hasOwn(container, ADVISOR_MCP_SERVER_NAME) && ownsAdvisorEntry(owned, clientId, paths.mcpConfigPath, currentText)) {
         backupOnceBeforeEdit(configDir, spec.id, paths.mcpConfigPath, read.text);
         delete container[ADVISOR_MCP_SERVER_NAME];
         const nextDoc = { ...read.doc, [spec.mcpContainer]: container };

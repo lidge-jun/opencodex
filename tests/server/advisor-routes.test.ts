@@ -1099,11 +1099,11 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
     for (const done of pendingResolvers) done();
   });
 
-  test("client-mcp preserves sibling hooks in matched groups, isolates per-client errors, and keeps shared-JSON journal Undo valid", async () => {
+  test("client-mcp preserves sibling hooks in matched groups, isolates per-client errors, and makes Routing Undo confirm before removing Advisor edits", async () => {
     const { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
     const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
-    const { fingerprint, writeRecord, integrationsDir } = await import("../../src/integrations/ownership");
+    const { fingerprint, readRecords, writeRecord, integrationsDir } = await import("../../src/integrations/ownership");
     const { appendOperation, findOperation, matchesOperationResult } = await import("../../src/integrations/journal");
     const { mountAdvisorMcpForClient, unmountAdvisorMcpForClient, syncAdvisorMcpClients } = await import("../../src/advisor/client-mcp");
 
@@ -1168,10 +1168,12 @@ describe("POST /api/advisor/consult and MCP tool helper", () => {
         { type: "command", command: "/old/path/opencodex-advisor-notice.sh" },
       ]);
 
+      // Routing ownership follows the shared file, so a Routing toggle does not see Advisor's edit as a conflict...
+      expect((readRecords(intDir) as Record<string, { fileFingerprint: string }>).qoder!.fileFingerprint).toBe(fingerprint(afterMountText));
+      // ...but Undo of the Routing apply sees drift and asks first: restoring its snapshot would remove Advisor's entry.
       const opAfterMount = findOperation(opId, intDir)!;
-      expect(matchesOperationResult(opAfterMount, afterMountText)).toBe(true);
-      // A subsequent external edit is still detected as drift.
-      expect(matchesOperationResult(opAfterMount, `${afterMountText}\n// external edit`)).toBe(false);
+      expect(matchesOperationResult(opAfterMount, afterMountText)).toBe(false);
+      expect(matchesOperationResult(opAfterMount, initialText)).toBe(true);
 
       // Unmount Advisor MCP: sibling user hook still preserved.
       const unmountRes = unmountAdvisorMcpForClient("qoder", { homeDir, configDir, env: {} });
