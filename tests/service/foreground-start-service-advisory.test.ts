@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import {
   FOREGROUND_ADVISORY_ARG,
@@ -235,11 +235,14 @@ describe("Windows failing-taskkill fallback terminates pending descendants", () 
               : spawn(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], { stdio: "ignore", windowsHide: true });
           }
           // Fallback PowerShell tree killer: on Windows run real PowerShell; on POSIX verify exact
-          // PowerShell tree-kill args and terminate the detached process group (child + descendant).
+          // incarnation-checked PowerShell tree-kill args and terminate the detached process group.
           if (process.platform === "win32") {
             return spawn(cmd, args, { stdio: "ignore", windowsHide: true });
           }
-          expect(args).toEqual(windowsPowerShellTreeKillArgs(child.pid!));
+          expect(args.slice(0, 4)).toEqual(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]);
+          expect(args[4]).toContain(`$root = ${child.pid!}`);
+          expect(args[4]).toContain("$rootCreated -ge $minCreated");
+          expect(args[4]).toContain("$rootCreated -le $maxRootCreated");
           return spawn(process.execPath, ["-e", `try { process.kill(-${child.pid!}, "SIGKILL"); } catch {}`], {
             stdio: "ignore",
             windowsHide: true,
@@ -301,13 +304,16 @@ describe("Windows failing-taskkill fallback terminates pending descendants", () 
         if (cmd.toLowerCase().includes("taskkill")) {
           throw new Error("taskkill failed during exit");
         }
-        expect(args).toEqual(windowsPowerShellTreeKillArgs(child.pid!));
+        expect(args.slice(0, 4)).toEqual(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]);
+        expect(args[4]).toContain(`$root = ${child.pid!}`);
+        expect(args[4]).toContain("$rootCreated -ge $minCreated");
         if (process.platform === "win32") {
+          execFileSync(cmd, [...args], { stdio: "ignore", windowsHide: true });
           return Buffer.from("");
         }
         try { process.kill(-child.pid!, "SIGKILL"); } catch { /* already gone */ }
         return Buffer.from("");
-      }) as typeof import("node:child_process").execFileSync,
+      }) as typeof execFileSync,
       launch: () => {
         const script = [
           'const { spawn } = require("node:child_process");',
@@ -375,32 +381,35 @@ describe("Windows failing-taskkill fallback terminates pending descendants", () 
     }
   }, 15_000);
 
-  test("Windows stdout close after exited root does not cancel async tree cleanup or block sync retry", async () => {
+  test("Windows stdout close after exited root skips bare-PID taskkill, keeps cleanup active, and allows sync retry", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-advisory-win-exited-root-"));
     const descendantPidFile = join(dir, "descendant.pid");
     let child!: ChildProcess;
     let descendantPid = 0;
-    let taskkillSignal: NodeJS.Signals | null = null;
-    const syncCalls: string[] = [];
+    let asyncKillerSignal: NodeJS.Signals | null = null;
+    const asyncCalls: Array<{ cmd: string; args: readonly string[] }> = [];
+    const syncCalls: Array<{ cmd: string; args: readonly string[] }> = [];
     const cancel = startForegroundAdvisory(() => {}, {
       platform: "win32",
       timeoutMs: 180,
       killDeadlineMs: 2_000,
       resolveTaskkill: () => "C:\\Windows\\System32\\taskkill.exe",
       resolvePowerShell: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-      spawnKill: (() => {
+      spawnKill: ((cmd: string, args: readonly string[]) => {
+        asyncCalls.push({ cmd, args });
         const killer = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: "ignore", windowsHide: true });
-        killer.once("exit", (_code, signal) => { taskkillSignal = signal; });
+        killer.once("exit", (_code, signal) => { asyncKillerSignal = signal; });
         return killer;
       }) as typeof spawn,
-      execKillSync: ((cmd: string) => {
-        syncCalls.push(cmd.toLowerCase());
-        if (cmd.toLowerCase().includes("taskkill")) throw new Error("taskkill failed");
-        if (process.platform !== "win32") {
-          try { process.kill(-child.pid!, "SIGKILL"); } catch {}
+      execKillSync: ((cmd: string, args: readonly string[]) => {
+        syncCalls.push({ cmd, args });
+        if (process.platform === "win32") {
+          execFileSync(cmd, [...args], { stdio: "ignore", windowsHide: true });
+          return Buffer.from("");
         }
+        try { process.kill(-child.pid!, "SIGKILL"); } catch {}
         return Buffer.from("");
-      }) as typeof import("node:child_process").execFileSync,
+      }) as typeof execFileSync,
       launch: () => {
         const script = [
           'const { spawn } = require("node:child_process");',
@@ -416,15 +425,24 @@ describe("Windows failing-taskkill fallback terminates pending descendants", () 
       await once(child, "exit");
       descendantPid = Number(readFileSync(descendantPidFile, "utf8").trim());
       expect(descendantPid).toBeGreaterThan(0);
-      // Timeout starts async taskkill and destroys stdout, causing child "close" immediately.
+      // Timeout starts incarnation-checked PowerShell cleanup (skipping bare-PID taskkill)
+      // and destroys stdout, causing child "close" immediately.
       await once(child, "close");
       await Bun.sleep(60);
-      // "close" must NOT have cancelled the in-flight async taskkill or marked cleanup done.
-      expect(taskkillSignal).toBeNull();
-      // A subsequent synchronous exit cleanup must still cancel async taskkill and reap the descendant.
+      // Exited root must NEVER invoke bare-PID taskkill (PID reuse risk), and PowerShell
+      // must never add $root itself to $seen.
+      expect(asyncCalls.map(c => c.cmd.toLowerCase())).toEqual([expect.stringContaining("powershell")]);
+      expect(asyncCalls[0]!.args[4]).not.toContain("$queue.Enqueue($root)");
+      expect(asyncCalls[0]!.args[4]).toContain("$c -le $maxChildCreated");
+      expect(asyncCalls[0]!.args[4]).toContain("$c -lt $rootCreated");
+      // "close" must NOT have cancelled the in-flight async killer or marked cleanup done.
+      expect(asyncKillerSignal).toBeNull();
+      // A subsequent synchronous exit cleanup must still cancel async cleanup and reap the descendant
+      // without invoking bare-PID taskkill.
       cancel(true);
       expect(await waitUntilDead(descendantPid)).toBe(true);
-      expect(syncCalls).toEqual([expect.stringContaining("taskkill"), expect.stringContaining("powershell")]);
+      expect(syncCalls.map(c => c.cmd.toLowerCase())).toEqual([expect.stringContaining("powershell")]);
+      expect(syncCalls[0]!.args[4]).not.toContain("$queue.Enqueue($root)");
     } finally {
       cancel(true);
       if (descendantPid > 0) { try { process.kill(descendantPid, "SIGKILL"); } catch {} }
