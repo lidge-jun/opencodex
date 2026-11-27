@@ -1,7 +1,6 @@
 import { parseResetCooldownMs } from "../codex/routing";
 import { CYBER_POLICY_FALLBACK_MESSAGE, TERMINAL_REFUSAL_FALLBACK_MESSAGE, classifyError, isCyberPolicyCode, isCyberPolicyMessage, isRateLimitOrQuotaFailureMessage, isSubscriptionGateMessage, isTerminalRefusalCode, safetyRefusalCodeFromMessage } from "../lib/errors";
 import { isHardPolicyOrOriginRefusal } from "../lib/hard-refusal";
-import { parseHttpDate } from "../lib/http-date";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure, isAnthropicExtraUsageFailure } from "../providers/anthropic-billing-refusal";
 import { hasConflictingReasoningEffortCode } from "../providers/reasoning-metadata";
@@ -11,11 +10,13 @@ import { M365_RESPONSE_LIMIT_MESSAGES } from "../adapters/m365-copilot/response-
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
 import { PersistedCooldownMap } from "./cooldown-store";
+import { MAX_COOLDOWN_MS, MAX_SERVER_DELAY_MS, parseRetryAfterMs } from "./retry-after-delay";
 import { registerOptionalShutdownHook } from "../lib/optional-shutdown-hooks";
 import { isDefiniteContextOverflow } from "../lib/context-overflow-verdict";
 
 // The verdict lives in a dependency-free leaf so the presentation classifier can share it.
 export { isDefiniteContextOverflow };
+export { parseRetryAfterMs };
 import {
   captureConfigGeneration,
   sweepExpiredOnWrite,
@@ -32,8 +33,6 @@ interface TargetCooldown {
 }
 
 const DEFAULT_COOLDOWN_MS = 60_000;
-const MAX_COOLDOWN_MS = 10 * 60_000;
-const MAX_SERVER_DELAY_MS = 24 * 60 * 60_000;
 /** Short cooldown for request-rate 429s (for example provider code 1302) that omit Retry-After. */
 export const COMBO_REQUEST_RATE_COOLDOWN_MS = 5_000;
 
@@ -63,35 +62,6 @@ function cooldownMapKey(
   target: Pick<OcxComboTarget, "provider" | "model">,
 ): string {
   return `${comboId}\0${targetKey(target)}`;
-}
-
-/** Parse a Retry-After delay, optionally retaining an upstream delay up to one day. */
-export function parseRetryAfterMs(
-  value: string | null | undefined,
-  now = Date.now(),
-  options?: { preserveImmediate?: boolean; preserveServerDelay?: boolean },
-): number | undefined {
-  const text = value?.trim();
-  if (!text) return undefined;
-  // Keep legacy bounded parsing for other callers. Combo cooldowns preserve
-  // multi-hour upstream delays, but never quarantine a target beyond one day.
-  const maximum = options?.preserveServerDelay === true
-    ? MAX_SERVER_DELAY_MS
-    : MAX_COOLDOWN_MS;
-  if (/^\d+(?:\.\d+)?$/.test(text)) {
-    const seconds = Number(text);
-    if (
-      Number.isFinite(seconds)
-      && (seconds > 0 || (options?.preserveImmediate && seconds === 0))
-    ) {
-      return Math.min(Math.max(Math.ceil(seconds * 1000), 1), maximum);
-    }
-  }
-  const timestamp = parseHttpDate(text, now, { legacy: true });
-  if (timestamp === undefined) return undefined;
-  const delay = timestamp - now;
-  if (delay > 0) return Math.min(delay, maximum);
-  return options?.preserveImmediate ? 1 : undefined;
 }
 
 export function isComboTargetInCooldown(
