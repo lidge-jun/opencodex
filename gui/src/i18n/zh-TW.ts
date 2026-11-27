@@ -4517,6 +4517,8 @@ export const zhTW: Record<TKey, string> = {
   "remoteLink.child.ownerAction.mise-managed": "此子裝置的 OpenCodex 由 mise 管理；請透過 mise 更新",
   "remoteLink.child.ownerAction.source-checkout": "此子裝置從原始碼檢出執行；請手動更新",
   "remoteLink.child.ownerAction.installer-unknown": "此子裝置的安裝方式不明；請在該裝置上更新",
+  "remoteLink.child.ownerAction.windows-apply": "此 Windows 裝置不支援遠端更新。請直接在該 Windows 電腦上更新 OpenCodex。",
+  "remoteLink.child.ownerAction.recheck-required": "請再次檢查此子裝置，以確認更新方式",
   "remoteLink.child.check": "檢查",
   "remoteLink.child.checkAll": "全部檢查",
   "remoteLink.child.syncNow": "立即同步",

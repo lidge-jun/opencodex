@@ -4554,6 +4554,8 @@ export const ru: Record<TKey, string> = {
   "remoteLink.child.ownerAction.mise-managed": "OpenCodex на этом Child управляется mise; обновите через mise",
   "remoteLink.child.ownerAction.source-checkout": "Этот Child запущен из копии исходного кода; обновите вручную",
   "remoteLink.child.ownerAction.installer-unknown": "Способ установки этого Child неизвестен; обновите его там",
+  "remoteLink.child.ownerAction.windows-apply": "Удалённые обновления для этого устройства Windows не поддерживаются. Обновите OpenCodex непосредственно на компьютере с Windows.",
+  "remoteLink.child.ownerAction.recheck-required": "Проверьте этот Child ещё раз, чтобы узнать, как его обновить",
   "remoteLink.child.check": "Проверить",
   "remoteLink.child.checkAll": "Проверить все",
   "remoteLink.child.syncNow": "Синхронизировать сейчас",

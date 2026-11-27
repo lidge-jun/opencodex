@@ -1,7 +1,7 @@
 import { DEFAULT_IDLE_AFTER_MS, isLinkIdle } from "../../link/child-activity";
 import { readChildPolicy, updateChildPolicy, validPolicyPatch } from "../../link/child-policy";
 import { createCatalogRevisionMonitor, type CatalogRevisionMonitor } from "../../link/child-catalog-freshness";
-import { observeChild } from "../../link/child-observe";
+import { observeChild, windowsLocalUpdateRoute } from "../../link/child-observe";
 import { patchChildObservation, readChildObservations, updateChildObservations } from "../../link/child-observations";
 import { sharedChildOpsEngine, type ChildOpsEngine, type SubmitRefusal, type SubmitResult } from "../../link/child-ops-engine";
 import { CHILD_OPS, CHILD_OPS_MAX_LINK_IDS, type ChildOp, type ChildOpsEnv, type ChildRestart } from "../../link/child-ops-types";
@@ -136,11 +136,16 @@ export function attachLinkChildOpsForState(dto: LinkStatusDto, state: LinkRouteS
   const revision = (state.catalogRevision ??= catalogRevisionForRoutes()).current();
   const observations = readChildObservations();
   const known = new Set(store.links.map(link => link.id));
+  const platforms = new Map(store.links.map(link => [link.id, link.remotePlatform]));
   return attachLinkChildOps(dto, {
     // The policy threshold governs every idle decision (050 reconciliation item 5).
     homeVersion: packageVersion("0.0.0"), now, idleAfterMs: readChildPolicy().policy.idleAfterMs, revision,
     peerVersion: linkId => state.listener.peerObservation?.(linkId).observed?.version ?? null,
-    observation: linkId => known.has(linkId) ? observations.children[linkId] ?? null : null,
+    observation: linkId => {
+      const cached = known.has(linkId) ? observations.children[linkId] ?? null : null;
+      // #9172: an observation recorded before Windows was told to update locally reads the same as a new one.
+      return cached ? { ...cached, ...windowsLocalUpdateRoute(platforms.get(linkId) ?? cached.platform, cached.updateRoute, cached.updateReason) } : null;
+    },
     activity: linkId => state.listener.linkActivity?.(linkId, now) ?? null,
     catalogPull: linkId => state.listener.catalogPull?.(linkId) ?? null,
     // The shared engine: a job the wp5 scheduler started shows on a status read that never submitted one.

@@ -86,8 +86,21 @@ export function isLinkManagementPath(pathname: string): boolean {
  * The one refusal every management surface on a link Child uses: the dashboard relay, the CLI,
  * and the Child's listener. It names the Home and the link and never suggests a relay transport.
  * `homePhrase` is "Home <name>" or "its Home" when the Child does not know the Home's name.
+ * A Windows Child cannot be updated from its Home (the Home refuses `windows-apply`), so an update
+ * request there gets local-update guidance instead of a pointer to the Home (#9172).
  */
-export function linkChildManagementRefusal(homePhrase: string, linkId: string, operation = "This management command"): string {
-  return `This machine is a Remote Link Child managed by ${homePhrase} (link ${linkId}). `
-    + `${operation} runs on the Home, not on this Child: use the Home's dashboard or run the command there. No request was sent.`;
+export function linkChildManagementRefusal(
+  homePhrase: string,
+  linkId: string,
+  operation = "This management command",
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const child = `This machine is a Remote Link Child managed by ${homePhrase} (link ${linkId}). `;
+  if (platform === "win32" && /^[A-Z]+ \/api\/update(?:\/|$)/.test(operation)) {
+    return `${child}${WINDOWS_CHILD_LOCAL_UPDATE} No request was sent.`;
+  }
+  return `${child}${operation} runs on the Home, not on this Child: use the Home's dashboard or run the command there. No request was sent.`;
 }
+
+/** The Home's dashboard shows the same guidance for a Windows Child (owner-action reason `windows-apply`). */
+export const WINDOWS_CHILD_LOCAL_UPDATE = "Remote updates aren't supported for this Windows device. Update OpenCodex directly on the Windows computer.";

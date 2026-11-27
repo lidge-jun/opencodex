@@ -4553,6 +4553,8 @@ export const ko: Record<TKey, string> = {
   "remoteLink.child.ownerAction.mise-managed": "이 Child의 OpenCodex는 mise가 관리합니다. mise로 업데이트하세요",
   "remoteLink.child.ownerAction.source-checkout": "이 Child는 소스 체크아웃에서 실행됩니다. 직접 업데이트하세요",
   "remoteLink.child.ownerAction.installer-unknown": "이 Child의 설치 방식을 알 수 없습니다. 그곳에서 업데이트하세요",
+  "remoteLink.child.ownerAction.windows-apply": "이 Windows 기기에서는 원격 업데이트를 지원하지 않습니다. Windows 컴퓨터에서 OpenCodex를 직접 업데이트하세요.",
+  "remoteLink.child.ownerAction.recheck-required": "업데이트 방법을 확인하려면 이 Child를 다시 확인하세요",
   "remoteLink.child.check": "확인",
   "remoteLink.child.checkAll": "모두 확인",
   "remoteLink.child.syncNow": "지금 동기화",

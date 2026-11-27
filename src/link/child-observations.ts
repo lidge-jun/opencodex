@@ -41,6 +41,8 @@ export interface ChildObservation {
   /** An update whose result is unknown. A record carrying desktopRequestId is cleared only by the Desktop route's
    *  status reconciliation or by expiry, never by a sync. */
   pendingUpdateRecovery: { target: string; since: string; until: string; desktopRequestId?: string } | null;
+  /** The platform the plan probe ran on (#9172). Absent on observations recorded before it or not taken from a plan. */
+  platform?: "posix" | "windows";
 }
 /** Fields an operation or the Home owns; a fresh observe never overwrites them. Missing in an older file ⇒ null. */
 export const CARRIED_OBSERVATION_FIELDS = ["catalogPulledAt", "catalogPulledEtag", "catalogSyncedEtag", "lastOperation",
@@ -107,6 +109,7 @@ function observation(value: unknown): ChildObservation {
     autoUpdateAttempts: nullable(value.autoUpdateAttempts, attempts),
     updateInFlight: nullable(value.updateInFlight, item => typeof item === "boolean" ? item : drop()),
     pendingUpdateRecovery: nullable(value.pendingUpdateRecovery, recovery),
+    ...(value.platform === "posix" || value.platform === "windows" ? { platform: value.platform } : {}),
   };
 }
 function homeCatalog(value: unknown): ChildObservationsFile["homeCatalog"] {

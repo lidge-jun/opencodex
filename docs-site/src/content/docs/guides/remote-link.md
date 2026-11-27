@@ -351,7 +351,7 @@ On a Home, every Remote Link row carries what the Home last learned about that C
 - `Catalog current` or `Catalog out of date`. `Codex restart needed (<n>)` and `Codex not running` appear only once the Child reports its Codex state, which a later release adds; no released Child sends it yet, so those two badges do not appear today.
 - the last operation, as `Last <operation>: <state>` with its reason in monospace, and the running one while a job holds the link.
 
-When the Home cannot update that Child itself, the row says what to do instead: use Check for Updates in OpenCodex Desktop there, update by hand, through `mise`, or let GOAT do it. An unknown reason prints as a token rather than a guessed sentence.
+When the Home cannot update that Child itself, the row says what to do instead: use Check for Updates in OpenCodex Desktop there, update by hand, through `mise`, or let GOAT do it. A Windows Child installed with a package manager cannot be updated from the Home: its row offers no **Update** and says to update OpenCodex directly on the Windows computer, and the Child's own dashboard gives the same guidance when you check for updates there. If the Home has not recorded the platform of a Child it last checked before this behavior shipped, its row offers no **Update** either and asks you to check that Child again; **Check** or `ocx link check` refreshes the row. An unknown reason prints as a token rather than a guessed sentence.
 
 The four actions start the same job as the CLI, so they need the same versions on the Child:
 
