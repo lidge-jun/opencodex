@@ -18,7 +18,7 @@ export type CatalogLoginHint = {
 };
 
 /** The account-row kinds the catalog renders; only OAuth rows own a login hint. */
-export type CatalogRowKind = "oauth" | "key" | "codex";
+export type CatalogRowKind = "oauth" | "key" | "codex" | "agy";
 
 /**
  * Whether an account row should render the in-flight login hint.

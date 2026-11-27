@@ -58,7 +58,9 @@ export default function CatalogAccountRow({
           <div className="sub">{statusText}</div>
         </div>
         <div className="provider-catalog-badges">
-          {row.kind === "key" ? null : row.kind === "codex" ? (
+          {row.kind === "agy" ? (
+            <button type="button" className="btn btn-ghost" onClick={() => onManage?.(row.id)}>{t("modal.accountManage")}</button>
+          ) : row.kind === "key" ? null : row.kind === "codex" ? (
             <>
               {loggedIn && (
                 <a className="btn btn-ghost" href={row.href ?? "#codex-set"}>{t("modal.accountManage")}</a>

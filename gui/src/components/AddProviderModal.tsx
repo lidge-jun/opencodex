@@ -185,6 +185,10 @@ export default function AddProviderModal({
   };
 
   const choosePreset = (p: Preset) => {
+    if (p.adapter === "agy-acp" && onAccountManage && accountRows?.some(row => row.id === p.id && row.kind === "agy")) {
+      onAccountManage(p.id);
+      return;
+    }
     const choiceId = matchChoiceId(p.baseUrlChoices, p.baseUrl);
     dispatch({
       type: "choose-preset",

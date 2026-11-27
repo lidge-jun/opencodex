@@ -19,6 +19,8 @@ export function buildAddModalAccountRows(
         kind: "codex" as const,
         href: "#codex-set",
       })),
+    ...Object.entries(config.providers).filter(([, row]) => row.adapter === "agy-acp")
+      .map(([id]) => ({ id, label: formatProviderDisplayName(id, t), kind: "agy" as const, statusLabel: t("agyAccounts.hint") })),
     ...oauthProviders
       .toSorted((a, b) => a.localeCompare(b))
       .map(id => ({ id, label: oauthLabel(id), kind: "oauth" as const })),

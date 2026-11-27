@@ -1117,3 +1117,42 @@ describe("agy acp use policy at runTurn", () => {
     expect(old.spawned).toBe(0);
   });
 });
+
+describe.skipIf(process.platform === "win32")("manually selected agy accounts", () => {
+  test("add, select and reset keep each CLI-owned login separate", async () => {
+    const { mkdirSync } = await import("node:fs");
+    const { addProfile } = await import("../../src/cli/account-agy");
+    const { profileNames, selectedLaunch, selectProfile } = await import("../../src/adapters/agy-acp/profiles");
+    const root = mkdtempSync(join(tmpdir(), "ocx-agy-account-test-"));
+    const config = join(root, "config");
+    const profiles = join(root, "profiles");
+    const signIn = (dir: string) => {
+      const data = join(dir, "antigravity-cli");
+      mkdirSync(data, { mode: 0o700 });
+      writeFileSync(join(data, "antigravity-oauth-token"), "fixture", { mode: 0o600 });
+    };
+    try {
+      expect(selectedLaunch("1.5.3", config, profiles).args).toEqual([]);
+      addProfile(profiles, "work", signIn);
+      addProfile(profiles, "personal", signIn);
+      expect(() => addProfile(profiles, "work", signIn)).toThrow();
+      expect(() => addProfile(profiles, "../escape", signIn)).toThrow();
+      expect(() => addProfile(profiles, "pending", () => {})).toThrow();
+      expect(profileNames(profiles)).toEqual(["personal", "work"]);
+      for (const name of ["work", "personal", "work"]) {
+        selectProfile(name, config, profiles);
+        const launch = selectedLaunch("1.5.18", config, profiles);
+        expect(launch.args).toContain(join(profiles, name));
+        expect(launch.env).toMatchObject({ GEMINI_HOME: join(profiles, name), AGY_CLI_FORCE_FILE_TOKEN_STORAGE: "true" });
+      }
+      expect(() => selectProfile("missing", config, profiles)).toThrow();
+      expect(() => selectedLaunch("1.5.3", config, profiles)).toThrow();
+      renameSync(join(profiles, "work"), join(profiles, ".away"));
+      expect(() => selectedLaunch("1.5.18", config, profiles)).toThrow();
+      selectProfile("default", config, profiles);
+      expect(selectedLaunch("1.5.3", config, profiles)).toEqual({ args: [], env: {} });
+    } finally {
+      await removeTreeWithRetry(root);
+    }
+  });
+});
