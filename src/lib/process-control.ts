@@ -180,8 +180,7 @@ function refusalFallbackMessage(code: string | null): string {
         + "stopping the manager from inside it would end the process before native Codex is "
         + "restored.";
     case "service_state_unknown":
-      return "The running proxy refused to stop: the service manager state could not be read, "
-        + "so it cannot tell whether a wrapper would respawn it.";
+      return "The running proxy refused to stop: the Windows service or process state could not be verified.";
     default:
       return "The running proxy refused to stop and sent no reason.";
   }
@@ -208,8 +207,7 @@ export function refusalNextStep(code: string | null): string {
         + "again is not the missing step. Run `ocx service status` to see whether the service "
         + "is still registered.";
     case "service_state_unknown":
-      return "Run `ocx service status` to see the query error, repair the service manager "
-        + "access, then retry.";
+      return "Check the reported stop reason and run `ocx service status` to inspect service registration.";
     default:
       return "Run `ocx service status` to inspect the service state.";
   }

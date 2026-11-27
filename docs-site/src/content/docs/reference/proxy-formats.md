@@ -206,7 +206,7 @@ to the bare tool name the request declared (`default.Read` → `Read`).
 | Anthropic Messages | `POST /v1/messages` | Anthropic `message` JSON | Anthropic Messages SSE |
 | Anthropic token count | `POST /v1/messages/count_tokens` | `{ "input_tokens": number }` | Not applicable |
 | Model discovery | `GET /v1/models` | Catalog or explicit Desktop snapshot | Not applicable |
-| File transcription | `POST /v1/audio/transcriptions` | `{ "text": string }` or plain text | Not supported on this file endpoint |
+| File transcription | `POST /v1/audio/transcriptions` | `{ "text": string, "languages"?: [...] }` or plain text | Not supported on this file endpoint |
 | Streaming dictation | `WS /v1/audio/transcriptions/stream` | Not applicable | Desktop dictation JSON events |
 | Voice and Realtime | `POST /v1/live`, `POST /v1/realtime/calls` | Relayed call-creation response | A separate sideband WebSocket relays frames in both directions |
 | Responses compaction | `POST /v1/responses/compact` | Replacement-history JSON | Not applicable |
@@ -243,16 +243,23 @@ curl "$OPENCODEX_BASE_URL/audio/transcriptions" \
 
 Set `OPENCODEX_BASE_URL` to your proxy URL ending in `/v1`. Optional fields are
 `prompt`, `language`, and `response_format` (`json`, the default, or `text`). The
-JSON result contains `text` only. Files must be nonempty and no larger than
+JSON result contains `text`, plus `languages` (an array of `{ "code": string }`) when
+the upstream reports detected languages. Files must be nonempty and no larger than
 25,000,000 bytes; multipart bodies are limited to 32 MiB and text fields to
 16 KiB. The configured listener body limit can impose a smaller ceiling.
-Duplicate or unsupported fields, including `stream`, are rejected. This endpoint
+Duplicate scalar fields and unsupported fields, including `stream`, are rejected. This endpoint
 does not promise timestamps, diarization, subtitles, or token-usage metadata.
+
+With an OpenAI API-key provider, `model=gpt-transcribe` takes repeated `keywords[]`
+and `languages[]` fields (up to 100 entries each) instead of `language`; that model
+refuses the singular field, and every other model refuses the list fields. An upload
+whose filename has no extension is named and typed from its audio signature (WAV, MP3,
+M4A, Ogg, WebM or FLAC) before it is sent upstream; anything else keeps the `.webm` name.
 
 The ChatGPT subscription path uses `gpt-4o-transcribe` as a compatibility identifier
 and does not send a model name to the private transcription endpoint. It is not
 evidence of the backend's internal model. An enabled OpenAI API-key provider also
-supports `gpt-4o-mini-transcribe` and `whisper-1`; when a ChatGPT provider is selected,
+supports `gpt-transcribe`, `gpt-4o-mini-transcribe` and `whisper-1`; when a ChatGPT provider is selected,
 an authentication failure does not silently switch to that paid provider.
 Direct mode uses the stored main account under the existing profile admission
 rules; Pool mode uses the selected stored account. Missing, expired or draining
@@ -874,6 +881,8 @@ from the URL and headers before the request is logged or forwarded. Errors use G
   `contents`, `systemInstruction`, inline images, function declarations and calls, and
   `generationConfig`. Thought signatures on `functionCall` parts are carried in both directions. With
   `alt=sse` the stream is SSE; without it the answer is one JSON array, as Google's REST API sends it.
+  For streaming responses, the Chat bridge buffers up to 2 MiB of arguments per tool call and 32 MiB of pending tool data
+  per turn. Exceeding either limit ends the translated stream with an error.
   Hosted Gemini tools are ignored. A `candidateCount` other than 1, non-image inline data and file parts
   are refused with 400.
 - `:countTokens` returns `{ "totalTokens": n }` from a local estimate and sends nothing upstream.
@@ -905,9 +914,15 @@ from the URL and headers before the request is logged or forwarded. Errors use G
 
 External clients use an OpenCodex key in any supported audio credential header,
 or the browser subprotocol pair described above. Standalone
-`WS /v1/live?model=gpt-live-1-codex` uses the Frameless protocol; an omitted model
-defaults to that identifier and `gpt-live-1` is its proxy alias. This is not a
-claim that every public OpenAI Realtime SDK or API key supports GPT-Live.
+`WS /v1/live?model=gpt-live-1.1-codex` uses the Frameless protocol. An omitted model
+defaults to that identifier, Codex's current GPT-Live model; `gpt-live-1` and
+`gpt-live-1.1` are proxy aliases for `gpt-live-1-codex` and `gpt-live-1.1-codex`, and
+the same aliases apply to a call-create session. A key scoped to a live model is judged
+on the resolved name, and such a key must name its model: a session without one,
+`/v1/realtime/calls` without a session and a Realtime socket without `model=` are refused for it. When `POST /v1/live` carries no session, OpenCodex writes one
+with that default model and the destination's default voice: `cove` for a ChatGPT
+account and `marin` for an OpenAI API key. A session you send keeps its own fields; only a model alias in it is resolved.
+This is not a claim that every public OpenAI Realtime SDK or API key supports GPT-Live.
 
 For a new standalone connection, send the source-compatible initialization below
 after socket open and wait for `session.started` with a nonempty `session.id`.
@@ -937,6 +952,23 @@ server restart. Socket lifetimes are bounded independently; media travels
 directly over WebRTC and is not proxied. The proxy never executes delegation
 requests. OpenAI account availability is established by the actual upstream
 response, not by the presence of a model name in the dashboard.
+
+### GPT-Live sessions
+
+OpenCodex also relays OpenAI's public GPT-Live session API for external keys, through
+an enabled OpenAI API-key provider only. A ChatGPT account is never used for it, and a
+request without that provider receives 400.
+
+- `POST /v1/live/sessions` takes JSON `{ "session": { "model": ... }, "transport": { "type": "webrtc", "sdp": ... } }`
+  (at most 1 MiB) and answers like the API, `201 { "session": { "id" }, "transport": { "type", "sdp" } }`.
+  `session.model` is required, and a key scoped to models is judged on it. SIP transport is refused.
+- The returned `session.id` is an OpenCodex alias bound to the creating key. Only that key can open
+  `WS /v1/live/sessions/{id}/attach`, which reaches the session's server-side control connection.
+- `WS /v1/live/sessions` opens a session whose model arrives later in `session.start`, so a key
+  restricted to a model list cannot open it.
+
+`OpenAI-Safety-Identifier` is forwarded when the client sends it. OpenCodex does not carry the
+WebRTC media; the client connects to OpenAI with the returned SDP answer.
 
 ### Native Codex compatibility
 

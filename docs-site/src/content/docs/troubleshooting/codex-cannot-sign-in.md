@@ -142,3 +142,9 @@ Before a response starts, this temporary refusal returns HTTP 503 with
 error. Capacity refusal does not mark the account as needing reauthentication,
 so signing in again is unnecessary for this error. A refresh that never settles
 can continue occupying capacity; the limit does not impose a refresh deadline.
+
+## A listed model is unavailable
+
+A model in the picker is not a grant for every account in the pool. For a registered ungated native model, when an account returns the exact unsupported-model refusal, automatic routing remembers that account/model pair and prefers another usable account on later requests. This also covers newly configured and discovered native models; an absent roster entry alone does not deny them. Explicit account selections remain authoritative, and no alternative can serve the request when every usable account lacks that model or has exhausted its quota.
+
+Check the failed request's account and error in **Usage & Logs**. As an immediate workaround, pause the refusing account in **Accounts & Quotas**, or select an account that has served that model and still has quota. Pausing preserves its login and does not cancel already-sent requests. Overload and timeout errors are separate failures; signing in again does not resolve them.

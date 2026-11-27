@@ -925,7 +925,7 @@ de la CLI seleccionada. Nunca detiene sesiones de Codex existentes: si hay proce
 conoce su estado, rechaza la actualización.
 
 Windows admite prefijos compartidos con ACL verificadas y sin rutas con puntos de reanálisis.
-La observación incluye paquetes y shims ajenos, con límites de 4,096 entradas, 512 MiB en total
+La observación incluye paquetes y shims ajenos, con límites de 4096 entradas, 512 MiB en total
 y 384 MiB por archivo. Deben conservarse sus bytes e identidades. Los prefijos mayores o inseguros,
 ARM64, la reparación de shims, las aplicaciones nativas y otros gestores de instalación siguen sin
 admitirse. Si no se conoce la duración de los hijos o la limpieza de handles queda incompleta,

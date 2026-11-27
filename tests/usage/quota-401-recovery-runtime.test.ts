@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +26,7 @@ beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), "ocx-quota-401-"));
   process.env.OPENCODEX_HOME = home;
   originalFetch = globalThis.fetch;
+  bindStoredCodexPoolRoutingForTests();
   const { resetQuotaRecoveryForTests } = await import("../../src/codex/quota-401-recovery");
   resetQuotaRecoveryForTests();
 });

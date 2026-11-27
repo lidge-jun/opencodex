@@ -5,6 +5,7 @@ import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { remoteLinkChildCopy } from "./remote-link-child-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
+import { connectionsCopy } from "./connections-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { modelsOverallCopy } from "./models-overall-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
@@ -143,6 +144,7 @@ export const ja: Record<TKey, string> = {
   ...remoteLinkDiagnosticsCopy("ja"),
   ...remoteLinkChildCopy("ja"),
   ...gatewayClientsCopy("ja"),
+  ...connectionsCopy("ja"),
   ...modelsV2Copy("ja"),
   ...modelsOverallCopy("ja"),
   ...accountsV2Copy("ja"),
@@ -3696,6 +3698,27 @@ export const ja: Record<TKey, string> = {
   "cws.tabsLabel": "コンボ詳細セクション",
   "cws.tab.config": "設定",
   "cws.tab.about": "概要",
+  "cws.quotaPreset.openai-first": "OpenAI を優先",
+  "cws.quotaPreset.claude-first": "Claude を優先",
+  "cws.quotaOnly": "利用枠を使い切った場合のみ切り替える",
+  "cws.preserveModel": "切り替え時に同じモデルを維持",
+  "cws.allowPaidLocal": "ローカルクライアントの有料呼び出しを許可",
+  "cws.meteredTarget": "有料 API の対象",
+  "cws.preview.title": "切り替えのプレビュー",
+  "cws.preview.note": "このプレビューはコンボ設定に基づきます。呼び出し元の権限と実際の利用枠は送信時に確認します。",
+  "cws.preview.unchecked": "ルートが未確認のため、設定済みのターゲットを表示しています。リダイレクト、呼び出し元の権限、実際の利用枠は送信時に確認します。",
+  "cws.preview.paid": "有料 API",
+  "cws.preview.billingUnknown": "課金方式は不明",
+  "cws.preview.consent": "有料 API の呼び出しには許可が必要です",
+  "cws.preview.model": "モデル固定中に異なるモデルが指定されています",
+  "cws.preview.provider": "プロバイダーを利用できません",
+  "cws.preview.incomplete": "対象の設定が不完全です",
+  "cws.preview.unreached": "到達しません",
+  "cws.preview.skipped": "スキップ · {reason}",
+  "cws.preview.terminal": "最後の対象も失敗した場合は停止します。",
+  "cws.preview.stopAt": "ステップ {step} で停止します。",
+  "cws.preview.quotaRule": "利用枠またはクレジットの枯渇を確認した場合のみ、次の対象に切り替えます。",
+  "cws.preview.subscriptionsOnly": "サブスクリプションのみ",
   "cws.strategy": "ストラテジー",
   "cws.strategy.failover": "フェイルオーバー",
   "cws.strategy.roundRobin": "ラウンドロビン",
@@ -3737,6 +3760,7 @@ export const ja: Record<TKey, string> = {
   "cws.field.defaultEffortUnsupported": "この負荷はターゲット共通の階段にありません — リクエスト時に無視またはスナップされます。",
   "cws.field.defaultEffortUnsupportedOption": "交差に含まれない",
   "cws.targets": "ターゲット",
+  "cws.targets.order": "ターゲットの順序",
   "cws.targets.failoverHint": "順序が重要 — 最初がプライマリです。",
   "cws.targets.roundRobinHint": "重みが決定論的な相対選択を制御し、順序がローテーションリングの同点を解消します。",
   "cws.targets.randomHint": "重みが各抽選の確率を制御します。順序は影響しません。",

@@ -24,6 +24,12 @@ while empty installation and turn-metadata headers retain their existence gates.
 `src/codex/forward-transport-headers.ts` also isolates a present installation field inside native
 turn metadata and strips caller attestations from substituted credentials. Its selected-header merge
 prevents removed identity fields from reappearing through provider defaults.
+Its `FORWARD_HEADERS` allowlist also carries Codex's stream-exclusion requests, `x-codex-exclude`
+and `x-codex-exclude-stream-fields`, to the canonical destination only. These requests keep the
+backend from echoing the tool catalog and per-item usage attribution, and from sending delta sequence
+numbers or preliminary reasoning ciphertext. No canonical-path consumer reads those fields; sequence
+numbers are validated only when present. Destinations OpenCodex does not operate never receive the
+headers (`tests/codex-integration/codex-metadata-integrity.test.ts`).
 For an object with a nonblank string `installation_id`, including one already matching the selected
 identity, turn-metadata JSON is canonicalized and escapes every code unit outside
 printable ASCII: `JSON.stringify` escapes U+0000–U+001F (with short forms such as `\n` and
@@ -76,6 +82,11 @@ retain the selected context and project cloned client metadata immediately befor
 JSON send, including live's converted multipart session. Live inspects JSON content independently
 of Content-Type; non-JSON SDP retains its original bytes. Their selected headers authoritatively
 replace or remove mixed-case provider identity defaults; main and main-pool preserve caller values.
+For hosted search, the selected pool account's network route takes precedence over the provider
+route. A caller's own bearer retains the process route. A local routing refusal releases the
+probe lease without recording an upstream connection failure.
+Hosted search passes a configured deadline over 200 seconds to the transport as an idle budget.
+The search signal still enforces the total deadline and caller cancellation.
 Vision, audio and sidecar credential selection share materialization.
 Dictation in `src/server/audio-dictation.ts` has a 600,000 ms recording budget and
 opts into a separate 60,000 ms finalization window after a validated `session.close`.

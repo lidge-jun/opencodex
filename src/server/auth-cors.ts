@@ -1231,6 +1231,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   supportsNativeCompactEndpoint: "editor",
   allowEncryptedV2AgentTasks: "editor",
   allowPrivateNetwork: "editor",
+  videoApi: "editor",
   // A proxy URL routinely embeds `user:password@`, so it never reaches the dashboard DTO and
   // the editor may not write it. `ocx config set` and the config file remain the way to set
   // it, which is the same boundary `apiKey` sits behind and for the same reason.

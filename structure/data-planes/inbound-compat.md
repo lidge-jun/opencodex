@@ -35,9 +35,9 @@ ChatGPT authentication failure never falls through to the paid OpenAI provider; 
 
 The bounded multipart input accepts one nonempty file up to 25,000,000 bytes within a 32 MiB
 body, required model, and optional prompt, language and JSON/text response format. Unknown or
-duplicate fields fail. Subscription requests use the compatibility identifier gpt-4o-transcribe
-and send no model upstream; the keyed API also accepts gpt-4o-mini-transcribe and whisper-1.
-Responses retain only text. Manual redirects, capped response reads and linked cancellation
+duplicate scalar fields fail. Subscription requests use the compatibility identifier gpt-4o-transcribe and send no model upstream; the keyed API also accepts gpt-transcribe, gpt-4o-mini-transcribe and whisper-1.
+gpt-transcribe alone takes repeated keywords[] and languages[] (at most 100 each) and refuses the singular language. Responses retain text and a code-only languages array when the upstream reports one.
+An extensionless upload is named and typed from its audio signature, because Bun's multipart parser drops the part Content-Type; unknown bytes keep the .webm name. Manual redirects, capped response reads and linked cancellation
 keep credentials and audio content out of redirects, request logs and durable storage.
 `tests/server/audio-transcriptions.test.ts` exercises the real ingress and synthetic upstream;
 `tests/server/api-key-attribution.test.ts` uses multipart fixtures for the HTTP auth matrix.
@@ -49,11 +49,9 @@ socket names in its own query, or the model a bound call settled on when the sam
 and a refused forward request releases its probe lease. `LiveCallBinding` records that model for
 exactly this reason, so a reconnect is judged on the call it rejoins rather than on a default.
 
-The native voice path in `src/server/live.ts` applies the same predicate but can name less. It
-records only which call ids it created (`src/server/live-native-calls.ts`), never their model or
-account, so a join, and a call-create that sends no session
-model, name no destination at all; a key carrying a model list is refused there rather than
-admitted against an assumed default, while a provider-only scope and an unscoped key are
+Both live paths treat a request that names no model the same way. The native path in `src/server/live.ts` records only which call ids it created (`src/server/live-native-calls.ts`), never their model or account, so a join, and a call-create that sends no session
+model, name no destination at all. On the external path a call-create session without a model, `/v1/realtime/calls` without a session and a Realtime standalone socket without a query model are unnamed too, and a binding stores no model for them.
+A key carrying a model list is refused for every unnamed destination rather than admitted against an assumed default, while a provider-only scope and an unscoped key are
 unchanged, on both join credentials described under streaming audio. Coverage lives in
 `tests/server/api-key-scope-audio.test.ts`, `tests/server/api-key-scope-live.test.ts` and
 `tests/server/server-live-existing-call.test.ts`.
@@ -75,8 +73,9 @@ maps opaque rtc_ocx_ aliases to the creating key, provider, physical account and
 Expired aliases never fall through to native joins. Reconnect resolves the recorded account
 freshly; keyed provider replacement fails unless its credential digest still matches.
 The registry is per server, holds at most 1024 entries for 30 minutes and is cleared on shutdown.
-It does not proxy WebRTC media or execute delegation requests. Standalone Frameless defaults
-to gpt-live-1-codex; gpt-live-1 is an explicit alias. Dictation and Frameless event formats remain
+It does not proxy WebRTC media or execute delegation requests. Frameless defaults to Codex's gpt-live-1.1-codex (`resolveLiveAudioModel` in `src/server/audio-upstream.ts`); gpt-live-1 and gpt-live-1.1 alias the -codex models for call-create sessions and Frameless standalone sockets, and the resolved name is the one a key scope judges and the binding records; Realtime standalone queries pass unchanged.
+Only a session the proxy synthesizes gets a voice, chosen after the upstream resolves: marin for a keyed API relay, cove for ChatGPT, matching openai/codex.
+`src/server/audio-live-sessions.ts` relays the public GPT-Live session API (`POST /v1/live/sessions`, `WS /v1/live/sessions`, `WS /v1/live/sessions/<alias>/attach`) only to the API-key provider, refuses SIP, judges scope on `session.model` (a fresh socket is unnamed), and binds the returned id to the creating key; `tests/server/audio-live-sessions.test.ts`. Dictation and Frameless event formats remain
 separate. Coverage lives in `tests/server/audio-client.test.ts`,
 `tests/server/audio-dictation.test.ts` and `tests/server/live-call-bindings.test.ts`.
 

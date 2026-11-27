@@ -9,7 +9,7 @@ de cuentas y los proveedores locales siguen en esa página.
 
 Para rotar cuentas de suscripción, consulta [`reset-near-weighted`](/es/reference/configuration/providers/#reset-near-weighted) en los grupos OAuth de Codex y Anthropic. Los grupos de claves API usan sus propios [ajustes de selección de claves](/es/reference/configuration/providers/).
 
-opencodex incluye 112 preajustes integrados: 90 con clave, 18 OAuth, tres locales y uno predeterminado de reenvío a ChatGPT. El selector **Añadir proveedor** abre el formulario del proveedor con clave, valida la credencial cuando el proveedor permite comprobarla y la guarda; cada proveedor tiene su propia validación. Entre ellos:
+opencodex incluye 114 preajustes integrados: 92 con clave, 18 OAuth, tres locales y uno predeterminado de reenvío a ChatGPT. El selector **Añadir proveedor** abre el formulario del proveedor con clave, valida la credencial cuando el proveedor permite comprobarla y la guarda; cada proveedor tiene su propia validación. Entre ellos:
 
 **ClinePass** utiliza una clave API de Cline con el [catálogo oficial de suscripción](https://docs.cline.bot/getting-started/clinepass) y el [punto final de Chat Completions](https://docs.cline.bot/api/chat-completions), operados por Cline Bot Inc. bajo [los términos de Cline](https://cline.bot/tos). Un id enrutado como `cline-pass/cline-pass/kimi-k3` es intencional: el primer segmento selecciona el proveedor de opencodex, mientras que `cline-pass/kimi-k3` es el identificador de modelo completo que se envía aguas arriba. La cuota de ClinePass se comparte por cuenta entre límites rotativos de 5 horas, semanales y mensuales. Una sonda en vivo del 2026-08-13 verificó que todos los modelos estáticos de ClinePass aceptan `low`, `medium`, `high`, `xhigh` y `max` en el límite de entrada de la pasarela. opencodex conserva los niveles solicitados; cualquier normalización específica del backend sigue siendo responsabilidad de ClinePass.
 
@@ -74,6 +74,7 @@ opencodex incluye 112 preajustes integrados: 90 con clave, 18 OAuth, tres locale
 | TokenLab | `https://api.tokenlab.sh/v1` |
 | Modelflare | `https://modelflare.dev/v1` |
 | AI Stupid Level | `https://aistupidlevel.info/v1` |
+| AI/ML API | `https://api.aimlapi.com/v1` |
 | cheapaimodel | `https://api.cheapaimodel.ai/v1` |
 | AbliteratedLLM | `https://api.abliteratedllm.dev/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
@@ -81,7 +82,17 @@ opencodex incluye 112 preajustes integrados: 90 con clave, 18 OAuth, tres locale
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …y otros | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
 
+**Neuralwatt Cloud** descubre los modelos desde el catálogo público `/v1/models` de Neuralwatt y omite
+los modelos de decisión que no son de chat; una lista sin conexión cubre los modelos de chat cuando el descubrimiento no está disponible.
+En Chat Completions, OpenCodex reenvía el razonamiento previo de los modelos de razonamiento que Neuralwatt documenta,
+incluidos DeepSeek V4.1 Flash y su alias de seguimiento `nw-flash`. Las solicitudes a Kimi K3.1 Pro omiten
+`temperature`, `top_p` y las penalizaciones, que Moonshot fija para ese modelo.
+Las estimaciones de coste de uso aplican los precios de lista por token que Neuralwatt publica para cada modelo; Neuralwatt factura
+las suscripciones y el pago por uso según la energía de GPU, por lo que la estimación no es el importe cobrado.
+
 **Alibaba Token Plan** ofrece los presets Personal Edition de Beijing y Team Edition internacional. Ambas regiones ofrecen los dos niveles de suscripción. Las listas de modelos de chat son estáticas porque el descubrimiento del proveedor también incluye modelos que no son de chat. Se conservan las selecciones existentes y los endpoints internacionales configurados explícitamente.
+
+El preset de Beijing también incluye `qwen4-max`, el modelo insignia más reciente de Alibaba, que figura en la lista de modelos de la edición Personal ([guía de inicio](https://help.aliyun.com/en/model-studio/token-plan-personal-quick-start), consultado el 2026-11-26). Acepta entrada de texto e imágenes, tiene un contexto de 1.000.000 de tokens y un límite de salida de 131.072 tokens, y admite razonamiento `low`, `high` o `xhigh` (`high` por defecto). El preset internacional no lo incluye porque la descripción general de la edición Team tampoco lo hace.
 
 Ambos presets incluyen `deepseek-v4.1-flash-1017`, con entrada de texto e imágenes, salida de texto, contexto de 1.000.000 de tokens y razonamiento `low`, `high` y `max` (`high` por defecto). Su límite de salida de 393.216 sigue la normalización del presupuesto publicado; no es un límite medido. El Lab informa 384.000. Los esquemas estrictos son rechazados y `json_object` no está verificado para este identificador exacto, por lo que las solicitudes Chat omiten `response_format`: la salida es texto de mejor esfuerzo, sin garantía de JSON. La degradación JSON verificada del modelo sin sufijo y las asignaciones existentes a Responses no cambian. Beijing también incluye `deepseek-v4-pro-0813`, ahora publicado. La región internacional omite los retirados `deepseek-v3.2` y `deepseek-v4-flash` sin sufijo, pero conserva `deepseek-v4-flash-0731`. Los presets mantienen los hosts de sus guías oficiales: Beijing usa `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` y la región internacional `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`. El preset Qwen Cloud usa el host Token Plan independiente documentado arriba. Consulta la [ficha del modelo 1017](https://www.qianwenai.com/models/deepseek-v4.1-flash-1017), la [referencia Chat](https://docs.qwencloud.com/api-reference/chat/openai-chat) y la [guía Personal](https://help.aliyun.com/en/model-studio/token-plan-personal-overview).
 
@@ -144,6 +155,8 @@ La mayoría usa el adaptador `openai-chat` con una clave bearer; los preajustes 
 El Plan de codificación y el Plan de agente de Volcengine usan sus endpoints nativos de Responses mediante `openai-responses`. Durante las continuaciones de herramientas validadas del Plan de codificación de Ark, reproducir el elemento `reasoning` que devuelve Responses respondía `400 InvalidParameter`, por lo que el preajuste del Plan de codificación descarta los elementos de razonamiento reproducidos antes de reenviar la entrada de continuación; eso pierde información, y `dropResponsesReasoningItems: false` lo desactiva. Una instalación que ya guardó el proveedor del Plan de codificación en `openai-chat` conserva ese protocolo —nada reescribe una fila almacenada—, así que el cambio es una edición deliberada: establezca `adapter` en `openai-responses` y `responsesPath` en `/responses`, o elimine y vuelva a agregar el preajuste. Las anulaciones explícitas por modelo de `openai-chat` siguen disponibles en cualquier caso.
 
 El preajuste integrado de DeepSeek también enruta `deepseek-v4-flash` por su endpoint nativo de Responses y mantiene habilitado el streaming SSE ascendente. Si ese modelo termina todos los elementos de salida pero omite el evento Responses final, opencodex aplica una reparación de gracia de cinco segundos limitada a ese modelo; los flujos mal formados o parciales se cierran como incompletos en lugar de informarse como exitosos. El modelo propio `deepseek-flash` anuncia entrada nativa `text` e `image`, por lo que las solicitudes de imagen se envían directamente a DeepSeek de forma predeterminada en lugar de pasar por el sidecar de visión. Las declaraciones explícitas de `noVisionModels` o de solo texto siguen siendo autoritativas. Los modelos propios `deepseek-chat`, `deepseek-reasoner` y `deepseek-v4-flash` siguen respaldados por el sidecar de forma predeterminada. Las rutas de Zen no cambian y no se sondearon en esta actualización.
+
+El preajuste de DeepSeek incluye `deepseek-flash` (el predeterminado), `deepseek-v4-flash`, `deepseek-v4-pro` y `deepseek-v4-flash-vision-exp`. DeepSeek dejó de ofrecer `deepseek-chat` y `deepseek-reasoner` el 24 de julio de 2026, y su [referencia de la API](https://api-docs.deepseek.com/api/create-chat-completion) solo acepta `deepseek-flash` y `deepseek-v4-pro` (consultado el 2026-11-26), por lo que las instalaciones nuevas ya no los incluyen. Una lista de modelos guardada conserva lo que ya contiene.
 
 **Capacidades de razonamiento.** Los metadatos distinguen `supportsReasoning`, `supportsThinkingToggle` y `supportsReasoningEffort`. Un valor omitido es desconocido; `false` es una declaración explícita. `defaultThinkingEnabled` registra el estado predeterminado del interruptor y `reasoningEfforts` enumera los niveles de intensidad reales. Las declaraciones por modelo se guardan en `modelCapabilities`; los ejes se combinan con el registro sin distinguir mayúsculas en el identificador, y prevalece lo configurado por el operador. `/v1/models` publica `supports_reasoning`, `supports_thinking_toggle`, `supports_reasoning_effort` y `default_thinking_enabled` dentro de `capabilities`, sin inventar niveles para modelos de intensidad fija.
 
@@ -443,6 +456,7 @@ El preajuste utiliza un **Lista estática** (`liveModels: false`) tomado del [Do
 
 | Modelo | Tokens de contexto | Esfuerzo seleccionable ascendente | Esfuerzo predeterminado | Resúmenes de razonamiento |
 | --- | ---: | --- | --- | --- |
+| `glm-5.4` | 1,048,576 | `low`, `high`, `max` | `max` | Apoyado |
 | `glm-5.3` | 1,048,576 | `low`, `high`, `max` | `max` | Apoyado |
 | `glm-5.3-flash` | 1,048,576 | `low`, `high`, `max` | `max` | Apoyado |
 | `glm-5-turbo` | 204,800 | Ninguno (lista vacía) | `max` | Apoyado |
@@ -450,6 +464,8 @@ El preajuste utiliza un **Lista estática** (`liveModels: false`) tomado del [Do
 `glm-5.3` y `glm-5-turbo` declaran entrada de solo texto aguas arriba. El catálogo Codex anuncia texto e imagen para ellos porque el sidecar de visión existente opencodex puede describir imágenes para modelos solo de texto; esa ruta requiere un sidecar de visión disponible y habilitado y no reclama soporte de imagen BigModel nativo.
 
 `glm-5.3-flash` es la excepción: declara la entrada nativa `text` y `image`, porque upstream lo documenta como un modelo multimodal nativo. Por lo tanto, lee imágenes directamente en lugar de ser enrutado a través del desvío del primer sidecar descrito.
+
+`glm-5.4` también lee imágenes de forma nativa: upstream declara entrada de vídeo, imagen, texto y archivo. El GLM Coding Plan lo ofrece en todos los niveles ([cómo cambiar de modelo](https://docs.bigmodel.cn/cn/coding-plan/latest-model.md), consultado el 2026-11-26); los preajustes `zai` y `zhipu-bigmodel-coding` también lo incluyen, con el alias local `glm-5.4[1m]`.
 
 El modelo predeterminado es `glm-5.3`; Responses El contenido de razonamiento se conserva en la repetición. La exportación Codex existente agrega su nivel de compatibilidad `ultra` a GLM-5.3 y omite el campo de esfuerzo predeterminado de Turbo porque Turbo no tiene una escalera seleccionable; los metadatos del proveedor aún registran `max` para ambos modelos. Para Turbo, las solicitudes salientes Responses omiten `reasoning.effort`, incluyendo `max` o `ultra` de la persona que llama, mientras se conservan los resúmenes de razonamiento solicitados. Esto deja la selección de esfuerzo en el valor por defecto ascendente; opencodex no inyecta un protocolo seleccionable o `max`.
 
@@ -504,6 +520,8 @@ La configuración del proveedor selecciona el adaptador; la selección de transp
 
 **GitHub Copilot** es un proveedor de OAuth (`ocx login github-copilot`) que canjea un inicio de sesión de GitHub mediante flujo de dispositivo por un token de API de Copilot de corta duración, no por una clave de API pegada. **GitLab Duo** sigue siendo una puerta de enlace de clave/token de suscripción en su punto final compatible con OpenAI. **Cloudflare AI Gateway** necesita que su cuenta y los identificadores de la puerta de enlace se rellenen en la URL.
 
+La lista de modelos de Copilot procede del catálogo en vivo de su cuenta. Antes de la primera consulta correcta, el preajuste ofrece una lista de respaldo con modelos GPT actuales y usa `gpt-5.3-codex` como predeterminado, que GitHub designa como su modelo de soporte a largo plazo. Los modelos que GitHub ha retirado, como `gpt-4o`, `gpt-4.1` y `gpt-5.5`, ya no forman parte de esa lista ([modelos compatibles](https://docs.github.com/en/copilot/reference/ai-models/supported-models), consultado el 2026-11-26).
+
 Copilot usa Auto automáticamente cuando cada fila válida de un catálogo de cuenta no vacío informa explícitamente que la selección manual no está disponible. Los permisos ausentes o mal formados conservan las rutas con nombre; el selector solo elimina las filas denegadas explícitamente. El descubrimiento de solo Auto suministra `github-copilot/auto`, y GitHub selecciona el modelo real en cada solicitud. Esto no cambia los permisos de suscripción. Las listas de permisos de modelos ordinarios, el estado pendiente/deshabilitado y la política de nuevo modelo también se aplican a la visibilidad automática. Si las selecciones guardadas o la directiva ocultan Auto, seleccione o habilite la fila Auto antes de usarla. Las preferencias manuales existentes permanecen guardadas. Un modelo llamado `auto` solo no anula la evidencia de la cuenta.
 
 Auto sigue el protocolo de sesión e intención de la [implementación pública de VS Code Copilot Chat](https://github.com/microsoft/vscode-copilot-chat/blob/7b70532a4cbdfa61c2b30fe4ccffda3d89336a4d/src/platform/endpoint/node/automodeService.ts). Se trata de una integración experimental de cliente, no de un contrato de API de terceros documentado; GitHub puede cambiar el protocolo o los permisos de la cuenta. Auto usa el punto final anunciado del modelo seleccionado en cada solicitud. El enrutamiento por intención envía solo el último texto del usuario, limitado localmente a 32.768 unidades de código UTF-16; la inferencia real conserva la entrada completa. La negociación tiene presupuestos defensivos locales de 512 entradas de catálogo/grupo/candidato, 1 MiB por respuesta correcta y ocho segundos por llamada, incluidos el ritmo y las lecturas del cuerpo. Son salvaguardas de OpenCodex, no límites documentados de GitHub; catálogos de gran tamaño, una negociación lenta o un extracto de intención truncado pueden afectar la compatibilidad.
@@ -534,6 +552,16 @@ Ollama Cloud es un servidor (no local) Ollama. Configure en `https://ollama.com/
 Ollama actualmente documenta salidas estructuradas como no compatibles en Ollama Cloud. Para canónica `ollama-cloud`, opencodex por lo tanto rechaza las solicitudes de salida estructuradas (`text.format`) con un error claro en lugar de devolver silenciosamente prosa sin restricciones; los endpoints locales y personalizados `ollama-native` conservan el comportamiento nativo de `format` de Ollama.
 
 ## Cambios del catálogo y cuotas
+
+**AI/ML API**, operado por Boiler Labs FZ-LLC conforme a sus [condiciones del servicio](https://aimlapi.com/terms-and-conditions),
+es una pasarela compatible con OpenAI en `https://api.aimlapi.com/v1`. Crea una [clave de API](https://aimlapi.com/app/keys)
+y selecciona **AI/ML API** en `ocx init` o en **Añadir proveedor**, o ejecuta `ocx provider add aimlapi`.
+Introduce la clave directamente o como referencia `${AIMLAPI_API_KEY}`. El preajuste usa Chat Completions
+y conserva los prefijos de proveedor de los modelos, como `openai/gpt-5.6-terra` (el predeterminado).
+La detección de modelos filtra el catálogo público de `GET /v1/models` para incluir las entradas de
+Chat Completions. El catálogo público no permite validar las claves de API.
+Las solicitudes al destino del preajuste incluyen la cabecera de atribución `X-AIMLAPI-Source`.
+Esa cabecera se elimina si el preajuste se configura con otro origen.
 
 **cheapaimodel** es una pasarela de pago por token para modelos abiertos DeepSeek, GLM y Kimi, y Grok, operada por LINKOVA PTE. LTD. Crea una [clave API](https://console.cheapaimodel.ai/keys) con saldo prepago USD y elige el preajuste en init/dashboard u `ocx provider add cheapaimodel`, con clave o `${CHEAPAIMODEL_API_KEY}`. Usa `https://api.cheapaimodel.ai/v1` y [Chat Completions](https://cheapaimodel.ai/docs/api/create-chat-completion) para todos los clientes, no sus rutas Responses/Messages. Descubre por [`GET /v1/models`](https://cheapaimodel.ai/docs/api/list-models), que devuelve 401 sin clave válida. Incluye `deepseek-v4-1-flash`, predeterminado, `glm-5.3`, `glm-5.3-flash`, `kimi-k3` y `grok-4.7`. GLM 5.3 es solo texto; sus imágenes van al sidecar. Kimi K3 usa muestreo propio y no recibe `temperature` ni `top_p`. Se aplican sus [términos](https://cheapaimodel.ai/terms) y [privacidad](https://cheapaimodel.ai/privacy).
 

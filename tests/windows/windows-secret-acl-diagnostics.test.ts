@@ -100,6 +100,26 @@ afterEach(() => {
 });
 
 describe("aclFailure diagnostics on required harden errors", () => {
+  for (const failure of ["timeout", "denial"]) test(`compound restriction ${failure} identifies both operations`, () => {
+    const timeout = failure === "timeout";
+    const original = process.env.OPENCODEX_ACL_BATCH_RESTRICTIONS;
+    process.env.OPENCODEX_ACL_BATCH_RESTRICTIONS = "1";
+    try {
+      const file = secretFile();
+      setIcaclsRunnerForTests(args => args.includes("/inheritance:r") && args.includes("/remove:g")
+        ? (timeout ? timedOut : denied(5)) : ok);
+      const error = thrownAclError(() => hardenSecretPath(file, { required: true }));
+      expect(error.code).toBe(timeout ? "ETIMEDOUT" : "EICACLS");
+      expect(error.aclFailure).toMatchObject({
+        step: "/inheritance:r /remove:g", stage: "child_result", success: false, timedOut: timeout,
+      });
+      expect(error.message).not.toContain(file);
+    } finally {
+      if (original === undefined) delete process.env.OPENCODEX_ACL_BATCH_RESTRICTIONS;
+      else process.env.OPENCODEX_ACL_BATCH_RESTRICTIONS = original;
+    }
+  });
+
   test("a mid-sequence child failure reports step, stage, exit code, budget and elapsed", () => {
     const filePath = secretFile();
     setIcaclsRunnerForTests(args => (args.includes("/inheritance:r") ? denied(5) : ok));
