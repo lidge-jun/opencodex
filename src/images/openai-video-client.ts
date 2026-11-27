@@ -124,6 +124,16 @@ export async function fetchOpenAiVideoContent(
   options: { variant?: string; signal?: AbortSignal } = {},
   dependencies: VideoOutboundDependencies = {},
 ): Promise<Response> {
+  return (await fetchOpenAiVideoContentWithDeadline(id, auth, options, dependencies)).response;
+}
+
+/** The public download route also observes this same deadline while its consumer is idle. */
+export async function fetchOpenAiVideoContentWithDeadline(
+  id: string,
+  auth: VideoProviderAuth,
+  options: { variant?: string; signal?: AbortSignal } = {},
+  dependencies: VideoOutboundDependencies = {},
+): Promise<{ response: Response; signal: AbortSignal }> {
   if (options.variant !== undefined && !OPENAI_VIDEO_CONTENT_VARIANTS.has(options.variant)) {
     throw new Error("video content variant is not supported");
   }
@@ -134,7 +144,7 @@ export async function fetchOpenAiVideoContent(
     signal: deadline,
   }, videoOutboundDependencies(dependencies));
   if (!resp.ok) throw await upstreamFailure("OpenAI videos content API", resp, deadline);
-  return resp;
+  return { response: resp, signal: deadline };
 }
 
 const SHORT_SIDE: Readonly<Record<string, number>> = { "480p": 480, "720p": 720, "1080p": 1080 };
