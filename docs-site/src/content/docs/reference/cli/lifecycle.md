@@ -1331,8 +1331,14 @@ must supply it in Codex's environment.
 Use the maintained shim installed by `ocx codex-shim install`. When the launching context resolves
 this shim, it reads the token file created by OpenCodex and supplies the variable to Codex.
 Desktop, cron, and service launches must use a PATH or launcher path that selects the shim;
-installation does not configure those environments automatically. Codex's own child processes
-may still inherit the token.
+installation does not configure those environments automatically. Codex Desktop and other GUI
+launchers that spawn their own `codex` binary directly bypass a healthy CLI shim and will fail with
+`Missing environment variable: OPENCODEX_API_AUTH_TOKEN` in Hub mode unless that app's environment
+receives the variable from `$OPENCODEX_HOME/service-api-token` or the machine connects via
+[Remote Link](/guides/remote-link/) (whose local loopback relay attaches the link key with no
+`env_key`; `--desktop-authless` is inert on a connected client). `ocx connect`, `ocx connect status`,
+and `ocx doctor` surface this GUI shim-bypass caveat without printing any token material. Codex's
+own child processes may still inherit the token.
 
 Do not export this bearer token from a shell startup file or copy it into `config.toml`. The
 `service-api-token` file contains the raw token, not `NAME=value` assignments, so it cannot be used

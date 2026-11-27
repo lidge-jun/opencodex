@@ -30,7 +30,7 @@ import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydo
 import { isModelRerouted, modelTitle, type ModelTitleTierOutcome } from "./logs-model-title";
 import { speedLabel } from "./logs-speed-label";
 import { decodeRateLabelKeys } from "./logs-decode-rate";
-import { failureAttributionLabels, failureDetailLabel, failureSummary, upstreamConditionLabel } from "./logs-failure-summary";
+import { failureAttributionLabels, failureDetailLabel, failureSummary, isInterruptedWebSocketDelivery, upstreamConditionLabel } from "./logs-failure-summary";
 import "./logs-decode-rate.css";
 import { effectivePriorityLowerBound, estimateReasonsForBilling, formatCredits, formatEstimatedUsd, formatEstimatedUsdValue, formatUsdPrecise, summarizeEstimatedCosts, type CostBilling, type PartialCostResult, type CostEstimateReason as BillingEstimateReason } from "./logs-cost-format";
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
@@ -142,6 +142,12 @@ interface LogFailureAttribution {
 }
 
 interface LogAttempt extends LogFailureAttribution {
+  codexWsStage?: {
+    sent: boolean;
+    closeCode: number | null;
+    relayedEvents: number;
+    terminalEvent: string | null;
+  };
   ordinal: number;
   provider: string;
   model: string;
@@ -209,6 +215,8 @@ export interface LogEntry extends LogFailureAttribution {
    * numeric HTTP status alone and reported an incomplete 200 as a plain success.
    */
   terminalStatus?: string;
+  terminalSource?: string;
+  transportPhase?: string;
   closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
   /** Upstream spend for the whole logical request, aggregated across attempts and combo children. */
   spend?: RequestSpendTotals;
@@ -963,6 +971,9 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                        {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
                        <ProtocolBadge trace={log.protocolTrace} t={t} />
                      </span>
+                     {isInterruptedWebSocketDelivery(log) && (
+                       <span className="text-[12px] text-danger">{t("logs.status.streamInterrupted")}</span>
+                     )}
                      <span className="log-reqid block max-w-full truncate font-mono text-[11.5px] text-fg-subtle" title={log.requestId}>{log.requestId ?? "-"}</span>
                    </span>
                  </td>
@@ -1140,7 +1151,9 @@ function LogDetailDialog({
           </h3>
           <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} aria-label={t("common.cancel")}><IconX /></button>
         </div>
-        {summary.description && <p className="modal-desc">{summary.description}</p>}
+        {isInterruptedWebSocketDelivery(detail)
+          ? <p className="modal-desc">{t("logs.detail.streamInterrupted1006")}</p>
+          : summary.description && <p className="modal-desc">{summary.description}</p>}
 
         <section className="log-detail-section" aria-labelledby="log-detail-basic">
           <h4 id="log-detail-basic" className="log-detail-section-title">{t("logs.detail.section.basic")}</h4>

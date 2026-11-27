@@ -8,7 +8,7 @@ import { pinnedHttpGet, type PinnedAddress } from "../lib/pinned-http";
 
 export type { PinnedAddress } from "../lib/pinned-http";
 
-const MAX_DECODED_BYTES_PER_IMAGE = 50 * 1024 * 1024;
+export const MAX_DECODED_BYTES_PER_IMAGE = 50 * 1024 * 1024;
 const MAX_DECODED_BYTES_PER_RESPONSE = 100 * 1024 * 1024;
 /** Hard cap for remote image downloads (also enforced inside pinnedHttpsGet). */
 export const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024; // 50 MiB
@@ -500,7 +500,16 @@ export async function downloadVideoToArtifact(
     try { await resp.body?.cancel(); } catch { /* ignore */ }
     throw new Error("video download failed: " + resp.status);
   }
+  return writeVideoResponseToArtifact(resp, budget);
+}
 
+/**
+ * Stream a successful video response body to a new artifact file under the same 200 MiB cap and
+ * per-turn budget as {@link downloadVideoToArtifact}, sniffing MP4/WebM from the first bytes. The
+ * caller owns the request that produced `resp` (its destination, credential and status check);
+ * this only decides what reaches disk.
+ */
+export async function writeVideoResponseToArtifact(resp: Response, budget?: VideoBudget): Promise<string> {
   const dir = getArtifactsDir();
   await mkdir(dir, { recursive: true, mode: 0o700 });
 

@@ -69,6 +69,8 @@ intento para distinguirlos. Aumentar `stream_idle_timeout_ms` solo prolonga la e
 
 <a id="why-the-first-reconnect-row-can-be-absent"></a>
 
+En el registro de solicitudes del panel, **Transmisión interrumpida** indica que la conexión WebSocket con el proveedor se cerró de forma anómala (1006) después de enviar eventos de respuesta al cliente y antes de que el proxy observara un evento de finalización. El detalle de la solicitud muestra esta distinción. Para consultar la actividad posterior, usa el filtro junto al ID de conversación y quita el filtro de estado, si lo hay. Una conversación puede incluir varios turnos. La hora y el tamaño de las solicitudes por sí solos no permiten confirmar un reintento automático ni que el trabajo se haya recuperado.
+
 ## Por qué la primera fila de reconexión puede estar ausente
 
 La fuente pública Codex `rust-v0.158.0-alpha.2.1` guarda la notificación de reintento de transmisión ordinaria en [`handle_response_stream_error`](https://github.com/openai/codex/blob/rust-v0.158.0-alpha.2.1/codex-rs/core/src/responses_retry.rs):

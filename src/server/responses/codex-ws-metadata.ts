@@ -9,10 +9,44 @@ export const CODEX_WS_METADATA_MAX_VALUE_BYTES = 4096;
 
 export type CodexWsQuotaObserver = (headers: Headers) => void;
 const REASONING_INCLUDED_HEADER = "x-reasoning-included";
+/** Connection-scoped upload ceiling the backend may advertise on the 101 (openai/codex ed7ca22bb6). */
+export const CODEX_WS_MAX_MESSAGE_BYTES_HEADER = "x-codex-websocket-max-message-bytes";
 const HTTP_HEADER_TOKEN = /^[!#$%&'*+.^_`|~0-9a-z-]+$/i;
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The advertised message ceiling, read like Codex's `usize` parse: an optional `+` and decimal
+ * digits, leading zeros allowed, zero included (nothing fits). A value beyond JavaScript's safe
+ * integers is larger than any frame this process can build, so it limits nothing. A missing,
+ * repeated, negative, exponent or non-digit value is no advertisement, which leaves the static
+ * ceiling alone in charge.
+ */
+export function readCodexWsAdvertisedMessageLimit(payload: unknown): number | undefined {
+  try {
+    if (!record(payload) || payload.statusCode !== 101 || !Array.isArray(payload.rawHeaders)
+      || payload.rawHeaders.length % 2 !== 0 || payload.rawHeaders.length > CODEX_WS_METADATA_MAX_HEADERS * 2) return undefined;
+    let limit: number | undefined;
+    let seen = false;
+    for (let i = 0; i < payload.rawHeaders.length; i += 2) {
+      const name = payload.rawHeaders[i];
+      const value = payload.rawHeaders[i + 1];
+      if (typeof name !== "string" || typeof value !== "string") return undefined;
+      if (name.toLowerCase() !== CODEX_WS_MAX_MESSAGE_BYTES_HEADER) continue;
+      if (seen) return undefined;
+      seen = true;
+      const match = /^\+?(\d+)$/.exec(value.trim());
+      if (!match) return undefined;
+      const digits = match[1]!.replace(/^0+(?=\d)/, "");
+      const parsed = digits.length <= 16 ? Number(digits) : Number.POSITIVE_INFINITY;
+      limit = Number.isSafeInteger(parsed) ? parsed : undefined;
+    }
+    return limit;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Bun emits this payload before validating the upgrade; the session must wait for open. */

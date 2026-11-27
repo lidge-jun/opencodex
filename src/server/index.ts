@@ -204,6 +204,7 @@ import {
 import { createReadinessGate, type ReadinessGate } from "./readiness";
 import { createServeOptions, type ServerIngress } from "./index/serve-options";
 import { createOptionalListenerSet, LINK_INGRESS_HOSTNAME } from "./index/optional-listeners";
+import { matchVideoRoute } from "../lib/video-routes";
 import { createPackageTreeIntegrityGuardForServer } from "./index/package-tree-guard";
 import { inspectStartupOwnership, logProxyEndpoints, resolveInboundBodyLimitWithWarning, setStartupCacheInvalidationWrite, warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup, type StartServerDeps } from "./index/startup-warnings";
 import { acquireSpendLedgerServerLifecycle, recordFailedStartRollback, type SpendLedgerServerLifecycle } from "./index/spend-ledger-lifecycle";
@@ -422,6 +423,9 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     if (path === "/v1/images/generations" || path === "/v1/images/edits") {
       return req.method === "POST";
     }
+    // Videos (#9110) mirror images: a direct-spawn client may create, poll and fetch through this socket; handles
+    // minted here belong to the shared "loopback" principal, so every local process on it is one caller.
+    if (path === "/v1/videos" || path.startsWith("/v1/videos/")) return matchVideoRoute(req.method, path) !== undefined;
     if (path === "/v1/models") return req.method === "GET";
     // Gemini wire (#8732): `ocx connect agy` points the CLI at this socket. Same admission as the
     // chat wire it is translated into; each Gemini path admits only its own HTTP method.
@@ -440,6 +444,9 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     const isWebSocketUpgrade = req.headers.get("upgrade")?.toLowerCase() === "websocket";
     if (path === "/v1/realtime") return isWebSocketUpgrade;
     if (path === "/v1/live") return isWebSocketUpgrade || req.method === "POST";
+    // Public GPT-Live sessions: external audio keys only, checked again at the handler.
+    if (path === "/v1/live/sessions") return isWebSocketUpgrade || req.method === "POST";
+    if (/^\/v1\/live\/sessions\/[^/]+\/attach\/?$/.test(path)) return isWebSocketUpgrade;
     if (path === "/v1/realtime/calls") return req.method === "POST";
     if (/^\/v1\/(?:live|realtime\/calls)\/[^/]+\/?$/.test(path)) return isWebSocketUpgrade;
     return false;

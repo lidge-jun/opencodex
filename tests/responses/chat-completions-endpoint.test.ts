@@ -285,7 +285,7 @@ describe("chatCompletionsToResponsesBody image parts", () => {
     ] }]);
   });
 
-  test("retains ordered tool screenshots and legacy text without forwarding video", () => {
+  test("retains ordered tool screenshots and legacy text, and refuses a tool-result video it cannot carry", () => {
     const url = "data:image/png;base64,aGVsbG8=";
     const body = chatCompletionsToResponsesBody({
       model: "mock/test-model",
@@ -295,7 +295,6 @@ describe("chatCompletionsToResponsesBody image parts", () => {
           { type: "text", text: "before" },
           { type: "image_url", image_url: { url, detail: "high" } },
           { type: "output_text", text: "after" },
-          { type: "video_url", video_url: "https://example.com/video.mp4" },
           { type: "image_url", image_url: "https://example.com/second.png", detail: "low" },
         ] },
       ],
@@ -310,6 +309,7 @@ describe("chatCompletionsToResponsesBody image parts", () => {
       ] },
     ]);
     expect(() => parseRequest(body)).not.toThrow();
+    expect(() => chatCompletionsToResponsesBody({ model: "mock/test-model", messages: [{ role: "tool", tool_call_id: "call_image", content: [{ type: "video_url", video_url: "https://example.com/video.mp4" }] }] })).toThrow("cannot translate video input");
   });
 
   test("keeps image-only tool results structured and ignores unsupported detail", () => {

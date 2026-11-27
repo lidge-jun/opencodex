@@ -1448,6 +1448,8 @@ export const en = {
   "logs.detail.stage.headersOnly": "headers only",
   "logs.detail.stage.protocolPrelude": "protocol prelude",
   "logs.detail.stage.semanticOutput": "output delivered",
+  "logs.status.streamInterrupted": "Stream interrupted",
+  "logs.detail.streamInterrupted1006": "The upstream WebSocket closed abnormally (1006) after response events were relayed. No completion was confirmed.",
   "logs.detail.stage.sideEffect": "side effect emitted",
   "logs.detail.stage.terminal": "answer delivered",
   "logs.detail.resend.permitted": "Could be resent",

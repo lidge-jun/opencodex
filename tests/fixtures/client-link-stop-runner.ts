@@ -37,6 +37,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   missingStopRecord?: "absent" | "invalid";
   startIdentityChanges?: "request" | "escalation";
   failedRollback?: "before-rebind" | "during-rebind";
+  refusedDisconnectRecycle?: "complete" | "pending" | "other-owner" | "config-release" | "config-held" | "config-takeover" | "config-at-deadline";
   legacyOwnerRecord?: boolean;
   stopConnectionDrift?: "invalid" | "mismatched" | "disconnected" | "other-link" | "hub";
   driftDuringFallback?: boolean;
@@ -47,7 +48,9 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   danglingServiceRecord?: boolean;
   busyStopFence?: boolean;
   busyRollbackPublication?: boolean;
-  retryRollbackPublication?: "lifecycle" | "config" | "owner-changed";
+  retryRollbackPublication?: "lifecycle" | "config" | "owner-changed" | "exhausted";
+  rollbackBindContention?: "unchanged" | "pending" | "stop";
+  finalRollbackProof?: "pending" | "config-held";
   terminationPlatform?: "linux" | "darwin";
   siblingEscalation?: "stopping" | "different-generation";
   removeToken?: boolean;
@@ -344,25 +347,99 @@ if (options.mode === "retry") {
   let observeRollback!: (closed: boolean) => void;
   const rollbackTurn = new Promise<boolean>(resolve => { observeRollback = resolve; });
   let restartSettled: (() => Promise<void>) | undefined;
+  let rollbackExit: number | undefined;
   const replaceSavedConnection = () => {
     config.client!.connectedAt = "2026-11-17T00:00:00.000Z";
     saveConfig(config);
     protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
   };
-  if (options.failedRollback || options.retryRollbackPublication) {
+  let recycleAdmissions = 0;
+  let proofWaits = 0, proofLock: Database | undefined;
+  const contendProof = options.refusedDisconnectRecycle?.startsWith("config-");
+  if (options.refusedDisconnectRecycle) {
+    const apply = await import("../../src/client/link-home");
+    const withApply = apply.withLinkApply;
+    mock.module("../../src/client/link-home", () => ({ ...apply, withLinkApply: <T>(work: () => Promise<T>, lockPath?: string) => {
+      if (!replacementAttempts) return withApply(work, lockPath);
+      recycleAdmissions++;
+      if (contendProof) {
+        proofLock = new Database(prepareConfigMutationDatabasePathForWrite());
+        proofLock.exec("BEGIN IMMEDIATE");
+        return withApply(work, lockPath);
+      }
+      throw new apply.LinkApplyBusyError();
+    } }));
+  }
+  if (options.failedRollback || options.retryRollbackPublication || options.rollbackBindContention || options.refusedDisconnectRecycle) {
     const controller = await import("../../src/client/runtime-restart");
     const create = controller.createClientRestartController;
     mock.module("../../src/client/runtime-restart", () => ({ ...controller, createClientRestartController: (...args: Parameters<typeof create>) => {
-      const result = create(...args);
+      const result = options.retryRollbackPublication === "exhausted" || options.rollbackBindContention || options.refusedDisconnectRecycle
+        ? create({ ...args[0], exitProcess: code => { rollbackExit = code; } })
+        : create(...args);
       restartSettled = result.settled;
       return result;
     } }));
+  }
+  let portHolder: ReturnType<typeof Bun.serve> | undefined;
+  if (options.rollbackBindContention) {
+    const rollback = await import("../../src/client/runtime-rollback");
+    const retry = rollback.retryClientRollback;
+    mock.module("../../src/client/runtime-rollback", () => ({ ...rollback,
+      retryClientRollback: (attempt: Parameters<typeof retry>[0]) => retry(attempt, { deadline: performance.now() + 250 }),
+    }));
+  }
+  if (options.retryRollbackPublication === "exhausted" || contendProof) {
+    if (!contendProof) lock(() => {}, lifecycleLockDeps);
+    const rollback = await import("../../src/client/runtime-rollback");
+    const retry = rollback.retryClientRollback;
+    let now = 0;
+    mock.module("../../src/client/runtime-rollback", () => ({ ...rollback,
+      retryClientRollback: (attempt: Parameters<typeof retry>[0]) => retry(attempt, {
+        now: () => now, deadline: contendProof ? 100 : 50, sleep: async ms => {
+          now += ms;
+          if (options.finalRollbackProof) {
+            await rollbackTurn;
+            if (options.finalRollbackProof === "pending") {
+              const { markClientConnectPending } = await import("../../src/client/state");
+              lock(() => markClientConnectPending("a".repeat(64)), lifecycleLockDeps);
+            } else {
+              proofLock = new Database(prepareConfigMutationDatabasePathForWrite());
+              proofLock.exec("BEGIN IMMEDIATE");
+            }
+          }
+          if (!contendProof) return;
+          proofWaits++;
+          if (options.refusedDisconnectRecycle === "config-held" || (options.refusedDisconnectRecycle === "config-at-deadline" && now < 100)) return;
+          proofLock!.close(); proofLock = undefined;
+          if (options.refusedDisconnectRecycle === "config-takeover") (await import("../../src/client/state")).markClientConnectPending(expected.tokenFingerprint);
+        },
+      }),
+    }));
   }
   if (options.preserve?.startsWith("restart-rollback")) {
     const replacement = await import("../../src/server/restart-replacement");
     mock.module("../../src/server/restart-replacement", () => ({ ...replacement,
       spawnReplacementStart: async () => {
         replacementAttempts++;
+        if (options.refusedDisconnectRecycle && replacementAttempts === 1) {
+          saveConfig({ ...config, runtimeRole: "standalone", client: undefined });
+          const owner = { serverUrl: expected.serverUrl, apiKeyId: expected.apiKeyId,
+            connectedAt: options.refusedDisconnectRecycle === "other-owner" ? "2026-11-17T00:00:00.000Z" : expected.connectedAt };
+          mkdirSync(join(home, "desktop-remote"), { recursive: true, mode: 0o700 });
+          writeFileSync(join(home, "desktop-remote", "disconnect.json"), JSON.stringify({
+            version: 1, owner, tokenFingerprint: expected.tokenFingerprint, keepCatalog: false, phase: "complete",
+          }), { mode: 0o600 });
+          if (options.refusedDisconnectRecycle === "pending") (await import("../../src/client/state")).markClientConnectPending(expected.tokenFingerprint);
+          protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
+        }
+        if (options.rollbackBindContention && replacementAttempts === 1) {
+          portHolder = Bun.serve({ hostname: "127.0.0.1", port: config.port, fetch: () => new Response("occupied") });
+          if (options.rollbackBindContention === "pending") {
+            const { markClientConnectPending } = await import("../../src/client/state");
+            lock(() => markClientConnectPending("a".repeat(64)), lifecycleLockDeps);
+          }
+        }
         if (options.failedRollback === "before-rebind") replaceSavedConnection();
         if (replacementAttempts === 1) throw Object.assign(new Error("fixture replacement refused"), { code: "not_ready" });
       },
@@ -382,7 +459,7 @@ if (options.mode === "retry") {
       ? { ...deps, restart: { ...deps.restart, linkStopFence: undefined } } : deps);
     if ((options.busyRollbackPublication || options.retryRollbackPublication) && replacementAttempts === 1 && !publicationHeld) {
       publicationHeld = true;
-      const lock = new Database(options.retryRollbackPublication === "lifecycle"
+      const lock = new Database(options.retryRollbackPublication === "lifecycle" || options.retryRollbackPublication === "exhausted"
         ? lifecycleLockDeps.lockPath : prepareConfigMutationDatabasePathForWrite());
       lock.exec("BEGIN IMMEDIATE");
       const stop = server.stop.bind(server);
@@ -427,16 +504,28 @@ if (options.mode === "retry") {
     if (options.retryRollbackPublication) {
       const closedBeforeYield = await rollbackTurn;
       await restartSettled!();
+      proofLock?.close();
       const after = readRuntimePort(process.pid)!;
       const published = after.servingGeneration !== before.servingGeneration;
       const bound = published && (await fetch(`http://127.0.0.1:${config.port}/healthz`)).ok;
       report({ preflight, closedBeforeYield, published, bound, rollbackBinds, replacementAttempts,
-        stopping: after.clientStopping, explicitStop: after.clientStopRequested });
+        stopping: after.clientStopping, explicitStop: after.clientStopRequested, rollbackExit });
       process.exit(0);
     }
-    if (options.failedRollback) {
+    if (options.rollbackBindContention) {
       await restartSettled!();
+      await portHolder?.stop(true);
+      const after = readRuntimePort(process.pid);
+      report({ preflight, published: after !== null && after.servingGeneration !== before.servingGeneration,
+        rollbackBinds, replacementAttempts, rollbackExit,
+        stopping: after?.clientStopping, explicitStop: after?.clientStopRequested });
+      process.exit(0);
+    }
+    if (options.failedRollback || options.refusedDisconnectRecycle) {
+      await restartSettled!();
+      proofLock?.close();
       report({ preflight, replacementAttempts, runtimePresent: readRuntimePort(process.pid) !== null,
+        ...(options.refusedDisconnectRecycle ? { rollbackExit, recycleAdmissions, proofWaits } : {}),
         explicitStop: readRuntimePort(process.pid)?.clientStopRequested });
       process.exit(0);
     }

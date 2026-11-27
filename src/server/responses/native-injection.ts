@@ -71,7 +71,13 @@ export class NativeInjectionChannel implements NativeResponseControl {
     if (!checkOutboundBodySize(text, this.maxUpstreamBodyBytes).admitted) {
       injectionError("outbound_body_too_large", "Native injection frame exceeds the configured upstream body limit.");
     }
+    if (this.transportMessageLimit !== undefined && Buffer.byteLength(text) > this.transportMessageLimit) {
+      injectionError("outbound_body_too_large", "Native injection frame exceeds the upstream's advertised WebSocket message limit.");
+    }
   }
+  private transportMessageLimit?: number;
+  /** Codex refuses a frame strictly larger than the socket's advertised ceiling (openai/codex ed7ca22bb6). */
+  setTransportMessageLimit(bytes: number | undefined): void { this.transportMessageLimit = bytes; }
   /** Report that the real dispatch boundary has selected this owner. */
   get attached(): boolean { return this.everAttached; }
   /** A terminal is not final until submitted results have acknowledgements. */

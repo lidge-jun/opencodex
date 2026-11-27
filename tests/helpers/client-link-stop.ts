@@ -76,7 +76,14 @@ export async function runStop(options: Record<string, unknown>) {
       expect(stderr).toContain("Link Child Codex routing restore refused");
     } else if (String(options.preserve).startsWith("restart-rollback")) {
       expect(exit, stdout).toBe(0);
-      expect(stderr.trim()).toBe("[client] restart: the replacement did not start (not_ready); this runtime keeps serving");
+      const first = "[client] restart: the replacement did not start (not_ready); attempting recovery";
+      const code = ["complete", "config-release", "config-at-deadline"].includes(String(options.refusedDisconnectRecycle)) ? "client_recycle_unpublished"
+        : ((options.retryRollbackPublication === "exhausted" && options.mode === "file-restart-control" && !options.finalRollbackProof)
+          || options.rollbackBindContention === "unchanged") ? "client_rollback_unpublished" : undefined;
+      const extra = code ? `\n[client] restart: this runtime could not serve again (${code}); run 'ocx start'`
+        : options.finalRollbackProof === "config-held" ? "\n[client] restart: could not verify ownership of the unpublished Link listener; check ocx status"
+        : options.refusedDisconnectRecycle === "config-held" ? "\n[client] restart: could not verify disconnect ownership before the recovery deadline; check ocx status" : "";
+      expect(stderr.trim()).toBe(first + extra);
     } else expect({ exit, stderr }, stdout).toEqual({ exit: 0, stderr: "" });
     const report = JSON.parse(readFileSync(join(home, "result.json"), "utf8"));
     const atExit = JSON.parse(readFileSync(join(home, "exit.json"), "utf8"));
