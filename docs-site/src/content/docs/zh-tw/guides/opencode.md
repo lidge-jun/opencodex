@@ -20,7 +20,7 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ```
 
-只有在標準 `openai` 供應商已啟用且未處於 Codex Direct 模式時，原生 OpenAI slug 列才會出現。Direct 模式會轉送每個呼叫者自己的 OpenAI 憑證，而 opencode 送出的是代理的密鑰；當 `openai` 供應商被停用時，代理會拒絕所有不帶前綴的 `gpt-*` 選擇器。在這兩種狀態下，啟動器、受管理的整合與 `ocx export` 都會省略這些列，而不是提供一個無法執行的模型。
+只有在標準 `openai` 供應商已啟用且未處於 Codex Direct 模式時，不帶前綴的原生 OpenAI `gpt-*` 列才會出現；開啟 Codex Direct 模式時，可用的帳號限定 `<namespace>/gpt-*` 列仍會保留在匯出結果中。Direct 模式會轉送每個呼叫者自己的 OpenAI 憑證，而 opencode 送出的是代理的密鑰；當 `openai` 供應商被停用時，代理會拒絕所有不帶前綴的 `gpt-*` 選擇器。在這兩種狀態下，啟動器、受管理的整合與 `ocx export` 都會省略不帶前綴的 `gpt-*` 列，而不是提供一個無法執行的模型。
 
 ## 你自己的設定絕不會被修改
 
