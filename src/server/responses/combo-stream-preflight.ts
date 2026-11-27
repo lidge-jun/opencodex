@@ -26,6 +26,13 @@ import { COMBO_DEGENERATE_COMPLETION_CODE, REQUIRED_TOOL_CONTRACT_CODE, response
 import { isPlainObject } from "../../lib/plain-data";
 import { attachComboFailureEvidence, isPausedTurn } from "../../lib/client-error-body";
 import {
+  collectDeclaredBareCustomWireToolNames,
+  collectDeclaredBareWireToolNames,
+  collectDeclaredNamelessClientCallTypes,
+  collectDeclaredWireToolNames,
+  collectProviderExecutedCallTypes,
+  currentTurnWireToolCatalogBody,
+  hasExplicitWireToolCatalog,
   undeclaredToolCallMessage,
   undeclaredToolCallName,
   type ProviderExecutedCallType,
@@ -720,6 +727,55 @@ export type ComboStreamPreflightResult =
   /** A clean EOF after control frames, retained for an explicitly opted-in recovery owner. */
   | { kind: "pre-output-eof"; response: Response; error: ProtocolPreOutputEof; stage: RequestFailureStage };
 
+/** The child request's declared wire tool catalog, as its undeclared-tool guard reads it (#9163). */
+export type ComboDeclaredWireTools = {
+  declared: ReadonlySet<string>;
+  declaredNamelessClientCallTypes: ReadonlySet<string>;
+  providerExecutedCallTypes: ReadonlySet<ProviderExecutedCallType>;
+  declaredBare?: ReadonlySet<string>;
+  declaredCustom?: ReadonlySet<string>;
+};
+
+/**
+ * The catalog {@link preflightComboStreamResponse} needs to read an undeclared call as the guard's
+ * refusal, or undefined when that guard does not stand armed for this child (#9163).
+ *
+ * The guard stands down for forward-auth targets: the child's own registry owns the
+ * catalog, so the preflight must not judge the child's calls undeclared either. The
+ * bridge child can settle on a route other than the planned one (filled into
+ * `childRoute.route` by request-prepare before the child is dispatched), and the
+ * production guard reads that settled route — so the caller passes the same
+ * effective route. A native child has no settled route and sends to the planned one.
+ */
+export function comboChildDeclaredWireTools(
+  childInput: unknown,
+  replayPrefixLength: number,
+  route: { provider: { authMode?: string } },
+): ComboDeclaredWireTools | undefined {
+  if (route.provider.authMode === "forward") return undefined;
+  try {
+    // The same current-turn catalog boundary the child's undeclared-tool guard will read
+    // (#9163): caller-owned tools only, historical items of a replay excluded. Presenting
+    // it to the preflight lets an undeclared call frame count as the refusal the guard
+    // synthesizes rather than as committed client output, so the combo can advance.
+    const catalogBody = currentTurnWireToolCatalogBody(childInput, replayPrefixLength);
+    const declared = collectDeclaredWireToolNames(catalogBody);
+    const nameless = collectDeclaredNamelessClientCallTypes(catalogBody);
+    // An explicit empty catalog is a deny-all the caller declared, same as the dispatch
+    // guard arms on: with no names at all the guard still refuses every client call.
+    if (declared.size === 0 && nameless.size === 0 && !hasExplicitWireToolCatalog(catalogBody)) return undefined;
+    return {
+      declared,
+      declaredNamelessClientCallTypes: nameless,
+      providerExecutedCallTypes: collectProviderExecutedCallTypes(catalogBody),
+      declaredBare: collectDeclaredBareWireToolNames(catalogBody),
+      declaredCustom: collectDeclaredBareCustomWireToolNames(catalogBody),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Buffer a Responses SSE only until the request becomes unsafe to replay or reaches a
  * terminal. Combo failover and native post-header reset recovery share this protocol
@@ -743,13 +799,7 @@ export async function preflightComboStreamResponse(
      * for this child; with it, an output frame naming an undeclared tool is read as the
      * refusal the guard will synthesize instead of as committed client output.
      */
-    declaredWireTools?: {
-      declared: ReadonlySet<string>;
-      declaredNamelessClientCallTypes: ReadonlySet<string>;
-      providerExecutedCallTypes: ReadonlySet<ProviderExecutedCallType>;
-      declaredBare?: ReadonlySet<string>;
-      declaredCustom?: ReadonlySet<string>;
-    };
+    declaredWireTools?: ComboDeclaredWireTools;
     signal?: AbortSignal;
     onUpstreamActivity?: () => void;
   },

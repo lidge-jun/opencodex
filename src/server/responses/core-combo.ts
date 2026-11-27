@@ -30,13 +30,13 @@ import { recordAttemptRequestedEffort } from "../request-log";
 import { bindLinkTurnChild, failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion } from "../link-turn";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
-  deriveRequestExecutionBudget,
   isRequestExecutionBudget,
 } from "../../lib/request-execution-budget";
 import type {
   RequestExecutionBudgetPolicy,
   RequestExecutionBudget,
 } from "../../lib/request-execution-budget";
+import { deriveSendBudgetScope } from "./combo-send-budget-scope";
 import type { OcxComboDefaultEffort, OcxConfig, OcxUsage } from "../../types";
 import type { RequestLogContext } from "../request-log";
 import type { HandleResponsesOptions, ResponsesDispatchers, ConsumedComboFailure } from "./core-options";
@@ -151,17 +151,7 @@ import {
   markNativePassthroughSseResponse,
   markEagerRelaySseResponse,
 } from "../relay";
-import { preflightComboStreamResponse } from "./combo-stream-preflight";
-import {
-  collectDeclaredBareCustomWireToolNames,
-  collectDeclaredBareWireToolNames,
-  collectDeclaredNamelessClientCallTypes,
-  collectDeclaredWireToolNames,
-  collectProviderExecutedCallTypes,
-  currentTurnWireToolCatalogBody,
-  hasExplicitWireToolCatalog,
-  type ProviderExecutedCallType,
-} from "../responses-undeclared-tool-guard";
+import { comboChildDeclaredWireTools, preflightComboStreamResponse } from "./combo-stream-preflight";
 import { requiredToolContractOf } from "./combo-required-tool-contract";
 import {
   streamingContextOverflowResponse,
@@ -211,33 +201,6 @@ export function comboExecutionBudgetPolicy(declaredTargets: number): RequestExec
     maxAlternateTargetSends: Math.max(1, hops),
     maxTargetTransitions: Math.max(1, hops),
   };
-}
-
-
-/**
- * A budget scope that keeps its own recovery ledgers but spends the SAME request-wide counter.
- *
- * The sharing has to happen inside the factory. Redefining `used` as an accessor onto the parent
- * only shared what callers read from the outside: `remainingBaseSends`, the total check and the
- * reserve test all consult the factory's own private counter, which an overridden property
- * cannot reach. Each derived scope therefore admitted dispatches as though the request had spent
- * nothing, and the per-target holdback below -- expressed against `maxTotalModelSends` -- had
- * nothing to hold back from.
- *
- * `deriveRequestExecutionBudget` binds the scope to the parent's real ledger, including pending
- * externally-counted bookings and the durable-spend observer, all of which must travel together.
- * A pending booking is a send already counted in the total and waiting for its reporter, and the
- * observer books by watching that same counter move (#4707) -- so a scope that spent the counter
- * without carrying the observer would move it without booking, and this combo's child sends
- * would go missing from the spend ledger. The reserve, alternate-target and transition ledgers
- * stay per-scope on purpose: a combo target's account failover is its own recovery decision,
- * while the request total still bounds every target together.
- */
-export function deriveSendBudgetScope(
-  parent: RequestExecutionBudget,
-  policy: RequestExecutionBudgetPolicy,
-): RequestExecutionBudget {
-  return deriveRequestExecutionBudget(parent, policy);
 }
 
 
@@ -1586,45 +1549,8 @@ export async function executeComboResponses(
       const eagerRelay = isEagerRelaySseResponse(response);
       let preflight;
       try {
-        let childCatalog: {
-          declared: ReadonlySet<string>;
-          declaredNamelessClientCallTypes: ReadonlySet<string>;
-          providerExecutedCallTypes: ReadonlySet<ProviderExecutedCallType>;
-          declaredBare?: ReadonlySet<string>;
-          declaredCustom?: ReadonlySet<string>;
-        } | undefined;
-        // The guard stands down for forward-auth targets: the child's own registry owns the
-        // catalog, so the preflight must not judge the child's calls undeclared either. The
-        // bridge child can settle on a route other than the planned one (filled into
-        // `childRoute.route` by request-prepare before the child is dispatched), and the
-        // production guard reads that settled route — so the preflight must gate on the same
-        // effective route. A native child has no settled route and sends to the planned one.
-        const catalogRoute = childRoute.route ?? targetRoute;
-        const catalogEligible = catalogRoute.provider.authMode !== "forward";
-        try {
-          // The same current-turn catalog boundary the child's undeclared-tool guard will read
-          // (#9163): caller-owned tools only, historical items of a replay excluded. Presenting
-          // it to the preflight lets an undeclared call frame count as the refusal the guard
-          // synthesizes rather than as committed client output, so the combo can advance.
-          const catalogBody = currentTurnWireToolCatalogBody(
-            childInput,
-            previousResponseRestoredPrefixLength(body),
-          );
-          const declared = collectDeclaredWireToolNames(catalogBody);
-          const nameless = collectDeclaredNamelessClientCallTypes(catalogBody);
-          // An explicit empty catalog is a deny-all the caller declared, same as the dispatch
-          // guard arms on: with no names at all the guard still refuses every client call.
-          if (catalogEligible && (declared.size > 0 || nameless.size > 0
-            || hasExplicitWireToolCatalog(catalogBody))) {
-            childCatalog = {
-              declared,
-              declaredNamelessClientCallTypes: nameless,
-              providerExecutedCallTypes: collectProviderExecutedCallTypes(catalogBody),
-              declaredBare: collectDeclaredBareWireToolNames(catalogBody),
-              declaredCustom: collectDeclaredBareCustomWireToolNames(catalogBody),
-            };
-          }
-        } catch { childCatalog = undefined; }
+        // The child guard's own catalog lets an undeclared call read as its refusal (#9163).
+        const childCatalog = comboChildDeclaredWireTools(childInput, previousResponseRestoredPrefixLength(body), childRoute.route ?? targetRoute);
         preflight = await preflightComboStreamResponse(response, childLog, undefined, {
           signal: options.abortSignal,
           requiredToolPrelude: childLog.providerAdapter === "openai-responses" && requiredToolContractOf(rawBody) !== undefined,
