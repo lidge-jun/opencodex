@@ -928,7 +928,9 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
   that login or the configured seed. The model selection and new-model visibility settings still apply.
 - **Manual account selection (macOS and Linux, agy 1.5.18+):** On the machine that runs the proxy, use
   `ocx account agy add personal` and `ocx account agy add work`. Complete Google's terminal sign-in
-  for each label. List them with `ocx account agy list` and select one with `ocx account agy use work`.
+  for each label. In the local dashboard, open **Providers → Antigravity ACP → Accounts** to select a login.
+  On macOS, enter a label and choose **Add account** to start Google sign-in in Terminal. Return to the list and select the new account.
+  List them with `ocx account agy list` and select one with `ocx account agy use work`.
   Selection applies to subsequent ACP turns, including turns in an existing chat. An in-flight turn
   keeps its original login. Use `ocx account agy use default` to return to the host CLI sign-in.
   Each named login has a private, separate agy settings and file-token directory under

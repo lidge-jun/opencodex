@@ -157,3 +157,65 @@ test("a stored Kimi credential does not finish a pending sibling login early", a
     globalThis.setTimeout = realSetTimeout;
   }
 });
+
+test("the Antigravity Accounts catalog opens management without posting a provider replacement", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const managed: string[] = [];
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<LanguageProvider>
+      <AddProviderModal apiBase="" initialTier="accounts" existingNames={["antigravity-acp"]}
+        accountRows={[{ id: "antigravity-acp", label: "Antigravity ACP", kind: "agy" }]}
+        onAccountManage={id => managed.push(id)} onClose={() => {}} onAdded={() => {}} />
+    </LanguageProvider>);
+  });
+  await settle();
+  const row = Array.from(host.querySelectorAll(".provider-catalog-account-row"))
+    .find(node => node.textContent?.includes("Antigravity ACP"));
+  expect(row).toBeDefined();
+  act(() => row!.querySelector("button")!.click());
+  expect(managed).toEqual(["antigravity-acp"]);
+  expect(posts).toEqual([]);
+});
+
+test("the Antigravity account panel waits for completed login and explicitly switches the selected label", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const { default: AgyAccounts } = await import("../src/components/provider-workspace/AgyAccounts");
+  const names = ["default"];
+  let selected = "default";
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (url: string, init?: RequestInit) => {
+    expect(url).toEndWith("/api/antigravity-acp/accounts");
+    if (init?.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      posts.push({ path: url, body });
+      if (body.action === "add") return Response.json({ pending: body.name }, { status: 202 });
+      selected = body.name;
+    }
+    return Response.json({ names, selected, canOpenTerminal: true });
+  } });
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<LanguageProvider><AgyAccounts apiBase="" /></LanguageProvider>);
+  });
+  await settle();
+  const input = host.querySelector("input")!;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!;
+    setter.call(input, "work");
+    input.dispatchEvent(new win.Event("input", { bubbles: true }) as unknown as Event);
+  });
+  expect(host.querySelector<HTMLButtonElement>("button[type=submit]")?.disabled).toBe(false);
+  await act(async () => { host.querySelector("form")!.dispatchEvent(new win.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event); });
+  await settle();
+  expect(posts.map(p => p.body)).toEqual([{ action: "add", name: "work" }]);
+  expect(host.querySelectorAll("li")).toHaveLength(1);
+  names.push("work");
+  await act(async () => click("Refresh"));
+  await settle();
+  expect(host.querySelectorAll("li")).toHaveLength(2);
+  expect(selected).toBe("default");
+  await act(async () => click("Use this account"));
+  await settle();
+  expect(host.querySelector("li.pwi-auth-row--active")?.textContent).toContain("work");
+  expect(posts.map(p => p.body)).toEqual([{ action: "add", name: "work" }, { action: "use", name: "work" }]);
+});

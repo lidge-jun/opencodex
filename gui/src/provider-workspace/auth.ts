@@ -3,7 +3,7 @@ import { isAccountProvider, type WorkspaceItem } from "./catalog";
 import { isLocalProvider } from "./kind";
 import { isSubscriptionCliProvider } from "./subscription-cli";
 
-export type ProviderAuthSurface = "codex-accounts" | "oauth-accounts" | "api-keys" | null;
+export type ProviderAuthSurface = "agy-accounts" | "codex-accounts" | "oauth-accounts" | "api-keys" | null;
 
 export interface OAuthAccountIdentity {
   id: string;
@@ -20,6 +20,7 @@ export interface OAuthAccountIdentity {
  * account pool merely because it also uses forward authentication.
  */
 export function providerAuthSurface(item: WorkspaceItem): ProviderAuthSurface {
+  if (item.adapter === "agy-acp") return "agy-accounts";
   if (isAccountProvider(item.name, item)) return "codex-accounts";
 
   const mode = (item.authMode ?? "").toLowerCase();

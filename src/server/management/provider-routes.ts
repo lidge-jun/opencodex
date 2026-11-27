@@ -883,6 +883,10 @@ function canonicalOpenAiBudgetPatchError(
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, principal, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
+  if (url.pathname === "/api/antigravity-acp/accounts" && (req.method === "GET" || req.method === "POST")) {
+    const { handleAgyAccounts } = await import("./agy-account-routes");
+    return handleAgyAccounts(ctx);
+  }
   if (url.pathname === "/api/provider-quotas" && req.method === "GET") {
     const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
     const snapshot = await fetchProviderQuotaReports(config, forceRefresh);
