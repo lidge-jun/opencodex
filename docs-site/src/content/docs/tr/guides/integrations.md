@@ -159,7 +159,7 @@ normalleştirilebilir. İstisna, JSON'un birebir yeniden yazamayacağı şeylerd
 büyük bir tam sayı ya da sıfıra çökecek kadar küçük bir sayı), `-0`, aynı
 nesnede iki kez yazılmış bir anahtar veya 1000 seviyeden derin iç içe geçme —
 bu durumda anahtar kilitlenir, böylece
-hiçbir şey sessizce değiştirilmez veya düşürülmez. **OMP**, **Hermes** ve **Kimi Code** de yanındaki
+hiçbir şey sessizce değiştirilmez veya düşürülmez. **OMP**, **DSH**, **Hermes** ve **Kimi Code** de yanındaki
 düzenlemelerden etkilenmez, ama başka bir nedenle: writer'ları yalnızca kendi
 yönetilen aralıklarını bayt bayt yamalar, dosyanın geri kalanı hiçbir
 zaman yeniden yazılmaz. Yorum taşıyabilen diğer biçimlerde (OpenClaw,

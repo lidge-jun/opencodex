@@ -1,6 +1,11 @@
 import { parseSegment } from "./merge";
 import { quoteTomlKey, renderToml } from "./serialize";
 
+interface LineToken {
+  readonly text: string;
+  eol: string;
+}
+
 /**
  * Write owned TOML tables into the user's file without re-rendering the rest of it (#9152).
  *
@@ -11,7 +16,8 @@ import { quoteTomlKey, renderToml } from "./serialize";
  *
  * The result must parse to `expected`, the document the whole-file writer would have produced.
  * A layout this cannot patch (an owned table written inline or with dotted keys, a header inside a
- * multi-line string) fails that check and returns null, so the caller refuses instead of guessing.
+ * multi-line string, or a user comment inside an owned table) fails that check and returns null,
+ * so the caller refuses instead of guessing.
  */
 export function patchTomlTablesSource(
   before: string,
@@ -21,52 +27,113 @@ export function patchTomlTablesSource(
 ): string | null {
   if ([...remove, ...upsert.map(item => item.path)].some(path => !path.every(isPlainKey))) return null;
   if (upsert.some(item => !isPlainRecord(item.value))) return null;
-  const lines = before.split("\n");
-  const headers = lines.map(tableHeaderPath);
+  const eol = before.includes("\r\n") ? "\r\n" : "\n";
+  const lines = splitLines(before);
+  const headers = lines.map(line => tableHeaderPath(line.text));
   const owned = new Set([...remove, ...upsert.map(item => item.path)].map(pathKey));
   const prunedHeaders = prunedContainers(before, expected);
   const drop = new Set<number>();
   const retained: string[][] = [];
   let insertAt: number | undefined;
-  headers.forEach((header, index) => {
-    if (header === null || header === "array") return;
+  for (let index = 0; index < headers.length; index += 1) {
+    const header = headers[index]!;
+    if (header === null || header === "array") continue;
     const key = pathKey(header);
     if (header.some((_, depth) => owned.has(pathKey(header.slice(0, depth + 1))))) {
       insertAt ??= index;
-      dropRange(lines, headers, index, true, drop);
+      if (!dropRange(lines, headers, index, true, drop)) return null;
     } else if (prunedHeaders.has(key)) {
       // A comment the user put on the header line keeps the table, now empty, rather than going
       // with it.
-      if (/\]\s*#/.test(lines[index]!)) retained.push(header);
+      if (hasTomlComment(lines[index]!.text)) retained.push(header);
       else dropRange(lines, headers, index, false, drop);
     }
-  });
-  const kept: string[] = [];
+  }
+  const kept: LineToken[] = [];
   let insertKept: number | undefined;
+  let droppedFirstSeparator = false;
   lines.forEach((line, index) => {
-    if (index === insertAt) insertKept = kept.length;
-    if (!drop.has(index)) kept.push(line);
+    if (index === insertAt) {
+      insertKept = kept.length;
+      droppedFirstSeparator = index > 0 && drop.has(index - 1) && lines[index - 1]!.text.trim() === "";
+    }
+    if (!drop.has(index)) kept.push({ text: line.text, eol: line.eol });
   });
-  const blocks = upsert.map(item => renderTable(item.path, item.value as Record<string, unknown>));
+  const blocks = upsert.map(item => renderTable(item.path, item.value as Record<string, unknown>, eol));
   let text: string;
   if (blocks.length === 0) {
-    text = kept.join("\n");
-  } else if (insertKept !== undefined && kept.slice(insertKept).some(line => line.trim() !== "")) {
+    // Removing an appended managed block that had no blank separator above it (a file that
+    // originally ended without a trailing newline) restores the absent trailing newline.
+    if (insertKept !== undefined && insertKept === kept.length && kept.length > 0 && !droppedFirstSeparator) {
+      kept[kept.length - 1]!.eol = "";
+    }
+    text = joinLines(kept);
+  } else if (insertKept !== undefined && kept.slice(insertKept).some(line => line.text.trim() !== "")) {
     const head = kept.slice(0, insertKept);
     const tail = kept.slice(insertKept);
-    while (tail[0]?.trim() === "") tail.shift();
-    const lead = head.length > 0 && head[head.length - 1]!.trim() !== "" ? "\n" : "";
-    text = `${head.join("\n")}${head.length > 0 ? "\n" : ""}${lead}${blocks.join("\n")}\n${tail.join("\n")}`;
+    const headText = joinLines(head);
+    const tailText = joinLines(tail);
+    let lead = "";
+    if (head.length > 0) {
+      if (head[head.length - 1]!.eol === "") lead = eol;
+      else if (droppedFirstSeparator) lead = eol;
+    }
+    text = `${headText}${lead}${blocks.join(eol)}${tailText}`;
   } else {
-    const body = kept.join("\n");
-    const separator = body.length === 0 ? "" : body.endsWith("\n") ? "\n" : "\n\n";
-    text = `${body}${separator}${blocks.join("\n")}`;
+    const body = joinLines(kept);
+    const separator = body.length === 0 ? "" : eol;
+    text = `${body}${separator}${blocks.join(eol)}`;
   }
   try {
     return Bun.deepEquals(Bun.TOML.parse(text), withEmptyTables(expected, retained)) ? text : null;
   } catch {
     return null;
   }
+}
+
+function splitLines(input: string): LineToken[] {
+  if (input.length === 0) return [];
+  const tokens: LineToken[] = [];
+  let start = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    if (ch === "\r" && input[i + 1] === "\n") {
+      tokens.push({ text: input.slice(start, i), eol: "\r\n" });
+      i += 1;
+      start = i + 1;
+    } else if (ch === "\n") {
+      tokens.push({ text: input.slice(start, i), eol: "\n" });
+      start = i + 1;
+    }
+  }
+  if (start < input.length) {
+    tokens.push({ text: input.slice(start), eol: "" });
+  }
+  return tokens;
+}
+
+function joinLines(lines: readonly LineToken[]): string {
+  return lines.map(line => line.text + line.eol).join("");
+}
+
+/** True when a TOML line carries a `#` comment outside single- or double-quoted strings. */
+function hasTomlComment(line: string): boolean {
+  let inDouble = false;
+  let inSingle = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i]!;
+    if (inDouble) {
+      if (ch === "\\") { i += 1; continue; }
+      if (ch === "\"") inDouble = false;
+    } else if (inSingle) {
+      if (ch === "'") inSingle = false;
+    } else {
+      if (ch === "\"") inDouble = true;
+      else if (ch === "'") inSingle = true;
+      else if (ch === "#") return true;
+    }
+  }
+  return false;
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -107,22 +174,27 @@ function tableHeaderPath(line: string): string[] | "array" | null {
 /**
  * Mark a table for removal: its header, the blank line above it, and with `body` its key lines up
  * to the next header. Comments and blank lines at the end of the body stay, since they usually
- * introduce whatever follows.
+ * introduce whatever follows. Returns false if an owned table header or body carries a user
+ * comment that dropping the range would silently lose.
  */
 function dropRange(
-  lines: readonly string[],
+  lines: readonly LineToken[],
   headers: readonly (string[] | "array" | null)[],
   start: number,
   body: boolean,
   drop: Set<number>,
-): void {
+): boolean {
   let end = start + 1;
   if (body) {
     while (end < lines.length && headers[end] === null) end += 1;
-    while (end > start + 1 && /^\s*(#.*)?$/.test(lines[end - 1]!)) end -= 1;
+    while (end > start + 1 && /^\s*(#.*)?$/.test(lines[end - 1]!.text)) end -= 1;
+    for (let index = start; index < end; index += 1) {
+      if (hasTomlComment(lines[index]!.text)) return false;
+    }
   }
   for (let index = start; index < end; index += 1) drop.add(index);
-  if (start > 0 && lines[start - 1]!.trim() === "" && !drop.has(start - 1)) drop.add(start - 1);
+  if (start > 0 && lines[start - 1]!.text.trim() === "" && !drop.has(start - 1)) drop.add(start - 1);
+  return true;
 }
 
 /** Table paths the file declares that the expected document no longer has. */
@@ -161,7 +233,8 @@ function withEmptyTables(document: unknown, paths: readonly string[][]): unknown
   return copy;
 }
 
-function renderTable(path: readonly string[], value: Record<string, unknown>): string {
+function renderTable(path: readonly string[], value: Record<string, unknown>, eol: string): string {
   const header = path.map(quoteTomlKey).join(".");
-  return `[${header}]\n${renderToml(value, header)}`;
+  const rendered = `[${header}]\n${renderToml(value, header)}`;
+  return eol === "\n" ? rendered : rendered.replace(/\n/g, eol);
 }
