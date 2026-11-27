@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { resolveAgyBinary } from "../../adapters/agy-acp/binary";
-import { profileNames, profileRoot, selectedName, selectProfile, validProfileName } from "../../adapters/agy-acp/profiles";
+import { profileNames, profileRoot, removeProfile, selectedName, selectProfile, validProfileName } from "../../adapters/agy-acp/profiles";
 import { getConfigDir } from "../../config/paths";
 import { desktopGuiOrigin, hasDesktopForwardingHeaders } from "../../lib/desktop-gui-origin";
 import { selfLaunchArgv } from "../../lib/self-launch-argv";
@@ -46,6 +46,11 @@ export async function handleAgyAccounts(ctx: ManagementContext, openTerminal = o
   if (!body || typeof body !== "object" || !("name" in body) || typeof body.name !== "string" || !("action" in body))
     return jsonResponse({ error: "invalid_request" }, 400);
   const { name, action } = body;
+  if (action === "remove") {
+    if (!validProfileName(name)) return jsonResponse({ error: "invalid_request" }, 400);
+    removeProfile(name, getConfigDir(), root);
+    return jsonResponse(list());
+  }
   if (action === "use") {
     if (name !== "default" && (!validProfileName(name) || !profileNames(root).includes(name))) return jsonResponse({ error: "unknown_profile" }, 404);
     selectProfile(name, getConfigDir(), root);

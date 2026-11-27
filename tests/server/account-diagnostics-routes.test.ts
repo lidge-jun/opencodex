@@ -310,13 +310,24 @@ test.skipIf(process.platform === "win32")("local Antigravity accounts register a
     expect(launch).toEqual(["work"]);
   }
   expect(await (await request()).json()).toMatchObject({ names: ["default"], selected: "default" });
-  addProfile(profiles, "work", dir => {
+  const signIn = (dir: string) => {
     const dataDir = join(dir, "antigravity-cli");
     mkdirSync(dataDir);
     writeFileSync(join(dataDir, "antigravity-oauth-token"), "fixture", { mode: 0o600 });
-  });
+  };
+  addProfile(profiles, "work", signIn);
   expect(await (await request()).json()).toMatchObject({ names: ["default", "work"], selected: "default" });
   expect(await (await request({ action: "use", name: "work" })).json()).toMatchObject({ selected: "work" });
   expect(await (await request()).json()).toMatchObject({ selected: "work" });
-  expect(await (await request({ action: "use", name: "default" })).json()).toMatchObject({ selected: "default" });
+  addProfile(profiles, "secondary", signIn);
+  expect((await request({ action: "remove", name: "default" })).status).toBe(400);
+  expect((await request({ action: "remove", name: "../work" })).status).toBe(400);
+  expect((await request({ action: "remove", name: "work" }, false)).status).toBe(403);
+  expect(await (await request({ action: "remove", name: "secondary" })).json()).toMatchObject({ names: ["default", "work"], selected: "work" });
+  addProfile(profiles, "secondary", signIn);
+  expect(await (await request({ action: "remove", name: "work" })).json()).toMatchObject({ names: ["default", "secondary"], selected: "default" });
+  expect(await (await request({ action: "remove", name: "work" })).json()).toMatchObject({ selected: "default" });
+  expect(statSync(join(profiles, "work"), { throwIfNoEntry: false })).toBeUndefined();
+  addProfile(profiles, "work", signIn);
+  expect(await (await request({ action: "use", name: "work" })).json()).toMatchObject({ selected: "work" });
 });

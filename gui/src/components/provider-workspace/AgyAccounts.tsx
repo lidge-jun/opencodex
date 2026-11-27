@@ -14,6 +14,7 @@ export default function AgyAccounts({ apiBase, targetKey }: { apiBase: string; t
   const key = JSON.stringify(["agy-accounts", apiBase, targetKey]);
   const [name, setName] = useState("");
   const [pending, setPending] = useState("");
+  const [removeName, setRemoveName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const { data, loading, lastAttemptOk, refresh } = useKeyedClientResource(key, [capture], async signal => {
@@ -33,7 +34,7 @@ export default function AgyAccounts({ apiBase, targetKey }: { apiBase: string; t
     return () => window.clearTimeout(timer);
   }, [pending]);
 
-  async function change(action: "add" | "use", label: string) {
+  async function change(action: "add" | "use" | "remove", label: string) {
     if (busy || !isApiTargetCaptureCurrent(capture)) return;
     setBusy(true);
     setError("");
@@ -42,12 +43,20 @@ export default function AgyAccounts({ apiBase, targetKey }: { apiBase: string; t
         body: JSON.stringify({ action, name: label }) });
       if (!isApiTargetCaptureCurrent(capture)) return;
       if (!res.ok) {
-        setError(action === "use" ? t("prov.accountSwitchFail") : t("agyAccounts.manual"));
+        setError(action === "remove" ? t("prov.accountRemoveUnverified", { email: label })
+          : action === "use" ? t("prov.accountSwitchFail") : t("agyAccounts.manual"));
+        if (action === "remove") refresh();
         return;
       }
       if (action === "add") setPending(label);
-      else setClientResourceData(key, await res.json() as Accounts);
-    } catch { setError(t("prov.networkError")); }
+      else {
+        setClientResourceData(key, await res.json() as Accounts);
+        if (action === "remove") setRemoveName("");
+      }
+    } catch {
+      setError(t("prov.networkError"));
+      if (action === "remove") refresh();
+    }
     finally { setBusy(false); }
   }
 
@@ -66,11 +75,25 @@ export default function AgyAccounts({ apiBase, targetKey }: { apiBase: string; t
         <ul className="pwi-auth-list">
           {data.names.map(account => <li key={account} className={account === data.selected ? "pwi-auth-optin-row pwi-auth-row--active" : "pwi-auth-optin-row"}>
             <span className="pwi-auth-optin-label">{account === "default" ? t("agyAccounts.default") : account}</span>
-            {account === data.selected ? <strong>{t("pws.accountCurrent")}</strong>
-              : <button type="button" className="btn btn-ghost" disabled={busy || !lastAttemptOk}
-                  onClick={() => void change("use", account)}>{t("prov.accountSwitchTitle")}</button>}
+            <div className="pwi-auth-head-actions">
+              {account === data.selected ? <strong>{t("pws.accountCurrent")}</strong>
+                : <button type="button" className="btn btn-ghost" disabled={busy || !lastAttemptOk}
+                    onClick={() => void change("use", account)}>{t("prov.accountSwitchTitle")}</button>}
+              {account !== "default" && <button type="button" className="btn btn-ghost" disabled={busy || !lastAttemptOk}
+                aria-label={t("prov.accountRemoveAria", { email: account })} onClick={() => setRemoveName(account)}>{t("common.delete")}</button>}
+            </div>
           </li>)}
         </ul>
+        {removeName && data.names.includes(removeName) && (
+          <div className="pwi-auth-wait" role="group" aria-label={t("prov.accountRemoveAria", { email: removeName })}>
+            <p>{t("agyAccounts.removeConfirm", { name: removeName })}</p>
+            <div className="pwi-auth-actions">
+              <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setRemoveName("")}>{t("common.cancel")}</button>
+              <button type="button" className="btn btn-danger" disabled={busy || !lastAttemptOk}
+                onClick={() => void change("remove", removeName)}>{t("common.delete")}</button>
+            </div>
+          </div>
+        )}
         <form className="pwi-auth-actions" onSubmit={event => {
           event.preventDefault();
           if (valid && !duplicate && data.canOpenTerminal && !pending && lastAttemptOk) void change("add", label);

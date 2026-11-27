@@ -924,6 +924,8 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
   `ocx account agy add personal` and `ocx account agy add work`. Complete Google's terminal sign-in
   for each label. In the local dashboard, open **Providers → Antigravity ACP → Accounts** to select a login.
   On macOS, enter a label and choose **Add account** to start Google sign-in in Terminal. Return to the list and select the new account.
+  Choose **Delete** beside a named account and confirm to remove its local login and CLI data, or run
+  `ocx account agy remove work`. Removing the selected account restores the default CLI account for new requests.
   List them with `ocx account agy list` and select one with `ocx account agy use work`.
   Selection applies to subsequent ACP turns, including turns in an existing chat. An in-flight turn
   keeps its original login. Use `ocx account agy use default` to return to the host CLI sign-in.

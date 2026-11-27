@@ -2,6 +2,7 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, wr
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import { getConfigDir } from "../../config/paths";
 export { validProfileName } from "./profile-name";
 import { validProfileName } from "./profile-name";
@@ -56,7 +57,37 @@ export function selectedName(config = getConfigDir()): string {
 }
 
 export function selectProfile(name: string, config: string, root: string): void {
-  if (name !== "default" && !profileNames(root).includes(name)) throw new Error("Unknown or signed-out Antigravity account.");
+  withConfigMutationLockSync(() => {
+    if (name !== "default" && !profileNames(root).includes(name)) throw new Error("Unknown or signed-out Antigravity account.");
+    writeSelected(name, config);
+  }, config);
+}
+
+/** Only a registered private profile can be removed. Detach its directory before erasing it. */
+export function removeProfile(name: string, config: string, root: string): void {
+  if (!validProfileName(name)) throw new Error("Choose a named Antigravity account to remove.");
+  withConfigMutationLockSync(() => {
+    if (!lstatSync(root, { throwIfNoEntry: false })) return;
+    if (!privateDirectory(root)) throw new Error("The Antigravity account directory must be private.");
+    const dir = join(root, name);
+    const retired = join(root, ".removing-" + name);
+    if (lstatSync(retired, { throwIfNoEntry: false })) {
+      rmSync(retired, { recursive: true, force: true });
+    }
+    if (!lstatSync(dir, { throwIfNoEntry: false })) return;
+    if (!signedInProfile(dir)) throw new Error("Unknown Antigravity account.");
+    const active = selectedName(config) === name;
+    if (active) writeSelected("default", config);
+    try { renameSync(dir, retired); }
+    catch (error) {
+      if (active && signedInProfile(dir)) writeSelected(name, config);
+      throw error;
+    }
+    rmSync(retired, { recursive: true, force: true });
+  }, config);
+}
+
+function writeSelected(name: string, config: string): void {
   mkdirSync(config, { recursive: true, mode: 0o700 });
   const file = join(config, selectedFile);
   const temporary = file + "." + randomUUID();
