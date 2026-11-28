@@ -157,6 +157,13 @@ refusal as rate-limit or quota evidence against the credential it was holding. T
 requests such as vision and web search are replayed normally, because repeating them cannot
 duplicate a turn.
 
+That terminal policy is the default. Set the top-level `replayRefusalRetryable` to `true`
+to answer the same refusal with HTTP 502 and `x-should-retry: true` instead. This is for
+clients such as Codex that retry 5xx but never 429; the upstream turn may already have run,
+so the option accepts a possible duplicate inference and billing. The default remains
+429/false, and deterministic contract errors keep their non-retryable headers regardless of
+this setting. Restart the proxy to apply.
+
 Native ChatGPT Responses and compact HTTP requests whose serialized JSON strings are at least
 1 MiB in UTF-8 use byte-buffer uploads to avoid Bun resetting a large string upload before response
 headers arrive. This preserves the request

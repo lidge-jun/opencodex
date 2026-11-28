@@ -1,5 +1,6 @@
 import {
   applyReplayRefusalClientHeaders,
+  applyTerminalRefusalClientHeaders,
   isNonReplayableUpstreamCode,
   isReplayRefusalCode,
   markResponseNonReplayable,
@@ -114,7 +115,7 @@ export function formatErrorResponse(
   // and no wait of its own does not stop a client that retries every 429 by default.
   const refusal = isReplayRefusalCode(error.code) && replayBlocked;
   if (refusal) applyReplayRefusalClientHeaders(headers);
-  if (error.code === REQUIRED_TOOL_CONTRACT_CODE && finalStatus === 400) applyReplayRefusalClientHeaders(headers);
+  if (error.code === REQUIRED_TOOL_CONTRACT_CODE && finalStatus === 400) applyTerminalRefusalClientHeaders(headers);
   const response = new Response(JSON.stringify({ error }), {
     status: finalStatus,
     headers,

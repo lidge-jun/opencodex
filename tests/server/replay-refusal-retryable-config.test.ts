@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import {
+  applyTerminalRefusalClientHeaders,
   replayRefusalResponse,
   replayRefusedStatus,
   setReplayRefusalRetryable,
@@ -20,4 +21,11 @@ test("replayRefusalRetryable makes the refusal a retryable 502", async () => {
   const response = replayRefusalResponse();
   expect(response.status).toBe(502);
   expect(response.headers.get("x-should-retry")).toBe("true");
+});
+
+test("deterministic contract errors stay terminal when retryable refusals are enabled", () => {
+  setReplayRefusalRetryable(true);
+  const headers = new Headers();
+  applyTerminalRefusalClientHeaders(headers);
+  expect(headers.get("x-should-retry")).toBe("false");
 });

@@ -169,6 +169,18 @@ export function applyReplayRefusalClientHeaders(headers: Headers): void {
 }
 
 /**
+ * Headers for a deterministic contract error that must never be retried.
+ *
+ * Unlike a replay refusal, this is not an ambiguous transport outcome: another send
+ * cannot change the answer, and must not repeat a hosted effect. It therefore keeps
+ * the terminal x-should-retry value even when replayRefusalRetryable is enabled.
+ */
+export function applyTerminalRefusalClientHeaders(headers: Headers): void {
+  headers.delete("retry-after");
+  headers.set(REPLAY_REFUSAL_NO_RETRY_HEADER, REPLAY_REFUSAL_NO_RETRY_VALUE);
+}
+
+/**
  * Mark a response that re-wraps a refusal as the same refusal.
  *
  * The verdict has to be a property of the result the surfaces pass around, because the thing it
