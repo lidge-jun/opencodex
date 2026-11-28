@@ -564,6 +564,17 @@ describe("selfContainedResponsesBody", () => {
     })).toBe(true);
   });
 
+  test("Codex history records from multi-agent threads and effort changes replay like messages (#9185)", () => {
+    expect(selfContainedResponsesBody({
+      ...clientTurn,
+      input: [
+        ...clientTurn.input,
+        { type: "agent_message", author: "/root", recipient: "/root/reader", content: [{ type: "input_text", text: "read it" }] },
+        { type: "configuration_update", reasoning: { effort: "low" } },
+      ],
+    })).toBe(true);
+  });
+
   test("an input item type this proxy does not recognise is refused", () => {
     expect(selfContainedResponsesBody({
       ...clientTurn,

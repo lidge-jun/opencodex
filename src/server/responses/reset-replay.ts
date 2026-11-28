@@ -75,6 +75,9 @@ const CLIENT_INPUT_ITEM_TYPES: ReadonlySet<string> = new Set([
   "function_call", "function_call_output",
   "custom_tool_call", "custom_tool_call_output",
   "tool_search_call",
+  // Codex history records: messages between agents in a multi-agent thread, and the effort a
+  // session switched to. Neither runs anything on the origin (#9185).
+  "agent_message", "configuration_update",
 ]);
 const MESSAGE_ROLES: ReadonlySet<string> = new Set(["user", "assistant", "system", "developer"]);
 /** Bounded traversal: a catalog is operator data, not a reason to walk forever. */

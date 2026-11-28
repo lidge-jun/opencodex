@@ -62,6 +62,10 @@ function portableBody(body: Record<string, unknown>): boolean {
   // Native ciphertext cannot be summarized by another provider. Never silently replace it with a note.
   if (body.input.some(item => record(item) && ["compaction", "compaction_summary", "context_compaction"].includes(String(item.type))
     && typeof item.encrypted_content === "string" && !item.encrypted_content.startsWith("ocx1:") && !decodeRetainedCompaction(item.encrypted_content))) return false;
+  // The replay check accepts these because a second send to the same origin only repeats the
+  // inference. Another provider is a different question: agent_message content can be backend
+  // ciphertext it cannot read (#9185).
+  if (body.input.some(item => record(item) && (item.type === "agent_message" || item.type === "configuration_update"))) return false;
   const input = body.input.filter(item => !record(item) || item.type !== "compaction_trigger");
   return selfContainedResponsesBody({ ...body, store: false, input });
 }
