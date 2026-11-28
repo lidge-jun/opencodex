@@ -121,6 +121,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     ],
   },
   {
+    name: "claude-shim",
+    usage: "ocx claude-shim <install|status|uninstall>",
+    summary: "Manage the opt-in Claude Code PATH overlay on Linux and macOS.",
+  },
+  {
     name: "codex-shim",
     usage: "ocx codex-shim <install|status|uninstall|remove>",
     summary: "Auto-start the proxy when `codex` launches.",

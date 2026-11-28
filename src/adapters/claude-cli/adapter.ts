@@ -1,3 +1,4 @@
+import { findNativePosixClaude, supportsClaudeShim } from "../../claude/native-executable";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -44,6 +45,7 @@ export function findClaudeCliBinary(
   userHome = homedir(),
   platform: NodeJS.Platform = process.platform,
 ): string | undefined {
+  if (candidate === "claude" && pathLookup === whichFromPath && supportsClaudeShim(platform)) return findNativePosixClaude(process.env.PATH, userHome);
   const onPath = pathLookup(candidate);
   if (onPath || candidate !== "claude") return onPath;
   const nativePath = join(userHome, ".local", "bin", platform === "win32" ? "claude.exe" : "claude");

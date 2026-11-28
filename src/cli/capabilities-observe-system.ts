@@ -646,6 +646,24 @@ export const OBSERVE_SYSTEM_CAPABILITIES: readonly Capability[] = [
     details: ["Local OS service manager: macOS launchd, Linux systemd, Windows Task Scheduler or WinSW. No management API or JSON mode.", "remove is an alias for uninstall."],
   },
   {
+    command: ["claude-shim", "install"], summary: "Install the private Claude Code PATH overlay.",
+    usage: "ocx claude-shim install",
+    routes: [], flags: [], mutates: true, json: "none",
+    details: ["Linux and macOS only. Native Claude and shell startup files are not modified."],
+  },
+  {
+    command: ["claude-shim", "status"], summary: "Inspect Claude Code overlay installation and PATH activation.",
+    usage: "ocx claude-shim status",
+    routes: [], flags: [], mutates: false, json: "none",
+    details: ["Linux and macOS only. Native Claude and shell startup files are not modified."],
+  },
+  {
+    command: ["claude-shim", "uninstall"], summary: "Remove only the managed Claude Code overlay.",
+    usage: "ocx claude-shim uninstall",
+    routes: [], flags: [], mutates: true, json: "none",
+    details: ["Linux and macOS only. Native Claude and shell startup files are not modified."],
+  },
+  {
     command: ["codex-shim", "install"], summary: "Local Codex launcher shim install.",
     usage: "ocx codex-shim install",
     routes: [],
