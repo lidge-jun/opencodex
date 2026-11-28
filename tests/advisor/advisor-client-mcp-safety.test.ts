@@ -7,6 +7,7 @@ import {
   ADVISOR_MCP_SERVER_NAME,
   advisorHookCommand,
   buildNoticeHookScript,
+  inspectAdvisorMcpClientStatus,
   mountAdvisorMcpForClient,
   shellQuote,
   syncAdvisorMcpClients,
@@ -124,14 +125,15 @@ describe("Advisor client MCP safety", () => {
     const home = tempHome("ocx-advisor-hook-ready-");
     const bin = join(home, "bin");
     mkdirSync(bin);
-    // A curl stand-in: an HTTP error status fails only when the caller asked for --fail, as real curl does.
-    writeFileSync(join(bin, "curl"), "#!/bin/sh\ncase \" $* \" in *\" -f\"*) [ \"$HEALTH_STATUS\" = 404 ] && exit 22;; esac\nexit 0\n", { mode: 0o755 });
+    // A curl stand-in that reports the HTTP status the hook asks for with -w.
+    writeFileSync(join(bin, "curl"), "#!/bin/sh\nprintf '%s' \"${HEALTH_STATUS:-200}\"\nexit 0\n", { mode: 0o755 });
     const run = (execPath: string, status = "200") => spawnSync("sh", ["-c", buildNoticeHookScript(home, execPath)],
       { encoding: "utf8", env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home, USERPROFILE: home, HEALTH_STATUS: status }, input: "{}" });
     expect(run(process.execPath).stdout).toBe("");
     writeFileSync(join(home, "config.json"), JSON.stringify({ advisor: { enabled: true, model: "expert", contextSharingConsent: "v1" } }));
     expect(run(join(home, "missing-bun")).stdout).toBe("");
     expect(run(process.execPath, "404").stdout).toBe("");
+    expect(run(process.execPath, "302").stdout).toBe("");
     expect(run(process.execPath).stdout).toContain("active and ready");
   });
 
@@ -428,6 +430,70 @@ describe("Advisor client MCP safety", () => {
     expect(mountAdvisorMcpForClient("qoder-cn", { homeDir: home, configDir, env: { QODERCN_CONFIG_DIR: alias } }).ok).toBe(true);
     const groups = JSON.parse(readFileSync(join(real, "settings.json"), "utf8")).hooks.UserPromptSubmit;
     expect(groups).toHaveLength(1);
+    // Status recognizes the alias registration for display, without recording it as Qoder CN's.
+    expect(inspectAdvisorMcpClientStatus("qoder-cn", { advisor: { enabled: true } } as Pick<OcxConfig, "advisor">, { homeDir: home, configDir, env: { QODERCN_CONFIG_DIR: alias } }).hooksMounted).toBe(true);
+  });
+  test("cleanup intent is written before ownership is released, so a failed handoff can be finished later", () => {
+    const home = tempHome("ocx-advisor-handoff-");
+    const configDir = join(home, ".opencodex");
+    const dir = join(home, "commandcode");
+    const opts = { homeDir: home, configDir, env: { COMMANDCODE_CONFIG_DIR: dir } };
+    expect(mountAdvisorMcpForClient("commandcode", opts).ok).toBe(true);
+    const queue = join(configDir, "advisor-pending-cleanup.json");
+    mkdirSync(queue);
+    expect(() => unmountAdvisorMcpForClient("commandcode", opts)).toThrow();
+    expect(JSON.parse(readFileSync(join(dir, "mcp.json"), "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeDefined();
+    rmSync(queue, { recursive: true, force: true });
+    expect(unmountAdvisorMcpForClient("commandcode", opts).ok).toBe(true);
+    expect(JSON.parse(readFileSync(join(dir, "mcp.json"), "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeUndefined();
+  });
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a recorded skill that cannot be read stays queued and is removed once readable", () => {
+    const home = tempHome("ocx-advisor-unreadable-skill-");
+    const configDir = join(home, ".opencodex");
+    const dir = join(home, "qoder");
+    const opts = { homeDir: home, configDir, env: { QODER_CONFIG_DIR: dir } };
+    expect(mountAdvisorMcpForClient("qoder", opts).ok).toBe(true);
+    const skill = join(dir, "skills", "opencodex-advisor", "SKILL.md");
+    chmodSync(skill, 0o000);
+    try {
+      const first = unmountAdvisorMcpForClient("qoder", opts);
+      expect(first.ok).toBe(false);
+      expect(first.error).toContain("Could not read");
+      expect(existsSync(skill)).toBe(true);
+    } finally {
+      chmodSync(skill, 0o644);
+    }
+    expect(unmountAdvisorMcpForClient("qoder", opts).ok).toBe(true);
+    expect(existsSync(skill)).toBe(false);
+  });
+  test("a move keeps the old directory's entry while another selected client still targets it", () => {
+    const home = tempHome("ocx-advisor-move-protected-");
+    const configDir = join(home, ".opencodex");
+    const oldDir = join(home, "dir-a");
+    const newDir = join(home, "dir-b");
+    expect(mountAdvisorMcpForClient("qoder", { homeDir: home, configDir, env: { QODER_CONFIG_DIR: oldDir } }).ok).toBe(true);
+    // The user edits the shared skill, so Qoder CN, selected at the old directory, refuses to mount.
+    appendFileSync(join(oldDir, "skills", "opencodex-advisor", "SKILL.md"), "\nMy note.\n");
+    const selected = { advisor: { enabled: true, model: "fixture/m", contextSharingConsent: "v1", mcpClients: ["qoder", "qoder-cn"] } } as unknown as OcxConfig;
+    const sync = syncAdvisorMcpClients(selected, { homeDir: home, configDir, env: { QODER_CONFIG_DIR: newDir, QODERCN_CONFIG_DIR: oldDir } });
+    expect(sync.errors.some(error => error.clientId === "qoder-cn")).toBe(true);
+    expect(JSON.parse(readFileSync(join(oldDir, "settings.json"), "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeDefined();
+    expect(JSON.parse(readFileSync(join(newDir, "settings.json"), "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeDefined();
+  });
+  test("deselecting a client whose config cannot be parsed queues its recorded entry and reports it", () => {
+    const home = tempHome("ocx-advisor-deselect-malformed-");
+    const configDir = join(home, ".opencodex");
+    const dir = join(home, "commandcode");
+    const opts = { homeDir: home, configDir, env: { COMMANDCODE_CONFIG_DIR: dir } };
+    expect(mountAdvisorMcpForClient("commandcode", opts).ok).toBe(true);
+    const mcpPath = join(dir, "mcp.json");
+    const valid = readFileSync(mcpPath, "utf8");
+    writeFileSync(mcpPath, "{ not json");
+    const sync = syncAdvisorMcpClients({ advisor: { enabled: false } }, opts);
+    expect(sync.errors.some(error => error.clientId === "commandcode" && error.message.includes("invalid JSON"))).toBe(true);
+    writeFileSync(mcpPath, valid);
+    expect(syncAdvisorMcpClients({ advisor: { enabled: false } }, opts).errors).toEqual([]);
+    expect(JSON.parse(readFileSync(mcpPath, "utf8")).mcpServers[ADVISOR_MCP_SERVER_NAME]).toBeUndefined();
   });
   test("a user edit at the old recorded path is kept, and a removed old file only drops the record", () => {
     const home = tempHome("ocx-advisor-stale-path-edited-");

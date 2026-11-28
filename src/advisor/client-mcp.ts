@@ -516,7 +516,9 @@ if [ -f "$CFG_PATH" ] && [ -x "$BUN_BIN" ]; then
   [ "$ADVISOR_OK" = "1" ] || exit 0
 fi
 
-curl -fsS --noproxy '*' --max-time 0.3 "http://127.0.0.1:\${PROXY_PORT}/healthz" >/dev/null 2>&1 || exit 0
+# A 2xx status only: redirects are not followed, and an error or redirect status is not a ready proxy.
+HEALTH_STATUS=$(curl -sS --noproxy '*' --max-time 0.3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:\${PROXY_PORT}/healthz" 2>/dev/null) || exit 0
+case "$HEALTH_STATUS" in 2??) ;; *) exit 0 ;; esac
 
 cat <<'EOF'
 [opencodex-advisor] The stronger OpenCodex expert advisor MCP tool \`consult_advisor\` (MCP server \`opencodex-advisor\` / lazy tool \`mcp__opencodex_advisor__consult_advisor\` or \`mcp__opencodex-advisor__consult_advisor\`) is active and ready.
@@ -565,12 +567,6 @@ function isHookItemWithCommand(item: unknown, command: string): boolean {
   return isPlainObject(item) && typeof item.command === "string" && item.command === command;
 }
 
-/** Whether any group runs the Advisor hook command for this script path (used for status only). */
-function entryMatchesAdvisorHook(entry: unknown, hookScriptPath: string): boolean {
-  if (!isPlainObject(entry) || !Array.isArray(entry.hooks)) return false;
-  return entry.hooks.some(item => isHookItemWithCommand(item, advisorHookCommand(hookScriptPath)));
-}
-
 /**
  * What OpenCodex installed for each client besides the MCP entry: the hook registration (hook config file and exact
  * command), the hook script and the skill file. A registration OpenCodex did not record is the user's and is never
@@ -594,15 +590,34 @@ function contentSha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-/** A regular, non-symlink file's text; null when missing, undefined when it is something else or unreadable. */
-function readPlainTextFile(path: string): string | null | undefined {
+type PlainTextFile =
+  | { state: "missing" }
+  | { state: "text"; text: string }
+  | { state: "foreign" }
+  | { state: "unreadable"; message: string };
+
+/** Inspect a regular, non-symlink file: missing, its text, something else (foreign), or present but unreadable. */
+function inspectPlainTextFile(path: string): PlainTextFile {
+  let isPlain: boolean;
   try {
     const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink()) return undefined;
-    return readFileSync(path, "utf8");
+    isPlain = stat.isFile() && !stat.isSymbolicLink();
   } catch (error) {
-    return (error as { code?: string }).code === "ENOENT" ? null : undefined;
+    if ((error as { code?: string }).code === "ENOENT") return { state: "missing" };
+    return { state: "unreadable", message: error instanceof Error ? error.message : String(error) };
   }
+  if (!isPlain) return { state: "foreign" };
+  try {
+    return { state: "text", text: readFileSync(path, "utf8") };
+  } catch (error) {
+    return { state: "unreadable", message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** A regular, non-symlink file's text; null when missing, undefined when it is something else or unreadable. */
+function readPlainTextFile(path: string): string | null | undefined {
+  const file = inspectPlainTextFile(path);
+  return file.state === "text" ? file.text : file.state === "missing" ? null : undefined;
 }
 
 /**
@@ -763,13 +778,12 @@ function queueRecordedArtifacts(spec: ClientSpec, paths: ResolvedClientPaths, co
   const items: PendingCleanup[] = [];
   const mcpRecords = readOwnedAdvisorEntries(configDir);
   const mcpRecord = mcpRecords[spec.id];
-  if (mcpRecord && !(keepCurrent && same(mcpRecord.configPath, paths.mcpConfigPath))) {
+  const releaseMcp = !!mcpRecord && !(keepCurrent && same(mcpRecord.configPath, paths.mcpConfigPath));
+  if (mcpRecord && releaseMcp) {
     items.push({
       kind: "mcp", clientId: spec.id, container: spec.mcpContainer, configPath: mcpRecord.configPath, entry: mcpRecord.entry,
       routingShared: !!paths.sharedWithRouting && same(mcpRecord.configPath, paths.mcpConfigPath),
     });
-    const { [spec.id]: _queued, ...rest } = mcpRecords;
-    writeOwnedAdvisorEntries(configDir, rest);
   }
   const artifacts = readOwnedArtifacts(configDir);
   const record: OwnedArtifacts = { ...(artifacts[spec.id] ?? {}) };
@@ -800,10 +814,17 @@ function queueRecordedArtifacts(spec: ClientSpec, paths: ResolvedClientPaths, co
     delete record.hookConfigPath;
     delete record.command;
   }
-  if (JSON.stringify(record) !== JSON.stringify(artifacts[spec.id] ?? {})) {
-    writeOwnedArtifacts(configDir, { ...artifacts, [spec.id]: record });
-  }
+  // The cleanup intent is written before the records that justify it are released. If the process stops in
+  // between, both survive: the record still claims the artifacts, so the queue never removes them, and the next
+  // mount or unmount queues them again and finishes the release.
   queuePendingCleanup(configDir, items);
+  if (releaseMcp) {
+    const { [spec.id]: _queued, ...rest } = readOwnedAdvisorEntries(configDir);
+    writeOwnedAdvisorEntries(configDir, rest);
+  }
+  if (JSON.stringify(record) !== JSON.stringify(artifacts[spec.id] ?? {})) {
+    writeOwnedArtifacts(configDir, { ...readOwnedArtifacts(configDir), [spec.id]: record });
+  }
 }
 
 function unlinkOwnedFile(item: Extract<PendingCleanup, { kind: "file" }>): boolean {
@@ -902,8 +923,14 @@ function reconcilePendingCleanup(
     const protectedSet = item.marker === "hook" ? protectedPaths?.hookScriptPaths : protectedPaths?.skillPaths;
     if (protectedSet?.has(target)) { keep.push(item); return; }
     // Only the exact content OpenCodex recorded writing is removed; a changed or unrecorded file is the user's.
-    const text = readPlainTextFile(item.path);
-    if (typeof text !== "string" || !item.sha256 || contentSha256(text) !== item.sha256) return;
+    // A file that exists but cannot be read stays queued: neither its absence nor its ownership is known.
+    const file = inspectPlainTextFile(item.path);
+    if (file.state === "unreadable") {
+      keep.push(item);
+      errors.push({ clientId, message: `Could not read ${item.path} (${file.message}); Advisor cleanup will retry` });
+      return;
+    }
+    if (file.state !== "text" || !item.sha256 || contentSha256(file.text) !== item.sha256) return;
     // A registration (the user's, or one whose ownership is ambiguous) still runs this script, or nothing says which
     // config could run it: keep it.
     if (item.marker === "hook" && (!item.hookConfigPath || !item.command || hookStillRegistered(item.hookConfigPath, item.command))) {
@@ -1110,7 +1137,11 @@ export function inspectAdvisorMcpClientStatus(
     const submitArr = hooksDoc.doc && isPlainObject(hooksDoc.doc.hooks) && Array.isArray(hooksDoc.doc.hooks.UserPromptSubmit)
       ? hooksDoc.doc.hooks.UserPromptSubmit
       : [];
-    hooksMounted = submitArr.some(entry => entryMatchesAdvisorHook(entry, paths.hookScriptPath!));
+    // Display only: a hook that runs the script through any spelling (a symlinked directory, unquoted) counts as
+    // mounted, the same identity check mount uses. Removal still requires the exact recorded registration.
+    const command = advisorHookCommand(paths.hookScriptPath);
+    hooksMounted = submitArr.some(entry => isPlainObject(entry) && Array.isArray(entry.hooks)
+      && entry.hooks.some(item => hookItemRunsScript(item, command)));
   }
   const skillMounted = Boolean(
     spec.supportsSkills
@@ -1197,6 +1228,8 @@ function ownsAdvisorEntry(
 export function mountAdvisorMcpForClient(
   clientId: AdvisorMcpClientId,
   options?: AdvisorMcpSyncOptions,
+  /** Paths no cleanup may touch; a batch sync passes every selected client's paths. Defaults to this client's own. */
+  cleanupProtection?: ProtectedClientPaths,
 ): { ok: boolean; changed: boolean; error?: string; status?: AdvisorMcpClientStatus } {
   const home = resolveSafeHome(options);
   if (!home) return { ok: true, changed: false };
@@ -1286,7 +1319,7 @@ export function mountAdvisorMcpForClient(
 
   const hookSkillRes = mountHooksAndSkill(spec, paths, configDir, options);
   changed = changed || hookSkillRes.changed;
-  const cleanup = reconcilePendingCleanup(configDir, collectProtectedPaths(new Set([clientId]), home, env), clientId);
+  const cleanup = reconcilePendingCleanup(configDir, cleanupProtection ?? collectProtectedPaths(new Set([clientId]), home, env), clientId);
   changed = changed || cleanup.changed;
   return { ok: true, changed, status: inspectAdvisorMcpClientStatus(clientId, {}, options) };
 }
@@ -1414,7 +1447,7 @@ export function syncAdvisorMcpClients(
   for (const id of ADVISOR_MCP_CLIENT_IDS) {
     if (!desiredTargets.has(id)) continue;
     try {
-      const res = mountAdvisorMcpForClient(id, options);
+      const res = mountAdvisorMcpForClient(id, options, protectedPaths);
       if (!res.ok && res.error) errors.push({ clientId: id, message: res.error });
       else if (res.changed) mounted.push(id);
     } catch (error) {
@@ -1431,9 +1464,16 @@ export function syncAdvisorMcpClients(
       const paths = CLIENT_SPECS[id].resolvePaths(home, env);
       const status = inspectAdvisorMcpClientStatus(id, config, options, routedSet);
       const recordedPath = readOwnedAdvisorEntries(configDir)[id]?.configPath;
+      const artifactRecord = readOwnedArtifacts(configDir)[id] ?? {};
+      // Recorded ownership is a cleanup candidate on its own, even when status sees no mount (an unreadable config,
+      // or a moved directory); the queue's protection and content checks decide what is actually removed.
+      const recordedUnprotected =
+        (!!recordedPath && !protectedPaths.mcpPaths.has(canonicalClientPath(recordedPath)))
+        || (!!artifactRecord.hookConfigPath && !protectedPaths.hookConfigPaths.has(canonicalClientPath(artifactRecord.hookConfigPath)))
+        || (!!artifactRecord.hookScriptPath && !protectedPaths.hookScriptPaths.has(canonicalClientPath(artifactRecord.hookScriptPath)))
+        || (!!artifactRecord.skillPath && !protectedPaths.skillPaths.has(canonicalClientPath(artifactRecord.skillPath)));
       const hasUnprotectedMounted =
-        (!!recordedPath && canonicalClientPath(recordedPath) !== canonicalClientPath(paths.mcpConfigPath)
-          && !protectedPaths.mcpPaths.has(canonicalClientPath(recordedPath)))
+        recordedUnprotected
         || (status.mounted && !protectedPaths.mcpPaths.has(canonicalClientPath(paths.mcpConfigPath)))
         || (status.hooksMounted && (!paths.hookConfigPath || !protectedPaths.hookConfigPaths.has(canonicalClientPath(paths.hookConfigPath))))
         || (status.skillMounted && (!paths.skillPath || !protectedPaths.skillPaths.has(canonicalClientPath(paths.skillPath))));
