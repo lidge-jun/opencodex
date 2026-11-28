@@ -46,6 +46,7 @@ opencodex est une passerelle locale unique pour vos outils de code IA et vos mod
 | Factory Droid | — | JSON | Oui | Chat Completions | test-covered ([test](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/droid-client.test.ts)) | — | Écoute locale uniquement. [guide](/fr/guides/factory-droid/) |
 | Gentle Shell | — | JSON | Oui | Chat Completions | test-covered ([test](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/gentle-shell-client.test.ts)) | — | Écoute locale uniquement. |
 | T3 Code | — | JSON | Oui | Anthropic Messages | test-covered ([test](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/t3code-client.test.ts)) | — | Écoute locale uniquement. L’application exécute d’abord une vérification propre au client et peut refuser. |
+| GitHub Copilot | — | JSON | Oui | Compatible OpenAI (point de terminaison choisi par le client) | test-covered ([test](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/github-copilot-client.test.ts)) | — | Écoute locale uniquement. L’application exécute d’abord une vérification propre au client et peut refuser. |
 
 ## Points de terminaison entrants
 

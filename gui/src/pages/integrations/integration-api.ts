@@ -26,6 +26,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "droid",
   "gentle-shell",
   "t3code",
+  "github-copilot",
 ] as const;
 
 export type FileIntegrationClientId = (typeof FILE_INTEGRATION_CLIENTS)[number];
@@ -292,6 +293,9 @@ const PLAN_SCHEMA_PATHS = new Set([
   "models.*",
   "modelConfigs.customModels.*",
   "providerInstances.opencodex",
+  // GitHub Copilot keeps its provider and model rows in two arrays; model rows
+  // share the `models.*` template above.
+  "providers.[name=opencodex]",
   "llm-pi-ai.providers.opencodex",
   "custom_provider.opencodex",
   "providers.[id=opencodex]",

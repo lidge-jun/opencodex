@@ -4,7 +4,7 @@
 
 <h3 align="center">One local gateway for your AI coding tools and models.</h3>
 <p align="center"><b>Use the models you choose with Codex, Claude Code, Claude Desktop and Grok Build,<br>
-and connect OpenCode, Pi, Qoder, WorkBuddy, Kilo, Cline, T3 Code and more through managed configs.</b><br>
+and connect OpenCode, Pi, Qoder, WorkBuddy, Kilo, Cline, T3 Code, GitHub Copilot and more through managed configs.</b><br>
 <a href="https://opencodex.me/reference/client-support/">See every supported tool →</a></p>
 <p align="center">Part of GOAT: run your coding agents on any model, on any machine → <a href="https://trygoat.ai">trygoat.ai</a></p>
 

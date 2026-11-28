@@ -46,6 +46,7 @@ opencodex は、AI コーディングツールとモデルをつなぐ 1 つの�
 | Factory Droid | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/droid-client.test.ts)) | — | ローカルリスナーのみ。 [ガイド](/ja/guides/factory-droid/) |
 | Gentle Shell | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/gentle-shell-client.test.ts)) | — | ローカルリスナーのみ。 |
 | T3 Code | — | JSON | はい | Anthropic Messages | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/t3code-client.test.ts)) | — | ローカルリスナーのみ。適用前にクライアント固有のチェックを実行し、拒否することがあります。 |
+| GitHub Copilot | — | JSON | はい | OpenAI 互換（エンドポイントはクライアントが選択） | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/github-copilot-client.test.ts)) | — | ローカルリスナーのみ。適用前にクライアント固有のチェックを実行し、拒否することがあります。 |
 
 ## 受信エンドポイント
 

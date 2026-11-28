@@ -12,6 +12,7 @@ import {
 const CATALOG_REFRESH_CLIENTS: readonly IntegrationClientId[] = [
   "mcode", "pi", "aside", "raycast", "omo", "cline", "commandcode", "dsh", "droid",
   "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "gentle-shell", "hermes", "t3code",
+  "github-copilot",
 ];
 
 const CATALOG_REFRESH_EXCLUSIONS = {

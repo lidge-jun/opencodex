@@ -94,6 +94,8 @@ import { buildQoderClientConfig, summarizeQoder, buildQoderContribution, qoderCo
 export { buildQoderClientConfig, qoderConfigPath, qoderHomeDir, type QoderGeneratedConfig } from "./config-export/qoder";
 import { buildT3CodeClientConfig, summarizeT3Code, buildT3CodeContribution, t3codeApplyRefusal, t3codeConfigPath } from "./config-export/t3code";
 export { buildT3CodeClientConfig, t3codeConfigPath, t3codeHomeDir, type T3CodeGeneratedConfig } from "./config-export/t3code";
+import { buildGithubCopilotClientConfig, summarizeGithubCopilot, buildGithubCopilotContribution, githubCopilotApplyRefusal, githubCopilotConfigPath } from "./config-export/github-copilot";
+export { buildGithubCopilotClientConfig, githubCopilotConfigPath, githubCopilotHomeDir, type GithubCopilotGeneratedConfig } from "./config-export/github-copilot";
 
 
 
@@ -1843,6 +1845,19 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     summarize: summarizeT3Code,
     validateApply: t3codeApplyRefusal,
     buildContribution: buildT3CodeContribution,
+    loopbackOnly: true,
+  },
+  "github-copilot": {
+    id: "github-copilot",
+    filename: "providers.json",
+    destination: env => githubCopilotConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "GitHub Copilot CLI reads providers.json (COPILOT_PROVIDERS_CONFIG or COPILOT_HOME relocate it); restart the CLI to load the catalog. Loopback needs no key.",
+    build: buildGithubCopilotClientConfig,
+    format: "json",
+    summarize: summarizeGithubCopilot,
+    validateApply: githubCopilotApplyRefusal,
+    buildContribution: buildGithubCopilotContribution,
     loopbackOnly: true,
   },
 };

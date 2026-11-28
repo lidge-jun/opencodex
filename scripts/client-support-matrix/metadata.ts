@@ -216,6 +216,11 @@ export const EXPORT_CLIENT_METADATA: Readonly<Record<string, ExportClientMetadat
     protocolFields: [{ path: "providerInstances.opencodex.driver", values: { claudeAgent: "anthropic-messages" } }],
     test: { file: "tests/clients/t3code-client.test.ts", title: "the provider instance routes T3 Code's Claude driver through the proxy origin with a non-secret marker", mentions: ["t3code", "T3"] },
   },
+  "github-copilot": {
+    label: "GitHub Copilot",
+    protocolFields: [{ path: "providers.*.type", values: OPENAI_FAMILY }],
+    test: { file: "tests/clients/github-copilot-client.test.ts", title: "the provider routes Copilot's OpenAI provider through the proxy with a non-secret placeholder", mentions: ["github-copilot", "Copilot"] },
+  },
 };
 
 /**

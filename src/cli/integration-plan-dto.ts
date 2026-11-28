@@ -32,6 +32,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "workbuddy-ai",
   "gentle-shell",
   "t3code",
+  "github-copilot",
 ] as const;
 
 export const INTEGRATION_REFUSAL_REASONS: ReadonlySet<string> = new Set<IntegrationRefusalReason>([
@@ -74,6 +75,8 @@ const PLAN_SCHEMA_PATHS = new Set([
   "customModels.*",
   "modelConfigs.customModels.*",
   "providerInstances.opencodex",
+  // GitHub Copilot keeps its provider and model rows in two arrays.
+  "providers.[name=opencodex]",
   // ZCode reads its providers from a second file; a plan for it publishes that
   // file's templates, and a path missing here is rejected as an invalid preview.
   "config.providerConfigRules.providerRules.[providerId=opencodex]",

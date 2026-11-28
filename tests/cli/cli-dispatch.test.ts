@@ -202,7 +202,7 @@ describe("dispatchCommand exit codes", () => {
       expect(code).toBe(0);
       expect(order).toEqual(["catalog", "refresh"]);
       expect(refresh).toHaveBeenCalledTimes(1);
-      expect(refresh.mock.calls[0]![1]).toEqual(["mcode", "raycast", "omo", "cline", "commandcode", "dsh", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]);
+      expect(refresh.mock.calls[0]![1]).toEqual(["mcode", "raycast", "omo", "cline", "commandcode", "dsh", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code", "github-copilot"]);
       // #8287: Pi refreshes through the serving proxy instead of the local fan-out.
       expect(pi).toHaveBeenCalledTimes(1);
     } finally {

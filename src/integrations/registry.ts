@@ -23,6 +23,8 @@ import {
   qoderHomeDir,
   t3codeConfigPath,
   t3codeHomeDir,
+  githubCopilotConfigPath,
+  githubCopilotHomeDir,
   clineConfigPath,
   clineSettingsDir,
   droidConfigPath,
@@ -529,6 +531,16 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     // The state directory, not `~/.t3`: the server creates `userdata` on its first start,
     // while `~/.t3` alone can be left behind by the installer's `bin`.
     detectDir: (env = process.env, home = homedir()) => join(t3codeHomeDir(env, home), "userdata"),
+  },
+  "github-copilot": {
+    id: "github-copilot",
+    configPath: (env = process.env, home = homedir()) => githubCopilotConfigPath(env, home),
+    /*
+     * The config directory, not the providers file: the CLI creates `~/.copilot`
+     * on its first run, which is the install signal. `COPILOT_PROVIDERS_CONFIG`
+     * relocates only the file, so detection stays on the directory.
+     */
+    detectDir: (env = process.env, home = homedir()) => githubCopilotHomeDir(env, home),
   },
 };
 

@@ -99,7 +99,7 @@ describe("the client registries cannot drift apart", () => {
     const guiRouting = await import("../../gui/src/app-routing");
 
     const expected = [...EXPORT_CLIENT_IDS].sort();
-    expect(expected).toHaveLength(24);
+    expect(expected).toHaveLength(25);
 
     expect([...INTEGRATION_CLIENT_IDS].sort()).toEqual(expected);
     expect([...gui.CLIENTS].sort()).toEqual(expected);
@@ -284,6 +284,8 @@ describe("every client survives a full lifecycle", () => {
     kilo: '{\n  "model": "keep-me",\n  "provider": {\n    "mine": { "npm": "keep-me" }\n  }\n}\n',
     // A second Codex account the user added in T3 Code sits beside ours under providerInstances.
     t3code: '{"favorites":[],"providerInstances":{"codex_personal":{"driver":"codex","config":{"homePath":"~/.codex"}}}}\n',
+    // Copilot's providers and models are arrays keyed by name and id, so the user's entry is a sibling element.
+    "github-copilot": '{"providers":[{"name":"mine","type":"openai","baseUrl":"http://keep-me/v1"}],"models":[{"id":"mine","provider":"mine"}]}\n',
   };
   /** Where the seed's user-owned entry lives when the seed is a sequence. */
   const USER_ELEMENT: Partial<Record<IntegrationClientId, readonly string[]>> = {
@@ -291,6 +293,7 @@ describe("every client survives a full lifecycle", () => {
     workbuddy: ["models", "[id=mine]"],
     "workbuddy-ai": ["[id=mine]"],
     droid: ["customModels", "[model=local]"],
+    "github-copilot": ["providers", "[name=mine]"],
   };
 
   for (const clientId of INTEGRATION_CLIENT_IDS) {
