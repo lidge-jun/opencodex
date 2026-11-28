@@ -87,7 +87,7 @@ export async function handleV2RuntimeCommand(parsed: V2ParsedCommand, deps: Runt
     if (parsed.verb === "mode" && parsed.value === "v2-plaintext" && state.multiAgentMode !== "v2-plaintext") throw new Error("Plaintext V2 mode was not confirmed by the selected runtime");
     const modelModes = record(state.multiAgentModeByModel) ? state.multiAgentModeByModel : undefined;
     // An older runtime accepts the PUT body it does not understand and changes nothing.
-    if (parsed.verb === "model-mode" && (modelModes?.[parsed.model] ?? null) !== parsed.value) throw new Error("The per-model mode was not confirmed by the selected runtime");
+    if (parsed.verb === "model-mode" && (modelModes && Object.hasOwn(modelModes, parsed.model) ? modelModes[parsed.model] : null) !== parsed.value) throw new Error("The per-model mode was not confirmed by the selected runtime");
     const lines = [`multi_agent_v2: ${state.enabled ? "ON" : "OFF"}`, `multi_agent_mode: ${state.multiAgentMode}`,
       `keep_native_chatgpt_on_v1: ${state.keepNativeChatGptOnV1 ? "ON" : "OFF"}`,
       ...(modelModes ? [`multi_agent_mode_by_model: ${Object.entries(modelModes).map(([model, entry]) => `${model}=${entry}`).join(", ") || "none"}`] : []),

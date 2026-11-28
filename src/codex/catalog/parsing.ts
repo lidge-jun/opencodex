@@ -717,7 +717,12 @@ function applyGlobalMultiAgentMode(
       // A forced mode recorded what this row carried before it was overwritten; returning
       // to default consumes that record whichever branch below decides the row.
       const origin = takeMultiAgentOrigin(entry);
-      if (options.preserveDefaultMultiAgentVersion?.(entry)) continue;
+      if (options.preserveDefaultMultiAgentVersion?.(entry)) {
+        // A preserved row keeps its own value, which is the one recorded before any stamp.
+        if (typeof origin === "string") entry.multi_agent_version = origin;
+        else if (origin === null) delete entry.multi_agent_version;
+        continue;
+      }
       const slug = typeof entry.slug === "string" ? entry.slug : "";
       const nativeAlias = entry.opencodex_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND;
       const routedNativeSlug = slug.startsWith(`${OPENAI_CODEX_PROVIDER_ID}/`)

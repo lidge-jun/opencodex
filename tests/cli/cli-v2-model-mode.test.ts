@@ -96,6 +96,24 @@ describe("ocx v2 model-mode (#8953)", () => {
     expect(readConfig().multiAgentModeByModel).toEqual({ "xai/grok-4.7": "v2", "xai/grok-47": "v2" });
   });
 
+  test("a stored mode that resolves to base gets the base-mode refusal", async () => {
+    install({ multiAgentMode: "unsupported" }, true);
+    expect(await cmdV2(["model-mode", "ZQ/gpt-6.2-sol", "v1"], deps())).toBe(1);
+    expect(errors.at(-1)).toContain("base mode leaves that override to you");
+    expect(calls).toEqual([]);
+  });
+
+  test("a full map refuses a new model but still updates and removes listed ones", async () => {
+    const full = Object.fromEntries(Array.from({ length: 256 }, (_, index) => [`routed/model-${index}`, "v2"]));
+    install({ multiAgentMode: "v1", multiAgentModeByModel: full }, false);
+    expect(await cmdV2(["model-mode", "gpt-6.2-sol", "v2"], deps())).toBe(1);
+    expect(errors.at(-1)).toContain("256 entries");
+    expect(Object.hasOwn(readConfig().multiAgentModeByModel, "gpt-6.2-sol")).toBe(false);
+    expect(await cmdV2(["model-mode", "routed/model-0", "v1", "--json"], deps())).toBe(0);
+    expect(await cmdV2(["model-mode", "routed/model-1", "default", "--json"], deps())).toBe(0);
+    expect(Object.keys(readConfig().multiAgentModeByModel)).toHaveLength(255);
+  });
+
   test("a v2-plaintext entry needs the acknowledgement once", async () => {
     install({ multiAgentMode: "v1" }, false);
     const before = readFileSync(configPath, "utf8");

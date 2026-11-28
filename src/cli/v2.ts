@@ -20,7 +20,9 @@ import { getAgentsEnabled, getAgentsMaxDepth, getLogicalMaxThreads, getMultiAgen
 import type { ResolveDeps, SpawnInvocation } from "../lib/win-exec";
 import { validatedCodexExecInvocation } from "../codex/exec-boundary";
 import { deleteConfigTopLevelKey, loadConfig, saveConfig } from "../config";
-import { hasMultiAgentModelMode, resolveMultiAgentModeByModel, unmatchedMultiAgentModelModes } from "../config/multi-agent-surface";
+import {
+  MULTI_AGENT_MODE_BY_MODEL_LIMIT, hasMultiAgentModelMode, resolveMultiAgentMode, resolveMultiAgentModeByModel, unmatchedMultiAgentModelModes,
+} from "../config/multi-agent-surface";
 import type { OcxConfig } from "../types";
 import { resolveAndPersistCodexRuntime, type ResolveCodexRuntimeDeps } from "../codex/runtime";
 import { withCodexCliSelectionParentWriteAsync } from "../codex/cli-update-selection-gate";
@@ -286,6 +288,10 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
         && stored() !== "v2-plaintext" && !parsed.plaintextAcknowledged;
       const refuseUnacknowledgedPlaintext = () => emit(false, ["A v2-plaintext model-mode entry requires --acknowledge-plaintext-agent-messages. That model's eligible canonical ChatGPT requests are compiled to plaintext, including existing V2 sessions. Task text can remain in Codex history, provider requests and local response/debug state; existing ciphertext is not decrypted."]);
       if (needsPlaintextAcknowledgment()) return refuseUnacknowledgedPlaintext();
+      const current = resolveMultiAgentModeByModel(config);
+      if (parsed.value !== null && !current.has(parsed.model) && current.size >= MULTI_AGENT_MODE_BY_MODEL_LIMIT) {
+        return emit(false, [`multi_agent_mode_by_model already holds ${MULTI_AGENT_MODE_BY_MODEL_LIMIT} entries. Remove one with 'ocx v2 model-mode <model> default' before adding ${parsed.model}.`]);
+      }
       let unchangedModel = false;
       const persistModelMode = (): void => {
         unchangedModel = stored() === (parsed.value ?? undefined);
@@ -302,7 +308,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
         let baseModeConflict = false;
         const transition = await withCodexCliSelectionParentWriteAsync(() => {
           config = loadConfig();
-          const baseMode = (config.multiAgentMode ?? "default") === "default";
+          const baseMode = resolveMultiAgentMode(config) === "default";
           if (baseMode && (deps.isEnabled ?? isMultiAgentV2Enabled)()) { baseModeConflict = true; return { ok: true as const, changed: false }; }
           const result = baseMode ? { ok: true as const, changed: false }
             : transitionMultiAgentV2(false, (next, env, validate) => runCodexFeatures(next ? "enable" : "disable", deps, env, validate));

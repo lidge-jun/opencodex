@@ -396,7 +396,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const mode = wantsMode ? body.multiAgentMode as "v1" | "default" | "v2" | "v2-plaintext" : undefined;
     const { isMultiAgentV2Enabled: globalV2Enabled } = await import("../../codex/features");
     const readModePlan = () => {
-      const effectiveMode = mode ?? config.multiAgentMode ?? "default";
+      const effectiveMode = mode ?? resolveMultiAgentMode(config);
       const effectiveKeepNative = wantsKeepNative
         ? body.keepNativeChatGptOnV1 === true
         : config.keepNativeChatGptOnV1 === true;

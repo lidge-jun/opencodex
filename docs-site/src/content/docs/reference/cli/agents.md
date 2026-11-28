@@ -216,8 +216,9 @@ Codex resolves an enabled global `multi_agent_v2` override before the selected m
 pin. The hybrid `keep-native-v1` contract therefore keeps that global override off; otherwise a
 native row stamped `v1` would still start on V2 and produce backend-encrypted child tasks.
 A `model-mode` entry set to `v1` is the same kind of pin and follows the same rule: `on` is rejected
-while one is stored, and `status` lists every entry. Model ids are catalog ids, matched exactly; an id
-that matches no catalog model is stored and reported, since it changes nothing until that model appears.
+while one is stored, and `status` lists every entry. Model ids are catalog ids, matched exactly or,
+for a routed id, in its raw or encoded spelling; an id that matches no catalog model is stored and
+reported, since it changes nothing until that model appears.
 
 `mode-hint` writes `features.multi_agent_v2.multi_agent_mode_hint_text` in Codex's
 `$CODEX_HOME/config.toml` even when `multi_agent_v2` is currently disabled. The

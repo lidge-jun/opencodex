@@ -158,6 +158,11 @@ describe("live V2 fixed management operations", () => {
       expect(await cmdV2(["model-mode", "ZQ/gpt-6.2-sol", "v1", "--live", "--json"], { runtimeApi: unconfirmed.runtimeApi })).toBe(1);
       expect(out).toEqual([]);
     }
+
+    // A model id that names an Object.prototype member is still just a key.
+    out = [];
+    const prototypeName = transport(state({ ok: true, catalogRefresh: committed, multiAgentModeByModel: {} }));
+    expect(await cmdV2(["model-mode", "constructor", "default", "--live", "--json"], { runtimeApi: prototypeName.runtimeApi })).toBe(0);
   });
   test.each([[404, 4], [409, 5], [400, 1], [502, 1], [503, 1], [401, 1]])("safe refusal HTTP %i exits %i", async (status, code) => {
     const live = transport({ error: privateText, token: privateText }, status);

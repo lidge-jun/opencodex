@@ -73,6 +73,16 @@ describe("multiAgentModeByModel catalog pins (#8953)", () => {
     applyMultiAgentMode(pinned, "default", false, {});
     expect(pins(pinned)).toEqual({ "gpt-5.6-luna": "v1", "xai/grok-4.7": null });
   });
+
+  test("a preserved row gets back what it carried once its entry is removed", () => {
+    const preserved: RawEntry[] = [{ slug: "reserve/gpt-6.2-sol", multi_agent_version: "v1" }, { slug: "reserve/xai-grok" }];
+    const preserveDefaultMultiAgentVersion = () => true;
+    applyMultiAgentMode(preserved, "default", false,
+      { preserveDefaultMultiAgentVersion, modelModes: modes({ "reserve/gpt-6.2-sol": "v2", "reserve/xai-grok": "v2" }) });
+    expect(pins(preserved)).toEqual({ "reserve/gpt-6.2-sol": "v2", "reserve/xai-grok": "v2" });
+    applyMultiAgentMode(preserved, "default", false, { preserveDefaultMultiAgentVersion });
+    expect(pins(preserved)).toEqual({ "reserve/gpt-6.2-sol": "v1", "reserve/xai-grok": null });
+  });
 });
 
 describe("multiAgentModeByModel resolution", () => {
@@ -250,6 +260,14 @@ describe("/api/v2 multiAgentModeByModel", () => {
     expect(accepted?.status).toBe(200);
     expect(toggles).toEqual([false]);
     expect(loadConfig().multiAgentModeByModel).toEqual({ "ZQ/gpt-6.2-sol": "v1" });
+  });
+
+  test("a stored mode the API reports as default gets the base-mode refusal too", async () => {
+    codexHome(true);
+    const config = liveConfig({ multiAgentMode: "unsupported" as OcxConfig["multiAgentMode"] });
+    const refused = await handleManagementAPI(put({ multiAgentModeByModel: { "ZQ/gpt-6.2-sol": "v1" } }), url(), config, refusing);
+    expect(refused?.status).toBe(400);
+    expect(config.multiAgentModeByModel).toBeUndefined();
   });
 
   test("a new v2-plaintext entry needs the plaintext acknowledgement; re-saving it does not", async () => {
