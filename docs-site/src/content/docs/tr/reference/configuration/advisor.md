@@ -5,7 +5,15 @@ description: manual, preflight ve kanıta dayalı adaptive politikalarıyla bağ
 
 Danışman, worker'ın görevini inceleyen ve tavsiye döndüren bağımsız bir uzman modeldir. Danışmayı uçtan uca OpenCodex sahiplenir: proxy, worker'ın turuna sentetik `advisor` aracını enjekte eder, danışmayı normal yönlendirme otoritesi aracılığıyla kendisi yürütür ve tavsiyeyi geri enjekte ederek özgün worker'ın devam etmesini sağlar. Worker'ın bir şey devretmesine, spawn etmesine veya sağlayıcı kimlik bilgisi taşımasına gerek yoktur.
 
-Bu, alt ajan yüzeyinden farklıdır (bkz. [Ajan yapılandırması](/tr/reference/configuration/agents/)): alt ajanlar, Codex'in işbirliği araçları üzerinden worker tarafından başlatılan delegasyondur. Danışman, istemcinin hiç görmediği proxy tarafı bir sidecar'dır — hiçbir şey spawn etmeyen bir worker bile tavsiye alabilir.
+Bu, alt ajan yüzeyinden farklıdır (bkz. [Ajan yapılandırması](/tr/reference/configuration/agents/)): alt ajanlar, Codex'in işbirliği araçları üzerinden worker tarafından başlatılan delegasyondur. Yönlendirilen worker için danışman, istemcinin görmediği proxy tarafı bir sidecar'dır — hiçbir şey spawn etmeyen bir worker bile tavsiye alabilir.
+
+## Harici istemciler ve tam bağlam
+
+`autoMountMcp` varsayılan olarak `false` değerindedir. Uyumlu rotaları izlemek için `ocx advisor set --auto-mount-mcp on`, istemci seçmek için `--mcp-clients <ids>` kullanın. `auto` açık listeyi temizler, `none` hiçbir istemci seçmez. Harici istemciler `ocx advisor mcp` üzerinden `consult_advisor` kullanabilir veya `ocx advisor consult --question "..."` ile başlayıp `ocx advisor consult --consultation-id <id>` ile sonucu sorgulayabilir. Güncel onay gerekir.
+
+`context` sınırlı bağlam paylaşır; `question-only` yalnızca soruyu gönderir ve otomatik danışmaları duraklatır; `full` sınırları genişletir ve oturum, görev kimliği veya izin verilen yol sağlanırsa eşleşen yerel dökümü ekleyebilir. Metin ve araç sonuçları danışman sağlayıcısına gönderilebilir; dökümün bulunması garanti değildir.
+
+`timeoutMs` hareketsizlik sınırıdır ve gelen veri sayacı sıfırlar. Toplam üst sınır `max(4 × timeoutMs, 600000 ms)` değeridir; varsayılan 600000 ms, ayarlanabilir azami değer 1800000 ms'dir.
 
 ## Yalnızca soru
 
@@ -39,9 +47,9 @@ Kontrol panelindeki **Advisor** sayfasında katalogdan model seçin. Yerel, sağ
 | `model?` | `string` | — | Uzman model. Yönlendiricinin kabul ettiği herhangi bir model dizisi: çıplak yerel model (`gpt-6-astra`), açık `provider/model` (`anthropic/claude-sonnet-4-6`, `xai/grok-...`) veya hesap nitelemeli yerel model. Sağlayıcılar arası tam desteklenir. |
 | `effort?` | `string` | `"max"` | Danışman çağrısının muhakeme düzeyi (`low`–`ultra`). |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | Ne zaman danışılır. |
-| `contextMode?` | `"context" \| "question-only"` | `"context"` | Bağlam paylaşımı. `question-only` çalışanın açık sorusunu gerektirir ve otomatik danışmaları duraklatır. |
+| `contextMode?` | `"context" \| "full" \| "question-only"` | `"context"` | Bağlam paylaşımı. `question-only` çalışanın açık sorusunu gerektirir ve otomatik danışmaları duraklatır. |
 | `maxConsultationsPerTask?` | `integer` | `3` | Uyarlanabilir görev bütçesi: manuel çağrılar dahil 1–3 deneme. |
-| `timeoutMs?` | `number` | `120000` | Loopback danışma zaman aşımı. |
+| `timeoutMs?` | `number` | `600000` | Loopback danışma zaman aşımı. |
 | `contextSharingConsent?` | `"v1"` | yok | Yapılandırılmış danışman sağlayıcısına görev bağlamını gönderme onayı. Güncel değer yalnızca `"v1"`. Yok, eskimiş veya başka bir değer görev içeriğinin gönderilmemesi demektir. `enabled: true` bu onay değildir. |
 
 Panodaki **Advisor** sayfası veya `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>` ile yönetin.

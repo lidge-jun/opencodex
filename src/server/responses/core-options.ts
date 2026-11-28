@@ -249,6 +249,8 @@ export interface HandleResponsesOptions {
   /** Metadata-qualified Messages discovery evidence, never caller JSON or a preselected destination. */
   anthropicToolLoadingSource?: Readonly<Record<string, unknown>>;
   /** Droid's per-request effort default; each concrete combo or policy target applies it only if its ladder allows it. */
+  /** Internal-only derived session identity for adaptive advisor ledger scoping; never sent upstream. */
+  advisorSessionIdentity?: string;
   droidDefaultEffort?: string;
   /** The Chat or Messages source a combo child may send natively; set only by that ingress. */
   protocolSource?: import("./core-combo-native").ComboProtocolSource;

@@ -121,6 +121,43 @@ type Rec = Record<string, unknown>;
 function isRec(v: unknown): v is Rec {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
+
+const MAX_DERIVED_SESSION_ID_CHARS = 256;
+
+function normalizeSessionCandidate(raw: string | null | undefined): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_DERIVED_SESSION_ID_CHARS) return undefined;
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const code = trimmed.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return undefined;
+  }
+  return trimmed;
+}
+
+function codebuddyBaggageSessionId(baggageHeader: string | null): string | undefined {
+  if (!baggageHeader) return undefined;
+  for (const entry of baggageHeader.split(",")) {
+    const member = entry.split(";", 1)[0]?.trim();
+    if (!member) continue;
+    const eq = member.indexOf("=");
+    if (eq <= 0) continue;
+    if (member.slice(0, eq).trim() !== "codebuddy.session_id") continue;
+    const rawVal = member.slice(eq + 1).trim();
+    let decoded = rawVal;
+    try { decoded = decodeURIComponent(rawVal); } catch { /* keep raw */ }
+    const normalized = normalizeSessionCandidate(decoded);
+    if (normalized) return normalized;
+  }
+  return undefined;
+}
+
+export function deriveChatSessionId(reqHeaders: Headers, _chatBody: Rec): string | undefined {
+  return normalizeSessionCandidate(reqHeaders.get("x-opencode-session"))
+    ?? normalizeSessionCandidate(reqHeaders.get("x-session-id"))
+    ?? normalizeSessionCandidate(reqHeaders.get("x-conversation-id"))
+    ?? codebuddyBaggageSessionId(reqHeaders.get("baggage"));
+}
 function routingPolicyRefusalMessage(kind: "unknown" | "unavailable", model: ClientFacingModelLabel): string {
   return kind === "unknown" ? `Unknown routing policy: ${clientFacingModelText(model)}`
     : `No eligible candidates for policy profile: ${clientFacingModelText(model)}`;
@@ -311,7 +348,7 @@ async function handleChatCompletionsWithBudget(
     // effort, failover, and per-attempt telemetry run before any native Chat send.
     nativeDecline = route.combo ? "combo-or-policy-route"
       : effortRow ? "effort-row"
-      : nativeChatDeclineReason(route, chatBody, config);
+      : nativeChatDeclineReason(route, chatBody, config, { advisorInternal });
     if (nativeDecline === undefined) {
       chatNativeRoute = route;
       // Reserve an input estimate for spend without recording it as usage: native Chat attempts
@@ -533,6 +570,11 @@ async function handleChatCompletionsWithBudget(
     const value = req.headers.get(name);
     if (value) headers.set(name, value);
   }
+  // Derive non-canonical Chat Completions session identity purely internally for advisor task
+  // tracking — never mutate `headers` (`session-id`), which FORWARD_HEADERS relays upstream.
+  const advisorSessionIdentity = (!headers.has("session_id") && !headers.has("session-id") && !headers.has("thread-id"))
+    ? deriveChatSessionId(req.headers, chatBody)
+    : undefined;
   // Existing primary enrichment stays on non-caller-auth routes. Caller-auth routes defer
   // optional stored sidecar auth until the final helper plan actually needs it.
   if (!callerAuthorizationRoute) {
@@ -628,6 +670,7 @@ async function handleChatCompletionsWithBudget(
     ...(visionDescribeTerminal ? { visionDescribeTerminal: true } : {}),
     ...(advisorInternal ? { advisorInternal: true } : {}),
     ...(sidecarRegistration ? { internalSidecarCall: true } : {}),
+    ...(advisorSessionIdentity ? { advisorSessionIdentity } : {}),
     ...(inheritedAdmissionScope ? { admissionScope: inheritedAdmissionScope } : {}),
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),

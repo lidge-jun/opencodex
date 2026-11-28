@@ -7,6 +7,11 @@ import { AdvisorModelSelect } from "../components/AdvisorModelSelect";
 import { HelpButton, SettingsRow, SettingsSection } from "../components/v2-proxy/settings-layout";
 import AdvisorActivity from "./advisor/AdvisorActivity";
 import { AdvisorConsentCallout } from "./advisor/AdvisorConsentCallout";
+import {
+  AdvisorClientMcpPanel,
+  type AdvisorMcpClientId,
+  type AdvisorMcpClientStatusDto,
+} from "./advisor/AdvisorClientMcpPanel";
 import "./advisor/advisor.css";
 
 /**
@@ -21,32 +26,57 @@ export interface AdvisorSettings {
   model: string;
   effort: string;
   policy: "manual" | "preflight" | "adaptive";
-  contextMode?: "context" | "question-only";
+  contextMode?: "context" | "full" | "question-only";
   maxConsultationsPerTask?: number;
   timeoutMs: number;
   contextSharingConsent: "v1" | null;
+  autoMountMcp?: boolean;
+  mcpClients?: AdvisorMcpClientId[] | null;
+}
+
+export interface AdvisorMcpSyncErrorDto {
+  clientId: AdvisorMcpClientId;
+  message: string;
+}
+
+export interface AdvisorMcpSyncDto {
+  mounted?: AdvisorMcpClientId[];
+  unmounted?: AdvisorMcpClientId[];
+  errors?: AdvisorMcpSyncErrorDto[];
 }
 
 export interface AdvisorDto {
   settings: AdvisorSettings;
   runnable: boolean;
   warning?: string;
+  mcpClients?: AdvisorMcpClientStatusDto[];
+  mcpSync?: AdvisorMcpSyncDto;
 }
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
 // One field width for the editor's dropdowns and the timeout box; full width on a phone.
 const ADVISOR_FIELD_WIDTH = "w-[16rem] max-w-full max-[640px]:w-full";
 
-export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: AdvisorSettings }) {
+export function AdvisorEditor({
+  apiBase,
+  initial,
+  initialMcpClients = [],
+}: {
+  apiBase: string;
+  initial: AdvisorSettings;
+  initialMcpClients?: readonly AdvisorMcpClientStatusDto[];
+}) {
   const t = useT();
   // Mount-time snapshot. The parent remounts this editor when the first load settles
   // (`key` flips cold → ready), so later parent dto changes do not need to be copied here.
   // After mount, `saved` only advances from a successful PUT.
   const [saved, setSaved] = useState(initial);
   const [draft, setDraft] = useState(initial);
+  const [mcpStatus, setMcpStatus] = useState<readonly AdvisorMcpClientStatusDto[]>(initialMcpClients);
   const [saving, setSaving] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [mcpSyncErrors, setMcpSyncErrors] = useState<AdvisorMcpSyncErrorDto[]>([]);
   const savedFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -80,6 +110,8 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
           policy: submitted.policy,
           contextMode: submitted.contextMode ?? "context",
           ...(submitted.maxConsultationsPerTask !== undefined ? { maxConsultationsPerTask: submitted.maxConsultationsPerTask } : {}),
+          ...(submitted.autoMountMcp !== undefined ? { autoMountMcp: submitted.autoMountMcp } : {}),
+          ...(submitted.mcpClients !== undefined ? { mcpClients: submitted.mcpClients } : {}),
           timeoutMs: submitted.timeoutMs,
           contextSharingConsent: submitted.contextSharingConsent,
         }),
@@ -91,24 +123,27 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
       }
       const body = (await response.json()) as AdvisorDto;
       setSaved(body.settings);
+      if (Array.isArray(body.mcpClients)) setMcpStatus(body.mcpClients);
       // Edits made while the PUT was in flight stay in the draft: only overwrite the draft
       // when the user has not touched it since this save started.
       setDraft(current => (JSON.stringify(current) === JSON.stringify(submitted) ? body.settings : current));
-      setSavedFlash(true);
-      savedFlashTimerRef.current = setTimeout(() => {
-        savedFlashTimerRef.current = null;
-        setSavedFlash(false);
-      }, 2500);
+      const syncErrors = Array.isArray(body.mcpSync?.errors) ? body.mcpSync.errors : null;
+      if (syncErrors !== null) setMcpSyncErrors(syncErrors);
+      if (syncErrors?.length === 0 || (syncErrors === null && mcpSyncErrors.length === 0)) {
+        setSavedFlash(true);
+        savedFlashTimerRef.current = setTimeout(() => {
+          savedFlashTimerRef.current = null;
+          setSavedFlash(false);
+        }, 2500);
+      }
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error));
     } finally {
       setSaving(false);
     }
-  }, [apiBase, draft]);
+  }, [apiBase, draft, mcpSyncErrors.length]);
 
-  // Every field edit invalidates the previous failure notice: it describes the state that was
-  // submitted, and it must not outlive the field the operator is now correcting. A revert to the
-  // saved value would otherwise leave the notice with no way to clear at all.
+  // Reconciliation errors remain actionable until a successful save confirms they are cleared.
   const edit = useCallback((patch: Partial<AdvisorSettings>) => {
     setSaveError("");
     setDraft(current => ({ ...current, ...patch }));
@@ -188,6 +223,27 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
             </label>
           )}
         />
+        {draft.contextMode !== "question-only" && (
+          <SettingsRow
+            label={t("advisor.fullContext")}
+            labelFor="advisor-full-context"
+            inline
+            hint={t("advisor.fullContextHint")}
+            control={(
+              <label className="toggle">
+                <input
+                  id="advisor-full-context"
+                  type="checkbox"
+                  checked={draft.contextMode === "full"}
+                  disabled={saving}
+                  aria-label={t("advisor.fullContext")}
+                  onChange={event => edit({ contextMode: event.target.checked ? "full" : "context" })}
+                />
+                <span className="slider" aria-hidden="true" />
+              </label>
+            )}
+          />
+        )}
         <SettingsRow
           label={t("advisor.policy")}
           labelFor="advisor-policy"
@@ -233,7 +289,7 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
               className={cn("input mono", ADVISOR_FIELD_WIDTH)}
               type="number"
               min={1000}
-              max={600000}
+              max={1800000}
               value={draft.timeoutMs}
               disabled={saving}
               onChange={event => {
@@ -254,10 +310,40 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
         onChange={agreed => edit({ contextSharingConsent: agreed ? "v1" : null })}
       />
 
+      <AdvisorClientMcpPanel
+        clients={mcpStatus}
+        autoMountMcp={draft.autoMountMcp ?? false}
+        explicitClients={draft.mcpClients}
+        disabled={saving}
+        onChangeAutoMount={enabled => edit({ autoMountMcp: enabled })}
+        onChangeClients={mcpClients => edit({ mcpClients })}
+        onUseAutoMode={() => edit({ mcpClients: null, autoMountMcp: true })}
+      />
+
       <div className="flex flex-col gap-2">
         {modelMissing && <Notice tone="warn">{t("advisor.warning.noModel")}</Notice>}
         {consentMissing && <Notice tone="warn">{t("advisor.consent.required")}</Notice>}
         {saveError && <Notice tone="err">{saveError}</Notice>}
+        {mcpSyncErrors.length > 0 && (
+          <Notice tone="warn">
+            {t("advisor.mcp.syncPartial", {
+              clients: mcpSyncErrors
+                .map(err => {
+                  const label = mcpStatus.find(c => c.clientId === err.clientId)?.label ?? err.clientId;
+                  return `${label} (${err.message})`;
+                })
+                .join(", "),
+            })}{" "}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={saving}
+              onClick={() => void save()}
+            >
+              {t("common.retry")}
+            </button>
+          </Notice>
+        )}
         {savedFlash && <Notice tone="ok">{t("advisor.saved")}</Notice>}
         <div className="flex flex-wrap items-center justify-end gap-3">
           {dirty && !saving && <span className="text-[13px] text-fg-muted" role="status">{t("proxyV2.unsaved")}</span>}
@@ -309,6 +395,7 @@ export default function Advisor({ apiBase }: { apiBase: string }) {
           key={resource.hasSucceeded ? "ready" : "cold"}
           apiBase={apiBase}
           initial={state.data.settings}
+          initialMcpClients={state.data.mcpClients ?? []}
         />
       )}
       <AdvisorActivity apiBase={apiBase} />

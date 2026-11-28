@@ -1718,11 +1718,11 @@ export interface OcxAdvisorConfig {
    * or a tool result after the latest user message).
    */
   policy?: "manual" | "preflight" | "adaptive";
-  /** question-only sends only the worker's explicit question and disables automatic consultations. */
-  contextMode?: "context" | "question-only";
+  /** question-only sends only the worker's explicit question and disables automatic consultations; full sends expanded, bounded task history (up to 128,000 characters per message and 512,000 characters total across the transcript). */
+  contextMode?: "context" | "full" | "question-only";
   /** Adaptive task consultation attempts (manual + automatic). Integer 1–3, default 3. */
   maxConsultationsPerTask?: number;
-  /** Advisor fetch timeout (ms). Default 120000. */
+  /** Advisor fetch timeout (ms). Default 600000 (10 minutes). Max 1800000 (30 minutes). */
   timeoutMs?: number;
   /**
    * Operator consent to send task conversation and tool results to the configured Advisor
@@ -1730,6 +1730,10 @@ export interface OcxAdvisorConfig {
    * send task context. `enabled: true` does not grant this, and upgrades do not write it.
    */
   contextSharingConsent?: "v1";
+  /** Auto-mount `opencodex-advisor` MCP + hooks/skills for compatible active client routes. Default: false. */
+  autoMountMcp?: boolean;
+  /** Explicit client selection works independently of auto-mount; absent follows active routes only when auto-mount is enabled. */
+  mcpClients?: string[];
 }
 
 export interface OcxWebSearchSidecarConfig {

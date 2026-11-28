@@ -5,6 +5,7 @@ import type { RouteResult } from "../router";
 import type { OcxConfig } from "../types";
 import { isModelTextOnly, requiresVisionPreprocessing } from "../vision";
 import { isCommandCodeDecisionRoute } from "../providers/command-code-decision-models";
+import { isAdvisorDestination } from "./advisor-destination";
 
 type Rec = Record<string, unknown>;
 
@@ -35,6 +36,7 @@ export function nativeChatDeclineReason(
   route: RouteResult,
   rawBody: Rec,
   config?: OcxConfig,
+  options?: { advisorInternal?: boolean },
 ): NativeChatDeclineReason | undefined {
   const provider = route.provider;
   if (provider.adapter !== "openai-chat") return "cross-wire-ir";
@@ -42,6 +44,17 @@ export function nativeChatDeclineReason(
   // forward the body verbatim; the translated path refuses it at the adapter guard before a send.
   if (isCommandCodeDecisionRoute(provider, route.modelId)) return "compatibility-reject";
   if (provider.authMode !== undefined && provider.authMode !== "key" && provider.authMode !== "local") return "auth-mode-not-native";
+  // The advisor sidecar plan is registered inside the Responses pipeline only: it injects its
+  // synthetic tool, intercepts calls and re-dispatches the worker continuation there. A native
+  // Chat turn is forwarded straight to the destination and never enters that pipeline, so an
+  // enabled advisor has nothing to attach to and the worker never sees the tool. Route such a
+  // turn through the translated lane instead (except advisor's own internal loopback hops, which
+  // never recurse and can travel natively on openai-chat destinations).
+  const advisorModel = typeof config?.advisor?.model === "string" ? config.advisor.model.trim() : "";
+  const isSelfAdvisorRoute = advisorModel !== "" && config !== undefined && isAdvisorDestination(route, config, advisorModel);
+  if (config?.advisor?.enabled === true && advisorModel !== "" && !options?.advisorInternal && !isSelfAdvisorRoute) {
+    return "responses-only-feature";
+  }
   // Combo and policy execution own multi-candidate retries in the Responses pipeline.
   if (route.combo || route.routeKind === "combo" || route.routeKind === "policy") return "combo-or-policy-route";
   if (rawBody.store === true || rawBody.background === true) return "responses-only-feature";

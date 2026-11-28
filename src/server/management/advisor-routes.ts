@@ -25,12 +25,21 @@ import {
   isValidAdvisorPolicy,
   isValidAdvisorContextMode,
   isValidAdvisorTaskLimit,
+  normalizeAdvisorMcpClients,
+  isAdvisorMcpClientId,
   resolveAdvisorSettings,
   type AdvisorEffort,
+  type AdvisorMcpClientId,
   type AdvisorPolicy,
   type AdvisorContextMode,
 } from "../../advisor/settings";
 import { advisorActivityStore } from "../../advisor/activity";
+import {
+  listAdvisorMcpClientStatuses,
+  syncAdvisorMcpClients,
+  type AdvisorMcpSyncResult,
+} from "../../advisor/client-mcp";
+import { runExternalAdvisorConsult } from "../../advisor/external-consult";
 
 const INVALID_BODY = Symbol("invalid-body");
 
@@ -44,12 +53,26 @@ interface AdvisorPatch {
   maxConsultationsPerTask?: number;
   /** "v1" records current consent. null removes it. Enabling does not imply this field. */
   contextSharingConsent?: typeof ADVISOR_CONTEXT_SHARING_CONSENT_VERSION | null;
+  autoMountMcp?: boolean;
+  mcpClients?: AdvisorMcpClientId[] | null;
   reset?: boolean;
 }
 
 type ParsedPatch = { ok: true; patch: AdvisorPatch } | { ok: false; code: string; message: string };
 
-const PATCH_KEYS = new Set(["enabled", "model", "effort", "policy", "contextMode", "timeoutMs", "maxConsultationsPerTask", "contextSharingConsent", "reset"]);
+const PATCH_KEYS = new Set([
+  "enabled",
+  "model",
+  "effort",
+  "policy",
+  "contextMode",
+  "timeoutMs",
+  "maxConsultationsPerTask",
+  "contextSharingConsent",
+  "autoMountMcp",
+  "mcpClients",
+  "reset",
+]);
 
 type Rec = Record<string, unknown>;
 function isRec(value: unknown): value is Rec {
@@ -61,7 +84,9 @@ export function parseAdvisorSettingsPatch(body: unknown): ParsedPatch {
   if (!isRec(body)) return { ok: false, code: "invalid_body", message: "body must be a JSON object" };
   if (Object.keys(body).length === 0) return { ok: false, code: "empty_body", message: "body must set at least one supported advisor setting or reset" };
   for (const key of Object.keys(body)) {
-    if (!PATCH_KEYS.has(key)) return { ok: false, code: "unknown_field", message: "body accepts only enabled, model, effort, policy, contextMode, timeoutMs, maxConsultationsPerTask, contextSharingConsent and reset" };
+    if (!PATCH_KEYS.has(key)) {
+      return { ok: false, code: "unknown_field", message: "body accepts only enabled, model, effort, policy, contextMode, timeoutMs, maxConsultationsPerTask, contextSharingConsent, autoMountMcp, mcpClients and reset" };
+    }
   }
   const patch: AdvisorPatch = {};
   if (body.reset !== undefined) {
@@ -100,12 +125,12 @@ export function parseAdvisorSettingsPatch(body: unknown): ParsedPatch {
     patch.policy = body.policy;
   }
   if (body.contextMode !== undefined) {
-    if (!isValidAdvisorContextMode(body.contextMode)) return { ok: false, code: "invalid_context_mode", message: 'contextMode must be "context" or "question-only"' };
+    if (!isValidAdvisorContextMode(body.contextMode)) return { ok: false, code: "invalid_context_mode", message: 'contextMode must be "context", "full" or "question-only"' };
     patch.contextMode = body.contextMode;
   }
   if (body.timeoutMs !== undefined) {
-    if (typeof body.timeoutMs !== "number" || !Number.isFinite(body.timeoutMs) || body.timeoutMs < 1_000 || body.timeoutMs > 600_000) {
-      return { ok: false, code: "invalid_timeout", message: "timeoutMs must be a number between 1000 and 600000" };
+    if (typeof body.timeoutMs !== "number" || !Number.isFinite(body.timeoutMs) || body.timeoutMs < 1_000 || body.timeoutMs > 1_800_000) {
+      return { ok: false, code: "invalid_timeout", message: "timeoutMs must be a number between 1000 and 1800000" };
     }
     patch.timeoutMs = Math.floor(body.timeoutMs);
   }
@@ -126,10 +151,29 @@ export function parseAdvisorSettingsPatch(body: unknown): ParsedPatch {
       };
     }
   }
+  if (body.autoMountMcp !== undefined) {
+    if (typeof body.autoMountMcp !== "boolean") {
+      return { ok: false, code: "invalid_auto_mount_mcp", message: "autoMountMcp must be a boolean" };
+    }
+    patch.autoMountMcp = body.autoMountMcp;
+  }
+  if (body.mcpClients !== undefined) {
+    if (body.mcpClients === null) {
+      patch.mcpClients = null;
+    } else if (Array.isArray(body.mcpClients) && body.mcpClients.every(isAdvisorMcpClientId)) {
+      patch.mcpClients = normalizeAdvisorMcpClients(body.mcpClients) ?? [];
+    } else {
+      return {
+        ok: false,
+        code: "invalid_mcp_clients",
+        message: "mcpClients must be null or an array of supported client ids",
+      };
+    }
+  }
   return { ok: true, patch };
 }
 
-function advisorInfo(config: ManagementContext["config"]): Record<string, unknown> {
+function advisorInfo(config: ManagementContext["config"], mcpSync?: AdvisorMcpSyncResult): Record<string, unknown> {
   const settings = resolveAdvisorSettings(config);
   const warning = settings.enabled && settings.model.trim() === ""
     ? "advisor_enabled_without_model"
@@ -139,6 +183,14 @@ function advisorInfo(config: ManagementContext["config"]): Record<string, unknow
   return {
     settings,
     runnable: advisorRunnable(settings),
+    mcpClients: mcpSync?.statuses ?? listAdvisorMcpClientStatuses(config),
+    ...(mcpSync ? {
+      mcpSync: {
+        mounted: mcpSync.mounted,
+        unmounted: mcpSync.unmounted,
+        errors: mcpSync.errors,
+      },
+    } : {}),
     // Enabled without a model cannot consult. Enabled with a model but without current
     // consent must not send task context; the warning names that block.
     ...(warning ? { warning } : {}),
@@ -160,6 +212,9 @@ function applyPatchInMemory(config: ManagementContext["config"], patch: AdvisorP
   if (patch.maxConsultationsPerTask !== undefined) current.maxConsultationsPerTask = patch.maxConsultationsPerTask;
   if (patch.contextSharingConsent === null) delete current.contextSharingConsent;
   else if (patch.contextSharingConsent !== undefined) current.contextSharingConsent = patch.contextSharingConsent;
+  if (patch.autoMountMcp !== undefined) current.autoMountMcp = patch.autoMountMcp;
+  if (patch.mcpClients === null) delete current.mcpClients;
+  else if (patch.mcpClients !== undefined) current.mcpClients = patch.mcpClients;
   config.advisor = current as ManagementContext["config"]["advisor"];
 }
 
@@ -174,11 +229,24 @@ export async function handleAdvisorRoutes(ctx: ManagementContext): Promise<Respo
   if (url.pathname === "/api/advisor/activity" && req.method === "GET") {
     return jsonResponse({ entries: advisorActivityStore(config).snapshot(), retention: "process", limit: 100 }, 200, req, config);
   }
+  if (url.pathname === "/api/advisor/consult" && req.method === "POST") {
+    return postAdvisorConsult(ctx);
+  }
   if (url.pathname !== "/api/advisor/settings") return null;
 
   if (req.method === "GET") return jsonResponse(advisorInfo(config), 200, req, config);
   if (req.method === "PUT") return putAdvisorSettings(ctx);
   return null;
+}
+
+async function postAdvisorConsult(ctx: ManagementContext): Promise<Response> {
+  const { req, config } = ctx;
+  const body = await readManagementJsonBodyOr(req, INVALID_BODY);
+  if (body === INVALID_BODY) {
+    return jsonResponse({ ok: false, error: { code: "invalid_json", message: "body must be valid JSON" } }, 400, req, config);
+  }
+  const result = await runExternalAdvisorConsult(config, body);
+  return jsonResponse(result.body, result.status, req, config);
 }
 
 async function putAdvisorSettings(ctx: ManagementContext): Promise<Response> {
@@ -216,7 +284,8 @@ async function putAdvisorSettings(ctx: ManagementContext): Promise<Response> {
       published = true;
       adoptPersistedAdvisor(config, candidate.advisor);
       activateAdvisor(config);
-      return jsonResponse(advisorInfo(config), 200, req, config);
+      const mcpSync = ctx.deps.saveConfigPreservingClaudeCode ? undefined : syncAdvisorMcpClients(config);
+      return jsonResponse(advisorInfo(config, mcpSync), 200, req, config);
     });
   } catch (error) {
     if (published) throw error;

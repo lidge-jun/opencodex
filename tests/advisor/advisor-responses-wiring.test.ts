@@ -1117,4 +1117,59 @@ describe("advisor responses wiring (end-to-end)", () => {
       for (const value of Object.values(headers)) expect(value).not.toContain(capability);
     }
   });
+
+  test("external MCP tool present does not suppress synthetic advisor when tool_choice selects advisor, and tool_choice none suppresses worker notice", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const externalMcpTool = {
+      type: "function",
+      name: "mcp__opencodex-advisor__consult_advisor",
+      description: "External MCP advisor",
+      parameters: { type: "object", properties: { question: { type: "string" } } },
+    };
+
+    // 1. tool_choice selects synthetic `advisor`: synthetic tool + `advisor` notice MUST attach.
+    const selectedBodies: string[] = [];
+    const selectedChats: string[] = [];
+    const selectedFetch = workerProviderFetch([
+      advisorCallFrames,
+      plainFrames("Solved via selected synthetic advisor."),
+    ], selectedBodies);
+    const selectedCfg = advisorConfig(
+      { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
+      selectedFetch,
+    );
+    loopbackInterceptor(selectedCfg, { chatRequests: selectedChats });
+
+    const selectedRes = await handleResponses(
+      workerRequest("Choose a locking strategy", undefined, true, [externalMcpTool], { type: "function", name: "advisor" }),
+      selectedCfg,
+      logCtx,
+    );
+    expect(selectedRes.status).toBe(200);
+    const selectedText = await collectSse(selectedRes.body!);
+    expect(selectedChats).toHaveLength(1);
+    expect(selectedBodies.length).toBeGreaterThanOrEqual(2);
+    const firstReq = JSON.parse(selectedBodies[0]!) as { tools?: Array<{ function: { name: string } }>; messages: Array<{ role: string; content: unknown }> };
+    expect(firstReq.tools?.some(t => t.function.name === "advisor")).toBe(true);
+    expect(JSON.stringify(firstReq.messages)).toContain("You have a `advisor` tool backed by a stronger model.");
+    expect(JSON.stringify(selectedText)).toContain("Solved via selected synthetic advisor.");
+
+    // 2. tool_choice: "none" with external MCP tool present: NO worker notice or synthetic advisor tool.
+    const noneBodies: string[] = [];
+    const noneFetch = workerProviderFetch([plainFrames("Direct plain answer.")], noneBodies);
+    const noneCfg = advisorConfig(
+      { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
+      noneFetch,
+    );
+    const noneRes = await handleResponses(
+      workerRequest("Say hello", undefined, true, [externalMcpTool], "none"),
+      noneCfg,
+      logCtx,
+    );
+    expect(noneRes.status).toBe(200);
+    await collectSse(noneRes.body!);
+    const noneReq = JSON.parse(noneBodies[0]!) as { tools?: Array<{ function: { name: string } }>; messages: Array<{ role: string; content: unknown }> };
+    expect(noneReq.tools ?? []).toHaveLength(0);
+    expect(JSON.stringify(noneReq.messages)).not.toContain("## Advisor");
+  });
 });

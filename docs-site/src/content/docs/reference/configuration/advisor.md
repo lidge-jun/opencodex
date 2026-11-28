@@ -11,8 +11,16 @@ anything, or carries provider credentials.
 
 This is distinct from the subagent surface (see
 [Agent configuration](/reference/configuration/agents/)): subagents are worker-initiated
-delegation through Codex's collaboration tools. The advisor is a proxy-side sidecar the client
+delegation through Codex's collaboration tools. For routed workers, the advisor is a proxy-side sidecar the client
 never sees — even a worker that never spawns anything can be advised.
+
+## External clients and full context
+
+`autoMountMcp` defaults to `false`. Enable it with `ocx advisor set --auto-mount-mcp on` to follow compatible active routes, or choose explicit clients with `--mcp-clients <ids>`; `auto` clears the explicit list and `none` selects no clients. External clients can use the `consult_advisor` MCP tool served by `ocx advisor mcp`, or start a consultation with `ocx advisor consult --question "..."` and poll it with `ocx advisor consult --consultation-id <id>`. Current context-sharing consent is required.
+
+`context` is the default bounded context, `question-only` sends the question only and pauses automatic consultations, and `full` uses expanded bounds and can attach a matching local transcript when a session or task ID or permitted transcript path is supplied. Transcript text and tool results may be sent to the configured Advisor provider. A transcript is not guaranteed to be found.
+
+`timeoutMs` is an inactivity timeout: response data resets it. A separate hard ceiling is `max(4 × timeoutMs, 600000 ms)`; the default is 600000 ms and the maximum configurable inactivity timeout is 1800000 ms.
 
 ## Question-only mode
 
@@ -46,9 +54,9 @@ On the dashboard **Advisor** page (under the **Subagents** sidebar row), choose 
 | `model?` | `string` | — | The expert model. Any model string the router accepts: a bare native model (`gpt-6-astra`), an explicit `provider/model` (`anthropic/claude-sonnet-4-6`, `xai/grok-...`), or an account-qualified native model. Cross-provider is fully supported: the worker and the advisor do not need to share a provider. |
 | `effort?` | `string` | `"max"` | Reasoning effort for the advisor call (`low` through `ultra`). |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | When the advisor is consulted. |
-| `contextMode?` | `"context" \| "question-only"` | `"context"` | Context sharing. `question-only` requires an explicit worker question and pauses automatic consultations. |
+| `contextMode?` | `"context" \| "full" \| "question-only"` | `"context"` | Context sharing. `question-only` requires an explicit worker question and pauses automatic consultations. |
 | `maxConsultationsPerTask?` | `integer` | `3` | Adaptive task allowance (1–3 attempts), including manual calls. |
-| `timeoutMs?` | `number` | `120000` | Loopback consultation timeout. |
+| `timeoutMs?` | `number` | `600000` | Loopback consultation timeout. |
 | `contextSharingConsent?` | `"v1"` | absent | Operator consent to send task context to the configured Advisor provider. Only `"v1"` is current. Absent, stale, or any other value means no task context is sent. |
 
 Manage it from the dashboard **Advisor** page (the context-sharing checkbox starts unchecked) or

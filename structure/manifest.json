@@ -328,6 +328,8 @@
       "scope": "The optional expert consultation sidecar: manual/preflight/adaptive policies, evidence, durable task allowance, metadata activity, and loopback routing.",
       "documents": [
         "src/advisor/",
+        "src/server/management/advisor-routes.ts",
+        "src/server/advisor-destination.ts",
         "src/server/responses/advisor-slot.ts",
         "src/server/responses/advisor-question.ts",
         "src/server/responses/advisor-plan-slot.ts",

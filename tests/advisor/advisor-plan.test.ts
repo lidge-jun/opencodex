@@ -602,4 +602,48 @@ describe("advisor plan — consultation dedup", () => {
       warnSpy.mockRestore();
     }
   });
+
+  test("clock-controlled inflight preflight claim prevents duplicate consultations beyond 10 minutes", async () => {
+    let clock = 1_000;
+    let fetchCalls = 0;
+    let resolveFirst!: (res: Response) => void;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Promise<Response>(resolve => {
+        resolveFirst = resolve;
+      });
+    }) as typeof fetch;
+
+    const ledger = createAdvisorPreflightLedger();
+    const config = {
+      advisor: {
+        enabled: true,
+        model: "expert/expert-model",
+        policy: "preflight" as const,
+        contextSharingConsent: "v1" as const,
+        timeoutMs: 1_800_000,
+      },
+    };
+    const plan1 = createAdvisorRuntimePlan({ config, workerIdentity: "w", workerModelId: "m", ledger, now: () => clock, baseUrlOverride: "http://advisor.test" })!;
+    const plan2 = createAdvisorRuntimePlan({ config, workerIdentity: "w", workerModelId: "m", ledger, now: () => clock, baseUrlOverride: "http://advisor.test" })!;
+
+    const firstPromise = plan1.preflightInject(orientedParsed("long-running task", "thread-long"));
+    await Bun.sleep(10);
+    expect(fetchCalls).toBe(1);
+
+    // Advance virtual clock 15 minutes (> 10 min ADVISOR_INFLIGHT_TTL_MS) while first consultation is still running.
+    clock += 15 * 60 * 1000;
+    expect(await plan2.preflightInject(orientedParsed("long-running task", "thread-long"))).toBe(false);
+    expect(fetchCalls).toBe(1);
+
+    resolveFirst(new Response(JSON.stringify({
+      choices: [{ message: { content: "Long consultation completed." } }],
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    expect(await firstPromise).toBe(true);
+
+    // Once settled, a subsequent plan sees complete and does not re-consult.
+    const plan3 = createAdvisorRuntimePlan({ config, workerIdentity: "w", workerModelId: "m", ledger, now: () => clock, baseUrlOverride: "http://advisor.test" })!;
+    expect(await plan3.preflightInject(orientedParsed("long-running task", "thread-long"))).toBe(false);
+    expect(fetchCalls).toBe(1);
+  });
 });

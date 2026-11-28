@@ -319,7 +319,7 @@ New records pair the exact contribution fingerprints with semantic fingerprints 
 sort JSON object keys while preserving array order. Existing records without the semantic companion
 fall back to comparing the recorded generated contribution when the catalog has not moved. This
 keeps old records readable while preventing a client's formatting-only key reorder from
-masquerading as a protected edit.
+masquerading as a protected edit. On the shared JSON files for Qoder, Qoder CN and OpenCode, a clean Advisor MCP companion write advances `fileFingerprint` but not the journal `resultFingerprint`, so Undo sees drift and requires confirmation.
 
 > Decision record: [ADR-0091](../decisions/ADR-0091-ownership-axes.md)
 
