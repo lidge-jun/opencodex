@@ -15,8 +15,9 @@ export async function probeM365CopilotProvider(name: string, provider: OcxProvid
       && row.credential.m365?.cookie === auth.m365?.cookie;
   };
   try {
-    const models = await fetchM365ModelRoster(name, provider, auth, AbortSignal.any([signal, AbortSignal.timeout(15_000)]), maySend);
-    return jsonResponse({ ok: true, latencyMs: Date.now() - started, models: models.length, message: "Connected. " + models.length + " account models." });
+    const { items, live } = await fetchM365ModelRoster(name, provider, auth, AbortSignal.any([signal, AbortSignal.timeout(15_000)]), maySend);
+    if (!live) return jsonResponse({ ok: false, latencyMs: Date.now() - started, error: "Live model discovery unavailable; the saved sign-in roster may be outdated." });
+    return jsonResponse({ ok: true, latencyMs: Date.now() - started, models: items.length, message: "Connected. " + items.length + " account models." });
   } catch {
     return jsonResponse({ ok: false, latencyMs: Date.now() - started, error: "Microsoft 365 Copilot live discovery failed. Check the account and sign in again if the web session expired." });
   }

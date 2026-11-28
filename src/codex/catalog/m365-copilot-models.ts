@@ -38,12 +38,16 @@ export async function fetchM365CopilotCatalog(captured: CapturedProviderGather, 
   };
   try {
     const signal = AbortSignal.timeout(15_000);
-    const items = await fetchM365ModelRoster(name, provider, { accessToken: auth.apiKey, m365: session }, signal, maySend);
+    const { items, live } = await fetchM365ModelRoster(name, provider, { accessToken: auth.apiKey, m365: session }, signal, maySend);
     const models = items.map(item => applyProviderConfigHints(name, provider, { id: item.id, provider: name, displayName: M365_COPILOT_DISPLAY_PREFIX + (item.name as string), inputModalities: ["text", "image"] }, contextCap, metadataModelIdCaseFold, effectiveAlias, metadataConfigDir, false));
     if (!maySend()) return { models: [], state: "degraded" };
-    setCached(name, models, Date.now(), undefined, identity);
-    markProviderDiscoveryOk(name, models.length);
-    return { models, state: "authoritative" };
+    if (live) {
+      setCached(name, models, Date.now(), undefined, identity);
+      markProviderDiscoveryOk(name, models.length);
+      return { models, state: "authoritative" };
+    }
+    markProviderDiscoveryFailed(name, { reason: "provider" });
+    return { models, state: "degraded" };
   } catch {
     if (!maySend()) return { models: [], state: "degraded" };
     if (isCurrent()) { markModelsFetchFailure(name, undefined, identity); markProviderDiscoveryFailed(name, { reason: "provider" }); }

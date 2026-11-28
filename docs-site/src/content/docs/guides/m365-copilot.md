@@ -31,6 +31,8 @@ The provider reads available model choices directly from your account's Microsof
 
 Existing installs must sign in again once to capture the web session and enable Live models. Old request aliases still work, but discovery lists Microsoft's native selector IDs. Discovery requires a valid Copilot web session independently of the chat access token. If Microsoft expires that session, OpenCodex retains the last successfully fetched list and requires sign-in again to refresh it. No static alias list is presented as account discovery. Microsoft does not publish context windows in this picker metadata.
 
+If the chat page identifies the account but no longer includes its picker metadata, OpenCodex may display a snapshot captured during sign-in and reports live discovery as unavailable. That snapshot cannot include models added after sign-in. If the web account cannot be independently identified, sign-in remains pending instead of assuming it matches the OAuth account.
+
 Use the provider namespace when selecting a model:
 
 ```text

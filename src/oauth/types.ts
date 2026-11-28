@@ -1,4 +1,6 @@
 /** Minimal OAuth types, ported from jawcode packages/ai/src/utils/oauth/types.ts. */
+import type { ProviderModelsApiItem } from "../providers/model-discovery";
+
 export type OAuthCredentialSource = "oauth" | "local-cli" | "credential-file" | "environment" | "manual";
 
 /**
@@ -62,7 +64,12 @@ export interface WorkBuddyOAuthMetadata {
 }
 
 /** Private web-session authority for the account-specific M365 chat model picker. */
-export interface M365CopilotWebSession { cookie: string; accountId: string }
+export interface M365CopilotWebSession {
+  cookie: string;
+  accountId: string;
+  /** Roster captured live in the sign-in browser, used when the chat HTML no longer embeds it. */
+  roster?: ProviderModelsApiItem[];
+}
 
 export type OAuthCredentials = {
   /** Kept only in the protected credential store and private catalog auth captures. */

@@ -6,6 +6,7 @@ export const M365_COPILOT_WEB_URL = "https://copilot.cloud.microsoft/chat/";
 export const M365_COPILOT_WEB_COOKIE_NAMES = /^(?:OhpAuth(?:C\d+)?|OhpToken|SSRUserType)$/;
 const guid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const M365_NATIVE_MODEL_ID = /^[A-Z][A-Za-z0-9_]{0,159}$/;
+export class M365RosterMissingError extends Error {}
 
 export function normalizeM365WebSession(value: unknown): M365CopilotWebSession | undefined {
   if (!value || typeof value !== "object") return;
@@ -17,25 +18,24 @@ export function normalizeM365WebSession(value: unknown): M365CopilotWebSession |
     const i = p.indexOf("=");
     return i < 1 || !M365_COPILOT_WEB_COOKIE_NAMES.test(p.slice(0, i)) || !/^[\x21-\x2b\x2d-\x3a\x3c-\x7e]+$/.test(p.slice(i + 1));
   })) return;
-  return { cookie, accountId };
+  const roster = normalizeM365Roster((value as M365CopilotWebSession).roster);
+  return roster ? { cookie, accountId, roster } : { cookie, accountId };
 }
 
 function record(value: unknown): Record<string, any> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
 }
 
-/** Read only the main chat roster; researcher and other agent menus are different products. */
-export function parseM365ModelBootstrap(html: string): { accountId: string; items: ProviderModelsApiItem[] } {
+/** The hydration global Microsoft's chat shell embeds in its server HTML. */
+function hydrationRoot(html: string): Record<string, any> {
   const quoted = html.match(/window\.__staticRouterHydrationData\s*=\s*JSON\.parse\(\s*("(?:[^"\\]|\\.)*")\s*\)/)?.[1];
   if (!quoted) throw new Error("Microsoft 365 Copilot model discovery requires web sign-in");
-  let root: Record<string, any>;
-  try { root = record(record(record(JSON.parse(JSON.parse(quoted))).loaderData).root); }
+  try { return record(record(record(JSON.parse(JSON.parse(quoted))).loaderData).root); }
   catch { throw new Error("Microsoft 365 Copilot returned invalid model metadata"); }
-  const account = record(record(root.store).accountInfo);
-  if (!guid.test(account.objectId) || !guid.test(account.tenantId)) throw new Error("Microsoft 365 Copilot returned no work-account identity");
-  const queries = record(root.__queryState).queries;
-  if (!Array.isArray(queries) || queries.length > 256) throw new Error("Microsoft 365 Copilot returned invalid model metadata");
-  const metadata = queries.map(q => record(record(record(q).state).data).bizchatAsAgentGpt?.clientPreferences?.modelSelectorMetadata).find(Boolean);
+}
+
+/** Read only the main chat roster; researcher and other agent menus are different products. */
+function m365RosterFromMetadata(metadata: unknown): ProviderModelsApiItem[] {
   const options = record(metadata).availableModelSelectionOptions;
   if (!Array.isArray(options)) throw new Error("Microsoft 365 Copilot returned no chat model roster");
   const items: ProviderModelsApiItem[] = [], seen = new Set<string>();
@@ -56,13 +56,82 @@ export function parseM365ModelBootstrap(html: string): { accountId: string; item
     }
   };
   walk(options, 0);
-  return { accountId: account.objectId + "@" + account.tenantId, items };
+  return items;
+}
+
+/** Identity-only read for sign-in: no roster requirement, so a changed picker never blocks login. */
+export function m365BootstrapAccountId(html: string): string {
+  try {
+    const account = record(record(hydrationRoot(html)).store).accountInfo;
+    return guid.test(account.objectId) && guid.test(account.tenantId) ? account.objectId + "@" + account.tenantId : "";
+  } catch { return ""; }
+}
+
+export function parseM365ModelBootstrap(html: string, expectedAccountId?: string): { accountId: string; items: ProviderModelsApiItem[] } {
+  const root = hydrationRoot(html);
+  const account = record(record(root.store).accountInfo);
+  if (!guid.test(account.objectId) || !guid.test(account.tenantId)) throw new Error("Microsoft 365 Copilot returned no work-account identity");
+  const accountId = account.objectId + "@" + account.tenantId;
+  if (expectedAccountId && accountId.toLowerCase() !== expectedAccountId.toLowerCase()) throw new Error("Microsoft 365 Copilot model discovery account mismatch");
+  const queries = record(root.__queryState).queries;
+  if (queries === undefined) throw new M365RosterMissingError("Microsoft 365 Copilot returned no chat model roster");
+  if (!Array.isArray(queries) || queries.length > 256) throw new Error("Microsoft 365 Copilot returned invalid model metadata");
+  const metadata = queries.map(q => record(record(record(q).state).data).bizchatAsAgentGpt?.clientPreferences?.modelSelectorMetadata).find(Boolean);
+  if (!metadata) throw new M365RosterMissingError("Microsoft 365 Copilot returned no chat model roster");
+  return { accountId, items: m365RosterFromMetadata(metadata) };
+}
+
+function findSelectorMetadata(value: unknown, depth: number, fromBizchat: boolean, requireBizchat: boolean): Record<string, any> | undefined {
+  if (depth > 12) return undefined;
+  if (Array.isArray(value)) {
+    if (value.length > 4_096) return undefined;
+    for (const entry of value) { const found = findSelectorMetadata(entry, depth + 1, fromBizchat, requireBizchat); if (found) return found; }
+    return undefined;
+  }
+  if (!value || typeof value !== "object") return undefined;
+  const row = value as Record<string, any>;
+  if (Array.isArray(row.availableModelSelectionOptions) && (!requireBizchat || fromBizchat)) return row;
+  const keys = Object.keys(row);
+  if (keys.length > 4_096) return undefined;
+  for (const key of keys) {
+    const found = findSelectorMetadata(row[key], depth + 1, fromBizchat || key === "bizchatAsAgentGpt", requireBizchat);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/** Roster read for bodies captured live in the sign-in browser: raw API JSON or the hydrated HTML shell. */
+export function parseM365RosterBody(text: string): ProviderModelsApiItem[] | undefined {
+  let value: unknown;
+  try { value = JSON.parse(text); }
+  catch {
+    const quoted = text.match(/window\.__staticRouterHydrationData\s*=\s*JSON\.parse\(\s*("(?:[^"\\]|\\.)*")\s*\)/)?.[1];
+    if (!quoted) return undefined;
+    try { value = JSON.parse(JSON.parse(quoted)); } catch { return undefined; }
+  }
+  const metadata = findSelectorMetadata(value, 0, false, true);
+  if (!metadata) return undefined;
+  try { return m365RosterFromMetadata(metadata); } catch { return undefined; }
+}
+
+/** Stored rosters keep the bootstrap item shape so both discovery sources feed the catalog identically. */
+export function normalizeM365Roster(value: unknown): ProviderModelsApiItem[] | undefined {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 256) return undefined;
+  const items: ProviderModelsApiItem[] = [], seen = new Set<string>();
+  for (const raw of value) {
+    const row = record(raw);
+    if (typeof row.id !== "string" || row.id.length > 160 || !M365_NATIVE_MODEL_ID.test(row.id) || seen.has(row.id)) return undefined;
+    if (typeof row.name !== "string" || row.name.length > 256 || /[\x00-\x1f\x7f]/.test(row.name)) return undefined;
+    if (row.m365_disabled !== undefined && row.m365_disabled !== true && row.m365_disabled !== false) return undefined;
+    seen.add(row.id);
+    items.push({ id: row.id, name: row.name, input_modalities: ["text", "image"], m365_disabled: row.m365_disabled === true });
+  }
+  return items;
 }
 
 export async function readM365ModelBootstrap(response: Response, expectedAccountId: string, signal?: AbortSignal) {
   const read = await readBoundedResponseBytes(response, { maxBytes: 2 * 1024 * 1024, signal });
   if (read.oversized) throw new Error("Microsoft 365 Copilot model metadata exceeds its limits");
-  const result = parseM365ModelBootstrap(new TextDecoder().decode(read.bytes));
-  if (result.accountId.toLowerCase() !== expectedAccountId.toLowerCase()) throw new Error("Microsoft 365 Copilot model discovery account mismatch");
+  const result = parseM365ModelBootstrap(new TextDecoder().decode(read.bytes), expectedAccountId);
   return result.items;
 }

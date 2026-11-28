@@ -1,4 +1,4 @@
-import { M365_COPILOT_WEB_URL, M365_COPILOT_WEB_COOKIE_NAMES, normalizeM365WebSession, parseM365ModelBootstrap } from "../providers/m365-copilot-discovery";
+import { M365_COPILOT_WEB_URL, M365_COPILOT_WEB_COOKIE_NAMES, m365BootstrapAccountId, normalizeM365WebSession } from "../providers/m365-copilot-discovery";
 import type { M365CopilotWebSession } from "./types";
 
 interface BrowserCommands { command(method: string, params?: Record<string, unknown>, sessionId?: string): Promise<any> }
@@ -16,34 +16,45 @@ const fetchChatHtml = "location.origin===" + M365_WEB_ORIGIN + "?(async()=>{"
   + "for(;;){const{done,value}=await rd.read();if(done)break;n+=value.byteLength;"
   + "if(n>" + M365_CHAT_HTML_MAX_BYTES + "){c.abort();return''}s+=d.decode(value,{stream:true})}"
   + "return s+d.decode()}catch{return''}finally{clearTimeout(t)}})():''";
-function bootstrapAccountId(html: unknown) {
-  if (typeof html !== "string" || !html) return "";
-  try { return parseM365ModelBootstrap(html).accountId; } catch { return ""; }
+const pageAccountExpression = "(()=>{if(location.origin!==" + M365_WEB_ORIGIN + ")return'';const a=window.__staticRouterHydrationData?.loaderData?.root?.store?.accountInfo;"
+  + "return a?.objectId&&a?.tenantId?a.objectId+'@'+a.tenantId:''})()";
+
+async function browserAccountId(browser: BrowserCommands, context: string): Promise<string> {
+  const result = await browser.command("Runtime.evaluate", { expression: pageAccountExpression, returnByValue: true }, context).catch(() => null);
+  return typeof result?.result?.value === "string" ? result.result.value : "";
 }
-export async function readM365BrowserWebSession(browser: BrowserCommands, context: string, signal: AbortSignal): Promise<M365CopilotWebSession> {
-  const expression = "(()=>{const r=window.__staticRouterHydrationData?.loaderData?.root;const a=r?.store?.accountInfo;return a?.objectId&&a?.tenantId&&r?.__queryState?.queries?.some(q=>q.state?.data?.bizchatAsAgentGpt?.clientPreferences?.modelSelectorMetadata)?a.objectId+'@'+a.tenantId:''})()";
+
+async function htmlAccountId(browser: BrowserCommands, context: string, signal: AbortSignal): Promise<string> {
+  const page = await browser.command("Runtime.evaluate", { expression: fetchChatHtml, awaitPromise: true, returnByValue: true }, context).catch(() => null);
+  // The fallback fetch can outlive a cancelled login; never read identity after an abort.
+  signal.throwIfAborted();
+  return typeof page?.result?.value === "string" ? m365BootstrapAccountId(page.result.value) : "";
+}
+
+function chatCookieHeader(cookies: unknown): string {
+  return (Array.isArray(cookies) ? cookies : []).filter(c =>
+    ["copilot.cloud.microsoft", ".copilot.cloud.microsoft"].includes(c.domain)
+    && c.secure === true && c.path === "/" && M365_COPILOT_WEB_COOKIE_NAMES.test(c.name))
+    .map(c => c.name + "=" + c.value).join("; ");
+}
+
+export async function readM365BrowserWebSession(browser: BrowserCommands, context: string, signal: AbortSignal, expectedAccountId?: string): Promise<M365CopilotWebSession> {
   await browser.command("Page.navigate", { url: M365_COPILOT_WEB_URL }, context);
   const deadline = Date.now() + 120_000;
+  // A cookie must be accompanied by an independently observed web-account identity.
   while (Date.now() < deadline) {
     signal.throwIfAborted();
-    const result = await browser.command("Runtime.evaluate", { expression, returnByValue: true }, context).catch(() => null);
-    let accountId = result?.result?.value;
-    if (typeof accountId !== "string" || !accountId) {
-      const page = await browser.command("Runtime.evaluate", { expression: fetchChatHtml, awaitPromise: true, returnByValue: true }, context).catch(() => null);
-      // The fallback fetch can outlive a cancelled login; never read cookies after an abort.
+    const cookies = await browser.command("Network.getCookies", { urls: [M365_COPILOT_WEB_URL] }, context).then(result => result?.cookies).catch(() => undefined);
+    signal.throwIfAborted();
+    const cookie = chatCookieHeader(cookies);
+    if (cookie) {
+      const accountId = await browserAccountId(browser, context) || await htmlAccountId(browser, context, signal);
       signal.throwIfAborted();
-      accountId = bootstrapAccountId(page?.result?.value);
-    }
-    if (accountId) {
-      const { cookies } = await browser.command("Network.getCookies", { urls: [M365_COPILOT_WEB_URL] }, context);
-      const cookie = (Array.isArray(cookies) ? cookies : []).filter(c =>
-        ["copilot.cloud.microsoft", ".copilot.cloud.microsoft"].includes(c.domain)
-        && c.secure === true && c.path === "/" && M365_COPILOT_WEB_COOKIE_NAMES.test(c.name))
-        .map(c => c.name + "=" + c.value).join("; ");
+      if (accountId && expectedAccountId && accountId.toLowerCase() !== expectedAccountId.toLowerCase()) throw new Error("Microsoft 365 Copilot web sign-in account mismatch");
       const session = normalizeM365WebSession({ cookie, accountId });
       if (session) return session;
     }
     await Bun.sleep(1_000);
   }
-  throw new Error("Microsoft 365 Copilot web sign-in did not expose a work-account model picker; retry login");
+  throw new Error("Microsoft 365 Copilot web sign-in did not reach its chat session; retry login");
 }
