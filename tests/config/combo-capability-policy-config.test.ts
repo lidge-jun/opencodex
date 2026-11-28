@@ -57,36 +57,43 @@ describe("combo capabilityPolicy config", () => {
   test("rejects values outside the closed sets", () => {
     expect(comboConfigIssues("u", { targets, capabilityPolicy: "primary" }, providers).map(issue => issue.path[0]))
       .toContain("capabilityPolicy");
+    expect(comboConfigIssues("u", { targets, contextWindowPolicy: "avg" }, providers).map(issue => issue.path[0]))
+      .toContain("contextWindowPolicy");
     expect(comboConfigIssues("u", { targets, onUnservable: "drop" }, providers).map(issue => issue.path[0]))
       .toContain("onUnservable");
-    expect(comboConfigIssues("u", { targets, capabilityPolicy: "union", onUnservable: "reject" }, providers)).toEqual([]);
+    expect(comboConfigIssues("u", { targets, capabilityPolicy: "union", contextWindowPolicy: "max", onUnservable: "reject" }, providers)).toEqual([]);
+    expect(comboConfigIssues("u", { targets, contextWindowPolicy: "min" }, providers)).toEqual([]);
   });
 
   test("survives a management round trip and stays sparse at the defaults", async () => {
     const config = freshConfig();
-    const saved = await comboApi(config, "PUT", { id: "u", combo: { targets, capabilityPolicy: "union", onUnservable: "reject" } });
-    expect(saved.combo).toMatchObject({ capabilityPolicy: "union", onUnservable: "reject" });
-    expect(config.combos?.u).toMatchObject({ capabilityPolicy: "union", onUnservable: "reject" });
+    const saved = await comboApi(config, "PUT", { id: "u", combo: { targets, capabilityPolicy: "union", contextWindowPolicy: "max", onUnservable: "reject" } });
+    expect(saved.combo).toMatchObject({ capabilityPolicy: "union", contextWindowPolicy: "max", onUnservable: "reject" });
+    expect(config.combos?.u).toMatchObject({ capabilityPolicy: "union", contextWindowPolicy: "max", onUnservable: "reject" });
     const listed = await comboApi(config, "GET");
-    expect(listed.combos).toEqual([expect.objectContaining({ id: "u", capabilityPolicy: "union", onUnservable: "reject" })]);
+    expect(listed.combos).toEqual([expect.objectContaining({ id: "u", capabilityPolicy: "union", contextWindowPolicy: "max", onUnservable: "reject" })]);
 
-    // A whole-combo PUT that omits both (the CLI, an older dashboard) carries them forward.
+    // A whole-combo PUT that omits all three (the CLI, an older dashboard) carries them forward.
     await comboApi(config, "PUT", { id: "u", combo: { targets, strategy: "round-robin" } });
-    expect(config.combos?.u).toMatchObject({ strategy: "round-robin", capabilityPolicy: "union", onUnservable: "reject" });
+    expect(config.combos?.u).toMatchObject({ strategy: "round-robin", capabilityPolicy: "union", contextWindowPolicy: "max", onUnservable: "reject" });
 
-    // A combo created with both defaults spelled out stores neither key and echoes neither.
-    const plain = await comboApi(config, "PUT", { id: "plain", combo: { targets, capabilityPolicy: "intersection", onUnservable: "degrade" } });
+    // A combo created with defaults spelled out stores none of the keys and echoes none.
+    const plain = await comboApi(config, "PUT", { id: "plain", combo: { targets, capabilityPolicy: "intersection", contextWindowPolicy: "min", onUnservable: "degrade" } });
     expect(plain.combo).not.toHaveProperty("capabilityPolicy");
+    expect(plain.combo).not.toHaveProperty("contextWindowPolicy");
     expect(plain.combo).not.toHaveProperty("onUnservable");
     expect(config.combos?.plain).not.toHaveProperty("capabilityPolicy");
+    expect(config.combos?.plain).not.toHaveProperty("contextWindowPolicy");
     expect(config.combos?.plain).not.toHaveProperty("onUnservable");
 
     // Explicit defaults clear the stored keys instead of pinning them.
-    await comboApi(config, "PUT", { id: "u", combo: { targets, capabilityPolicy: "intersection", onUnservable: "degrade" } });
+    await comboApi(config, "PUT", { id: "u", combo: { targets, capabilityPolicy: "intersection", contextWindowPolicy: "min", onUnservable: "degrade" } });
     expect(config.combos?.u).not.toHaveProperty("capabilityPolicy");
+    expect(config.combos?.u).not.toHaveProperty("contextWindowPolicy");
     expect(config.combos?.u).not.toHaveProperty("onUnservable");
     const onDisk = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
     expect(onDisk.combos?.u).not.toHaveProperty("capabilityPolicy");
+    expect(onDisk.combos?.u).not.toHaveProperty("contextWindowPolicy");
     expect(onDisk.combos?.plain).not.toHaveProperty("onUnservable");
   });
 });

@@ -1,5 +1,5 @@
 import { codexEffortRank } from "../reasoning-effort";
-import type { OcxComboCapabilityPolicy, OcxComboReasoningEffortMode } from "../types";
+import type { OcxComboCapabilityPolicy, OcxComboContextWindowPolicy, OcxComboReasoningEffortMode } from "../types";
 
 /** Distinct values across every list, in first-seen order. */
 export function unionStrings(values: readonly (readonly string[])[]): string[] {
@@ -28,4 +28,26 @@ export function comboAdvertisesEffortUnion(
   mode: OcxComboReasoningEffortMode,
 ): boolean {
   return policy === "union" && mode === "adaptive";
+}
+
+/** Sparse normalizer for `contextWindowPolicy`: default `"min"` is omitted. */
+export function normalizeComboContextWindowPolicy(
+  value: unknown,
+): Extract<OcxComboContextWindowPolicy, "max"> | undefined {
+  return value === "max" ? "max" : undefined;
+}
+
+/** Effective catalog context-window policy for a combo (`"min"` when omitted). */
+export function comboContextWindowPolicy(
+  combo: { contextWindowPolicy?: OcxComboContextWindowPolicy } | undefined,
+): OcxComboContextWindowPolicy {
+  return combo?.contextWindowPolicy === "max" ? "max" : "min";
+}
+
+/** Whether a combo advertises its largest member's context window instead of the minimum. */
+export function comboAdvertisesMaxContextWindow(
+  policy: OcxComboCapabilityPolicy | undefined,
+  contextWindowPolicy: OcxComboContextWindowPolicy | undefined,
+): boolean {
+  return policy === "union" && contextWindowPolicy === "max";
 }

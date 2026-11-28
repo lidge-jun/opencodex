@@ -32,6 +32,7 @@ const USAGE = `Usage:
       (quota-only mode requires consent for any paid target, including the first target)
       [--description <text|->]
       [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>]
+      [--context-window-policy <min|max|->]
       [--jev-effort-mode <decide|client>]
       [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->]
       [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->]
@@ -228,6 +229,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   }
   if (additional.imageInput !== undefined) combo.imageInput = additional.imageInput;
   if (additional.reasoningEffortMode !== undefined) combo.reasoningEffortMode = additional.reasoningEffortMode;
+  if (additional.contextWindowPolicy !== undefined) combo.contextWindowPolicy = additional.contextWindowPolicy;
   if (additional.jevEffortMode !== undefined) combo.jevEffortMode = additional.jevEffortMode;
   if (displayName !== undefined) combo.displayName = displayName === "-" ? "" : displayName;
   if (description !== undefined) combo.description = description === "-" ? "" : description;

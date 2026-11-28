@@ -58,15 +58,19 @@ describe("combo extension input", () => {
     expect(args).toEqual(["--alias", "gpt-fixture"]);
   });
   test("nondefault values and inline false", async () => {
-    expect(await prepareComboInput(["--native-alias=off", "--image-input", "disabled", "--reasoning-effort-mode=adaptive"]))
-      .toEqual({ nativeAlias: false, imageInput: "disabled", reasoningEffortMode: "adaptive" });
+    expect(await prepareComboInput(["--native-alias=off", "--image-input", "disabled", "--reasoning-effort-mode=adaptive", "--context-window-policy=max"]))
+      .toEqual({ nativeAlias: false, imageInput: "disabled", reasoningEffortMode: "adaptive", contextWindowPolicy: "max" });
+    expect(await prepareComboInput(["--context-window-policy", "-"])).toEqual({ contextWindowPolicy: "min" });
+    expect(await prepareComboInput(["--context-window-policy", "min"])).toEqual({ contextWindowPolicy: "min" });
   });
   for (const args of [
     ["--native-alias", "false"], ["--native-alias="], ["--native-alias", "off", "--native-alias"],
     ["--native-alias=off", "--native-alias=on"], ["--image-input"], ["--image-input", "yes"],
     ["--image-input=auto", "--image-input=disabled"], ["--reasoning-effort-mode", "force"],
-    ["--reasoning-effort-mode=strict", "--reasoning-effort-mode=adaptive"], ["--targets-file"],
-    ["--targets-file=a", "--targets-file=b"],
+    ["--reasoning-effort-mode=strict", "--reasoning-effort-mode=adaptive"],
+    ["--context-window-policy"], ["--context-window-policy", "avg"],
+    ["--context-window-policy=min", "--context-window-policy=max"],
+    ["--targets-file"], ["--targets-file=a", "--targets-file=b"],
   ]) test(`invalid new option refuses: ${args.join(" ")}`, async () => {
     await expect(prepareComboInput([...args])).rejects.toThrow();
   });
@@ -229,5 +233,18 @@ describe("integrated combo extension and actual management persistence", () => {
     expect(await handleComboCommand(["set", "saved", "--image-input", "auto", "--json"], f.deps)).toBe(1);
     expect(f.config.combos!.saved).not.toHaveProperty("imageInput");
     expect(JSON.parse(String(output.mock.calls[0]?.[0])).catalogRefresh).toMatchObject({ status: "committed", degraded: true });
+  });
+  test("context-window-policy max persists, carries across unrelated edits, and clears with - or min", async () => {
+    const f = realRuntime();
+    expect(await handleComboCommand(["set", "saved", "--context-window-policy", "max", "--json"], f.deps)).toBe(0);
+    expect(f.config.combos!.saved!.contextWindowPolicy).toBe("max");
+    expect(await handleComboCommand(["set", "saved", "--display-name", "Kept Max", "--json"], f.deps)).toBe(0);
+    expect(f.config.combos!.saved!.contextWindowPolicy).toBe("max");
+    expect(await handleComboCommand(["set", "saved", "--context-window-policy", "-", "--json"], f.deps)).toBe(0);
+    expect(f.config.combos!.saved).not.toHaveProperty("contextWindowPolicy");
+    expect(await handleComboCommand(["set", "saved", "--context-window-policy", "max", "--json"], f.deps)).toBe(0);
+    expect(f.config.combos!.saved!.contextWindowPolicy).toBe("max");
+    expect(await handleComboCommand(["set", "saved", "--context-window-policy", "min", "--json"], f.deps)).toBe(0);
+    expect(f.config.combos!.saved).not.toHaveProperty("contextWindowPolicy");
   });
 });

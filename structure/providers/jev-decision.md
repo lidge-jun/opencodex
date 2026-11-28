@@ -64,7 +64,11 @@ The bounded decision response selects SSE through the [internal media-type contr
 
 `src/combos/jev.ts` extracts bounded user-task, previous-assistant, and latest-tool-output text plus
 the tool name and boolean signals; raw image data, tool arguments, encrypted reasoning, headers, and
-the JEV credential are excluded. All three text samples omit recognized Codex protected envelopes
+the JEV credential are excluded. For self-hosted System One endpoints only (`endpoint.descriptiveCriteria === true`
+and not a `/decisions` endpoint), `buildJevState` also includes `signals.estimated_tokens` when `src/server/responses/core-combo.ts`
+supplies a positive safe-integer input-token estimate via `resolveJevEstimatedInputTokens` in `src/combos/request-capability.ts`
+(reusing the `comboCapabilityGate` estimate for `union` combos without re-parsing, falling back to `estimateComboInputTokens` only for non-`union` combos, and skipping non-`systemone` or `/decisions` endpoints); canonical TypeSafe (`jev`) always omits it so
+`tests/fixtures/jev-typesafe-request-golden.json` stays byte-for-byte unchanged. All three text samples omit recognized Codex protected envelopes
 and Claude Code `<system-reminder>` blocks before clipping, including nested and unclosed blocks.
 Only an envelope-only `codex_internal_context` goal outside a reminder may supply a fallback task;
 reminder-only text supplies no task. Reminder-free inputs keep their existing sampling behavior.

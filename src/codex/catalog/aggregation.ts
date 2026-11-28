@@ -29,7 +29,7 @@ import {
   targetKey,
 } from "../../combos";
 import type { NormalizedComboConfig } from "../../combos/types";
-import { comboAdvertisesEffortUnion, unionEfforts, unionStrings } from "../../combos/capability-policy";
+import { comboAdvertisesEffortUnion, comboAdvertisesMaxContextWindow, unionEfforts, unionStrings } from "../../combos/capability-policy";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
@@ -160,8 +160,11 @@ export function deriveComboCatalogModel(
     : comboAdvertisesEffortUnion(combo.capabilityPolicy, combo.reasoningEffortMode)
       ? unionEfforts(advertisedLadders)
       : intersectStrings(advertisedLadders);
-  // Publish a window safe across all targets. Request admission can still use larger members.
-  const contextWindow = Math.min(...members.map(member => member.contextWindow!));
+  const useMaxContextWindow = comboAdvertisesMaxContextWindow(combo.capabilityPolicy, combo.contextWindowPolicy);
+  // Default publishes a window safe across all targets; opt-in union max advertises the largest member.
+  const contextWindow = useMaxContextWindow
+    ? Math.max(...members.map(member => member.contextWindow!))
+    : Math.min(...members.map(member => member.contextWindow!));
   const limitingMembers = members.filter(member => member.contextWindow === contextWindow);
   const hasLimitingContextCapMetadata = limitingMembers.some(
     member => typeof member.contextCapped === "boolean",
@@ -170,24 +173,38 @@ export function deriveComboCatalogModel(
   // itself reduced by a provider cap. An uncapped member at the same window means the
   // combo would have the same window even without the cap.
   const contextCapped = limitingMembers.every(member => member.contextCapped === true);
-  const maxInputTokens = Math.min(
-    contextWindow,
-    ...members.map(member => member.maxInputTokens ?? member.contextWindow!),
-  );
+  const maxInputTokens = useMaxContextWindow
+    ? Math.min(
+      contextWindow,
+      Math.max(...limitingMembers.map(member => member.maxInputTokens ?? member.contextWindow!)),
+    )
+    : Math.min(
+      contextWindow,
+      ...members.map(member => member.maxInputTokens ?? member.contextWindow!),
+    );
   const knownMaxOutputTokens = members
     .map(member => member.maxOutputTokens)
     .filter((value): value is number => typeof value === "number" && value > 0);
   const maxOutputTokens = knownMaxOutputTokens.length === members.length
     ? Math.min(...knownMaxOutputTokens)
     : undefined;
-  const autoCompactTokenLimit = Math.min(
-    maxInputTokens,
-    ...members.map(member => clampAutoCompactTokenLimit(
-      member.contextWindow!,
-      member.maxInputTokens,
-      member.autoCompactTokenLimit,
-    )),
-  );
+  const autoCompactTokenLimit = useMaxContextWindow
+    ? Math.min(
+      maxInputTokens,
+      Math.max(...limitingMembers.map(member => clampAutoCompactTokenLimit(
+        member.contextWindow!,
+        member.maxInputTokens,
+        member.autoCompactTokenLimit,
+      ))),
+    )
+    : Math.min(
+      maxInputTokens,
+      ...members.map(member => clampAutoCompactTokenLimit(
+        member.contextWindow!,
+        member.maxInputTokens,
+        member.autoCompactTokenLimit,
+      )),
+    );
   const defaultReasoningEffort = effectiveComboDefault(
     combo.defaultEffort,
     reasoningEfforts,

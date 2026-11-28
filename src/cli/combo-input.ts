@@ -7,6 +7,7 @@ type ComboInput = {
   targets?: Array<Record<string, unknown>>;
   imageInput?: "auto" | "disabled";
   reasoningEffortMode?: "strict" | "adaptive";
+  contextWindowPolicy?: "min" | "max";
   jevEffortMode?: "decide" | "client";
   nativeAlias?: boolean;
   allowMeteredTargets?: boolean;
@@ -83,6 +84,7 @@ export async function prepareComboInput(args: string[], deps: RuntimeApiDeps = {
   const file = takeOptionWithSyntax(args, "--targets-file")?.value;
   const image = takeOptionWithSyntax(args, "--image-input")?.value;
   const reasoning = takeOptionWithSyntax(args, "--reasoning-effort-mode")?.value;
+  const contextWindowPolicyRaw = takeOptionWithSyntax(args, "--context-window-policy")?.value;
   const jevEffort = takeOptionWithSyntax(args, "--jev-effort-mode")?.value;
   const nativeAlias = takeNativeAlias(args);
   const metered = takeOnOff(args, "--allow-metered-targets");
@@ -97,6 +99,15 @@ export async function prepareComboInput(args: string[], deps: RuntimeApiDeps = {
   if (reasoning !== undefined && reasoning !== "strict" && reasoning !== "adaptive") {
     throw new CliUsageError("--reasoning-effort-mode must be strict or adaptive");
   }
+  if (contextWindowPolicyRaw !== undefined
+    && contextWindowPolicyRaw !== "min"
+    && contextWindowPolicyRaw !== "max"
+    && contextWindowPolicyRaw !== "-") {
+    throw new CliUsageError("--context-window-policy must be min, max, or -");
+  }
+  const contextWindowPolicy = contextWindowPolicyRaw === undefined
+    ? undefined
+    : contextWindowPolicyRaw === "-" ? "min" : contextWindowPolicyRaw;
   if (jevEffort !== undefined && jevEffort !== "decide" && jevEffort !== "client") {
     throw new CliUsageError("--jev-effort-mode must be decide or client");
   }
@@ -104,6 +115,7 @@ export async function prepareComboInput(args: string[], deps: RuntimeApiDeps = {
     ...(file === undefined ? {} : { targets: parseComboTargets(await readJsonInput(file, deps)) }),
     ...(image === undefined ? {} : { imageInput: image }),
     ...(reasoning === undefined ? {} : { reasoningEffortMode: reasoning }),
+    ...(contextWindowPolicy === undefined ? {} : { contextWindowPolicy }),
     ...(jevEffort === undefined ? {} : { jevEffortMode: jevEffort }),
     ...(nativeAlias === undefined ? {} : { nativeAlias }),
     ...(metered === undefined ? {} : { allowMeteredTargets: metered }),

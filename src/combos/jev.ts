@@ -134,6 +134,8 @@ export interface ResolveJevDecisionOptions {
   isDestinationAllowed?: (providerName: string, modelId: string) => boolean;
   /** Decision deadline; values outside 1000..120000 ms keep the four-second default. */
   timeoutMs?: number;
+  /** Heuristic input-token count forwarded only to self-hosted System One endpoints. */
+  estimatedInputTokens?: number;
   signal?: AbortSignal;
   post?: typeof providerOutboundPost;
   now?: () => number;
@@ -385,8 +387,19 @@ function hasImageContent(item: Record<string, unknown>): boolean {
   return item.content.some(part => isRecord(part) && (part.type === "input_image" || part.type === "image_url"));
 }
 
+export interface BuildJevStateOptions {
+  /** Include `signals.estimated_tokens` only for self-hosted System One endpoints. */
+  includeEstimatedTokens?: boolean;
+  /** Positive finite integer input-token estimate. */
+  estimatedInputTokens?: number;
+}
+
 /** Extract bounded task/assistant/tool evidence, omit protected envelopes, and attach configured target notes. */
-export function buildJevState(body: unknown, candidates: readonly JevCandidate[] = []): Record<string, unknown> {
+export function buildJevState(
+  body: unknown,
+  candidates: readonly JevCandidate[] = [],
+  options: BuildJevStateOptions = {},
+): Record<string, unknown> {
   const input = isRecord(body) ? body.input : undefined;
   let task = "";
   let previousAssistant = "";
@@ -438,9 +451,20 @@ export function buildJevState(body: unknown, candidates: readonly JevCandidate[]
     if (note) operatorNotes[candidate.key] = note;
   }
 
+  const estimatedTokens = options.includeEstimatedTokens === true
+    && typeof options.estimatedInputTokens === "number"
+    && Number.isSafeInteger(options.estimatedInputTokens)
+    && options.estimatedInputTokens > 0
+    ? options.estimatedInputTokens
+    : undefined;
+
   return {
     task,
-    signals: { has_image: hasImage, tool_history: toolHistory },
+    signals: {
+      has_image: hasImage,
+      tool_history: toolHistory,
+      ...(estimatedTokens !== undefined ? { estimated_tokens: estimatedTokens } : {}),
+    },
     step,
     ...(previousAssistant ? { previous_assistant: previousAssistant.slice(-ASSISTANT_TAIL_CHARS) } : {}),
     ...(Object.keys(operatorNotes).length ? { operator_notes: operatorNotes } : {}),
@@ -714,7 +738,10 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
       if (optionCount < SELF_HOSTED_MIN_OPTIONS) return "no_choices";
       if (optionCount > SELF_HOSTED_MAX_OPTIONS) return "invalid";
     }
-    const state = buildJevState(options.body, options.candidates);
+    const state = buildJevState(options.body, options.candidates, {
+      includeEstimatedTokens: endpoint.descriptiveCriteria === true && !isDecisions,
+      estimatedInputTokens: options.estimatedInputTokens,
+    });
     if (!hasJevDecisionState(state)) return "no_state";
     if (isDecisions && endpoint.url) {
       const payload = boundedJevQuotaPayload(jevQuotaCandidates(options), rows => {
