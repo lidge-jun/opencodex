@@ -1655,6 +1655,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const { staticCatalogConnectionTest } = await import("./static-catalog-probe");
       return jsonResponse(await staticCatalogConnectionTest(name, prov, req.signal));
     }
+    if (prov.adapter === "trae-cn")
+      return (await import("./trae-cn-provider-probe")).probeTraeCnProviderFromContext(ctx, name, prov);
     const { buildModelsRequest, getModelsOAuthAccessSnapshot, resolveModelsAuthToken } = await import("../../oauth");
     const antigravity = effectiveGoogleMode(name, prov) === "cloud-code-assist";
     const snapshot = prov.authMode === "oauth" && mayResolveModelsOAuth(name, config.providers[name])

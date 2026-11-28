@@ -9,6 +9,7 @@ import { withClinePassDeepSeekV4ToolReplayCompatibility } from "./cline-pass-dee
 import { withUniqueToolCallIds } from "./unique-tool-call-ids";
 import { createCodeBuddyAdapter } from "./codebuddy/adapter";
 import { createQoderAdapter } from "./qoder/adapter";
+import { createTraeCnAdapter } from "./trae-cn/adapter";
 import { createStepCliAdapter } from "./step-cli/adapter";
 import { createCommandCodeAdapter } from "./command-code";
 import { createCursorAdapter } from "./cursor";
@@ -44,6 +45,7 @@ export interface AdapterFactoryContext {
 
 export type AdapterWire =
   | "codebuddy"
+  | "trae-cn"
   | "step-cli"
   | "command-code"
   | "openai-chat"
@@ -176,6 +178,11 @@ export const ADAPTER_REGISTRY = {
     // and the CLI owns the credential: the adapter stores and injects none.
     contractParent: "codebuddy",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createClaudeCliAdapter(provider),
+  },
+  "trae-cn": {
+    wire: "trae-cn",
+    mutation: "codex-owned",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createTraeCnAdapter(provider),
   },
   "step-cli": {
     // StepCode's SDK stdio host speaks its own length-prefixed envelope rather than the Anthropic

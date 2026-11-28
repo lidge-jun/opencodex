@@ -95,6 +95,7 @@ import type { OcxConfig, OcxParsedRequest } from "../../types";
 import { buildToolBridgeMaps } from "./collaboration";
 import { parseRequest } from "../../responses/parser";
 import { responsesHasFileImage, responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
+import { responsesHasUnsupportedInputMedia } from "../../adapters/trae-cn/input-media";
 import { anthropicSessionKeyFromParts } from "../../oauth/anthropic-routing";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
@@ -261,8 +262,7 @@ export async function prepareResponsesRequest(
   const policyScope = options.policyRequestScope ?? { triedDestinations: new Set<string>() };
   const concreteSelection = options.comboAttempt || options.policyFallbackCandidate !== undefined;
 
-  // The Chat and Anthropic surfaces replay through here with a Responses-shaped body,
-  // so an omitted value means a genuine Responses inbound.
+  // The Chat and Anthropic surfaces replay through here with a Responses-shaped body, so an omitted value means a genuine Responses inbound.
   const inboundWire = options.inboundWire ?? "responses";
   const translatorBudget = options.translatorBudget;
   const agentTaskRecovery = agentTaskRecoveryConfig(config);
@@ -278,6 +278,7 @@ export async function prepareResponsesRequest(
     return decodeRequestErrorResponse(err, "responses");
   }
   options.responsesInstructionImage ||= responsesHasInstructionImage(body);
+  options.responsesUnsupportedInputMedia ||= responsesHasUnsupportedInputMedia(body, { captionUserImages: true });
   options.responsesFileImage ||= responsesHasFileImage(body);
   // Remove display-only artifact paths before helpers, combo dispatch and upstream replay.
   const originalSelector = options.mainHardLockFallbackOverride?.sourceModel ?? options.compactionRoutingOverride?.sourceModel
@@ -519,6 +520,7 @@ export async function prepareResponsesRequest(
   if (!options.comboReplaySnapshot) observeLinkTurnExpansion(options.linkTurn, req, logCtx, body, previousResponseInputExpanded ? "chained"
     : body && typeof body === "object" && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string" ? "unexpanded" : "none");
   options.responsesInstructionImage ||= responsesHasInstructionImage(body);
+  options.responsesUnsupportedInputMedia ||= responsesHasUnsupportedInputMedia(body, { captionUserImages: true });
   options.responsesFileImage ||= responsesHasFileImage(body);
   // Counted after replay expansion so the catalog this request pays for is the one measured:
   // input restored from stored continuation state is history, and the prefix removes it.
@@ -1305,8 +1307,7 @@ export async function prepareResponsesRequest(
 
   let recoveryFailureReason: AgentTaskRecoveryFailureReason | undefined;
   let recoveryAttempts: PersistedUsageAttempt[] | undefined;
-  // Native fallback and explicitly trusted direct Responses routes can consume ciphertext,
-  // so recover only after final route selection.
+  // Native fallback and explicitly trusted direct Responses routes can consume ciphertext, so recover only after final route selection.
   //
   // Deliberately NOT gated on `threadSpawn` (#4089). Switching a live thread from a native
   // ChatGPT model to a routed provider replays a backend-minted encrypted agent message on every

@@ -9,7 +9,7 @@
  *
  * Keyed on the adapter, not the provider id: the adapter is the transport identity
  * (src/adapters/registry.ts builds the CLI adapter for any provider that names it), so a
- * custom row with `adapter: "claude-cli"` spends the same subscription and gets the same label.
+ * custom row using one of these adapters spends the same account entitlement and gets the same label.
  */
 import type { TKey } from "../i18n/shared";
 
@@ -20,6 +20,8 @@ const SUBSCRIPTION_CLI_WARNINGS: Readonly<Record<string, SubscriptionCliWarning>
   "claude-cli": { key: "modal.subscriptionCliWarning", cmd: "claude -p", apiProvider: "anthropic-apikey", vars: { cli: "Claude Code CLI", plan: "Claude" } },
   "step-cli": { key: "modal.subscriptionCliWarning", cmd: "step --sdk-stdio", apiProvider: "stepfun", vars: { cli: "StepCode CLI", plan: "Step Plan" } },
   "agy-acp": { key: "modal.subscriptionCliWarningAgy", cmd: "agy acp", apiProvider: "google" },
+  // TRAE CN has no key-billed preset; its warning does not reference {apiProvider}.
+  "trae-cn": { key: "modal.traeCnCliWarning", cmd: "traecli acp serve", apiProvider: "" },
 };
 
 export function isSubscriptionCliProvider(provider: { adapter?: string | null }): boolean {

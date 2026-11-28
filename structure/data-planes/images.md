@@ -18,6 +18,19 @@ file-backed image references in messages, agent messages or tool results before 
 dispatch. Other provider routes retain their own image handling; a usable image URL takes
 precedence over a file ID. `tests/providers/claude-cli-client-http.test.ts` covers this boundary.
 
+TRAE CN retains its pre-dispatch refusal for instruction media, native agent-message media (including an item that also says
+`role: "user"`), video, documents and tool replay. An ordinary user `message` image may instead proceed only when the selected
+route produces an actual routed or credentialed OpenAI vision plan; preferring the OpenAI backend without usable credentials is
+not dispatchability. The sidecar replaces that image with a description before ACP dispatch. Tool-result images are refused
+before vision preparation, while rebuilt `web_search` results remain eligible for the existing no-search-plan cleanup.
+TRAE resolves the optional OpenAI helper once, before image admission, and reuses that same result for preprocessing. Replay
+refusals precede credential resolution and no image is stripped or described when no dispatchable plan exists; a text-only
+request does not resolve a vision helper. A refusal returns any acquired helper probe lease before completing, while a disabled
+or ineligible vision configuration acquires none. The credentialed and credential-free OpenAI cases and the resolver's single invocation
+are pinned beside the other media regressions.
+`tests/responses/responses-combo-run-turn-classified-failure.test.ts` covers these boundaries and verifies that refused agent
+and tool-result images trigger no vision request or ACP session.
+
 Mistral's registry entry in `src/providers/registry/entries-extended.ts` declares `zai-glm-5-3` native input as text-only, so registry enrichment enrolls that model in the enabled vision sidecar for existing configurations: the catalog advertises image attachments and request preprocessing sends GLM descriptions. Native Mistral vision models and explicit operator modalities retain precedence (`tests/vision/mistral-vision-sidecar.test.ts`).
 
 A registry entry can also declare `inputModalities` for the whole provider. It covers ids the per-model maps do not list, such as models from live discovery, and a per-model declaration still wins. AI Stupid Level declares text, so an image for one of its pinned models is described or stripped instead of being sent to the router (`tests/providers/aistupidlevel-provider.test.ts`).

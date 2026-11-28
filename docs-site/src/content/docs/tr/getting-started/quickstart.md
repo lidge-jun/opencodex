@@ -17,6 +17,9 @@ ocx init
    veya bir temel URL ile adaptör yazmak için `custom` seçeneğini belirleyin.
 2. **API anahtarı** — bir anahtar yapıştırın veya `${ANTHROPIC_API_KEY}` gibi
    bir ortam değişkenine başvurun.
+
+   **TRAE CN**, oturum açılmış resmi CLI uygulamasını kullanır; API anahtarı gerekmez. CLI uygulamasını yükleyip oturum açın ve sihirbazdaki anahtar alanını boş bırakın. Ayrıntılar için [TRAE CN kurulumu (İngilizce)](/guides/providers/#trae-cn-official-acp) bölümüne bakın.
+
 3. **Varsayılan model** — anahtar, yerel ve özel sağlayıcılar için önayarı kabul
    edin veya bir model kimliği girin.
 4. **Proxy portu** — varsayılan olarak `10100`.

@@ -101,6 +101,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | [`providers/oauth-credential-siblings.md`](providers/oauth-credential-siblings.md) | Provider rows that sign in through another provider's login: one auth-store slot, owner-named refresh, sibling-only login publication and last-row credential release. |
 | [`providers/antigravity-account-import.md`](providers/antigravity-account-import.md) | Cockpit Tools import schema, identity check, probe-gated project_id fallback and no-write failure paths. |
 | [`providers/claude-cli-replay.md`](providers/claude-cli-replay.md) | Claude CLI stable replay, canonical tool schemas, capture-only client tool ownership and subscription usage admission. |
+| [`providers/trae-cn.md`](providers/trae-cn.md) | Official CLI authentication, ACP text streaming, model discovery, capability limits and process lifecycle. |
 | [`providers-and-adapters.md`](providers-and-adapters.md) | Provider and adapter selection, the adapter inventory, live model discovery, and the hosted-search continuation bridge. |
 | [`providers/step-cli-transport.md`](providers/step-cli-transport.md) | StepCode as a Step Plan transport: its own framed stdio wire, one process per conversation, inline SDK tools instead of an MCP catalog, and the bounded tool-result window. |
 | [`providers/opengateway.md`](providers/opengateway.md) | Preset discovery, paired Responses tool-result projection and bounded empty-completion recovery. |
@@ -259,6 +260,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/adapters/openai-responses/transport.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/adapters/openai-responses/zai-input.ts` | [`providers/zai-image-detail.md`](providers/zai-image-detail.md) |
 | `src/adapters/step-cli/` | [`providers/step-cli-transport.md`](providers/step-cli-transport.md) |
+| `src/adapters/trae-cn/` | [`providers/trae-cn.md`](providers/trae-cn.md) |
 | `src/adapters/unique-tool-call-ids.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) |
 | `src/adapters/workbuddy-schema.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/adapters/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
@@ -327,6 +329,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/catalog/parsing.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/catalog/routed-defaults.ts` | [`catalog-routed-defaults.md`](catalog-routed-defaults.md) |
 | `src/codex/catalog/routed-gather.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md)<br>[`providers/opengateway.md`](providers/opengateway.md) |
+| `src/codex/catalog/trae-cn-models.ts` | [`providers/trae-cn.md`](providers/trae-cn.md) |
 | `src/codex/catalog/vendor-context.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/cli-update-apply.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-artifacts.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
@@ -560,6 +563,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/quota-pool-routes.ts` | [`quota-pool.md`](quota-pool.md) |
 | `src/server/management/system-routes.ts` | [`transports/upload-reduction.md`](transports/upload-reduction.md) |
 | `src/server/management/telemetry-routes.ts` | [`telemetry.md`](telemetry.md) |
+| `src/server/management/trae-cn-provider-probe.ts` | [`providers/trae-cn.md`](providers/trae-cn.md) |
 | `src/server/management/usage-aggregate-cache.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/messages-native-tool-guard.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/messages-native.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |

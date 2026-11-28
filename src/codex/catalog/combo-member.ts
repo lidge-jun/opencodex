@@ -233,6 +233,9 @@ export function resolveComboCatalogMember(
     const hinted = prov
       ? applyProviderConfigHints(target.provider, prov, model, contextCap, metadataModelIdCaseFold, undefined, metadataConfigDir, visionSidecarEnabled)
       : model;
+    if (prov?.adapter === "trae-cn") {
+      return withVisionSidecarInput({ ...hinted, inputModalities: ["text"], supportsVerbosity: false }, prov, visionSidecarEnabled);
+    }
     return model.catalogKind === CODEX_CUSTOM_MODEL_CATALOG_KIND && model.inputModalities !== undefined
       ? withVisionSidecarInput({ ...hinted, inputModalities: [...model.inputModalities] }, prov, visionSidecarEnabled)
       : hinted;

@@ -45,6 +45,7 @@ export const RESPONSES_CORE_MODULES = [
   // Reached from core.ts: the keepalive head a slow streaming combo selection commits (#8326).
   "combo-selection-keepalive.ts",
   "deferred-send-reporter.ts",
+  "chat-policy-media.ts",
   "combo-admission-snapshot.ts",
   "combo-requested-effort.ts",
   "core-combo-native.ts",

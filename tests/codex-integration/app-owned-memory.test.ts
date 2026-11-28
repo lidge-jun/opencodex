@@ -28,6 +28,7 @@ import {
   clearModelCache,
   evictOldestModelCacheForBudget,
   modelCacheRetainedStoreSnapshot,
+  MODEL_CACHE_MAX_PINNED_BYTES,
   setCached,
 } from "../../src/codex/model-cache";
 import type { PersistedUsageEntry } from "../../src/usage/log";
@@ -88,7 +89,8 @@ describe("app-owned retained memory", () => {
       + IMAGE_NORMALIZE_CACHE_MAX_BYTES
       + VISION_DESCRIPTION_CACHE_MAX_BYTES
       + ANTIGRAVITY_REPLAY_MAX_TOTAL_BYTES
-      + MAX_NATIVE_CONTROL_REPLAY_TOTAL_BYTES;
+      + MAX_NATIVE_CONTROL_REPLAY_TOTAL_BYTES
+      + MODEL_CACHE_MAX_PINNED_BYTES;
     expect(boundedStoreBytes).toBeLessThan(APP_OWNED_WORST_CASE_PINNED_BYTES);
   });
 

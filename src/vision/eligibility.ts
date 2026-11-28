@@ -133,12 +133,14 @@ type EnrichedProviderCache = Map<string, OcxProviderConfig>;
  * path when it describes a text model that excludes image input: an audio-only declaration is
  * not a text-only model and must not be widened to image through the vision sidecar. The
  * provider-wide `inputModalities` covers ids the per-model map does not list, such as a model
- * that arrived through live discovery; a per-model declaration still wins.
+ * that arrived through live discovery; a per-model declaration still wins unless the adapter
+ * has a hard text-only wire contract, as TRAE CN does.
  */
 export function isModelVisionSidecarConsumer(
-  provider: Pick<OcxProviderConfig, "noVisionModels" | "modelInputModalities" | "inputModalities" | "modelCapabilities">,
+  provider: Pick<OcxProviderConfig, "noVisionModels" | "modelInputModalities" | "inputModalities" | "modelCapabilities"> & Partial<Pick<OcxProviderConfig, "adapter">>,
   modelId: string,
 ): boolean {
+  if (provider.adapter === "trae-cn") return true;
   const declared = Object.hasOwn(provider.modelCapabilities ?? {}, modelId)
     ? provider.modelCapabilities?.[modelId]?.inputModalities : undefined;
   if (declared !== undefined) return declared.includes("text") && !declared.includes("image");
@@ -213,6 +215,7 @@ function isVisionSidecarConsumerWithCache(
 ): boolean {
   const provider = enrichedProviderForVision(config, providerName, cache);
   if (provider === undefined) return false;
+  if (provider.adapter === "trae-cn") return true;
   // Documented precedence, highest first: the dedicated per-model capability axis, then the
   // operator's own custom row, then the provider-level hints. Reading the custom row ahead of
   // `modelCapabilities` would let it override the more specific axis.

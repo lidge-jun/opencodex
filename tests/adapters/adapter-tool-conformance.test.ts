@@ -441,7 +441,7 @@ describe("registry-derived routed tool conformance", () => {
   // the shared catalog builder's namespacing, tool_choice: none and required-choice behaviour through
   // the SDK projection, and step-cli-provider.test.ts pins the refusals — so read this entry as "not
   // covered by this suite", not as unchecked.
-  const TOOL_LESS_ADAPTERS = new Set(["codebuddy", "qoder", "claude-cli", "step-cli", "zed"]);
+  const TOOL_LESS_ADAPTERS = new Set(["codebuddy", "qoder", "claude-cli", "trae-cn", "step-cli", "zed"]);
   // The Devin adapter is runTurn-only: it streams Connect-RPC from runTurn, so
   // buildRequest returns a placeholder and tools never travel the wire path.
   // Both Devin provider rows share it and differ only in where the credential

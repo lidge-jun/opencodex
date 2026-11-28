@@ -141,6 +141,7 @@ import { workBuddyCatalogIdentity } from "../../providers/workbuddy";
 import { fetchM365CopilotCatalog } from "./m365-copilot-models";
 import { QUIET_AUTHORITATIVE_CATALOG_PROVIDERS, applyConfigHintsToCachedModels, applyProviderConfigHints, boundedOwnedBy, catalogHintsFromModelsApiItem, catalogHintsFromProviderConfig, withVisionSidecarInput } from "./model-hints";
 import { mergeConfiguredModelsIntoLiveCatalog, shouldExposeProviderModel, warnDroppedConfiguredIdsOnce } from "./model-visibility";
+import { fetchTraeCnProviderModels } from "./trae-cn-models";
 import { captureModelsRequest, captureProviderGather, materializeCapturedHeaders } from "./gather-capture";
 
 
@@ -277,7 +278,7 @@ async function fetchProviderModelsUncached(
   const configured: CatalogModel[] = configuredIds.map(id => applyProviderConfigHints(
     name, prov, { id, provider: name }, contextCap, metadataModelIdCaseFold,
     captured.effectiveAlias, metadataConfigDir, false,
-  ));
+  )).map(model => prov.adapter === "trae-cn" ? { ...model, inputModalities: ["text"], supportsVerbosity: false } : model);
   const withConfiguredRetention = (
     models: CatalogModel[],
     options?: { retainComboTargets?: boolean; warnDrops?: boolean },
@@ -305,6 +306,9 @@ async function fetchProviderModelsUncached(
     }
     return merged;
   };
+  if (prov.adapter === "trae-cn" && prov.liveModels !== false) {
+    return fetchTraeCnProviderModels(captured, ttlMs, contextCap, configured, withConfiguredRetention, resolveAuth.kind === "refreshing");
+  }
   // Static catalogs never need an OAuth refresh or an upstream model request. Clear any
   // discovery failure left by an older live configuration even when the account is logged out.
   if (prov.liveModels === false) {

@@ -826,6 +826,12 @@ are on the [API-key catalog](/guides/api-key-catalog/) page. Its sections:
 - [GPT-5.6 preview paths](/guides/api-key-catalog/#gpt-56-preview-paths)
 - [Ollama Cloud](/guides/api-key-catalog/#ollama-cloud)
 
+### [TRAE CN (official ACP)](/guides/trae-cn/)
+
+TRAE CN is an experimental ACP adapter that drives the signed-in official TRAE CN CLI. It is absent
+from the built-in presets and available through manual configuration only. The CLI owns
+authentication, so no API key is stored.
+
 ### RunAPI
 
 [RunAPI](https://runapi.co) is a Standard sponsor. Select **RunAPI** in **Add provider** or

@@ -185,7 +185,7 @@ describe("inline document bytes reach a wire that can hold them", () => {
     ]);
   });
 
-  test("a developer turn carrying a document keeps its role", () => {
+  test("a developer turn keeps its document in one user-compatible carrier", () => {
     const parsed = {
       modelId: "local-model",
       context: {
@@ -202,7 +202,7 @@ describe("inline document bytes reach a wire that can hold them", () => {
       messages: Array<{ role: string; content: unknown }>;
     };
     expect(outbound.messages).toEqual([{
-      role: "developer",
+      role: "user",
       content: [{ type: "file", file: { file_data: PDF_DATA_URL, filename: "spec" } }],
     }]);
   });

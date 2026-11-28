@@ -222,12 +222,14 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
         const parts = typeof msg.content === "string" ? undefined : msg.content as OcxContentPart[];
         const hasImages = parts?.some(p => p.type === "image") ?? false;
         const hasAudio = parts?.some(p => p.type === "audio") ?? false;
+        const hasDocuments = parts?.some(p => p.type === "document") ?? false;
         // Video is user content only on this wire (the input media guard refuses it elsewhere),
         // so a developer message never switches to the structured branch for it.
         const hasVideo = msg.role === "user" && (parts?.some(p => p.type === "video") ?? false);
         // A document and a video have structured counterparts on this wire, so they need the
         // parts array for the same reason an image does: flattening would drop the bytes.
         const hasStructured = hasImages || hasAudio || hasVideo || (parts?.some(p => p.type === "document") ?? false);
+        // the same reason an image does: flattening it to a string would drop the bytes.
         let chatMsg: Record<string, unknown>;
         if (msg.role === "developer" && !hasStructured) {
           const text = typeof msg.content === "string"
@@ -277,21 +279,39 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             }
             return { type: "text", text: (p as OcxTextContent).text };
           });
-          // A developer message with images keeps the user-compatible shape it has always had on
-          // this wire. One carrying only a document has no such precedent, and demoting it would
-          // undo the role this adapter just finished preserving. Video is user content only.
-          chatMsg = {
-            role: msg.role === "developer" && !hasImages && !hasAudio && !hasVideo ? developerWireRole : "user",
-            content: chatParts,
-          };
-          if (provider.singleLeadingSystemMessage === true && chatMsg.role !== "user") {
-            // Keep document bytes in a user-compatible slot; only their accompanying text is
-            // instruction content. Use the same tool barrier so instruction order is retained.
-            const instruction = { role: developerWireRole, content: chatParts.filter(p => p.type === "text") };
-            if (instruction.content.length > 0) {
-              (pendingToolCalls.length > 0 ? deferredBarrierMessages : out).push(instruction);
+          chatMsg = { role: "user", content: chatParts };
+          if (msg.role === "developer") {
+            const destination = pendingToolCalls.length > 0 ? deferredBarrierMessages : out;
+            if (leadingSystemTemplate) {
+              // This template accepts rich user content in place, but rejects every late system
+              // or developer message. Keep text and attachments together in the original slot.
+              destination.push(chatMsg);
+            } else if (provider.singleLeadingSystemMessage === true) {
+              const text = chatParts.filter(part => part.type === "text");
+              const attachments = chatParts.filter(part => part.type !== "text");
+              if (text.length > 0) destination.push({ role: developerWireRole, content: text });
+              if (attachments.length > 0) destination.push({ role: "user", content: attachments });
+            } else if (hasImages || hasDocuments) {
+              // Keep rich instruction text attached to the image/file it describes. Every part is
+              // valid under user, while system/developer roles accept only the text subset.
+              destination.push(chatMsg);
+            } else {
+              // Images, audio and files are user-content-only on the Chat wire. Split only at
+              // role boundaries so interleaved instruction/attachment groups retain their order.
+              let role: "system" | "developer" | "user" | undefined;
+              let content: unknown[] = [];
+              for (const part of chatParts) {
+                const nextRole = part.type === "text" ? developerWireRole : "user";
+                if (role !== undefined && nextRole !== role) {
+                  destination.push({ role, content });
+                  content = [];
+                }
+                role = nextRole;
+                content.push(part);
+              }
+              if (role !== undefined) destination.push({ role, content });
             }
-            chatMsg = { role: "user", content: chatParts.filter(p => p.type !== "text") };
+            break;
           }
         }
         if (pendingToolCalls.length > 0) deferredBarrierMessages.push(chatMsg);

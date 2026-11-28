@@ -25,6 +25,7 @@ ocx init
 
 1. **Elegir un proveedor**: selecciona uno de los 114 preajustes del registro integrado o `custom` para introducir una URL base y un adaptador.
 2. **Clave API**: pega una clave o indica una variable de entorno como `${ANTHROPIC_API_KEY}`.
+   **TRAE CN** usa el CLI oficial con sesión iniciada y no necesita clave de API. Instala el CLI, inicia sesión y deja el campo de clave vacío en el asistente. Consulta la [configuración de TRAE CN (en inglés)](/guides/providers/#trae-cn-official-acp).
 3. **Modelo predeterminado**: para proveedores con clave, locales o personalizados, acepta el preajuste o introduce un identificador de modelo.
 4. **Puerto del proxy**: `10100` de forma predeterminada.
 5. **¿Integrar con Codex?** En una configuración habitual de bucle local, opencodex añade `openai_base_url` en la raíz de `$CODEX_HOME/config.toml` (de forma predeterminada, `~/.codex/config.toml`) para que el proveedor integrado `openai` de Codex apunte al proxy. Las conexiones remotas o LAN usan una entrada de proveedor dedicada con un encabezado de autenticación de API.

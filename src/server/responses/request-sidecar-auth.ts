@@ -106,7 +106,7 @@ async function resolveResponsesOpenAiSidecar(
   }
 }
 
-function responsesVisionPlan(
+export function responsesVisionPlan(
   { config, options }: SidecarRequestContext,
   { provider, providerName, modelId }: ComboTargetRoute,
   parsed: OcxParsedRequest,
@@ -149,6 +149,18 @@ export async function canDescribeComboImages(
   }
 }
 
+/** Resolve the helper for a turn that must caption its media; the caller releases it when no plan is dispatchable. */
+export async function resolveResponsesCaptionSidecar(
+  context: SidecarRequestContext,
+  route: ComboTargetRoute,
+  parsed: OcxParsedRequest,
+): Promise<{ openAiSidecar: ResolvedOpenAiForwardSidecar | undefined; plannable: boolean }> {
+  const openAiSidecar = shouldResolveOpenAiVisionSidecar(responsesVisionConfig(context), route.provider, route.modelId, parsed, route.providerName,
+    visionAdmissionScope(context.config, context.options))
+    ? await resolveResponsesOpenAiSidecar(context, route) : undefined;
+  return { openAiSidecar, plannable: responsesVisionPlan(context, route, parsed, openAiSidecar) !== undefined };
+}
+
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareResponsesSidecarAuth(
   requestContext: SidecarRequestContext,
@@ -160,6 +172,7 @@ export async function prepareResponsesSidecarAuth(
     | "translatorBudget"
   >,
   transportState: Pick<ResponsesTransport, "adapter" | "isPassthrough">,
+  resolvedOpenAiSidecar?: ResolvedOpenAiForwardSidecar,
 ) {
   const { options, config } = requestContext;
   const { parsed, route, translatorBudget } = requestState;
@@ -187,7 +200,7 @@ export async function prepareResponsesSidecarAuth(
       : (shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough)
         || shouldResolveOpenAiPassthroughWebSearchBridge(route.provider, parsed, isPassthrough)));
   if (needsOpenAiVision || needsOpenAiSearch) {
-    openAiSidecar = await resolveResponsesOpenAiSidecar(requestContext, route);
+    openAiSidecar = resolvedOpenAiSidecar ?? await resolveResponsesOpenAiSidecar(requestContext, route);
   }
 
   // Vision sidecar: the routed model can't see images (provider.noVisionModels). Describe each

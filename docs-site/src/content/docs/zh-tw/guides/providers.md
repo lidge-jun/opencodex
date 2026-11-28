@@ -264,6 +264,8 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 
 ## 3. API 金鑰目錄
 
+**TRAE CN** 提供需手動設定的實驗性 ACP adapter。目錄中僅有未經驗證的參考項，內建預設尚未啟用。詳見 [TRAE CN 設定說明（英文）](/guides/trae-cn/)。
+
 opencodex 內建 114 個 preset：92 個 key-based、18 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
 preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
