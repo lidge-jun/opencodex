@@ -34,8 +34,15 @@ import {
   historyHasManualAdvisorResult,
   type AdvisorPreflightLedger,
 } from "./state";
-import { formatAdvisorAdvice, advisorPreflightMessages, formatAdvisorUnavailable } from "./context";
+import {
+  formatAdvisorAdvice,
+  advisorPreflightMessages,
+  formatAdvisorUnavailable,
+  hasExternalAdvisorMcpTool,
+  injectAdvisorWorkerNotice,
+} from "./context";
 import { advisorActivityStore, type AdvisorActivityStore, type AdvisorTrigger } from "./activity";
+import { advisorPlanRootConfig } from "../server/responses/advisor-plan-slot";
 import { createAdvisorTaskBudget, type AdvisorTaskBudget } from "./budget";
 import { collectAdvisorRepairEvidence, type AdvisorRepairEvidence } from "./evidence";
 import type { AdmissionModelScope } from "../server/admission-model-scope";
@@ -76,6 +83,8 @@ export interface AdvisorRuntimePlan extends AdvisorPlan {
   readonly policy: AdvisorPolicy;
   readonly toolEnabled: boolean;
   readonly tool: import("../types").OcxTool;
+  injectWorkerNotice(parsed: OcxParsedRequest, toolName?: string): boolean;
+  hasExternalMcpTool(parsed: OcxParsedRequest): boolean;
   /**
    * The automatic preflight pass. Returns true when advice was injected. A cancelled
    * consultation injects nothing and leaves the task eligible for a later attempt.
@@ -95,7 +104,10 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
   const ledger = deps.ledger ?? sharedPreflightLedger;
   const now = deps.now ?? (() => Date.now());
   const budget = deps.budget ?? createAdvisorTaskBudget();
-  const activities = deps.activities ?? advisorActivityStore(deps.config);
+  // Identity-scoped state must key on the LIVE config: `GET /api/advisor/activity` reads the store
+  // of the management context's own config, so a request-scoped view (the Claude replay config)
+  // would record consultations the dashboard and CLI never see.
+  const activities = deps.activities ?? advisorActivityStore(advisorPlanRootConfig(deps.config));
   // Management PUT mutates this same config object (`config.advisor = ...`). Re-resolving
   // at dispatch is what makes a mid-request consent revocation stop outbound transfer.
   const liveSettings = () => resolveAdvisorSettings(deps.config);
@@ -303,54 +315,68 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
     const baseKey = taskKey(parsed);
     const key = evidence && baseKey ? `${baseKey}:repair:${evidence.id}` : baseKey;
     let claimToken: string | undefined;
+    let claimActive = false;
+    let claimSettled = false;
     if (key) {
-      const claim = ledger.claim(key, now());
+      const claim = ledger.claim(key, now(), { isAlive: () => claimActive });
       if (claim.state !== "claimed") return false;
       claimToken = claim.token;
+      claimActive = true;
     }
+    const settleClaim = (kind: "complete" | "fail" | "release") => {
+      if (!key || !claimToken || claimSettled) return;
+      claimSettled = true;
+      ledger[kind](key, claimToken, now());
+      claimActive = false;
+    };
     preflightUsed = true;
-    deps.afterPreflightClaim?.();
 
     let outcome: AdvisorConsultOutcome;
     try {
-      outcome = await runConsultation(parsed, reason, undefined, evidence);
-    } catch (error) {
-      if (key && claimToken) ledger.fail(key, claimToken, now());
-      console.warn(`[advisor] consultation failed trigger=${reason} worker=${deps.workerModelId} error=plan_threw`);
+      deps.afterPreflightClaim?.();
+      try {
+        outcome = await runConsultation(parsed, reason, undefined, evidence);
+      } catch (error) {
+        settleClaim("fail");
+        console.warn(`[advisor] consultation failed trigger=${reason} worker=${deps.workerModelId} error=plan_threw`);
+        parsed.context.messages = [
+          ...parsed.context.messages,
+          {
+            role: "user",
+            content: "An automatic advisor consultation could not be completed. Continue with your own judgment.",
+            timestamp: Date.now(),
+          },
+        ];
+        void error;
+        return false;
+      }
+
+      if (outcome.blocked) {
+        // Operator revoked consent (or disabled the sidecar) after the claim: not a provider
+        // failure. Release so the task is not put on cooldown and nothing is injected.
+        settleClaim("release");
+        return false;
+      }
+      if (outcome.ok) {
+        settleClaim("complete");
+      } else if (outcome.cancelled) {
+        // Client cancellation is not a provider failure: no cooldown, the task may retry later.
+        settleClaim("release");
+        // Nothing to inject — the caller is gone or aborting; do not add noise to a live turn.
+        return false;
+      } else {
+        settleClaim("fail");
+      }
+
       parsed.context.messages = [
         ...parsed.context.messages,
-        {
-          role: "user",
-          content: "An automatic advisor consultation could not be completed. Continue with your own judgment.",
-          timestamp: Date.now(),
-        },
+        ...advisorPreflightMessages(outcome.content),
       ];
-      void error;
-      return false;
+      return outcome.ok;
+    } finally {
+      if (!claimSettled) settleClaim("release");
+      claimActive = false;
     }
-
-    if (outcome.blocked) {
-      // Operator revoked consent (or disabled the sidecar) after the claim: not a provider
-      // failure. Release so the task is not put on cooldown and nothing is injected.
-      if (key && claimToken) ledger.release(key, claimToken, now());
-      return false;
-    }
-    if (outcome.ok) {
-      if (key && claimToken) ledger.complete(key, claimToken, now());
-    } else if (outcome.cancelled) {
-      // Client cancellation is not a provider failure: no cooldown, the task may retry later.
-      if (key && claimToken) ledger.release(key, claimToken, now());
-      // Nothing to inject — the caller is gone or aborting; do not add noise to a live turn.
-      return false;
-    } else {
-      if (key && claimToken) ledger.fail(key, claimToken, now());
-    }
-
-    parsed.context.messages = [
-      ...parsed.context.messages,
-      ...advisorPreflightMessages(outcome.content),
-    ];
-    return outcome.ok;
   };
 
   const plan: AdvisorPlan = {
@@ -380,6 +406,8 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
     shouldCountManualConsultation: plan.shouldCountManualConsultation,
     consult: plan.consult,
     formatUnavailable: plan.formatUnavailable,
+    injectWorkerNotice: (parsed: OcxParsedRequest, toolName?: string) => injectAdvisorWorkerNotice(parsed, toolName),
+    hasExternalMcpTool: (parsed: OcxParsedRequest) => hasExternalAdvisorMcpTool(parsed),
     preflightInject,
     attachGuard: parsed => {
       parsed._advisorGuard = createAdvisorGuard(plan);

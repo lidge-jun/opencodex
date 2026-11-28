@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests, registerCodexPoolRowForTests } from "../helpers/codex-pool-routing";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,7 +51,7 @@ const ASTRA = "gpt-6-astra";
 
 function credential(accountId: string): CodexModelEntitlementCredentialSnapshot {
   return {
-    accountId,
+    accountId: registerCodexPoolRowForTests(accountId),
     accessToken: `token-${accountId}`,
     chatgptAccountId: `chatgpt-${accountId}`,
     credentialIdentity: `test:${accountId}`,
@@ -80,7 +81,7 @@ function deferred<T = void>(): {
   return { promise, resolve };
 }
 
-beforeEach(() => resetCodexModelEntitlementCacheForTests());
+beforeEach(() => { resetCodexModelEntitlementCacheForTests(); bindStoredCodexPoolRoutingForTests(); });
 
 describe("Codex account model entitlements", () => {
   test("keeps parsed-empty distinct from refresh failures end to end", async () => {
@@ -490,6 +491,7 @@ describe("ensureCodexEntitlementFreshness", () => {
     mkdirSync(codexHome, { recursive: true });
     process.env.OPENCODEX_HOME = join(root, "opencodex");
     process.env.CODEX_HOME = codexHome;
+    bindStoredCodexPoolRoutingForTests();
   });
 
   afterEach(() => {
@@ -1588,7 +1590,7 @@ describe("entitlement client version (#2886)", () => {
     let fetches = 0;
     const backend = (async () => { fetches += 1; return roster(SOL); }) as typeof fetch;
     const credentials = [{
-      accountId: "pool-miss-budget",
+      accountId: registerCodexPoolRowForTests("pool-miss-budget"),
       accessToken: "tok-miss",
       chatgptAccountId: "acct-miss",
       credentialIdentity: "pool:1:acct-miss",

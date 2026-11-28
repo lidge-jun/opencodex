@@ -50,7 +50,7 @@ import {
   runCodexHistoryJob,
 } from "../codex/history-job";
 import { findCrossHomeOwner, markCrossHomeSibling, markLiveHomeSibling } from "./cross-home-owner";
-import { inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
+import { clientStartupRefusalMessage, inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
 import {
   codexAutoStartEnabled,
   getConfigDir,
@@ -72,6 +72,7 @@ import {
 import { describeTrackedRuntimeTarget } from "../config/tracked-runtime-inspection";
 import {
   claimPendingTeardown,
+  clearPendingTeardown,
   isPendingTeardownAbandoned,
   listPendingTeardowns,
   pendingTeardownPathFor,
@@ -79,7 +80,8 @@ import {
   quarantinePendingTeardown,
 } from "../config/pending-teardown";
 import { collectStatus, detectMissingCodexCatalogPath, hubStatusLines, missingCodexCatalogLines, remoteHubBannerLine, remoteHubStatusLines, runtimeSupervisorLine, statusDeadProxyLines, statusProxyUp, statusUnusedProxyLines } from "./status";
-import { endpointsToProve, everyEndpointProvenDownAsync, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
+import { stopUninstallProxy } from "./uninstall-stop";
+import { captureUninstallEndpointProof, endpointsToProve, respawnWindowRequired, sharedTeardownAuthorized, uninstallServiceRemoval, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
 import { parseStartOptions, StartArgsError } from "./start-args";
 
@@ -124,12 +126,13 @@ import {
   type GuardedStopSnapshot,
   type StopApproval,
 } from "./stop-approval";
-import { inspectGuardedManagerTarget, observeGuardedManagerStopped } from "../service/guarded-manager-target";
 import { summarizeStopRun, type StopOutcome, type StopRunRecord } from "./stop-report";
+import { confirmGuardedFreed, inspectGuardedTarget, noServiceStop, observeGuardedStopped, orphanDiscoveryCap, stopGuardedManager, stopServiceForOcxStop, stopServiceForUninstall, stopWindowFailed, verifyUninstallStopWindow, windowsChildStopHeld, windowsPartAFailureMessage, windowsPartAHeldUnchanged, windowsPartAHolds, windowsPartAReceiptRecord, windowsPartBDue, windowsPartBOwnsPortWait, windowsStopRequiresReceipt } from "./stop-windows-checked";
 import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
 import { startupDataPlaneToken } from "../lib/service-secrets";
-import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxyStillLiveAfterStop, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatePaths, serviceStatusSummary, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
+import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatePaths, serviceStatusSummary, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
+import { completeWindowsServiceStopReceipt } from "../service/cli-windows-stop";
 import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
@@ -164,9 +167,9 @@ import { uninstallPrivilegeRefusal } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
-import { assertConnectedClientStopSupported, clearRestoredStopReceipts, connectedClientStopSkipLine, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary } from "./stop-restore";
+import { abandonedTeardownProbeOncePerEndpoint, assertConnectedClientStopSupported, classifyStopRole, clearRestoredStopReceipts, configuredStopEndpoint, connectedClientStopSkipLine, inheritedTeardownProbeCount, isRegisteredServiceStopTarget, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, proveStandaloneStopRecord, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, stopOwnershipRefused, unclassifiedStopTarget, unsupportedConnectedStop, verifyConnectedStopTarget, type LinkStopPreflight, type StopTargetProof } from "./stop-restore";
 import { stopRestoreWriteGuard } from "./stop-restore-guard";
-import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
+import { startConnectedClientWithOwnershipFence } from "./client-start-fence";
 import { recoverStartJournalAfterOwnerRecheck, recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
@@ -211,6 +214,7 @@ async function refreshOwnedRaycastCatalog(
   }
 }
 
+if (process.argv[2] === "__foreground-service-advisory") process.exit(await (await import("../service/foreground-advisory-process")).runForegroundAdvisoryEntrypoint());
 if (process.argv[2] === "__update-orchestrated-identity") process.exit(await (await import("../update/orchestrated-identity-probe-entry")).runIdentityProbe(process.argv.slice(2)));
 if (process.argv[2] === "start" && process.env.OCX_SERVICE) startServiceLogging(join(getConfigDir(), "service.log"));
 const updateRestartChild = admitUpdateRestartChild(process.argv.slice(2));
@@ -487,16 +491,9 @@ async function handleStart(options: { block?: boolean } = {}) {
   const rotationGate = inspectClientRotationRecoveryGate(clientState);
   if (clientState.kind === "connected") {
     if (rotationGate.kind === "recovery-required" || rotationGate.kind === "unsafe") {
-      throw new Error(`client startup refused: ${rotationGate.reason}`);
+      throw new Error(clientStartupRefusalMessage(rotationGate.reason));
     }
-    const { startClientRuntime } = await import("../client/runtime");
-    // Same lease-held owner recheck as the server path below: this branch binds and publishes too.
-    await startClientRuntimeUnderOwnershipLease({
-      acquireLease: () => acquireOwnershipMutationLease(serviceStatePaths()),
-      decide: () => serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild),
-      stayOut: refusal => { console.error("❌ " + refusal); process.exit(serviceStayOutExitCode()); },
-      start: afterPublish => startClientRuntime({ port: requestedPort, block: options.block, afterPublish }),
-    });
+    await startConnectedClientWithOwnershipFence({ connection: clientState.value, siblingStart, supervisedServiceChild, requestedPort, block: options.block });
     return;
   }
 
@@ -509,6 +506,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   // live daemon holding resources while it overwrites its own binary. Never from a
   // sibling: replacing the global package makes the live proxy drain and restart.
   if (!siblingStart) await maybeShowUpdatePrompt();
+  const { readClientStopProcessStart } = await import("../client/stop-teardown-owner");
 
   type StartServerModule = typeof import("../server");
   type BoundStart = {
@@ -608,6 +606,7 @@ async function handleStart(options: { block?: boolean } = {}) {
         port: bound.port,
         hostname: bound.server.hostname,
         attestationSecret: bound.localAttestationSecret,
+        startTime: readClientStopProcessStart(process.pid),
         command: currentServingCommand(),
         ...siblingRuntimeField(),
       }); updateRestartChild?.complete(); },
@@ -643,11 +642,13 @@ async function handleStart(options: { block?: boolean } = {}) {
   let routingHealer: { stop(): void } | undefined; // routing-healer.ts; stopped first in syncCleanup
   let catalogHealer: { stop(): void } | undefined;
 
+  let stopForegroundAdvisory: ((sync?: boolean) => void) | undefined;
   let cleaned = false;
   let cleanupSucceeded = true;
   const syncCleanup = () => {
     if (cleaned) return cleanupSucceeded;
     cleaned = true;
+    stopForegroundAdvisory?.(true);
     try { catalogHealer?.stop(); } catch { /* best-effort */ }
     try { routingHealer?.stop(); } catch { /* best-effort */ }
     try { guardian.stop(); } catch { /* best-effort */ }
@@ -704,7 +705,7 @@ async function handleStart(options: { block?: boolean } = {}) {
       try { syncCleanup(); } catch { /* best-effort */ }
       process.exit(130);
     }
-    shuttingDown = true;
+    shuttingDown = true; stopForegroundAdvisory?.();
     shutdownStartedAt = now;
     noteExplicitShutdownRequested(); // an automatic package restart must not hand off after this
     console.log("\n🛑 Shutting down opencodex proxy...");
@@ -799,6 +800,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     console.error(`⚠️  ${grokSyncFailureMessage(err)}`);
   }
   console.log("Client startup work complete.");
+  stopForegroundAdvisory = (await import("../service/foreground-advisory-process")).maybeStartForegroundAdvisory({ cleaned, shuttingDown, siblingStart, ownerLive: Boolean(owner.live), supervisedServiceChild, restartParentPid: restartParent.restartParentPid, stderrIsTTY: process.stderr?.isTTY }, line => console.warn(line));
   if (options.block ?? true) {
     setInterval(() => {}, 60_000);
     await new Promise<void>(() => {});
@@ -1011,8 +1013,10 @@ async function handleRestartStartWhenStopped(recoveringLiveRestart = false): Pro
 }
 async function handleStop(approval?: StopApproval) {
   const lease = acquireOwnershipMutationLease(serviceStatePaths());
+  let finishConnectedStop: (() => Promise<void>) | undefined;
+  const stop = (snapshot?: GuardedStopSnapshot) => handleStopUnlocked(snapshot, finish => { finishConnectedStop = finish; });
   try {
-    if (!approval) return await handleStopUnlocked();
+    if (!approval) return await stop();
     return await runApprovedStop(
       approval,
       async () => {
@@ -1026,51 +1030,19 @@ async function handleStop(approval?: StopApproval) {
         catch { return null; }
       },
       describeTrackedRuntimeTarget,
-      () => inspectGuardedManagerTarget(approval.pid, approval.port),
-      snapshot => handleStopUnlocked(snapshot),
+      () => inspectGuardedTarget(approval.pid, approval.port),
+      stop,
     );
   }
-  finally { lease.release(); }
+  finally { try { await finishConnectedStop?.(); } finally { lease.release(); } }
 }
 
-async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
+async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onFence: (finish: () => Promise<void>) => void) {
   // The receipt must name the endpoint the owner was stopping — an obligation nobody can
   // locate cannot be proven discharged. Only the runtime record knows it; a proxy started
   // with an explicit --port is not on the configured one.
   const endpointOf = (runtime: { port: number; hostname?: string } | null): { hostname: string; port: number } | null =>
     runtime?.port ? { hostname: runtime.hostname ?? "127.0.0.1", port: runtime.port } : null;
-  // Last-resort endpoint for a receipt: the address this home is configured to serve on,
-  // which is what a later recovery probe would ask about anyway.
-  const configuredEndpoint = (): { hostname: string; port: number } => {
-    try {
-      const config = loadConfig();
-      return {
-        hostname: config.hostname ?? "127.0.0.1",
-        port: typeof config.port === "number" && config.port > 0 ? config.port : 10100,
-      };
-    } catch {
-      return { hostname: "127.0.0.1", port: 10100 };
-    }
-  };
-  // Only a definitive "nothing is answering" authorizes finishing somebody else's
-  // abandoned teardown. The tri-state probe distinguishes that from "we could not tell"
-  // (timeout, a listener that withholds /healthz), which `findLiveProxy` collapses into
-  // the same null (#3008).
-  const abandonedTeardownIsSafeToFinish = async (
-    endpoint: { hostname: string; port: number } | null,
-  ): Promise<boolean> => {
-    // The endpoint has to come from the receipt. A crashed owner usually leaves no
-    // runtime-port record, and the configured port is the wrong question for a proxy
-    // started with an explicit --port: it refuses while the live one keeps serving.
-    // An obligation that cannot name its endpoint cannot be proven discharged.
-    if (!endpoint) return false;
-    try {
-      return await probeEndpointLiveness(endpoint) === "dead";
-    } catch {
-      // A probe that could not run is not evidence of absence.
-      return false;
-    }
-  };
   let stopFailed = false;
   let historyOnlyFailure = false;
   /**
@@ -1092,25 +1064,14 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   // A sibling instance's shared teardown is not this stop's to run: the client routing belongs
   // to the live proxy it ran beside (`src/codex/sibling-start.ts`). Read before any stop removes
   // the record; a record left behind by a hard-killed sibling still says so.
-  const siblingOfPort = readRuntimePort()?.siblingOfPort;
+  const initialRuntime = readRuntimePort();
+  const siblingOfPort = initialRuntime?.siblingOfPort;
   const stoppingSibling = siblingOfPort !== undefined;
-  const connectedClientSkip = stoppingSibling ? null : connectedClientStopSkipLine(readClientConnectionState());
-  let connectedClientAlreadyStopped = false;
-  if (connectedClientSkip) {
-    const preflight = await preflightConnectedClientStop(snapshot?.approval);
-    if (preflight === "already-stopped") connectedClientAlreadyStopped = true;
-    else if (preflight) return preflight;
+  if (stoppingSibling && snapshot && snapshot.manager.kind !== "absent") {
+    return approvalChanged("the sibling runtime record conflicts with the approved service manager");
   }
-  // Structured twin of the human lines below, for `ocx stop --json`: one document the
-  // desktop shell can read across the process boundary (D4). Every field is assigned
-  // where the corresponding boolean already flips — the summarizer never re-decides.
-  const record: StopRunRecord = {
-    service: "absent",
-    proxy: "unknown",
-    sharedTeardown: "skipped",
-    inheritedTeardownBlocks: false,
-    receiptClearFailed: false,
-  };
+  const connectedClientState = readClientConnectionState();
+  let connectedClientSkip = stoppingSibling ? null : connectedClientStopSkipLine(connectedClientState);
   // Deferring shared teardown to this process is an obligation, so record it on disk
   // before asking for it (#3008). A parent that dies mid-stop would otherwise leave the
   // client config routed at a proxy that is already gone, with nothing to find later.
@@ -1134,35 +1095,78 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   // anything is restored.
   const teardownOwnerStillRunning = (ownerPid: number): boolean =>
     isProcessAlive(ownerPid) && isLikelyOcxProcess(ownerPid);
-  const inheritedTeardowns = listPendingTeardowns()
-    .filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
+  const savedLink = connectedClientState.kind === "connected" && connectedClientState.value.transport === "link";
+  const pendingTeardowns = savedLink ? [] : listPendingTeardowns();
+  const inheritedTeardownSnapshot = savedLink
+    ? (await import("../client/stop-native-handoff")).readLinkInheritedTeardowns()
+    : pendingTeardowns.filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
+  let linkStop: LinkStopPreflight | undefined;
+  let stopTarget: StopTargetProof | undefined;
+  const stopRole = await classifyStopRole(connectedClientState, initialRuntime, pendingTeardowns);
+  const connectedStop = stopRole === "connected";
+  const trackedStopPid = connectedStop ? null : snapshot?.approval.pid ?? readPid();
+  const verifyStandaloneRecord = stopRole === "unknown" && connectedClientState.kind === "disconnected" && trackedStopPid !== null
+    ? await proveStandaloneStopRecord(initialRuntime, trackedStopPid, pendingTeardowns) : undefined;
+  if (trackedStopPid !== null) {
+    const standaloneRuntime = (stopRole === "standalone" || stoppingSibling || verifyStandaloneRecord) && initialRuntime?.pid === trackedStopPid
+      && Bun.deepEquals(readRuntimePort(trackedStopPid), initialRuntime, true);
+    if (!standaloneRuntime && !(connectedClientState.kind === "disconnected" && isRegisteredServiceStopTarget(trackedStopPid))) {
+      return stopOwnershipRefused(unclassifiedStopTarget(trackedStopPid));
+    }
+  }
+  const preflight = connectedStop ? await preflightConnectedClientStop(snapshot?.approval, onFence, inheritedTeardownSnapshot,
+    proof => { linkStop = proof; connectedClientSkip = null; }, proof => { stopTarget = proof; }, siblingOfPort) : null;
+  const connectedClientAlreadyStopped = preflight === "already-stopped";
+  if (preflight && preflight !== "already-stopped") return preflight;
+  const inheritedTeardowns = stopTarget?.terminateSibling ? [] : inheritedTeardownSnapshot;
+  // Structured twin of the human lines below, for `ocx stop --json`: one document the
+  // desktop shell can read across the process boundary (D4). Every field is assigned
+  // where the corresponding boolean already flips — the summarizer never re-decides.
+  const record: StopRunRecord = {
+    service: "absent",
+    proxy: "unknown",
+    sharedTeardown: "skipped",
+    inheritedTeardownBlocks: false,
+    receiptClearFailed: false,
+  };
   let teardownNonce: string | undefined;
   // #7423: an update that restarts the proxy asks this stop to leave Codex routing for the replacement.
   // Client start never discharges a standalone update-handover receipt or reapplies routing.
   const handoverRequested = updateTeardownHandoverRequested(process.env, () => shouldSyncCodexOnStart(loadConfig()))
     && !stoppingSibling && readClientConnectionState().kind !== "connected";
   let deferralHonoredByProxy = false;
+  const verifyStopTarget = (pid?: number) => {
+    if (connectedStop) return verifyConnectedStopTarget(stopTarget, linkStop, pid);
+    const current = readClientConnectionState();
+    if (!stoppingSibling && current.kind === "connected" && current.value.transport === "link") throw unsupportedConnectedStop();
+    const trackedPid = readPid();
+    if (trackedPid !== null && trackedPid !== trackedStopPid) throw unclassifiedStopTarget(trackedPid);
+    verifyStandaloneRecord?.();
+  };
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
-    if (teardownNonce || stoppingSibling) return;
-    if (connectedClientSkip) return;
+    if (teardownNonce || stoppingSibling || (!linkStop && connectedClientSkip)) return;
     try {
-      teardownNonce = claimPendingTeardown(endpoint, endpointSource, process.pid, handoverRequested ? "update-restart" : undefined).nonce;
+      teardownNonce = claimPendingTeardown(endpoint, endpointSource, process.pid, handoverRequested ? "update-restart" : undefined, windowsPartAReceiptRecord(), linkStop?.owner, linkStop?.inheritedTeardownDigest).nonce;
     } catch (err) {
-      // Without a receipt the proxy performs its own teardown, which is the pre-#3008
-      // behaviour: correct for every backend that cannot respawn, and merely early for
-      // Task Scheduler. Losing the deferral is far better than losing the stop.
+      // A Link Child can exit before native restoration. Record that obligation first.
+      if (linkStop) throw new ProxyOwnershipRefusedError(`Link Child stop refused: could not record the deferred-teardown receipt (${err instanceof Error ? err.message : String(err)}). Repair the OpenCodex home's storage and retry ocx stop.`, "link_teardown_receipt_failed");
+      if (windowsStopRequiresReceipt()) { ownershipBlocked = true; stopFailed = true; throw err; }
       console.warn(`⚠️  Could not record the deferred-teardown receipt: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
-  // Resolve one target for receipt and request. Only a discovered endpoint may direct POST;
-  // a configured guess records an obligation but is never evidence for orphan recovery.
-  // Claim before any kill fallback so a parent crash leaves a durable teardown obligation.
+  // Use one endpoint for the receipt and POST. A connected stop needs its own proved target.
   const stopWithDeferral = async (pid: number, discovered?: { hostname: string; port: number } | null): Promise<boolean> => {
-    // Resolve ONCE. Reading the runtime record twice let the receipt name the configured
-    // guess while the request went to a runtime endpoint that appeared in between.
-    const exact = discovered ?? endpointOf(readRuntimePort(pid));
+    verifyStopTarget(pid);
+    if (stopTarget?.terminateSibling) {
+      stopTarget.terminateSibling();
+      return false;
+    }
+    const verifiedLink = linkStop;
+    const exact = connectedStop ? endpointOf(stopTarget?.target ?? null) : discovered ?? endpointOf(readRuntimePort(pid));
+    if (connectedStop && !exact) throw unsupportedConnectedStop();
     if (connectedClientSkip) await assertConnectedClientStopSupported(exact ? { ...exact, pid } : null);
-    claimTeardown(exact ?? configuredEndpoint(), exact ? "exact" : "guessed");
+    claimTeardown(exact ?? configuredStopEndpoint(), exact ? "exact" : "guessed");
+    verifyStopTarget(pid);
     const graceful = await stopProxy(pid, {
       deferSharedTeardownNonce: teardownNonce,
       // "not-owned" is refused only for a positively identified Link connection, read at the
@@ -1170,9 +1174,10 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
       // restore. A connect committed mid-stop can make this a hub client whose answer is
       // truthful, so the entry-time skip snapshot cannot stand in for this check.
       acceptNotOwnedTeardown: notOwnedTeardownIsAcceptable(readClientConnectionState(), stoppingSibling),
-      // Only an exact endpoint may direct the request; the configured fallback is a guess
-      // good enough to record an obligation against, not to POST a stop to.
       runtimeEndpoint: exact ?? undefined,
+      runtimeEndpointOnly: true,
+      ...(verifiedLink ? { forceKill: verifiedLink.forceKill } : { mayTerminate: () => { verifyStopTarget(pid); return true; } }),
+      skipPortWait: windowsPartBOwnsPortWait(), // #7771: Part B owns the Windows port wait on both paths.
     });
     // A valid receipt means the proxy deferred shared teardown to this process. If the
     // receipt could not be written, the proxy restores it itself and the caller must not
@@ -1185,51 +1190,67 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     ? { hostname: probeHostname(snapshot.approval.hostname || undefined), port: snapshot.approval.port }
     : null;
   // Only an exact runtime endpoint may back a handover; without one the ordinary restore runs.
-  const claimHandoverBeforeManager = () => { const exact = handoverRequested ? endpointOf(readRuntimePort()) : null; if (exact) claimTeardown(exact, "exact"); };
+  const claimHandoverBeforeManager = () => {
+    if (!handoverRequested) return;
+    const exact = endpointOf(connectedStop ? stopTarget?.target ?? null : readRuntimePort());
+    if (exact) claimTeardown(exact, "exact");
+  };
   let guardedStep: Awaited<ReturnType<typeof runGuardedManagerStep>> | null = null;
   try {
     const serviceStop = snapshot
       ? (guardedStep = await runGuardedManagerStep(snapshot, {
-          revalidateManager: () => inspectGuardedManagerTarget(snapshot.approval.pid, snapshot.approval.port),
+          revalidateManager: () => inspectGuardedTarget(snapshot.approval.pid, snapshot.approval.port),
           stopManager: () => {
+            verifyStopTarget();
             if (approvedEndpoint) claimTeardown(approvedEndpoint, "exact");
-            return stopServiceIfInstalledDetailed();
+            return stopGuardedManager({ approvedPort: snapshot.approval.port, receiptNonce: () => teardownNonce, inheritedReceipts: inheritedTeardownProbeCount(inheritedTeardowns) });
           },
           signalApproved: () => stopWithDeferral(snapshot.approval.pid, approvedEndpoint),
           settle: () => settleApprovedTarget(snapshot.approval),
-          managerState: () => observeGuardedManagerStopped(snapshot.manager),
+          confirmFreed: () => confirmGuardedFreed(record),
+          managerState: () => observeGuardedStopped(snapshot.manager),
         })).service
       // A sibling never runs under a service manager: an installed one belongs to the live owner,
       // and its ownership check would fail this stop and skip the stale-record purge below.
       // #7423: a manager stop takes the proxy down itself, so a handover claims its receipt first.
-      : stoppingSibling || connectedClientAlreadyStopped ? "absent" : (claimHandoverBeforeManager(), stopServiceIfInstalledDetailed());
+      : stoppingSibling || connectedClientAlreadyStopped ? noServiceStop() : await (async () => {
+        verifyStopTarget();
+        const linkEndpoint = linkStop && endpointOf(linkStop.target);
+        if (linkEndpoint) claimTeardown(linkEndpoint, "exact");
+        else claimHandoverBeforeManager();
+        return stopServiceForOcxStop({ receiptNonce: () => teardownNonce, inheritedReceipts: inheritedTeardownProbeCount(inheritedTeardowns) });
+      })();
     record.service = serviceStop;
     stoppedService = serviceStop === "stopped" || serviceStop === "stopped-respawnable";
-    schedulerCanRespawn = serviceStop === "stopped-respawnable";
+    schedulerCanRespawn = serviceStop === "stopped-respawnable" || windowsPartBDue();
     // No "won't respawn" claim here: a stopped Task Scheduler can still respawn through
     // its wrapper, which the verification below is what actually settles.
     if (stoppedService) console.log("🛑 Service manager stopped.");
+    const heldByWindows = windowsPartAHolds(record);
+    ownershipBlocked = heldByWindows || ownershipBlocked; // #7771: no POST and no shared teardown.
     if (serviceStop === "failed") {
       // A manager that would not stop can respawn the proxy. That is a real stop failure,
       // not a history-only one, and an update must not replace files over it (#3008).
       stopFailed = true;
-      console.error("❌ The installed service manager did not stop; it may respawn the proxy.");
+      if (!heldByWindows) console.error("❌ The installed service manager did not stop; it may respawn the proxy.");
     }
     if (serviceStop === "state-unknown") {
-      // Nothing refused to stop — the scheduler state could not be READ. Saying "did not
-      // stop" sends the operator looking for the wrong problem, and `/api/stop` answers
-      // the same case with service_state_unknown.
       stopFailed = true;
-      console.error("❌ The Windows Task Scheduler state could not be read, so this stop cannot tell whether a wrapper would respawn the proxy.");
-      console.error("   Run 'ocx service status' to see the query error, repair Task Scheduler access, then retry.");
+      if (!heldByWindows) console.error("❌ The service state could not be verified. Check 'ocx service status' for details.");
     }
+    // #8960: a held Part A that changed nothing owes no teardown, so the receipt this run claimed
+    // before it goes too. Kept, the next stop inherits it and budgets one more probe, so each
+    // refused retry needed more time than the last and an update could wedge for good.
+    if (teardownNonce && windowsPartAHeldUnchanged() && clearPendingTeardown(teardownNonce)) teardownNonce = undefined;
   } catch (err) {
     record.service = "error";
-    if (isServiceOwnershipError(err)) {
+    if (err instanceof ProxyOwnershipRefusedError || isServiceOwnershipError(err) || windowsChildStopHeld()) {
       ownershipBlocked = true;
       stopFailed = true;
-      console.error(`❌ ${err.message}`);
-      console.error("   Skipping shared teardown (native Codex restore, Grok config): the installed service is still running.");
+      console.error(`❌ ${err instanceof Error ? err.message : String(err)}`);
+      console.error(err instanceof ProxyOwnershipRefusedError
+        ? "   Skipping shared teardown (native Codex restore, Grok config) because the stop could not be verified."
+        : "   Skipping shared teardown (native Codex restore, Grok config): the installed service is still running.");
     } else {
       console.error(`⚠️  Service manager stop failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1237,7 +1258,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
 
   if (snapshot) {
     if (guardedStep?.effect === "approval-changed") {
-      return approvalChanged(guardedStep.detail);
+      return approvalChanged(guardedStep.detail, guardedStep.stopReason);
     }
     if (guardedStep?.effect === "manager-still-active") {
       return managerStillActive(record.service, record);
@@ -1253,16 +1274,13 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
       record.proxy = "unknown";
       console.error("The approved runtime could not be verified after the guarded stop step.");
     }
-  } else {
-  const pid = readPid();
+  } else if (windowsChildStopHeld() || (connectedStop && ownershipBlocked)) { /* No process stop after the connected manager gate refused. */ } else {
+  const attestedPid = linkStop?.target.pid ?? (stopTarget?.terminateSibling ? stopTarget.target.pid : undefined);
+  const pid = readPid() ?? (attestedPid !== undefined && isProcessAlive(attestedPid) ? attestedPid : null);
   if (pid) {
     try {
-      // Graceful-first (management-API drain) — on Windows this is the only path where
-      // the proxy's shutdown handlers actually run; taskkill /F is the fallback inside.
-      // Shared teardown is deferred to this process: it happens after the respawn
-      // verification below, so a survivor does not get its client config pulled first.
-      // The receipt goes down first — the proxy honours the deferral only when it can
-      // see one, so an unrecordable claim degrades to the child doing its own teardown.
+      // The management API can drain before exit. A deferral receipt leaves shared teardown
+      // with this process until after respawn verification.
       nativeRestoreHandledByProxy = await stopWithDeferral(pid);
       console.log(`✅ Proxy (PID ${pid}) stopped.`);
       removePid(pid);
@@ -1294,7 +1312,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     const staleRuntimePid = readRuntimePort()?.pid ?? null;
     // Orphan recovery: a live proxy can outlive its pid file (crash, manual delete,
     // corrupt file). Identity-checked liveness still finds it via the runtime record.
-    const live = await findLiveProxy({ acceptPackageTreeFenced: true });
+    const live = await findLiveProxy({ acceptPackageTreeFenced: true, ...orphanDiscoveryCap() });
     if (siblingStopFoundOwner(siblingOfPort, live)) {
       record.proxy = "not-running";
       console.log(`The sibling instance is already gone; the proxy on port ${siblingOfPort} was left running.`);
@@ -1306,12 +1324,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
       console.error("   Skipping shared teardown (native Codex restore, Grok config) while that proxy is running.");
     } else if (live?.pid) {
       try {
-        // The probe already found where it answers, and on this path the runtime record is
-        // typically what went missing in the first place.
-        nativeRestoreHandledByProxy = await stopWithDeferral(
-          live.pid,
-          { hostname: live.hostname ?? "127.0.0.1", port: live.port },
-        );
+        nativeRestoreHandledByProxy = await stopWithDeferral(live.pid, { hostname: live.hostname ?? "127.0.0.1", port: live.port });
         console.log(`✅ Proxy (PID ${live.pid}) stopped.`);
         record.proxy = "stopped-orphan";
       } catch (err) {
@@ -1355,21 +1368,13 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   // Environment ownership is independent from service ownership. Roll back current-home
   // variables (the helper refuses foreign markers on its own) unless a sibling never set them.
   if (!stoppingSibling) { try { revertSystemEnv(); } catch { /* best-effort */ } }
-  // A stopped Windows scheduler is not a proven-down proxy. `killWindowsSchedulerWrappers`
-  // is explicitly best-effort and the `:loop` wrapper respawns its child after ~5s, so an
-  // immediate probe can see a dead interval and an update can start replacing files right
-  // before the proxy comes back. Poll across the restart window before this stop is allowed
-  // to report anything but failure (#3008) — and ONLY for that backend, since making every
-  // launchd and systemd stop wait seven seconds would be a regression in ordinary use.
+  // A stopped Windows service is not a proven-down proxy: the `:loop` wrapper relaunches its
+  // child about 5 s later, so an immediate probe can see a dead interval (#764, #3008). On
+  // Windows Part B of the checked stop (#7771) holds the port free across that window and
+  // re-enumerates the wrappers; only then may the stop report anything but failure. launchd
+  // and systemd are down when they say so and pay no wait.
   if (schedulerCanRespawn && !ownershipBlocked) {
-    const survivor = await proxyStillLiveAfterStop({ canRespawn: true });
-    if (survivor) {
-      stopFailed = true;
-      record.proxy = "respawned";
-      console.error(`❌ A proxy is still listening on port ${survivor.port} after the service stop; it is being respawned.`);
-      console.error("   Skipping shared teardown: restoring client config while the proxy runs leaves both pointing at each other.");
-      ownershipBlocked = true;
-    }
+    if (await stopWindowFailed(record)) { stopFailed = true; ownershipBlocked = true; }
   }
   // Recovering somebody else's abandoned obligation is not the same act as finishing this
   // run's own. This run stopped a proxy and verified the result; the inherited case has no
@@ -1396,6 +1401,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   const unreadable: { nonce: string }[] = [];
   let inheritedBlocks = false;
   if (inheritedTeardowns.length > 0 && !ownershipBlocked) {
+    const abandonedTeardownIsSafeToFinish = abandonedTeardownProbeOncePerEndpoint();
     for (const read of inheritedTeardowns) {
       if (read.state === "unscannable") {
         // No file, no nonce: nothing to quarantine and nothing to remove. The home itself
@@ -1521,7 +1527,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   };
   const summary = summarizeStopRun(record, signals);
   if (snapshot && !stopFailed) {
-    return guardFinalStopSummary(record, () => observeGuardedManagerStopped(snapshot.manager),
+    return guardFinalStopSummary(record, () => observeGuardedStopped(snapshot.manager),
       () => ({ ok: !stopFailed, summary }));
   }
   return { ok: !stopFailed, summary };
@@ -1531,17 +1537,8 @@ async function handleUninstall() {
   // Before every teardown step: an elevated run must not act on a home another account can change.
   const privilegeRefusal = uninstallPrivilegeRefusal(getConfigDir());
   if (privilegeRefusal) { console.error(`❌ ${privilegeRefusal}`); process.exit(1); }
-  /** Definitive "nothing is answering" on the endpoint this home would serve. */
-  const proxyEndpointProvenDown = async (): Promise<boolean> => {
-    try {
-      // Every candidate, not just the preferred one: a stale runtime record pointing at a
-      // closed port would otherwise "prove" a live proxy on the configured port is gone.
-      const endpoints = endpointsToProve(readRuntimePort(), loadConfig());
-      return await everyEndpointProvenDownAsync(endpoints, probeEndpointLiveness);
-    } catch {
-      return false;
-    }
-  };
+  /** Definitive "nothing is answering" on every endpoint this home could serve, captured before the stop. */
+  const proxyEndpointProvenDown = captureUninstallEndpointProof(() => endpointsToProve(readRuntimePort(), loadConfig()), probeEndpointLiveness);
   const failures: string[] = [];
 
   const runStep = async (label: string, step: () => void | boolean | Promise<void | boolean>) => {
@@ -1567,53 +1564,52 @@ async function handleUninstall() {
     serviceRemoval: null,
     respawnWindowVerified: false,
   };
-  await runStep("service stopped", () => {
-    const outcome = stopServiceIfInstalledDetailed();
+  // The receipt an uninstall's Windows proxy stop claimed; discharged only after Part B
+  // and the shared restore succeeded, kept for recovery otherwise (#7771, #3008).
+  let uninstallStopNonce: string | undefined;
+  await runStep("service stopped", async () => {
+    const outcome = await stopServiceForUninstall();
     observed.serviceStop = outcome;
     if (outcome === "absent") return false;
     if (outcome === "failed") {
-      throw new Error("the installed service manager did not stop; it may respawn the proxy");
+      throw new Error(windowsPartAFailureMessage() ?? "the installed service manager did not stop; it may respawn the proxy");
     }
     if (outcome === "state-unknown") {
-      throw new Error("the Windows Task Scheduler state could not be read, so this uninstall cannot tell whether a manager is still running. Run 'ocx service status' to see the query error");
+      throw new Error(windowsPartAFailureMessage() ?? "the service state could not be verified. Check 'ocx service status' for details");
     }
     return true;
   });
 
   await runStep("proxy stopped", async () => {
-    const pid = readPid();
-    if (!pid) {
-      // A missing pid file is not proof that nothing is serving: a proxy can outlive its
-      // record (crash, manual delete, corrupt file), which is exactly why `ocx stop` falls
-      // back to identity-checked discovery. Without this, uninstall restored shared config
-      // and reported success while that proxy kept running (#3008).
-      const live = await findLiveProxy();
-      if (!live) {
-        // A miss is not proof: `findLiveProxy` collapses a timeout and a transport failure
-        // into the same null as a dead endpoint. Ask the tri-state probe, which only says
-        // "dead" for a refused connection or a definitive non-OpenCodex answer (#3008).
-        observed.proxyProvenDown = await proxyEndpointProvenDown();
-        if (!observed.proxyProvenDown) {
-          throw new Error("no proxy could be found, but its endpoint could not be confirmed down either; confirm nothing is serving, then rerun");
-        }
-        return false;
-      }
-      if (!live.pid) {
-        throw new Error(`a proxy is answering on port ${live.port} but no process id could be resolved for it; stop it from the home that started it, then rerun`);
-      }
-      await stopProxy(live.pid);
-      observed.proxyProvenDown = true;
-      return true;
-    }
-    await stopProxy(pid);
-    removePid(pid);
-    removeRuntimePort(pid);
-    observed.proxyProvenDown = true;
-    return true;
+    // #7771 / #3008: on Windows this claims the teardown receipt before the child stop and
+    // forbids the forced fallback when Part A did not prove the manager stopped, so shared
+    // client config is never restored under a wrapper that can relaunch the proxy.
+    const result = await stopUninstallProxy({
+      platform: process.platform,
+      serviceStop: observed.serviceStop,
+      readPid,
+      findLiveProxy,
+      endpointProvenDown: proxyEndpointProvenDown,
+      partARecord: windowsPartAReceiptRecord,
+      stop: (target, io) => stopProxy(target, io),
+      removeTracked: pid => {
+        removePid(pid);
+        removeRuntimePort(pid);
+      },
+      portWaitOwned: windowsPartBOwnsPortWait,
+    });
+    uninstallStopNonce = result.nonce;
+    observed.proxyProvenDown = result.provenDown;
+    return result.changed;
   });
 
   await runStep("service removed", () => {
-    const outcome = uninstallServiceDetailed();
+    // Windows only: a Part A that failed (or could not read the state, or left a wrapper
+    // that can still respawn) leaves a manager this uninstall cannot account for. Deleting
+    // its registration would remove the evidence without stopping the wrapper, and
+    // `ocx service uninstall` refuses in the same states. The failure stays recorded so the
+    // shared teardown below stays blocked.
+    const outcome = uninstallServiceRemoval(observed, uninstallServiceDetailed);
     observed.serviceRemoval = outcome;
     // "absent" and "removed" are both fine; a failure is not, and it used to look like
     // absence on darwin and linux.
@@ -1624,10 +1620,9 @@ async function handleUninstall() {
   // Only Task Scheduler can respawn through a surviving wrapper, and removing the
   // registration does not prove the running one died. Poll the same window `ocx stop` does
   // before shared config is allowed down (#764, #3008).
-  if (observed.serviceStop === "stopped-respawnable") {
+  if (respawnWindowRequired(observed)) {
     await runStep("respawn window verified", async () => {
-      const survivor = await proxyStillLiveAfterStop({ canRespawn: true });
-      if (survivor) throw new Error(`a proxy is still listening on port ${survivor.port} after the service was removed; it is being respawned`);
+      await verifyUninstallStopWindow(); // Windows: Part B (#7771); otherwise the legacy re-poll.
       // A null from that poll is not proof either: its identity probe returns null on a
       // timeout, so a respawned-but-unresponsive proxy looks the same as none. Require the
       // tri-state probe to say dead on every candidate before calling the window verified.
@@ -1670,6 +1665,12 @@ async function handleUninstall() {
     console.error("⚠️  Skipping shared teardown (native Codex restore, Grok config): a service or proxy could not be proven stopped.");
     console.error("   Resolve the failures above and rerun 'ocx uninstall' — service removal and local state cleanup are also unfinished.");
     console.error("   'ocx restore' is an interim step if you need native routing back before then.");
+  }
+
+  // The obligation the proxy stop deferred is discharged only now: Part B and the shared
+  // restore both succeeded. Otherwise the receipt stays for the next stop to finish.
+  if (uninstallStopNonce && failures.length === 0) {
+    completeWindowsServiceStopReceipt(uninstallStopNonce);
   }
 
   await runStep("system env vars reverted", () => {

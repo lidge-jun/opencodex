@@ -13,7 +13,9 @@ import { clearCodexPoolRefreshFailure } from "../pool-refresh-backoff";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { emailMaskingEnabled, projectEmail } from "../../lib/privacy";
 import { CodexWarmupError, codexWarmupFailureReason, isCodexWarmupProvisioningFailure, warmCodexAccount } from "../warmup";
+import { codexAccountFetch } from "../account-egress-runtime";
 import type { CodexAccount, CodexAccountCredentials, OcxConfig } from "../../types";
+import type { OAuthCredentials } from "../../oauth/types";
 import type { CatalogDisposition } from "../convergence-types";
 import { isValidCodexAccountId } from "../account-id";
 import { codexAccountIdNamespaceCollisionError } from "../account-namespace-match";
@@ -47,9 +49,10 @@ export async function verifyCodexAccountWarmup(
   accountId: string,
   accessToken: string,
   chatgptAccountId: string,
+  transport?: typeof globalThis.fetch,
 ): Promise<{ ok: true; validatedAt: number } | { ok: false; response: Response }> {
   try {
-    await warmCodexAccount({ accessToken, chatgptAccountId });
+    await warmCodexAccount({ accessToken, chatgptAccountId, ...(transport ? { transport } : {}) });
     return { ok: true, validatedAt: Date.now() };
   } catch (err) {
     const reason = codexWarmupFailureReason(err);
@@ -176,6 +179,9 @@ export async function convergeAccountNamespaceCatalog(
   }
 }
 
+// Once synchronous pool publication starts, a cancellation can no longer undo it.
+const publishingPoolLogins = new WeakSet<CodexLoginStateRow>();
+
 export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig, convergeCodexCatalog?: CodexAuthCatalogConvergence): Promise<Response> {
   const body = (await req.json().catch(() => ({}))) as {
     id?: string;
@@ -183,9 +189,6 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
     openBrowser?: unknown;
     device?: unknown;
   };
-  // Device mode: no local browser, no loopback listener. The only way to add
-  // an account to a headless hub (#3366).
-  const useDeviceFlow = body.device === true;
   const requestedAccountId = body.id?.trim();
   const reauth = body.reauth === true;
   if (requestedAccountId && !isValidCodexAccountId(requestedAccountId)) {
@@ -193,6 +196,12 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
   }
   const accountId = requestedAccountId || `chatgpt-${Date.now()}`;
   const runtimeConfig = getRuntimeConfig(config);
+  // Device mode: no local browser, no loopback listener. The only way to add
+  // an account to a headless hub (#3366). `codexAuthMethod: "device-only"`
+  // enforces it for every caller, so a dashboard or CLI that did not ask for
+  // it still never starts a localhost callback login (#8082).
+  const deviceOnly = runtimeConfig.codexAuthMethod === "device-only";
+  const useDeviceFlow = body.device === true || deviceOnly;
   const preflightConflict = !reauth
     ? codexAccountPersistenceConflict(runtimeConfig, accountId, "create")
     : undefined;
@@ -213,12 +222,23 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
   const flowId = `flow-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const loginOwner: CodexLoginStateRow = { status: "starting", startedAt: Date.now() };
   codexAuthLoginState.set(flowId, loginOwner);
+  const ownsFlow = () => codexAuthLoginState.get(flowId) === loginOwner;
+  const ownsPendingFlow = () => ownsFlow() && loginOwner.status === "pending";
+  const settlePoolLogin = (patch: Partial<CodexLoginStateRow>) => {
+    if (ownsPendingFlow()) setCodexLoginState(flowId, patch);
+  };
+  let persistedCredential: OAuthCredentials | undefined;
   try {
     const { startLoginFlow, getLoginStatus, publicOAuthAuthenticationErrorMessage } = await import("../../oauth");
     const result = await startLoginFlow("chatgpt", {
       forceLogin: true,
       ...(useDeviceFlow ? { flow: "device" as const } : {}),
-    }, { flowId });
+    }, {
+      flowId,
+      retainOutcome: () => ownsFlow() && (loginOwner.status === "starting" || loginOwner.status === "pending"),
+      // ChatGPT's scratch slot can be replaced by another login before this poller wakes up.
+      onCredentialPersisted: credential => { persistedCredential = credential; },
+    });
 
     // Open the browser server-side (same pattern as /api/oauth/login in management-api.ts).
     // The GUI's window.open is popup-blocked because it runs after an await, not a direct click.
@@ -248,14 +268,26 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
         const pollAttempts = useDeviceFlow ? 480 : 150;
         for (let i = 0; i < pollAttempts; i++) {
           await new Promise(r => setTimeout(r, 2000));
-          const st = getLoginStatus("chatgpt");
-          if (st.done && st.loggedIn) {
-            const { getCredential } = await import("../../oauth/store");
-            const cred = getCredential("chatgpt");
+          if (!ownsPendingFlow()) return;
+          const st = getLoginStatus("chatgpt", true, flowId);
+          if (st.status === "error") {
+            settlePoolLogin({
+              status: "error",
+              // startLoginFlow projects background failures before storing login status, so
+              // fixed actionable OAuth messages retain their type-derived remediation here.
+              error: st.error,
+              doneAt: Date.now(),
+            });
+            completed = true;
+            break;
+          }
+          if (st.status === "complete") {
+            const cred = persistedCredential;
+            persistedCredential = undefined;
             if (cred) {
               const oauthAccountId = cred.accountId;
               if (!oauthAccountId) {
-                setCodexLoginState(flowId, {
+                settlePoolLogin({
                   status: "error",
                   error: "Could not determine account identity from OAuth tokens. Please retry OAuth login.",
                   doneAt: Date.now(),
@@ -268,9 +300,11 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
               let plan = extractChatgptPlanType(undefined, cred.access);
               let quota: Omit<StoredAccountQuota, "updatedAt"> | null = null;
               let policyQuota: Omit<StoredAccountQuota, "updatedAt"> | null = null;
+              // The account's route; a new login has no row yet and takes the provider's.
+              const accountTransport = codexAccountFetch(accountId, { newLogin: !reauth });
               try {
                 const tokens = { access_token: cred.access, account_id: oauthAccountId };
-                const resp = await fetch("https://chatgpt.com/backend-api/wham/usage", {
+                const resp = await accountTransport("https://chatgpt.com/backend-api/wham/usage", {
                   headers: { Authorization: `Bearer ${tokens.access_token}`, "ChatGPT-Account-Id": tokens.account_id },
                   signal: AbortSignal.timeout(8000),
                 });
@@ -282,6 +316,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                   policyQuota = poolWhamPolicyObservation(data, quota);
                 }
               } catch { /* wham fetch is non-blocking */ }
+              if (!ownsPendingFlow()) return;
               // Reauth must refresh the same ChatGPT identity already bound to this pool slot.
               // Otherwise a different login would silently overwrite credentials under a trusted id.
               if (reauth) {
@@ -292,7 +327,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                 const gotEmail = email.trim().toLowerCase();
                 if (expectedChatgptId) {
                   if (expectedChatgptId !== oauthAccountId) {
-                    setCodexLoginState(flowId, {
+                    settlePoolLogin({
                       status: "error",
                       error: "Signed-in ChatGPT account does not match this pool account. Sign in with the same account, or remove it and add a new one.",
                       doneAt: Date.now(),
@@ -302,7 +337,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                   }
                 } else if (expectedEmail) {
                   if (!gotEmail || gotEmail !== expectedEmail) {
-                    setCodexLoginState(flowId, {
+                    settlePoolLogin({
                       status: "error",
                       error: "Signed-in ChatGPT account does not match this pool account. Sign in with the same account, or remove it and add a new one.",
                       doneAt: Date.now(),
@@ -313,7 +348,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                 } else {
                   // No chatgptAccountId and no pool email — refuse silent identity replacement
                   // (including empty credential slots that still have a pool row).
-                  setCodexLoginState(flowId, {
+                  settlePoolLogin({
                     status: "error",
                     error: "Cannot verify account identity for reauth. Remove this account and add it again.",
                     doneAt: Date.now(),
@@ -325,8 +360,9 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
 
               // 1.2: Duplicate check is scoped by personal vs workspace plan bucket.
               const collision = await checkAccountIdCollision(oauthAccountId, email, plan, reauth ? accountId : undefined);
+              if (!ownsPendingFlow()) return;
               if (collision.collision) {
-                setCodexLoginState(flowId, {
+                settlePoolLogin({
                   status: "error", error: collision.reason, doneAt: Date.now(),
                 });
                 completed = true;
@@ -340,10 +376,11 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
               // and keep it unavailable to routing. Unknown/failed usage reads retain the gate.
               const warmup = isCodexQuotaExhausted(quota, plan)
                 ? { ok: true as const, validatedAt: undefined }
-                : await verifyCodexAccountWarmup(accountId, cred.access, oauthAccountId);
+                : await verifyCodexAccountWarmup(accountId, cred.access, oauthAccountId, accountTransport);
+              if (!ownsPendingFlow()) return;
               if (!warmup.ok) {
                 const body = await warmup.response.json().catch(() => ({})) as { error?: string; code?: string; reason?: string };
-                setCodexLoginState(flowId, {
+                settlePoolLogin({
                   status: "error",
                   error: body.reason ? `${body.error ?? "Codex account warmup failed"} (${body.reason})` : body.error ?? "Codex account warmup failed",
                   code: body.code,
@@ -364,7 +401,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                 reauth ? "reauth" : "create",
               );
               if (commitConflict) {
-                setCodexLoginState(flowId, {
+                settlePoolLogin({
                   status: "error",
                   error: commitConflict,
                   doneAt: Date.now(),
@@ -380,6 +417,8 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                 chatgptAccountId: oauthAccountId,
               };
 
+              if (!ownsPendingFlow()) return;
+              publishingPoolLogins.add(loginOwner);
               if (existingIdx >= 0) {
                 const generation = saveCodexAccountCredential(accountId, credential, {
                   validationPending: warmup.validatedAt === undefined,
@@ -439,14 +478,14 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                 convergeCodexCatalog,
               );
               if (newAccountPersistence?.status === "publication-failed") {
-                setCodexLoginState(flowId, {
+                settlePoolLogin({
                   status: "error",
                   ...codexCredentialPersistenceFailure(accountId, catalogRefreshPending),
                   doneAt: Date.now(),
                 });
                 completed = true;
               } else {
-                setCodexLoginState(flowId, {
+                settlePoolLogin({
                   status: "done",
                   accountId,
                   email,
@@ -456,23 +495,19 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                 });
                 completed = true;
               }
+            } else {
+              settlePoolLogin({
+                status: "error",
+                error: "OAuth login completed without a usable credential. Please retry OAuth login.",
+                doneAt: Date.now(),
+              });
+              completed = true;
             }
-            break;
-          }
-          if (st.done && st.error) {
-            setCodexLoginState(flowId, {
-              status: "error",
-              // startLoginFlow projects background failures before storing login status, so
-              // fixed actionable OAuth messages retain their type-derived remediation here.
-              error: st.error,
-              doneAt: Date.now(),
-            });
-            completed = true;
             break;
           }
         }
         if (!completed) {
-          setCodexLoginState(flowId, {
+          settlePoolLogin({
             status: "error",
             error: "Login timed out before OAuth completed.",
             doneAt: Date.now(),
@@ -487,12 +522,13 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
           : error instanceof CodexCredentialRefreshBusyError || error instanceof CodexCredentialRefreshStaleError
             ? "Credential refresh is busy; retry login shortly."
           : publicOAuthAuthenticationErrorMessage(error);
-        setCodexLoginState(flowId, {
+        settlePoolLogin({
           status: "error",
           error: message,
           doneAt: Date.now(),
         });
       } finally {
+        persistedCredential = undefined;
         // TTL: keep completed flow state available for clients that miss a short polling window.
         setTimeout(() => { if (codexAuthLoginState.get(flowId) === loginOwner) codexAuthLoginState.delete(flowId); }, CODEX_LOGIN_TERMINAL_TTL_MS);
       }
@@ -509,6 +545,8 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
       // Dropped before #3366: every device-code surface renders this field,
       // so withholding it left the GUI and CLI with no code to show.
       ...(result.deviceCode ? { deviceCode: result.deviceCode } : {}),
+      // Tells the caller the device grant was imposed by configuration, not chosen by it.
+      ...(deviceOnly ? { authMethod: "device-only" as const } : {}),
     });
   } catch (e) {
     if (codexAuthLoginState.get(flowId) === loginOwner) codexAuthLoginState.delete(flowId);
@@ -550,12 +588,13 @@ export async function handleCodexAuthLoginCancel(req: Request): Promise<Response
     ? (body as { flowId?: unknown }).flowId : undefined;
   const flowId = typeof suppliedId === "string" ? suppliedId.trim() : "";
   if (!flowId) return jsonResponse({ error: "flowId required" }, 400);
-  const { cancelLoginFlow } = await import("../../oauth");
+  const { cancelLoginFlow, getLoginStatus } = await import("../../oauth");
   const flow = codexAuthLoginState.get(flowId);
-  if (!flow || flow.status !== "pending") {
+  if (!flow || flow.status !== "pending" || publishingPoolLogins.has(flow)) {
     return jsonResponse({ error: "login flow expired or unknown" }, 400);
   }
-  if (!cancelLoginFlow("chatgpt", flowId)) {
+  // OAuth may have settled while the pool login is still checking the identity and quota.
+  if (!cancelLoginFlow("chatgpt", flowId) && getLoginStatus("chatgpt", true, flowId).status !== "complete") {
     return jsonResponse({ error: "login flow expired or unknown" }, 400);
   }
   expireCodexAuthFlow(flowId);

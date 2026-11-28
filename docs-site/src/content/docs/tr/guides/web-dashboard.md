@@ -22,6 +22,11 @@ sunucusunu çalışan bir proxy'ye karşı ayrı olarak çalıştırabilirsiniz:
 
 ```bash
 ocx start
+```
+
+Proxy bu terminalde çalışmaya devam etsin. İkinci bir terminalde GUI geliştirme sunucusunu başlatın:
+
+```bash
 bun run dev:gui
 ```
 
@@ -135,17 +140,29 @@ ayarlanmadığında) ve devre dışı bırakılmadığında açıktır. Bir mode
 iki filtreyi de atomik olarak uzlaştırır; **Tümünü aç (All on)** sağlayıcı izin
 listesini temizler, böylece yeni keşfedilen modeller de açık olur.
 
+**Tümü** sekmesi (`#models/overall`), tüm sağlayıcıların modellerini katalogla aynı sırada tek bir
+listede gösterir; arama kutusu, **Tümü** / **Açık** / **Kapalı** filtresi ve aynı anahtar vardır. İki
+sekme aynı durumu okur ve tek bir kayıt kuyruğunu paylaşır; birinde yapılan değişiklik diğerinde hemen görünür.
+
+**Modeller** sayfasından ayrılmadan veya sunucu değiştirmeden önce kayıt sonucunu bekleyin: ayrılırken
+kuyrukta bekleyen ve henüz gönderilmemiş değişiklikler atılır.
+
 ### Sağlayıcı çalışma alanında modelleri yönetme
 
-Sağlayıcının **Modeller** sekmesinde **Sil**, kayıtlı özel tanımı kaldırır. Alttaki yerel veya canlı
-keşfedilmiş model yeniden görünebilir; bu nedenle model sayısı aynı kalabilir. **Gizle** yalnızca
-katalog görünürlüğünü değiştirir; tanımı silmez veya doğrudan yönlendirme ilkesini değiştirmez.
-**Modeller bölümünde görünürlüğü yönet**, görünürlüğü geri yükleyebileceğiniz **Modeller** sayfasını
-açar. Sağlayıcı sekmesinde hiç satır kalmasa da bu bağlantı kullanılabilir.
+Sağlayıcının **Modeller** sekmesi, kapalı olanlar dahil sağlayıcının tüm modellerini listeler ve her
+birinde **Modeller** sayfasındakiyle aynı açma/kapama anahtarı bulunur; iki sayfa aynı durumu okur ve
+yazar. Anahtar hemen kaydeder. Bu kayıt ve ardından gelen yeniden okuma bitene kadar diğer anahtarlar,
+**Ekle** ve **Sil** bekler; böylece aynı anda tek bir değişiklik sürer ve başka bir sağlayıcı seçmek onu
+iptal etmez; ancak bitmeden **Sağlayıcılar** sayfasından ayrılmak isteği iptal edebilir. Kaydedilip
+kaydedilmediğini bir sonraki yükleme gösterir. Bir modeli kapatmak yalnızca katalog görünürlüğünü değiştirir; tanımı silmez veya doğrudan
+yönlendirme ilkesini değiştirmez. **Modeller bölümünde görünürlüğü yönet**, **Modeller** sayfasını açar.
 
-**Ekle**, özel tanımı kaydeder; mevcut gizleme durumunu veya sağlayıcı seçim kurallarını kaldırmaz.
-Kaydedilen model gizli kalabilir. Model zaten biliniyorsa görünürlüğünü **Modeller** bölümünden
-yönetin. Kayıt doğrulandıysa katalog yenilemesi başarısız olsa bile tanım kaydedilmiştir. Yeniden
+**Sil**, kayıtlı özel tanımı kaldırır. Alttaki yerel veya canlı keşfedilmiş model yeniden görünebilir;
+bu nedenle model sayısı aynı kalabilir.
+
+**Ekle**, özel tanımı kaydeder; mevcut kapalı durumu veya sağlayıcı seçim kurallarını kaldırmaz.
+Kaydedilen model kapalı kalabilir; anahtarıyla açın. Kayıt doğrulandıysa katalog yenilemesi başarısız
+olsa bile tanım kaydedilmiştir. Yeniden
 eklemek yerine yenileme mesajını izleyin. Değişiklik doğrulanamıyorsa tekrar denemeden önce
 modellerin durumunu yenileyin.
 
@@ -153,6 +170,12 @@ Sağlayıcının model sayısı, sunucunun döndürdüğü güncel model envante
 benzersiz girdileri, arama ve görüntüleme sınırı uygulanmadan önce sayar. Bu sayı izin listesinin
 boyutu veya canlı keşif sayısı değildir; girdinin sağlayıcıdan keşfedildiğini de kanıtlamaz.
 Seçim rozetleri ve keşif bilgileri bu sayıdan ayrıdır.
+
+Bu sayı sağlayıcı listesinde görünür. Sağlayıcının **Modeller** sekmesinin başlığı ise toplam içinden
+kaç modelin açık olduğunu gösterir: toplam, kapalı modeller dahil listedeki her girdiyi sayar; bir model
+**Modeller** sayfasındakiyle aynı kurala göre açıktır: devre dışı değildir ve ayrıca ya Codex'in
+yerleşik (native) GPT modelidir, ya sağlayıcısının izin listesi yoktur ya da izin listesi onu içerir.
+Ollama gibi yerel sunucu sağlayıcılarının modelleri bu istisnaya girmez.
 
 ## Yetkilendirme seçicisi ve spawn yönlendirmesi
 

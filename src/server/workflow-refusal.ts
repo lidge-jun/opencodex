@@ -31,6 +31,7 @@ import {
   type WorkflowSpendDenialDetail,
 } from "../lib/workflow-budget";
 import { currentWorkflowBudgetPolicy } from "../lib/workflow-budget-config";
+import { SEND_BUDGET_EXHAUSTED_CODE } from "../lib/errors";
 
 /**
  * What a caller needs to hand over for the refusal to become a row on `/api/logs`.
@@ -150,6 +151,13 @@ export function unboundPoolSpendRefusalResponse(logCtx: RequestLogContext): Resp
   const detail = logCtx.spendRefusalDetail;
   if (!detail?.includesUnboundPoolHistory) return undefined;
   return workflowRefusalResponse("workflow-spend-exhausted", logCtx, undefined, undefined, detail);
+}
+
+/** Preserve affinity when the proxy, rather than the serving credential, refuses a send. */
+export function adapterSendBudgetRefusal(logCtx: RequestLogContext, rootId: string | undefined, message: string): Response {
+  logCtx.terminalSource = "synthetic";
+  return unboundPoolSpendRefusalResponse(logCtx) ?? workflowSendCeilingRefusalResponse(logCtx, rootId)
+    ?? markProxyError(formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, message));
 }
 
 /**

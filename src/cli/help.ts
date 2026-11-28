@@ -64,8 +64,8 @@ Usage:
   ocx debug <scope>           provider/usage/injection/claude on|off|status|reset
   ocx login <provider>        OAuth or API-key provider login (ocx login codex for Codex/ChatGPT)
   ocx logout <provider>       Remove a stored OAuth login
-  ocx gui [pair --origin <browser-origin> [--json]]
-                              Open the dashboard or create a single-use remote pairing grant
+  ocx gui [pair [--desktop] --origin <browser-origin> [--json]]
+                              Open the dashboard, pair a remote GUI, or authorize local Desktop changes (--desktop)
   ocx hub invite [--json]     Print a ready-to-run \`ocx connect\` line for one more machine
                               (hub only; see \`ocx help hub\` for the one-port topology)
   ocx link <sub>              Machine links over SSH (port|issue|revoke|status|check)
@@ -87,7 +87,7 @@ Usage:
   ocx fallback <sub>          Turn model or provider fallback off per scope; per-device local fallback
   ocx observe <sub>           Logs, usage, storage, memory, and debug data
   ocx inspect <sub>           Effective config, catalog, analytics, pacing, client-config
-  ocx route <sub>             Routing features (combo, policy)
+  ocx route <sub>             Routing features (to, combo, policy)
   ocx logs [filters]          Alias of ocx observe logs
   ocx usage [--range <today|1d|7d|30d|all>] [--provider <name>] [--model <id>] [--top <1-1000>]
                               Token and estimated-cost report (alias of ocx observe usage)
@@ -101,7 +101,7 @@ Usage:
   ocx grok <sub>              Grok Build model selection and apply
   ocx system <sub>            Runtime settings, startup, sync, OpenCodex updates, and Codex CLI inspection
   ocx config [sub]            Validated configuration show/get/set/import/export
-  ocx advisor <status|on|off|set|consent>  Advisor sidecar settings and context-sharing consent
+  ocx advisor <status|consult|mcp|on|off|set|consent>  Advisor sidecar settings, consultation and MCP host
   ocx companion <show|set|reset>  Menu-bar and widget companion usage settings
   ocx telemetry <sub>         Anonymous usage telemetry status, preview, enable, and disable
   ocx lab <sub>               Inspect Lab evidence and control local automation
@@ -134,6 +134,55 @@ export function hasHelpFlag(values: string[]): boolean {
   return values.some(value => value === "--help" || value === "-h" || value === "help");
 }
 
+// Human-readable navigation only: keep the versioned capability payload and command grammar unchanged.
+const OPERATOR_HELP_GUIDANCE: Readonly<Record<string, readonly string[]>> = {
+  account: [
+    "Inspect first: ocx account pool openai --json",
+    "This reads live pool policy, not account availability. Read the roster and selection with ocx account list openai --json.",
+    "Operating guide: recipe 17, Inspect pool policy before changing account scope.",
+  ],
+  "account strategy": [
+    "Inspect first: ocx account pool openai --json",
+    "For Codex: quota prefers lower usage when choosing a replacement; fill-first keeps placing new work on the active account until its threshold, cooldown, or unavailability; round-robin spreads new work across eligible accounts.",
+    "Reset-first prefers the nearest future five-hour or weekly reset among eligible accounts with threshold headroom; reset-near-weighted gives accounts closer to reset more weight for new work.",
+    "These choices are for new or unbound Codex work. Existing bindings follow affinity and recovery policy. Strategy support varies by provider.",
+  ],
+  "account pool": [
+    "Inspect first: ocx account pool openai --json",
+    "Omit policy flags to read the selected runtime without changing it. Check supported and effective values before choosing flags.",
+    "Compare placement strategies: ocx help account strategy",
+  ],
+  config: [
+    "Inspect first: ocx config show --source",
+    "This explains how the local settings were loaded; it is not a complete view of the running proxy. For live settings, start with the relevant feature's status command.",
+  ],
+  "config get": [
+    "Inspect first: ocx config show --source",
+    "Reads validated local settings, which may include defaults, not the running hub's feature status.",
+    "Setting meanings and defaults: https://opencodex.me/reference/configuration/",
+  ],
+  connect: [
+    "Inspect first: ocx connect status --json",
+    "Check the saved/local link and the reported readiness separately. Being connected does not make every management command target the remote server.",
+    "Operating guide: Remote hub, Discover locally, manage the intended machine.",
+  ],
+  models: [
+    "Inspect first: ocx models list --json",
+    "This is a local model view. For recorded discoveries use ocx models new-arrivals --json; live catalogue reads such as models selected may fetch upstream and reconcile discovery state.",
+    "Operating guide: recipe 11, Choose a model preset and inspect new arrivals.",
+  ],
+  "models new-policy": [
+    "Inspect first: ocx models new-policy --json",
+    "Add --provider <name> to inspect the provider policy before changing it. This read does not refresh discovery.",
+    "Without an allowlist, off disables new arrivals and on leaves them eligible. admit extends custom selections without widening preset-derived selections.",
+  ],
+  provider: [
+    "Inspect first: ocx provider snapshot --json",
+    "This reads the running proxy's non-secret provider configuration, not provider reachability. Use ocx provider show <name> for authored local settings.",
+    "Operating guide: recipe 6, Save locally or change the running provider configuration.",
+  ],
+};
+
 function printCapabilityDetails(capability: Capability, write: (text: string) => void, shown: readonly string[] = []): void {
   if (capability.flags.length) {
     write("\nDeclared flags:");
@@ -165,6 +214,8 @@ export function printSubcommandUsage(
   if (result.kind === "entry") {
     write(`Usage: ${result.entry.usage}\n\n${result.entry.summary}`);
     if (result.entry.details?.length) write(`\n${result.entry.details.join("\n")}`);
+    const guidance = OPERATOR_HELP_GUIDANCE[result.canonicalName];
+    if (guidance) write(`\n${guidance.join("\n")}`);
     if (result.capability) printCapabilityDetails(result.capability, write, result.entry.details);
     if (result.children.length) {
       write("\nDeclared commands (incomplete):");
@@ -180,6 +231,8 @@ export function printSubcommandUsage(
     const { capability } = result;
     const heading = capability.usage !== undefined ? `Usage: ${capability.usage}` : `Command: ocx ${result.path.join(" ")}`;
     write(`${heading}\n\n${capability.summary}`);
+    const guidance = OPERATOR_HELP_GUIDANCE[capability.command.join(" ")];
+    if (guidance) write(`\n${guidance.join("\n")}`);
     printCapabilityDetails(capability, write);
     if (result.children.length) {
       write("\nDeclared commands (incomplete):");

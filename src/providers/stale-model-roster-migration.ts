@@ -22,6 +22,10 @@ import {
   ALIBABA_INTL_TOKEN_PLAN_MODELS,
   ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
   ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
+  ALIBABA_TOKEN_PLAN_BEIJING_CONTEXT_WINDOWS,
+  ALIBABA_TOKEN_PLAN_BEIJING_MAX_OUTPUT_TOKENS,
+  ALIBABA_TOKEN_PLAN_MODELS_BEFORE_QWEN4,
+  QWEN4_MAX,
   KIMI_API_DEFAULT_REASONING_EFFORTS,
   KIMI_API_MODEL_CONTEXT_WINDOWS,
   KIMI_API_MODELS,
@@ -36,6 +40,10 @@ import {
   MINIMAX_MODELS,
   MINIMAX_MODELS_BEFORE_M31,
   MINIMAX_MODEL_CONTEXT_WINDOWS,
+  NEURALWATT_MODEL_HINTS,
+  GOOGLE_GEMINI_API_MODELS,
+  ZAI_CODING_PLAN_MODELS,
+  BIGMODEL_RESPONSES_MODELS,
 } from "./registry/model-seeds";
 import type { OcxConfig } from "../types";
 import { modelRecordValue } from "../reasoning-effort";
@@ -48,6 +56,11 @@ export interface StaleModelRoster {
   /** Exact old roster after id renames; metadata additions still compare against `from`. */
   afterModelRenames?: readonly string[];
   to: readonly string[];
+  /**
+   * Ids `from` carries that the registry has since dropped. A refreshed row keeps them after
+   * `to`, so a saved defaultModel or selection naming one is never orphaned by the refresh.
+   */
+  retain?: readonly string[];
   /** Per-model seed values for the added ids, written only into containers that exist. */
   contextWindows?: Readonly<Record<string, number>>;
   /**
@@ -88,6 +101,20 @@ const ALIBABA_INTL_TOKEN_PLAN_MODELS_BEFORE_1017 = [
  */
 export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
   {
+    provider: "neuralwatt",
+    from: [
+      "glm-5.3", "glm-5.3-fast", "glm-5.3-short", "glm-5.3-short-fast", "glm-5.3-flash",
+      "glm-5.2", "glm-5.2-fast", "glm-5.2-short", "glm-5.2-short-fast",
+      "kimi-k2.6", "kimi-k2.6-fast", "kimi-k2.7-code",
+      "qwen3.5-397b", "qwen3.5-397b-fast", "qwen3.6-35b", "qwen3.6-35b-fast",
+    ],
+    to: NEURALWATT_MODEL_HINTS.models,
+    contextWindows: NEURALWATT_MODEL_HINTS.modelContextWindows,
+    maxOutputTokens: NEURALWATT_MODEL_HINTS.modelMaxOutputTokens,
+    defaultReasoningEfforts: NEURALWATT_MODEL_HINTS.modelDefaultReasoningEfforts,
+    destinationBaseUrls: ["https://api.neuralwatt.com/v1"],
+  },
+  {
     provider: "meta-model",
     from: META_MUSE_MODELS,
     to: META_MODEL_API_MODELS,
@@ -99,10 +126,41 @@ export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
   {
     provider: "deepseek",
     from: ["deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"],
-    to: ["deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"],
+    // The target is the registry seed today; deepseek-chat/reasoner left it on 2026-11-26 but a
+    // saved row keeps them, since its defaultModel may still name one.
+    to: ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"],
+    retain: ["deepseek-chat", "deepseek-reasoner"],
     contextWindows: { "deepseek-v4-pro": 1_048_576 },
     destinationBaseUrls: ["https://api.deepseek.com", "https://api.deepseek.com/v1"],
   },
+  // 261126 Gemini API refresh: Gemini 4 Neon/Hydrogen/Carbon join; the redirected 3.5/3.7 Flash ids
+  // left the picker but stay on a saved row, whose defaultModel may name one.
+  {
+    provider: "google",
+    from: ["gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"],
+    to: GOOGLE_GEMINI_API_MODELS,
+    retain: ["gemini-3.5-flash", "gemini-3.7-flash"],
+    contextWindows: { "gemini-4-neon": 1_048_576, "gemini-4-hydrogen": 1_048_576, "gemini-4-carbon": 1_048_576 },
+    defaultReasoningEfforts: { "gemini-4-neon": "high", "gemini-4-hydrogen": "high" },
+    destinationBaseUrls: ["https://generativelanguage.googleapis.com"],
+  },
+  // 261126 GLM-5.4 joined every Coding Plan tier; each static row's previous seed picks it up.
+  ...([
+    ["zai", ZAI_CODING_PLAN_MODELS, 1_048_576, ["https://api.z.ai"]],
+    ["zhipu-bigmodel-coding", ZAI_CODING_PLAN_MODELS, 1_000_000, ["https://open.bigmodel.cn/api/coding/paas/v4"]],
+    ["zhipu-bigmodel-responses", BIGMODEL_RESPONSES_MODELS, 1_048_576, ["https://open.bigmodel.cn/api/v1"]],
+  ] as const).map(([provider, to, window, destinationBaseUrls]) => {
+    const added = to.filter(id => id.startsWith("glm-5.4"));
+    return {
+      provider,
+      from: to.filter(id => !id.startsWith("glm-5.4")),
+      to,
+      contextWindows: Object.fromEntries(added.map(id => [id, window])),
+      maxOutputTokens: Object.fromEntries(added.map(id => [id, 131_072])),
+      defaultReasoningEfforts: Object.fromEntries(added.map(id => [id, "max"])),
+      destinationBaseUrls,
+    };
+  }),
   ...["minimax", "minimax-cn"].map(provider => ({
     provider,
     from: MINIMAX_MODELS_BEFORE_M31,
@@ -115,7 +173,16 @@ export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
       .flatMap(url => [url, `${url}/chat/completions`]),
   })),
   ...[
-    { provider: "alibaba-token-plan", from: ALIBABA_TOKEN_PLAN_MODELS_BEFORE_1017, to: ALIBABA_TOKEN_PLAN_MODELS },
+    {
+      provider: "alibaba-token-plan", from: ALIBABA_TOKEN_PLAN_MODELS_BEFORE_1017, to: ALIBABA_TOKEN_PLAN_MODELS,
+      contextWindows: ALIBABA_TOKEN_PLAN_BEIJING_CONTEXT_WINDOWS, maxOutputTokens: ALIBABA_TOKEN_PLAN_BEIJING_MAX_OUTPUT_TOKENS,
+    },
+    // 261126 qwen4-max: a row saved with the pre-Qwen4 Beijing seed picks the new flagship up.
+    {
+      provider: "alibaba-token-plan", from: ALIBABA_TOKEN_PLAN_MODELS_BEFORE_QWEN4, to: ALIBABA_TOKEN_PLAN_MODELS,
+      contextWindows: ALIBABA_TOKEN_PLAN_BEIJING_CONTEXT_WINDOWS, maxOutputTokens: ALIBABA_TOKEN_PLAN_BEIJING_MAX_OUTPUT_TOKENS,
+      defaultReasoningEfforts: { [QWEN4_MAX]: "high" },
+    },
     // International honors pay-as-you-go and Custom URLs, which may still serve the retired ids.
     // Beijing needs no guard: the router pins it to the registry Token Plan host.
     {
@@ -123,10 +190,10 @@ export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
       destinationBaseUrls: [ALIBABA_INTL_TOKEN_PLAN_BASE_URL],
     },
   ].map(entry => ({
-    ...entry,
     contextWindows: ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
     maxOutputTokens: ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
-    defaultReasoningEfforts: { "deepseek-v4.1-flash-1017": "high" },
+    ...entry,
+    defaultReasoningEfforts: { "deepseek-v4.1-flash-1017": "high", ...("defaultReasoningEfforts" in entry ? entry.defaultReasoningEfforts : {}) },
   })),
   // Kimi K3.1 Pro (#7653). Both the International and China platforms list kimi-k3.1-pro and
   // -highspeed; a Custom URL may be another gateway, so it keeps its saved list.
@@ -198,7 +265,7 @@ export function projectStaleModelRosters(
     }
     if (!sameList(prov.models, entry.from)
       && !(entry.afterModelRenames && sameList(prov.models, entry.afterModelRenames))) continue;
-    prov.models = [...entry.to];
+    prov.models = [...entry.to, ...(entry.retain ?? []).filter(id => entry.from.includes(id) && !entry.to.includes(id))];
     fillExisting(prov.modelContextWindows, entry.contextWindows, added);
     fillExisting(prov.modelMaxOutputTokens, entry.maxOutputTokens, added);
     fillExisting(prov.modelDefaultReasoningEfforts, entry.defaultReasoningEfforts, added);

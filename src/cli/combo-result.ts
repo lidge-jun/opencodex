@@ -8,8 +8,9 @@ const ENUMS: Readonly<Record<string, readonly (string | null)[]>> = {
   defaultEffort: [null, "low", "medium", "high", "xhigh", "max", "ultra"],
   defaultEffortMode: ["fallback", "force"], reasoningEffortMode: ["strict", "adaptive"], jevEffortMode: ["decide", "client"],
   imageInput: ["auto", "disabled"], cooldownWaitPolicy: ["before-last-resort"],
+  capabilityPolicy: ["intersection", "union"], onUnservable: ["degrade", "reject"],
 };
-const STRINGS = new Set(["alias", "displayName", "description", "decisionProvider", "decisionModel"]);
+const STRINGS = new Set(["alias", "displayName", "description", "decisionProvider", "decisionModel", "revision"]);
 const RANGES: Readonly<Record<string, readonly [number, number]>> = {
   stickyLimit: [1, 100], cooldownMs: [1, 600_000], waitForCooldownMs: [0, 600_000],
   decisionTimeoutMs: [1_000, 120_000],
@@ -52,7 +53,8 @@ function publicCombo(value: unknown): Record<string, unknown> {
       if (!pin) invalid();
       result[key] = pin;
       continue;
-    } else if (key === "nativeAlias" || key === "allowMeteredTargets" || key === "decisionQuotaSignals") {
+    } else if (key === "nativeAlias" || key === "allowMeteredTargets" || key === "decisionQuotaSignals"
+      || key === "quotaOnlyFallback" || key === "preserveFallbackModel") {
       if (typeof child !== "boolean") invalid();
     } else invalid();
     result[key] = child;

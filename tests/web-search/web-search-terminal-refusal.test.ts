@@ -30,7 +30,8 @@ test.each(cases)("a refused web_search iteration stops and meters usage: %j", as
   const adapter: ProviderAdapter = {
     name: "mock-refusal",
     buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
-    fetchResponse: async () => {
+    fetchResponse: async (_req, ctx) => {
+      ctx?.onPhysicalSend?.({ ordinal: 1 });
       routedSends++;
       return new Response("ok", { status: path === "rotated" && routedSends === 2 ? 429 : 200 });
     },

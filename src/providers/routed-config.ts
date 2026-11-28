@@ -13,7 +13,7 @@ import { captureProviderApiKeySelection } from "./api-key-selection-capture";
 import { captureVertexEnvironmentKey } from "./vertex-environment-authority";
 import { assertProviderDestinationAllowed } from "../lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "../lib/redact";
-import { PROVIDER_REGISTRY, registryEntryForProviderDestination } from "./registry";
+import { PROVIDER_REGISTRY, registryEntryForProviderDestination, withoutRegistryStaticHeaderCopies } from "./registry";
 import { applyDirectReasoningEffortContracts, hasLegacyClinePassReasoningEfforts, registryInputModalitiesForDestination } from "./derive";
 import { cloneFastWire } from "./fastwire";
 import { fastSwitchOff } from "./fast-opt-in";
@@ -131,6 +131,7 @@ function snapshotVertexEnvironment(provider: OcxProviderConfig): OcxProviderConf
   };
 }
 
+/** Resolve registry defaults, destination capability maps, and credential snapshots for a provider row. */
 export function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
   provider = { ...provider, _apiKeyAttempt: provider._apiKeyAttempt ?? captureProviderApiKeySelection(provider) };
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
@@ -152,10 +153,16 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     const destination = registryEntryForProviderDestination(provider);
     const inputModalities = provider.inputModalities === undefined
       ? registryInputModalitiesForDestination(providerName, provider) : undefined;
+    const headers = withoutRegistryStaticHeaderCopies(registryEntry, provider);
+    const { headers: _savedHeaders, ...rest } = provider;
     return withAnthropicModelOutputCaps(snapshotVertexEnvironment({
-      ...provider,
+      ...rest,
+      ...(headers ? { headers } : {}),
       ...(inputModalities ? { inputModalities } : {}),
       apiKey: usableResolvedApiKey(provider.apiKey),
+      ...(destination?.modelReasoningEfforts ? {
+        modelReasoningEfforts: mapFill(destination.modelReasoningEfforts, provider.modelReasoningEfforts)[0],
+      } : {}),
       ...(destination?.modelDefaultReasoningEfforts ? {
         modelDefaultReasoningEfforts: mapFill(destination.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts)[0],
       } : {}),

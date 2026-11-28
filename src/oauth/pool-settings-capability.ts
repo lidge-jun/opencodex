@@ -34,10 +34,12 @@ export function poolSettingsCapability(name: string, provider: OcxProviderConfig
 
 export function parseGenericPoolStrategy(value: unknown, providerName?: string): GenericPoolStrategy | null {
   // reset-first is shared with the Codex pool, so it is named here rather than added to the
-  // three-name shared parser that the Anthropic kind also uses. least-loaded is Kiro-specific.
+  // Anthropic parser. least-loaded is Kiro-specific.
+  // reset-near-weighted is Codex and Anthropic only; the generic runtime does not run it.
   if (value === "reset-first") return value;
   if (value === "least-loaded") return providerName === "kiro" ? value : null;
-  return parseAccountPoolStrategy(value);
+  const parsed = parseAccountPoolStrategy(value);
+  return parsed === "reset-near-weighted" ? null : parsed;
 }
 
 export function parseKiroAccountCap(value: unknown): number | null {
@@ -90,6 +92,12 @@ export interface PoolSettingsDto {
   routes: AnthropicModelRoute[] | null;
   /** Anthropic preference, default true; null for unsupported pool kinds. */
   nativeMessages: boolean | null;
+  /**
+   * Same marker as {@link GenericPoolSettingsDto.inert}, with the same scope: it never describes
+   * `enabled`. Only the generic kind gates its selector fields on `pool.kernel`; the Codex and
+   * Anthropic selectors are not gated by it, so those kinds answer false.
+   */
+  inert: GenericPoolSettingsDto["inert"];
   /** Present only when stored Anthropic routes fail validation on read. */
   routesError?: string;
   /** Saved state confirmed despite a post-publication failure. */
@@ -174,6 +182,7 @@ export function unifiedPoolSettingsDto(
       maxConcurrentPerAccount: null,
       routes: null,
       nativeMessages: null,
+      inert: false,
     };
   }
   if (kind === "anthropic") {
@@ -184,12 +193,13 @@ export function unifiedPoolSettingsDto(
       enabled,
       enabledEffective: enabled === true,
       nativeMessages: !Object.hasOwn(pool, "nativeMessages") || pool.nativeMessages === true,
-      strategy: parseGenericPoolStrategy(pool.strategy) ?? "quota",
+      strategy: parseAccountPoolStrategy(pool.strategy) ?? "quota",
       stickyLimit: parseGenericStickyLimit(pool.stickyLimit) ?? 1,
       autoSwitchThreshold: parseGenericAutoSwitchThreshold(pool.autoSwitchThreshold) ?? 80,
       quotaWindow: typeof pool.quotaWindow === "string" ? pool.quotaWindow : "five-hour",
       maxConcurrentPerAccount: null,
       ...readAnthropicModelRoutes(pool.routes),
+      inert: false,
     };
   }
   const failover = config.providers?.[provider]?.oauthAccountFailover ?? {};
@@ -209,5 +219,6 @@ export function unifiedPoolSettingsDto(
     maxConcurrentPerAccount: provider === "kiro" ? parseKiroAccountCap(failover.maxConcurrentPerAccount) : null,
     routes: null,
     nativeMessages: null,
+    inert: config.pool?.kernel !== true,
   };
 }

@@ -45,10 +45,40 @@ let entryFactory: ProviderKeychainEntryFactory = defaultEntryFactory;
 const resolvedCache = new Map<string, string>();
 const warnedAccounts = new Set<string>();
 let resolutionGeneration = 0;
+// A digest and incarnation token retain passive ownership without retaining another secret copy.
+// Only a routing read can establish this proof; passive paths never read or populate the keychain.
+const passiveProofs = new Map<string, { digest: string; generation: number }>();
+let nextPassiveGeneration = 0;
+const MAX_PASSIVE_PROOFS = 512;
+
+function credentialDigest(value: string): string {
+  return new Bun.CryptoHasher("sha256").update(value).digest("hex");
+}
+
+/** Return the observed account incarnation, optionally requiring a match to the wire key. */
+export function passiveKeychainGeneration(reference: string, key?: string): number | undefined {
+  if (!isKeychainReference(reference)) return undefined;
+  const account = keychainAccount(reference);
+  const proof = passiveProofs.get(account);
+  if (!resolvedCache.has(account)) return undefined;
+  return proof && (key === undefined || proof.digest === credentialDigest(key)) ? proof.generation : undefined;
+}
+
+function rememberPassiveProof(account: string, value: string): void {
+  const digest = credentialDigest(value), previous = passiveProofs.get(account);
+  passiveProofs.delete(account);
+  passiveProofs.set(account, previous?.digest === digest ? previous : { digest, generation: ++nextPassiveGeneration });
+  if (passiveProofs.size > MAX_PASSIVE_PROOFS) passiveProofs.delete(passiveProofs.keys().next().value!);
+}
 
 /** Advances whenever cached secrets may have changed, so derived snapshots can rebuild. */
 export function providerKeyResolutionGeneration(): number {
   return resolutionGeneration;
+}
+
+/** Inspect a resolved routing credential without reading the OS, modifying the cache or publishing evidence. */
+export function peekResolvedProviderKey(value: string): string | undefined {
+  return isKeychainReference(value) ? resolvedCache.get(keychainAccount(value)) : undefined;
 }
 
 /** Test seam: swap the OS entry for an in-memory one and drop caches. */
@@ -56,14 +86,16 @@ export function setProviderKeychainEntryFactoryForTests(factory: ProviderKeychai
   entryFactory = factory ?? defaultEntryFactory;
   invalidateDecisionKeyQuotas();
   resolvedCache.clear();
+  passiveProofs.clear();
   resolutionGeneration++;
   warnedAccounts.clear();
 }
 
 /** Write-path seam: a store/restore mutated secrets, so cached reads and warnings are stale. */
-export function invalidateResolvedProviderKeyCache(): void {
+export function invalidateResolvedProviderKeyCache(options?: { preservePassiveKeychainProofs: true }): void {
   invalidateDecisionKeyQuotas();
   resolvedCache.clear();
+  if (!options?.preservePassiveKeychainProofs) passiveProofs.clear();
   resolutionGeneration++;
   warnedAccounts.clear();
 }
@@ -95,16 +127,16 @@ export function providerKeychainEntry(account: string): ProviderKeychainEntry {
   };
   return {
     getPassword: () => entry.getPassword(),
-    setPassword: password => publishCredentialSync(() => entry.setPassword(password), {
+    setPassword: password => publishCredentialSync(() => { passiveProofs.delete(account); entry.setPassword(password); }, {
       accounts: [account], absent: completed => completed ? [] : absent(),
     }),
     // Registered before the attempt, so a deletion that fails keeps the secret counted.
-    deletePassword: () => publishCredentialSync(() => entry.deletePassword(), { accounts: [account], absent }),
+    deletePassword: () => publishCredentialSync(() => { passiveProofs.delete(account); return entry.deletePassword(); }, { accounts: [account], absent }),
   };
 }
 
-function readKeychain(account: string, quiet = false): string | undefined {
-  const cached = resolvedCache.get(account);
+function readKeychain(account: string, quiet = false, useCache = true): string | undefined {
+  const cached = useCache ? resolvedCache.get(account) : undefined;
   if (cached !== undefined) return cached;
   let value: string | null = null;
   try {
@@ -113,10 +145,14 @@ function readKeychain(account: string, quiet = false): string | undefined {
     // fall through to the single warning below
   }
   if (typeof value === "string" && value.trim()) {
-    if (isGcpCredentialMaterial(value)) throw new Error("GCP credential JSON cannot be used as a literal API key; select a gcp-sa reference");
-    resolvedCache.set(account, value);
+    if (isGcpCredentialMaterial(value)) {
+      if (useCache) passiveProofs.delete(account);
+      throw new Error("GCP credential JSON cannot be used as a literal API key; select a gcp-sa reference");
+    }
+    if (useCache) { resolvedCache.set(account, value); rememberPassiveProof(account, value); }
     return value;
   }
+  if (useCache) passiveProofs.delete(account);
   if (!quiet && !warnedAccounts.has(account)) {
     warnedAccounts.add(account);
     console.warn(`[opencodex] provider key reference keychain:${account} could not be read from the OS keychain; requests for this provider have no credential until the keychain is available (no plaintext fallback)`);
@@ -133,6 +169,12 @@ export function resolveProviderApiKey(value: string | undefined): string | undef
   const resolved = isKeychainReference(value) ? readKeychain(keychainAccount(value)) : resolveEnvValue(value);
   observeDecisionKeyCredential(value, resolved);
   return resolved;
+}
+
+/** Resolve current display ownership without touching routing's cache, evidence, or warnings. */
+export function resolveProviderApiKeyPassively(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return isKeychainReference(value) ? readKeychain(keychainAccount(value), true, false) : resolveEnvValue(value);
 }
 
 /** The same resolution without the unreadable-reference warning, for observe-only callers. */

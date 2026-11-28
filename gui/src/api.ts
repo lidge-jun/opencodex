@@ -526,6 +526,14 @@ export function hasRememberedDashboardDevice(plane: ApiPlane): boolean {
   catch { return false; }
 }
 
+/** Sensitive Desktop operations never enter renewal, admin fallback or POST replay. */
+export function fetchDesktopSession(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+  if (!installed) return globalThis.fetch(input, init);
+  const state = runtime("machine"), url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+  if (!targetMatchesUrl(state.target, url)) return Promise.reject(new Error("desktop_target_changed"));
+  return fetchApiSessionValidation("machine", input, init);
+}
+
 function targetAbsoluteBase(target: ApiTarget): URL {
   return new URL(target.baseUrl || "/", window.location.href);
 }
@@ -553,6 +561,8 @@ function classify(input: RequestInfo | URL): { plane: ApiPlane; bootstrap: boole
   if (targets.shared.transport === "relay" && targetMatchesUrl(targets.shared, url)) return { plane: "shared", bootstrap: false };
   const machinePath = relativeTargetPath(targets.machine, url);
   if (machinePath?.startsWith("/api/machine/") || machinePath?.startsWith("/api/codex/desktop-compatibility/")) return { plane: "machine", bootstrap: false };
+  // A Remote Link Child serves its own link status and diagnostics beside /api/machine (#8985).
+  if (targets.link && (machinePath === "/api/link/status" || machinePath === "/api/link/diagnostics")) return { plane: "machine", bootstrap: false };
   const sharedPath = relativeTargetPath(targets.shared, url);
   if (sharedPath?.startsWith("/api/")) return { plane: "shared", bootstrap: false };
   if (url.href === new URL(targets.machine.bootstrapPath, window.location.href).href) return { plane: "machine", bootstrap: true };

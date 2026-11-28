@@ -5,7 +5,7 @@ import type { Root } from "react-dom/client";
 import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuthPanel";
 import { LanguageProvider } from "../src/i18n/provider";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
-import type { ProviderAuthHandlers } from "../src/components/provider-workspace/types";
+import type { OAuthAccountRow, ProviderAuthHandlers } from "../src/components/provider-workspace/types";
 import { captureApiTarget, configureApiTargets } from "../src/api";
 import { standaloneApiTargets } from "../src/api-targets";
 
@@ -39,6 +39,7 @@ function relayTargets(origin: string) {
 
 async function mountPanel(props: {
   item?: WorkspaceItem;
+  accounts?: OAuthAccountRow[];
   loginCapture?: ReturnType<typeof captureApiTarget>;
   hint?: { provider: string; instructions?: string };
 }) {
@@ -51,7 +52,7 @@ async function mountPanel(props: {
           item={props.item ?? item()}
           apiBase=""
           busy
-          accounts={[]}
+          accounts={props.accounts ?? []}
           accountLoadState="ready"
           loginCapture={props.loginCapture}
           loginHint={props.hint ?? { provider: (props.item ?? item()).name, instructions: "Complete manual login" }}
@@ -101,6 +102,30 @@ test("manual code uses the original login capture", async () => {
   expect(calls).toEqual(["/api/oauth/login/code"]);
 });
 
+test("cached Gemini quota keeps its timeout and distinct read timestamps in the table", async () => {
+  const now = Date.now();
+  await mountPanel({
+    item: item("google-antigravity"),
+    accounts: [{
+      id: "acct1", active: true, quotaMode: "probe", quotaUnavailable: true, quotaFailure: "timeout",
+      quotaReadAt: now - 2 * 60_000,
+      quota: { updatedAt: now - 10 * 60_000, customWindows: [{ label: "Gem", percent: 20 }] },
+    }],
+  });
+  const table = host.querySelector('[data-testid="account-quota-table"]')!;
+  expect(table.textContent).toContain("20% used");
+  expect(table.textContent).toContain("The quota request timed out.");
+  expect(table.textContent).toMatch(/Quota updated: 10m ago/);
+  expect(table.textContent).toMatch(/Last read: 2m ago/);
+  expect(table.textContent).not.toContain("Quota not read");
+});
+
+test("an unrecognized upstream tier renders as text in the quota table", async () => {
+  await mountPanel({ item: item("google-antigravity"), accounts: [{ id: "acct1", active: true, plan: "__proto__" }] });
+  const table = host.querySelector('[data-testid="account-quota-table"]')!;
+  expect(table.textContent).toContain("__proto__");
+});
+
 test("manual code without a login capture refuses instead of using the current target", async () => {
   let calls = 0;
   globalThis.fetch = (async () => { calls += 1; return Response.json({ ok: true }); }) as typeof fetch;
@@ -139,6 +164,11 @@ test("a cockpit import opened on A cannot post its document to B", async () => {
   const input = host.querySelector<HTMLInputElement>("#cockpit-import-file")!;
   Object.defineProperty(input, "files", { configurable: true, value: [file] });
   await act(async () => { input.dispatchEvent(new win.Event("change", { bubbles: true })); });
+  // The pick is held behind the Antigravity risk dialog; accepting it starts the import on A.
+  const dialog = host.querySelector("dialog")!;
+  await act(async () => { dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(); });
+  await act(async () => { dialog.querySelector<HTMLButtonElement>(".modal-actions .btn-primary")!.click(); });
+  expect(releaseText).toBeDefined();
   configureApiTargets(relayTargets("https://hub-b.example"));
   await act(async () => { releaseText(JSON.stringify({ accounts: [] })); await Promise.resolve(); });
   expect(posts).toBe(0);

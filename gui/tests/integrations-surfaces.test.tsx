@@ -55,6 +55,7 @@ type JournalRow = {
 };
 
 let stateResponse: () => Response;
+let advisorResponse: () => Response;
 let journalRows: JournalRow[];
 let putResponse: (request: RecordedRequest) => Response;
 let codexRoutingResponse: () => Response;
@@ -130,6 +131,7 @@ beforeEach(() => {
   mountCount += 1;
   apiBase = `http://ocx-test-${mountCount}.invalid`;
   stateResponse = () => json(status());
+  advisorResponse = () => json(null, 404);
   putResponse = () => json({ ok: true, clientId: "hermes", changed: true, state: "absent", message: "disabled" });
   codexRoutingResponse = () => json({ routingInjected: false, status: "native", recommendedCommand: null });
   codexDesiredEnabled = true;
@@ -153,6 +155,7 @@ beforeEach(() => {
       body: init?.body ? JSON.parse(String(init.body)) : undefined,
     };
     requests.push(request);
+    if (url.endsWith("/api/advisor/settings")) return advisorResponse();
     if (url.endsWith("/api/client-integrations/restore/preview")) return json(previewPlan("restore"));
     if (url.endsWith("/api/client-integrations/preview")) {
       const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
@@ -242,7 +245,7 @@ afterEach(async () => {
 
 async function mountClient(
   active = true,
-  client: "hermes" | "dsh" | "kilo" | "droid" = "hermes",
+  client: "hermes" | "dsh" | "kilo" | "droid" | "qoder" = "hermes",
 ): Promise<void> {
   const [{ createRoot }, { LanguageProvider }, { default: FileIntegrationPage }] = await Promise.all([
     import("react-dom/client"),
@@ -259,6 +262,23 @@ async function mountClient(
   });
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
 }
+
+test("Advisor installation notes appear only after Qoder is mounted", async () => {
+  stateResponse = () => json(status({ clientId: "qoder", configPath: "/tmp/qoder/settings.json" }));
+  advisorResponse = () => json({ settings: { enabled: true, autoMountMcp: true, mcpClients: null }, runnable: true,
+    mcpClients: [{ clientId: "qoder", mounted: false, defaultAutoMount: true, configPath: "/tmp/qoder/settings.json" }] });
+  await mountClient(true, "qoder");
+  expect(container.textContent).toContain("will also register");
+  expect(container.textContent).not.toContain("Written to Qoder settings.json");
+});
+
+test("mounted Qoder retains Advisor installation guidance", async () => {
+  stateResponse = () => json(status({ clientId: "qoder", configPath: "/tmp/qoder/settings.json" }));
+  advisorResponse = () => json({ settings: { enabled: true, autoMountMcp: true }, runnable: true,
+    mcpClients: [{ clientId: "qoder", mounted: true, defaultAutoMount: true, configPath: "/tmp/qoder/settings.json" }] });
+  await mountClient(true, "qoder");
+  expect(container.textContent).toContain("Written to Qoder settings.json");
+});
 
 /**
  * Mount again inside ONE test, against a fresh fixture.

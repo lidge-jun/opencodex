@@ -50,12 +50,13 @@ import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import {
   decodeValidatedImageBase64,
   fetchPublicHttpsImage,
+  MAX_DECODED_BYTES_PER_IMAGE,
   MAX_ENCODED_BYTES_PER_IMAGE,
   sniffImageExtension,
   type PinnedDownloadFn,
 } from "../images/artifacts";
 import { findXaiProvider, resolveXaiImageAuthToken } from "../images/plan";
-import { callXaiImages } from "../images/xai-client";
+import { callXaiImages, XAI_DEFAULT_IMAGE_MODEL, XAI_MAX_EDIT_IMAGES } from "../images/xai-client";
 import type { AdmissionLease } from "../lib/admission";
 import { codexAccountSelectionForTurn } from "./lifecycle";
 import { codexModelAvailabilityErrorResponse } from "./responses/codex-auth-error";
@@ -80,6 +81,12 @@ const IMAGES_UPSTREAM_TIMEOUT_MS = 300_000;
  * combined decoded-byte and base64-encoded output budget across the whole batch.
  */
 export const IMAGES_RESPONSE_MAX_BYTES = 100 * 1024 * 1024;
+
+/**
+ * xAI edit requests are rebuilt as JSON after ingress parsing. Keep that second request-sized
+ * allocation below the shared 256 MiB default even when an operator raises the general cap.
+ */
+export const XAI_EDIT_MAX_REQUEST_BYTES = 100 * 1024 * 1024;
 
 interface ImageResponseBytesOptions {
   signal?: AbortSignal;
@@ -131,7 +138,82 @@ export async function readImageResponseBytes(
 }
 
 const CCA_IMAGE_MODEL = "gemini-3.1-flash-image";
-const XAI_IMAGE_BRIDGE_MODEL = "grok-imagine-image-quality";
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/** An edit source xAI can fetch: an https URL without credentials, or a canonical image data URL. */
+function isXaiEditSourceUrl(value: string, start: number): boolean {
+  if (start > 0) {
+    if (value.length === start || (value.length - start) % 4 !== 0) return false;
+    const nonAlphabet = /[^A-Za-z0-9+/]/g;
+    nonAlphabet.lastIndex = start;
+    const firstNonAlphabet = nonAlphabet.exec(value)?.index;
+    if (firstNonAlphabet === undefined) return true;
+    const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+    if (firstNonAlphabet !== value.length - padding) return false;
+    // Canonical padding leaves four unused bits before "==" or two before "=".
+    const lastSextet = BASE64_ALPHABET.indexOf(value[firstNonAlphabet - 1]!);
+    return (lastSextet & (padding === 2 ? 0x0f : 0x03)) === 0;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname !== "" && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+/** Collect every caller-supplied source before authentication or outbound serialization. */
+export function collectXaiEditSources(
+  obj: Record<string, unknown>,
+  limits: { maxDecodedBytesPerImage: number; maxAggregateEncodedBytes: number } = {
+    maxDecodedBytesPerImage: MAX_DECODED_BYTES_PER_IMAGE,
+    maxAggregateEncodedBytes: XAI_EDIT_MAX_REQUEST_BYTES,
+  },
+): { sources: string[]; unusable: boolean; oversized: boolean } {
+  const sources = new Set<string>();
+  let unusable = false;
+  let oversized = false;
+  let aggregateEncodedBytes = 0;
+  const add = (value: unknown) => {
+    const url = typeof value === "string" ? value.trim() : "";
+    const headerLength = /^data:image\/(?:png|jpeg|jpg|webp);base64,/i.exec(url)?.[0].length ?? 0;
+    const encodedBytes = headerLength ? url.length - headerLength : 0;
+    if (encodedBytes > 4 * Math.ceil(limits.maxDecodedBytesPerImage / 3)) { oversized = true; return; }
+    if (sources.has(url)) return;
+    if (!isXaiEditSourceUrl(url, headerLength)) { unusable = true; return; }
+    if (headerLength) {
+      const padding = url.endsWith("==") ? 2 : url.endsWith("=") ? 1 : 0;
+      if (encodedBytes / 4 * 3 - padding > limits.maxDecodedBytesPerImage) { oversized = true; return; }
+    }
+    if (encodedBytes > limits.maxAggregateEncodedBytes - aggregateEncodedBytes) {
+      oversized = true;
+      return;
+    }
+    // One extra source records overflow. Later entries are still inspected so none are dropped.
+    if (sources.size <= XAI_MAX_EDIT_IMAGES) {
+      sources.add(url);
+      aggregateEncodedBytes += encodedBytes;
+    }
+  };
+  if (obj.image !== undefined) add(obj.image);
+  if (obj.image_url !== undefined) add(obj.image_url);
+  if (obj.images !== undefined) {
+    if (!Array.isArray(obj.images)) unusable = true;
+    else for (const entry of obj.images) {
+      if (typeof entry === "string") { add(entry); continue; }
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) { unusable = true; continue; }
+      const rec = entry as Record<string, unknown>;
+      if (rec.image_url === undefined && rec.url === undefined) { unusable = true; continue; }
+      if (rec.image_url !== undefined) {
+        const nested = rec.image_url;
+        if (nested && typeof nested === "object" && !Array.isArray(nested)) add((nested as Record<string, unknown>).url);
+        else add(nested);
+      }
+      if (rec.url !== undefined) add(rec.url);
+    }
+  }
+  return { sources: [...sources], unusable, oversized };
+}
 
 /**
  * The model this request names, or undefined when it names none.
@@ -481,18 +563,16 @@ async function tryCcaImageGeneration(
  * Codex's client-side image_gen POSTs here. When the Grok Imagine bridge is
  * opted in, send that request to api.x.ai instead of ChatGPT.
  */
-async function tryXaiImageRelay(
+async function handleXaiImageRelay(
   body: unknown,
   config: OcxConfig,
+  found: NonNullable<ReturnType<typeof findXaiProvider>>,
   logCtx: RequestLogContext,
   signal: AbortSignal | undefined,
   endpoint: ImagesEndpoint,
   admission: DataPlaneAdmission | undefined,
-): Promise<Response | undefined> {
-  if (config.images?.bridgeEnabled !== true) return undefined;
-  const found = findXaiProvider(config);
-  if (!found) return undefined;
-  const bridgeModel = config.images?.bridgeModel ?? XAI_IMAGE_BRIDGE_MODEL;
+): Promise<Response> {
+  const bridgeModel = config.images?.bridgeModel ?? XAI_DEFAULT_IMAGE_MODEL;
   // The bridge sends this request to the configured xAI provider and the bridge
   // model regardless of the selector in the body, so that is what the key is
   // checked against.
@@ -515,20 +595,18 @@ async function tryXaiImageRelay(
   const quality = typeof obj.quality === "string" ? obj.quality : undefined;
   const aspectRatio = typeof obj.aspect_ratio === "string" ? obj.aspect_ratio : undefined;
   let imageUrl: string | undefined;
+  let imageUrls: string[] | undefined;
   if (endpoint === "edits") {
-    const images = obj.images;
-    const first = Array.isArray(images) ? images[0] : undefined;
-    if (typeof obj.image === "string") imageUrl = obj.image;
-    else if (typeof obj.image_url === "string") imageUrl = obj.image_url;
-    else if (first && typeof first === "object" && first !== null) {
-      const rec = first as Record<string, unknown>;
-      if (typeof rec.image_url === "string") imageUrl = rec.image_url;
-      else if (typeof rec.url === "string") imageUrl = rec.url;
-    }
-    if (!imageUrl?.trim()) {
-      return formatErrorResponse(400, "invalid_request_error", "image edits require an image URL");
-    }
-    imageUrl = imageUrl.trim();
+    // Every supplied source must be a usable URL: silently dropping one would buy an edit
+    // missing an image the caller sent. xAI takes a public https URL or a base64 image data URL;
+    // an explicit null counts as supplied.
+    const collected = collectXaiEditSources(obj);
+    if (collected.unusable) return formatErrorResponse(400, "invalid_request_error", "xAI image edits need every image as a URL");
+    if (collected.oversized) return formatErrorResponse(400, "invalid_request_error", "xAI image edit inline data exceeds the size limit");
+    // Same rule as callXaiImages: duplicates collapse first, then the five-source limit applies.
+    if (collected.sources.length > XAI_MAX_EDIT_IMAGES) return formatErrorResponse(400, "invalid_request_error", "xAI image edits accept at most 5 images");
+    [imageUrl, ...imageUrls] = collected.sources;
+    if (!imageUrl) return formatErrorResponse(400, "invalid_request_error", "image edits require an image URL");
   }
   const timeoutMs = config.images?.timeoutMs ?? IMAGES_UPSTREAM_TIMEOUT_MS;
   const linkedSignal = signalWithTimeout(timeoutMs, signal);
@@ -557,6 +635,7 @@ async function tryXaiImageRelay(
         quality,
         aspectRatio,
         imageUrl,
+        imageUrls,
       },
       { baseUrl: "https://api.x.ai/v1", token },
       linkedSignal.signal,
@@ -655,22 +734,24 @@ export async function handleImages(
   turnAdmissionLease?: AdmissionLease,
   admission?: DataPlaneAdmission,
 ): Promise<Response> {
+  // The standalone bridge destination is selected by configuration before reading the body.
+  // An explicit provider owns its route, including its own validation errors.
+  const xai = config.images?.provider === undefined && config.images?.bridgeEnabled === true
+    ? findXaiProvider(config) : undefined;
+  const configuredLimit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
+  const fixedEditLimit = !!xai && endpoint === "edits" && configuredLimit >= XAI_EDIT_MAX_REQUEST_BYTES;
+  const bodyLimit = fixedEditLimit ? XAI_EDIT_MAX_REQUEST_BYTES : configuredLimit;
   let body: unknown;
   try {
-    body = await readJsonRequestBody(req, undefined, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
+    body = await readJsonRequestBody(req, undefined, bodyLimit);
   } catch (err) {
-    return decodeRequestErrorResponse(err, "images");
+    return decodeRequestErrorResponse(err, "images", fixedEditLimit ? "xai-edit" : undefined);
   }
   const model = (body as { model?: unknown } | null)?.model;
   if (typeof model === "string" && model) logCtx.model = model;
 
+  if (xai) return handleXaiImageRelay(body, config, xai, logCtx, req.signal, endpoint, admission);
   const candidates = selectImagesProvider(config);
-  // Explicit images.provider owns the route, including its validation errors.
-  // Do not divert that selection to the xAI Imagine relay.
-  if (config.images?.provider === undefined) {
-    const xaiRelay = await tryXaiImageRelay(body, config, logCtx, req.signal, endpoint, admission);
-    if (xaiRelay) return xaiRelay;
-  }
   if (candidates.error && (config.images?.provider !== undefined || !candidates.paused)) {
     return formatErrorResponse(candidates.paused ? 403 : 400, candidates.paused ? "permission_error" : "invalid_request_error", candidates.error);
   }

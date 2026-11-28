@@ -33,13 +33,14 @@ import {
 } from "../../oauth";
 import { getAccountSet } from "../../oauth/store";
 import { mayResolveModelsOAuth } from "../../oauth/model-discovery-auth";
+import { buildVertexProviderModelsRequest, captureVertexDiscoveryCredentialIdentity } from "../../providers/google-vertex-model-discovery";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider, type ModelMetadata } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
-import { applyRegistryCapabilitySeedFill } from "./model-hints";
+import { applyRegistryCapabilitySeedFill, captureCatalogModelPolicy } from "./model-hints";
 import {
   captureFastPolicyAuthority,
   fastPolicyForModel,
@@ -120,6 +121,7 @@ export interface CatalogGatherProviderModelOutcome {
   readonly state: "authoritative" | "degraded";
 }
 export interface ModelsAuthResolution {
+  readonly m365?: import("../../oauth/types").M365CopilotWebSession;
   readonly workbuddy?: import("../../oauth/types").WorkBuddyOAuthMetadata;
   readonly apiKey: string | undefined;
   readonly observed: boolean;
@@ -129,6 +131,8 @@ export interface ModelsAuthResolution {
   readonly oauthGeneration?: string;
   readonly oauthApiBaseUrl?: string;
   readonly oauthProjectId?: string;
+  /** Vertex discovery credential bound to its authority (passive gathers). */
+  readonly vertexAuth?: import("../../providers/google-vertex-model-discovery").VertexDiscoveryAuth;
 }
 
 export type ModelsAuthResolver =
@@ -332,6 +336,7 @@ export function captureTrustedOpenAiApiPolicy(
   });
 }
 
+/** Capture credential-free and sentinel-bearing model discovery requests for flight deduplication. */
 export function captureModelsRequest(
   name: string,
   provider: OcxProviderConfig,
@@ -339,8 +344,10 @@ export function captureModelsRequest(
   workbuddy?: import("../../oauth/types").WorkBuddyOAuthMetadata,
 ): CapturedModelsRequest {
   const observed = { oauthApiBaseUrl, workbuddy };
-  const withoutCredential = buildModelsRequest(provider, undefined, name, observed);
-  const withCredential = buildModelsRequest(provider, REQUEST_CREDENTIAL_SENTINEL, name, observed);
+  const withoutCredential = buildVertexProviderModelsRequest(name, provider, undefined)
+    ?? buildModelsRequest(provider, undefined, name, observed);
+  const withCredential = buildVertexProviderModelsRequest(name, provider, REQUEST_CREDENTIAL_SENTINEL)
+    ?? buildModelsRequest(provider, REQUEST_CREDENTIAL_SENTINEL, name, observed);
   const method = withoutCredential.method ?? "GET";
   if (withoutCredential.url !== withCredential.url || method !== (withCredential.method ?? "GET")) {
     throw new TypeError(`Provider model discovery URL for ${name} depends on credential bytes.`);
@@ -385,6 +392,7 @@ export function captureProviderGather(
   // explicit {}. enrichProviderFromRegistry already preserves/fills that contract; replacing it
   // with the resolver's per-key registry fill would turn "no configured default" into a seed default.
   const provider = recursivelyFreeze(enriched);
+  captureCatalogModelPolicy(name, provider);
   const fastPolicyAuthority = captureFastPolicyAuthority(
     name,
     provider,
@@ -456,6 +464,7 @@ export function captureProviderGather(
 export function captureGatherFlight(
   config: OcxConfig,
   createAuthResolver: ModelsAuthResolverFactory,
+  onlyProvider?: string,
 ): GatherFlightCapture {
   const providerAuthOutcomes: CatalogGatherProviderAuthOutcome[] = [];
   const authResolver = createAuthResolver(providerAuthOutcomes);
@@ -463,7 +472,8 @@ export function captureGatherFlight(
   const providers = Object.entries(config.providers)
     // A decision service (canonical TypeSafe or a self-hosted `jev-decision` row) owns no model
     // transport: never probe its endpoint for /models and never publish its model id as routable.
-    .filter(([, provider]) => provider.disabled !== true && provider.adapter !== "jev-decision")
+    .filter(([name, provider]) => provider.disabled !== true && provider.adapter !== "jev-decision"
+      && (onlyProvider === undefined || name === onlyProvider))
     .map(([name, provider]) => captureProviderGather(
       name,
       provider,
@@ -484,6 +494,12 @@ export function captureGatherFlight(
       liveModels: provider.provider.liveModels ?? null,
       credential: provider.provider.apiKey ?? null,
       observedAuth: provider.observedAuth ?? null,
+      // Vertex credential incarnations can change with identical config and API-key bytes.
+      vertexCredentialIdentity: onlyProvider === undefined && provider.provider.authMode !== "forward"
+        && provider.provider.authMode !== "oauth" && provider.provider.liveModels !== false
+        && effectiveGoogleMode(provider.name, provider.provider) === "vertex"
+        ? captureVertexDiscoveryCredentialIdentity(provider.provider, authResolver.kind === "refreshing")
+        : undefined,
       oauthAccount: provider.refreshingOAuthAccountId ?? null,
       headers: provider.request.headersWithCredential,
       url: provider.request.url,

@@ -117,11 +117,12 @@ describe("bundled desktop update surface", () => {
     await settle();
     expect(nodes.get("error")?.textContent).toContain("600000 ms");
     expect(nodes.get("install")?.disabled).toBe(true);
+    expect(nodes.get("manual")?.hidden).toBe(true);
   });
   test("a failed download offers the known version's manual installer", async () => {
     const status = { currentVersion: "2.65.0", latestVersion: "2.66.0-preview.1", available: true, installing: false, checking: false };
     const { nodes, handlers } = evaluatePage(name => name === "update_install"
-      ? Promise.reject(new Error("download failed")) : Promise.resolve(status));
+      ? Promise.reject({ message: "download failed", manualDownload: true }) : Promise.resolve(status));
     await settle();
     handlers.get("install:click")?.();
     await settle();
@@ -134,7 +135,7 @@ describe("bundled desktop update surface", () => {
   test("an install failure without a known version has no manual hint", async () => {
     const status = { currentVersion: "2.65.0", latestVersion: null, available: true, installing: false, checking: false };
     const { nodes, handlers } = evaluatePage(name => name === "update_install"
-      ? Promise.reject(new Error("install failed")) : Promise.resolve(status));
+      ? Promise.reject({ message: "install failed", manualDownload: true }) : Promise.resolve(status));
     await settle();
     handlers.get("install:click")?.();
     await settle();
@@ -144,8 +145,11 @@ describe("bundled desktop update surface", () => {
   });
   test("navigation and check failures clear a previous manual hint", async () => {
     const status = { currentVersion: "2.65.0", latestVersion: "2.66.0", available: true, installing: false, checking: false };
-    const { nodes, handlers } = evaluatePage(name => name === "update_status"
-      ? Promise.resolve(status) : Promise.reject(new Error(name + " failed")));
+    const { nodes, handlers } = evaluatePage(name => {
+      if (name === "update_status") return Promise.resolve(status);
+      if (name === "update_install") return Promise.reject({ message: "download failed", manualDownload: true });
+      return Promise.reject(new Error(name + " failed"));
+    });
     await settle();
     handlers.get("install:click")?.();
     await settle();
@@ -158,6 +162,25 @@ describe("bundled desktop update surface", () => {
     await settle();
     expect(nodes.get("error")?.textContent).toBe("update_check failed");
     expect(nodes.get("manual")?.hidden).toBe(true);
+  });
+  test("a runtime refusal survives a failed status refresh without offering a manual install", async () => {
+    const status = { currentVersion: "2.65.0", latestVersion: "2.66.0", available: true, installing: false, checking: false };
+    const message = "The update was downloaded and verified, but the running proxy could not be identified. Installation has not started.";
+    let attempted = false;
+    const { nodes, handlers } = evaluatePage(name => {
+      if (name === "update_install") {
+        attempted = true;
+        return Promise.reject({ message, manualDownload: false });
+      }
+      return attempted ? Promise.reject(new Error("unavailable")) : Promise.resolve(status);
+    });
+    await settle();
+    await handlers.get("install:click")?.();
+    expect(nodes.get("error")?.textContent).toBe(message);
+    expect(nodes.get("manual")?.hidden).toBe(true);
+    expect(nodes.get("state")?.textContent).toContain("Check again");
+    expect(nodes.get("install")?.disabled).toBe(true);
+    expect(nodes.get("check")?.disabled).toBe(false);
   });
   test("a page check superseded by a tray check stays checking until the tray result settles", async () => {
     const current = { currentVersion: "2.65.0", latestVersion: null, available: false, installing: false, checking: false };

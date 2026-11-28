@@ -47,6 +47,8 @@ Host devbox
 
 连接会重启这台电脑上的 OpenCodex。已在运行的 Codex 请求会先完成，重启期间新的请求可能在最多一分钟内失败。随后控制台会自动重新加载并显示子机链接。Codex 继续使用这台电脑上的 `http://127.0.0.1:<port>/v1`，无需设置令牌或环境变量：本地 OpenCodex 会把每个请求转发给主机，由主机用它自己的提供商和账户提供服务。
 
+如果通过 CLI 重启失败且无法恢复原有监听器，OpenCodex 会报告恢复失败。请在子机运行 `ocx start`，并检查 `~/.opencodex/restart-handoff.log`。从控制台断开连接时，如果锁被占用，OpenCodex 会重试最多 30 秒。如果锁仍未释放，独立进程不会启动。请运行 `ocx status` 检查状态，再重启 OpenCodex。
+
 如果 **Child** 提示先配对这台电脑，请在这台电脑上打开配置的 HTTP 回环 IP 地址控制台，例如 `http://127.0.0.1:<configured-port>`。只有在缺少配对且控制台与 API 使用同一个回环源时，才会显示本地配对表单。复制表单中的 `ocx gui pair --origin "http://127.0.0.1:<configured-port>"` 命令，在这台电脑的终端中运行，再将一次性代码粘贴到表单中。必须使用表单显示的确切源；提供商 API 密钥或管理员令牌不是配对代码。缺少配对与配置端口不匹配是不同的原因。
 
 选择 **Child** 角色还要求 OpenCodex 以独立运行模式在其配置的端口上运行，因为子机会在正好这个端口上重启。如果控制台提示 OpenCodex 未在其配置的端口上运行，请先在该端口上重启它。
@@ -84,6 +86,7 @@ ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
+ocx link recover (--link-id <id> | --operation-id <id>) [--json]
 ocx link reconnect --link-id <id> [--json]
 ocx link check (--link-id <id> | --all) [--no-wait] [--json]
 ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
@@ -98,7 +101,31 @@ ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wai
 
 ### 从 Home 操作子机
 
-`ocx link sync`、`ocx link restart-codex` 和 `ocx link update` 通过链接的 SSH 连接在由 Home 添加的子机上运行，并以 JSON 输出任务。`sync` 运行固定的 `ocx sync --expect-link`（子机需 2.93.0 或更高版本）。`restart-codex` 先同步，再重启子机上的 Codex app-server，使正在运行的 Codex 加载当前目录；`--scope codex` 还会重新启动桌面应用。重启只能指定一个链接；`restart-codex` 和 `--restart-codex` 需要 `--yes`，而 `ocx link sync --link-id <id> --restart-app-server-only` 无需确认即可重启 app-server。当 Home 正在为该子机中继模型请求时，重启会被跳过（`restart-skipped:link-active`）。对于早于 2.69 的子机，非流式请求要到响应开始后才能被看到。`update --yes` 使用子机自己的更新程序把子机的 OpenCodex 更新到本 Home 的版本，绝不会更新到其他版本（子机需 2.97.0 或更高版本；npm 和 pnpm 安装通过其 Node 启动器应用更新，因此 `ocx link check` 也会在那里以只读方式运行 `node --version`）。每次更新一台子机，应用成功、失败或回滚后会再次同步；结果未知的应用不会重试也不会同步，请用 `ocx link check` 检查。正在为该子机中继的请求会中断。Windows 子机只支持 `sync`，`ocx-child` 子机会将重启和更新报告为不支持。CLI 需要绑定到 loopback 的 Home；在其他 Home 上无法执行这些操作，仪表盘也不提供这些操作。详情和退出码见 [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)（英文）。 此保护为尽力而为：在检查与重启之间开始的请求仍可能被结束，因此需要保留轮次时，请先暂停该子机上的新请求。 `ocx sync --restart-children`（或 `--restart-children=codex --yes`）在 Home 同步向外传播时，对所有子机或用 `--child <linkId>` 指定的子机应用同一规则：每台子机都会同步，只有在有中继请求进行时才跳过其重启（`restart-skipped:link-active`）。
+`ocx link sync`、`ocx link restart-codex` 和 `ocx link update` 通过链接的 SSH 连接在由 Home 添加的子机上运行，并以 JSON 输出任务。`sync` 运行固定的 `ocx sync --expect-link`（子机需 2.93.0 或更高版本）。`restart-codex` 先同步，再重启子机上的 Codex app-server，使正在运行的 Codex 加载当前目录；`--scope codex` 还会重新启动桌面应用。重启只能指定一个链接；`restart-codex` 和 `--restart-codex` 需要 `--yes`，而 `ocx link sync --link-id <id> --restart-app-server-only` 无需确认即可重启 app-server。当 Home 正在为该子机中继模型请求时，重启会被跳过（`restart-skipped:link-active`）。对于早于 2.69 的子机，非流式请求要到响应开始后才能被看到。`update --yes` 使用子机自己的更新程序把子机的 OpenCodex 更新到本 Home 的版本，绝不会更新到其他版本（子机需 2.97.0 或更高版本；npm 和 pnpm 安装通过其 Node 启动器应用更新，因此 `ocx link check` 也会在那里以只读方式运行 `node --version`）。每次更新一台子机，应用成功、失败或回滚后会再次同步；结果未知的应用不会重试也不会同步，请用 `ocx link check` 检查。正在为该子机中继的请求会中断。Windows 子机只支持 `sync`，`ocx-child` 子机会将重启和更新报告为不支持。CLI 需要绑定到 loopback 的 Home；在其他 Home 上无法执行这些操作，仪表盘的 Remote Link 页面会为由 Home 添加的子机提供相同的操作。详情和退出码见 [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)（英文）。 此保护为尽力而为：在检查与重启之间开始的请求仍可能被结束，因此需要保留轮次时，请先暂停该子机上的新请求。 Home 也无法判断 Codex 是否正处在运行工具而非模型请求的轮次中，因此在重启该子机上的 Codex 或更新其 OpenCodex 之前，请等待进行中的 Codex 轮次结束。手动更新会重启该子机的 OpenCodex，并结束仍为其中继的任何轮次；自动更新会等到子机空闲。 `ocx sync --restart-children`（或 `--restart-children=codex --yes`）在 Home 同步向外传播时，对所有子机或用 `--child <linkId>` 指定的子机应用同一规则：每台子机都会同步，只有在有中继请求进行时才跳过其重启（`restart-skipped:link-active`）。
+
+### 子机版本与操作
+
+在 Home 上，每个 Remote Link 行都会显示 Home 最后获知的该子机信息，由 Home 添加的行还带有对该子机的控件。徽标含义如下：
+
+- 子机版本，以及旁边的 `Behind Home (<home version>)`、`Same version as Home` 或 `Newer than Home`；可以应用更新时还会显示 `Update available: <home version>`。从子机自身仪表盘启动的链接只显示版本，没有版本差异徽标；`ocx-child` 子机始终显示 `unknown`。
+- 安装类型（`Desktop app`、`GOAT`、`Source checkout`），本版本未命名的类型以等宽字体显示原始标记。
+- `Catalog current` 或 `Catalog out of date`。`Codex restart needed (<n>)` 与 `Codex not running` 徽章只有在 Child 报告其 Codex 状态后才会出现，该报告将由后续版本加入；目前还没有 Child 版本会发送它，因此这两个徽章现在还不会显示。
+- 上一次操作，显示为 `Last <operation>: <state>`，原因以等宽字体显示；任务占用该链接期间显示正在运行的操作。
+
+当 Home 无法自行更新该子机时，该行会说明应改做什么：在该子机的 OpenCodex Desktop 中使用 Check for Updates、手动更新、通过 `mise` 更新，或交给 GOAT 处理。未知原因会以标记显示，而不是猜测的句子。
+
+这四个操作启动与 CLI 相同的任务，因此子机也需要相同的版本：
+
+- **Check** 像 `ocx link check` 一样读取子机的安装信息。
+- **Sync now** 在该处像 `ocx link sync` 一样运行固定版本的 `ocx sync --expect-link`。
+- **Restart Codex** 会打开范围选择。`Codex app-servers` 重启子机的后台 app-server，使其加载当前目录；它不会刷新 Codex 桌面应用自身的 app-server，因此这种情况请重启桌面应用。`Codex desktop app` 还会退出并重新启动桌面应用，其中打开的对话会结束。
+- **Update** 像 `ocx link update` 一样，用子机自身的更新程序把子机的 OpenCodex 更新到本 Home 的版本。确认文字会说明子机的 OpenCodex 会重启、仍为该子机中继的任何轮次会结束，并且自动更新会等到子机空闲。
+
+**Check all** 和 **Update all** 作用于所有符合条件的 Home 添加链接；Update all 仍然一次只处理一台子机，且绝不针对其他版本。正在运行的任务会为每台子机显示一行，包含状态、更新前后的版本、目录同步结果和重启结果。任务结束后面板消失，各行刷新；Home 已不再知道的任务（因为 Home 重启过）会如此说明，并以各行自身的状态作为答案。任务占用链接期间，该行的操作和 Disconnect 会被禁用；服务器本来也会拒绝该请求。
+
+列表下方的 **Child automation** 面板显示并编辑与 `ocx link policy` 相同的策略文件：目录分发（默认自动）、Codex 重启（默认从不）、更新（默认空闲时自动，本版本尚未启用）以及空闲时长。保存时只写入你更改过的值。如果策略文件已损坏，面板会说明自动目录分发和自动更新已关闭，此时保存会写入全部设置，使你选择的模式得以保留。这些控件不会绕过服务器：服务器会在每个任务中重新检查策略、链接状态和子机活动。
+
+不要链接你不拥有的机器：Home 会用你的 SSH 密钥在那里运行命令。
 
 ### 目录自动分发与子机策略
 

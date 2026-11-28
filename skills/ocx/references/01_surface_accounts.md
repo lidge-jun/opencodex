@@ -8,11 +8,11 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 43.
+Declared capabilities: 44.
 
 ### `ocx account login`
 
-Usage: `ocx account login <provider> [--id <account-id>] [--reauth] [--device] [--method <builder-id|google|github>] [--code -] [--no-wait] [--open-browser <on|off>] [--add-account <on|off>] [--json]`
+Usage: `ocx account login <provider> [--id <account-id>] [--reauth] [--device] [--method <builder-id|google|github>] [--code -] [--no-wait] [--open-browser <on|off>] [--add-account <on|off>] [--accept-antigravity-risk] [--json]`
 
 Log in to an OAuth provider; Kiro can add a native device account.
 
@@ -31,15 +31,17 @@ State-changing: yes. JSON mode: `payload`.
 |---|---|---|
 | `--id` | string | Account ID; provider OAuth requires --reauth when supplied. |
 | `--reauth` | boolean | Reauthenticate an existing account. |
-| `--device` | boolean | Codex device flow; accepted for already-device-native kimi, nous and github-copilot. |
+| `--device` | boolean | Codex device flow or xAI device authorization; a no-op for already-device-native kimi, nous and github-copilot. |
 | `--method` | string | Kiro only: builder-id, google or github; add-only and incompatible with --reauth, --id, --device or --code. |
 | `--code` | string | Use - to read authorization material from stdin. |
 | `--no-wait` | boolean | Return after flow start. |
-| `--json` | boolean | Emit the command result as JSON. |
+| `--json` | boolean | Emit the command result as JSON; xAI --device requires --no-wait. |
 | `--open-browser` | string | on or off for browser-capable login; rejected for explicit/native device flows. |
 | `--add-account` | string | Fresh generic OAuth login only: on forces a fresh flow, off permits existing import preference. Not supported with reauth/Codex/Kiro method. |
+| `--accept-antigravity-risk` | boolean | google-antigravity only: accept the Google account-ban risk without the interactive y/N prompt. |
 
 - openai, codex and chatgpt address the Codex pool. Native main uses the separate account main reauth flow.
+- google-antigravity (login and reauth) prints an account-ban warning and needs a y answer on a terminal or --accept-antigravity-risk; otherwise it is refused before any request. Agent-driven runs are refused even with the flag (AGENTS_INSTALL.md).
 - Login is a human authorization handoff. Codes, verification material and credentials must not be copied into agent transcripts. Legacy argv code input warns about exposure; use stdin.
 - No --live flag is implemented. Provider OAuth --id requires --reauth; --method is Kiro add-only.
 - Omitted options preserve each flow's existing defaults. Explicit browser flags are refused for Codex device, known native-device providers and native Kiro method; add-account is refused for reauth/Codex/Kiro method.
@@ -246,7 +248,7 @@ State-changing: yes. JSON mode: `envelope`.
 
 ### `ocx account strategy`
 
-Usage: `ocx account strategy <provider> [quota|round-robin|fill-first|least-loaded|reset-first] [--json]`
+Usage: `ocx account strategy <provider> [quota|round-robin|fill-first|reset-near-weighted|least-loaded|reset-first] [--json]`
 
 Show or set how an account pool picks the next account.
 
@@ -557,9 +559,28 @@ State-changing: yes. JSON mode: `envelope`.
 
 - API-key providers only. Requires non-TTY stdin and reads one secret line; never put plaintext keys in command arguments or agent transcripts. This imports an upstream credential, not an OpenCodex access-key creation workflow.
 
+### `ocx account probe`
+
+Usage: `ocx account probe google-antigravity [<account-id|alias>] [--json]`
+
+Test stored accounts one by one with their own tokens, read-only.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/oauth/accounts` |
+| POST | `/api/oauth/accounts/probe` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit per-account status, HTTP code, reason and quota windows. |
+
+- Statuses: ok, paused, token_expired, suspended, verification_required, rate_limited, permission_denied, error. Sends one retrieveUserQuotaSummary request per account with its stored token; paused accounts are skipped without a request, and expired tokens are reported, never refreshed. Only google-antigravity is supported.
+
 ### `ocx account import`
 
-Usage: `ocx account import google-antigravity --format cockpit-tools (--file <path>|--stdin) [--json]`
+Usage: `ocx account import google-antigravity --format cockpit-tools (--file <path>|--stdin) [--accept-antigravity-risk] [--json]`
 
 Import Google Antigravity accounts from a bounded Cockpit Tools document.
 
@@ -574,9 +595,11 @@ State-changing: yes. JSON mode: `envelope`.
 | `--format` | string | Only cockpit-tools is supported. |
 | `--file` | string | Bounded source document; exclusive with --stdin. |
 | `--stdin` | boolean | Read the document from non-TTY stdin. |
+| `--accept-antigravity-risk` | boolean | Accept the Google account-ban risk without the y/N prompt; required with --stdin. |
 | `--json` | boolean | Emit sanitized per-record import outcomes. |
 
 - Human-controlled credential handoff: choose exactly one source. Unsupported providers/formats are refused before source I/O. Partial failures or unsupported records return nonzero; do not echo the document.
+- Prints the Antigravity account-ban warning before reading the source; --file on a terminal asks y/N, otherwise --accept-antigravity-risk is required. Agent-driven runs are refused even with the flag (AGENTS_INSTALL.md).
 
 ### `ocx account reauth`
 
@@ -598,10 +621,10 @@ State-changing: yes. JSON mode: `payload`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--id` | string | Account identity to reauthenticate. |
-| `--device` | boolean | Codex device login; accepted for already-device-native kimi, nous and github-copilot. |
+| `--device` | boolean | Codex device login or xAI device authorization; a no-op for already-device-native kimi, nous and github-copilot. |
 | `--code` | string | Use - to read the short-lived authorization code from stdin. |
 | `--no-wait` | boolean | Return after starting the flow. |
-| `--json` | boolean | Emit login instructions or completion state. |
+| `--json` | boolean | Emit login instructions or completion state; xAI --device requires --no-wait. |
 | `--open-browser` | string | on or off for browser-capable login; rejected for explicit/native device flows. |
 
 - Alias of account login with --reauth. openai, codex and chatgpt address the pool; native main uses account main reauth. Human completes authorization; keep returned login material out of transcripts. Kiro --method cannot be combined with reauth.
@@ -643,10 +666,10 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--flow` | string | Required for Codex; selects a native Kiro flow when supplied. |
+| `--flow` | string | Required for Codex; selects a native Kiro or xAI flow when supplied. |
 | `--json` | boolean | Emit cancellation receipt. |
 
-- Codex cancellation sends flowId. Other providers send provider; Kiro additionally forwards a supplied flowId.
+- Codex cancellation sends flowId. Other providers send provider; Kiro and xAI additionally forward a supplied flowId.
 
 ### `ocx account reset-credits`
 
@@ -829,7 +852,7 @@ State-changing: yes. JSON mode: `envelope`.
 |---|---|---|
 | `--enabled` | string | Stored pool preference; unsupported for Codex. Not equivalent to threshold0. |
 | `--threshold` | number | Auto-switch threshold0–100. |
-| `--strategy` | string | Use a strategy supported by this provider kind; reset-first is Codex or generic OAuth, least-loaded is Kiro. |
+| `--strategy` | string | Use a strategy supported by this provider kind; reset-first is Codex or generic OAuth, reset-near-weighted is Codex or Anthropic, and least-loaded is Kiro. |
 | `--sticky` | number | Sticky limit1–100. |
 | `--quota-window` | string | Anthropic only: five-hour, weekly or max-utilization. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |

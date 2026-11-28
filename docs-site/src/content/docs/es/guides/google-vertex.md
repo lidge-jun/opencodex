@@ -1,0 +1,50 @@
+---
+title: "Google Vertex AI"
+description: Cómo un proveedor de Vertex AI descubre sus modelos, qué credencial usa el descubrimiento y cómo los modelos Gemini 4 reciben imágenes de herramientas.
+---
+
+Esta página describe el comportamiento propio del proveedor Google Vertex AI (`google-vertex`, o
+cualquier proveedor de Google con `googleMode: "vertex"`). La configuración y las credenciales se
+explican en [Proveedores](/es/guides/providers/).
+
+## Descubrimiento de modelos
+
+Un proveedor de Vertex AI con modelos en vivo lista los modelos de editor de Google y recorre todas
+las páginas del listado. Muestra los modelos de chat Gemini y Gemma y omite los modelos de
+embeddings, voz, Live API, Imagen y Veo, así como los modelos Gemini que generan imágenes, como
+`gemini-3.1-flash-image`, cuyas fichas de modelo indican que no admiten llamadas a funciones.
+
+El descubrimiento usa la credencial del propio proveedor: una cuenta de servicio `gcp-sa:`, una
+clave o, si no hay ninguna configurada, `GOOGLE_CLOUD_API_KEY` y después las credenciales
+predeterminadas de la aplicación (ADC). Si no se puede leer una clave configurada como `keychain:`
+o `$VARIABLE`, el descubrimiento se detiene en lugar de probar otra credencial, igual que las
+solicitudes se niegan a empezar. Cuando el listado no se puede leer completo, OpenCodex conserva los
+modelos anteriores o configurados en lugar de publicar solo una parte.
+
+El descubrimiento en vivo y las pruebas de conexión requieren un endpoint HTTPS de Google:
+`aiplatform.googleapis.com` o `<location>-aiplatform.googleapis.com`, con el puerto HTTPS estándar
+y sin usuario ni contraseña en la URL. Los endpoints de gateways personalizados no reciben las
+credenciales de Vertex. Restablece el endpoint de Google para usar el descubrimiento en vivo;
+los modelos configurados siguen disponibles cuando no se puede verificar el destino.
+
+Los niveles de razonamiento siguen el preajuste: Gemini 4 Hydrogen y Neon ofrecen low, medium, high (el
+predeterminado) y xhigh; Gemini 4 Carbon y Argon ofrecen low, medium y high. Un modelo al que el
+preajuste no asigna niveles, como `gemini-3-pro`, no muestra ninguno, porque sus solicitudes no
+llevan nivel de razonamiento.
+
+El modelo predeterminado del preajuste sigue siendo `gemini-3-pro` hasta que se verifique para él el
+ciclo de vida de modelos propio de Vertex AI. El [calendario de retirada de la Gemini API](https://ai.google.dev/gemini-api/docs/deprecations)
+cubre AI Studio, no Vertex AI, por lo que no cambia este valor. El descubrimiento en vivo muestra los
+modelos que tu proyecto puede usar; elige uno de ellos como predeterminado si `gemini-3-pro` no figura.
+
+## Imágenes de herramientas en Gemini 3+
+
+En Vertex AI, los modelos Gemini 3 y posteriores (incluidos `gemini-3.8-flash`, `gemini-4-argon`,
+`gemini-4-carbon`, `gemini-4-hydrogen`, `gemini-4-neon` y futuros modelos Gemini 4+ descubiertos)
+reciben las imágenes que devuelven las herramientas, como capturas de pantalla, dentro de la respuesta
+de función correspondiente. Esto evita el error 400 del servicio "Requests ending with a model turn are
+not supported" reproducido en Argon, Neon y 3.8 Flash tras una llamada a herramienta que produce
+imágenes. Las imágenes de resultados duplicados o sin llamada correspondiente se conservan en un
+mensaje aparte después de las respuestas de herramientas, con una marca que explica que no se pudieron
+emparejar. No hace falta cambiar la configuración; este tratamiento aplica a los modelos Gemini 3+ en
+Vertex.

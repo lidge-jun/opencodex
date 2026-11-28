@@ -888,7 +888,8 @@ describe("CC-Switch keyless provider import", () => {
         );
       }
     } finally {
-      db.close();
+      // Uncached prepare() statements otherwise defer releasing the Windows file handle.
+      db.close(true);
     }
 
     // Compact JSON placing WORD_CANARY inside bytes 0..15 of the file header AND in secret fields,
@@ -1094,11 +1095,11 @@ describe("CC-Switch keyless provider import", () => {
         expect(cliJsonOut.join("\n")).not.toContain(aliasDbPath);
         expect(JSON.parse(cliJsonOut[0]!)).toMatchObject({ error: "sqlite_hardlink_refused" });
       } finally {
-        writer.close();
+        writer.close(true);
         unlinkSync(aliasDbPath);
       }
     } finally {
-      try { writer.close(); } catch { /* already closed */ }
+      writer.close(true);
     }
 
     // Reopen and checkpoint cleanly (simulating CC-Switch closing/checkpointing); retry now succeeds with updated data.

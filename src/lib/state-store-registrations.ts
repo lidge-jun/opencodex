@@ -1,3 +1,5 @@
+import { bindCodexWsIncrementalConfig } from "../config/codex-ws-incremental-setting";
+import { bindUpstreamHistorySlimConfig } from "../server/responses/history-slim";
 import {
   getConfigDir,
   reconcileConfigWarningMemos,
@@ -24,6 +26,7 @@ import {
 import { reconcileComboWarningMemos } from "../combos/request";
 import { reconcileComboRotationState } from "../combos/resolve";
 import { reconcileComboRecall, sweepExpiredComboRecall } from "../server/responses/combo-session-recall";
+import { reconcileProviderCacheAffinity, sweepExpiredProviderCacheAffinity } from "../providers/cache-affinity";
 import { listLiveComboTargetKeys } from "../combos/types";
 import {
   listLiveConfigOwnershipRoots,
@@ -42,6 +45,7 @@ import { configuredAnthropicInstance } from "../providers/anthropic-instance";
 import { listLiveOAuthAccountKeys, reconcileOAuthReauthState } from "../oauth/store";
 import { reconcileGuardianBackoff } from "../oauth/token-guardian";
 import { sweepExpiredApiKeyCooldowns } from "../providers/key-failover";
+import { reconcileApiKeyCooldownGenerations } from "../providers/api-key-cooldowns";
 import { reconcileProviderRequestPacing } from "../providers/request-pacing";
 import { sweepAbandonedResponseStateTemps, sweepExpiredResponseStates, sweepOrphanedResponseSpills } from "../responses/state";
 import { sweepExpiredAntigravityReplay } from "../adapters/google-antigravity-replay";
@@ -83,12 +87,15 @@ export function setLiveStateStoreConfig(config: OcxConfig): void {
   // The one place the server's live config object is installed; detached configs (catalog sync)
   // never come through here, so the outbound compression opt-in follows the running server only.
   bindUpstreamRequestCompressionConfig(config);
+  bindUpstreamHistorySlimConfig(config);
+  bindCodexWsIncrementalConfig(config);
   bindWorkflowBudgetConfig(config);
   notifyLiveConfigObservers(config);
 }
 
 export function reconcileLiveStateStores() {
   if (!liveServerConfig) return { storesVisited: 0, rowsRemoved: 0 };
+  bindCodexWsIncrementalConfig(liveServerConfig);
   notifyLiveConfigObservers(liveServerConfig);
   // Only adopted live providers own canonical pools; detached disk snapshots may
   // contain providers the routing instance deliberately has not activated yet.
@@ -107,6 +114,11 @@ export function buildGenerationContext(): GenerationContext {
   return {
     generation: 0,
     providerNames,
+    disabledProviderNames: new Set(Object.entries(liveServerConfig.providers)
+      .filter(([, provider]) => provider.disabled === true)
+      .map(([name]) => name)),
+    providerKeyEntryIds: new Map(Object.entries(liveServerConfig.providers)
+      .map(([name, provider]) => [name, new Set((provider.apiKeyPool ?? []).map(entry => entry.id))] as const)),
     comboIds: new Set(Object.keys(liveServerConfig.combos ?? {})),
     comboTargets: listLiveComboTargetKeys(liveServerConfig),
     codexAccountIds: listLiveCodexAccountIds(liveServerConfig),
@@ -117,7 +129,8 @@ export function buildGenerationContext(): GenerationContext {
 
 export const STATE_STORE_REGISTRATIONS = [
   { name: "subagent-model-health", sweepExpired: sweepExpiredSubagentModelHealth },
-  { name: "api-key-cooldowns", sweepExpired: sweepExpiredApiKeyCooldowns },
+  { name: "api-key-cooldowns", sweepExpired: sweepExpiredApiKeyCooldowns,
+    reconcileGeneration: () => reconcileApiKeyCooldownGenerations(liveServerConfig?.providers) },
   { name: "provider-request-pacing", reconcileGeneration: reconcileProviderRequestPacing },
   {
     name: "combo-target-cooldowns",
@@ -160,6 +173,11 @@ export const STATE_STORE_REGISTRATIONS = [
     name: "combo-session-recall",
     sweepExpired: sweepExpiredComboRecall,
     reconcileGeneration: reconcileComboRecall,
+  },
+  {
+    name: "provider-cache-affinity",
+    sweepExpired: sweepExpiredProviderCacheAffinity,
+    reconcileGeneration: context => reconcileProviderCacheAffinity(context, liveServerConfig?.providers),
   },
   { name: "guardian-backoff", reconcileGeneration: reconcileGuardianBackoff },
   { name: "codex-reauth", reconcileGeneration: reconcileCodexReauthState },

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { captureInitialSelectionBaseline, finalizeInitialModelSelection } from "../../providers/initial-model-selection-runtime";
-import { captureModelDiscoveryBaseline, finalizeModelDiscovery } from "../../providers/new-model-policy-runtime";
+import { captureModelDiscoveryBaseline, finalizeModelDiscovery, projectSupersededModelDiscovery } from "../../providers/new-model-policy-runtime";
 import { CatalogGatherBusyError } from "../../codex/catalog/routed-gather";
+import { observeModelCacheRevision, readableSupersededModelDiscovery } from "../../codex/model-cache";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { isPassiveRead } from "../../lib/passive-read";
 import { readFileSync } from "node:fs";
@@ -40,7 +41,8 @@ import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap
 import { resolveCodexHomeDir } from "../../codex/home";
 import { isKnownRequestFailureCause, isKnownRequestFailureStage, readUsageEntries } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
-import { cacheObservationFromUsage, parseRange, parseUsageSurface, summarizeUsage } from "../../usage/summary";
+import { cacheObservationFromUsage } from "../../usage/cache-provenance";
+import { parseRange, parseUsageSurface, summarizeUsage } from "../../usage/summary";
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
 import { getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
@@ -53,11 +55,12 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustomModel, OcxProviderConfig, OcxUsage } from "../../types";
 import type { DesktopProfileModel } from "../../claude/desktop-profile";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
-import { estimateComboCost, estimateRequestCost, serviceTierContext, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
+import { creditChargeUnrepresentable, estimateAttemptCost, estimateComboCost, estimateRequestCost, serviceTierContext, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
+import { costTokensWithinBound, isRepresentableCreditCount } from "../../usage/credit-billing";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { usageModelPriceOptions } from "../../usage/model-identity";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
@@ -84,7 +87,12 @@ export type MetricUnavailableReason =
   | "usage_missing" | "usage_unsupported" | "output_missing" | "invalid_duration"
   | "price_unmatched" | "invalid_cache_breakdown"
   | "invalid_usage" | "combo_attempt_unavailable"
-  | "ttft_missing" | "decode_window_too_short";
+  | "ttft_missing" | "decode_window_missing" | "decode_window_too_short"
+  // The row is credit-priced, but `providerCredits x creditPriceUsd` cannot be represented (an
+  // out-of-bound price or credit count, or an overflowing product). It is deliberately not
+  // `price_unmatched`-with-a-token-estimate: falling back would report a different amount than
+  // the credit basis the operator configured.
+  | "credit_cost_unrepresentable";
 
 export type TokPerSecondResult =
   | { kind: "value"; value: number; estimated: boolean }
@@ -100,13 +108,17 @@ export type CostEstimateReason =
   | "cache_detail_missing"
   | "expected_price_overlay"
   | "provider_cost_overlay"
-  | "priority_lower_bound";
+  | "priority_lower_bound"
+  | "service_tier_transmitted";
 
 export type CostResult =
   | { kind: "value"; estimate: NonNullable<ReturnType<typeof estimateRequestCost>>; estimateReasons: CostEstimateReason[] }
+  | { kind: "partial"; subtotalUsd: number; unpricedAttempts: number }
   | { kind: "unavailable"; reason: MetricUnavailableReason };
 
-export type MetricSource = Pick<RequestLogEntry, "provider" | "model" | "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "usageStatus" | "usage" | "requestedServiceTier" | "configuredServiceTier" | "responseServiceTier" | "tierOutcome" | "routeDecision" | "cacheProvenance"> & {
+export type MetricSource = Pick<RequestLogEntry, "provider" | "model" | "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "protocolTrace" | "usageStatus" | "usage" | "requestedServiceTier" | "configuredServiceTier" | "responseServiceTier" | "tierOutcome" | "routeDecision" | "cacheProvenance"> & {
+  /** Request time; selects dated tier prices such as the Ultrafast schedule. */
+  timestamp?: number;
   attempts?: readonly PersistedUsageAttempt[];
 };
 
@@ -154,7 +166,7 @@ export const MIN_DECODE_WINDOW_MS = 1_000;
  * generation window spans both and stops at the last delta rather than at stream close.
  */
 export function decodeTokPerSecondResult(
-  entry: Pick<MetricSource, "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "usageStatus" | "usage">,
+  entry: Pick<MetricSource, "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "protocolTrace" | "usageStatus" | "usage">,
 ): DecodeTokPerSecondResult {
   if (!entry.usage) return { kind: "unavailable", reason: "usage_missing" };
   if (entry.usageStatus === "unsupported") return { kind: "unavailable", reason: "usage_unsupported" };
@@ -168,6 +180,7 @@ export function decodeTokPerSecondResult(
     return value === null ? { kind: "unavailable", reason: "invalid_duration" }
       : { kind: "value", value, estimated: true, timingBasis: "generation-window" };
   }
+  if (entry.protocolTrace?.inbound === "gemini") return { kind: "unavailable", reason: "decode_window_missing" };
   // A row that predates TTFT capture, or a non-streaming turn that never recorded one, has no
   // window to measure. That is a different fact from a bad duration, so it gets its own reason.
   if (entry.firstOutputMs === undefined) return { kind: "unavailable", reason: "ttft_missing" };
@@ -183,44 +196,112 @@ export function decodeTokPerSecondResult(
   return { kind: "value", value, estimated: true, timingBasis: "legacy-post-visible-output" };
 }
 
+/**
+ * True when the row would otherwise be priced but its credit charge cannot be represented. A row
+ * with no resolved token price is unpriced for the ordinary reason, so the price lookup has to
+ * succeed before the credit failure is the explanation.
+ */
+function isCreditCostUnrepresentable(entry: MetricSource): boolean {
+  if (entry.attempts?.length) {
+    return entry.attempts.some(attempt => creditChargeUnrepresentable({
+      ...attempt, ...usageModelPriceOptions(entry, attempt),
+    }));
+  }
+  return creditChargeUnrepresentable({ ...entry, ...usageModelPriceOptions(entry, entry) });
+}
+
 export function unavailableCostReason(entry: MetricSource): MetricUnavailableReason {
   // Normalizer-first classification: the landed normalizer recovers legacy
   // cachedInputTokens=read+write rows via retry, so a raw read+write>input
   // pre-check would misclassify recoverable rows (020 audit blocker #2).
   if (!entry.usage && !entry.attempts?.length) return "usage_missing";
   if (entry.usageStatus === "unsupported") return "usage_unsupported";
-  if (entry.attempts?.length) return "combo_attempt_unavailable";
+  // A Combo is unpriced when ANY attempt is, and the generic reason covers every other cause.
+  // An attempt whose credit charge cannot be represented is a different fact: the operator set a
+  // credit price and the row cannot honor it, so the parent names that instead of implying an
+  // ordinary missing price somewhere in the attempt list.
+  if (entry.attempts?.length) {
+    return isCreditCostUnrepresentable(entry) ? "credit_cost_unrepresentable" : "combo_attempt_unavailable";
+  }
   if (!entry.usage) return "usage_missing";
-  if (!normalizeCostTokens(entry.usage)) {
+  if (isCreditCostUnrepresentable(entry)) return "credit_cost_unrepresentable";
+  const tokens = normalizeCostTokens(entry.usage);
+  if (!tokens) {
     const effectiveRead = entry.usage.cacheReadInputTokens ?? entry.usage.cachedInputTokens ?? 0;
     const effectiveWrite = entry.usage.cacheCreationInputTokens ?? 0;
     const finite = [entry.usage.inputTokens, entry.usage.outputTokens, effectiveRead, effectiveWrite]
       .every(v => Number.isFinite(v) && v >= 0);
     return finite ? "invalid_cache_breakdown" : "invalid_usage";
   }
+  // A finite but absurd token count normalizes fine and then overflows the estimate. Calling that
+  // "price unmatched" would send an operator to the price table for a number no price can fix.
+  if (!costTokensWithinBound(tokens)) return "invalid_usage";
   return "price_unmatched";
 }
 
 /** Display-time cost estimate for one log entry (or its attempt list), including the reasons that qualify the estimate. */
 export function costResult(entry: MetricSource): CostResult {
   const tier = serviceTierContext(entry);
-  const estimate = entry.attempts?.length
-    ? estimateComboCost(entry.attempts.map(attempt => ({ ...attempt, ...usageModelPriceOptions(entry, attempt) })), undefined, tier)
+  const attempts = entry.attempts?.map(attempt => ({
+    ...attempt,
+    ...usageModelPriceOptions(entry, attempt),
+    cacheProvenance: attempt.cacheProvenance ?? entry.cacheProvenance,
+  }));
+  const estimate = attempts?.length
+    ? estimateComboCost(attempts, undefined, tier)
     : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier, ...usageModelPriceOptions(entry, entry) });
-  if (!estimate) return { kind: "unavailable", reason: unavailableCostReason(entry) };
+  if (!estimate) {
+    // Keep the shared request-total contract. Native Gemini credential replays can show a
+    // separate subtotal from the attempts for which we do have a price.
+    if (entry.protocolTrace?.inbound === "gemini" && entry.protocolTrace.mode === "native"
+      && attempts?.some(attempt => attempt.recoveryKinds.includes("oauth-401"))) {
+      const priced = attempts.flatMap(attempt => estimateAttemptCost(attempt, undefined, tier) ?? []);
+      const unpricedAttempts = attempts.length - priced.length;
+      const subtotalUsd = priced.reduce((sum, attempt) => sum + attempt.cost.total, 0);
+      if (priced.length && unpricedAttempts > 0 && Number.isFinite(subtotalUsd)) {
+        return { kind: "partial", subtotalUsd, unpricedAttempts };
+      }
+    }
+    return { kind: "unavailable", reason: unavailableCostReason(entry) };
+  }
+  // Provenance follows the basis that produced the amount. A credit charge is
+  // `providerCredits x creditPriceUsd`; the token rates were resolved only to decide whether the
+  // row falls back to them, so anything derived from those rates — a cache-detail caveat, a price
+  // overlay, a Priority floor — describes a price nobody was charged. A `mixed` combo asks the
+  // same question per attempt: only its token-priced legs may contribute token provenance, and
+  // the parent's usage is a synthesized sum that priced nothing.
+  const creditOnly = estimate.billing?.source === "provider-credits";
+  // `estimateComboCost` walks the attempts in order and fails closed on any unpriced leg, so the
+  // estimate roster lines up with the stored one and the persisted cache provenance stays reachable.
+  const tokenPricedLegs = estimate.billing?.source === "mixed"
+    ? (estimate.attempts ?? [])
+      .map((attempt, index) => ({ attempt, source: attempts?.[index] }))
+      .filter(leg => leg.attempt.billing === undefined)
+    : undefined;
+  // A cost estimate is qualified by cache detail it can TRUST. A detail object that exists only
+  // because a strict client requires the field carries no cache reading, so it qualifies the
+  // estimate exactly as a missing one does — reading it as a measured zero prices the request
+  // as an uncached send that nothing observed.
+  const cacheDetailMissing = creditOnly
+    ? false
+    : tokenPricedLegs
+      ? tokenPricedLegs.some(leg =>
+        cacheObservationFromUsage(leg.source?.usage, leg.source?.cacheProvenance).provenance !== "observed")
+      : !!entry.usage && cacheObservationFromUsage(entry.usage, entry.cacheProvenance).provenance !== "observed";
+  const priceSources = creditOnly
+    ? []
+    : tokenPricedLegs
+      ? tokenPricedLegs.map(leg => leg.attempt.price.source)
+      : [estimate.price?.source, ...(estimate.attempts?.map(attempt => attempt.price.source) ?? [])];
   const estimateReasons = [
+    // The row's own usage reading still qualifies a credit charge: the credits came from it.
     entry.usageStatus === "estimated" || entry.usage?.estimated ? "usage_estimated" as const : undefined,
-    // A cost estimate is qualified by cache detail it can TRUST. A detail object that exists only
-    // because a strict client requires the field carries no cache reading, so it qualifies the
-    // estimate exactly as a missing one does — reading it as a measured zero prices the request
-    // as an uncached send that nothing observed.
-    entry.usage && cacheObservationFromUsage(entry.usage, entry.cacheProvenance).provenance !== "observed"
-      ? "cache_detail_missing" as const : undefined,
-    estimate.price?.source === "expected" || estimate.attempts?.some(a => a.price.source === "expected")
-      ? "expected_price_overlay" as const : undefined,
-    estimate.price?.source === "user" || estimate.attempts?.some(a => a.price.source === "user")
-      ? "provider_cost_overlay" as const : undefined,
+    cacheDetailMissing ? "cache_detail_missing" as const : undefined,
+    priceSources.includes("expected") ? "expected_price_overlay" as const : undefined,
+    priceSources.includes("user") ? "provider_cost_overlay" as const : undefined,
     estimate.priorityLowerBound ? "priority_lower_bound" as const : undefined,
+    // A credit charge never used the token rates the Ultrafast multiplier scaled.
+    !creditOnly && estimate.serviceTierPricing?.basis === "transmitted" ? "service_tier_transmitted" as const : undefined,
   ].filter((reason): reason is CostEstimateReason => reason !== undefined);
   return { kind: "value", estimate, estimateReasons };
 }
@@ -248,12 +329,22 @@ function resendVerdict(row: { failureStage?: string; failureCause?: string }): {
   if (!isKnownRequestFailureStage(row.failureStage) || !isKnownRequestFailureCause(row.failureCause)) return {};
   return { resendPermission: resendPermission(row.failureStage, row.failureCause) };
 }
+
+/** Keep invalid credit evidence available to cost estimation and omit it from API usage. */
+export function publicLogUsage(usage: OcxUsage | undefined): { usage?: OcxUsage } {
+  if (usage === undefined) return {};
+  const { providerCredits, ...rest } = usage;
+  return { usage: isRepresentableCreditCount(providerCredits) ? usage : rest };
+}
+
 export function requestLogDto(
   entry: RequestLogEntry,
   { includeDecodeRate = true }: { includeDecodeRate?: boolean } = {},
 ): Record<string, unknown> {
+  const requestTier = serviceTierContext(entry);
   return {
     ...entry,
+    ...publicLogUsage(entry.usage),
     ...(entry.attemptNormalizationDropped === true ? { attemptNormalizationDropped: true } : {}),
     ...resendVerdict(entry),
     displayMetrics: {
@@ -267,12 +358,16 @@ export function requestLogDto(
       ? {
         attempts: entry.attempts.map(attempt => ({
           ...attempt,
+          ...publicLogUsage(attempt.usage),
           ...resendVerdict(attempt),
           displayMetrics: {
             tokPerSecond: tokPerSecondResult(attempt),
             // Each attempt measures its own attempt-relative TTFT.
             ...(includeDecodeRate ? { decodeTokPerSecond: decodeTokPerSecondResult(attempt) } : {}),
-            cost: costResult({ ...attempt, attempts: undefined, routeDecision: entry.routeDecision, requestedServiceTier: entry.requestedServiceTier, configuredServiceTier: entry.configuredServiceTier, responseServiceTier: entry.responseServiceTier }),
+            // Attempts carry no time of their own; dated tier prices follow the request's.
+            // An attempt without its own tier record gets the tier the request total gives it (estimateComboCost):
+            // the request's derived context, never a raw parent scalar that may describe an earlier response.
+            cost: costResult({ ...attempt, attempts: undefined, timestamp: entry.timestamp, routeDecision: entry.routeDecision, requestedServiceTier: requestTier.requestedServiceTier, configuredServiceTier: requestTier.configuredServiceTier, responseServiceTier: requestTier.responseServiceTier }),
           },
         })),
       }
@@ -288,31 +383,48 @@ export function requestLogDto(
  */
 export async function fetchAllModels(
   config: OcxConfig,
-  /** Filled with each provider's content revision as of the moment its rows were chosen. */
-  providerContentRevisions?: Map<string, string>,
-  /** Management renders disabled rows using this detached state after inventory drift. */
-  publishProjection?: (projection: OcxConfig) => void,
+  options: {
+    /** Filled with each provider's content revision as of the moment its rows were chosen. */
+    providerContentRevisions?: Map<string, string>;
+    /** The response renders visibility from this detached state. */
+    publishProjection?: (projection: OcxConfig) => void;
+    allowSuperseded?: boolean;
+  } = {},
 ): Promise<CatalogModel[]> {
   // A Remote Link read: no upstream, no initial selection, no write (#6959).
   if (isPassiveRead()) return [];
   const { gatherRoutedModels } = await import("../../codex/catalog");
   const baseline = captureInitialSelectionBaseline(config);
   const discoveryBaseline = captureModelDiscoveryBaseline(config);
-  const revisions = providerContentRevisions ?? new Map<string, string>();
+  const revisions = options.providerContentRevisions ?? new Map<string, string>();
   const outcomes: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
   const models = await gatherRoutedModels(config, {
     providerModelOutcomes: outcomes,
     providerContentRevisions: revisions,
   });
-  finalizeInitialModelSelection(config, baseline, uniqueCatalogModelsForPublicList(models),
-    outcomes.filter(outcome => outcome.state === "authoritative").map(outcome => outcome.provider));
+  const authoritative = new Set(outcomes.filter(outcome => outcome.state === "authoritative").map(outcome => outcome.provider));
+  const superseded = [...revisions].filter(([provider, revision]) => observeModelCacheRevision(provider) !== revision);
+  if (superseded.length > 0) {
+    const { allowSuperseded, publishProjection } = options;
+    if (!allowSuperseded || !publishProjection) throw new CatalogGatherBusyError();
+    for (const [provider, revision] of superseded) {
+      const readable = readableSupersededModelDiscovery(provider, revision);
+      if (readable === null) throw new CatalogGatherBusyError();
+      if (readable === "caller-local") authoritative.add(provider);
+    }
+    const projection = projectSupersededModelDiscovery(config, discoveryBaseline, models,
+      [...authoritative]);
+    if (!projection) throw new CatalogGatherBusyError();
+    publishProjection(projection);
+    return models;
+  }
+  finalizeInitialModelSelection(config, baseline, uniqueCatalogModelsForPublicList(models), [...authoritative]);
   let publicationConfig = config;
-  if (!finalizeModelDiscovery(config, discoveryBaseline, models,
-    outcomes.filter(outcome => outcome.state === "authoritative").map(outcome => outcome.provider), revisions,
-    projection => { publicationConfig = projection; publishProjection?.(projection); })) {
+  if (!finalizeModelDiscovery(config, discoveryBaseline, models, [...authoritative], revisions,
+    projection => { publicationConfig = projection; options.publishProjection?.(projection); })) {
     throw new CatalogGatherBusyError();
   }
-  if (publicationConfig !== config && !publishProjection) {
+  if (publicationConfig !== config && !options.publishProjection) {
     // Other consumers keep their live config, so only return rows visible under the projection.
     const { filterCatalogVisibleModels } = await import("../../codex/catalog");
     return filterCatalogVisibleModels(models, publicationConfig);

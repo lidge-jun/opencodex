@@ -18,7 +18,7 @@ export const orchestratedEntryReview: UpdateReviewTable = {
       "import { resolveServiceOwnership } from \"../service/state\";", // read-only: inspect service ownership
       "import { inspectDesktopSupervision, type SupervisionEvidence } from \"../service/desktop-supervision.mjs\";", // read-only: inspect desktop supervision evidence
       "import { diagnoseService } from \"../service/diagnostics\";", // read-only: inspect service installation
-      "import { detectInstallOwnership, defaultUpdateTag, latestVersion } from \"./index\";", // pre-mutation: detect installer and probe registry version
+      "import { detectInstallOwnership, defaultUpdateTag, latestVersion, resolveCurrentPnpmGlobalOwner } from \"./index\";", // pre-mutation: detect installer, resolve pnpm owner, and probe registry version
       "import { parseOrchestratedUpdateArgs, type OrchestratedUpdateArgs } from \"./orchestrated-arguments.mjs\";", // read-only: parse update request
       "import { buildOrchestratedPlan, type PlanInputs } from \"./orchestrated-plan\";", // read-only: construct plan from observations
       "import { inspectLiveOrchestratedIdentity } from \"./orchestrated-live-identity\";", // read-only: inspect live serving identity
@@ -65,7 +65,7 @@ export const orchestratedEntryReview: UpdateReviewTable = {
     ["src/update/orchestrated-entry.ts:applyOrchestratedBun:deps.spawn(process.execPath, selfLaunchArgv(args), { env: { ...process.env, OCX_UPDATE_ORCHESTRATED_CHILD: \"1\", OCX_UPDATE_RESULT_CAPABILITY: channel.capability }, stdio: [\"ignore\", 2, 2] })", "ordinary launcher for the orchestrated update child, as job.ts spawnGuiUpdateWorker; the child takes the sync/update mutex, ownership lease, plan-token and attested identity checks and its own home authorization before any mutation"],
     ["src/update/orchestrated-entry.ts:<module>:import { mkdtempSync, readFileSync, realpathSync, rmSync } from \"node:fs\";", "registry probe cache directory and its cleanup, plus manifest and canonical path reads; package mutation remains separately guarded"],
     ["src/update/orchestrated-live-identity.ts:<module>:import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from \"node:fs\";", "read-only runtime record inspection using a bounded descriptor"],
-    ["src/update/orchestrated-entry.ts:<module>:probeSpawnSync", "bounded registry version probe passed to latestVersion"],
+    ["src/update/orchestrated-entry.ts:<module>:probeSpawnSync", "bounded pnpm owner and registry version probes"],
     ["src/update/orchestrated-identity-probe-entry.ts:<module>:import.meta.main", "direct probe entry detection only"],
     ["src/update/orchestrated-entry.ts:<module>:mkdtempSync(join(tmpdir(), \"ocx-registry-probe-\"))", "exclusive disposable registry probe cache under OS temp"],
     ["src/update/orchestrated-entry.ts:<module>:rmSync(cache, { recursive: true, force: true })", "remove only this registry probe's disposable cache"],

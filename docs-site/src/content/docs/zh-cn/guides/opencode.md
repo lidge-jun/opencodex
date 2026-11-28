@@ -20,6 +20,8 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ```
 
+只有当规范 `openai` provider 已启用且不处于 Codex Direct 模式时，不带前缀的原生 OpenAI `gpt-*` 行才会出现；开启 Codex Direct 模式时，可用的账号限定 `<namespace>/gpt-*` 行仍会保留在导出结果中。Direct 模式转发每个调用方自己的 OpenAI 凭据，而 opencode 发送的是代理的密钥；`openai` provider 被禁用时，代理会拒绝所有不带前缀的 `gpt-*` 选择器。在这两种状态下，启动器、托管集成和 `ocx export` 都会省略不带前缀的 `gpt-*` 行，而不是提供一个无法运行的模型。
+
 ## 你的配置绝不会被修改
 
 启动器不会复制或重写 `~/.config/opencode/opencode.json`、项目中的 `opencode.json` / `opencode.jsonc`，也不会处理任何其他磁盘上的配置层。它可能会读取全局或项目配置，以检测是否存在 `provider.opencodex` 或 `providers.opencodex` 覆盖；而你现有的 providers、agents、keybinds、MCP 条目以及相对路径的 `{file:…}` 引用，都会继续从它们原本的文件中解析。
@@ -54,7 +56,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 
 与启动器的运行时 block 不同，合并后的 block 是一个静态快照：它不会跟随你的目录变化。每当你新增 provider 或调整 model 可见性后，都要重新运行 `ocx export`。
 
-合并完成后，在启动 opencode 之前导出 admission key - 除非代理绑定在 loopback 上，那种情况下不需要：
+合并完成后，在启动 opencode 之前导出 admission key。仅绑定 loopback 的监听器不会校验它，但 OpenCode 会拒绝未设置的 key，因此在那里任意非空值即可：
 
 ```bash
 export OPENCODEX_OPENCODE_API_KEY=<your key>
@@ -75,9 +77,11 @@ loopback 示例：
 
 非 loopback 示例：
 
+这是远程客户端的手动配置示例。请先配置 TLS 前端，再使用其 HTTPS URL；OpenCodex 本身不终止 TLS，`ocx opencode` 也不会自动发现该 URL。即使在局域网中，明文 HTTP 也会在传输时暴露准入凭据。另一种方式是让代理绑定回环地址，并使用本地 SSH 隧道。参见[数据监听器的 TLS](/zh-cn/guides/remote-hub/#giving-the-data-listener-tls)。
+
 ```json
 "options": {
-  "baseURL": "http://192.168.1.10:10100/v1",
+  "baseURL": "https://proxy.example.com/v1",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }
@@ -86,7 +90,7 @@ loopback 示例：
 
 真实值只会通过子进程环境传递。`OPENCODEX_API_AUTH_TOKEN` 优先，然后是加固后的服务 token 文件，最后才是配置的 API key - 而非 loopback 绑定正是需要这个 API key。
 
-loopback 绑定（`127.0.0.1`，默认值）不会进行任何认证，所以 `{env:…}` 引用是惰性的，你可以不设置该变量。它只在 `hostname` 超出 loopback 范围时才有意义；参见 [Remote access](/zh-cn/reference/configuration/server/#远程访问)。这个 admission key 是 opencodex 自己的，与在 [Providers](/guides/providers/) 下配置的上游 provider keys 无关。
+loopback 绑定（`127.0.0.1`，默认值）不要求数据面 key。但 OpenCode 本身需要非空的 `apiKey`：未设置的 `{env:…}` 引用会在发送请求前以 `Missing auth credential: apiKey` 被拒绝。当托管集成或仪表盘的客户端配置指向无认证的 loopback 监听器时，会把非机密占位符 `opencodex-loopback` 写为 `apiKey`，无需导出任何内容。包括 `ocx export` 在内的其他路径保留该引用：在需要的地方导出 admission key，在不检查 key 的 loopback 绑定上把任意非空值导出为 `OPENCODEX_OPENCODE_API_KEY`。仅凭 loopback URL 无法确定不会检查 key：绑定在 `0.0.0.0` 的公开监听器即使经由 `127.0.0.1` 访问，仍然要求可接受的 key；经由 SSH 转发访问的已认证监听器也是如此。只要目标会检查 key 就必须导出，例如 `hostname` 超出 loopback 范围且客户端未指向无认证的 loopback 监听器时；参见 [Remote access](/zh-cn/reference/configuration/server/#远程访问)。这个 admission key 是 opencodex 自己的，与在 [Providers](/guides/providers/) 下配置的上游 provider keys 无关。
 
 ## 回滚
 

@@ -12,7 +12,15 @@ rien à déléguer, ne spawn rien et ne porte aucun identifiant de fournisseur.
 Cela se distingue de la surface des sous-agents (voir
 [Configuration des agents](/fr/reference/configuration/agents/)) : les sous-agents sont une
 délégation initiée par le worker via les outils de collaboration de Codex. Le conseiller est un
-sidecar côté proxy invisible du client — même un worker qui ne spawn jamais peut être conseillé.
+sidecar côté proxy invisible du client pour les workers routés — même un worker qui ne spawn jamais peut être conseillé.
+
+## Clients externes et contexte complet
+
+`autoMountMcp` est désactivé par défaut. Activez-le avec `ocx advisor set --auto-mount-mcp on` pour suivre les routes compatibles, ou choisissez les clients avec `--mcp-clients <ids>`. `auto` efface la liste explicite et `none` ne sélectionne aucun client. Les clients externes peuvent utiliser `consult_advisor` via `ocx advisor mcp`, ou démarrer avec `ocx advisor consult --question "..."` puis consulter le résultat avec `ocx advisor consult --consultation-id <id>`. Un consentement à jour est requis.
+
+`context` partage un contexte limité ; `question-only` envoie seulement la question et suspend les consultations automatiques ; `full` élargit les limites et peut joindre une transcription locale correspondante lorsqu’une session, tâche ou voie autorisée est fournie. Le texte et les résultats d’outils peuvent être envoyés au fournisseur conseiller ; la découverte de transcription n’est pas garantie.
+
+`timeoutMs` mesure l’inactivité et les données reçues réinitialisent le délai. La limite totale est `max(4 × timeoutMs, 600000 ms)` ; la valeur par défaut est 600000 ms et le maximum configurable est 1800000 ms.
 
 ## Question uniquement
 
@@ -46,15 +54,15 @@ Sur la page **Advisor**, choisissez le modèle dans le catalogue. Le sélecteur 
 | `model?` | `string` | — | Le modèle expert. Toute chaîne de modèle acceptée par le routeur : modèle natif seul (`gpt-6-astra`), `provider/model` explicite (`anthropic/claude-sonnet-4-6`, `xai/grok-...`) ou modèle natif qualifié par compte. Inter-fournisseurs entièrement pris en charge. |
 | `effort?` | `string` | `"max"` | Intensité de raisonnement de l'appel conseiller (`low`–`ultra`). |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | Quand consulter le conseiller. |
-| `contextMode?` | `"context" \| "question-only"` | `"context"` | Partage du contexte. `question-only` exige une question explicite du worker et suspend les consultations automatiques. |
+| `contextMode?` | `"context" \| "full" \| "question-only"` | `"context"` | Partage du contexte. `question-only` exige une question explicite du worker et suspend les consultations automatiques. |
 | `maxConsultationsPerTask?` | `integer` | `3` | Budget adaptatif par tâche (1 à 3 tentatives, appels manuels compris). |
-| `timeoutMs?` | `number` | `120000` | Délai de la consultation en boucle locale. |
+| `timeoutMs?` | `number` | `600000` | Délai de la consultation en boucle locale. |
 | `contextSharingConsent?` | `"v1"` | absent | Consentement de l'opérateur pour envoyer le contexte de la tâche au fournisseur conseiller configuré. Seul `"v1"` est courant. Une valeur absente, périmée ou autre n'autorise aucun envoi. `enabled: true` n'est pas ce consentement. |
 
 Gérez-le via la page **Advisor** du tableau de bord ou
 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>`.
 
-Sans consentement courant, `ocx advisor on` n'active pas le partage inter-fournisseurs : il affiche cette divulgation et s'arrête. `ocx advisor on --ack-context-sharing` et `ocx advisor consent` enregistrent `v1`. `ocx advisor consent --revoke` retire le consentement et arrête immédiatement l'envoi. `ocx advisor set` n'accorde pas le consentement. La case du tableau de bord n'est pas précochée.
+Sans consentement courant, `ocx advisor on` n'active pas le partage inter-fournisseurs : il affiche cette divulgation et s'arrête. `ocx advisor on --ack-context-sharing` et `ocx advisor consent` enregistrent `v1`. `ocx advisor consent --revoke` retire le consentement. Les consultations qui n'ont pas encore été envoyées sont bloquées, mais une consultation déjà envoyée ne peut pas être annulée, et le contexte déjà transmis hors du proxy ne peut pas être retiré. `ocx advisor set` n'accorde pas le consentement. La case du tableau de bord n'est pas précochée.
 
 ## Politiques
 
@@ -125,6 +133,13 @@ codage, et une consultation ne change jamais le modèle principal de la session.
 - Les tours natifs OpenAI en passthrough (workers du pool ChatGPT) ne reçoivent pas l'outil
   synthétique ; le conseiller couvre les fournisseurs routés (traduits). La consultation
   preflight s'applique aux adaptateurs run-turn ; l'outil non.
+- Les requêtes `/v1/messages` traduites (par exemple Claude Code routé vers un fournisseur
+  traduit) reçoivent l'outil synthétique et la consultation preflight comme `/v1/responses` et
+  `/v1/chat/completions`. Les mêmes règles de `policy` et de consentement au partage de contexte
+  s'appliquent, et les réglages sont lus dans la configuration active : une révocation du
+  consentement empêche donc les requêtes déjà en cours de lancer une consultation qui n'a pas
+  encore été envoyée. Elle n'annule pas une consultation déjà envoyée et ne retire pas le contexte
+  déjà sorti du proxy.
 - Pas de détection sémantique de blocage, de revue finale, de niveaux d’escalade, de conseillers multiples ou de vote.
 - Le registre de déduplication preflight vit dans le processus ; après un redémarrage du proxy,
   une tâche en cours peut recevoir une tentative preflight de plus.

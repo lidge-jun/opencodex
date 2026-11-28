@@ -12,12 +12,16 @@ export interface LinkChildCodexView {
  * A row's `child` block as this CLI reads it. Tolerant (G1): a later Home may add keys or enum values, so unknown keys
  * are dropped and an unknown enum value reads "unknown"; a known key with the wrong type is still rejected.
  */
-export type LinkChildOpsView = Omit<LinkChildOpsStatus, "update" | "codex" | "activeJob" | "lastOperation"> & {
+export type LinkChildOpsView = Omit<LinkChildOpsStatus, "update" | "codex" | "activeJob" | "lastOperation" | "holds"> & {
   update: { route: UpdateRoute | "unknown" | null; reason: string | null; observedAt: string | null };
   codex: LinkChildCodexView | null;
   activeJob: { jobId: string; op: ChildOp | string; state: "queued" | "running" | "unknown" } | null;
   lastOperation: (Omit<ChildOperationSummary, "op"> & { op: ChildOp | string }) | null;
+  /** Link WebSocket activity holds (D8); absent while nothing holds the link. Unknown reasons read "unknown". */
+  holds?: LinkHoldsView;
 };
+
+export interface LinkHoldsView { holds: Array<{ since: number; reasons: string[]; pendingResults: number; runningTurns: number; runningUnknown: number }>; unknown: string | null }
 
 const INSTALL_KINDS: ReadonlySet<string> = new Set<InstallKind>(["npm", "pnpm", "bun", "source", "mise", "desktop-app", "goat", "standalone", "ocx-child", "unknown"]);
 const ROUTES: ReadonlySet<string> = new Set<UpdateRoute>(["orchestrated", "desktop-request", "owner-action", "replant", "none"]);
@@ -75,6 +79,7 @@ export function validateChildOps(value: unknown, index: number): LinkChildOpsVie
         finishedAt: text(last.finishedAt, "lastOperation.finishedAt"),
       };
     })(),
+    ...(child.holds === undefined ? {} : { holds: validateHolds(child.holds, fail) }),
   };
 }
 
@@ -91,4 +96,42 @@ function validateCodex(codex: Record<string, unknown>, fail: (field: string) => 
   if (codex.catalogSyncedAt !== undefined) view.catalogSyncedAt = nullableCount(codex.catalogSyncedAt, "codex.catalogSyncedAt");
   if (codex.reportedAt !== undefined) view.reportedAt = nullableCount(codex.reportedAt, "codex.reportedAt");
   return view;
+}
+
+const HOLD_REASONS: ReadonlySet<string> = new Set(["pending-results", "running-turn", "running-unknown", "untracked", "no-thread"]);
+
+/** The tolerant reader of a row's `child.holds` (G1): unknown reasons read "unknown"; a wrong type is rejected. */
+function validateHolds(value: unknown, fail: (field: string) => never): LinkHoldsView {
+  if (!isRecord(value) || !Array.isArray(value.holds)) return fail("holds");
+  const count = (target: unknown, field: string): number => typeof target === "number" && Number.isFinite(target) && target >= 0 ? target : fail(field);
+  return {
+    holds: value.holds.map((raw, index) => {
+      if (!isRecord(raw) || !Array.isArray(raw.reasons)) return fail(`holds.${index}`);
+      return { since: count(raw.since, `holds.${index}.since`),
+        reasons: raw.reasons.map(reason => typeof reason === "string" && HOLD_REASONS.has(reason) ? reason : "unknown"),
+        pendingResults: count(raw.pendingResults, `holds.${index}.pendingResults`), runningTurns: count(raw.runningTurns, `holds.${index}.runningTurns`),
+        runningUnknown: count(raw.runningUnknown, `holds.${index}.runningUnknown`) };
+    }),
+    unknown: value.unknown === null ? null : typeof value.unknown === "string" && value.unknown.length <= 64 ? value.unknown : fail("holds.unknown"),
+  };
+}
+
+/** A row's `ws` block (design 9.3) as this CLI reads it: counts are checked, reason keys are kept as sent (G1). */
+export interface LinkWsView { open: number; upgrades: number; refused: Record<string, number>; closes: Record<string, number>; holds: number }
+
+export function validateLinkWs(value: unknown, index: number): LinkWsView {
+  const fail = (field: string): never => { throw new Error(`invalid link API response: link ${index} ws ${field}`); };
+  if (!isRecord(value)) return fail("object");
+  const count = (target: unknown, field: string): number => typeof target === "number" && Number.isSafeInteger(target) && target >= 0 ? target : fail(field);
+  const tally = (target: unknown, field: string): Record<string, number> => {
+    if (!isRecord(target)) return fail(field);
+    const out: Record<string, number> = {};
+    for (const [key, raw] of Object.entries(target)) {
+      if (key.length > 32) fail(field);
+      out[key] = count(raw, `${field}.${key}`);
+    }
+    return out;
+  };
+  return { open: count(value.open, "open"), upgrades: count(value.upgrades, "upgrades"), refused: tally(value.refused, "refused"),
+    closes: tally(value.closes, "closes"), holds: count(value.holds, "holds") };
 }

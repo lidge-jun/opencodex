@@ -2,12 +2,19 @@ import { isInlineDocumentDataUrl } from "./inline-document";
 import { audioContentFromRaw } from "./audio";
 
 /** Input kinds for which the normalized request has no lossless content carrier. */
-export type UntranslatedInputMedia = "audio" | "file";
+export type UntranslatedInputMedia = "audio" | "file" | "video";
 
 type RecordValue = Record<string, unknown>;
 
 function isRecord(value: unknown): value is RecordValue {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Project the standard Chat user audio part into the inline Responses carrier. */
+export function chatAudioToResponsesPart(part: RecordValue): RecordValue | undefined {
+  if (part.type !== "input_audio" || !isRecord(part.input_audio)) return undefined;
+  const audio = audioContentFromRaw(part.input_audio.data, part.input_audio.format);
+  return audio ? { type: "input_audio", audio_url: `data:audio/${audio.format};base64,${audio.data}` } : undefined;
 }
 
 /**
@@ -44,6 +51,14 @@ function mediaKind(value: unknown, position: CarrierPosition, allowAudio: boolea
   // A file-id-only image is not pixels: translated adapters cannot dereference it.
   if (value.type === "input_image" && typeof value.file_id === "string" && value.file_id.length > 0
       && !(typeof value.image_url === "string" && value.image_url.length > 0)) return "file";
+  // Only user and developer content builds a video part; every other converter reduces its
+  // content to text and dropped the clip in silence. `video_url` is the Chat spelling, which
+  // reaches this scan for every Chat content part before either Chat conversion. Whether the
+  // routed wire can carry a video that did become a part is decided on the normalized request
+  // (`src/adapters/video-input-carrier.ts`).
+  if (value.type === "input_video" || value.type === "video_url") {
+    return position === "user-content" || position === "developer-content" ? undefined : "video";
+  }
   return undefined;
 }
 
@@ -103,14 +118,19 @@ export function untranslatedResponsesInputMedia(
 }
 
 /** Used only when Chat is actually projected, not on the native Chat fast path. */
-export function untranslatedChatInputMedia(body: unknown): UntranslatedInputMedia | undefined {
+export function untranslatedChatInputMedia(body: unknown, allowInlineAudio = false): UntranslatedInputMedia | undefined {
   if (!isRecord(body) || !Array.isArray(body.messages)) return undefined;
   for (const message of body.messages) {
     if (!isRecord(message)) continue;
     // Only the `user` branch of the Chat projection builds content blocks. `system`,
     // `developer`, `assistant` and `tool` all reduce their content to a string.
-    const kind = contentMedia(message.content, message.role === "user" ? "user-content" : "flattened", false);
-    if (kind) return kind;
+    if (!Array.isArray(message.content)) continue;
+    const user = message.role === "user";
+    for (const part of message.content) {
+      if (user && allowInlineAudio && isRecord(part) && chatAudioToResponsesPart(part)) continue;
+      const kind = mediaKind(part, user ? "user-content" : "flattened", false);
+      if (kind) return kind;
+    }
   }
   return undefined;
 }

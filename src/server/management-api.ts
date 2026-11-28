@@ -176,6 +176,19 @@ async function handleFallbackRoutesOnDemand(ctx: ManagementContext): Promise<Res
   return handleFallbackRoutes(ctx);
 }
 
+/** Lazy: per-account OAuth diagnostics read routing state the account list does not need. */
+async function handleAccountDiagnosticsRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/oauth/accounts/diagnostics", false)) return null;
+  const { handleAccountDiagnosticsRoutes } = await import("./management/account-diagnostics-routes");
+  return handleAccountDiagnosticsRoutes(ctx);
+}
+
+async function handleRouteToRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/route-to")) return null;
+  const { handleRouteToRoutes } = await import("./management/route-to-routes");
+  return handleRouteToRoutes(ctx);
+}
+
 /**
  * Lazy like the Lab and routing-profile handlers, and for the same recorded reason: this file is
  * mounted for every dashboard request, so a static import would put the workflow-budget ledger
@@ -242,6 +255,13 @@ async function handleTelemetryRoutesOnDemand(ctx: ManagementContext): Promise<Re
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/telemetry")) return null;
   const { handleTelemetryRoutes } = await import("./management/telemetry-routes");
   return handleTelemetryRoutes(ctx);
+}
+
+/** Lazy: the Connections projections read Codex and Claude state no other request needs. */
+async function handleConnectionStatusRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/connections", false)) return null;
+  const { handleConnectionStatusRoutes } = await import("./management/connection-status-routes");
+  return handleConnectionStatusRoutes(ctx);
 }
 
 export async function handleManagementAPI(
@@ -376,6 +396,8 @@ export async function handleManagementAPI(
     ??     (await handleLowQuotaRoutesOnDemand(ctx))
     ??     (await handleQuotaPoolRoutesOnDemand(ctx))
     ??     (await handleFallbackRoutesOnDemand(ctx))
+    ??     (await handleAccountDiagnosticsRoutesOnDemand(ctx))
+    ??     (await handleRouteToRoutesOnDemand(ctx))
     ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleCodexAgentRoleRoutesOnDemand(ctx))
     ??     (await handleProtocolRoutesOnDemand(ctx))
@@ -388,6 +410,7 @@ export async function handleManagementAPI(
     ??     (await handleModelRoutes(ctx))
     ??     (await handleIntegrationRoutes(ctx))
     ??     (await handleNativeIntegrationRoutes(ctx))
+    ??     (await handleConnectionStatusRoutesOnDemand(ctx))
     ??     (await handleCursorIntegrationRoutes(ctx))
     ??     (await handleClaudeDesktopPickerRoutes(ctx))
     ??     (await handleDesktopCompatibilityRoutes(ctx))
@@ -450,7 +473,12 @@ export async function handleManagementAPI(
     // touched and point at its tray, whose Stop it honours (#3008 refuses an undone stop the same way).
     const desktopRefusal = desktopSupervisedStopRefusal(principal);
     if (desktopRefusal) return jsonResponse(desktopRefusal, 409, req, config);
-    const holdsReceipt = deferralHonored(url, deferralMatchesReceipt);
+    // Only a receipt for the port this listener is actually bound to defers its teardown (#8416);
+    // before it serves there is no such port, and no receipt is honoured.
+    const { boundServerPort } = await import("./lifecycle");
+    const servedPort = boundServerPort();
+    const ownsThisReceipt = (nonce: string | null) => deferralMatchesReceipt(nonce, servedPort);
+    const holdsReceipt = deferralHonored(url, ownsThisReceipt);
     // A sibling never runs under a service manager, and the installed service is the live
     // owner's: asking the manager to stop from here would refuse, or boot the owner's job out.
     const sibling = siblingOfLivePort() !== null;
@@ -495,7 +523,9 @@ export async function handleManagementAPI(
       }
       let serviceStop: import("../service").ServiceStopOutcome;
       try {
-        serviceStop = sibling ? "absent" : stopServiceIfInstalledDetailed();
+        // #7771: on Windows the route skips Part A for a receipt that records it, caps it at
+        // 6 s for one that does not, and sweeps a deleted task's stray wrapper in 4 s.
+        serviceStop = sibling ? "absent" : await (await import("./stop-service-route")).routeServiceStop(url, holdsReceipt);
       } catch (err) {
         if (isServiceOwnershipError(err)) {
           // The installed service belongs to another CODEX_HOME/OPENCODEX_HOME: it would respawn
@@ -515,11 +545,10 @@ export async function handleManagementAPI(
         }, 409, req, config);
       }
       if (serviceStop === "state-unknown") {
-        // Same case, same remedy as the pre-check: the query is what needs fixing.
         return jsonResponse({
           success: false,
           code: "service_state_unknown",
-          message: "The Windows Task Scheduler state could not be read, so this proxy cannot tell whether a wrapper would respawn it. Shared client config was left alone. Run `ocx service status` to see the query error, repair Task Scheduler access, then retry.",
+          message: "The Windows service or process state could not be verified, so the stop could not be confirmed. Shared client config was left alone.",
         }, 409, req, config);
       }
       // The pre-check above already refused the respawnable case without a receipt, so
@@ -528,7 +557,7 @@ export async function handleManagementAPI(
       // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
       // which is exactly why an intentional stop has to do it here — unless the caller is
       // `ocx stop`, which does it itself once the proxy is proven down.
-      const teardown = await performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt });
+      const teardown = await performStopTeardown(url, { ownsReceipt: ownsThisReceipt });
       if (teardown.sharedTeardown === "refused") return jsonResponse(teardown, 409, req, config);
       noteExplicitShutdownRequested(); // Accepted stops and signals remain irreversible.
       setTimeout(async () => {

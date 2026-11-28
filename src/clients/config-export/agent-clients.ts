@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { isLoopbackHostname, shouldInjectApiAuthHeader } from "../../codex/loopback-target";
 import { absoluteClientPath } from "../client-path";
 import { parseSegment } from "../../integrations/merge";
-import type { ExportContext, ExportClientId, ManagedContribution, OpencodeLaunchEnv } from "./contracts";
+import { filterDirectModeBareNative, type ExportContext, type ExportClientId, type ManagedContribution, type OpencodeLaunchEnv } from "./contracts";
 import { LOOPBACK_API_KEY_PLACEHOLDER } from "./constants";
 import { normalizeExportModels, authoritativeContextWindow } from "./model-metadata";
 import { buildQoderClientConfig, buildQoderContribution } from "./qoder";
@@ -37,7 +37,7 @@ function modelSelector(id: string): string | null {
 }
 
 function workbuddyRows(ctx: ExportContext) {
-  return normalizeExportModels(ctx.models).map(model => {
+  return normalizeExportModels(filterDirectModeBareNative(ctx.models, ctx.config)).map(model => {
     return {
       id: model.namespaced,
       name: `OpenCodex: ${model.displayName ?? model.namespaced}`,

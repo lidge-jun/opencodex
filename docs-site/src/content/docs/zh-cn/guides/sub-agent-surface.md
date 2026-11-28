@@ -13,12 +13,13 @@ description: 控制 Codex 如何在所有模型上生成和管理子代理。
 
 | 模式 | Codex 获得什么 | 适合谁 |
 | --- | --- | --- |
-| **v1** | 经典的命名空间 `spawn_agent`、`send_input`、`resume_agent` 和 `close_agent` 工具。spawn 可以直接选择另一个模型。 | 需要在不同 provider 之间可靠委派的初学者，尤其是原生到路由子级。 |
-| **base**（默认） | 上游模型固定值：GPT-5.6 Sol/Terra 使用 v2，Luna 使用 v1，未固定的模型遵循 Codex 的 `multi_agent_v2` 功能开关。 | 大多数用户。它按 Codex 对每个模型预期的界面运行，而不是全局强制一种。 |
+| **v1**（全新安装的默认值） | 经典的命名空间 `spawn_agent`、`send_input`、`resume_agent` 和 `close_agent` 工具。spawn 可以直接选择另一个模型。 | 需要在不同 provider 之间可靠委派的初学者，尤其是原生到路由子级。 |
+| **base** | 上游模型固定值：GPT-5.6 Sol/Terra 使用 v2，Luna 使用 v1，未固定的模型遵循 Codex 的 `multi_agent_v2` 功能开关。 | 大多数用户。它按 Codex 对每个模型预期的界面运行，而不是全局强制一种。 |
 | **v2** | 扁平的 `spawn_agent`、`send_message`、`followup_task`、`interrupt_agent` 和 agent-list 工具，并支持并发会话。 | 想要更新的并发工作流，并理解模型继承以及下面加密任务限制的用户。 |
+| **v2-plaintext** | 为新会话固定 V2 目录项，关闭全局强制，并在规范的 ChatGPT 转发路径上以明文编译符合条件的任务消息。 | 明确接受明文任务可能被保留的用户；进入时需要确认。 |
 
 :::tip[不确定？]
-先从 **base** 开始。只有当跨 provider 委派必须可预测地工作时才选 **v1**。只有在你明确想让所有目录条目都使用更新的会话模型时，才强制使用 **v2**。
+先从全新安装的默认模式 **v1** 开始，以便跨 provider 委派可预测地工作。要遵循上游固定值，请选择 **base**。只有在你明确想让所有目录条目都使用更新的会话模型时，才强制使用 **v2**。
 :::
 
 ## 工作原理
@@ -28,6 +29,7 @@ description: 控制 Codex 如何在所有模型上生成和管理子代理。
 - **v1** 会把所有模型的 `multi_agent_version` 设为 `"v1"`。
 - **base** 会恢复上游固定值。未固定的条目会遵循原生 `multi_agent_v2` 功能开关。
 - **v2** 会把所有模型的 `multi_agent_version` 设为 `"v2"`；但启用 **让 ChatGPT 保持 v1** 时例外：ChatGPT 原生条目保持 `"v1"`，路由/组合条目仍为 `"v2"`。
+- **v2-plaintext** 为新会话将目录项固定为 `"v2"`，关闭全局 V2 强制并启用明文编译器。
 
 opencodex 会把这一点作为最后一步同时应用到实时的 `/v1/models` 目录和同步到磁盘的目录。因此，模式更改会一致影响新建的 App、CLI 和 TUI 会话。
 
@@ -183,6 +185,8 @@ curl -X PUT http://localhost:10100/api/injection-model \
   -d '{"model":"anthropic/claude-sonnet-5","effort":"xhigh"}'
 ```
 
+首次通过 `PUT /api/v2` 进入 `v2-plaintext` 时，必须同时提交 `plaintextAgentMessagesAcknowledged: true`；仪表板会要求用户确认，CLI 则使用 `ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages`。
+
 ## FAQ
 
 ### 选择委派模型会强制 Codex spawn 它吗？
@@ -203,7 +207,7 @@ Codex 按 priority 从目录中填充最多五个列出位置。设置的模型�
 
 ### 模式更改会影响正在运行的会话吗？
 
-不会。更改模式后请启动一个新的 Codex 会话。如果长时间运行的 App host 仍然显示旧的目录状态，请运行 `ocx sync` 并重启那个 Codex 界面。
+目录固定值只影响新会话，已有会话保留其界面。但明文编译器遵循当前设置，也会影响已有 V2 会话后续符合条件的请求。要使用新的目录固定值，请启动新的 Codex 会话；如果长时间运行的 App host 仍显示旧目录状态，请运行 `ocx sync` 并重启该界面。
 
 ### 推理强度
 
@@ -213,7 +217,7 @@ Codex 按 priority 从目录中填充最多五个列出位置。设置的模型�
 
 模型上下文上限与子代理模式无关。请在 Models 页面配置它；原生 OpenAI 模型会保留其真实的上下文窗口。
 
-新配置不会写入实验性的 `plaintextV2AgentMessages` 字段，只有显式设置为 `true` 才会启用。
+新配置不会写入实验性的 `plaintextV2AgentMessages` 字段；显式设置为 `true` 或选择 `v2-plaintext` 模式均会启用编译器。该模式为新会话选择 V2 并关闭全局强制，不覆盖独立字段。编译器遵循当前设置，也影响已有 V2 会话的后续符合条件的请求；已有密文不会被解密，已保存的历史不会被改写，禁用不会删除已保留的副本。
 调用方必须使用 Responses 格式，最终目标必须采用 `adapter: "openai-responses"`、
 `authMode: "forward"` 和准确的基础地址 `https://chatgpt.com/backend-api/codex`。OpenAI API key
 provider、自定义兼容网关、最终发往其他 provider 的请求，以及非 Responses 调用都不会被改写。

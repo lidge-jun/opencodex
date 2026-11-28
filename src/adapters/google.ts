@@ -22,12 +22,13 @@ import type { OcxTool } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
 import { bindVertexRequestAuthority, GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessTokenWithAuthority } from "../lib/gcp-adc";
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
-import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
+import { fetchAntigravityWithRetry, fetchVertexWithRetry, GOOGLE_HOSTED_ITERATION_SEND_LIMIT } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { readDisplaySafeErrorPayloadText } from "./upstream-http-error";
-import { isVertexTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
+import { googleModeLabel, googlePromptBlockedEvent, googleStopReason, isGoogleTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
 import { antigravitySessionAnchor, antigravityUserAgentForWireModel, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { summarizeGoogleWireShape } from "./google-wire-shape";
+import { usageFromGemini } from "./google-usage";
 import { compileGoogleWireBody } from "./google-wire-compiler";
 import type { GoogleToolSchemaLossReport, GoogleToolSchemaProfile } from "./google-tool-schema";
 import { identifyRoutedModel } from "./identity";
@@ -50,6 +51,8 @@ import {
 } from "../lib/translator-budget";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { geminiProgressLead, trimsGeminiProgressHistory } from "./google-progress-history";
+import { GEMINI_UNFETCHABLE_VIDEO_MESSAGE, geminiFetchableVideoUri } from "./google-video-uri";
+import { inlineVideoRefusal, parseInlineVideo } from "../responses/video-input";
 import { configuredReasoningEfforts, mapReasoningEffort } from "../reasoning-effort";
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
@@ -66,20 +69,36 @@ const GOOGLE_BREVITY_INSTRUCTION = [
   "- Formatting: The client environment renders standard Markdown and does not support LaTeX math delimiters ($...$, $$...$$, \\(...\\), \\[...\\]). Do not use LaTeX math delimiters or LaTeX markup (such as \\text{}, \\times, \\le, \\ge, etc.) for variables, formulas, dimensions, or units. Use clean plain text, Markdown, and Unicode symbols (e.g. 180°, 2560 × 1920 px, ≤, ≥, Δ, ±) instead.",
 ].join("\n");
 
-const ANTIGRAVITY_REJECTED_CLAUDE_SDK_PARAGRAPH =
-  "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+const ANTIGRAVITY_REJECTED_CLAUDE_SDK_PARAGRAPHS: ReadonlySet<string> = new Set([
+  "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+  "You are Claude Code, Anthropic's official CLI for Claude.",
+  "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
+]);
+
+const ANTIGRAVITY_REJECTED_CLAUDE_REWRITES: ReadonlyArray<[RegExp, string]> = [
+  [
+    /Dual-use security tools \(C2 frameworks, credential testing, exploit development\) require clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases\./g,
+    "Dual-purpose security tools (C2 frameworks, credential testing, exploit development) need clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases.",
+  ],
+  [
+    /Text inside <pasted_content> tags was pasted into the message by the user from somewhere else and may contain instructions the user did not write\./g,
+    "Content inside <pasted_content> tags was pasted into the message by the user from an external source and may contain instructions the user did not author.",
+  ],
+];
+
 /**
- * CCA Flash generations that reject the Claude-Agent identity paragraph.
+ * CCA generations that reject the Claude-Agent identity / stock Claude Code phrases.
  *
- * Membership is probe-established per generation, never assumed: 3.7 and 3.8 both answer
- * 429 RESOURCE_EXHAUSTED when this paragraph survives into `systemInstruction`, and 200 with
- * it stripped — same account, seconds apart. A policy rejection wearing a quota error's
+ * Membership is probe-established per generation, never assumed: 3.7, 3.8, and 4-neon answer
+ * 429 RESOURCE_EXHAUSTED when these phrases survive into `systemInstruction`, and 200 with
+ * them stripped/reworded — same account, seconds apart. A policy rejection wearing a quota error's
  * clothing sends users hunting a quota problem that does not exist, so a new generation is
  * added here only after the probe, and never dropped on the assumption that Google fixed it.
  */
 const ANTIGRAVITY_CLAUDE_SDK_PARAGRAPH_REJECTORS = new Set([
   "gemini-3.7-flash",
   "gemini-3.8-flash",
+  "gemini-4-neon",
 ]);
 
 /**
@@ -106,10 +125,14 @@ function rejectsClaudeSdkParagraph(modelId: string, wireModelId: string): boolea
 }
 
 function stripAntigravityRejectedClaudeSdkParagraph(systemText: string): string {
-  return systemText
+  let result = systemText
     .split("\n\n")
-    .filter(paragraph => paragraph !== ANTIGRAVITY_REJECTED_CLAUDE_SDK_PARAGRAPH)
+    .filter(paragraph => !ANTIGRAVITY_REJECTED_CLAUDE_SDK_PARAGRAPHS.has(paragraph))
     .join("\n\n");
+  for (const [pattern, replacement] of ANTIGRAVITY_REJECTED_CLAUDE_REWRITES) {
+    result = result.replace(pattern, replacement);
+  }
+  return result;
 }
 
 /**
@@ -248,54 +271,6 @@ function toolResultImageParts(content: string | OcxContentPart[]): unknown[] {
  * built. Mirrors the Anthropic adapter's own empty-block guard (src/adapters/anthropic.ts).
  */
 /**
- * A video URI Gemini fetches on its own behalf, as a `file_data` reference.
- *
- * Deliberately an allowlist of the forms Google documents, not "anything that is
- * not a data: URL". `file_data` tells Gemini to go and get the bytes; pointing it
- * at an arbitrary host would either fail upstream or make the proxy the reason a
- * caller's private URL got dereferenced by Google. Anything not matched here
- * keeps the existing `[video: …]` text marker.
- *
- * Returns the uri alone: the documented REST example for a YouTube part carries
- * `file_data.file_uri` and nothing else, and the Files API knows the type of what
- * it stored. An invented `mime_type` would be a guess on both paths.
- *
- * https://ai.google.dev/gemini-api/docs/generate-content/video-understanding
- */
-function geminiFetchableVideoUri(url: string): string | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return null;
-  }
-  if (parsed.protocol !== "https:") return null;
-
-  const host = parsed.hostname.toLowerCase();
-  const youtubeHosts = new Set([
-    "youtube.com",
-    "www.youtube.com",
-    "m.youtube.com",
-    "music.youtube.com",
-    "youtu.be",
-    "www.youtube-nocookie.com",
-    "youtube-nocookie.com",
-  ]);
-  if (youtubeHosts.has(host)) return url;
-
-  // The Files API resource form, https://generativelanguage.googleapis.com/v1beta/files/<id>.
-  // Anchored at the start so the resumable-upload endpoint (/upload/v1beta/files/<id>) does
-  // not match: that URL is not a readable resource, and passing it as `file_data.file_uri`
-  // would have Gemini dereference something it cannot read. The version segment stays loose
-  // because this service is reachable as v1, v1beta and v1alpha.
-  if (host === "generativelanguage.googleapis.com" && /^\/v1[a-z0-9]*\/files\/[^/]+$/.test(parsed.pathname)) {
-    return url;
-  }
-
-  return null;
-}
-
-/**
  * The caller's requested video mode as GenerateContent spells it.
  *
  * `media_processing` sits on the part beside `inline_data`/`file_data` and takes
@@ -342,11 +317,12 @@ function geminiToolResultParts(
 ): unknown[] {
   const functionResponse: Record<string, unknown> = {
     name: wireName,
-    response: { result: geminiToolResultText(msg.content) },
+    // Google documents an "error" key for a call that failed to execute; CPA writes it on every route.
+    response: msg.isError ? { error: geminiToolResultText(msg.content) } : { result: geminiToolResultText(msg.content) },
     id: wireCallId,
   };
   const images = toolResultImageParts(msg.content);
-  // Vertex Argon rejects image siblings beside a functionResponse as an unsupported model tail.
+  // Vertex Gemini 3+ models reject image siblings beside a functionResponse as an unsupported model tail (ADR-7279, ADR-8969).
   if (nestToolResultImages && images.length > 0) {
     functionResponse.parts = images;
     return [{ functionResponse }];
@@ -403,6 +379,8 @@ function messagesToGeminiFormat(
 
   const contents: unknown[] = [];
   const replayedCallIds: string[] = [];
+  // On Cloud Code Assist the identity model is the routed wire model.
+  const claudeOnCloudCodeAssist = isCloudCodeAssist && /^claude-/i.test(identityModelId);
 
   const callIds = createToolCallIdAllocator();
   for (const msg of parsed.context.messages) {
@@ -438,20 +416,26 @@ function messagesToGeminiFormat(
               const mediaProcessing = geminiMediaProcessing(p.processing);
               const processingPart = mediaProcessing ? { media_processing: mediaProcessing } : {};
 
-              // Gemini accepts inline video bytes in the same Part union as images.
-              const data = parseDataUrl(p.videoUrl);
-              if (data) {
+              // Gemini accepts inline video bytes in the same Part union as images. The shared
+              // decoder is the one the input media guard and admission use; Gemini receives its
+              // canonical base64 and parameter-free media type, never the raw substring.
+              const inline = parseInlineVideo(p.videoUrl);
+              if (inline.ok) {
                 parts.push({
-                  inline_data: { mime_type: data.mediaType, data: data.base64 },
+                  inline_data: { mime_type: inline.mime, data: inline.base64 },
                   ...processingPart,
                 });
                 continue;
               }
+              const inlineRefusal = inlineVideoRefusal(p.videoUrl);
+              // The input media guard refuses this before the build; the throw keeps a direct
+              // caller from sending a malformed or oversized clip.
+              if (inlineRefusal) throw new Error(inlineRefusal);
               // Two URI forms Gemini fetches itself: a YouTube watch URL and a Files API
               // uri. Those ARE valid file_data references (#3271), and flattening them to
               // a text marker was the whole reason agentic video could not be reached —
-              // the video never arrived as a video. Every other remote URL keeps the
-              // marker: we have no mime type for it and no evidence Gemini can fetch it.
+              // the video never arrived as a video. Every other remote URL is refused:
+              // we have no mime type for it and no evidence Gemini can fetch it.
               const fileUri = geminiFetchableVideoUri(p.videoUrl);
               if (fileUri) {
                 // Emitted only when the caller asked for a mode, so no existing
@@ -459,14 +443,21 @@ function messagesToGeminiFormat(
                 parts.push({ file_data: { file_uri: fileUri }, ...processingPart });
                 continue;
               }
-              parts.push({ text: `[video: ${p.videoUrl}]` });
-              continue;
+              // The input media guard refuses this before the build; the throw keeps a direct
+              // caller from sending a text marker in place of a clip the model cannot see.
+              throw new Error(GEMINI_UNFETCHABLE_VIDEO_MESSAGE);
             }
             if (p.type === "document") {
               // Gemini takes document bytes through the same inline_data part as images and
               // video. The marker on the part is the fallback for wires without one, not this
               // wire's best effort (#5212).
               parts.push({ inline_data: { mime_type: p.mediaType, data: p.data } });
+              continue;
+            }
+            // Gemini accepts WAV and MP3 bytes as inline_data. Antigravity hands Claude models an
+            // Anthropic message, which has no audio block, so they keep the text marker.
+            if (p.type === "audio" && !claudeOnCloudCodeAssist) {
+              parts.push({ inline_data: { mime_type: p.format === "mp3" ? "audio/mp3" : "audio/wav", data: p.data } });
               continue;
             }
             // Drop empty/malformed text instead of emitting `{ text: "" }` or a bare `{}` part.
@@ -671,18 +662,8 @@ function toolChoiceToGeminiToolConfig(parsed: OcxParsedRequest): Record<string, 
   return {
     functionCallingConfig: {
       mode: "ANY",
-      allowedFunctionNames: [resolveToolChoiceWireName(parsed.context.tools, choice.name)],
+      allowedFunctionNames: [resolveToolChoiceWireName(parsed.context.tools, choice.name, choice)],
     },
-  };
-}
-
-function usageFromGemini(usage: Record<string, number> | undefined): OcxUsage | undefined {
-  if (!usage) return undefined;
-  return {
-    inputTokens: usage.promptTokenCount ?? 0,
-    outputTokens: usage.candidatesTokenCount ?? 0,
-    ...(usage.cachedContentTokenCount !== undefined ? { cachedInputTokens: usage.cachedContentTokenCount } : {}),
-    ...(usage.thoughtsTokenCount !== undefined ? { reasoningOutputTokens: usage.thoughtsTokenCount } : {}),
   };
 }
 
@@ -989,6 +970,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     // 429 rotation and raw error formatting.
     ...(provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist"
       ? {
+          hostedIterationSendLimit: GOOGLE_HOSTED_ITERATION_SEND_LIMIT,
           fetchResponse: async (request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> => {
             const res = await (provider.googleMode === "cloud-code-assist" ? fetchAntigravityWithRetry : fetchVertexWithRetry)(
               request,
@@ -1072,7 +1054,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         identityModelId,
         stripRejectedClaudeSdkParagraph,
         isCloudCodeAssist,
-        provider.googleMode === "vertex" && parsed.modelId === "gemini-4-argon",
+        provider.googleMode === "vertex" && /^gemini-(?:[3-9]|\d{2,})(?:[.-]|$)/i.test(parsed.modelId),
         isCloudCodeAssist && /^claude-/i.test(routedModelId),
       );
       lastInjectedCallIds = [...replayedCallIds];
@@ -1100,9 +1082,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // current behavior; Vertex participates only through an explicitly configured ladder (the
       // seed google-vertex entry ships none). Image models are excluded — thinkingConfig would
       // suppress the responseModalities fallback below. CCA maps effort on its envelope path.
-      const thinkingLevel = thinkingEligible
+      const rawThinkingLevel = thinkingEligible
         ? mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning)
         : undefined;
+      const thinkingLevel = rawThinkingLevel === "xhigh" && configuredEfforts === undefined
+        ? "high"
+        : rawThinkingLevel;
       const includeThoughts = thinkingEligible
         && provider.showThinkingSummary === true
         && parsed.options.hideThinkingSummary !== true
@@ -1359,6 +1344,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       };
       let pendingUsage: OcxUsage | undefined;
       let toolCallsStarted = 0;
+      let sawVisibleOutput = false;
       let lastFinishReason: string | undefined;
       let sawAnyFrame = false;
       let sawTerminalSignal = false;
@@ -1417,11 +1403,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         // usageMetadata is a top-level field independent of candidates; read it BEFORE the
         // candidates guard so a usage-only final chunk is not dropped.
-        const usageMeta = root.usageMetadata as Record<string, number> | undefined;
-        if (usageMeta) {
+        if (root.usageMetadata) {
           // Accumulate usage; emit a single terminal `done` post-loop so usage is never
           // dropped on EOF and the stream never yields two `done` events.
-          pendingUsage = usageFromGemini(usageMeta);
+          pendingUsage = usageFromGemini(root.usageMetadata) ?? pendingUsage;
           sawTerminalSignal = true;
         }
         const rawCandidates = root.candidates;
@@ -1431,6 +1416,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         // absent key and an empty array are already skipped here; `null` joins them. A non-null
         // non-array container is still claimed structure the parser cannot read, and stays
         // terminal.
+        // A prompt Google refused before generating arrives as promptFeedback with no candidates.
+        const feedback = root.promptFeedback;
+        if ((rawCandidates === undefined || rawCandidates === null || (Array.isArray(rawCandidates) && rawCandidates.length === 0))
+          && isGoogleRecord(feedback) && typeof feedback.blockReason === "string" && feedback.blockReason) {
+          yield googlePromptBlockedEvent(googleModeLabel(provider.googleMode), feedback.blockReason, pendingUsage);
+          return "terminate";
+        }
         if (rawCandidates === undefined || rawCandidates === null) return "continue";
         if (!Array.isArray(rawCandidates)) {
           yield invalidGoogleShapeEvent({
@@ -1508,6 +1500,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             const textEvent = googlePartTextEvent(part, returnsThoughtSummaries);
             if (textEvent) {
               emittedContentEvent = true;
+              // Thought text is not visible output: a thoughts-only turn that drops its answer fails closed.
+              if (textEvent.type === "text_delta") sawVisibleOutput = true;
               yield textEvent;
             }
             const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
@@ -1519,6 +1513,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
                   const filePath = await materializeInlineImage(inline.data, imageBudget);
                   const escapedPath = artifactMarkdownUrl(filePath);
                   emittedContentEvent = true;
+                  sawVisibleOutput = true;
                   yield { type: "text_delta", text: `\n![image](${escapedPath})\n` };
                 } catch {
                   yield { type: "error", message: "failed to materialize inline image" };
@@ -1530,6 +1525,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
               const id = `call_${crypto.randomUUID().slice(0, 8)}`;
               toolCallsStarted++;
               emittedContentEvent = true;
+              sawVisibleOutput = true;
               const restoredName = restoreGoogleToolName(functionCall.name);
               yield {
                 type: "tool_call_start",
@@ -1595,22 +1591,19 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             return;
           } else if ((yield* handleDataLine(residual)) === "terminate") return;
         }
-        // Fail-closed: a turn cut off mid tool call (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces
-        // an error instead of a silently-incomplete done. Mirrors kiro-truncation.
-        if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
-          && isVertexTruncatedTurn(lastFinishReason, toolCallsStarted)) {
-          yield vertexTruncationErrorEvent(lastFinishReason, toolCallsStarted, pendingUsage);
+        // Fail-closed on every Google mode: a turn cut off mid tool call (MAX_TOKENS /
+        // MALFORMED_FUNCTION_CALL), or one whose output Google dropped before anything visible
+        // arrived (UNEXPECTED_TOOL_CALL / MALFORMED_RESPONSE), surfaces an error instead of a
+        // silently incomplete done. Mirrors kiro-truncation.
+        if (isGoogleTruncatedTurn(lastFinishReason, toolCallsStarted, sawVisibleOutput)) {
+          yield vertexTruncationErrorEvent(lastFinishReason, toolCallsStarted, pendingUsage, googleModeLabel(provider.googleMode));
           return;
         }
         if (!sawAnyFrame || !sawTerminalSignal) {
           yield { type: "error", message: "upstream stream ended without a terminal signal — possible truncation" };
           return;
         }
-        const stopReason = lastFinishReason === "MAX_TOKENS"
-          ? "max_tokens"
-          : ["SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"].includes(lastFinishReason ?? "")
-            ? "content_filter"
-            : undefined;
+        const stopReason = googleStopReason(lastFinishReason);
         yield {
           type: "done",
           usage: pendingUsage,
@@ -1739,6 +1732,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
       const candidates = rawCandidates as { finishReason?: string }[] | undefined;
       if (!candidates?.length) {
+        const feedback = (json as { promptFeedback?: unknown }).promptFeedback;
+        if (isGoogleRecord(feedback) && typeof feedback.blockReason === "string" && feedback.blockReason) {
+          return finish([googlePromptBlockedEvent(googleModeLabel(provider.googleMode), feedback.blockReason,
+            usageFromGemini(json.usageMetadata))]);
+        }
         return finish([{ type: "error", message: "google response contained no candidates" }]);
       }
       const rawCandidate: unknown = candidates[0];
@@ -1753,6 +1751,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
       const candidate = rawCandidate as { content?: unknown; finishReason?: string };
       let toolCallsStarted = 0;
+      let sawVisibleOutput = false;
       const imageBudget = createImageBudget();
       const rawContent: unknown = candidate.content;
       const invalidContent = diagnoseGoogleContent(rawContent);
@@ -1779,7 +1778,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             pendingThoughtSig = sig;
           }
           const textEvent = googlePartTextEvent(part, returnsThoughtSummaries);
-          if (textEvent) events.push(textEvent);
+          if (textEvent) {
+            if (textEvent.type === "text_delta") sawVisibleOutput = true;
+            events.push(textEvent);
+          }
           const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
           if (inline && typeof inline.data === "string") {
             if (inline.data.length > MAX_ENCODED_BYTES_PER_IMAGE) {
@@ -1788,6 +1790,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
               try {
                 const filePath = await materializeInlineImage(inline.data, imageBudget);
                 const escapedPath = artifactMarkdownUrl(filePath);
+                sawVisibleOutput = true;
                 events.push({ type: "text_delta", text: `\n![image](${escapedPath})\n` });
               } catch {
                 events.push({ type: "error", message: "failed to materialize inline image" });
@@ -1798,6 +1801,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           if (functionCall) {
             const id = `call_${crypto.randomUUID().slice(0, 8)}`;
             toolCallsStarted++;
+            sawVisibleOutput = true;
             events.push({
               type: "tool_call_start",
               id,
@@ -1810,31 +1814,26 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
       }
 
-      // Fail-closed truncation, same as the stream path: a non-stream turn cut off mid tool call
-      // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
-      if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
-        && isVertexTruncatedTurn(candidate.finishReason, toolCallsStarted)) {
+      // Fail-closed, same rule as the stream path, on every Google mode.
+      if (isGoogleTruncatedTurn(candidate.finishReason, toolCallsStarted, sawVisibleOutput)) {
         return finish([vertexTruncationErrorEvent(
           candidate.finishReason,
           toolCallsStarted,
-          usageFromGemini(json.usageMetadata as Record<string, number> | undefined),
+          usageFromGemini(json.usageMetadata),
+          googleModeLabel(provider.googleMode),
         )]);
       }
 
-      const usage = json.usageMetadata as Record<string, number> | undefined;
+      const usage = usageFromGemini(json.usageMetadata);
       // Mirror the streaming path: a buffered turn cut off by the token limit or a content filter
       // must carry its stop reason, or the bridge sees a clean `done` and reports the truncated
       // turn as completed — and, on a compaction turn, installs the half-written summary as
       // replacement history (#422).
       const finishReason = candidate.finishReason as string | undefined;
-      const stopReason = finishReason === "MAX_TOKENS"
-        ? "max_tokens"
-        : ["SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"].includes(finishReason ?? "")
-          ? "content_filter"
-          : undefined;
+      const stopReason = googleStopReason(finishReason);
       events.push({
         type: "done",
-        usage: usageFromGemini(usage),
+        usage,
         ...(stopReason ? { stopReason } : {}),
       });
       return finish(events);

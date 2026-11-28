@@ -27,6 +27,12 @@ describe("a Child or Hub client cannot serve from local providers", () => {
   test("control: the standalone server does reach provider dispatch, so the walk is not vacuous", () => {
     expect(firstLoadTimePathTo("src/server/index.ts", path => LOCAL_SERVING.test(path))).not.toBeNull();
   });
+  test("route-intent transport and receipt helpers do not eagerly load device writers", () => {
+    const writers = /\/src\/client\/route-intent-apply\.ts$|\/src\/integrations\/route-intent\.ts$/;
+    for (const entry of ["src/integrations/route-intent-connected.ts", "src/integrations/route-intent-disconnect.ts"]) {
+      expect(firstLoadTimePathTo(entry, path => writers.test(path))).toBeNull();
+    }
+  });
 });
 
 describe("home_unreachable answers", () => {
@@ -47,8 +53,8 @@ describe("home_unreachable answers", () => {
 
   test("a Hub client's relay keeps its 502 and adds the stable code when the Hub does not answer", async () => {
     const response = await relayHubManagementRequest(
-      new Request("http://127.0.0.1:10100/api/machine/hub-relay/api/fallback"),
-      "/api/fallback",
+      new Request("http://127.0.0.1:10100/api/machine/hub-relay/api/provider-quotas"),
+      "/api/provider-quotas",
       { managementUrl: "https://hub.example.test", browserOrigin: "http://127.0.0.1:10100" },
       { fetchImpl: (async () => { throw new TypeError("connect ECONNREFUSED"); }) as unknown as typeof fetch },
     );

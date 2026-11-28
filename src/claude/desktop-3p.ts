@@ -1,6 +1,6 @@
 import { readClientConnectionState } from "../client/state";
 import { readServiceApiTokenState, readTokenBackupState } from "../lib/service-secrets";
-import { withClientLifecycleSync, type ClientLifecycleLockDeps } from "../client/lifecycle-lock";
+import { assertClientLifecycleHeld, withClientLifecycleSync, type ClientLifecycleHeld, type ClientLifecycleLockDeps } from "../client/lifecycle-lock";
 import { applyRemoteDesktopStore, inspectRemoteDesktopCleanup, restoreRemoteDesktopStore } from "./desktop-remote-store";
 import { canonicalDirectory } from "./desktop-remote-store-io";
 import {
@@ -171,8 +171,9 @@ function collectDesktop3pModels(
   routedModels: Array<Desktop3pRoutedModel>,
   profile?: OcxClaudeDesktopProfile,
   nativeContextCap?: NativeContextLimitsInput,
-): { models: Desktop3pModelEntry[]; routes: string[]; registry: Map<string, string>; realAnthropicIds: Set<string> } {
+) {
   const registry = new Map<string, string>();
+  const aliasesByRoute = new Map<string, string>();
   const models: Desktop3pModelEntry[] = [];
   // routes[i] is the route models[i] serves; visibility filters by route, never by alias.
   const routes: string[] = [];
@@ -198,7 +199,6 @@ function collectDesktop3pModels(
     } satisfies DesktopProfileModel));
     const reconciled = reconcileDesktopProfile(profile, profileModels);
     const rendered = renderDesktopProfile(reconciled, profileModels);
-    const aliasesByRoute = new Map<string, string>();
     for (const model of rendered) {
       const realAnthropic = model.route.startsWith("anthropic/claude-");
       if (!realAnthropic && realAnthropicIds.has(model.name)) {
@@ -251,11 +251,9 @@ function collectDesktop3pModels(
         registry.set(legacy, model.route);
       }
     }
-    desktop3pAliasesByRoute = aliasesByRoute;
-    return { models, routes, registry, realAnthropicIds };
+    return { models, routes, registry, aliasesByRoute, realAnthropicIds };
   }
 
-  const aliasesByRoute = new Map<string, string>();
   const emittedNames = new Set<string>();
   for (const { provider, id, contextWindow } of candidates) {
     const route = `${provider}/${id}`;
@@ -310,8 +308,13 @@ function collectDesktop3pModels(
   }
 
   if (models[0]) models[0].isFamilyDefault = true;
+  return { models, routes, registry, aliasesByRoute, realAnthropicIds };
+}
+
+function installDesktop3pRegistry({ registry, aliasesByRoute, realAnthropicIds }: ReturnType<typeof collectDesktop3pModels>): void {
+  desktop3pRegistry = registry;
   desktop3pAliasesByRoute = aliasesByRoute;
-  return { models, routes, registry, realAnthropicIds };
+  desktop3pRealAnthropicIds = realAnthropicIds;
 }
 
 /** Build and install the registry used to decode Desktop aliases. */
@@ -321,10 +324,9 @@ export function buildDesktop3pRegistry(
   profile?: OcxClaudeDesktopProfile,
   nativeContextCap?: NativeContextLimitsInput,
 ): Map<string, string> {
-  const { registry, realAnthropicIds } = collectDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
-  desktop3pRegistry = registry;
-  desktop3pRealAnthropicIds = realAnthropicIds;
-  return registry;
+  const collected = collectDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
+  installDesktop3pRegistry(collected);
+  return collected.registry;
 }
 
 /** Generate Claude Desktop 3P model entries from the proxy's available models. */
@@ -348,9 +350,9 @@ export function generateDesktop3pModels(
   nativeContextCap?: NativeContextLimitsInput,
   options: Desktop3pModelOptions = {},
 ): Desktop3pModelEntry[] {
-  const { models: all, routes, registry, realAnthropicIds } = collectDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
-  desktop3pRegistry = registry;
-  desktop3pRealAnthropicIds = realAnthropicIds;
+  const collected = collectDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
+  installDesktop3pRegistry(collected);
+  const { models: all, routes } = collected;
   let models = filterDesktopModelsByVisibility(all, routes, options.visibility);
   if (models.length === 0 && all.length > 0) {
     // An empty static list leaves Desktop with no usable picker. The dashboard refuses to save
@@ -408,7 +410,9 @@ export function activeDesktop3pAlias(provider: string, modelId: string): string 
 
 /** Discovery cannot offer a skipped alias or one owned by a different route. */
 export function resolvableDesktop3pAlias(provider: string, modelId: string): string | undefined {
-  if (provider === "anthropic" && modelId.startsWith("claude-")) return modelId;
+  if (provider === "anthropic" && modelId.startsWith("claude-")) {
+    return desktop3pRealAnthropicIds.has(modelId) ? modelId : undefined;
+  }
   const alias = activeDesktop3pAlias(provider, modelId);
   return resolveDesktop3pAlias(alias) === `${provider}/${modelId}` ? alias : undefined;
 }
@@ -571,6 +575,7 @@ export function removeDesktop3pStandardPivot(
   options: Desktop3pConfigLibraryOptions & {
     appliedFingerprint?: string | null; unlink?: (path: string) => void;
     lifecycleLockDeps?: ClientLifecycleLockDeps;
+    lifecycleHeld?: ClientLifecycleHeld;
     /**
      * The desired-state guard below exists for OFF flows racing a concurrent enable. A
      * mode switch (gateway → first-party) removes the profile while the integration stays
@@ -581,7 +586,7 @@ export function removeDesktop3pStandardPivot(
 ): Desktop3pRemovalResult {
   const libraryPath = resolveDesktop3pConfigLibraryPath(options);
   try {
-    return withClientLifecycleSync<Desktop3pRemovalResult>(held => withConfigMutationLockSync(() => {
+    const remove = (held: ClientLifecycleHeld): Desktop3pRemovalResult => withConfigMutationLockSync(() => {
       const connection = readClientConnectionState();
       if (connection.kind === "invalid" || connection.kind === "mismatched") {
         return { ok: false, changed: false, kind: "unsafe", libraryPath, reason: `desktop_client_state_${connection.kind}` };
@@ -621,7 +626,9 @@ export function removeDesktop3pStandardPivot(
       return result.ok
         ? { ok: true, changed: result.changed, kind: result.changed ? "removed" : "noop", libraryPath }
         : { ok: false, changed: result.changed, kind: result.reason === "cleanup_pending" ? "cleanup_incomplete" : "unsafe", reason: result.reason, libraryPath };
-    }), options.lifecycleLockDeps);
+    });
+    if (options.lifecycleHeld) { assertClientLifecycleHeld(options.lifecycleHeld); return remove(options.lifecycleHeld); }
+    return withClientLifecycleSync(remove, options.lifecycleLockDeps);
   } catch (error) {
     return { ok: false, changed: false, kind: "write_failed", libraryPath, reason: desktopMutationFailureReason(error) };
   }
@@ -724,9 +731,10 @@ export function writeDesktop3pConfig(
   nativeContextCap?: NativeContextLimitsInput,
   lifecycleLockDeps?: ClientLifecycleLockDeps,
   refreshOnly?: { appliedFingerprint: string; admit: () => boolean },
+  lifecycleHeld?: ClientLifecycleHeld,
 ): { written: boolean; path: string; reason?: string; fingerprint?: string } {
   try {
-    return withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+    const write = () => withConfigMutationLockSync(() => {
       const connection = readClientConnectionState();
       if (connection.kind === "invalid" || connection.kind === "mismatched") {
         return { written: false, path: resolveDesktop3pConfigLibraryPath(), reason: `desktop_client_state_${connection.kind}` };
@@ -785,7 +793,9 @@ export function writeDesktop3pConfig(
         generateDesktop3pConfig(destination.origin, nativeSlugs, routedModels, gatewayKey, mode, profile, nativeContextCap,
           desktop3pModelOptions(latest.config.claudeCode))
       ), requiredId && refreshOnly ? { requiredId, expectedFingerprint: refreshOnly.appliedFingerprint, admit: refreshOnly.admit } : undefined);
-    }), lifecycleLockDeps);
+    });
+    if (lifecycleHeld) { assertClientLifecycleHeld(lifecycleHeld); return write(); }
+    return withClientLifecycleSync(write, lifecycleLockDeps);
   } catch { return { written: false, path: resolveDesktop3pConfigLibraryPath(), reason: "desktop_lifecycle_busy_or_unsafe" }; }
 }
 

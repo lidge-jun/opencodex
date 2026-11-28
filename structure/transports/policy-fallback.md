@@ -23,6 +23,15 @@ so a public combo or profile alias cannot reselect its destination. Redirects re
 original evaluation, including eligible destinations omitted from the bounded diagnostic trace.
 The outer retry owner captures caller admission policy before its first attempt when ingress has not
 already supplied it. Every candidate receives that same immutable Advisor policy snapshot.
+Translated Messages turns with hosted Advisor declarations or replay also carry one numeric spend
+snapshot across candidates. Once a candidate withholds optional hosted Advisor, later candidates
+keep it withheld even when the live ceilings change or a later credential has no applicable ceiling.
+
+An explicitly selected [hosted Advisor](../advisor.md#execution-paths) that is unavailable on the
+candidate's route, under its model scope, or under the selected credential's captured spend ceiling
+uses the same candidate-local refusal identity with public HTTP 400 attached. A spend refusal occurs
+before vision preprocessing. An eligible later candidate may fulfill the selection. An ambiguous
+declaration remains a terminal request error.
 
 When a main-account hard-lock fallback selects a profile, `src/server/responses/request-prepare.ts`
 checks its first ranked destination against the original model under the
@@ -55,6 +64,10 @@ credential recovery — is a dispatched candidate instead: the hop it was sent o
 that sent destination becomes the next hop's source for the fallback guard.
 Completed physical attempt rows remain intact, and final logging settles the last actual send's usage.
 The initial decision remains the selection evidence while physical attempts record execution.
+Candidate hops clear the previous candidate's cache-affinity outcome, kept entry, serving
+credential, model, and applicability before dispatch. A single-key or opted-out destination
+cannot inherit a prior candidate's `kept` outcome. Local skips restore the failed owner's
+context under the same rollback rule.
 When every observed refusal is specifically a mandatory-tool incompatibility, exhausted policy traversal returns the direct 400 diagnostic. Generic local skips and upstream failures permanently exclude that projection; cancellation and replay boundaries retain precedence. Discarded local bodies and replaced upstream failure bodies are cancelled to settle their lifetime owners; a refused fallback guard also cancels the retained failure.
 
 Cancellation, non-replayable responses and committed output keep the

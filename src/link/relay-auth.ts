@@ -10,6 +10,7 @@ export const LINK_RELAY_SESSION_HEADER = "x-opencodex-link-session";
 export const LINK_RELAY_PROBE_HEADER = "x-opencodex-link-probe";
 export const LINK_RELAY_AUTH_VERSION = "2";
 export const LINK_RELAY_AUTH_TIMEOUT_MS = 5_000;
+export const LINK_RELAY_AUTH_FAILED_CODE = "link_relay_auth_failed";
 /**
  * An additive part of a Home's relay-auth answer: which tunnel connection the proof crossed, as
  * `<Home runtime instance>:<tunnel generation>`, bound to the same nonce and link key by its own
@@ -46,6 +47,20 @@ export function linkConnectionProof(fingerprint: string, keyId: string, linkId: 
   if (!isLinkConnectionGeneration(generation) || !linkRelayProof(fingerprint, "listener", keyId, linkId, nonce)) return null;
   return createHmac("sha256", Buffer.from(fingerprint, "hex"))
     .update(`opencodex-link-connection-v1\0${keyId}\0${linkId}\0${nonce}\0${generation}`).digest("hex");
+}
+
+/**
+ * Whether this Home accepts the Responses WebSocket over the link, on a verified relay-auth answer.
+ * Sent only while the feature is on; a Child applies an answer without it as off. The proof binds
+ * the value to the nonce and both identities, as linkConnectionProof does.
+ */
+export const LINK_RELAY_WS_STATE_HEADER = "x-opencodex-link-ws-state";
+export const LINK_RELAY_WS_STATE_PROOF_HEADER = "x-opencodex-link-ws-proof";
+
+export function linkWebsocketStateProof(fingerprint: string, keyId: string, linkId: string, nonce: string, value: "on" | "off"): string | null {
+  if (!linkRelayProof(fingerprint, "listener", keyId, linkId, nonce)) return null;
+  return createHmac("sha256", Buffer.from(fingerprint, "hex"))
+    .update(`opencodex-link-ws-v1\0${keyId}\0${linkId}\0${nonce}\0${value}`).digest("hex");
 }
 
 /** The direction and both identities are covered; a caller proof is never a listener proof. */

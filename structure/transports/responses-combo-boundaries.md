@@ -11,7 +11,7 @@ options. Service diagnostics follow the [producer bounds](../ops/service-logging
 ## Context-window refusals
 
 `isDefiniteContextOverflow` in `src/lib/context-overflow-verdict.ts` (re-exported by
-`src/combos/failover.ts`) reads bounded innermost provider messages.
+`src/combos/failover.ts`) reads bounded innermost provider messages. Negation-aside matching starts at words or commas; a separate pass consumes surrounding whitespace once within each 120-character lookbehind, preserving newline and clause-boundary behavior.
 OpenAI context-length wording keeps its substring match; Anthropic `prompt is too long: N tokens > M maximum`,
 Bedrock `input is too long for requested model`, provider messages confirming the conversation/input has reached or passed its model context limit, a prompt that is too long for the model's context window, a window/length/limit that is full, exhausted, at its limit or has been exceeded, and `Please reduce the length of the messages or completion`
 count only in the innermost provider message (the anchored verdicts need the provider message to start with them, while the explicit too-long/context-window wording may appear inside it), so a validation error or SDK wrapper that echoes them is not
@@ -27,6 +27,35 @@ or a refused later send budget. Later fatal errors and explicit fallback-policy 
 Every physical attempt retains its own send count and usage. Coverage: `tests/helpers/combo-context-overflow-cases.ts`
 (registered by `tests/server/server-combo-failover-e2e.test.ts`), `tests/server/server-combo-reasoning-replay-eligibility.test.ts`
 and `tests/responses/responses-combo-exhausted-error.test.ts`.
+
+## Unoffered tool-call refusals
+
+`isUnofferedToolCallRefusal` in `src/combos/failover.ts` recognizes the provider verdicts for
+target-local model failures: that a model called a function the request never offered (`The model
+called a function that was not offered in tools.`) alongside the parser control-marker refusal
+(`The model returned an unexpected parser control marker; no output was published.`). The match is
+anchored to each sentence inside a bounded envelope walk — closed code/type/param sets (applied again inside an object-valued `param`), competing
+diagnostic carriers and a contradicting root message all fail closed — so quoted or reflected
+occurrences cannot impersonate the verdict. `consumeComboFailure` classifies the intact bounded body
+and passes the verdict through `unofferedToolCallRefusal`, because the 500-character display prefix
+would leave a long envelope unparseable. Like the other pre-output 400 hops it advances the combo
+without cooling the target: the model hallucinated the call or control marker on this target, the
+request itself fit, and the refusal arrives before any output commits. Coverage: `tests/routing/combo-unoffered-tool-refusal.test.ts`.
+
+## Reasoning-effort diagnostics
+
+`src/providers/reasoning-metadata.ts` checks the complete diagnostic before it parses fields or
+scans prose. Both automatic effort repair and its default conflict check accept at most 1,024
+UTF-16 code units. Effort repair rejects longer diagnostics in full, without truncating them
+or using a prefix to downgrade the request or learn a rejected effort.
+
+Exact-refusal Combo and policy fallback allow up to 16,384 UTF-16 code units for the complete
+envelope, which can include unrelated metadata. Each diagnostic prose scan still has a
+1,024-unit limit. A conflicting diagnostic field anywhere in the accepted envelope vetoes fallback.
+
+Field-separator patterns avoid overlapping whitespace runs. Optional field labels match whole words.
+An unquoted verb phrase such as "cannot use parameter" stays prose. Quoted or separately named
+fields still participate in the conflict check. The input limit bounds the remaining heuristics.
 
 ## Buffered required-tool contract
 
@@ -98,8 +127,15 @@ or post-commit typed failure. Caller hosted non-function selectors retain their 
 The outbound request parser shared with passthrough lives in `src/server/responses/outbound-request-body.ts`,
 so required-tool checks do not import the stream recovery owner.
 Completed item events and terminal snapshots can satisfy it; a call start alone cannot.
-Missing calls turn `response.completed` into `response.failed` with
-`required_tool_contract_unsatisfied`, retaining response identity, output and usage.
+A missing call in a clean `response.completed` becomes `response.failed` with
+`required_tool_contract_unsatisfied`, retaining response identity, output and usage. An error or
+refusal content on either terminal carrier preserves the upstream verdict and commits the stream.
+When either carrier has meaningful `error` or `last_error` evidence, HTTP/SSE and WebSocket delivery
+retain the provider's completion frame while terminal accounting reports failure. Empty placeholders
+preserve a clean completion. A failed completion cannot publish local continuation state, update
+success affinity, or clear a combo reprobe cooldown. The buffered JSON path returns the mapped
+provider error and settles the send using the reported terminal usage. Its in-process
+non-replayable marker prevents a second combo dispatch even when the mapped status is retryable.
 The client rewrite judges restored calls before continuation observers and hosted-image display.
 The raw inspector and client guard resolve selectors and observed calls through the same authorized
 Muse/namespace alias maps, authorized self-named scrub and catalog-aware default-namespace normalization.
@@ -108,17 +144,19 @@ or persisting completion. Eager and tee retain their readers and cancellation ow
 Provider-owned custom calls retain their call-ID-prefix ownership. Hosted effects, unknown items,
 and the local web-search bridge make the verdict non-replayable, including sparse terminal snapshots.
 
-Only this mandatory native contract extends preflight to hold known reasoning frames. It keeps the
-existing aggregate byte/chunk caps and a fixed `COMBO_REQUIRED_TOOL_REASONING_HOLD_MS` deadline of
-1,000 ms from the first held reasoning frame in `src/server/responses/combo-stream-preflight.ts`.
+The mandatory native contract holds known reasoning frames during preflight. It keeps the
+existing aggregate byte/chunk caps and a fixed `COMBO_STREAM_PRELUDE_HOLD_MS` deadline of
+1,000 ms from the first buffered client-visible event in `src/server/responses/combo-stream-preflight.ts`.
 Trickling frames do not reset it. Deadline expiry, text, tools, opaque/unknown events or either cap
 commit this child; expiry releases held bytes and transfers the pending read to the existing relay,
 preserving its eventual chunk or error exactly once without authorizing replay. A missing-call
 terminal held before commitment becomes the existing 502 combo failure; another
-target remains subject to eligibility, consent and budgets. After commitment the typed failed
-terminal remains with that child. Lifecycle snapshots with output and failed/incomplete snapshots
-with output commit conservatively; only a checked missing-call terminal with harmless text/reasoning
-may be discarded. Cancellation wakes a pending read; every exit clears the hold timer and checks cancellation before parent success.
+target remains subject to eligibility, consent and budgets. A replay veto on either terminal
+carrier still applies after the native missing-call rewrite. After commitment the typed failed
+terminal remains with that child. Output in a lifecycle or terminal snapshot commits conservatively.
+The checked missing-call terminal and the [degenerate-completion rule](#committed-terminal-cooldown-and-degenerate-completion-failover)
+can discard held prelude under their respective guards. Cancellation wakes a pending read; every exit
+clears the hold timer and checks cancellation before parent success.
 Auto/none, unknown contracts, direct native routes, Chat and runTurn keep their terminal owners.
 Coverage: `tests/server/server-combo-stream-required-tool.test.ts`,
 `tests/server/server-combo-stream-hosted-tool-contract.test.ts` (hosted substitutions, eager/tee),
@@ -136,6 +174,7 @@ Explicit non-SSE types pass through unread, including parameters or longer subty
 event-stream token. A caller can still opt into inspecting a response without a content type. Non-streaming
 JSON from a native (non-runTurn) child is therefore never inspected here: an empty `max_output_tokens`
 limit in such a body is returned to the client unchanged, and only SSE and runTurn children fail over on it.
+A process-marked native stream has a raw-body observer, so this downstream inspector keeps terminal, output and error classification but does not collect usage again. Client display estimates stay outside the [spend contract](responses-spend.md#durable-spend-reservations); unmarked upstream/reset preflight retains normal usage inspection.
 
 Native post-header reset recovery shares that boundary, because it is asking the same question
 about the same bytes. With `replayReadErrors`, the preflight reports the stage it observed —
@@ -146,6 +185,8 @@ resend gate decides. Control frames (`response.in_progress`, `response.queued`,
 not advance the stage. Once output commits the stream or a terminal ends inspection, a later read
 error belongs to the relay and never reaches the resend gate. A lifecycle event with output, an error, incomplete details, a contradictory
 status, a replay-unsafe mark, unknown event or snapshot fields, or unsafe nested metadata commits the original stream.
+Snapshot selector types are validated without coercion. A replay-classification exception also
+commits the original stream, preserving its bytes and preventing a replacement attempt.
 An SSE event name that conflicts with its JSON type, an opaque frame,
 or an unfinished output/error/terminal frame on a rejected read also keeps the original bytes and
 read error; the last SSE event field is authoritative. A clean EOF before output or a terminal is offered only to the native reset recovery
@@ -195,29 +236,28 @@ comment, cannot extend it, and the reset gate never resends a guard timeout. For
 JSON, the collector reports the guard's failure as a stall timeout. The hold emits a comment only when
 it reads non-empty upstream bytes or a replacement head lands behind a committed head, so the collector's own clock, which starts after
 selection and sees only delivered bytes, never ends a turn before the guard would. The byte and chunk
-caps and the collector's whole-turn ceiling remain in force.
+caps and the collector's whole-turn ceiling remain in force. That ceiling runs from the moment selection began holding the head (`bufferedResetSelectionStartedAt` in `src/server/responses/passthrough-completion.ts`), so the selection wait counts against it while sends before selection do not (#8343).
 Downstream cancellation or the request's abort signal ends the selection or hold at once, aborts an
 in-flight replacement, and never awaits upstream cleanup.
 
-- a non-control Responses event (apart from the held mandatory-tool reasoning prelude above and the
-  Codex metadata frames) begins client-visible output or a tool/action item, after which the
+- a non-control Responses event (apart from held reasoning or commentary and the Codex metadata
+  frames) begins client-visible output or a tool/action item, after which the
   target is committed and cross-target replay is forbidden;
 - a `response.failed` terminal arrives first, in which case the terminal is converted back through
   the ordinary bounded combo-failure classifier and may advance to the next declared target;
 - a zero-output `response.incomplete` with no reason, `adapter_eof`, `missing_terminal_event`,
   `upstream_stall_timeout`, or an empty-output `max_output_tokens` limit follows the same failure path.
-  The `max_output_tokens` arm needs the evidence `classifyZeroOutputTokenLimit` requires in
-  `src/adapters/run-turn-queue.ts`: `end_turn` must not be `false` and
-  `incomplete_details.retryable` must not be `false`. A translated Anthropic `pause_turn` also
-  reaches the wire as `incomplete/max_output_tokens`, so `src/bridge/sse.ts` records it on the
-  request context (`src/lib/client-error-body.ts`) and this preflight keeps it on its target while
-  the client keeps the same reason and usage. Other explicit semantic or unknown reasons stay
-  terminal;
+  A paused turn, `end_turn: false`, or `incomplete_details.retryable: false` keeps the terminal
+  on its target, including when the reason is absent. Preflight reads incomplete details from the
+  terminal event and nested response independently. Either carrier can veto replay. `src/bridge/sse.ts` records translated Anthropic
+  `pause_turn` on the request context (`src/lib/client-error-body.ts`) and preserves the wire reason
+  `max_output_tokens` and usage. Other explicit semantic or unknown reasons stay terminal;
 - a top-level `error` arrives before output, in which case unknown, rate-limit, and server failures
   may advance while errors explicitly classified as non-retryable 4xx remain committed;
   a bare error with no status field of its own but an integral numeric `code` in 400..599 takes
   that code as its HTTP status (`bareErrorStatus`), so it gets the same decision and cooldown scope
-  as the same HTTP response; non-integral, out-of-range and string codes keep the symbolic mapping;
+  as the same HTTP response; non-integral, out-of-range and string codes keep the symbolic mapping; an untyped
+  error envelope commits the target and the relay reports its eventual failure without replay;
 - another completed/incomplete terminal or the aggregate preflight byte or retained-chunk cap is reached,
   in which case the current target is committed conservatively.
 
@@ -240,8 +280,9 @@ after the ladder returns, until completion or cancellation. Buffered/exhausted e
 ladder binding in `finally`. `tests/server/server-combo-zero-output-failover.test.ts` covers failover,
 accepted stream lifetime, cancellation, and exactly-once attached-lease release.
 Plain admission leases without controller binding do not register or unregister a ladder controller.
-Reasonless incomplete snapshots containing output items stay committed; an explicit `reason: null`
-also stays terminal. `tests/routing/combo-stream-preflight.test.ts` pins these conservative boundaries.
+
+An explicit `reason: null` stays terminal. Reasonless incomplete snapshots with semantic output
+stay committed. `tests/routing/combo-stream-preflight.test.ts` pins these boundaries.
 Hop warnings in `src/server/responses/core-combo.ts` name the status and the closed condition from
 `classifyUpstreamCondition` ([proxy-owned error detail](../data-planes/error-detail.md)); upstream codes,
 messages and bodies stay out. `tests/responses/responses-combo-exhausted-error.test.ts` pins that log boundary.
@@ -267,6 +308,36 @@ deprecated, sunset, decommissioned, or no longer available). An unrelated applic
 not retried.
 
 > Decision record: [ADR-0071](../decisions/ADR-0071-combo-streaming-commit-boundary.md)
+
+## Combo selection keepalive
+
+A streaming combo selection can outlast an intermediary's idle limit while preflight holds every
+child head (#8326). `handleComboResponses` in `src/server/responses/core.ts` therefore runs the ladder
+through `selectComboWithKeepalive` (`src/server/responses/combo-selection-keepalive.ts`) when
+`comboSelectionKeepaliveApplies` holds: `stream: true`, the `comboSelectionKeepalive` option that only
+the HTTP `/v1/responses` route in `src/server/index/serve-options.ts` sets, no WebSocket transport, a
+Responses inbound wire and no internal decision call. Chat and Messages ingresses, WebSocket frames
+and non-streaming turns keep the selected response and its status unconditionally.
+
+If selection settles within `COMBO_SELECTION_KEEPALIVE_THRESHOLD_MS` (15 s), the ladder's own
+response object is returned unchanged, including a rejection, so zero-output failover and the real
+HTTP status of an all-targets failure stay exactly as above. Otherwise a 200 `text/event-stream`
+head is returned whose first read yields `: keepalive`, and another comment is owed every
+`COMBO_SELECTION_KEEPALIVE_INTERVAL_MS` (15 s) until selection settles. Behind that head an accepted
+SSE child is relayed byte for byte; any other outcome becomes one `response.failed` event whose
+`error` and `last_error` carry the failure envelope's `code`, `type` and display-safe message, with
+the original status written to `logCtx.terminalHttpStatus` for the request log. A ladder that throws
+after the head becomes `server_error` with proxy-owned copy and status 502. The chosen child's headers
+and identity markers cannot reach a head that is already committed. The combo ladder lease is
+still released when selection settles, because the keepalive wraps the whole ladder.
+
+The committed head is an unmarked SSE response, so the ingress request-log tap records its terminal;
+`comboSelectionKeepaliveLadderOptions` drops the ingress native-passthrough log callbacks once the
+head is committed so the request is logged once. Cancelling the committed stream aborts the signal
+the ladder runs on, stops the timer and cancels a child body that arrives later. An already aborted
+request never commits a head. The clock is an injected seam; tests advance it manually
+(`tests/routing/combo-selection-keepalive.test.ts`,
+`tests/server/server-combo-selection-keepalive.test.ts`).
 
 ## Upstream account quota exhaustion failover
 
@@ -303,3 +374,39 @@ ordinary failover by supplying the same header. The wire body remains `rate_limi
 The message says no additional provider request was sent when the current request already has
 physical sends; an admission refusal before its first send retains the no-provider wording.
 Coverage: `tests/responses/chat-native-spend.test.ts` and `tests/responses/responses-spend-contract-c.test.ts`.
+
+For a named hosted Advisor, union capability admission counts only destinations that can forward the scoped declaration. An otherwise eligible text-only destination can still receive an image-omission fallback under `degrade`.
+
+## Committed terminal cooldown and degenerate completion failover
+
+When a streaming combo child commits output to the client and then terminates `incomplete`,
+`coolComboTargetForCommittedTerminal` in `src/combos/failover.ts` records a bounded cooldown for
+that target under its configured alias selector (`pick.target`) and writer generation, so future
+picks route around it. `src/server/request-log-terminal-status.ts` captures a closed reason from the
+first incomplete terminal, checking both the event and its response snapshot. A refusal in either
+carrier takes precedence. Display diagnostics and error messages do not select the cooldown.
+
+- `max_output_tokens` applies a 10-minute cooldown when the turn is unpaused and the serving attempt's
+  output tokens reach the routed provider and model's configured or native ceiling (`resolveOutputCeiling`).
+  `src/server/request-log-committed-terminal.ts` reads the serving attempt's usage. The request row
+  still totals usage across attempts. `src/server/responses/core-combo.ts` carries the committed child's
+  pause marker and late native terminal reason to the parent. Devin targets without a configured ceiling are
+  ineligible for this cooldown because the Devin preset does not declare one.
+- `upstream_stall_timeout` applies a 60-second cooldown, recording the timeout even if finalization overwrote the
+  serving attempt status with a client-facing 5xx code.
+Existing live cooldowns with a later expiration (e.g. upstream Retry-After) are never shortened by a
+committed terminal write.
+
+Responses combo preflight holds reasoning and commentary for up to 1,000 ms from the first buffered
+client-visible event, including `response.created`. A terminal within that window can trigger
+`degenerate_completion` when its output contains only reasoning and commentary text. A terminal-only
+snapshot can itself supply the prelude. Refusals and other non-prelude content commit the original
+stream whether they arrive in a separate frame or only in a terminal snapshot. A terminal error on
+either carrier preserves the upstream verdict instead of becoming a synthetic degenerate failure. An explicit
+`end_turn: false`, `incomplete_details.retryable: false`, or semantic reason such as `content_filter`
+on either the terminal event or the response snapshot vetoes degenerate and zero-output replay.
+When both carriers allow replay, `max_output_tokens` on either carrier takes the zero-output limit
+path and retains its dedicated error code. With prelude output, the limit commits the stream.
+Hold expiry commits the original stream. The next hop remains subject to eligibility and send budget.
+Coverage: `tests/routing/combo-committed-terminal-cooldown.test.ts`, `tests/routing/combo-stream-preflight.test.ts`,
+and `tests/routing/combo-stream-prelude-guards.test.ts`.

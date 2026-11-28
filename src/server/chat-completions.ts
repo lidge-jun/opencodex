@@ -17,13 +17,17 @@ import {
   assertChatCompletionsRoutingBody,
   chatRawReasoningVisible,
   ChatCompletionsRequestError,
+  ChatUnsupportedInputModalityError,
 } from "../chat/inbound";
+import { chatBodyVideoRefusal } from "../responses/video-input";
 import { chatSettingsBody, chatToResponsesBody } from "../protocols/codecs/chat";
+import { getCombo } from "../combos/types";
 import { chatConversationToIr, chatIrRouteEvidence, withDirectChatConversation, type ChatIrConversation } from "../protocols/codecs/chat-ir";
 import { antigravityDirectDeclineReason } from "./antigravity-direct-eligibility";
 import { normalizeChatImageParts } from "../chat/image-parts";
 import { chatHasInstructionImage } from "../adapters/claude-cli/instruction-images";
 import { chatHasUnsupportedInstructionMedia } from "../adapters/trae-cn/input-media";
+import { AGY_ACP_INTERACTIVE_ONLY, AGY_ACP_LOCAL_ONLY, isUnattendedAgyAcpHttpTurn } from "../adapters/agy-acp/policy";
 import {
   chatCompletionsErrorResponse,
   collectChatCompletion,
@@ -33,7 +37,7 @@ import {
 } from "../chat/outbound";
 import { ADVISOR_INTERNAL_CAPABILITY_HEADER, isInternalCallCapability } from "../lib/local-internal-call-capability";
 import type { CapturedAdmissionPolicy } from "../types/admission-policy";
-import { ADVISOR_ADMISSION_SCOPE_HEADER, decodeAdvisorAdmissionScope, ADVISOR_ADMISSION_POLICY_HEADER, readAdvisorAdmissionPolicy, SIDECAR_ADMISSION_POLICY_HEADER, SIDECAR_INTERNAL_CAPABILITY_HEADER } from "./advisor-admission-scope";
+import { ADVISOR_ADMISSION_SCOPE_HEADER, decodeAdvisorAdmissionScope, ADVISOR_ADMISSION_POLICY_HEADER, readAdvisorAdmissionPolicy, readInternalCallRegistration, SIDECAR_ADMISSION_POLICY_HEADER, SIDECAR_INTERNAL_CAPABILITY_HEADER } from "./advisor-admission-scope";
 import {
   captureAdmissionPolicy, captureSelfFetchCredentialPolicy, inheritAdmissionPolicy, intersectAdmissionPolicies, selfFetchHostPolicy,
 } from "./capture-admission-policy";
@@ -120,6 +124,43 @@ type Rec = Record<string, unknown>;
 function isRec(v: unknown): v is Rec {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
+
+const MAX_DERIVED_SESSION_ID_CHARS = 256;
+
+function normalizeSessionCandidate(raw: string | null | undefined): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_DERIVED_SESSION_ID_CHARS) return undefined;
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const code = trimmed.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return undefined;
+  }
+  return trimmed;
+}
+
+function codebuddyBaggageSessionId(baggageHeader: string | null): string | undefined {
+  if (!baggageHeader) return undefined;
+  for (const entry of baggageHeader.split(",")) {
+    const member = entry.split(";", 1)[0]?.trim();
+    if (!member) continue;
+    const eq = member.indexOf("=");
+    if (eq <= 0) continue;
+    if (member.slice(0, eq).trim() !== "codebuddy.session_id") continue;
+    const rawVal = member.slice(eq + 1).trim();
+    let decoded = rawVal;
+    try { decoded = decodeURIComponent(rawVal); } catch { /* keep raw */ }
+    const normalized = normalizeSessionCandidate(decoded);
+    if (normalized) return normalized;
+  }
+  return undefined;
+}
+
+export function deriveChatSessionId(reqHeaders: Headers, _chatBody: Rec): string | undefined {
+  return normalizeSessionCandidate(reqHeaders.get("x-opencode-session"))
+    ?? normalizeSessionCandidate(reqHeaders.get("x-session-id"))
+    ?? normalizeSessionCandidate(reqHeaders.get("x-conversation-id"))
+    ?? codebuddyBaggageSessionId(reqHeaders.get("baggage"));
+}
 function routingPolicyRefusalMessage(kind: "unknown" | "unavailable", model: ClientFacingModelLabel): string {
   return kind === "unknown" ? `Unknown routing policy: ${clientFacingModelText(model)}`
     : `No eligible candidates for policy profile: ${clientFacingModelText(model)}`;
@@ -133,15 +174,22 @@ async function readChatBody(req: Request, budget: TranslatorBudget, maxBytes: nu
   }
 }
 
+interface ChatCompletionsRequestOptions {
+  requestId: string;
+  start: number;
+  turnAdmissionLease?: AdmissionLease;
+  admission?: DataPlaneAdmission;
+  advisorAdmissionPolicy?: CapturedAdmissionPolicy;
+  suppressProtocolTrace?: boolean;
+  /** Turn classification from the original native HTTP request before Chat translation. */
+  agyAcpUnattendedHttpTurn?: boolean;
+}
+
 export async function handleChatCompletions(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
-  logIds?: {
-    requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission;
-    advisorAdmissionPolicy?: CapturedAdmissionPolicy;
-    suppressProtocolTrace?: boolean;
-  },
+  logIds?: ChatCompletionsRequestOptions,
 ): Promise<Response> {
   if (logIds?.suppressProtocolTrace) suppressProtocolTrace(logCtx);
   // Set before routing so pre-dispatch refusals stay correlated. A Hermes-only id is marked as a
@@ -176,24 +224,23 @@ async function handleChatCompletionsWithBudget(
   config: OcxConfig,
   logCtx: RequestLogContext,
   translatorBudget: TranslatorBudget,
-  logIds?: {
-    requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission;
-    advisorAdmissionPolicy?: CapturedAdmissionPolicy;
-  },
+  logIds?: ChatCompletionsRequestOptions,
 ): Promise<Response> {
   const advisorInternal = isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER));
-  const sidecarInternal = isInternalCallCapability(req.headers.get(SIDECAR_INTERNAL_CAPABILITY_HEADER));
+  const sidecarCapability = req.headers.get(SIDECAR_INTERNAL_CAPABILITY_HEADER);
+  const sidecarInternal = isInternalCallCapability(sidecarCapability);
+  const sidecarRegistration = readInternalCallRegistration(req.headers.get(SIDECAR_ADMISSION_POLICY_HEADER), sidecarCapability);
   const callerPolicy = advisorInternal
     ? readAdvisorAdmissionPolicy(req.headers.get(ADVISOR_ADMISSION_POLICY_HEADER), req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER))
-    : readAdvisorAdmissionPolicy(req.headers.get(SIDECAR_ADMISSION_POLICY_HEADER), req.headers.get(SIDECAR_INTERNAL_CAPABILITY_HEADER));
+    : sidecarRegistration?.policy;
   const decodedScope = advisorInternal
     ? decodeAdvisorAdmissionScope(req.headers.get(ADVISOR_ADMISSION_SCOPE_HEADER))
     : undefined;
   // Only a validated internal hop gets its presented credential resolved; loopback admission for
   // every other caller is untouched. An unknown credential fails closed (#7894).
   const selfFetchPolicy = callerPolicy ? captureSelfFetchCredentialPolicy(req, config) : undefined;
-  if ((advisorInternal || sidecarInternal) && (!callerPolicy || selfFetchPolicy === null
-    || advisorInternal && req.headers.has(ADVISOR_ADMISSION_SCOPE_HEADER) && !decodedScope)) {
+  if (selfFetchPolicy === null || (sidecarInternal && !sidecarRegistration)
+    || (advisorInternal && (!callerPolicy || (req.headers.has(ADVISOR_ADMISSION_SCOPE_HEADER) && !decodedScope)))) {
     // Refused requests still own a final log row like every other early rejection.
     if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });
     return chatCompletionsErrorResponse(403, "invalid inherited advisor admission scope", "permission_error", MODEL_NOT_ALLOWED_FOR_KEY);
@@ -242,6 +289,9 @@ async function handleChatCompletionsWithBudget(
     chatBody.service_tier = "priority";
   }
   const stream = chatBody.stream === true;
+  const streamOptions = chatBody.stream_options;
+  const includeUsage = stream && typeof streamOptions === "object" && streamOptions !== null
+    && (streamOptions as Rec).include_usage === true;
   // Best-effort Grok attribution: the managed fence stamps this header on every model
   // it registers (extra_headers, sent verbatim by upstream Grok). Dashboard usage
   // bucketing only — never an auth or billing signal.
@@ -289,6 +339,9 @@ async function handleChatCompletionsWithBudget(
     callerAuthorizationRoute = !routeMayChangeCredentialDomain
       && providerConsumesCallerAuthorization(route.provider);
     if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro") {
+      // Usage estimation serializes the messages; a refused clip is refused before that copy.
+      const videoRefusal = chatBodyVideoRefusal(chatBody);
+      if (videoRefusal) throw new ChatUnsupportedInputModalityError(videoRefusal);
       const parts: string[] = [];
       if (chatBody.messages !== undefined) parts.push(JSON.stringify(chatBody.messages));
       if (chatBody.tools !== undefined) parts.push(JSON.stringify(chatBody.tools));
@@ -298,7 +351,7 @@ async function handleChatCompletionsWithBudget(
     // effort, failover, and per-attempt telemetry run before any native Chat send.
     nativeDecline = route.combo ? "combo-or-policy-route"
       : effortRow ? "effort-row"
-      : nativeChatDeclineReason(route, chatBody, config);
+      : nativeChatDeclineReason(route, chatBody, config, { advisorInternal });
     if (nativeDecline === undefined) {
       chatNativeRoute = route;
       // Reserve an input estimate for spend without recording it as usage: native Chat attempts
@@ -314,6 +367,11 @@ async function handleChatCompletionsWithBudget(
       }
     }
   } catch (err) {
+    if (err instanceof ChatUnsupportedInputModalityError) {
+      logCtx.requestedModel = requestedModel;
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
+      return chatCompletionsErrorResponse(400, err.message, "invalid_request_error", err.code);
+    }
     if (err instanceof AnthropicSecondaryInstanceUnavailableError) {
       logCtx.requestedModel = requestedModel;
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 401, { closeReason: "non_stream" });
@@ -422,6 +480,8 @@ async function handleChatCompletionsWithBudget(
       internalBody = chatSettingsBody(chatBody);
     } else {
       internalBody = chatToResponsesBody(chatBody, {
+        allowInlineAudio: settledRoute?.combo !== undefined
+          && getCombo(config, settledRoute.combo.comboId)?.capabilityPolicy === "union",
         // #7429: only a route that is and stays first-party Anthropic may receive signed thinking
         // a Chat client returns; a combo, policy or rewritten route resolves its target later.
         acceptAnthropicReasoningSignatures: settledRoute !== null && !routeMayChangeCredentialDomain
@@ -454,7 +514,7 @@ async function handleChatCompletionsWithBudget(
       status,
       overflow ? "request translation buffer exceeded the safe limit" : err instanceof Error ? err.message : String(err),
       overflow ? "request_too_large" : undefined,
-      overflow ? "translation_buffer_limit" : undefined,
+      overflow ? "translation_buffer_limit" : err instanceof ChatUnsupportedInputModalityError ? err.code : undefined,
     );
   }
 
@@ -513,6 +573,8 @@ async function handleChatCompletionsWithBudget(
   // Caller-owned only: stored-main enrichment below is sidecar authority, never Direct authority.
   const callerDirectAuth = captureCallerDirectAuth(req.headers, config);
   let openAiSidecarAuth = nativeCallerAuth;
+  const agyAcpUnattendedHttpTurn = logIds?.agyAcpUnattendedHttpTurn === true
+    || isUnattendedAgyAcpHttpTurn(req.headers, chatBody);
   const headers = new Headers({ "content-type": "application/json" });
   // Internal bridge metadata; the Go resolver scopes and hashes it before upstream use.
   const openCodeSession = req.headers.get("x-opencode-session");
@@ -523,6 +585,11 @@ async function handleChatCompletionsWithBudget(
     const value = req.headers.get(name);
     if (value) headers.set(name, value);
   }
+  // Derive non-canonical Chat Completions session identity purely internally for advisor task
+  // tracking — never mutate `headers` (`session-id`), which FORWARD_HEADERS relays upstream.
+  const advisorSessionIdentity = (!headers.has("session_id") && !headers.has("session-id") && !headers.has("thread-id"))
+    ? deriveChatSessionId(req.headers, chatBody)
+    : undefined;
   // Existing primary enrichment stays on non-caller-auth routes. Caller-auth routes defer
   // optional stored sidecar auth until the final helper plan actually needs it.
   if (!callerAuthorizationRoute) {
@@ -577,6 +644,7 @@ async function handleChatCompletionsWithBudget(
   const finalizeNativeLog = createFinalRequestLog(logIds, logCtx).finish;
   const upstream = await handleResponses(internalReq, config, logCtx, {
     clientModelLabel: clientFacingModelLabel(requestedModel),
+    agyAcpUnattendedHttpTurn,
     openAiSidecarAuth,
     allowStoredOpenAiSidecarAuth: !!(callerAuthorizationRoute && settledRoute
       && !isCanonicalOpenAiForwardProvider(settledRoute.provider)),
@@ -618,6 +686,8 @@ async function handleChatCompletionsWithBudget(
     // header — so the fact is detected here and carried as an option flag.
     ...(visionDescribeTerminal ? { visionDescribeTerminal: true } : {}),
     ...(advisorInternal ? { advisorInternal: true } : {}),
+    ...(sidecarRegistration ? { internalSidecarCall: true } : {}),
+    ...(advisorSessionIdentity ? { advisorSessionIdentity } : {}),
     ...(inheritedAdmissionScope ? { admissionScope: inheritedAdmissionScope } : {}),
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
@@ -627,7 +697,7 @@ async function handleChatCompletionsWithBudget(
     // point of the lane is that neither direction passes through the internal Responses body.
     ...(directRoute && directConversation
       ? {
-        clientEncoder: { protocol: "chat" as const, stream, model: requestedModel, requestLane: "direct" as const },
+        clientEncoder: { protocol: "chat" as const, stream, includeUsage, model: requestedModel, requestLane: "direct" as const },
         directRequest: {
           protocol: "chat" as const,
           providerName: directRoute.providerName,
@@ -645,7 +715,7 @@ async function handleChatCompletionsWithBudget(
         },
       }
       : directEncodersApply(config, settledRoute)
-        ? { clientEncoder: { protocol: "chat" as const, stream, model: requestedModel } }
+        ? { clientEncoder: { protocol: "chat" as const, stream, includeUsage, model: requestedModel } }
         : {}),
   });
   // Already in the Chat wire: no conversion. A direct-encoder body (PF-09) reports its own log
@@ -718,6 +788,9 @@ async function handleChatCompletionsWithBudget(
       // Structured model_not_found must win over classifyError's generic remaps.
       classified.code = "model_not_found";
       classified.type = "invalid_request_error";
+    } else if (upstream.status === 403 && isProxyError(upstream) && (upstreamCode === AGY_ACP_INTERACTIVE_ONLY || upstreamCode === AGY_ACP_LOCAL_ONLY)) {
+      classified.code = upstreamCode;
+      classified.type = "permission_error";
     } else if (upstreamCode === UNDECLARED_TOOL_CALL_ERROR_CODE) {
       // The guard's deterministic refusal keeps its wire identity — same code the
       // streamed `response.failed` frame and the Anthropic surface carry.
@@ -774,7 +847,7 @@ async function handleChatCompletionsWithBudget(
 
   if (contentType.includes("text/event-stream") && response.body) {
     const failureVerdictSink: FailureVerdictSink = {};
-    const chatSse = responsesSseToChatCompletionsSse(response.body, requestedModel, { translatorBudget, failureVerdictSink, proxyErrorContext: logCtx });
+    const chatSse = responsesSseToChatCompletionsSse(response.body, requestedModel, { translatorBudget, failureVerdictSink, proxyErrorContext: logCtx, includeUsage });
     if (stream) {
       // Stream failures surface as an error SSE frame then abort the body — never a
       // success completion that embeds `[error] ...` + clean [DONE].

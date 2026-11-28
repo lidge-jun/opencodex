@@ -54,6 +54,7 @@ import {
 } from "./windows-user-principal";
 
 const hardenedDirectories = new Map<string, HardenedIdentity>();
+const verifiedRuntimeDirectories = new Map<string, HardenedIdentity>();
 const hardenedPaths = new Map<string, HardenedIdentity>();
 /** Elevated-stage memos are kept apart from the secret ones: the ACL shapes differ. */
 const hardenedStageDirectories = new Map<string, HardenedIdentity>();
@@ -355,8 +356,9 @@ type IcaclsRunner = (args: string[], timeoutMs: number) => IcaclsResult;
 type AsyncIcaclsRunner = (args: string[], timeoutMs: number) => Promise<IcaclsResult>;
 
 /** The only icacls operations this module runs; argv is never derived from it. */
-export type IcaclsStep = "/grant:r" | "/inheritance:r" | "/remove:g" | "/findsid";
-const ICACLS_STEPS: ReadonlySet<string> = new Set(["/grant:r", "/inheritance:r", "/remove:g", "/findsid"]);
+const combinedRestrictionStep = "/inheritance:r /remove:g";
+export type IcaclsStep = "/grant:r" | "/inheritance:r" | "/remove:g" | "/findsid" | typeof combinedRestrictionStep;
+const ICACLS_STEPS: ReadonlySet<string> = new Set(["/grant:r", "/inheritance:r", "/remove:g", "/findsid", combinedRestrictionStep]);
 
 /**
  * Fixed failure stages for `aclFailure` diagnostics: the shared deadline ran
@@ -732,6 +734,7 @@ export function setNowForTests(fn: (() => number) | null): void {
 /** Test seam: clear memo/failure caches between cases. */
 export function resetHardenedStateForTests(): void {
   hardenedDirectories.clear();
+  verifiedRuntimeDirectories.clear();
   hardenedPaths.clear();
   hardenedStageDirectories.clear();
   hardenedStagePaths.clear();
@@ -1004,13 +1007,24 @@ function shouldVerifyExistingAcl(): boolean {
   return env["OPENCODEX_ACL_VERIFY_EXISTING"] === "1";
 }
 
+function batchSecretRestrictions(extraReadAces: readonly string[]): boolean {
+  return extraReadAces.length === 0 && env["OPENCODEX_ACL_BATCH_RESTRICTIONS"] === "1";
+}
+
+function rememberRuntimeDirectoryAcl(targetPath: string, before: PathObservation | null, verified: boolean, deadline: number): boolean {
+  const after = observe(targetPath);
+  if (!verified || before === null || after === null || !sameObservation(before, after) || nowFn() >= deadline) return false;
+  // Keep this stricter descriptor proof separate from the general harden memo.
+  verifiedRuntimeDirectories.set(targetPath, after);
+  return true;
+}
+
 function existingAclAlreadyCompliant(targetPath: string, directory: boolean, deadline: number, strictDirectory = false): boolean {
   if (strictDirectory) {
+    if (memoSatisfied(verifiedRuntimeDirectories, targetPath)) return true;
     const before = observe(targetPath);
     const verified = verifyWindowsEntriesAcl([{ path: targetPath, directory: true, policy: "private-runtime-directory" }], deadline - nowFn());
-    const after = observe(targetPath);
-    // No name-only fallback or success memo: this proof belongs to this observation only.
-    return verified && before !== null && after !== null && sameObservation(before, after) && nowFn() < deadline;
+    return rememberRuntimeDirectoryAcl(targetPath, before, verified, deadline);
   }
   if (!shouldVerifyExistingAcl()) return false;
   const identity = cachedCurrentWindowsIdentity();
@@ -1039,10 +1053,10 @@ async function existingAclAlreadyCompliantAsync(
   strictDirectory = false,
 ): Promise<boolean> {
   if (strictDirectory) {
+    if (memoSatisfied(verifiedRuntimeDirectories, targetPath)) return true;
     const before = observe(targetPath);
     const verified = await verifyWindowsEntriesAclAsync([{ path: targetPath, directory: true, policy: "private-runtime-directory" }], deadline - nowFn());
-    const after = observe(targetPath);
-    return verified && before !== null && after !== null && sameObservation(before, after) && nowFn() < deadline;
+    return rememberRuntimeDirectoryAcl(targetPath, before, verified, deadline);
   }
   if (!shouldVerifyExistingAcl()) return false;
   const identity = cachedCurrentWindowsIdentity();
@@ -1095,6 +1109,12 @@ function runIcacls(targetPath: string, directory: boolean, deadline: number, ext
   // Step 1: grant current user full control BEFORE any destructive ACL change.
   // If this fails, inheritance is untouched and the writer keeps inherited access.
   runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(principal, directory), ...extraReadAces]);
+  if (batchSecretRestrictions(extraReadAces)) {
+    // A failed compound command cannot prove inheritance was disabled. The split
+    // path's harmless missing-SID exception therefore does not apply here.
+    runOrThrow(combinedRestrictionStep, [targetPath, "/inheritance:r", "/remove:g", ...BROAD_SIDS]);
+    return;
+  }
 
   // Step 2: disable inheritance and remove inherited ACEs. The explicit owner ACE
   // from step 1 survives this transition, so a later failure still leaves cleanup access.
@@ -1156,6 +1176,10 @@ async function runIcaclsAsync(targetPath: string, directory: boolean, deadline: 
   };
 
   await runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(principal, directory), ...extraReadAces]);
+  if (batchSecretRestrictions(extraReadAces)) {
+    await runOrThrow(combinedRestrictionStep, [targetPath, "/inheritance:r", "/remove:g", ...BROAD_SIDS]);
+    return;
+  }
   await runOrThrow("/inheritance:r", [targetPath, "/inheritance:r"]);
 
   const { result: removal, meta: removalMeta } = await run("/remove:g", [targetPath, "/remove:g", ...BROAD_SIDS]);
@@ -1387,7 +1411,11 @@ function hardenEntry(
 ): HardenResult {
   // Observed absence retires the memo. Leaving it would let a later file at this
   // path satisfy the cache if the filesystem ever hands back a matching identity.
-  if (!existsSync(targetPath)) { cache.delete(targetPath); return { ok: true }; }
+  if (!existsSync(targetPath)) {
+    cache.delete(targetPath);
+    if (directory) verifiedRuntimeDirectories.delete(targetPath);
+    return { ok: true };
+  }
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
   const deadline = nowFn() + resolveHardenDeadlineMs(opts.deadlineMs);
@@ -1442,7 +1470,11 @@ function hardenEntryAsync(
   cache: Map<string, HardenedIdentity>,
   extraReadAces: readonly string[],
 ): Promise<HardenResult> {
-  if (!existsSync(targetPath)) { cache.delete(targetPath); return Promise.resolve({ ok: true }); }
+  if (!existsSync(targetPath)) {
+    cache.delete(targetPath);
+    if (directory) verifiedRuntimeDirectories.delete(targetPath);
+    return Promise.resolve({ ok: true });
+  }
   if (effectivePlatform() !== "win32" || memoSatisfied(cache, targetPath)) return Promise.resolve({ ok: true });
   return startTrackedAsyncAclWork(targetPath,
     () => runHardenEntryAsync(targetPath, directory, opts, cache, extraReadAces)).work;

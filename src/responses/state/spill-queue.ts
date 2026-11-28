@@ -40,7 +40,6 @@ export interface SpillQueueStore {
   currentEntry(id: string): StoredResponseState | undefined;
   residentEntries(): Array<[string, StoredResponseState]>;
   recomputeOldestResident(): void;
-  schedulePersist(): void;
   pruneResponses(): void;
   accountedResponseSpillBytes(): number;
   spillByteCap(): number;
@@ -193,6 +192,7 @@ function spillPayloadForResident(candidate: ResidentResponseState): Parameters<t
   return {
     createdAt: candidate.createdAt,
     ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
+    ...(candidate.replayOwnerKey ? { replayOwnerKey: candidate.replayOwnerKey } : {}),
     items: candidate.items,
     ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
     ...(candidate.providers ? { providers: candidate.providers } : {}),
@@ -261,7 +261,6 @@ async function runPendingResponseSpill(job: PendingResponseSpill): Promise<void>
     releasePendingResponseSpill(job);
     requireStore().recomputeOldestResident();
     if (!cancelled) {
-      requireStore().schedulePersist();
       requireStore().pruneResponses();
       enforceAppOwnedMemoryBudget();
     }
@@ -273,6 +272,11 @@ export function queuePendingResponseSpill(
   candidate: ResidentResponseState,
   options: { supersededSpill?: ResponseSpillRef; directAdmission?: boolean } = {},
 ): void {
+  if (candidate.connectionOwned === true) {
+    // Refuse without changing the map or a foreign pending publication for this id.
+    // The state owner's memory-pressure and close paths perform scoped eviction.
+    return;
+  }
   const inheritedSpill = cancelPendingResponseSpill(id) ?? options.supersededSpill;
   if (pendingResponseSpillBytes + candidate.sizeBytes > MAX_PENDING_RESPONSE_SPILL_BYTES) {
     noteSpillWriteFailure(null, "ECAPACITY");
@@ -327,6 +331,11 @@ export function replaceWithPendingResponseSpill(
   expected: StoredResponseState | undefined,
   options: { directAdmission?: boolean } = {},
 ): boolean {
+  if (candidate.connectionOwned === true) {
+    // Only the state owner's transactional admission validates liveness, applies limits,
+    // and indexes these residents for socket-close cleanup. No spill seam may install one.
+    return false;
+  }
   const inheritedSpill = pendingResponseSpillById.get(id)?.supersededSpill
     ?? (expected?.kind === "spill" ? expected.spill : undefined);
   if (!requireStore().replaceMapEntry(id, candidate, expected)) return false;
@@ -528,6 +537,7 @@ function stopAtShutdownTerminalizationPassLimit(
   }
   for (const [id, state] of requireStore().residentEntries()) {
     if (state.kind !== "resident") continue;
+    if (state.connectionOwned === true) { requireStore().deleteEntry(id); continue; }
     noteSpillWriteFailure(null, "ELOOP");
     requireStore().replaceWithSpillFailure(id, state);
   }

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
@@ -56,6 +56,8 @@ import { mergeModelCapabilities, modelCapabilitiesConfigError } from "../../conf
 import { modelRecordValue } from "../../reasoning-effort";
 import { commitProviderPatch } from "./provider-patch-transaction";
 import { ConfigWritePublishedError } from "../../config/persist-unlocked";
+import { readConfigFileSnapshot } from "../../config/diagnostics";
+import { adoptPersistedCombos } from "../../config/live-reconcile";
 import {
   customRowInputModalities,
   isVisionSidecarConsumer,
@@ -94,7 +96,9 @@ function sparseComboConfig<T extends {
   reasoningEffortMode?: "strict" | "adaptive";
   defaultEffortMode?: "fallback" | "force";
   jevEffortMode?: "decide" | "client";
-}>(combo: T): Omit<T, "cooldownMs" | "waitForCooldownMs" | "cooldownWaitPolicy" | "imageInput" | "reasoningEffortMode" | "defaultEffortMode" | "jevEffortMode"> & {
+  capabilityPolicy?: "intersection" | "union";
+  onUnservable?: "degrade" | "reject";
+}>(combo: T): Omit<T, "cooldownMs" | "waitForCooldownMs" | "cooldownWaitPolicy" | "imageInput" | "reasoningEffortMode" | "defaultEffortMode" | "jevEffortMode" | "capabilityPolicy" | "onUnservable"> & {
   cooldownMs?: number;
   waitForCooldownMs?: number;
   cooldownWaitPolicy?: OcxComboCooldownWaitPolicy;
@@ -102,6 +106,8 @@ function sparseComboConfig<T extends {
   reasoningEffortMode?: "adaptive";
   defaultEffortMode?: "force";
   jevEffortMode?: "client";
+  capabilityPolicy?: "union";
+  onUnservable?: "reject";
 } {
   const {
     cooldownMs,
@@ -111,6 +117,8 @@ function sparseComboConfig<T extends {
     reasoningEffortMode,
     defaultEffortMode,
     jevEffortMode,
+    capabilityPolicy,
+    onUnservable,
     ...rest
   } = combo;
   return {
@@ -126,12 +134,71 @@ function sparseComboConfig<T extends {
     ...(reasoningEffortMode === "adaptive" ? { reasoningEffortMode: "adaptive" as const } : {}),
     ...(defaultEffortMode === "force" ? { defaultEffortMode: "force" as const } : {}),
     ...(jevEffortMode === "client" ? { jevEffortMode: "client" as const } : {}),
+    ...(capabilityPolicy === "union" ? { capabilityPolicy: "union" as const } : {}),
+    ...(onUnservable === "reject" ? { onUnservable: "reject" as const } : {}),
   };
 }
 
 interface VisionSidecarTarget {
   provider: string;
   model: string;
+}
+
+function comboRevision(combo: OcxComboConfig): string {
+  const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical)
+    : isPlainRecord(value) ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  return createHash("sha256").update(JSON.stringify(canonical(combo))).digest("hex");
+}
+
+/** `stored` carries the persisted combos when the durable check refused the save. */
+class ComboRevisionConflict extends Error {
+  constructor(readonly stored?: Readonly<Record<string, OcxComboConfig>>) { super("combo revision conflict"); }
+}
+
+/**
+ * Nothing reloads the live config when another process edits the file, so the
+ * dashboard's refresh after a durable conflict would read the same stale combo and
+ * every retry would conflict again. Adopt the stored source and destination combos;
+ * the next rebasing save would have adopted these unedited disk values anyway.
+ * One disk edit can move a public model id (alias) between combos, so a live row that
+ * would share an adopted row's public id is adopted too when its stored value differs;
+ * otherwise two combos would advertise the same model and routing would pick the first.
+ * Returns the ids whose live combo changed.
+ */
+function adoptStoredCombos(config: OcxConfig, stored: Readonly<Record<string, OcxComboConfig>>, ids: readonly string[]): string[] {
+  const differs = (comboId: string): boolean => {
+    const durable = Object.hasOwn(stored, comboId) ? stored[comboId] : undefined;
+    const live = config.combos?.[comboId];
+    if (durable === undefined) return live !== undefined;
+    return live === undefined || comboRevision(live) !== comboRevision(durable);
+  };
+  const publicId = (comboId: string, combo: OcxComboConfig): string =>
+    (typeof combo.alias === "string" ? combo.alias.trim() : "") || `combo/${comboId}`;
+  const adopt = new Set([...new Set(ids)].filter(differs));
+  for (let grew = adopt.size > 0; grew;) {
+    grew = false;
+    const prospective: Record<string, OcxComboConfig> = { ...config.combos };
+    for (const comboId of adopt) {
+      if (Object.hasOwn(stored, comboId)) prospective[comboId] = stored[comboId]!;
+      else delete prospective[comboId];
+    }
+    const owners = new Map<string, string[]>();
+    for (const [comboId, combo] of Object.entries(prospective)) {
+      const key = publicId(comboId, combo);
+      owners.set(key, [...(owners.get(key) ?? []), comboId]);
+    }
+    for (const sharing of owners.values()) {
+      if (sharing.length < 2 || !sharing.some(comboId => adopt.has(comboId))) continue;
+      for (const comboId of sharing) {
+        if (adopt.has(comboId) || !differs(comboId)) continue;
+        adopt.add(comboId);
+        grew = true;
+      }
+    }
+  }
+  const changed = [...adopt];
+  if (changed.length > 0) adoptPersistedCombos(config, stored, changed);
+  return changed;
 }
 
 /**
@@ -170,16 +237,53 @@ function parseVisionSidecarTargets(
 export async function handleComboRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
+  // Only the Combos page reads the suggested combos' excluded-provider list; load it on demand.
+  if (url.pathname === "/api/combo-suggestions" || url.pathname === "/api/combo-suggestions/save") {
+    const { handleComboSuggestionRoutes } = await import("./combo-suggestion-routes");
+    return handleComboSuggestionRoutes(ctx);
+  }
+
   if (url.pathname === "/api/combos" && req.method === "GET") {
+    const selectors = url.searchParams.getAll("fallbackTarget");
+    if (selectors.length) {
+      if (selectors.length > 64 || selectors.some(selector => selector.length > 512)) {
+        return jsonResponse({ error: "Too many or oversized fallback targets" }, 400);
+      }
+      const { routeConcreteModel } = await import("../../router");
+      const { comboTargetRequiresConsent } = await import("../responses/combo-admission-snapshot");
+      const routes = Object.fromEntries([...new Set(selectors)].map(selector => {
+        const slash = selector.indexOf("/");
+        const provider = selector.slice(0, slash);
+        const model = selector.slice(slash + 1);
+        if (slash < 1 || !model || !Object.hasOwn(config.providers, provider) || config.providers[provider]?.disabled) return [selector, null];
+        try {
+          const route = routeConcreteModel(config, selector);
+          return [selector, {
+            provider: route.providerName, model: route.modelId,
+            requiresConsent: comboTargetRequiresConsent(config, { provider, model }, true, route),
+          }];
+        } catch {
+          return [selector, null];
+        }
+      }));
+      return jsonResponse({ routes });
+    }
     const { comboPublicModelId, getCombo, listComboIds } = await import("../../combos");
-    return jsonResponse({ combos: listComboIds(config).map(id => {
-      const combo = getCombo(config, id)!;
-      return {
-        id,
-        model: comboPublicModelId(id, combo),
-        ...sparseComboConfig(combo),
-      };
-    }) });
+    const { configuredComboProviderBilling } = await import("../../combos/billing");
+    return jsonResponse({
+      combos: listComboIds(config).map(id => {
+        const combo = getCombo(config, id)!;
+        return {
+          id,
+          model: comboPublicModelId(id, combo),
+          ...sparseComboConfig(combo),
+          revision: comboRevision(config.combos![id]!),
+        };
+      }),
+      // The dashboard labels targets with the billing class the quota-only dispatcher applies.
+      providerBilling: Object.fromEntries(Object.entries(config.providers)
+        .map(([name, provider]) => [name, configuredComboProviderBilling({ ...provider, name })])),
+    });
   }
 
   if (url.pathname === "/api/combos" && req.method === "PUT") {
@@ -193,6 +297,17 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       return jsonResponse({ error: "id is required and must be a string" }, 400);
     }
     const id = body.id.trim();
+    if (body.ifRevision !== undefined && typeof body.ifRevision !== "string") {
+      return jsonResponse({ error: "ifRevision must be a string" }, 400);
+    }
+    if (body.ifAbsent !== undefined && body.ifAbsent !== true) {
+      return jsonResponse({ error: "ifAbsent must be true when present" }, 400);
+    }
+    // Create-only: refuse instead of replacing a combo another writer created under this id.
+    const ifAbsent = body.ifAbsent === true;
+    if (ifAbsent && (body.ifRevision !== undefined || body.renameFrom !== undefined)) {
+      return jsonResponse({ error: "ifAbsent cannot be combined with ifRevision or renameFrom" }, 400);
+    }
     let renameFrom: string | undefined;
     if (body.renameFrom !== undefined) {
       if (typeof body.renameFrom !== "string" || !body.renameFrom.trim()) {
@@ -202,11 +317,8 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       if (renameFrom === id) {
         return jsonResponse({ error: "renameFrom must differ from id" }, 400);
       }
-      if (!Object.hasOwn(config.combos ?? {}, renameFrom)) {
+      if (!Object.hasOwn(config.combos ?? {}, renameFrom) && body.ifRevision === undefined) {
         return jsonResponse({ error: `combo "${renameFrom}" does not exist` }, 400);
-      }
-      if (Object.hasOwn(config.combos ?? {}, id)) {
-        return jsonResponse({ error: `combo "${id}" already exists` }, 400);
       }
     }
     const {
@@ -220,12 +332,32 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     } = await import("../../combos");
     const sourceId = renameFrom ?? id;
     const previous = config.combos?.[sourceId];
+    if (body.ifRevision !== undefined && (!previous || comboRevision(previous) !== body.ifRevision)) {
+      return jsonResponse({ error: "combo revision conflict", code: "combo_revision_conflict" }, 409);
+    }
+    if (ifAbsent && previous) {
+      return jsonResponse({ error: "combo revision conflict", code: "combo_revision_conflict" }, 409);
+    }
+    if (renameFrom && Object.hasOwn(config.combos ?? {}, id)) {
+      // A conditional rename reports an occupied destination as a conflict wherever it was seen.
+      if (body.ifRevision !== undefined) {
+        return jsonResponse({ error: "combo revision conflict", code: "combo_revision_conflict" }, 409);
+      }
+      return jsonResponse({ error: `combo "${id}" already exists` }, 400);
+    }
     if (!isPlainRecord(body.combo)) {
       return jsonResponse({ error: "combo must be an object" }, 400);
     }
     const requestedCombo: Record<string, unknown> = body.combo;
+    const savedFailoverOptions: Record<string, true> = {};
+    if (requestedCombo.strategy === undefined || requestedCombo.strategy === "failover") {
+      for (const key of ["quotaOnlyFallback", "preserveFallbackModel"] as const) {
+        if (!Object.hasOwn(requestedCombo, key) && previous?.[key] === true) savedFailoverOptions[key] = true;
+      }
+    }
     const effectiveCombo = {
       ...requestedCombo,
+      ...savedFailoverOptions,
       // Clients that do not expose this opt-in must preserve it on unrelated edits.
       ...(!Object.hasOwn(requestedCombo, "cooldownReprobe") && previous?.cooldownReprobe !== undefined
         ? { cooldownReprobe: previous.cooldownReprobe }
@@ -256,6 +388,12 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
         : {}),
       ...(!Object.hasOwn(requestedCombo, "imageInput") && previous?.imageInput !== undefined
         ? { imageInput: previous.imageInput }
+        : {}),
+      ...(!Object.hasOwn(requestedCombo, "capabilityPolicy") && previous?.capabilityPolicy !== undefined
+        ? { capabilityPolicy: previous.capabilityPolicy }
+        : {}),
+      ...(!Object.hasOwn(requestedCombo, "onUnservable") && previous?.onUnservable !== undefined
+        ? { onUnservable: previous.onUnservable }
         : {}),
       // #7229: the dashboard does not edit the row description, so a round trip that omits it
       // (including a rename) keeps it. An explicit empty string still clears it.
@@ -471,6 +609,22 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     // declarations, and every migrated reference together, never partially.
     try {
       commitProviderPatch(config, () => {
+        const current = config.combos?.[sourceId];
+        if (body.ifRevision !== undefined && (!current || comboRevision(current) !== body.ifRevision)) throw new ComboRevisionConflict();
+        if (ifAbsent && current) throw new ComboRevisionConflict();
+        if ((body.ifRevision !== undefined || ifAbsent) && !deps.saveConfigPreservingClaudeCode) {
+          const persisted = readConfigFileSnapshot({ passive: true }).diagnostics;
+          if (persisted.source !== "file") throw new Error("config unavailable");
+          const storedCombos = persisted.config.combos ?? {};
+          if (ifAbsent) {
+            if (Object.hasOwn(storedCombos, id)) throw new ComboRevisionConflict(storedCombos);
+          } else {
+            const durable = storedCombos[sourceId];
+            if (!durable || comboRevision(durable) !== body.ifRevision) throw new ComboRevisionConflict(storedCombos);
+            // A conditional rename also needs the destination to be free in the stored config.
+            if (renameFrom && Object.hasOwn(storedCombos, id)) throw new ComboRevisionConflict(storedCombos);
+          }
+        }
         config.combos = nextCombos;
         if (migratedModels.size > 0) {
           const migrateReference = (model: string): string => migratedModels.get(model) ?? model;
@@ -536,6 +690,21 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
         }
       }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
     } catch (error) {
+      if (error instanceof ComboRevisionConflict) {
+        // The transaction has rolled back; adopt only after it, or the rollback would undo it.
+        const adopted = error.stored ? adoptStoredCombos(config, error.stored, [sourceId, id]) : [];
+        if (adopted.length > 0) {
+          // Same follow-up as a save: runtime state and the catalog track the adopted rows.
+          notifyLiveConfigObservers(config);
+          reconcileLiveStateStores();
+          for (const adoptedId of adopted) {
+            clearComboSelectionState(adoptedId);
+            clearComboTargetCooldowns(adoptedId);
+          }
+          await convergeCodexCatalog();
+        }
+        return jsonResponse({ error: "combo revision conflict", code: "combo_revision_conflict" }, 409);
+      }
       if (!(error instanceof ConfigWritePublishedError)) {
         return jsonResponse({ error: "combo could not be saved" }, 500);
       }
@@ -543,6 +712,7 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       notifyLiveConfigObservers(config);
       throw error;
     }
+    const saved = structuredClone(config.combos![id]!);
     reconcileLiveStateStores();
     clearComboSelectionState(id);
     clearComboTargetCooldowns(id);
@@ -553,7 +723,7 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const catalogRefresh = await convergeCodexCatalog();
     if (shouldSyncClaudeAgentDefs) await syncClaudeAgentDefsBestEffort();
     // Wire shape matches persistence: omit default imageInput "auto".
-    return jsonResponse({ success: true, id, model: newPublicModel, combo: sparseComboConfig(stored), catalogRefresh });
+    return jsonResponse({ success: true, id, model: newPublicModel, combo: { ...sparseComboConfig(saved), revision: comboRevision(saved) }, catalogRefresh });
   }
 
   if (url.pathname === "/api/combos" && req.method === "DELETE") {

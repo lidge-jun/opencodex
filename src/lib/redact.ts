@@ -1,13 +1,22 @@
 import { foldForMatching } from "./redact-folding";
 
 export const REDACTED_SECRET = "[REDACTED]";
+const HUB_RELAY_TOKEN_PATTERN = /ocx_hub_relay_[A-Za-z0-9_-]{43}/g;
+
+// Minted management, dashboard, catalog-read, device/pairing, data-plane and Remote Workspace credential values.
+// Match inside quoted strings and identifiers as well as standalone tokens.
+export const OPEN_CODEX_CREDENTIAL_PATTERN = /ocx_(?:(?:admin|session|device|proof|pair|catalog)_[A-Za-z0-9_-]{43}|data_[0-9a-f]{40})|ocxrw_[A-Za-z0-9_-]{43}/g;
+
+export function redactOpenCodexCredentials(value: string): string {
+  return value.replace(OPEN_CODEX_CREDENTIAL_PATTERN, REDACTED_SECRET);
+}
 
 /**
  * Credential-bearing header/field names. Exported for transports that must refuse to send
  * credentials over an unsafe channel (e.g. plaintext non-loopback HTTP) rather than
  * re-deriving a narrower local list.
  */
-export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|x-api-key|x-goog-api-key|x-amz-security-token|x-dsh-auth-token|x-openai-agent-assertion|copilot[-_]?session[-_]?token|session[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
+export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|x-api-key|x-opencodex-api-key|x-goog-api-key|x-amz-security-token|x-dsh-auth-token|x-openai-agent-assertion|copilot[-_]?session[-_]?token|session[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
 
 /**
  * Colon-labelled credential headers echoed back inside an error body
@@ -40,7 +49,7 @@ export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cook
 // Every letter position also accepts \u0001, the placeholder the fold emits for
 // an unresolved HTML named reference: `author&ii;zation` is the label with one
 // character we cannot name, and that is still the label.
-const CREDENTIAL_HEADER_LABEL_RAW = "copilot[_-]?session[_-]?token|session[_-]?token|sessionToken|x-openai-agent-assertion|x-api-key|x-goog-api-key|x-amz-security-token|x-dsh-auth-token|api[_-]?key|apiKey|exa[_-]?api[_-]?key|exaApiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|id[_-]?token|client[_-]?secret|clientSecret|authorization|proxy-authorization|cookie|set-cookie|password|secret|token";
+const CREDENTIAL_HEADER_LABEL_RAW = "copilot[_-]?session[_-]?token|session[_-]?token|sessionToken|x-openai-agent-assertion|x-api-key|x-opencodex-api-key|x-goog-api-key|x-amz-security-token|x-dsh-auth-token|api[_-]?key|apiKey|exa[_-]?api[_-]?key|exaApiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|id[_-]?token|client[_-]?secret|clientSecret|authorization|proxy-authorization|cookie|set-cookie|password|secret|token";
 
 const CREDENTIAL_HEADER_LABEL = CREDENTIAL_HEADER_LABEL_RAW
   .replace(/(?<![\[\\])([A-Za-z])(?![\]\-])/g, "[$1\u0001]");
@@ -108,11 +117,13 @@ const OTHER_FRAMED_CREDENTIALS: Array<[RegExp, string]> = [
   // attacker-controlled text, so a body line starting `--not-the-boundary`
   // ended the mask and exposed everything after it. Consuming the remainder
   // costs trailing context in one framing and closes the bypass.
+  //
+  // Only the part-header name is a regex; the rest of the grammar
+  // (`[^\r\n]*\r?\n(?:\r?\n)?` then a non-empty body) is applied by
+  // maskMultipartOnce in one pass. As a single regex every candidate on a line
+  // without a terminator rescanned that line, quadratic in the input.
   [
-    new RegExp(
-      `(name=["']?(?:${CREDENTIAL_HEADER_LABEL})["']?[^\\r\\n]*\\r?\\n(?:\\r?\\n)?)([\\s\\S]+)`,
-      "gi",
-    ),
+    new RegExp(`name=["']?(?:${CREDENTIAL_HEADER_LABEL})["']?`, "gi"),
     "multipart",
   ],
 ];
@@ -159,7 +170,8 @@ function findXmlTagClose(text: string, from: number): number {
 
 /** Scan each tag once; a suffix-searching lookahead here makes unterminated tags quadratic. */
 function maskXmlIdentifyingAttribute(value: string, decodeEscapes: boolean): string {
-  const { folded, map } = foldForMatching(value, decodeEscapes);
+  const view = foldForMatching(value, decodeEscapes);
+  const { folded } = view;
   let searchFrom = 0;
   while (searchFrom < folded.length) {
     const relativeStart = folded.indexOf("<", searchFrom);
@@ -175,8 +187,8 @@ function maskXmlIdentifyingAttribute(value: string, decodeEscapes: boolean): str
     const tagEnd = close === -1 ? folded.length : close + 1;
     const attributes = folded.slice(tagStart + tagName[0].length, tagEnd);
     if (XML_CREDENTIAL_ATTRIBUTE.test(attributes)) {
-      const start = map[tagStart] ?? value.length;
-      const headEnd = map[tagStart + tagName[0].length] ?? value.length;
+      const start = view.map[tagStart] ?? value.length;
+      const headEnd = view.map[tagStart + tagName[0].length] ?? value.length;
       return value.slice(0, start) + value.slice(start, headEnd) + REDACTED_SECRET;
     }
     if (close === -1) return value;
@@ -188,23 +200,28 @@ function maskXmlIdentifyingAttribute(value: string, decodeEscapes: boolean): str
 function maskOtherFramingsOnce(value: string, decodeEscapes: boolean): string {
   let current = value;
   for (const [pattern, kind] of OTHER_FRAMED_CREDENTIALS) {
-    const { folded, map } = foldForMatching(current, decodeEscapes);
+    if (kind === "multipart") {
+      current = maskMultipartOnce(current, decodeEscapes, pattern);
+      continue;
+    }
+    const view = foldForMatching(current, decodeEscapes);
+    const { folded } = view;
     pattern.lastIndex = 0;
     let out = "";
     let cursor = 0;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(folded)) !== null) {
-      const start = map[match.index] ?? current.length;
-      const end = map[match.index + match[0].length] ?? current.length;
+      const start = view.map[match.index] ?? current.length;
+      const end = view.map[match.index + match[0].length] ?? current.length;
       if (start < cursor) continue;
       const head = (() => {
         if (kind === "=") {
           const eq = match[0].indexOf("=");
-          const headEnd = map[match.index + eq + 1] ?? end;
+          const headEnd = view.map[match.index + eq + 1] ?? end;
           return current.slice(start, headEnd);
         }
         const captured = match[1] ?? "";
-        const headEnd = map[match.index + captured.length] ?? end;
+        const headEnd = view.map[match.index + captured.length] ?? end;
         return current.slice(start, headEnd);
       })();
       const body = current.slice(start + head.length, end);
@@ -214,6 +231,41 @@ function maskOtherFramingsOnce(value: string, decodeEscapes: boolean): string {
       if (pattern.lastIndex === match.index) pattern.lastIndex += 1;
     }
     current = out + current.slice(cursor);
+  }
+  return current;
+}
+
+/**
+ * The multipart rule: a credential-named part header, the rest of its line, its line break, an
+ * optional blank line, then a non-empty body masked to the end of the input. Equivalent to the
+ * regex `(name=["']?(?:LABEL)["']?[^\r\n]*\r?\n(?:\r?\n)?)([\s\S]+)`, but linear: when one
+ * candidate's line has no usable terminator, every later candidate on that line fails the same way,
+ * so the search resumes past the line instead of rescanning it from each candidate.
+ */
+function maskMultipartOnce(current: string, decodeEscapes: boolean, partHeader: RegExp): string {
+  const view = foldForMatching(current, decodeEscapes);
+  const { folded } = view;
+  partHeader.lastIndex = 0;
+  let lineEnd = -1;
+  for (let match = partHeader.exec(folded); match !== null; match = partHeader.exec(folded)) {
+    const nameEnd = match.index + match[0].length;
+    if (nameEnd > lineEnd) {
+      lineEnd = nameEnd;
+      while (lineEnd < folded.length && folded[lineEnd] !== "\r" && folded[lineEnd] !== "\n") lineEnd++;
+    }
+    let headEnd = folded[lineEnd] === "\n" ? lineEnd + 1
+      : folded[lineEnd] === "\r" && folded[lineEnd + 1] === "\n" ? lineEnd + 2 : -1;
+    if (headEnd < 0 || headEnd >= folded.length) {
+      partHeader.lastIndex = lineEnd + 1;
+      continue;
+    }
+    const blank = folded[headEnd] === "\n" ? 1 : folded[headEnd] === "\r" && folded[headEnd + 1] === "\n" ? 2 : 0;
+    if (headEnd + blank < folded.length) headEnd += blank;
+    const start = view.map[match.index] ?? current.length;
+    const end = view.map[folded.length] ?? current.length;
+    const head = current.slice(start, view.map[headEnd] ?? end);
+    if (!current.slice(start + head.length, end).trim()) return current;
+    return current.slice(0, start) + head + REDACTED_SECRET;
   }
   return current;
 }
@@ -234,14 +286,15 @@ function maskCredentialHeaders(value: string): string {
 }
 
 function maskCredentialHeadersOnce(value: string, decodeEscapes: boolean): string {
-  const { folded, map } = foldForMatching(value, decodeEscapes);
+  const view = foldForMatching(value, decodeEscapes);
+  const { folded } = view;
   COLON_LABELLED_CREDENTIAL.lastIndex = 0;
   let out = "";
   let cursor = 0;
   let match: RegExpExecArray | null;
   while ((match = COLON_LABELLED_CREDENTIAL.exec(folded)) !== null) {
-    const start = map[match.index] ?? value.length;
-    const afterLabel = map[match.index + match[0].length] ?? value.length;
+    const start = view.map[match.index] ?? value.length;
+    const afterLabel = view.map[match.index + match[0].length] ?? value.length;
     if (start < cursor) continue;
     const lineEnd = (() => {
       const nl = value.slice(afterLabel).search(/[\r\n]/);
@@ -282,7 +335,8 @@ function maskCredentialHeadersOnce(value: string, decodeEscapes: boolean): strin
   return out + value.slice(cursor);
 }
 
-const SECRET_VALUE_PATTERNS: Array<[RegExp, string]> = [
+const SECRET_VALUE_PATTERNS: Array<[RegExp, string] | ((value: string) => string)> = [
+  [HUB_RELAY_TOKEN_PATTERN, REDACTED_SECRET],
   // A Bearer token outside a labelled header (prose, JSON fragments, logs).
   // Horizontal whitespace only: `\s+` crossed line boundaries and masked the
   // first word of the NEXT line when a header was quoted with a trailing break.
@@ -304,9 +358,45 @@ const SECRET_VALUE_PATTERNS: Array<[RegExp, string]> = [
   // a quoted proto field does not have. `eyJ` is the base64url of `{"`, so the
   // JWT rule needs a real three-segment shape and does not match ordinary prose.
   [/\bdevin-session-token\$[A-Za-z0-9._~+/=-]{8,}/g, REDACTED_SECRET],
-  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g, REDACTED_SECRET],
+  maskJwts,
   [/\b(arn:aws:[A-Za-z0-9_-]+:[A-Za-z0-9-]*:\d{12}:[A-Za-z0-9_/:+=,.@-]+)\b/g, REDACTED_SECRET],
 ];
+
+/**
+ * The JWT rule `\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*` applied in one pass. Each
+ * segment class excludes the dot, so a segment always runs to the end of its run of token
+ * characters and the dot must follow that run. As a regex, every `eyJ` inside one long run without a
+ * dot after it rescanned the rest of the run: quadratic. Here a candidate that fails skips past the
+ * run, because every later candidate in it ends the same run and fails the same way.
+ */
+function maskJwts(value: string): string {
+  if (!value.includes("eyJ")) return value;
+  const start = /\beyJ/g;
+  const runEnd = (from: number): number => {
+    let at = from;
+    while (at < value.length && JWT_SEGMENT_CHAR.test(value[at]!)) at++;
+    return at;
+  };
+  let out = "";
+  let cursor = 0;
+  for (let match = start.exec(value); match !== null; match = start.exec(value)) {
+    const first = match.index + 3;
+    const firstEnd = runEnd(first);
+    const second = firstEnd + 1;
+    const secondEnd = value[firstEnd] === "." && firstEnd - first >= 8 ? runEnd(second) : -1;
+    if (secondEnd < 0 || secondEnd - second < 8 || value[secondEnd] !== ".") {
+      start.lastIndex = Math.max(firstEnd, secondEnd);
+      continue;
+    }
+    const end = runEnd(secondEnd + 1);
+    out += value.slice(cursor, match.index) + REDACTED_SECRET;
+    cursor = end;
+    start.lastIndex = end;
+  }
+  return cursor === 0 ? value : out + value.slice(cursor);
+}
+
+const JWT_SEGMENT_CHAR = /[A-Za-z0-9_-]/;
 
 type HeaderRecord = Record<string, string | string[] | undefined>;
 
@@ -321,9 +411,13 @@ function isSensitiveKey(key: string): boolean {
 }
 
 export function redactSecretString(value: string): string {
-  let redacted = maskOtherFramings(maskCredentialHeaders(value));
-  for (const [pattern, replacement] of SECRET_VALUE_PATTERNS) {
-    redacted = redacted.replace(pattern, replacement);
+  // Every labelled grammar needs ':', '=' or '<'. Only literal ASCII without escape introducers
+  // can rule those out before folding; encoded or Unicode aliases must keep both matching views.
+  // Minted OpenCodex credentials need no label, so their mask runs on both paths.
+  let redacted = redactOpenCodexCredentials(/[<:=\\%&]|[^\x00-\x7f]/.test(value)
+    ? maskOtherFramings(maskCredentialHeaders(value)) : value);
+  for (const rule of SECRET_VALUE_PATTERNS) {
+    redacted = typeof rule === "function" ? rule(redacted) : redacted.replace(rule[0], rule[1]);
   }
   return redacted;
 }
@@ -373,7 +467,7 @@ export function redactUrlForLog(url: string): string {
     parsed.password = "";
     parsed.search = "";
     parsed.hash = "";
-    return parsed.toString();
+    return parsed.toString().replace(HUB_RELAY_TOKEN_PATTERN, REDACTED_SECRET);
   } catch {
     return redactSecretString(url.split("?")[0] ?? url);
   }

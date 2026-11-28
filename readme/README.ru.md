@@ -78,7 +78,7 @@ Sol ведёт сессию и вызывает подагента Kimi K3.
 </table>
 
 <p align="center">
-  <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <b>Русский</b> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/ru/"><b>Полная документация →</b></a>
+  <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <b>Русский</b> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.es.md">Español</a> · 📖 <a href="https://opencodex.me/ru/"><b>Полная документация →</b></a>
 </p>
 
 opencodex — лёгкий локальный шлюз между вашими инструментами программирования и поставщиками моделей. Он принимает запросы API Responses, Chat Completions и Anthropic Messages и переводит их в протокол провайдера, передавая потоковые ответы, вызовы инструментов, рассуждения и изображения там, где это поддерживают клиент, модель и провайдер. Используйте Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama и других провайдеров с Codex, Claude Code, Claude Desktop, Grok Build и инструментами со [страницы поддержки клиентов](https://opencodex.me/ru/reference/client-support/).
@@ -104,11 +104,11 @@ ocx start                         # прокси + панель управлен
 
 | Инструмент | Как подключить |
 |---|---|
-| Codex | Включите переключатель Codex на странице **Connect** панели, затем запускайте `codex` как обычно. При локальном прослушивании встроенный провайдер Codex будет направлен на прокси. В терминале выполните `ocx init` до добавления провайдеров в панели и примите приглашение Codex. |
+| Codex | Включите переключатель Codex на странице **Маршрут** панели, затем запускайте `codex` как обычно. При локальном прослушивании встроенный провайдер Codex будет направлен на прокси. В терминале выполните `ocx init` до добавления провайдеров в панели и примите приглашение Codex. |
 | Claude Code | Установив CLI `claude`, выполните `ocx claude`. Команда при необходимости запускает прокси и запускает через него Claude Code. |
 | Claude Desktop | Выполните `ocx claude desktop`. При новой установке команда настраивает профиль шлюза для всего приложения; существующая настройка first-party сохраняется, а `ocx claude desktop apply --gateway` явно переключает режим. См. [руководство Claude Code](https://opencodex.me/ru/guides/claude-code/). После переключения полностью закройте и снова откройте Claude Desktop. |
 | Grok Build | При локальном прослушивании и включённой интеграции Grok команда `ocx start` регистрирует модели, если существует `~/.grok`; выберите модель `ocx-*` в Grok Build. Об удалённой настройке см. [руководство Grok Build](https://opencodex.me/ru/guides/grok-build/). После добавления провайдеров перезапустите прокси (или выполните `ocx ensure`, если включён автозапуск Codex), чтобы обновить список. |
-| Инструменты с управляемой интеграцией | Используйте страницу **Connect** панели или `ocx integration client enable --client <id>`. |
+| Инструменты с управляемой интеграцией | Используйте страницу **Маршрут** панели или `ocx integration client enable --client <id>`. |
 | Любой другой инструмент | Укажите пользовательский базовый URL, совместимый с OpenAI: `http://localhost:10100/v1`, либо базовый URL Anthropic: `http://localhost:10100`. |
 
 На [странице поддержки клиентов](https://opencodex.me/ru/reference/client-support/) указаны способы подключения и протоколы каждого инструмента.
@@ -159,6 +159,10 @@ ocx start                         # прокси + панель управлен
 <tr>
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
 <td>Благодарим <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a> за спонсорскую поддержку проекта! TokenLab даёт агентам для программирования один API-ключ для ведущих моделей с поддержкой форматов OpenAI Responses и Chat Completions, Anthropic Messages и нативного API Gemini, включая стриминг и вызов инструментов. Также доступны MCP-сервер и Skills для агентов, чтобы упростить интеграцию. Выберите режим доставки и платите по мере использования. Выберите <code>TokenLab</code> в селекторе Add provider или выполните <code>ocx provider add tokenlab</code>.<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
+</tr>
+<tr>
+<td width="180"><a href="https://runapi.co"><img src="../assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
+<td>Спасибо <a href="https://runapi.co">RunAPI</a> за поддержку проекта! RunAPI — единый шлюз к API ИИ: один API-ключ открывает каталог из более чем 200 моделей OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot и других, доступных через форматы OpenAI Chat Completions и Responses, Anthropic Messages и нативный API Gemini; набор форматов зависит от модели. Умная маршрутизация отправляет каждый запрос на быстрый и стабильный узел поставщика с автоматическим переключением при сбоях, а оплата идёт по факту использования, обычно заметно ниже стандартных цен. Выберите <code>RunAPI</code> в селекторе Add provider или выполните <code>ocx provider add runapi</code>.</td>
 </tr>
 </tbody>
 </table>
@@ -257,10 +261,12 @@ ocx start     # или `ocx service`
 ocx init      # интерактивная настройка: пишет ~/.opencodex/config.json и подключает Codex
 ```
 
-`ocx init` никогда не запускает прокси; запустите его сначала (или после — оба порядка
-работают, но headless-команды вроде `ocx provider add` и `ocx combo set` обращаются к
-**живому** прокси и завершаются с ненулевым кодом, если он недоступен). `ocx status` /
-`ocx doctor` / `ocx health` показывают состояние запущенного процесса.
+Прокси можно запустить до или после `ocx init`: сама эта команда его не запускает.
+`ocx provider add` сохраняет локальную конфигурацию без работающего прокси. С флагом `--sync`
+команда сначала сохраняет провайдера, а затем синхронизирует модели с Codex через работающий прокси.
+Если прокси недоступен, провайдер останется сохранённым, но команда завершится с ненулевым кодом.
+Когда прокси запустится, выполните `ocx sync`. Команды `ocx provider add --live` и `ocx combo set`
+требуют работающего прокси. `ocx status` / `ocx doctor` / `ocx health` показывают его состояние.
 
 > **Агентам, которые устанавливают или запускают opencodex:** прочитайте
 > [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md). Интерактивный `ocx start` может один раз
@@ -308,13 +314,13 @@ ocx init      # интерактивная настройка: пишет ~/.ope
 OpenCodex отслеживает состояние, удерживаемое процессом, в категориях ниже. У каждой есть
 документированная граница:
 
-- **14 удерживаемых хранилищ** (журнал запросов, отладочные кольца, кэш изображений, кэш
+- **15 удерживаемых хранилищ** (журнал запросов, отладочные кольца, кэш изображений, кэш
   моделей, vision-описания, cursor-блобы, продолжение responses и т. д.) учитываются
   в байтах и вытесняются бюджетом памяти приложения (по умолчанию 256 MiB), кроме
   хранилища native control replay: оно закреплено и не вытесняется.
 - **4 наблюдаемых буфера** (аккумуляторы транслятора, хвосты image/OAuth/Grok)
   мониторятся по байтовому давлению in-flight без вытеснения.
-- **31 регистрация state-store** выполняет sweeps истечения (интервал 60 с) и сверку
+- **32 регистрации state-store** выполняет sweeps истечения (интервал 60 с) и сверку
   поколений конфигурации, чтобы удалять устаревшие ключи провайдеров и аккаунтов.
 - **Мемо пути и отпечатков** (метаданные рабочей области, усиленные идентификаторы,
   соли установки, возможности mode-hint) используют LRU-потолки в порядке вставки
@@ -431,10 +437,13 @@ npm uninstall -g @bitkyc08/opencodex
 
 ## Удалённый доступ
 
-По умолчанию opencodex привязывается к `127.0.0.1` и не требует дополнительной аутентификации.
-Привязка за пределами loopback (`"hostname": "0.0.0.0"`) **требует** bearer-токен — прокси
-откажется запускаться без `OPENCODEX_API_AUTH_TOKEN`, и каждый клиентский запрос должен нести его
-как `x-opencodex-api-key`. Подробности: [справочник по конфигурации](https://opencodex.me/ru/reference/configuration/).
+По умолчанию opencodex слушает `127.0.0.1` и не требует дополнительной аутентификации для запросов данных.
+Прослушивание за пределами loopback (например, `"hostname": "0.0.0.0"`) **требует настроенный
+клиентский API-ключ или общий токен для запросов данных**. Общий токен читается из
+`OPENCODEX_API_AUTH_TOKEN`, `OCX_API_TOKEN_FILE` или установленного файла `service-api-token`,
+доступного только владельцу. Клиенты передают подходящий ключ или токен в `x-opencodex-api-key`.
+Для управления используются отдельные учётные данные администратора.
+См. [справочник по конфигурации](https://opencodex.me/ru/reference/configuration/).
 
 ## Расширенное использование
 

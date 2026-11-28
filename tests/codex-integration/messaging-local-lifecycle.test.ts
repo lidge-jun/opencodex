@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { MessageBudget } from "../../src/messaging/budget";
@@ -19,7 +19,7 @@ test("transport rejects remote URLs and unsupported platforms without opening a 
 });
 
 test("importing the unactivated subsystem allocates no listener, timer, child or socket", async () => {
-  const modules = ["types", "budget", "socket", "rpc", "discovery", "envelope", "input", "send", "mcp-queue-rpc", "mcp-queue-tools", "mcp-queue-server", "mcp-reply-tools", "mcp-reply-cursor", "mcp-reply-wait"].map(name => repoPath("src", "messaging", `${name}.ts`));
+  const modules = ["types", "budget", "socket", "rpc", "discovery", "claude-discovery", "envelope", "input", "send", "mcp-queue-rpc", "mcp-queue-tools", "mcp-queue-server", "mcp-reply-tools", "mcp-reply-cursor", "mcp-reply-wait", "mcp-resume-tools", "resume-permissions"].map(name => repoPath("src", "messaging", `${name}.ts`));
   const script = `
     const forbidden = () => { throw new Error("unexpected messaging resource allocation"); };
     globalThis.setTimeout = forbidden;
@@ -35,7 +35,7 @@ test("importing the unactivated subsystem allocates no listener, timer, child or
 
 test("messaging activation is command-local, never on an ordinary proxy startup path", async () => {
   // Native parser inventory, not graph completeness: catches static/dynamic literal imports.
-  const allowed = new Set(["src/cli/message-args.ts", "src/cli/message-command.ts", "src/cli/message-remote-args.ts", "src/cli/message-remote-command.ts", "src/cli/message-mcp-command.ts"]);
+  const allowed = new Set(["src/cli/message-args.ts", "src/cli/message-command.ts", "src/cli/message-remote-args.ts", "src/cli/message-remote-command.ts", "src/cli/message-mcp-command.ts", "src/cli/message-claude-command.ts"]);
   const transpiler = new Bun.Transpiler({ loader: "ts" });
   for await (const scanned of new Bun.Glob("src/**/*.{ts,mts}").scan({ cwd: repoPath() })) {
     const path = scanned.replaceAll("\\", "/"); // Bun.Glob yields native separators on Windows.
@@ -43,6 +43,10 @@ test("messaging activation is command-local, never on an ordinary proxy startup 
     const imports = transpiler.scanImports(readFileSync(repoPath(path), "utf8").replace(/^#![^\n]*\n/, ""));
     const incoming = imports.filter(entry => /(?:^|\/)messaging(?:\/|$)/.test(entry.path));
     if (!allowed.has(path)) expect(incoming, path).toEqual([]);
+    for (const entry of imports.filter(entry => entry.path.endsWith("/message-claude-command"))) {
+      expect(path).toBe("src/cli/message-command.ts");
+      expect(entry.kind).toBe("dynamic-import");
+    }
     for (const entry of imports.filter(entry => /(?:^|\/)message-(?:command|args|runtime)$/.test(entry.path))) {
       expect(["src/cli/dispatch.ts", "src/cli/message-command.ts", "src/cli/message-remote-command.ts", "src/cli/message-remote-args.ts"], path).toContain(path);
       if (path === "src/cli/dispatch.ts") {
@@ -99,6 +103,67 @@ describe.skipIf(process.platform === "win32")("local RPC lifecycle", () => {
     const budget = new MessageBudget(150);
     try { await expect(LocalMessageRpc.connect(fixture.url, budget)).rejects.toThrow("deadline"); }
     finally { budget.dispose(); await fixture.close(); }
+  });
+
+  // Drive timers and the monotonic clock by hand so a stage timer can fire before the budget's own.
+  async function withHandTimers(run: (clock: { now: number }, timers: { fire(): void; delay: number }[]) => Promise<void>) {
+    const clock = { now: 0 };
+    const timers: { fire(): void; delay: number; cleared?: boolean }[] = [];
+    const [realSet, realClear] = [globalThis.setTimeout, globalThis.clearTimeout];
+    const now = spyOn(performance, "now").mockImplementation(() => clock.now);
+    globalThis.setTimeout = ((fire: () => void, delay: number) => {
+      const timer = { fire: () => { if (!timer.cleared) fire(); }, delay, cleared: false };
+      timers.push(timer); return timer;
+    }) as unknown as typeof setTimeout;
+    globalThis.clearTimeout = ((timer: { cleared?: boolean }) => { if (timer) timer.cleared = true; }) as typeof clearTimeout;
+    try { await run(clock, timers); }
+    finally { globalThis.setTimeout = realSet; globalThis.clearTimeout = realClear; now.mockRestore(); }
+  }
+
+  test("a connect timer reaching the deadline before the budget's timer reports the deadline", async () => {
+    const fixture = localMessagingFixture(call => call.method === "initialize" ? NO_REPLY : undefined);
+    try {
+      await withHandTimers(async (clock, timers) => {
+        const budget = new MessageBudget(150);
+        const connecting = LocalMessageRpc.connect(fixture.url, budget);
+        clock.now = 150;
+        timers[1]!.fire(); // connect timer first, budget timer (timers[0]) still pending
+        await expect(connecting).rejects.toMatchObject({ code: "operation_timeout", message: expect.stringContaining("deadline") });
+        budget.dispose();
+      });
+    } finally { await fixture.close(); }
+  });
+
+  test("a request timer reaching the deadline before the budget's timer reports the deadline", async () => {
+    const fixture = localMessagingFixture(call => call.method === "initialize" ? NO_REPLY : undefined);
+    try {
+      await withHandTimers(async (clock, timers) => {
+        const budget = new MessageBudget(150);
+        const initializing = LocalMessageRpc.connect(fixture.url, budget);
+        for (let i = 0; timers.length < 3 && i < 400; i++) await Bun.sleep(5);
+        expect(timers.map(timer => timer.delay)).toEqual([150, 150, 150]);
+        clock.now = 150;
+        timers[2]!.fire(); // initialize request timer first, budget timer still pending
+        await expect(initializing).rejects.toMatchObject({ code: "operation_timeout", message: expect.stringContaining("deadline") });
+        budget.dispose();
+      });
+    } finally { await fixture.close(); }
+  });
+
+  test("a per-request limit shorter than the remaining budget stays an RPC timeout", async () => {
+    const fixture = localMessagingFixture(call => call.method === "initialize" ? NO_REPLY : undefined);
+    try {
+      await withHandTimers(async (clock, timers) => {
+        const budget = new MessageBudget(30_000);
+        const initializing = LocalMessageRpc.connect(fixture.url, budget, 100);
+        for (let i = 0; timers.length < 3 && i < 400; i++) await Bun.sleep(5);
+        expect(timers.map(timer => timer.delay)).toEqual([30_000, 100, 100]);
+        clock.now = 100;
+        timers[2]!.fire();
+        await expect(initializing).rejects.toMatchObject({ code: "rpc_timeout" });
+        budget.dispose();
+      });
+    } finally { await fixture.close(); }
   });
 
   test("invalid JSON, binary frames and oversized frames reject all pending reads", async () => {

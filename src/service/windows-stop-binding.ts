@@ -12,7 +12,7 @@
  *    Scheduler service host proven by the SCM PID, or, only while this home's task is
  *    registered, its parent is gone. A parent PID that is not in the table, or whose
  *    creation time is later than the wrapper's (a reused PID), counts as gone;
- * 4. a creation time was read for it.
+ * 4. its creation time and same-account owner SID were verified.
  *
  * A wrapper that passes 1-2 but fails lineage (a launcher started by hand from a live
  * shell, an orphan while no task is registered) is reported as unbound and never touched.
@@ -23,10 +23,11 @@
  * manager is registered, is an ancestor of the child.
  *
  * Pure: the caller supplies the snapshot and every fact; nothing here reads the machine.
+ * Proven foreign owners are never candidates, but stay in the table for parent evidence.
  */
 import { createHash } from "node:crypto";
 
-import { commandLineHasPathToken } from "./windows-guarded-manager";
+import { commandLineHasPathToken } from "./windows-command-line-token";
 import type { WindowsStopProcessEntry } from "./windows-process-evidence";
 
 const WRAPPER_IMAGES = new Set(["wscript.exe", "cscript.exe", "cmd.exe"]);
@@ -64,9 +65,14 @@ export interface WindowsStopBinding {
   unbound: { pid: number; startTime: number | null }[];
   /** Candidates whose evidence cannot be read; any entry makes the stop unknown. */
   unreadable: number[];
+  /** Otherwise eligible wrappers whose same-account ownership could not be proven. */
+  ownershipUnverified: number[];
   /** The child as observed in the snapshot, for lineage and a WinSW survival check. */
   child: { pid: number; startTime: number | null } | null;
 }
+
+export const WRAPPER_OWNER_REFUSAL =
+  "same-account ownership of a service wrapper could not be proven. Stop it from its owning Windows session using Task Manager, then retry";
 
 /** The lowercased image name when it is one of the three wrapper images, else null. */
 export function windowsWrapperImage(name: string | null | undefined): string | null {
@@ -114,7 +120,7 @@ export function bindWindowsStopWrappers(context: WindowsStopBindingContext): Win
   const unreadable = new Set<number>();
   const candidates: WindowsStopProcessEntry[] = [];
   for (const entry of processes) {
-    if (entry.pid === context.childPid || !matchesPath(entry)) continue;
+    if (entry.pid === context.childPid || entry.foreignOwner === true || !matchesPath(entry)) continue;
     if (entry.name === null) unreadable.add(entry.pid);
     else if (windowsWrapperImage(entry.name)) candidates.push(entry);
   }
@@ -132,7 +138,7 @@ export function bindWindowsStopWrappers(context: WindowsStopBindingContext): Win
   for (let changed = true; changed;) {
     changed = false;
     for (const entry of candidates) {
-      if (bound.has(entry.pid) || entry.startTime === null) continue;
+      if (bound.has(entry.pid) || entry.startTime === null || entry.foreignOwner !== false) continue;
       if (lineage(entry)) {
         bound.add(entry.pid);
         changed = true;
@@ -141,15 +147,17 @@ export function bindWindowsStopWrappers(context: WindowsStopBindingContext): Win
   }
 
   const unbound: WindowsStopBinding["unbound"] = [];
+  const ownershipUnverified: number[] = [];
   for (const entry of candidates) {
     if (bound.has(entry.pid)) continue;
     if (entry.startTime === null) unreadable.add(entry.pid);
+    else if (lineage(entry)) ownershipUnverified.push(entry.pid);
     else if (context.taskRegistered && parentLink(entry) === "unreadable") unreadable.add(entry.pid);
     else unbound.push({ pid: entry.pid, startTime: entry.startTime });
   }
 
   for (const entry of processes) {
-    if (entry.pid === context.childPid || entry.commandLine?.trim() || !windowsWrapperImage(entry.name)) continue;
+    if (entry.pid === context.childPid || entry.foreignOwner === true || entry.commandLine?.trim() || !windowsWrapperImage(entry.name)) continue;
     if (descendsFromBound(entry) || (context.managerRegistered && childAncestors.has(entry.pid))) {
       unreadable.add(entry.pid);
     }
@@ -170,6 +178,7 @@ export function bindWindowsStopWrappers(context: WindowsStopBindingContext): Win
     })),
     unbound,
     unreadable: [...unreadable].sort((a, b) => a - b),
+    ownershipUnverified,
     child: childEntry ? { pid: childEntry.pid, startTime: childEntry.startTime } : null,
   };
 }
@@ -181,7 +190,7 @@ export function windowsHomeWrapperPids(
   selfPid?: number,
 ): number[] {
   return processes
-    .filter(entry => entry.pid !== selfPid && windowsWrapperImage(entry.name)
+    .filter(entry => entry.pid !== selfPid && entry.foreignOwner !== true && windowsWrapperImage(entry.name)
       && canonicalPaths.some(path => commandLineHasPathToken(entry.commandLine, path)))
     .map(entry => entry.pid);
 }

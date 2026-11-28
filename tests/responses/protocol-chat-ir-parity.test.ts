@@ -52,6 +52,18 @@ function clone(body: Body): Body {
 }
 
 const CORPUS: Record<string, Body> = {
+  "a tool call's extra_content thought signature, and a malformed one": {
+    model: MODEL,
+    messages: [
+      { role: "user", content: "look it up" },
+      { role: "assistant", content: null, tool_calls: [
+        { id: "call_sig_1", type: "function", function: { name: "lookup", arguments: "{}" }, extra_content: { google: { thought_signature: "CiQB0e2Kb7xQ9Zt0SignatureFixtureAAAA==" } } },
+        { id: "call_sig_2", type: "function", function: { name: "lookup", arguments: "{}" }, extra_content: { google: { thought_signature: 7 } } },
+      ] },
+      { role: "tool", tool_call_id: "call_sig_1", content: "a" },
+      { role: "tool", tool_call_id: "call_sig_2", content: "b" },
+    ],
+  },
   "a single user string": {
     model: MODEL,
     messages: [{ role: "user", content: "hello" }],

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import { Agent, createServer, request as httpRequest, type RequestListener } from "node:http";
 import type { Server } from "bun";
 import { gzipSync } from "node:zlib";
@@ -141,6 +141,7 @@ describe("connection-bound link relay", () => {
   });
 
   test("a silent actual peer expires only the credential-free auth deadline without touching the body", async () => {
+    const authTimeoutMs = 20;
     const seen: Array<{ url: string; authorization: string | undefined; body: string }> = [];
     let bodyRead = false, bodyCancelled = false;
     const body = new ReadableStream({
@@ -150,10 +151,17 @@ describe("connection-bound link relay", () => {
       const record = { url: req.url!, authorization: req.headers.authorization, body: "" };
       seen.push(record);
       req.on("data", chunk => { record.body += chunk.toString(); });
+      // Keep the peer silent and expire the caller's clock after the real probe arrives.
+      req.once("end", () => jest.advanceTimersByTime(authTimeoutMs));
     }, async port => {
-      await expect(fetchBoundLinkRelay(target(port), `http://127.0.0.1:${port}/v1/responses`, {
-        method: "POST", headers: { authorization: `Bearer ${key}` }, body,
-      }, { authTimeoutMs: 20 })).rejects.toBeInstanceOf(LinkRelayAuthTimeoutError);
+      // A missing probe still releases the socket and restores real timers.
+      const signal = AbortSignal.timeout(2_000); // well inside the 5 s test timeout
+      jest.useFakeTimers();
+      try {
+        await expect(fetchBoundLinkRelay(target(port), `http://127.0.0.1:${port}/v1/responses`, {
+          method: "POST", headers: { authorization: `Bearer ${key}` }, body, signal,
+        }, { authTimeoutMs })).rejects.toBeInstanceOf(LinkRelayAuthTimeoutError);
+      } finally { jest.useRealTimers(); }
       expect(seen).toHaveLength(1);
       expect(new URL(seen[0]!.url, "http://peer").pathname).toBe(LINK_RELAY_AUTH_PATH);
       expect(seen[0]!.authorization).toBeUndefined(); expect(seen[0]!.body).toBe("");
@@ -177,29 +185,68 @@ describe("connection-bound link relay", () => {
   for (const failure of ["header timeout", "reset"] as const) {
     test(`post-proof data ${failure} is never a preflight auth timeout`, async () => {
       const parent = new AbortController();
+      const dataReceived = gate();
+      const timeoutReason = new DOMException("data headers timed out", "TimeoutError");
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let pending: Promise<unknown> | undefined;
+      let resetData: (() => void) | undefined;
+      let settled = false;
       let probes = 0, dataRequests = 0;
-      await withHttpPeer((req, res) => {
-        const url = new URL(req.url!, "http://peer");
-        if (url.pathname === LINK_RELAY_AUTH_PATH) {
-          probes++;
-          res.writeHead(204, { "x-opencodex-link-proof": linkRelayProof(fp, "listener", keyId, linkId,
-            url.searchParams.get("nonce")!)! });
-          res.end(); return;
-        }
-        dataRequests++;
-        if (failure === "reset") req.socket.destroy();
-        else timer = setTimeout(() => parent.abort(new DOMException("data headers timed out", "TimeoutError")), 40);
-      }, async port => {
-        try {
-          const error = await fetchBoundLinkRelay(target(port), `http://127.0.0.1:${port}/v1/models`, {
-            headers: { authorization: `Bearer ${key}` }, signal: parent.signal,
-          }, { authTimeoutMs: 20 }).catch(error => error);
-          expect(error).toBeInstanceOf(Error);
-          expect(error).not.toBeInstanceOf(LinkRelayAuthTimeoutError);
-          expect(probes).toBe(1); expect(dataRequests).toBe(1);
-        } finally { clearTimeout(timer); parent.abort(); }
-      });
+      jest.useFakeTimers();
+      try {
+        await withHttpPeer((req, res) => {
+          const url = new URL(req.url!, "http://peer");
+          if (url.pathname === "/checkpoint") { res.writeHead(204); res.end(); return; }
+          if (url.pathname === LINK_RELAY_AUTH_PATH) {
+            probes++;
+            res.writeHead(204, { "x-opencodex-link-proof": linkRelayProof(fp, "listener", keyId, linkId,
+              url.searchParams.get("nonce")!)! });
+            res.end(); return;
+          }
+          dataRequests++;
+          resetData = () => req.socket.destroy();
+          dataReceived.resolve();
+        }, async port => {
+          const checkpointAgent = new Agent({ keepAlive: true, maxSockets: 1 });
+          const checkpoint = async () => {
+            // Real HTTP round trips advance native socket/close processing while fake time stays fixed.
+            for (let turn = 0; turn < 2; turn++) {
+              expect((await rawGet(new URL(`http://127.0.0.1:${port}/checkpoint`), checkpointAgent)).status).toBe(204);
+            }
+          };
+          try {
+            pending = fetchBoundLinkRelay(target(port), `http://127.0.0.1:${port}/v1/models`, {
+              headers: { authorization: `Bearer ${key}` }, signal: parent.signal,
+            }, { authTimeoutMs: 20 }).then(
+              response => { settled = true; return response; },
+              error => { settled = true; return error; },
+            );
+            expect(await Promise.race([
+              dataReceived.promise.then(() => "data"),
+              pending.then(() => "settled-before-data"),
+            ])).toBe("data");
+            expect(probes).toBe(1); expect(dataRequests).toBe(1);
+            if (failure === "reset") resetData!();
+            else {
+              timer = setTimeout(() => parent.abort(timeoutReason), 40);
+              jest.advanceTimersByTime(20);
+              await checkpoint();
+              expect(parent.signal.aborted).toBe(false);
+              expect(settled).toBe(false);
+              jest.advanceTimersByTime(19);
+              await checkpoint();
+              expect(parent.signal.aborted).toBe(false);
+              expect(settled).toBe(false);
+              jest.advanceTimersByTime(1);
+              expect(parent.signal.aborted).toBe(true);
+              expect(parent.signal.reason).toBe(timeoutReason);
+            }
+            const error = await pending;
+            expect(error).toBeInstanceOf(Error);
+            expect(error).not.toBeInstanceOf(LinkRelayAuthTimeoutError);
+          } finally { checkpointAgent.destroy(); clearTimeout(timer); parent.abort(); await pending; }
+        });
+      } finally { jest.useRealTimers(); }
     });
   }
 

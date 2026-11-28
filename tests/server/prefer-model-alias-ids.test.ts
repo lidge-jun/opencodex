@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { saveConfig } from "../../src/config";
+import { flushConfigDirHardeningForTests } from "../../src/config/paths";
+import { clearModelCache } from "../../src/codex/model-cache";
+import * as modelAliases from "../../src/providers/default-aliases";
 import { parseFastRowId, fastRowBases } from "../../src/server/fast-row";
 import { knownEffortRowIds } from "../../src/server/effort-row";
 import { collectDefaultModelExposure } from "../../src/cli/doctor";
@@ -12,7 +12,8 @@ import { gatherRoutedModels } from "../../src/codex/catalog/provider-fetch";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
-import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
+import { createTempHome } from "../helpers/temp-home";
+import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 
 /**
  * `preferModelAliasIds` changes the `/v1/models` row `id` from `provider/nativeId` to the
@@ -25,8 +26,7 @@ import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
  */
 setDefaultTimeout(SERVER_BUDGET_MS);
 
-const previousHome = process.env.OPENCODEX_HOME;
-let testHome = "";
+let home: ReturnType<typeof createTempHome>;
 
 function aliasConfig(prefer: boolean): OcxConfig {
   return {
@@ -50,16 +50,80 @@ function aliasConfig(prefer: boolean): OcxConfig {
 }
 
 beforeEach(() => {
-  testHome = mkdtempSync(join(tmpdir(), "ocx-prefer-alias-"));
-  process.env.OPENCODEX_HOME = testHome;
+  home = createTempHome("ocx-prefer-alias-");
 });
 
 afterEach(async () => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
   // Startup leaves config-dir ACL hardening in flight on Windows; settle it before removal.
-  if (testHome) await removeTreeAfterBackgroundWork(testHome);
-  testHome = "";
+  await flushConfigDirHardeningForTests();
+  home.remove();
+});
+
+test("one listing reuses each provider's alias view and the next request observes fresh discovery", async () => {
+  const providerName = "alias-listing-fixture";
+  let ids = Array.from({ length: 32 }, (_, index) => `vendor${index}/beam`);
+  let discoveryCalls = 0;
+  const upstream = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    fetch(request) {
+      if (new URL(request.url).pathname !== "/v1/models") return new Response("unexpected fixture path", { status: 404 });
+      discoveryCalls += 1;
+      return Response.json({ data: ids.map(id => ({ id, object: "model" })) });
+    },
+  });
+  const config: OcxConfig = {
+    port: 0, hostname: "127.0.0.1", defaultProvider: providerName, fastRows: false,
+    providers: {
+      [providerName]: {
+        adapter: "openai-chat", baseUrl: new URL("/v1", upstream.url).href,
+        apiKey: "fixture-key", liveModels: true, allowPrivateNetwork: true,
+        alias: "FX", aliasTemplate: "{providerAlias}-{modelBasename}",
+      },
+      control: {
+        adapter: "openai-chat", baseUrl: new URL("/v1", upstream.url).href, liveModels: false, allowPrivateNetwork: true,
+        models: ["control/model"], modelAliases: { "control/model": "manual-control" },
+      },
+    },
+  };
+  saveConfig(config);
+  const server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("Model alias listing fixture") });
+  const compute = modelAliases.effectiveModelAliases;
+  const computations = new Map<string, number>();
+  const aliasView = spyOn(modelAliases, "effectiveModelAliases").mockImplementation((...args) => {
+    const name = args[3];
+    if (name !== undefined) computations.set(name, (computations.get(name) ?? 0) + 1);
+    return compute(...args);
+  });
+  try {
+    const list = async () => {
+      computations.clear();
+      const response = await fetch(new URL("/v1/models", server.url));
+      expect(response.status).toBe(200);
+      const body = await response.json() as { data: { id: string; alias_of?: string; owned_by: string }[] };
+      // Gathering uses one view and the OpenAI row projection uses one, regardless of row count.
+      expect(computations.get(providerName)).toBeGreaterThan(0);
+      expect(computations.get(providerName)).toBeLessThanOrEqual(2);
+      expect(computations.get("control")).toBeLessThanOrEqual(2);
+      expect(body.data.find(row => row.owned_by === "control"))
+        .toMatchObject({ id: "control/control/model", alias_of: "control/manual-control" });
+      return body.data.filter(row => row.owned_by === providerName);
+    };
+    const collided = await list();
+    expect(collided.map(row => row.id).toSorted()).toEqual(ids.map(id => `${providerName}/${id}`).toSorted());
+    expect(collided.every(row => row.alias_of === undefined)).toBe(true);
+    expect(discoveryCalls).toBe(1);
+
+    // Removing the collision must expose the alias on the next request, even for the same provider.
+    ids = [ids[0]!];
+    clearModelCache(providerName);
+    expect(await list()).toEqual([expect.objectContaining({ id: `${providerName}/${ids[0]}`, alias_of: "FX/FX-beam" })]);
+    expect(discoveryCalls).toBe(2);
+  } finally {
+    aliasView.mockRestore();
+    await server.stop(true);
+    upstream.stop(true);
+    clearModelCache(providerName);
+  }
 });
 
 describe("preferModelAliasIds on /v1/models", () => {

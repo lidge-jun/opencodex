@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import ts from "typescript";
+import { gatewayClientsCopy } from "../src/i18n/gateway-clients-copy";
 import { LOCALES } from "../src/i18n/shared";
 
 const LOCALE_CODES = LOCALES.map(locale => locale.code);
@@ -6,14 +8,30 @@ const LOCALE_CODES = LOCALES.map(locale => locale.code);
 async function readDict(locale: string): Promise<Map<string, string>> {
   const src = await Bun.file(new URL(`../src/i18n/${locale}.ts`, import.meta.url)).text();
   const out = new Map<string, string>();
-  // NOT anchored to the line start: these catalogs pack several entries onto one line, and a
-  // `^\s*`-anchored pattern silently reads only the first of them. That made this parity check
-  // report a phantom missing key while the catalogs were in fact identical.
-  for (const m of src.matchAll(/"([^"]+)":\s*"((?:[^"\\]|\\.)*)"/g)) {
-    out.set(m[1]!, m[2]!);
+  // Parse property assignments: a JSON/config example inside translated prose can itself
+  // contain quoted keys, and must never become a phantom dictionary entry.
+  const file = ts.createSourceFile(`${locale}.ts`, src, ts.ScriptTarget.Latest, true);
+  const visit = (node: ts.Node): void => {
+    if (ts.isPropertyAssignment(node) && ts.isStringLiteral(node.name)
+      && ts.isStringLiteralLike(node.initializer)) out.set(node.name.text, node.initializer.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  // Resolve the copy the catalog actually spreads and assert that it selects its own locale.
+  const spread = src.match(/\.\.\.gatewayClientsCopy\("([^"]+)"\)/);
+  expect(spread?.[1]).toBe(locale);
+  const copy = gatewayClientsCopy(spread![1] as Parameters<typeof gatewayClientsCopy>[0]);
+  for (const [key, value] of Object.entries(copy)) {
+    out.set(key, value);
   }
   return out;
 }
+
+test("the parity reader sees the gateway-client namespace", async () => {
+  const en = await readDict("en");
+  expect(en.get("gatewayClients.tab")).toBe("Antigravity");
+  expect(en.has("gatewayClients.connect")).toBe(true);
+});
 
 /**
  * A value with no letters once its placeholders are removed has nothing to translate: an em
@@ -182,6 +200,8 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "integrations.tab.workbuddyAi",
   // T3 Code is a product name, identical in every locale.
   "integrations.tab.t3code",
+  // Antigravity is a product name, identical in every locale.
+  "gatewayClients.tab",
   "api.clientConfig.clientT3code",
   // Command Code is a product name, identical in every locale.
   "integrations.tab.commandcode",
@@ -226,6 +246,9 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "logs.cost.lowerBound",
   // A token count ("200k") reads the same in every locale; the 1M choice carries the translated "default".
   "claude.contextAccounting200k",
+  // GOAT is a product name, and Taiwan readers know it by that name; the badge is a chip beside the
+  // translated install-kind label, so translating it would name a product nobody would recognize.
+  "remoteLink.child.kind.goat",
 ]);
 
 test("zh-TW ships no untranslated English placeholders beyond the intentional allowlist", async () => {
@@ -301,6 +324,11 @@ test("every locale translates the Cursor tab beyond the brand labels", async () 
 });
 
 const DSH_VISIBLE_COPY: Record<(typeof LOCALE_CODES)[number], readonly [string, string, string]> = {
+  es: [
+    "DeepSeek Harness (DSH)",
+    "DSH",
+    "OpenCodex solo administra el proveedor opencodex de la fila llm-pi-ai en $DSH_HOME/profiles/desktop/cordis.patch.yml, el perfil Desktop que lee DSH 0.1.7+ ($DSH_HOME/settings.yaml mientras ese perfil no exista). DSH recarga este proveedor en caliente; tu modelo predeterminado y deepseek-official no cambian. Actualmente solo se admite la interfaz de bucle local; no se escribe ninguna credencial real.",
+  ],
   en: [
     "DeepSeek Harness (DSH)",
     "DSH",

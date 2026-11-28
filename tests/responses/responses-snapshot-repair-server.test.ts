@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
-import { handleResponses } from "../../src/server/responses";
+import { handleOwnedResponses as handleResponses } from "../helpers/response-replay-owner";
 import { isEagerRelaySseResponse } from "../../src/server/relay";
 import {
   createGrokResponsesControlFrameBlockRewrite,

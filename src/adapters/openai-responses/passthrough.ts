@@ -26,6 +26,7 @@ import { rewriteRoutedNamespaceToolsForUpstream } from "../../responses/namespac
 import { repairLegacyDottedToolCallNames } from "../../responses/legacy-dotted-tool-name-repair";
 import { preparePlaintextV2AgentMessages } from "../../responses/plaintext-v2-agent-messages";
 import { isMetaAiResponsesDestination, rewriteMuseToolNamesForUpstream } from "../../responses/muse-tool-name-alias";
+import { NATIVE_GPT62_ASTRA_MODEL, NATIVE_GPT62_SOL_MODEL } from "../../codex/catalog/native-models";
 import { buildResponsesTransport } from "./transport";
 export { FORWARD_HEADERS } from "./transport";
 import { normalizeResponsesCodeMode } from "../responses-code-mode";
@@ -59,6 +60,7 @@ import { normalizeMuseToolChoice } from "./muse-tool-choice";
 import { declaresHostedWebSearch, projectHostedSearchHistory, renderCompactionSearchHistoryItems } from "./compaction-search-history";
 import { isKimiCodingResponsesHttpsUrl, stripKimiEmptyAssistantMessages } from "./empty-assistant";
 import { normalizeOpenGatewayResponsesInput } from "./opengateway-input";
+import { normalizeZaiResponsesInput } from "./zai-input";
 
 /**
  * Identifies DeepSeek's strict Responses replay contract: tool-bearing continuations need
@@ -360,13 +362,15 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = injectXaiResponsesXSearch(outBody, provider, parsed._replayPrefixLen);
         // xAI, Meta, Azure and Kimi Code (#8075) answer 400 for `output.encrypted_content`
         // instead of ignoring it; Codex Desktop asks for it on every turn (#7878).
+        // Go multiplexes backends with different include support (#8702). Use its exact
+        // destination's common compatibility policy rather than a model-name allowlist.
         // Azure also rejects this exact include entry, including on plain Responses routes.
         const isAzureResponses = provider.adapter === "azure" || provider.adapter === "azure-openai"
           || new URL(url).hostname.toLowerCase().endsWith(".openai.azure.com");
         const arkKimi = !forward && provider.arkKimiResponsesModels?.includes(parsed.modelId);
         if (arkKimi) outBody = stripArkKimiOrphanCipher(outBody);
         if (isXaiResponsesDestination(provider) || isMetaAiResponsesDestination(url) || isAzureResponses
-          || isKimiCodingResponsesHttpsUrl(url) || arkKimi) {
+          || isKimiCodingResponsesHttpsUrl(url) || arkKimi || isOpenCodeGoResponsesUrl(url)) {
           outBody = stripUnsupportedOutputInclude(outBody);
         }
         // xAI and explicitly classified compatible gateways reject these OpenAI web_search
@@ -437,6 +441,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                 ),
                 {
                   preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
+                  translatorBudget,
                   dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
                   stripEncryptedContent: threadServingIdentityChanged || requiresPlaintextReasoningReplay(provider),
                   dropForeignItemId: parsed._dropForeignReasoningItemIds === true,
@@ -486,6 +491,17 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         finalBody = { ...finalBody, stream: true };
       }
       if (isCanonicalOpenAiForwardProvider(provider)) {
+        if (parsed._anthropicInbound === true && !parsed._compactionRequest && isPlainObject(finalBody)
+          && (finalBody.model === NATIVE_GPT62_SOL_MODEL || finalBody.model === NATIVE_GPT62_ASTRA_MODEL)
+          && typeof finalBody.instructions === "string" && finalBody.instructions.length > 0
+          && Array.isArray(finalBody.input)) {
+          // GPT-6.2 can reuse the Claude system prompt when it is part of the input prefix.
+          const { instructions, input, ...rest } = finalBody;
+          finalBody = {
+            ...rest,
+            input: [{ type: "message", role: "developer", content: [{ type: "input_text", text: instructions }] }, ...input],
+          };
+        }
         const override = (provider as { _codexAccountOverride?: { chatgptAccountId: string; kind?: string } })._codexAccountOverride;
         if (override && override.kind !== "main-pool") {
           finalBody = isolateCodexPoolClientMetadata(finalBody, override.chatgptAccountId);
@@ -525,6 +541,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         finalBody = projectHostedSearchHistory(finalBody);
       }
       finalBody = normalizeOpenGatewayResponsesInput(finalBody, url);
+      finalBody = normalizeZaiResponsesInput(finalBody, url);
       observeOutbound(parsed._rawBody, finalBody, headers);
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         validateFinalCustomToolCompatibility(finalBody, provider.supportsResponsesCustomTools);

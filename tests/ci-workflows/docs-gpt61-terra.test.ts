@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 
 const root = "docs-site/src/content/docs";
@@ -9,6 +9,11 @@ const locales = ["", ...readdirSync(repoPath(root), { withFileTypes: true })
   .map(entry => entry.name)];
 const read = (locale: string, page: string) =>
   readFileSync(repoPath(root, locale, page + ".md"), "utf8");
+// The provider guide continues on the API-key catalog page in locales that ship it.
+const readGuide = (locale: string, page: string) => page !== "guides/providers" ? read(locale, page)
+  : ["guides/providers", "guides/api-key-catalog"]
+    .filter(part => existsSync(repoPath(root, locale, part + ".md")))
+    .map(part => read(locale, part)).join("\n");
 
 describe("GPT-6.1 Terra documentation", () => {
   for (const locale of locales) {
@@ -16,18 +21,23 @@ describe("GPT-6.1 Terra documentation", () => {
       const doc = read(locale, "reference/configuration/providers");
       const section = doc.split("## GPT-6.1 Terra")[1]?.split(/\n## /)[0];
       expect(section).toBeDefined();
+      // Spanish writes grouped counts with a nonbreaking space and amounts with a
+      // decimal comma. Compare the same quantities; keep protocol and model IDs exact.
+      const numericText = locale === "es" ? section
+        ?.replace(/(?<=\d)\u00a0(?=\d{3}\b)/g, ",")
+        .replace(/(\d+),(\d{2})(?=\s*(?:\/|USD))/g, "$$$1.$2") : section;
       for (const value of ["gpt-6.1-terra", "gpt-5.6-terra", "500,000", "872,000",
         "1,050,000", "128,000", "low", "ultra", "max", "none", "medium",
         "$1.00", "$0.05", "$1.25", "$5.00", "272,000", "$2.00", "$0.10",
         "$2.50", "$7.50", "Fast", "2026-06-01", "v1/responses", "v1/chat/completions"]) {
-        expect(section, `${locale}: ${value}`).toContain(value);
+        expect(numericText, `${locale}: ${value}`).toContain(value);
       }
       expect(section).not.toMatch(/Ultrafast|ultrafast/);
     });
 
     test(`${locale || "en"}: model tables list Terra without replacing older models`, () => {
       for (const page of ["guides/providers", "guides/codex-app-models"]) {
-        const doc = read(locale, page);
+        const doc = readGuide(locale, page);
         expect(doc, `${locale}/${page}`).toContain("gpt-6.1-terra");
         expect(doc).toContain("gpt-5.6-terra");
         expect(doc.split("\n").filter(line => line.startsWith("| Cursor |"))
@@ -41,7 +51,7 @@ describe("GPT-6.1 Terra documentation", () => {
 
     test(`${locale || "en"}: OpenRouter and Copilot availability includes Terra`, () => {
       for (const page of ["guides/providers", "guides/codex-app-models"]) {
-        const rows = read(locale, page).split("\n");
+        const rows = readGuide(locale, page).split("\n");
         const terra = rows.find(line => line.startsWith("| OpenRouter |") && line.includes("gpt-6.1-terra"));
         expect(terra).toContain("openrouter/openai/gpt-6.1-terra");
         expect(terra).toContain("1,050,000");

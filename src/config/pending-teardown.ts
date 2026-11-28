@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { atomicWriteFile } from "./atomic-write";
 import { getConfigDir } from "./paths";
+import type { ClientStopOwner } from "./process-state";
 
 /**
  * Ownership receipt for a deferred shared teardown (#3008).
@@ -30,6 +31,10 @@ import { getConfigDir } from "./paths";
 export type PendingTeardownReceipt = {
   /** Process that accepted the obligation, so a live owner is distinguishable from a dead one. */
   ownerPid: number;
+  /** Optional process incarnation on claims bound to an active Link stop fence. */
+  ownerStartTime?: string;
+  /** Exact foreign-endpoint receipt snapshot verified by this Link stop before signaling. */
+  inheritedTeardownDigest?: string;
   /** Identity of this claim; also its filename, which is what makes a clear a single-syscall delete. */
   nonce: string;
   /** ISO timestamp, for diagnostics only; recovery is decided by liveness, not by age. */
@@ -63,6 +68,20 @@ export type PendingTeardownReceipt = {
    * replacement ever comes up, the next `ocx stop` finishes it like any abandoned receipt.
    */
   handover?: "update-restart";
+  /**
+   * Windows checked stop (#7771): what the owner's Part A did before it sent the stop.
+   * /api/stop skips its own Part A only for a receipt carrying this record whose manager
+   * is still the registered one; a receipt without it (an older CLI, or one written
+   * before Part A) gets the route's own capped Part A. Readers that predate it ignore it.
+   */
+  partA?: PendingTeardownPartA;
+};
+
+/** The Part A record of a teardown receipt: the outcome, the manager, the ended wrappers. */
+export type PendingTeardownPartA = {
+  partA: "stopped" | "absent";
+  manager: { scheduler: boolean; winsw: boolean };
+  wrappers: { pid: number; startTime: number }[];
 };
 
 /**
@@ -102,7 +121,7 @@ export function pendingTeardownPathFor(nonce: string): string {
   return join(getConfigDir(), `${PREFIX}${nonce}${SUFFIX}`);
 }
 
-function isReceipt(value: unknown, nonce: string): value is PendingTeardownReceipt {
+export function isValidPendingTeardownReceipt(value: unknown, nonce: string): value is PendingTeardownReceipt {
   if (!value || typeof value !== "object") return false;
   const receipt = value as Record<string, unknown>;
   const endpoint = receipt.endpoint as Record<string, unknown> | undefined;
@@ -118,6 +137,10 @@ function isReceipt(value: unknown, nonce: string): value is PendingTeardownRecei
     // The body must agree with the name: a receipt whose nonce was edited to name a
     // different claim would let a request authorize a deferral it does not own.
     && receipt.nonce === nonce
+    && (receipt.ownerStartTime === undefined || (typeof receipt.ownerStartTime === "string"
+      && receipt.ownerStartTime.length > 0 && receipt.ownerStartTime.length <= 80))
+    && (receipt.inheritedTeardownDigest === undefined || (typeof receipt.inheritedTeardownDigest === "string"
+      && /^[a-f0-9]{64}$/.test(receipt.inheritedTeardownDigest)))
     && typeof receipt.createdAt === "string"
     && (receipt.endpointSource === "exact" || receipt.endpointSource === "guessed")
     && (receipt.handover === undefined || receipt.handover === "update-restart")
@@ -130,16 +153,57 @@ export function claimPendingTeardown(
   endpointSource: "exact" | "guessed",
   ownerPid: number = process.pid,
   handover?: "update-restart",
+  partA?: PendingTeardownPartA | null,
+  stopOwner?: ClientStopOwner,
+  inheritedTeardownDigest?: string,
 ): PendingTeardownReceipt {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);
-  const nonce = randomBytes(16).toString("hex");
+  if (stopOwner && (stopOwner.pid !== ownerPid || endpointSource !== "exact" || !/^[a-f0-9]{32}$/.test(stopOwner.nonce))) {
+    throw new Error("invalid Link stop receipt owner");
+  }
+  const nonce = stopOwner?.nonce ?? randomBytes(16).toString("hex");
   const receipt: PendingTeardownReceipt = {
     ownerPid, nonce, createdAt: new Date().toISOString(), endpoint, endpointSource,
+    ...(stopOwner ? { ownerStartTime: stopOwner.startTime } : {}),
+    ...(inheritedTeardownDigest ? { inheritedTeardownDigest } : {}),
     ...(handover ? { handover } : {}),
+    ...(partA ? { partA } : {}),
   };
   atomicWriteFile(pendingTeardownPathFor(nonce), JSON.stringify(receipt, null, 2) + "\n");
   return receipt;
+}
+
+/**
+ * Add the Part A record to a receipt this process claimed before Part A ran (the guarded
+ * stop and an update handover claim first). Only the owner's own valid receipt is
+ * rewritten; anything else is left alone and reported as false.
+ */
+export function recordPendingTeardownPartA(nonce: string, partA: PendingTeardownPartA, ownerPid: number = process.pid): boolean {
+  const read = readPendingTeardown(nonce);
+  if (read.state !== "valid" || read.receipt.ownerPid !== ownerPid) return false;
+  assertNotRealHomeUnderTest(getConfigDir());
+  atomicWriteFile(pendingTeardownPathFor(nonce), JSON.stringify({ ...read.receipt, partA }, null, 2) + "\n");
+  return true;
+}
+
+/** The Part A record of the receipt a request names, when it is present and well formed. */
+export function pendingTeardownPartA(nonce: string | null): PendingTeardownPartA | null {
+  if (!nonce || !NONCE_RE.test(nonce)) return null;
+  const read = readPendingTeardown(nonce);
+  if (read.state !== "valid") return null;
+  const record = read.receipt.partA as unknown;
+  if (!record || typeof record !== "object") return null;
+  const value = record as Record<string, unknown>;
+  const manager = value.manager as Record<string, unknown> | undefined;
+  const ok = (value.partA === "stopped" || value.partA === "absent")
+    && !!manager && typeof manager === "object"
+    && typeof manager.scheduler === "boolean" && typeof manager.winsw === "boolean"
+    && Array.isArray(value.wrappers)
+    && value.wrappers.every(entry => !!entry && typeof entry === "object"
+      && Number.isSafeInteger((entry as { pid?: unknown }).pid)
+      && Number.isFinite((entry as { startTime?: unknown }).startTime));
+  return ok ? read.receipt.partA! : null;
 }
 
 export function readPendingTeardown(nonce: string): PendingTeardownRead {
@@ -157,7 +221,7 @@ export function readPendingTeardown(nonce: string): PendingTeardownRead {
   }
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (isReceipt(parsed, nonce)) return { state: "valid", receipt: parsed };
+    if (isValidPendingTeardownReceipt(parsed, nonce)) return { state: "valid", receipt: parsed };
     const digest = createHash("sha256").update(raw).digest("hex").slice(0, 12);
     return { state: "invalid", nonce, detail: `malformed receipt (sha256 ${digest})` };
   } catch {
@@ -332,10 +396,19 @@ export function isPendingTeardownAbandoned(
   return !isAlive(read.receipt.ownerPid);
 }
 
-/** Does this request name an obligation that exists and is readable? */
-export function deferralMatchesReceipt(nonce: string | null): boolean {
+/**
+ * Does this request name an obligation that exists, is readable, and is about this proxy?
+ *
+ * A receipt records the endpoint its stop was sent to. With `servedPort`, only a receipt naming
+ * that port defers this proxy's teardown, so a nonce claimed for one proxy cannot be spent on
+ * another listening elsewhere: that stop would defer an obligation the receipt does not describe,
+ * and the receipt's owner could release it without knowing (#8416).
+ */
+export function deferralMatchesReceipt(nonce: string | null, servedPort?: number | null): boolean {
   if (!nonce || !NONCE_RE.test(nonce)) return false;
-  return readPendingTeardown(nonce).state === "valid";
+  const read = readPendingTeardown(nonce);
+  if (read.state !== "valid") return false;
+  return servedPort === undefined || (servedPort !== null && read.receipt.endpoint.port === servedPort);
 }
 
 /** Does this request name a valid obligation that an update handed to its replacement (#7423)? */

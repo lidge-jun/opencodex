@@ -7,7 +7,7 @@ import {
 } from "./jev-session-pin-config";
 import { isCodexReasoningEffort, isDeclaredReasoningEffort } from "../reasoning-effort";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
-import type { OcxComboConfig, OcxComboCooldownWaitPolicy, OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboJevEffortMode, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
+import type { OcxComboCapabilityPolicy, OcxComboConfig, OcxComboCooldownWaitPolicy, OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboJevEffortMode, OcxComboOnUnservable, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
 import { COMBO_NAMESPACE, isValidComboId, resolveComboId, targetKey } from "./identifiers";
 import {
   CANONICAL_JEV_DECISION_PROVIDER,
@@ -55,6 +55,8 @@ export interface NormalizedComboTarget {
 }
 
 export interface NormalizedComboConfig {
+  quotaOnlyFallback?: true;
+  preserveFallbackModel?: true;
   /** Operator consent, effective only on a loopback-only proxy. */
   allowMeteredTargets?: boolean;
   strategy: OcxComboStrategy;
@@ -78,6 +80,10 @@ export interface NormalizedComboConfig {
    * (for example one whose effort swaps the upstream model id) is never re-tiered.
    */
   jevEffortMode: OcxComboJevEffortMode;
+  /** Catalog derivation and per-request member filtering; absent means `intersection`, the legacy rule. */
+  capabilityPolicy?: Extract<OcxComboCapabilityPolicy, "union">;
+  /** `union` only: what to do when no member can serve the request; absent means `degrade`. */
+  onUnservable?: Extract<OcxComboOnUnservable, "reject">;
   /** Disable image input; `auto` preserves the intersection derived from all targets. */
   imageInput: "auto" | "disabled";
   /** Trimmed public alias, or null when the combo keeps the default `combo/<id>` slug. */
@@ -193,6 +199,14 @@ export function comboConfigIssues(
   }
 
   const body = raw as Record<string, unknown>;
+  for (const setting of ["quotaOnlyFallback", "preserveFallbackModel"] as const) {
+    const value = body[setting];
+    if (value !== undefined && typeof value !== "boolean") {
+      issues.push({ path: [setting], message: `${setting} must be a boolean` });
+    } else if (value === true && body.strategy !== undefined && body.strategy !== "failover") {
+      issues.push({ path: [setting], message: `${setting} requires the failover strategy` });
+    }
+  }
   if (body.allowMeteredTargets !== undefined && typeof body.allowMeteredTargets !== "boolean") {
     issues.push({ path: ["allowMeteredTargets"], message: "allowMeteredTargets must be a boolean" });
   }
@@ -301,6 +315,12 @@ export function comboConfigIssues(
       path: ["reasoningEffortMode"],
       message: 'reasoningEffortMode must be "strict" or "adaptive"',
     });
+  }
+  if (body.capabilityPolicy !== undefined && body.capabilityPolicy !== "intersection" && body.capabilityPolicy !== "union") {
+    issues.push({ path: ["capabilityPolicy"], message: 'capabilityPolicy must be "intersection" or "union"' });
+  }
+  if (body.onUnservable !== undefined && body.onUnservable !== "degrade" && body.onUnservable !== "reject") {
+    issues.push({ path: ["onUnservable"], message: 'onUnservable must be "degrade" or "reject"' });
   }
 
   if (body.alias !== undefined) {
@@ -571,6 +591,8 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     : null;
   return {
     strategy: raw.strategy ?? "failover",
+    ...((raw.strategy ?? "failover") === "failover" && raw.quotaOnlyFallback === true ? { quotaOnlyFallback: true as const } : {}),
+    ...((raw.strategy ?? "failover") === "failover" && raw.preserveFallbackModel === true ? { preserveFallbackModel: true as const } : {}),
     ...(raw.allowMeteredTargets === true ? { allowMeteredTargets: true } : {}),
     stickyLimit: raw.stickyLimit ?? 1,
     cooldownMs: raw.cooldownMs,
@@ -584,6 +606,9 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     defaultEffortMode: raw.defaultEffortMode === "force" && defaultEffort !== null ? "force" : "fallback",
     reasoningEffortMode: raw.reasoningEffortMode === "adaptive" ? "adaptive" : "strict",
     jevEffortMode: raw.jevEffortMode === "client" ? "client" : "decide",
+    // Sparse like `allowMeteredTargets`: the default shape stays exactly what it was before the policy existed.
+    ...(raw.capabilityPolicy === "union" ? { capabilityPolicy: "union" as const } : {}),
+    ...(raw.onUnservable === "reject" ? { onUnservable: "reject" as const } : {}),
     imageInput: raw.imageInput === "disabled" ? "disabled" : "auto",
     alias: alias || null,
     nativeAlias: raw.nativeAlias === true,

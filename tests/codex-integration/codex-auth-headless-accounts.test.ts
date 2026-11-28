@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -85,6 +86,7 @@ beforeEach(() => {
   previousOcxHome = process.env.OPENCODEX_HOME;
   previousCodexHome = process.env.CODEX_HOME;
   process.env.OPENCODEX_HOME = join(root, "ocx");
+  bindStoredCodexPoolRoutingForTests();
   process.env.CODEX_HOME = nativeHome;
   mkdirSync(process.env.OPENCODEX_HOME);
   originalFetch = globalThis.fetch;

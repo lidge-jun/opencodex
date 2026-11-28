@@ -1,10 +1,11 @@
 import type { ResponsesTerminalStatus } from "../../bridge";
+import { responsesCompletionError } from "../../lib/errors";
 import { ResponseBodyInactivityError } from "../../lib/response-body-inactivity";
 import {
   createSseInspector,
   createSseTerminalOutputBoundary,
+  createTerminalStatusTracker,
   SseAggregateLimitError,
-  terminalStatusFromParsed,
   type CodexSafetyBufferingFilterOptions,
   type SseInspector,
 } from "../relay";
@@ -27,9 +28,18 @@ export const MAX_BUFFERED_RESPONSES_SSE_FRAMES = 100_000;
 export const BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS = 15 * 60_000;
 const BUFFERED_SSE_PROCESSING_SLICE_BYTES = 64 * 1024;
 
+export type BufferedFailedCompletion = {
+  payload: unknown;
+  error: NonNullable<ReturnType<typeof responsesCompletionError>>;
+};
+
 export type BufferedResponsesTerminal = {
   status: ResponsesTerminalStatus;
   response: Record<string, unknown>;
+  failedCompletion?: undefined;
+} | {
+  status: "failed";
+  failedCompletion: BufferedFailedCompletion;
 };
 
 export type BufferedResponsesSseFailure = {
@@ -110,6 +120,8 @@ function createBufferedTerminalInspector(maxSourceBytes: number): {
   let terminalCount = 0;
   let status: ResponsesTerminalStatus | undefined;
   let terminalResponse: Record<string, unknown> | undefined;
+  let failedCompletion: BufferedFailedCompletion | undefined;
+  const classifyTerminal = createTerminalStatusTracker();
   const inspector = createSseInspector({
     terminalReconstruction: {
       maxItems: MAX_BUFFERED_RESPONSES_OUTPUT_ITEMS,
@@ -118,16 +130,20 @@ function createBufferedTerminalInspector(maxSourceBytes: number): {
       mergeSparseTerminalOutput: true,
     },
     onParsedPayload(payload) {
-      const candidateStatus = terminalStatusFromParsed(payload);
+      const candidateStatus = classifyTerminal(payload);
       if (!candidateStatus) return;
       terminalCount += 1;
       status ??= candidateStatus;
+      if (terminalCount === 1 && candidateStatus === "failed") {
+        const error = responsesCompletionError(payload);
+        if (error) failedCompletion = { payload, error };
+      }
     },
     onOpaquePayload(payload) {
       if (payload !== "[DONE]") malformed = true;
     },
     onTerminalResponse(candidateStatus, response) {
-      if (candidateStatus === status && terminalResponse === undefined) {
+      if (!failedCompletion && candidateStatus === status && terminalResponse === undefined) {
         if (response.status !== undefined && response.status !== candidateStatus) {
           malformed = true;
           return;
@@ -149,6 +165,8 @@ function createBufferedTerminalInspector(maxSourceBytes: number): {
     result: () => {
       if (malformed) return { ok: false, kind: "malformed" };
       if (terminalCount !== 1 || status === undefined) return { ok: false, kind: "missing_terminal" };
+      // A provider error on response.completed is authoritative even when the snapshot claims success.
+      if (failedCompletion) return { ok: true, terminal: { status: "failed", failedCompletion } };
       if (!terminalResponse || terminalResponse.status !== status || !Array.isArray(terminalResponse.output)) {
         return { ok: false, kind: "malformed" };
       }
@@ -219,6 +237,8 @@ export async function collectBufferedResponsesSse(
     terminalBoundary?: CodexSafetyBufferingFilterOptions;
     read?: BufferedReadOptions;
     retainTranscript?: boolean;
+    /** Per-request outbound mask, applied to upstream copy before the boundary bounds it. */
+    maskCredential?: (text: string) => string;
   } = {},
 ): Promise<BufferedResponsesSseResult> {
   const maxBytes = options.read?.maxBytes ?? MAX_UPSTREAM_JSON_BODY_BYTES;
@@ -237,6 +257,7 @@ export async function collectBufferedResponsesSse(
   const reader = body.getReader();
   const boundary = createSseTerminalOutputBoundary({
     ...options.terminalBoundary,
+    maskCredential: options.maskCredential,
     maxInputBytes: maxBytes,
     maxOutputBytes: maxBytes,
     maxFrames,

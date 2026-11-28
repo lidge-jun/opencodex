@@ -12,6 +12,9 @@
  * being a contract.
  */
 
+/** Public, opaque account labels used by the usage log and dashboard. */
+export const ACCOUNT_LOG_LABEL_RE = /^(?:main|[po][a-f0-9]{6}|k[a-f0-9]{32})$/;
+
 /**
  * Recovery kinds recorded per attempt in the usage log; the dashboard renders localized labels
  * for these wire values.
@@ -25,6 +28,7 @@
 export const ATTEMPT_RECOVERY_KIND_ROSTER = Object.freeze([
   "transient-5xx",
   "connection-reset",
+  "offline-resend",
   "oauth-401",
   "oauth-account-403",
   "key-401",

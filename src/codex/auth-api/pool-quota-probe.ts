@@ -1,9 +1,10 @@
-import { parseCodexCredits, rememberCodexCredits } from "../credits";
+import { codexAccountFetch } from "../account-egress-runtime";
+import { rememberCodexCredits } from "../credits";
 import { fetchCodexUsage } from "../quota-query-backoff";
 import type { CodexUsageOwner } from "../quota-query-backoff";
 import { capturePoolQuotaWriter, getValidCodexToken, isCodexAccountGenerationLive, forceRefreshCodexPoolToken, markCodexAccountValidated, markCodexAccountValidationFailed, readCodexAccountRecord, isTerminalCodexPoolRefreshFailure, CodexCredentialGenerationConflictError, CodexCredentialRefreshLockTimeoutError, CodexCredentialRefreshBusyError, CodexCredentialRefreshStaleError, TokenRefreshError } from "../account-store";
 import type { PoolQuotaWriter } from "../quota-types";
-import { isValidWhamHistoryObservation, getAccountQuota, isCompleteCodexQuotaRecoverySnapshot, parseUsageQuota, poolWhamPolicyObservation, setAccountQuotaFromParsed } from "../quota";
+import { isValidWhamHistoryObservation, getAccountQuota, isCompleteCodexQuotaRecoverySnapshot, parseUsageQuota, parseWhamCredits, poolWhamPolicyObservation, setAccountQuotaFromParsed } from "../quota";
 import type { StoredAccountQuota, WhamUsageResponse } from "../quota";
 import type { ManualResetRefreshLineage } from "../routing";
 import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../account-runtime-state";
@@ -271,8 +272,8 @@ export async function recoverPoolQuotaFrom401(ctx: {
     },
     signal: AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS),
   }, () => markQuotaProbeAttempted(ctx.quotaProbeEvidence, refreshed.generation),
-  ctx.recoveryProbeNow === undefined ? { poolAccountId: accountId }
-    : { poolAccountId: accountId, recoveryProbe: true, now: () => ctx.recoveryProbeNow! });
+  ctx.recoveryProbeNow === undefined ? { poolAccountId: accountId, transport: codexAccountFetch(accountId) }
+    : { poolAccountId: accountId, recoveryProbe: true, now: () => ctx.recoveryProbeNow!, transport: codexAccountFetch(accountId) });
   if (!replayRead) return { quota: existing ?? null, needsReauth: false, credentialGeneration: refreshed.generation, quotaProbeSkipped: true };
   if (replayRead.kind === "joined") {
     if (!isCodexAccountGenerationLive(accountId, refreshed.generation)
@@ -359,11 +360,12 @@ export async function commitPoolQuotaResponse(
   if (ctx.mayPublish?.() === false) {
     return { quota: getAccountQuota(accountId), needsReauth: false, credentialGeneration: generation };
   }
-  if (ctx.poolWriter && isCodexAccountGenerationLive(accountId, generation)) {
-    rememberCodexCredits(accountId, ctx.poolWriter.historyIdentity, parseCodexCredits(data.credits));
-  }
   const freshPlan = nonEmptyPlan(data.plan_type) ?? undefined;
-  const quota = parseUsageQuota({ ...data, plan_type: freshPlan ?? configuredPlan });
+  const usage = { ...data, plan_type: freshPlan ?? configuredPlan };
+  if (ctx.poolWriter && isCodexAccountGenerationLive(accountId, generation)) {
+    rememberCodexCredits(accountId, ctx.poolWriter.historyIdentity, parseWhamCredits(usage));
+  }
+  const quota = parseUsageQuota(usage);
   const freshResetCredits = quota?.resetCredits;
   if (!quota) {
     return {
@@ -376,8 +378,8 @@ export async function commitPoolQuotaResponse(
   if (!isCodexAccountGenerationLive(accountId, generation)) {
     return { quota: null, needsReauth: false, credentialGeneration: generation };
   }
-  const validPolicyObservation = isValidWhamHistoryObservation(data);
-  setAccountQuotaFromParsed(accountId, quota, writerGeneration, undefined, poolWhamPolicyObservation(data, quota),
+  const validPolicyObservation = isValidWhamHistoryObservation(usage);
+  setAccountQuotaFromParsed(accountId, quota, writerGeneration, undefined, poolWhamPolicyObservation(usage, quota),
     ctx.poolWriter && validPolicyObservation ? { writer: ctx.poolWriter, observedAt, source: "wham", raw: quota } : undefined,
     true);
   return {
@@ -418,8 +420,8 @@ export async function fetchFreshPoolAccountQuota(
         headers: { Authorization: `Bearer ${accessToken}`, "ChatGPT-Account-Id": chatgptAccountId },
         signal: AbortSignal.timeout(8000),
       }, () => markQuotaProbeAttempted(quotaProbeEvidence, generation),
-      recoveryProbeNow === undefined ? { poolAccountId: accountId }
-        : { poolAccountId: accountId, recoveryProbe: true, now: () => recoveryProbeNow });
+      recoveryProbeNow === undefined ? { poolAccountId: accountId, transport: codexAccountFetch(accountId) }
+        : { poolAccountId: accountId, recoveryProbe: true, now: () => recoveryProbeNow, transport: codexAccountFetch(accountId) });
       if (!admission) return { quota: existing ?? null, needsReauth: false, credentialGeneration: generation, quotaProbeSkipped: true };
       if (admission.kind === "joined") return isCodexAccountGenerationLive(accountId, generation)
         && quotaProbeEvidence.mayPublish?.() !== false
@@ -597,6 +599,7 @@ export async function fetchPoolAccountQuota(
         await warmCodexAccount({
           accessToken: sourceToken?.accessToken ?? record.credential.accessToken,
           chatgptAccountId: sourceToken?.chatgptAccountId ?? record.credential.chatgptAccountId,
+          transport: codexAccountFetch(accountId),
         });
         markCodexAccountValidated(accountId, Date.now(), generation);
         clearAccountNeedsReauth(accountId, generation);

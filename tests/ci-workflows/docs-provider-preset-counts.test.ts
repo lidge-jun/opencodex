@@ -24,7 +24,8 @@ const KEY_PRESETS = PROVIDER_REGISTRY.filter(entry => entry.authKind === "key").
 
 /** Guides state the total and the key-based split on one line. */
 const GUIDES = [
-  { locale: "en", path: "docs-site/src/content/docs/guides/providers.md", anchor: "opencodex ships" },
+  { locale: "es", path: "docs-site/src/content/docs/es/guides/api-key-catalog.md", anchor: "preajustes integrados" },
+  { locale: "en", path: "docs-site/src/content/docs/guides/api-key-catalog.md", anchor: "opencodex ships" },
   { locale: "ja", path: "docs-site/src/content/docs/ja/guides/providers.md", anchor: "組み込みプリセットが" },
   { locale: "ko", path: "docs-site/src/content/docs/ko/guides/providers.md", anchor: "빌트인 프리셋이" },
   { locale: "fr", path: "docs-site/src/content/docs/fr/guides/providers.md", anchor: "préréglages intégrés" },
@@ -36,6 +37,7 @@ const GUIDES = [
 
 /** Quickstarts state the total only. */
 const QUICKSTARTS = [
+  { locale: "es", path: "docs-site/src/content/docs/es/getting-started/quickstart.md", anchor: "preajustes del registro integrado" },
   { locale: "en", path: "docs-site/src/content/docs/getting-started/quickstart.md", anchor: "built-in registry presets" },
   { locale: "ja", path: "docs-site/src/content/docs/ja/getting-started/quickstart.md", anchor: "組み込みレジストリプリセット" },
   { locale: "ko", path: "docs-site/src/content/docs/ko/getting-started/quickstart.md", anchor: "내장 레지스트리 프리셋" },
@@ -60,7 +62,7 @@ async function anchoredLine(path: string, anchor: string): Promise<string> {
 
 describe("documented provider preset counts match the registry", () => {
   test("TRAE CN quickstart leaves the key empty and links CLI login setup", async () => {
-    const page = await Bun.file(repoPath(QUICKSTARTS[0].path)).text();
+    const page = await Bun.file(repoPath(QUICKSTARTS.find(row => row.locale === "en")!.path)).text();
     const note = page.match(/For \*\*TRAE CN\*\*[^\n]*(?:\n[^\n]+)*/)?.[0] ?? "";
     expect(note).toMatch(/^For \*\*TRAE CN\*\*, press Enter to leave the wizard’s key prompt empty:/);
     expect(note).toContain("CLI owns authentication. Install and sign in to the CLI first;");
@@ -68,6 +70,7 @@ describe("documented provider preset counts match the registry", () => {
   });
 
   const translatedTraeNotes: Record<string, string> = {
+    es: "**TRAE CN** usa el CLI oficial con sesión iniciada y no necesita clave de API. Instala el CLI, inicia sesión y deja el campo de clave vacío en el asistente.",
     ja: "**TRAE CN** はログイン済みの公式 CLI を使用するため、API キーは不要です。CLI をインストールしてログインし、ウィザードのキー入力欄は空のまま進めてください。",
     ko: "**TRAE CN**은 로그인된 공식 CLI를 사용하므로 API 키가 필요하지 않습니다. CLI를 설치하고 로그인한 후 마법사의 키 입력란은 비워 두세요.",
     fr: "**TRAE CN** utilise le CLI officiel déjà connecté et ne nécessite pas de clé API. Installez le CLI, connectez-vous et laissez le champ de clé vide dans l’assistant.",

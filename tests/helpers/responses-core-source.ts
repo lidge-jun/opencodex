@@ -8,6 +8,8 @@ import { repoPath } from "./repo-root";
 export const RESPONSES_CORE_MODULES = [
   "core.ts",
   "core-pipeline.ts",
+  "hosted-advisor-spend.ts",
+  "image-context-recovery.ts",
   "compaction-retention.ts",
   "core-options.ts",
   "native-response-control.ts",
@@ -20,11 +22,15 @@ export const RESPONSES_CORE_MODULES = [
   "native-injection-replay.ts",
   // Reached from passthrough dispatch: the physical replay guard for a native reset/EOF replacement (#8292).
   "native-replay-guard.ts",
+  // Reached from passthrough delivery: opt-in estimated usage for providers that omit it (#7427).
+  "estimated-usage.ts",
   "native-steering.ts",
   "native-steering-settings.ts",
   "native-steering-policy.ts",
   "native-steering-replay.ts",
   "codex-ws-correlation.ts",
+  // Reached from native dispatch: acknowledged-prefix state and its physical-send accounting.
+  "codex-ws-send-accounting.ts",
   "core-lifetime.ts",
   "core-replay.ts",
   "core-errors.ts",
@@ -34,12 +40,18 @@ export const RESPONSES_CORE_MODULES = [
   "core-auth.ts",
   "core-normalize.ts",
   "core-combo.ts",
+  // Reached from core-combo.ts: the per-target send-budget scope moved out of it (#9163).
+  "combo-send-budget-scope.ts",
+  // Reached from core.ts: the keepalive head a slow streaming combo selection commits (#8326).
+  "combo-selection-keepalive.ts",
   "deferred-send-reporter.ts",
   "chat-policy-media.ts",
+  "combo-admission-snapshot.ts",
   "combo-requested-effort.ts",
   "core-combo-native.ts",
   // Reached from core-combo.ts: tool-loop continuations stay on the lane's previous target (#7298).
   "combo-tool-loop-pin.ts",
+  "command-code-decision-refusal.ts",
   // Reached from core-combo.ts: opt-in JEV session pin keeps a session on its decided target (#7525).
   "jev-session-pin.ts",
   // Reached from core-combo.ts: the JEV model backend's internal decision turn.
@@ -47,6 +59,7 @@ export const RESPONSES_CORE_MODULES = [
   // Reached from core-combo.ts: JEV effort choices and resolved native quota identity.
   "jev-combo-choice.ts",
   "request-prepare.ts",
+  "replay-owner.ts",
   // Reached from request-prepare.ts and compact.ts: the eager Codex MCP catalog diagnostic (#8133).
   "codex-tool-catalog.ts",
   // Reached from codex-tool-catalog.ts: the rendered Code Mode exec section parser.
@@ -77,12 +90,15 @@ export const RESPONSES_CORE_MODULES = [
   "passthrough-completion.ts",
   "opengateway-completion-guard.ts",
   "outbound-request-body.ts",
+  "bare-namespace-aliases.ts",
   "passthrough-observations.ts",
   "passthrough-key-rotation.ts",
   // Reached from passthrough/adapter dispatch, compact and runTurn: local spend-ledger refusal mapping.
   "spend-storage-error.ts",
   // Reached from passthrough dispatch: local pacing refusals retain 429 and Retry-After.
   "pacing-overload.ts",
+  // Reached from core.ts, the Combo loop and the physical send: Combo admission checked again at the send.
+  "send-admission.ts",
   "reset-replay.ts",
   "passthrough-delivery.ts",
   // Reached from passthrough-delivery.ts: buffered combo children must honor a required tool_choice (#7456).
@@ -102,15 +118,19 @@ export const RESPONSES_CORE_MODULES = [
   "adapter-failure-message.ts",
   "antigravity-validation-refusal.ts",
   "antigravity-model-denial-recovery.ts",
+  "antigravity-fault-rotation.ts",
   "adapter-continuation.ts",
   "adapter-delivery.ts",
+  "anthropic-image-context.ts",
   "anthropic-thinking-recovery.ts",
   "advisor-slot.ts",
-  // Reached from advisor-slot.ts: clips the opt-in question-only consultation text (#7526).
+  // Reached from advisor-slot.ts: shared question bounds/clip helper for opt-in question-only consultation text (#7526).
   "advisor-question.ts",
   "advisor-retention.ts",
   "advisor-plan-slot.ts",
   "policy-refusal.ts",
+  // Reached from core-pipeline.ts: the Antigravity ACP use-policy preflight (plan 080, #8480).
+  "agy-acp-preflight.ts",
 ] as const;
 
 export type ResponsesCoreModule = typeof RESPONSES_CORE_MODULES[number];

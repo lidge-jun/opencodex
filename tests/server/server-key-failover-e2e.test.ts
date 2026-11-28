@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { clearKeyCooldowns, getKeyCooldownUntil, rotateKeyOn429 } from "../../src/providers/key-failover";
+import { clearProviderCacheAffinityForTests } from "../../src/providers/cache-affinity";
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
 import {
   clearReasoningReplayCacheForTests,
@@ -31,6 +32,10 @@ import { providerRequestPacingStatus, resetProviderRequestPacingForTest, setProv
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport, commitProviderApiKeySelection } from "../../src/providers/api-key-selection";
 import { routedProviderConfig } from "../../src/router";
 import type { OcxProviderTransport } from "../../src/providers/xai-transport";
+import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+
+// These cases bind real servers and sockets, including their startup and cleanup.
+setDefaultTimeout(SERVER_BUDGET_MS);
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -60,6 +65,7 @@ beforeEach(() => {
   clearKeyCooldowns();
   clearReasoningReplayCacheForTests();
   clearBridgeSearchReplayCacheForTests();
+  clearProviderCacheAffinityForTests();
 });
 
 afterEach(async () => {
@@ -88,6 +94,7 @@ afterEach(async () => {
   clearKeyCooldowns();
   clearReasoningReplayCacheForTests();
   clearBridgeSearchReplayCacheForTests();
+  clearProviderCacheAffinityForTests();
   if (stopFailures.length > 0) throw new AggregateError(stopFailures, "tracked server stop failed in afterEach");
 });
 
@@ -1490,20 +1497,23 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
+import { sseFieldValue } from "../../src/lib/sse-decoder";
 
 async function cliKeyRecoveryCase(options: {
-  adapter?: "qoder" | "codebuddy"; stream?: boolean; vendorCode?: number; result?: string;
-  exitCode?: number; stderr?: string; prefix?: AdapterEvent;
+  adapter?: "qoder" | "codebuddy"; region?: "global" | "cn"; stream?: boolean; vendorCode?: number | string; result?: string;
+  exitCode?: number; stderr?: string; prefix?: AdapterEvent; preamble?: string | string[];
   poolSize?: number; allFail?: boolean; manualSwitch?: boolean; cancel?: boolean;
   budget?: "total" | "hop";
   stallFirstEvent?: boolean; stallTimeoutSec?: number; healthyFirst?: boolean;
 } = {}) {
   const adapterName = options.adapter ?? "qoder";
+  const qoderRegion = options.region ?? "global";
   clearQoderBinaryCache(); clearCodeBuddyBinaryCache();
   const config = { port: 0, defaultProvider: "cli-pool",
     ...(options.stallTimeoutSec ? { stallTimeoutSec: options.stallTimeoutSec } : {}),
     providers: { "cli-pool": {
-    adapter: adapterName, authMode: "key", baseUrl: adapterName === "qoder" ? "https://qoder.com" : "https://www.codebuddy.ai",
+    adapter: adapterName, authMode: "key",
+    baseUrl: adapterName === "qoder" ? (qoderRegion === "cn" ? "https://qoder.cn" : "https://qoder.com") : "https://www.codebuddy.ai",
     apiKey: "synthetic-cli-a", models: ["test"], liveModels: false,
     apiKeyPool: [
       { id: "a", key: "synthetic-cli-a" }, { id: "b", key: "synthetic-cli-b" },
@@ -1531,7 +1541,10 @@ async function cliKeyRecoveryCase(options: {
     const create = adapterName === "qoder" ? createQoderAdapter : createCodeBuddyAdapter;
     const adapter = create(provider, { which: () => "/synthetic/cli", killGraceMs: 100,
       spawn: (_file, _args, childOptions) => {
-        const key = String(childOptions.env?.[adapterName === "qoder" ? "QODER_PERSONAL_ACCESS_TOKEN" : "CODEBUDDY_API_KEY"]);
+        const tokenEnv = adapterName === "qoder"
+          ? (qoderRegion === "cn" ? "QODERCN_PERSONAL_ACCESS_TOKEN" : "QODER_PERSONAL_ACCESS_TOKEN")
+          : "CODEBUDDY_API_KEY";
+        const key = String(childOptions.env?.[tokenEnv]);
         seen.push(key);
         const failing = options.allFail || (key === "synthetic-cli-a" && !options.healthyFirst);
         const child = new EventEmitter() as ChildProcess;
@@ -1546,6 +1559,9 @@ async function cliKeyRecoveryCase(options: {
             order.push("cli-output");
           }
           if (failing) {
+            for (const text of Array.isArray(options.preamble) ? options.preamble : options.preamble ? [options.preamble] : []) {
+              yield Buffer.from(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] } }) + "\n");
+            }
             if (options.exitCode === undefined) yield Buffer.from(JSON.stringify({
               type: "result", is_error: true, error_code: options.vendorCode,
               result: options.result ?? "invalid personal access token",
@@ -1609,7 +1625,15 @@ async function cliKeyRecoveryCase(options: {
 }
 
 describe("runTurn API-key recovery", () => {
+  const daily = "You have reached the daily usage limit. Please try again later.";
+  const credits = "Your personal Credits have been exhausted. Please check your plan.";
+  const auth = "Your authentication has expired. Please sign in again.";
+  const quotaNotice = "The usage limit has been reached. Please check your quota and try again later.";
+  const cnPricing = 'inference.remoteChat.stream failed (403): {"pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}';
+  const reminder = "<system-reminder>local mcp servers</system-reminder>";
+
   test.each([
+    { vendorCode: 105, result: "invalid personal access token", preamble: auth, stream: true, status: 401 },
     { exitCode: 1, stderr: "QoderAuthError: QODER_PERSONAL_ACCESS_TOKEN contains a token that was rejected", stream: false, status: 401 },
     { result: "You've reached your daily usage limit for Chat. Come back tomorrow...", stream: true, status: 429 },
   ])("real CLI evidence recovers %j", async fixture => {
@@ -1619,11 +1643,63 @@ describe("runTurn API-key recovery", () => {
       : "insufficient_quota");
     expect(result.seen).toEqual(["synthetic-cli-a", "synthetic-cli-b"]);
     expect(result.body).toContain("recovered on B");
+    if (fixture.preamble) expect(result.body).not.toContain(fixture.preamble);
     expect(result.body).not.toContain("apiKeyRecovery");
     expect(result.active).toBe("synthetic-cli-b");
     expect(result.aCooldown).not.toBeNull();
     expect(result.bCooldown).toBeNull();
     expect(result.budgetUsed).toBe(2);
+  });
+
+  test.each([
+    { name: "daily limit without a code", stream: false, result: daily, preamble: daily },
+    { name: "alternative 110 result", vendorCode: "110", result: "Billing daily count exceeded", preamble: daily },
+    { name: "daily limit after a reminder", vendorCode: 110, result: daily, preamble: [reminder, daily] },
+    { name: "personal Credits 118", vendorCode: 118, result: credits, preamble: credits },
+    { name: "CN pricing 112", region: "cn" as const, vendorCode: "112", result: cnPricing, preamble: cnPricing },
+  ])("matching CLI notice retries on B: $name", async fixture => {
+    const result = await cliKeyRecoveryCase({ stream: true, ...fixture });
+    expect(result.errors[0]).toMatchObject({ status: 429, code: "insufficient_quota", apiKeyRecovery: true });
+    expect(result.seen).toEqual(["synthetic-cli-a", "synthetic-cli-b"]);
+    expect(result.body).toContain("recovered on B");
+    expect(result.body).not.toMatch(/daily usage limit|personal Credits|pricingUrl|system-reminder/);
+    expect(result.active).toBe("synthetic-cli-b");
+    expect(result.aCooldown).not.toBeNull();
+    expect(result.bCooldown).toBeNull();
+    expect(result.budgetUsed).toBe(2);
+  });
+
+  test.each([
+    { name: "auth text before a daily limit", recoverable: true, vendorCode: 110, result: daily, visible: auth },
+    { name: "daily text before personal Credits", recoverable: true, vendorCode: 118, result: credits, visible: daily },
+    { name: "personal Credits text before CN pricing", recoverable: true, region: "cn" as const, vendorCode: 403, result: cnPricing, visible: credits },
+    { name: "general quota 113", recoverable: false, vendorCode: 113, result: quotaNotice, visible: quotaNotice },
+    { name: "personal Credits on bare 112", recoverable: false, vendorCode: 112, result: credits, visible: credits },
+    { name: "CN notice on Global", recoverable: false, vendorCode: "112", result: cnPricing, visible: cnPricing },
+    { name: "CN notice with permission denial", recoverable: false, region: "cn" as const, vendorCode: "114", result: cnPricing, visible: cnPricing },
+    { name: "real answer after a reminder", recoverable: true, vendorCode: 110, result: daily, preamble: [reminder, "Real answer."], visible: "Real answer." },
+  ])("keeps assistant output and stays on A: $name", async ({ visible, recoverable, ...fixture }) => {
+    const result = await cliKeyRecoveryCase({ stream: true, preamble: visible, ...fixture });
+    expect(result.errors[0]?.apiKeyRecovery === true).toBe(recoverable);
+    let text = "";
+    for (const line of result.body.split(/\r?\n/)) {
+      const data = sseFieldValue(line, "data");
+      if (!data || data === "[DONE]") continue;
+      const event = JSON.parse(data);
+      if (event.type === "response.output_text.delta") text += event.delta;
+    }
+    expect(text).toBe(visible);
+    expect(result.seen).toEqual(["synthetic-cli-a"]);
+    expect(result.active).toBe("synthetic-cli-a");
+    expect(result.aCooldown).toBeNull();
+    expect(result.bCooldown).toBeNull();
+    expect(result.budgetUsed).toBe(1);
+  });
+
+  test("a notice with extra text stays turn output and blocks recovery", async () => {
+    const result = await cliKeyRecoveryCase({ vendorCode: 110, result: daily, preamble: daily + " Please contact support." });
+    expect(result.seen).toEqual(["synthetic-cli-a"]);
+    expect(result.aCooldown).toBeNull();
   });
 
   test("CodeBuddy multi-key healthy stream starts SSE without key-pool preflight", async () => {
@@ -1638,6 +1714,7 @@ describe("runTurn API-key recovery", () => {
       expect(result.body).toContain("healthy on A");
       expect(result.seen).toEqual(["synthetic-cli-a"]);
       expect(result.errors).toEqual([]);
+      expect(result.logCtx.attempts?.map(attempt => attempt.sendCount)).toEqual([1]);
       expect(result.budgetUsed).toBe(1);
       expect(result.aCooldown).toBeNull();
       expect(result.bCooldown).toBeNull();
@@ -1716,6 +1793,11 @@ describe("runTurn API-key recovery", () => {
   });
 
   test.each([
+    ["explicit permission code", { region: "cn" as const, vendorCode: "PERMISSION_DENIED", result: cnPricing }],
+    ["embedded permission code", { region: "cn" as const, vendorCode: 403, result: 'inference.remoteChat.stream failed (403): {"code":114,"pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}' }],
+    ["different pricing path", { region: "cn" as const, vendorCode: 403, result: 'inference.remoteChat.stream failed (403): {"pricingUrl":"https://qoder.com.cn/pricing-policy"}' }],
+    ["permission denial beside the pricing URL", { region: "cn" as const, vendorCode: 403, result: 'inference.remoteChat.stream failed (403): {"message":"Permission denied","pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}' }],
+    ["account lock beside the pricing URL", { region: "cn" as const, vendorCode: 403, result: 'inference.remoteChat.stream failed (403): {"message":"Account locked due to security policy","pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}' }],
     ["Team daily usage limit reached", { result: "Team daily usage limit reached" }],
     ["This model's credit usage limit reached", { result: "This model's credit usage limit reached" }],
     ["Shared daily usage limit reached", { result: "Shared daily usage limit reached" }],

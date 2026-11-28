@@ -20,6 +20,19 @@ import { AUTO_COMPACT_WINDOW_DEFAULT, formatCompactWindow, newClientId, normaliz
 import { SmallFastModelSetting } from "./claude-code-settings";
 import { ClaudeCodeTierDefaults } from "./claude-code-tier-defaults";
 import { interceptReasonKey, normalizeSharedProxy, selectFirstPartyNotice, type FirstPartyNotice } from "./claude-code-first-party";
+import FirstPartyPreviewDialog from "./FirstPartyPreviewDialog";
+import ClaudeHomesStatus from "./ClaudeHomesStatus";
+import { fetchFirstPartyPreview, FirstPartyPreviewRefusal, type FirstPartyPreview } from "./claude-first-party-preview";
+
+/** Refusal codes the first-party switch (and its preview) answer with, and their copy. */
+const FIRST_PARTY_REFUSAL_KEYS = {
+  intercept_disabled: "claude.firstParty.refusal.interceptDisabled",
+  intercept_unavailable: "claude.firstParty.refusal.interceptUnavailable",
+  foreign_env: "claude.firstParty.refusal.foreignEnv",
+  ca_unavailable: "claude.firstParty.refusal.caUnavailable",
+  unreadable: "claude.firstParty.refusal.unreadable",
+  write_failed: "claude.firstParty.refusal.writeFailed",
+} as const satisfies Record<string, TKey>;
 import {
   acknowledgeSave,
   applyServerRead,
@@ -49,6 +62,7 @@ function normalizeFirstPartyState(state: ClaudeCodeState): ClaudeCodeState {
     contextAccounting: normalizeContextAccounting(state.contextAccounting),
     // The GET has no separate field: the env on this read was built under the accounting it reports.
     servedContextAccounting: normalizeContextAccounting(state.servedContextAccounting ?? state.contextAccounting),
+    servedFableModel: state.servedFableModel ?? (state.tierModels && (state.tierModels.fable ?? "")),
   };
 }
 
@@ -147,6 +161,8 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   const { pending: connectionPending, change: changeConnection } = useClaudeConnection(apiBase);
   const [firstPartyPending, setFirstPartyPending] = useState(false);
   const firstPartyInFlight = useRef(false);
+  /* The open preview confirmation and the answer the switch is waiting for. */
+  const [previewPrompt, setPreviewPrompt] = useState<{ preview: FirstPartyPreview; answer: (confirmed: boolean) => void } | null>(null);
 
   const fetchCode = useCallback(async (signal: AbortSignal): Promise<CachedClaudeCode> => {
     const epoch = writeEpoch(cacheKey);
@@ -296,6 +312,26 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
     setStatus("");
     const requested = !state.cliFirstParty;
     try {
+      if (requested) {
+        // Preview before writing: the dry run reports the settings.json keys and change kinds.
+        // A failed or refused preview throws here, so the PUT is never sent and the finally
+        // below releases the switch.
+        let preview: FirstPartyPreview;
+        try {
+          preview = await fetchFirstPartyPreview(apiBase, true);
+        } catch (error) {
+          const refusalKey = error instanceof FirstPartyPreviewRefusal && error.code in FIRST_PARTY_REFUSAL_KEYS
+            ? FIRST_PARTY_REFUSAL_KEYS[error.code as keyof typeof FIRST_PARTY_REFUSAL_KEYS]
+            : "connections.preview.loadFail";
+          throw new Error(t(refusalKey), { cause: error });
+        }
+        // Nothing to confirm when no settings.json key would change.
+        if (preview.changes.length > 0) {
+          const confirmed = await new Promise<boolean>(answer => setPreviewPrompt({ preview, answer }));
+          setPreviewPrompt(null);
+          if (!confirmed) return;
+        }
+      }
       const response = await fetch(`${apiBase}/api/claude-code`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -303,14 +339,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => null) as { code?: string; port?: number; bound?: number; configured?: number } | null;
-        const refusalKeys = {
-          intercept_disabled: "claude.firstParty.refusal.interceptDisabled",
-          intercept_unavailable: "claude.firstParty.refusal.interceptUnavailable",
-          foreign_env: "claude.firstParty.refusal.foreignEnv",
-          ca_unavailable: "claude.firstParty.refusal.caUnavailable",
-          unreadable: "claude.firstParty.refusal.unreadable",
-          write_failed: "claude.firstParty.refusal.writeFailed",
-        } as const;
+        const refusalKeys = FIRST_PARTY_REFUSAL_KEYS;
         const key = payload?.code && payload.code in refusalKeys
           ? refusalKeys[payload.code as keyof typeof refusalKeys]
           : "claude.saveFailed";
@@ -441,7 +470,9 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
             label={t("claude.firstParty.aria")}
           />
         </div>
+        <ClaudeHomesStatus apiBase={apiBase} />
       </div>
+      {previewPrompt && <FirstPartyPreviewDialog preview={previewPrompt.preview} onAnswer={previewPrompt.answer} />}
       {!state.interceptRunning && <ClaudeInterceptStart apiBase={apiBase} reason={state.interceptReason} port={state.interceptFailurePort} onStarted={() => codeResource.refresh()} />}
       {state.cliFirstParty && (
         <Notice tone="warn">{t("claude.firstParty.risk")}</Notice>

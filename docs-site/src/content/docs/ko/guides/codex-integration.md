@@ -77,6 +77,9 @@ context_management.experimental_mode = true
 시작하세요. 이 기능은 명시적으로 켜야 하며, 사용자 소유 URL과 원격 사용자 지정 provider
 주입은 변경하지 않습니다. 컨텍스트 창이나 압축 한도를 덮어쓰지 않습니다.
 
+Windows 데스크톱 호환의 관찰 모드는 이 경로가 현재 OpenCodex 프록시의 주소와 포트를
+가리키면 실험적 컨텍스트 관리를 켠 상태에서도 시작할 수 있습니다.
+
 이 backend 접두사는 Responses WebSocket 업그레이드를 포함한 기존 데이터 경로의 별칭입니다.
 원래 `/v1` 경로와 realtime sideband 오버라이드도 유지됩니다. 열 개의 네이티브
 `alpha/history/v2/*`, `alpha/notes/v2/*` POST 엔드포인트는 `openai-responses` 어댑터와 정식
@@ -241,7 +244,7 @@ WebSocket으로 연결하면 상류 응답 전에 연결 승인이 끝나므로,
 나중에 추가할 수는 없습니다.
 
 네이티브 ChatGPT forward 요청의 로컬 재생 상태가 만료되었거나 없으면 opencodex는
-upstream 요청 전에 `previous_response_not_found`를 반환합니다. Codex WebSocket 클라이언트는
+후속 요청을 ChatGPT에 전달하기 전에 `previous_response_not_found`를 반환합니다. Codex WebSocket 클라이언트는
 일반 스트림 재시도 한도 안에서 다시 연결하고, 완료된 도구 호출과 결과를 포함한 현재 보유
 컨텍스트 전체를 다시 보낼 수 있습니다. 따라서 프록시의 재생 캐시가 만료되었다는 이유만으로
 새 작업을 만들 필요는 없습니다. 재생 상태는 24시간 보존하며 기존 메모리·디스크·항목 수
@@ -249,11 +252,22 @@ upstream 요청 전에 `previous_response_not_found`를 반환합니다. Codex W
 HTTP 클라이언트는 이 오류를 직접 처리하고 `previous_response_id` 없이 전체 컨텍스트를 다시
 보내야 합니다. 같은 ID만 재시도해서는 누락된 상태를 복구할 수 없습니다.
 
+`usage.jsonl`에는 선택된 ChatGPT 공급자와 모델 및 `errorCode: "previous_response_not_found"`가
+기록됩니다. 요청 준비 중 추론 요청을 보내지 않았다면 `failureCause: "local-refusal"`이 기록되며
+모델 사용량 한도를 소모하지 않습니다. 암호화된 작업 복구를 활성화한 경우 네이티브 대체 모델을
+선택하기 전에 복구용 추론 요청을 보낼 수 있습니다. 이 시도는 같은 항목에 기록되며 모델 사용량
+한도를 소모할 수 있습니다. 클라이언트가 전체 컨텍스트를 다시 보내면 별도 요청으로 기록되며
+모델 사용량 한도를 소모할 수 있습니다.
+
 참조한 상태의 client task scope가 현재 요청과 다를 때도 같은 거부 응답을 반환합니다. 새 요청이
 전체 입력처럼 보여도 프록시는 그것이 완전한 대화인지 증명할 수 없으므로
 `previous_response_id`를 조용히 제거하거나 일치하는 상태의 존재 여부를 노출하지 않습니다.
-전체 대화를 담고 `previous_response_id`를 뺀 요청으로 명시적으로 다시 시도하세요. 정규화된
-scope가 같거나 양쪽 scope가 모두 없거나 비어 있는 기존 unscoped continuation은 계속 replay합니다.
+`v2-plaintext` 모드 또는 `plaintextV2AgentMessages` 플래그가 활성화된 경우 로컬 재생에는 같은 수락된 OpenCodex 호출자와 요청 자체의 비어 있지 않은 `thread-id`가 필요합니다.
+부모 스레드, 루프백 주소, 상류 인증 정보나 임시 키만으로는 이 소유권을 증명할 수 없습니다.
+수락된 호출자 주체가 없거나 요청 자체의 스레드가 없는 클라이언트는 `previous_response_id` 없이 전체 대화를 다시 보내야 합니다.
+기본 루프백 Codex·DSH 설정은 이 호출자 인증을 제공하지 않습니다. 어느 한 설정이 활성화된 동안 보존된 상태는 비활성화 후에도 해당 신원에 결속된 채로 남습니다.
+기본 `v1`에서는 결속되지 않은 상태에 대해 기본 루프백 호출자를 포함하여 기존의 부모 스레드 범위 이어가기 동작이 유지됩니다. 네이티브 상류 서버가 소유한
+Responses ID의 처리 경로는 이 로컬 재생 규칙과 별개입니다.
 
 routed 목적지에는 모두 같은 복구 신호가 적용됩니다. 프록시가 잃어버린 기록을 대신 볼 수 있는
 것은 네이티브 Responses 패스스루뿐입니다. 체인을 저장해 둔 백엔드로 `previous_response_id`를

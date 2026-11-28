@@ -11,6 +11,8 @@ import { clientFacingModelText, type ClientFacingModelLabel } from "../../lib/er
  * catches the pathological case and stays out of the way otherwise. Every uncertainty
  * resolves toward admitting.
  */
+import { collapseDevinModelUid, DEVIN_MODEL_CONTEXT_WINDOWS } from "../../adapters/devin/live-models";
+import { openAIChatSerializesThinking } from "../../adapters/openai-chat/messages";
 import {
   nativeOpenAiContextWindow,
   nativeOpenAiMaxInputTokens,
@@ -21,7 +23,8 @@ import { getModelMetadata } from "../../generated/model-metadata";
 import { estimateTokens } from "../../lib/token-estimate";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { modelRecordValue } from "../../reasoning-effort";
-import { modelInList, type OcxContentPart, type OcxParsedRequest, type OcxProviderConfig } from "../../types";
+import { parseInlineVideo } from "../../responses/video-input";
+import type { OcxContentPart, OcxParsedRequest, OcxProviderConfig } from "../../types";
 
 /**
  * Multiplier applied to the ceiling before refusing.
@@ -59,6 +62,21 @@ const IMAGE_BYTES_PER_TOKEN = 750;
 /** Compressed-audio bytes per token. More conservative than the image proxy. */
 const AUDIO_BYTES_PER_TOKEN = 256;
 
+/**
+ * Decoded video bytes per token. Gemini bills static video at about 100 tokens per second at
+ * its default media resolution (Gemini video-understanding guide), and a compressed clip runs at
+ * roughly 1 Mbit/s, so a second is about 125,000 bytes. A duration-free proxy like the image
+ * one, sized for video rather than borrowed from image tiles.
+ */
+const VIDEO_BYTES_PER_TOKEN = 1_250;
+
+/**
+ * Token cost charged for a video the provider fetches itself (a YouTube or Files API URL). Its
+ * length is unknown here, so this charges one minute at the rate above and otherwise admits:
+ * the provider bills the real duration and refuses what does not fit.
+ */
+const REMOTE_VIDEO_TOKENS = 6_000;
+
 export interface InputAdmissionResult {
   admitted: boolean;
   estimatedTokens: number;
@@ -68,6 +86,12 @@ export interface InputAdmissionResult {
   contextWindow?: number | null;
   /** Output space reserved by the combo preflight; absent on the loose direct gate. */
   requiredOutputHeadroom?: number;
+  /**
+   * The margin-adjusted estimate the combo gate actually decided on. Present only when the
+   * strict gate ran, so refusal reporting can name the limit that bound without re-deriving
+   * the margin. `estimatedTokens` stays the raw figure.
+   */
+  admissionEstimateTokens?: number;
 }
 
 function positive(value: unknown): number | null {
@@ -90,7 +114,7 @@ function imageTokens(imageUrl: string): number {
 
 function contentPartTokens(part: OcxContentPart, modelId: string): number {
   if (part.type === "image") return imageTokens(part.imageUrl);
-  if (part.type === "video") return imageTokens(part.videoUrl);
+  if (part.type === "video") return videoTokens(part.videoUrl);
   if (part.type === "audio") return base64PayloadTokens(part.data, AUDIO_BYTES_PER_TOKEN);
   // An inline document is a base64 payload, not a sentence: estimating it from its marker would
   // admit a request whose real input is orders of magnitude larger. Counted arithmetically —
@@ -103,6 +127,19 @@ function base64PayloadTokens(base64: string, bytesPerToken = IMAGE_BYTES_PER_TOK
   if (base64.length === 0) return 0;
   const decoded = Math.floor((base64.length * 3) / 4);
   return Math.max(1, Math.ceil(decoded / bytesPerToken));
+}
+
+/**
+ * Inline video by the shared decoder's decoded size at the video rate; a fetched URL at the flat
+ * remote charge. A clip the decoder refuses still carries the decoder's conservative size bound:
+ * translated routes refuse it before any send, but native Responses passthrough forwards the
+ * original body, so admission must charge what that body can carry.
+ */
+function videoTokens(videoUrl: string): number {
+  const parsed = parseInlineVideo(videoUrl);
+  if (!parsed.ok && parsed.reason === "not_data_url") return REMOTE_VIDEO_TOKENS;
+  const decoded = parsed.decodedBytes ?? 0;
+  return decoded === 0 ? 0 : Math.max(1, Math.ceil(decoded / VIDEO_BYTES_PER_TOKEN));
 }
 
 function contentTokens(content: string | readonly OcxContentPart[], modelId: string): number {
@@ -124,7 +161,7 @@ function contentTokens(content: string | readonly OcxContentPart[], modelId: str
 export function estimateInputTokens(parsed: OcxParsedRequest, modelId: string, provider?: OcxProviderConfig): number {
   const { context } = parsed;
   const countThinking = provider?.adapter !== "openai-chat"
-    || modelInList(provider.preserveReasoningContentModels, parsed.modelId);
+    || openAIChatSerializesThinking(provider, parsed.modelId).text;
   let total = 0;
 
   for (const prompt of context.systemPrompt ?? []) total += estimateTokens(prompt, modelId);
@@ -171,6 +208,35 @@ interface ResolvedContextLimits {
   ceiling: number | null;
 }
 
+/**
+ * Devin spells one model dotted in catalog families (`swe-1.7`) and hyphenated in uids
+ * (`swe-1-7`), with optional effort suffixes (`swe-2-flash-medium`). A per-model record is
+ * matched on the exact id first, then the effort-collapsed id, then both hyphenated forms, and
+ * finally on record keys folded the same way (`swe-1.7` serves a `swe-1-7-medium` request), so
+ * an operator override on any of those spellings binds before a provider-wide default.
+ */
+function devinRecordValue(record: Record<string, number> | undefined, modelId: string): number | null {
+  const normalized = modelId.replace(/\./g, "-");
+  // Lower-case before collapsing so an upper-case effort suffix (SWE-1-7-MEDIUM) is removed too.
+  const collapsed = collapseDevinModelUid(normalized.toLowerCase());
+  for (const key of new Set([modelId, collapseDevinModelUid(modelId), normalized, collapsed])) {
+    const value = positive(modelRecordValue(record, key));
+    if (value !== null) return value;
+  }
+  if (!record) return null;
+  // Exact spellings missed; fold dotted record keys only now so an exact key always wins.
+  for (const target of new Set([normalized, collapsed])) {
+    // Fold case too, like modelRecordValue's exact-spelling lookup.
+    const folded = target.toLowerCase();
+    for (const [key, raw] of Object.entries(record)) {
+      if (key.replace(/\./g, "-").toLowerCase() !== folded) continue;
+      const value = positive(raw);
+      if (value !== null) return value;
+    }
+  }
+  return null;
+}
+
 function resolveContextLimits(
   provider: OcxProviderConfig,
   providerName: string,
@@ -180,7 +246,10 @@ function resolveContextLimits(
   // `modelRecordValue`, not a bare lookup: the catalog resolves these same two maps that
   // way, so a `gpt-oss` entry covers `gpt-oss:120b`. Reading raw here made the gate fall
   // back to the provider-wide window and refuse turns the model can plainly hold.
-  const configured = positive(modelRecordValue(provider.modelContextWindows, modelId))
+  const devin = provider.adapter === "devin";
+  const configured = (devin
+    ? devinRecordValue(provider.modelContextWindows, modelId)
+    : positive(modelRecordValue(provider.modelContextWindows, modelId)))
     ?? positive(provider.contextWindow);
 
   // The canonical `openai` registry entry declares no context fields, so without this the
@@ -202,9 +271,14 @@ function resolveContextLimits(
     : null;
   const nativeMaxInput = canonicalNativeBare ? positive(nativeOpenAiMaxInputTokens(modelId, nativeLimits)) : null;
 
-  const window = canonicalNativeBare ? (native ?? generatedNativeWindow(modelId, configured, nativeContextCap)) : configured;
+  // Devin's live catalog windows reach the Codex model list but never `provider.modelContextWindows`;
+  // without the adapter table every devin combo target resolved no window and the strict gate stayed open.
+  const window = canonicalNativeBare ? (native ?? generatedNativeWindow(modelId, configured, nativeContextCap))
+    : (configured ?? (devin ? devinRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, modelId) : null));
   // modelMaxInputTokens is an input-only cap, so it can only tighten the window.
-  const configuredMaxInput = positive(modelRecordValue(provider.modelMaxInputTokens, modelId));
+  const configuredMaxInput = devin
+    ? devinRecordValue(provider.modelMaxInputTokens, modelId)
+    : positive(modelRecordValue(provider.modelMaxInputTokens, modelId));
   const limits = [window, configuredMaxInput, nativeMaxInput].filter((v): v is number => v !== null);
   return { window, ceiling: limits.length === 0 ? null : Math.min(...limits) };
 }
@@ -276,6 +350,16 @@ export function resolveOutputCeiling(
 }
 
 /**
+ * Output room a combo child must retain when the caller declares no `max_output_tokens`. The
+ * loose direct-request gate tolerates pathological input because a solo request has nowhere
+ * else to go; a combo child does -- input admitted at 99.9% of the window leaves a few hundred
+ * tokens, so the target answers `incomplete`/`max_output_tokens` AFTER selection, when no
+ * sibling remains to retry. Bounded so a small window keeps a usable fraction and a large one
+ * cannot reserve a whole answer's worth.
+ */
+const COMBO_DEFAULT_OUTPUT_RESERVE = { fraction: 0.1, min: 1_024, max: 32_768 } as const;
+
+/**
  * Combo-only admission. A fallback must be able to satisfy the caller's declared output
  * allowance inside its OWN context window. Otherwise it returns 200, emits a few hundred
  * tokens, and terminates on `finish_reason: length` — which the Anthropic surface renders as
@@ -289,7 +373,7 @@ export function resolveOutputCeiling(
  * Direct and single-target requests keep the deliberately loose 2.5x pathological-input gate.
  * This stricter rule applies only to synthetic combo children, where skipping one known-small
  * target is safe and the ladder continues before any upstream bytes are sent. Unknown context
- * stays fail-open, and a caller that declared no output allowance is unaffected.
+ * falls back to the direct check, and an undeclared output allowance uses a default reserve.
  */
 export function checkComboTargetInputAdmission(
   parsed: OcxParsedRequest,
@@ -299,18 +383,25 @@ export function checkComboTargetInputAdmission(
   nativeContextCap?: NativeContextLimitsInput,
 ): InputAdmissionResult {
   const { window, ceiling } = resolveContextLimits(provider, providerName, modelId, nativeContextCap);
-  const requestedOutput = positive(parsed.options.maxOutputTokens);
-  if (window === null || ceiling === null || requestedOutput === null) {
+  if (window === null || ceiling === null) {
     return checkInputAdmission(parsed, provider, providerName, modelId, nativeContextCap);
   }
+  const requestedOutput = positive(parsed.options.maxOutputTokens);
   const targetOutput = resolveOutputCeiling(provider, providerName, modelId);
-  const requiredOutputHeadroom = targetOutput === null
-    ? requestedOutput
-    : Math.min(requestedOutput, targetOutput);
+  const defaultReserve = Math.min(
+    COMBO_DEFAULT_OUTPUT_RESERVE.max,
+    Math.max(COMBO_DEFAULT_OUTPUT_RESERVE.min, Math.floor(window * COMBO_DEFAULT_OUTPUT_RESERVE.fraction)),
+  );
+  const requiredOutputHeadroom = requestedOutput === null
+    ? (targetOutput === null ? defaultReserve : Math.min(defaultReserve, targetOutput))
+    : (targetOutput === null ? requestedOutput : Math.min(requestedOutput, targetOutput));
   const estimatedTokens = estimateInputTokens(parsed, modelId, provider);
+  // Apply the 1.1x estimate margin without rounding exact fits up by one token.
+  const admissionEstimate = Math.ceil((estimatedTokens * 11) / 10);
   return {
-    admitted: estimatedTokens <= ceiling && estimatedTokens + requiredOutputHeadroom <= window,
+    admitted: admissionEstimate <= ceiling && admissionEstimate + requiredOutputHeadroom <= window,
     estimatedTokens,
+    admissionEstimateTokens: admissionEstimate,
     ceiling,
     requiredOutputHeadroom,
     ...(window !== ceiling ? { contextWindow: window } : {}),
@@ -339,9 +430,10 @@ export function checkInputAdmission(
 export function inputAdmissionRefusalMessage(input: InputAdmissionResult, model: ClientFacingModelLabel): string {
   const count = (value: number | null) => value !== null && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : 0;
   const label = clientFacingModelText(model);
-  const estimate = count(input.estimatedTokens);
+  const decisionEstimate = input.admissionEstimateTokens ?? input.estimatedTokens;
+  const estimate = count(decisionEstimate);
   const ceiling = count(input.ceiling);
-  if (input.contextWindow !== undefined && input.estimatedTokens > ceiling) {
+  if (input.contextWindow !== undefined && decisionEstimate > ceiling) {
     const window = input.contextWindow === null ? "" : `; context window: ${count(input.contextWindow)} tokens`;
     return `Estimated input (~${estimate} tokens) exceeds the input limit of ${label} (${ceiling} tokens${window}). `
       + "Start a new session or choose a model with a larger input limit.";

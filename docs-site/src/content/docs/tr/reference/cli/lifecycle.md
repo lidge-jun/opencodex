@@ -52,6 +52,8 @@ ocx start --socks5-off
 
 Gözetimsiz Link Child kapanma sinyalinde her yazmadan önce bağlantıyı doğrular ve dinleyiciyi bırakmadan önce yerel Codex ile yönetilen Grok ayarlarını geri yükler. Servis/Desktop, sibling, yeniden başlatma devri ve üst stop makbuzu ayarları korur. Kapanma sırasında yeniden başlatma `409 runtime_stopping` döndürür. Zorla sonlandırma sinyali atlayabilir; üst `ocx stop` geri yüklemesi yine gereklidir.
 
+Windows x64’te WMI eşleşen hizmet sarmalayıcısının sahibini bildirmezse OpenCodex, çalışan sürecin tanıtıcısı üzerinden Windows hesabını ve oluşturulma zamanını doğrulayabilir. Sahibi doğrulanamayan sarmalayıcı çalışmaya devam eder. Hata özellikle Görev Zamanlayıcı kaydını belirtiyorsa kaydı `ocx service status` ile inceleyin.
+
 Çalışan proxy'yi (PID'ye göre) durdurun, PID dosyasını kaldırın ve yerel Codex'i
 geri yükleyin. Yönetilen bir arka plan servisi kuruluysa `ocx stop` proxy'yi
 yeniden oluşturamaması için önce onu da durdurur. Web kontrol panelinin kenar çubuğundaki proxy kolunu sonuna kadar çekmek aynı eylemi (`POST /api/stop`) Windows Görev Zamanlayıcı dışındaki tüm arka uçlarda çalıştırır: orada görev bittikten sonra sarmalayıcı proxy'yi yeniden başlatabilir, bu yüzden panel `respawnable_service` ile reddeder, hiçbir şeyi değiştirmez ve `ocx stop` çalıştırmanızı ister.
@@ -237,6 +239,16 @@ saniyeleri kabul eder. CLI JSON, `status`'un `ready`, `pending`, `failed` veya
 için 0; hazır değil, beklemede, başarısız, zaman aşımı veya erişilemez için 1;
 ve geçersiz bağımsız değişkenler için 64'tür.
 
+Proxy başlatılırken Codex ana dizininin bulunamadığı bildirilirse Codex’i bir kez açın veya `CODEX_HOME` değişkenini Codex’in daha önce hazırladığı dizine ayarlayın. Ardından `ocx sync` komutunu çalıştırın. Başarılı bir eşitleme yönlendirmeyi düzeltir, ancak `failed` durumu çalışan sürecin başlangıç sonucunu göstermeye devam eder. Proxy’yi yeniden başlatın ve yeni sürecin hazır olup olmadığını `ocx ready` ile kontrol edin.
+
+CLI ile yönetilen hizmet için kayıtlı `CODEX_HOME` ve `OPENCODEX_HOME` değerlerini kullanın. Eski hizmet tanımında bu yollar yoksa aynı ayarlarla bir kez `ocx service repair` çalıştırın. Gerekirse Codex ana dizinini hazırlayın, `ocx sync` komutunu çalıştırın ve hizmeti yeniden başlatın. Proxy’yi masaüstü uygulaması yönetiyorsa uygulamadan yeniden başlatın.
+
+CLI hizmetini mevcut başka bir Codex ana dizinine taşımak için ilk ayarlarla `ocx service uninstall` çalıştırın. Hizmet kaldırıldığı halde yerel Codex yapılandırması geri yüklenemediyse bildirilen hatayı giderip aynı ayarlarla `ocx restore` çalıştırın.
+
+Windows’ta geri yükleme başarısız olup bekleyen bir temizlik kaydı bırakırsa dizinleri değiştirmeden önce hizmetin sahibi olan kurulumda ilk dizin ayarlarıyla `ocx stop` çalıştırın. Bu kayıt dururken `ocx update` paketi değiştirmeyi reddeder.
+
+Kaldırma ve geri yükleme başarılı olunca `OPENCODEX_HOME` değerini koruyun, yeni `CODEX_HOME` değerini seçin ve ilk kurulumdaki arka uç ve seçeneklerle `ocx service install` çalıştırın. Yeni ayarlarla `ocx sync` çalıştırıp `ocx ready` ile durumu kontrol edin. Başlatma başarısızsa yukarıdaki kurtarma adımlarını uygulayın.
+
 ### `ocx doctor`
 
 Salt okunur ortam ve bağlantı tanılamalarını çalıştırın: durum yolları ve dosya
@@ -358,7 +370,7 @@ macOS aracısı, varsayılan daemon sınıfının CPU ve I/O kısıtlamalarında
 
 Yüklenmesi doğrulanmamış bir tanım, belirteç değişse bile sonraki onarıma kadar beklemede kalır. Kayıt yalnızca ilk launchd durum denetimi yapılabiliyorsa yeniden denenir; grafik oturum açılması gerekebilir. Başarıyla oluşturulmuş ilk yedek, bootstrap kabul edilip eşleşen iş doğrulanana kadar korunur. Yedekleme eldeki imkânlarla yapılır; yeni kurulumun önceki tanımı yoktur.
 
-İlk launchd durum denetimi yapılamıyorsa repair, yeni plist veya yedek yazmadan işlemi reddeder. Değişen tanımın bootstrap işlemi reddedilir ve durum denetlenebiliyorsa önceki tanımı geri yükleme denenir. Bootstrap sonrasında durum denetlenemez hale gelirse yeniden çıkarma veya geri yükleme yapılmaz: kabul edilen bootstrap doğrulanmamış yeniden yükleme uyarısı verir, reddedilen ise başarısız olur. Yeniden denemeden önce `launchctl print gui/$(id -u)/com.opencodex.proxy` ile inceleyin. Yeni kurulum sahipsiz kurtarma dosyalarını, tam kaldırma ise plist olmasa da bu dosyaları siler. Yeni kurulumun kurtarma dosyası temizliği, bekleme işaretçisi silme ve kaldırma temizliği yalnızca zaten bulunmayan dosyaları yok sayar. Bu adımlardaki diğer hatalar başarısızlık olarak bildirilir ve kurulum durumu silinmez. Doğrulanmış onarım kurulum durumunu yazdıktan sonra `.prev` yedeğinin silinmesi eldeki imkânlarla yapılır; bu silme hatası onarımın başarılı sonucunu değiştirmez.
+İlk launchd durum denetimi yapılamıyorsa repair, yeni plist veya yedek yazmadan işlemi reddeder. Değişen tanımın bootstrap işlemi reddedilir ve durum denetlenebiliyorsa önceki tanımı geri yükleme denenir. Bootstrap işleminden hemen sonraki denetim durumu okuyamıyorsa yeniden çıkarma veya geri yükleme yapılmaz: kabul edilen bootstrap doğrulanmamış yeniden yükleme uyarısı verir, reddedilen ise başarısız olur. Değişmemiş bir tanımda kurtarma kickstart işlemi başarılı olsa bile sonraki durum denetimi yapılamıyorsa iş yeniden çıkarılabilir. Yeniden denemeden önce `launchctl print gui/$(id -u)/com.opencodex.proxy` ile inceleyin. Yeni kurulum sahipsiz kurtarma dosyalarını, tam kaldırma ise plist olmasa da bu dosyaları siler. Yeni kurulumun kurtarma dosyası temizliği, bekleme işaretçisi silme ve kaldırma temizliği yalnızca zaten bulunmayan dosyaları yok sayar. Bu adımlardaki diğer hatalar başarısızlık olarak bildirilir ve kurulum durumu silinmez. Doğrulanmış onarım kurulum durumunu yazdıktan sonra `.prev` yedeğinin silinmesi eldeki imkânlarla yapılır; bu silme hatası onarımın başarılı sonucunu değiştirmez.
 
 Bu değişiklikten önce kurulan tanımlar hâlâ eski sürümlü yolları taşır ve kendilerini taşıyamaz —
 eski yürütülebilir dosya silindiğinde, onu düzeltecek hiçbir opencodex kodu çalışmaz. Yükseltmeden
@@ -571,6 +583,8 @@ Windows bu yalnızca Unix denetimini açıkça atlar. Bir arıza tepsi ve proxy 
 başlatılır, ön plan kurulumu ise sonraki adım olarak `ocx start` yazdırır.
 Kontrol paneli güncelleme kayıtları kalıcı hale getirilmeden önce
 profil/önbellek yollarını ve UID/GID değerlerini maskeler.
+
+Önizleme sürümleri `X.Y.Z-preview.<date>` veya `X.Y.Z-preview.<date>.<attempt>` biçiminde adlandırılır, örneğin `2.100.6-preview.20261119.1`; deneme, o tarihteki yayınları numaralandırır. preview kanalında önizlemeler önce temel sürüme, sonra tarihe, sonra denemeye göre sıralanır ve denemesi olmayan bir sürüm deneme 0 sayılır. Her iki kanalda da kararlı bir sürüm, bir önizleme kurulumuna yalnızca temel sürümü önizlemeninkinden yüksekse önerilir ve kararlı kanal hiçbir zaman önizleme önermez. Bu kurallar güncelleme denetimleri, bildirimler ve panodaki güncelleme önerisi için geçerlidir. `ocx update` ise seçilen etiketin gösterdiği sürüm kurulu sürümden farklı olduğunda onu kurar; bu yüzden bir önizleme kurulumunda `ocx update --tag latest`, temel sürümü daha yüksek olmasa bile güncel kararlı sürüme geçer.
 
 ```bash
 ocx update

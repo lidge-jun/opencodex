@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultConfig, loadConfig, saveConfig } from "../../src/config";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../../src/oauth/account-auto-pause";
-import { AccountRefusalStreaks, autoPauseThreshold, classifyPermanentAccountRefusal, permanentAccountRefusal } from "../../src/oauth/account-auto-pause-policy";
+import { AccountRefusalStreaks, classifyPermanentAccountRefusal, isConclusiveAccountBan, permanentAccountRefusal, permanentAccountRefusalEvidence, pauseEvidenceMessage, type PermanentAccountRefusalEvidence } from "../../src/oauth/account-auto-pause-policy";
+import { effectiveAccountAutoPause } from "../../src/config/account-auto-pause-revisions";
 import { getValidAccessSnapshotForAccount, OAuthAccountPausedError } from "../../src/oauth";
 import { getAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { routedProviderConfig } from "../../src/router";
@@ -15,6 +16,7 @@ import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { setCodexAccountPaused } from "../../src/codex/account-pause";
 import { configSchema } from "../../src/config/schema/config-schema";
 import type { OcxConfig } from "../../src/types";
+import * as z from "zod/v4";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const orgMessage = "OAuth authentication is currently not allowed for this organization";
@@ -34,8 +36,9 @@ function configFor(name: string, mode: "oauth" | "key" | "forward" = "oauth"): O
   config.defaultProvider = name;
   return config;
 }
-async function oauthFixture(name = "command-code") {
+async function oauthFixture(name = "command-code", edit?: (config: OcxConfig) => void) {
   const config = configFor(name);
+  edit?.(config);
   for (let n = 0; n < 2; n++) await saveCredential(name, {
     access: `synthetic-access-${n}`, refresh: `synthetic-refresh-${n}`,
     expires: Date.now() + 3_600_000, accountId: `synthetic-${n}`, source: "oauth",
@@ -78,11 +81,38 @@ describe("permanent account refusal classification", () => {
     expect(await permanentAccountRefusal(new Response("not json", { status: 403 }))).toBeUndefined();
     expect(await permanentAccountRefusal(new Response("x".repeat(20_000), { status: 403 }))).toBeUndefined();
   });
+  test("evidence carries status and a redacted, bounded sentence; non-bans and oversized bodies carry none", async () => {
+    expect(await permanentAccountRefusalEvidence(refusal())).toEqual({ reason: "oauth_organization_disabled", statusCode: 403, message: orgMessage });
+    expect(await permanentAccountRefusalEvidence(refusal(401))).toMatchObject({ statusCode: 401 });
+    expect(await permanentAccountRefusalEvidence(Response.json(payload("Your quota resets tomorrow"), { status: 403 }))).toBeUndefined();
+    expect(await permanentAccountRefusalEvidence(Response.json(payload("Your quota resets tomorrow"), { status: 429 }))).toBeUndefined();
+    const oversizedBody = " ".repeat(16_385) + JSON.stringify(payload());
+    expect(await permanentAccountRefusalEvidence(new Response(oversizedBody, { status: 403 }))).toBeUndefined();
+  });
+  test("stored sentence is one line, redacted, and capped at 300 characters", async () => {
+    const ban = { error: { code: 403, status: "PERMISSION_DENIED", message: "  This service has been disabled in this account for violation of Terms of Service.\n   Please submit an appeal to continue using this product.  " } };
+    expect((await permanentAccountRefusalEvidence(Response.json(ban, { status: 403 })))?.message)
+      .toBe("This service has been disabled in this account for violation of Terms of Service. Please submit an appeal to continue using this product.");
+    const redacted = pauseEvidenceMessage("Your account is disabled. Authorization: Bearer secret-token");
+    expect(redacted).toStartWith("Your account is disabled. Authorization: Bearer ");
+    expect(redacted).not.toContain("secret-token");
+    expect(pauseEvidenceMessage("y".repeat(400))).toBe("y".repeat(300));
+    // The token straddles the cap, so capping before redacting would keep a "secret-" prefix.
+    const capped = pauseEvidenceMessage(`${"x".repeat(270)} Authorization: Bearer secret-token-abcdef`);
+    expect(capped).toHaveLength(300);
+    expect(capped).not.toContain("secret");
+  });
+  test("stored sentence redacts multipart credentials before flattening line breaks", () => {
+    const header = 'Content-Disposition: form-data; name="authorization"';
+    const redacted = pauseEvidenceMessage(`${header}\r\n\r\nsynthetic-multipart-value`);
+    expect(redacted).toBe(`${header} [REDACTED]`);
+  });
   test("default off, default threshold two, strict schema", () => {
-    expect(autoPauseThreshold(undefined)).toBeUndefined();
-    expect(autoPauseThreshold({ enabled: false })).toBeUndefined();
-    expect(autoPauseThreshold({ enabled: true })).toBe(2);
-    for (const n of [0, -1, 1.5, 101]) expect(autoPauseThreshold({ enabled: true, consecutiveFailures: n })).toBeUndefined();
+    const row = { adapter: "openai-chat" };
+    expect(effectiveAccountAutoPause(row)).toBeUndefined();
+    expect(effectiveAccountAutoPause({ ...row, accountAutoPause: { enabled: false } })).toBeUndefined();
+    expect(effectiveAccountAutoPause({ ...row, accountAutoPause: { enabled: true } })).toEqual({ threshold: 2, conclusiveOnly: false });
+    for (const n of [0, -1, 1.5, 101]) expect(effectiveAccountAutoPause({ ...row, accountAutoPause: { enabled: true, consecutiveFailures: n } })).toBeUndefined();
     const config = configFor("fixture");
     expect(configSchema.safeParse(config).success).toBe(true);
     config.providers.fixture!.accountAutoPause!.consecutiveFailures = 0;
@@ -92,17 +122,20 @@ describe("permanent account refusal classification", () => {
 
 test("concurrent refusals pause once; response-arrival order serializes slow verdicts and success", async () => {
   const tracker = new AccountRefusalStreaks();
-  let pauses = 0;
-  const pause = async () => { pauses++; return true; };
-  let resolve!: (value: "subscription_expired") => void;
+  const pauses: PermanentAccountRefusalEvidence[] = [];
+  const pause = async (refusal: PermanentAccountRefusalEvidence) => { pauses.push(refusal); return true; };
+  const original = { reason: "subscription_expired", statusCode: 401 } as const;
+  const decisive = { reason: "subscription_expired", statusCode: 403, message: "Your subscription has expired." } as const;
+  let resolve!: (value: PermanentAccountRefusalEvidence) => void;
   const first = tracker.observe("fixture", "login", 2, new Promise(r => { resolve = r; }), false, () => true, pause);
   const success = tracker.observe("fixture", "login", 2, Promise.resolve(undefined), true, () => true, pause);
-  const third = tracker.observe("fixture", "login", 2, Promise.resolve("subscription_expired"), false, () => true, pause);
-  resolve("subscription_expired");
+  const third = tracker.observe("fixture", "login", 2, Promise.resolve(original), false, () => true, pause);
+  resolve(original);
   await Promise.all([first, success, third]);
-  expect(pauses).toBe(0);
-  await Promise.all(Array.from({ length: 8 }, () => tracker.observe("fixture", "login", 2, Promise.resolve("subscription_expired"), false, () => true, pause)));
-  expect(pauses).toBe(1);
+  expect(pauses).toEqual([]);
+  await Promise.all([decisive, ...Array<PermanentAccountRefusalEvidence>(7).fill(original)]
+    .map(refusal => tracker.observe("fixture", "login", 2, Promise.resolve(refusal), false, () => true, pause)));
+  expect(pauses).toEqual([decisive]);
 });
 
 test("OAuth threshold, transient neutrality, stored reason, skip and manual resume", async () => {
@@ -116,10 +149,19 @@ test("OAuth threshold, transient neutrality, stored reason, skip and manual resu
   const set = getAccountSet("command-code")!;
   expect(set.accounts[0]!.pauseDetails?.reason).toBe("oauth_organization_disabled");
   expect(set.accounts[0]!.pauseDetails?.pausedAt).toBeGreaterThan(0);
+  // What convicted the account sits beside the details, so the dashboard can show why, not only that.
+  expect(set.accounts[0]!.pauseEvidence).toEqual({ statusCode: 403, message: orgMessage });
+  // A build without pauseEvidence reads pauseDetails with this frozen strict schema; the record
+  // written above must still yield its reason and timestamp there instead of being dropped whole.
+  const preEvidenceDetails = z.object({ reason: z.string(), pausedAt: z.number().int().nonnegative() }).strict();
+  const raw = JSON.parse(readFileSync(join(home, "auth.json"), "utf8"))["command-code"].accounts[0];
+  expect(preEvidenceDetails.parse(raw.pauseDetails)).toEqual(set.accounts[0]!.pauseDetails!);
+  expect(raw.pauseEvidence).toEqual({ statusCode: 403, message: orgMessage });
   expect(set.activeAccountId).toBe(f.ids[1]!);
   await expect(getValidAccessSnapshotForAccount("command-code", f.ids[0]!)).rejects.toBeInstanceOf(OAuthAccountPausedError);
   await setAccountPaused("command-code", f.ids[0]!, false);
   expect(getAccountSet("command-code")!.accounts[0]!.pauseDetails).toBeUndefined();
+  expect(getAccountSet("command-code")!.accounts[0]!.pauseEvidence).toBeUndefined();
   await stale(refusal()); // old pre-resume capture is fenced out
   expect(getAccountSet("command-code")!.accounts[0]!.paused).not.toBe(true);
 });
@@ -362,4 +404,230 @@ test("manual idempotent resume on an enabled key fences in-flight account auto-p
   expect(config.providers.fixture!.apiKeyPool![0]!.disabled).toBe(true);
   expect(loadConfig().providers.fixture!.apiKeyPool![0]!.disabled).toBe(true);
   expect(config.providers.fixture!.apiKey).toBe("synthetic-B");
+});
+
+// #8752: a Cloud Code Assist provider with no policy still pauses on Google's own permanent verdict.
+const ccaRow = { adapter: "google", googleMode: "cloud-code-assist", authMode: "oauth", baseUrl: "https://daily-cloudcode-pa.googleapis.com" };
+const relayBaseUrl = "https://cloudcode-relay.example.test";
+const ccaProvider = (config: OcxConfig, name: string, accountAutoPause?: OcxConfig["providers"][string]["accountAutoPause"], baseUrl = ccaRow.baseUrl) => {
+  config.providers[name] = { ...config.providers[name]!, ...ccaRow, baseUrl } as OcxConfig["providers"][string];
+  if (accountAutoPause === undefined) delete config.providers[name]!.accountAutoPause;
+  else config.providers[name]!.accountAutoPause = accountAutoPause;
+};
+const ccaBan = () => Response.json(googleEnvelope(ccaTosAppeal), { status: 403 });
+const appealUrl = "https://forms.gle/appeal-fixture";
+const appealInfo = (url: unknown, text: unknown = "Submit Appeal") => ({
+  "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "TOS_VIOLATION",
+  domain: "cloudcode-pa.googleapis.com", metadata: { appeal_url: url, appeal_url_link_text: text },
+});
+const appealResponse = (details: unknown[], message = ccaTosAppeal) =>
+  Response.json(googleEnvelope(message, { details }), { status: 403 });
+const ccaDestination = `${ccaRow.baseUrl}/v1internal:streamGenerateContent`;
+const reportCcaSend = (f: Awaited<ReturnType<typeof oauthFixture>>, destination = ccaDestination) => {
+  const observe = f.capture();
+  observe.physical(true, new Headers({ authorization: `Bearer ${f.snapshot.accessToken}` }), destination);
+  return observe;
+};
+
+test.each([
+  [`${appealUrl}?form=fixture#section`, `${appealUrl}?form=fixture`],
+  ["https://docs.google.com/forms/d/e/fixture/viewform?entry.10=fixture#section", "https://docs.google.com/forms/d/e/fixture/viewform?entry.10=fixture"],
+  ["https://support.google.com/gemini/answer/123?unused=fixture#section", "https://support.google.com/gemini/answer/123"],
+  ["http://forms.gle/fixture", undefined],
+  ["https://example.test/fixture", undefined],
+  ["https://forms.gle.example.test/fixture", undefined],
+  ["https://forms.gle./fixture", undefined],
+  [`https://name:pass@${"forms.gle"}/fixture`, undefined],
+  ["https://@forms.gle/fixture", undefined],
+  ["https://forms.gle:443/fixture", undefined],
+  ["https://forms.gle:8443/fixture", undefined],
+  ["https://docs.google.com/document/d/fixture", undefined],
+  ["https://docs.google.com/forms/../document/d/fixture", undefined],
+  ["javascript:void(0)", undefined],
+  ["https://forms.gle/fi\txture", undefined],
+  [`https://forms.gle/${"x".repeat(500)}`, undefined],
+  [null, undefined],
+] as const)("validates the Cloud Code Assist appeal destination %s", async (url, expected) => {
+  const name = "google-antigravity";
+  const f = await oauthFixture(name, config => ccaProvider(config, name));
+  expect(wasAccountAutoPaused(await reportCcaSend(f)(appealResponse([appealInfo(url)])))).toBe(true);
+  const evidence = getAccountSet(name)!.accounts[0]!.pauseEvidence;
+  expect(evidence?.appealUrl).toBe(expected);
+  expect(evidence?.appealText).toBe(expected ? "Submit Appeal" : undefined);
+});
+
+test.each([
+  { ...appealInfo(appealUrl), "@type": "type.googleapis.com/google.rpc.Help" },
+  { ...appealInfo(appealUrl), domain: "other.googleapis.com" },
+  { ...appealInfo(appealUrl), reason: "CONSUMER_SUSPENDED" },
+])("a ban still pauses without accepting unrelated ErrorInfo %j", async detail => {
+  const name = "google-antigravity";
+  const f = await oauthFixture(name, config => ccaProvider(config, name));
+  expect(wasAccountAutoPaused(await reportCcaSend(f)(appealResponse([detail])))).toBe(true);
+  expect(getAccountSet(name)!.accounts[0]!.pauseEvidence?.appealUrl).toBeUndefined();
+});
+
+test.each(["unreported", "relay", "ordinary refusal", "competing credential"] as const)("an explicit pause stores no appeal link on %s", async scenario => {
+  const name = "google-antigravity";
+  const f = await oauthFixture(name, config => ccaProvider(config, name, { enabled: true, consecutiveFailures: 1 },
+    scenario === "relay" ? relayBaseUrl : ccaRow.baseUrl));
+  const observe = scenario === "unreported" ? f.capture()
+    : reportCcaSend(f, scenario === "relay" ? `${relayBaseUrl}/v1internal:streamGenerateContent` : ccaDestination);
+  if (scenario === "competing credential") observe.physical(true,
+    new Headers({ authorization: `Bearer ${f.snapshot.accessToken}`, "x-goog-api-key": "synthetic-key" }), ccaDestination);
+  const message = scenario === "ordinary refusal" ? "Your subscription is inactive" : ccaTosAppeal;
+  expect(wasAccountAutoPaused(await observe(appealResponse([appealInfo(appealUrl)], message)))).toBe(true);
+  expect(getAccountSet(name)!.accounts[0]!.pauseEvidence?.appealUrl).toBeUndefined();
+});
+
+test("an explicit first-party pause keeps its appeal URL and drops a non-plain label", async () => {
+  const name = "google-antigravity";
+  const f = await oauthFixture(name, config => ccaProvider(config, name, { enabled: true, consecutiveFailures: 1 }));
+  expect(wasAccountAutoPaused(await reportCcaSend(f)(appealResponse([appealInfo(appealUrl, "<b>Submit Appeal</b>")])))).toBe(true);
+  expect(getAccountSet(name)!.accounts[0]!.pauseEvidence?.appealUrl).toBe(appealUrl);
+  expect(getAccountSet(name)!.accounts[0]!.pauseEvidence?.appealText).toBeUndefined();
+});
+
+test("resume clears the appeal and repeat bans log availability once per account without the URL or account ID", async () => {
+  const { fetchGoogleWithRetry } = await import("../../src/adapters/google-http");
+  const { providerFetch } = await import("../../src/server/responses/fetch-helpers");
+  const name = "google-antigravity";
+  const f = await oauthFixture(name, config => ccaProvider(config, name));
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const duplicate = reportCcaSend(f);
+    const fetch = (async () => appealResponse([appealInfo(appealUrl)])) as typeof globalThis.fetch;
+    const provider = { ...f.config.providers[name]!, fetch };
+    const executor = providerFetch(provider, undefined, {
+      providerName: name, httpOnly: true,
+      accountAutoPause: (route, sendingProvider, headers) =>
+        captureAccountAutoPauseAttempt(route, sendingProvider, { config: f.config, oauth: f.snapshot }, headers),
+    });
+    const response = await fetchGoogleWithRetry("Antigravity", {
+      url: ccaDestination, method: "POST", body: "{}",
+      headers: { authorization: `Bearer ${f.snapshot.accessToken}` },
+    }, { executor });
+    expect(wasAccountAutoPaused(response)).toBe(true);
+    expect(await response.text()).not.toContain(appealUrl);
+    expect(wasAccountAutoPaused(await duplicate(appealResponse([appealInfo(appealUrl)])))).toBe(false);
+    expect(getAccountSet(name)!.accounts[0]!.pauseEvidence?.appealUrl).toBe(appealUrl);
+
+    const raw = JSON.parse(readFileSync(join(home, "auth.json"), "utf8"))[name].accounts[0];
+    const previousEvidence = z.object({ statusCode: z.number().int().min(100).max(599), message: z.string().max(300).optional() });
+    expect(previousEvidence.parse(raw.pauseEvidence)).toEqual({ statusCode: 403, message: ccaTosAppeal });
+
+    expect((await setAccountPaused(name, f.ids[0]!, false)).status).toBe("updated");
+    expect(getAccountSet(name)!.accounts[0]!.pauseEvidence).toBeUndefined();
+    expect(wasAccountAutoPaused(await reportCcaSend(f)(appealResponse([appealInfo(appealUrl)])))).toBe(true);
+    const logged = warn.mock.calls.flat().join("\n");
+    expect(warn.mock.calls.filter(([line]) => line === "[account-auto-pause] appeal link available")).toHaveLength(1);
+    expect(logged).not.toContain(appealUrl);
+    expect(logged).not.toContain(f.ids[0]!);
+  } finally { warn.mockRestore(); }
+});
+
+test("a Cloud Code Assist provider with no policy defaults to pausing on the first Terms of Service ban only", () => {
+  expect(effectiveAccountAutoPause(ccaRow)).toEqual({ threshold: 1, conclusiveOnly: true });
+  expect(effectiveAccountAutoPause({ ...ccaRow, accountAutoPause: { enabled: false } })).toBeUndefined();
+  expect(effectiveAccountAutoPause({ ...ccaRow, accountAutoPause: {} })).toBeUndefined();
+  expect(effectiveAccountAutoPause({ ...ccaRow, accountAutoPause: { enabled: true, consecutiveFailures: 3 } })).toEqual({ threshold: 3, conclusiveOnly: false });
+  expect(effectiveAccountAutoPause({ ...ccaRow, baseUrl: "https://cloudcode-pa.googleapis.com" })).toEqual({ threshold: 1, conclusiveOnly: true });
+  for (const row of [{ ...ccaRow, googleMode: "vertex" }, { ...ccaRow, googleMode: undefined }, { ...ccaRow, adapter: "openai-chat" }]) {
+    expect(effectiveAccountAutoPause(row)).toBeUndefined();
+  }
+  // The default needs OAuth on a first-party Cloud Code Assist destination; anything else may relay a refusal.
+  for (const baseUrl of [relayBaseUrl, "http://daily-cloudcode-pa.googleapis.com", "https://daily-cloudcode-pa.googleapis.com:8443",
+    "https://daily-cloudcode-pa.googleapis.com.example.test", undefined]) {
+    expect(effectiveAccountAutoPause({ ...ccaRow, baseUrl })).toBeUndefined();
+  }
+  for (const authMode of ["key", "forward", undefined]) expect(effectiveAccountAutoPause({ ...ccaRow, authMode })).toBeUndefined();
+  expect(effectiveAccountAutoPause({ ...ccaRow, baseUrl: relayBaseUrl, accountAutoPause: { enabled: true } })).toEqual({ threshold: 2, conclusiveOnly: false });
+  expect(isConclusiveAccountBan(403, googleEnvelope(ccaTosContact))).toBe(true);
+  expect(isConclusiveAccountBan(403, googleEnvelope("Your subscription is inactive"))).toBe(false);
+  expect(isConclusiveAccountBan(403, payload())).toBe(false);
+  expect(isConclusiveAccountBan(401, { error: { code: 401, status: "UNAUTHENTICATED", message: ccaTosDisabled } })).toBe(false);
+  expect(isConclusiveAccountBan(403, googleEnvelope(ccaTosAppeal, { type: "rate_limit_error" }))).toBe(false);
+});
+
+test("a Cloud Code Assist account with no policy is paused by its first Terms of Service ban", async () => {
+  const f = await oauthFixture("google-antigravity", config => ccaProvider(config, "google-antigravity"));
+  expect(f.config.providers["google-antigravity"]!.accountAutoPause).toBeUndefined();
+  const response = await f.capture()(ccaBan());
+  expect(response.status).toBe(403);
+  expect(wasAccountAutoPaused(response)).toBe(true);
+  const set = getAccountSet("google-antigravity")!;
+  expect(set.accounts[0]!.paused).toBe(true);
+  expect(set.accounts[0]!.pauseDetails?.reason).toBe("account_permission_denied");
+  expect(set.activeAccountId).toBe(f.ids[1]!);
+});
+
+test.each([
+  { upstream: ccaTosAppeal.replace(" Please", "\n  Please"), expected: ccaTosAppeal },
+  { upstream: ccaTosDisabled, expected: ccaTosDisabled },
+])("the implicit Cloud Code Assist pause stores only the qualifying message and HTTP status: $expected", async ({ upstream, expected }) => {
+  const name = "google-antigravity";
+  const f = await oauthFixture(name, config => ccaProvider(config, name));
+  const observe = f.capture();
+  observe.physical(true, new Headers({ authorization: `Bearer ${f.snapshot.accessToken}` }),
+    `${ccaRow.baseUrl}/v1internal:streamGenerateContent`);
+  const response = Response.json(googleEnvelope(upstream, {
+    details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", metadata: { appeal_url: "https://appeal.example.test/form" } }],
+  }), { status: 403 });
+
+  expect(wasAccountAutoPaused(await observe(response))).toBe(true);
+  const raw = JSON.parse(readFileSync(join(home, "auth.json"), "utf8"))[name].accounts[0];
+  expect(raw.pauseDetails).toEqual({ reason: "account_permission_denied", pausedAt: expect.any(Number) });
+  expect(raw.pauseEvidence).toEqual({ statusCode: 403, message: expected });
+});
+
+test("a Cloud Code Assist account behind a custom baseUrl pauses on a ban only with the explicit opt-in", async () => {
+  const f = await oauthFixture("google-antigravity", config => ccaProvider(config, "google-antigravity", undefined, relayBaseUrl));
+  expect(f.capture()).toBeUndefined();
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).not.toBe(true);
+
+  f.config.providers["google-antigravity"]!.accountAutoPause = { enabled: true, consecutiveFailures: 1 };
+  saveConfig(f.config);
+  const response = await f.capture()(ccaBan());
+  expect(wasAccountAutoPaused(response)).toBe(true);
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).toBe(true);
+});
+
+test("the Cloud Code Assist default counts a ban only from a first-party final destination", async () => {
+  const f = await oauthFixture("google-antigravity", config => ccaProvider(config, "google-antigravity"));
+  const wire = new Headers({ authorization: `Bearer ${f.snapshot.accessToken}` });
+  const relayed = f.capture();
+  relayed.physical(true, wire, `${relayBaseUrl}/v1internal:streamGenerateContent`);
+  expect(wasAccountAutoPaused(await relayed(ccaBan()))).toBe(false);
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).not.toBe(true);
+
+  const direct = f.capture();
+  direct.physical(true, wire, `${ccaRow.baseUrl}/v1internal:streamGenerateContent`);
+  expect(wasAccountAutoPaused(await direct(ccaBan()))).toBe(true);
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).toBe(true);
+});
+
+test("without a policy, other permanent refusals never pause a Cloud Code Assist account", async () => {
+  const f = await oauthFixture("google-antigravity", config => ccaProvider(config, "google-antigravity"));
+  for (let n = 0; n < 3; n++) {
+    await f.capture()(refusal());
+    await f.capture()(Response.json(googleEnvelope("Your subscription is inactive"), { status: 403 }));
+  }
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).not.toBe(true);
+});
+
+test("an explicit opt-out keeps a banned Cloud Code Assist account selectable", async () => {
+  const f = await oauthFixture("google-antigravity", config => ccaProvider(config, "google-antigravity", { enabled: false }));
+  expect(f.capture()).toBeUndefined();
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).not.toBe(true);
+});
+
+test("a Cloud Code Assist default row is revision-tracked and a policy change fences an in-flight ban", async () => {
+  const f = await oauthFixture("google-antigravity", config => ccaProvider(config, "google-antigravity"));
+  expect(loadConfig().accountAutoPausePolicyRevisions?.["google-antigravity"]).toEqual(expect.any(String));
+  const inFlight = f.capture();
+  f.config.providers["google-antigravity"]!.accountAutoPause = { enabled: false };
+  saveConfig(f.config);
+  const response = await inFlight(ccaBan());
+  expect(wasAccountAutoPaused(response)).toBe(false);
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).not.toBe(true);
 });

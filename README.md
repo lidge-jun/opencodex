@@ -79,7 +79,7 @@ Sol drives the session and calls a Kimi K3 subagent.
 </table>
 
 <p align="center">
-  <a href="README.md">English</a> · <a href="readme/README.fr.md">Français</a> · <a href="readme/README.ko.md">한국어</a> · <a href="readme/README.zh-CN.md">简体中文</a> · <a href="readme/README.zh-TW.md">繁體中文</a> · <a href="readme/README.ru.md">Русский</a> · <a href="readme/README.ja.md">日本語</a> · <a href="readme/README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/"><b>Full documentation →</b></a>
+  <a href="README.md">English</a> · <a href="readme/README.fr.md">Français</a> · <a href="readme/README.ko.md">한국어</a> · <a href="readme/README.zh-CN.md">简体中文</a> · <a href="readme/README.zh-TW.md">繁體中文</a> · <a href="readme/README.ru.md">Русский</a> · <a href="readme/README.ja.md">日本語</a> · <a href="readme/README.tr.md">Türkçe</a> · <a href="readme/README.es.md">Español</a> · 📖 <a href="https://opencodex.me/"><b>Full documentation →</b></a>
 </p>
 
 opencodex is a lightweight local gateway between your coding tools and your model providers. It
@@ -110,11 +110,11 @@ Connect the tool you already use:
 
 | Tool | How to connect |
 |---|---|
-| Codex | Turn on the Codex switch on the dashboard's **Connect** page, then run `codex` as usual. On a local listener this points Codex's built-in provider at the proxy. From the terminal, run `ocx init` before adding providers in the dashboard and accept its Codex prompt. |
+| Codex | Turn on the Codex switch on the dashboard's **Route** page, then run `codex` as usual. On a local listener this points Codex's built-in provider at the proxy. From the terminal, run `ocx init` before adding providers in the dashboard and accept its Codex prompt. |
 | Claude Code | With the `claude` CLI installed, run `ocx claude`. It starts the proxy if needed and launches Claude Code through it. |
 | Claude Desktop | Run `ocx claude desktop`. On a new install it sets up the gateway profile for the whole app; an existing first-party setup is kept, and `ocx claude desktop apply --gateway` switches explicitly. See the [Claude Code guide](https://opencodex.me/guides/claude-code/). Fully quit and reopen Claude Desktop after a switch. |
 | Grok Build | On a local listener with Grok integration enabled, `ocx start` registers the models when `~/.grok` exists; pick an `ocx-*` model in Grok Build. Remote setups: see the [Grok Build guide](https://opencodex.me/guides/grok-build/). After adding providers, restart the proxy (or run `ocx ensure` when Codex autostart is enabled) to refresh the list. |
-| Tools with a managed integration | Use the dashboard **Connect** page, or `ocx integration client enable --client <id>`. |
+| Tools with a managed integration | Use the dashboard **Route** page, or `ocx integration client enable --client <id>`. |
 | Any other tool | Set a custom OpenAI-compatible base URL of `http://localhost:10100/v1`, or an Anthropic base URL of `http://localhost:10100`. |
 
 The [client support page](https://opencodex.me/reference/client-support/) lists which path each tool has
@@ -163,6 +163,10 @@ See [SPONSORS.md](./SPONSORS.md).
 <tr>
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/sponsors/tokenlab-dark.png"><img src="assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
 <td>Thanks to <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a> for sponsoring this project! TokenLab gives coding agents one API key for leading models, supporting OpenAI Responses and Chat Completions, Anthropic Messages, and Gemini's native API formats, with streaming and tool calling. It also provides an MCP server and agent Skills for easy integration. Choose your delivery mode and pay as you go. Pick <code>TokenLab</code> in the Add provider picker or run <code>ocx provider add tokenlab</code>.<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
+</tr>
+<tr>
+<td width="180"><a href="https://runapi.co"><img src="assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
+<td>Thanks to <a href="https://runapi.co">RunAPI</a> for sponsoring this project! RunAPI is a unified AI API gateway: one API key opens a catalog of 200+ models from OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot and more, served over the OpenAI Chat Completions and Responses, Anthropic Messages, and Gemini native API formats, with the formats available varying by model. Smart routing sends each request to a fast, stable provider node with automatic failover, and pricing is pay-as-you-go, typically well below standard rates. Pick <code>RunAPI</code> in the Add provider picker or run <code>ocx provider add runapi</code>.</td>
 </tr>
 </tbody>
 </table>
@@ -258,9 +262,12 @@ ocx start     # or `ocx service`
 ocx init      # interactive setup: writes ~/.opencodex/config.json and wires Codex
 ```
 
-`ocx init` never starts the proxy; start it first (or after — either order works, but headless
-commands like `ocx provider add` and `ocx combo set` talk to the **live** proxy and exit nonzero
-when it is unreachable). `ocx status` / `ocx doctor` / `ocx health` report the running state.
+You can start the proxy before or after `ocx init`; `ocx init` never starts it for you.
+`ocx provider add` saves local configuration without a running proxy. With `--sync`,
+it saves first and then needs a running proxy to sync models to Codex. If the proxy is
+unavailable, the provider stays saved, but the command exits nonzero; run `ocx sync`
+once the proxy is up. `ocx provider add --live` and `ocx combo set` require a running
+proxy. `ocx status` / `ocx doctor` / `ocx health` report the running state.
 
 > **Agents installing or running opencodex:** read
 > [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md). An interactive `ocx start` may ask once whether to
@@ -307,13 +314,13 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
 
 OpenCodex tracks process-retained state in the categories below. Each has a documented bound:
 
-- **14 retained stores** (request log, debug rings, image cache, model cache, vision
+- **15 retained stores** (request log, debug rings, image cache, model cache, vision
   descriptions, cursor blobs, responses continuation, etc.) are byte-accounted and
   evicted by the app-owned memory budget (default 256 MiB), except the native control replay
   store, which is pinned and never evicted.
 - **4 observed buffers** (translator accumulators, image/OAuth/Grok tails) are
   monitored for in-flight byte pressure without eviction.
-- **31 state-store registrations** handle expiry sweeps (60 s interval) and
+- **32 state-store registrations** handle expiry sweeps (60 s interval) and
   config-generation reconciliation so stale provider/account keys are removed.
 - **Path and fingerprint memos** (workspace metadata, hardened identities, installation
   salts, mode-hint capabilities) use insertion-order LRU caps (8–128 entries).
@@ -429,10 +436,12 @@ npm uninstall -g @bitkyc08/opencodex
 
 ## Remote access
 
-By default opencodex binds to `127.0.0.1` and needs no extra authentication. Binding beyond
-loopback (`"hostname": "0.0.0.0"`) **requires** a bearer token — the proxy refuses to start
-without `OPENCODEX_API_AUTH_TOKEN`, and every client request must carry it as
-`x-opencodex-api-key`. Details: [configuration reference](https://opencodex.me/reference/configuration/).
+By default, opencodex binds to `127.0.0.1` and needs no extra data-plane authentication.
+A non-loopback bind (for example, `"hostname": "0.0.0.0"`) **requires a configured client
+API key or a shared data token**. The shared token is resolved from `OPENCODEX_API_AUTH_TOKEN`,
+`OCX_API_TOKEN_FILE`, or the installed owner-only `service-api-token`. Inference clients
+send an accepted credential in `x-opencodex-api-key`. Management uses a separate admin
+credential. See the [configuration reference](https://opencodex.me/reference/configuration/).
 
 ## Advanced usage
 

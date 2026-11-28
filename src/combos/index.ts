@@ -22,8 +22,11 @@ export {
 export {
   advanceComboAfterFailure,
   clearComboSelectionState,
+  comboExclusion,
   comboExclusionReasons,
+  comboTargetUnavailableCause,
   comboTargetSkipTrigger,
+  comboUnavailableDiagnostics,
   NoAvailableComboTargetsError,
   noteComboFailure,
   noteComboSuccess,
@@ -34,7 +37,9 @@ export {
   snapshotComboQuotaCooldowns,
   tryPickComboModel,
   UnknownComboError,
+  type ComboExclusion,
   type ComboPick,
+  type ComboUnavailableDiagnostics,
   type QuotaInactiveReason,
 } from "./resolve";
 export {
@@ -42,6 +47,7 @@ export {
   comboCooldownRetryAfterSeconds,
   COMBO_REQUEST_RATE_COOLDOWN_MS,
   coolComboTarget,
+  coolComboTargetForCommittedTerminal,
   earliestComboCooldown,
   earliestComboCooldownExpiry,
   isComboTargetInCooldown,
@@ -52,6 +58,8 @@ export {
   comboFailureCooldownScope,
   type ComboFailureDecision,
   type ComboFailureCooldownScope,
+  type CommittedTerminalCooldownFacts,
+  type CommittedTerminalServingAttempt,
 } from "./failover";
 export {
   comboIdFromRawBody,

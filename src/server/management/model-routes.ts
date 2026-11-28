@@ -172,7 +172,7 @@ import type {
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import { managementInferencePort, type ManagementContext } from "./context";
-import { effectiveModelReasoningEfforts, inheritedModelReasoningEfforts, listManagementModelRows, loadExportModels, previewExportSnapshot } from "./model-rows";
+import { effectiveModelReasoningEfforts, inheritedModelReasoningEfforts, listManagementModelRows, loadExportModels, previewExportSnapshot, refreshProviderDiscovery } from "./model-rows";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import {
@@ -300,6 +300,36 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     persistConfig(config);
     const catalogRefresh = await convergeCodexCatalog();
     return jsonResponse({ ok: true, provider, acknowledged: [...acknowledged], catalogRefresh });
+  }
+
+  // Refresh only this provider and record arrivals through the shared new-model policy.
+  if (url.pathname === "/api/model-discovery/refresh" && req.method === "POST") {
+    let body: { provider?: unknown };
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    const provider = typeof body?.provider === "string" ? body.provider.trim() : "";
+    if (!provider || !hasOwnProvider(config.providers, provider)) return jsonResponse({ error: "unknown provider" }, 404);
+    if (config.providers[provider]!.liveModels === false) {
+      return jsonResponse({ ok: false, provider, applicable: false, reason: "static_catalog" });
+    }
+    const arrivalKey = (row: { id: string; at: string }) => `${row.id}\0${row.at}`;
+    const before = new Set((config.modelDiscovery?.recentArrivals?.[provider] ?? []).map(arrivalKey));
+    const discovery = await refreshProviderDiscovery(config, provider);
+    if (discovery === "in-progress") {
+      return jsonResponse({ error: "Model discovery is already in progress. Try again shortly.", code: "discovery_in_progress" }, 409);
+    }
+    if (!discovery) return jsonResponse({ error: "live model discovery did not produce an observation" }, 503);
+    const cached = getStaleCached(provider) ?? [];
+    const recentArrivals = (config.modelDiscovery?.recentArrivals?.[provider] ?? []).map(row => ({
+      ...row, state: arrivalState(config, provider, row, cached),
+    }));
+    return jsonResponse({
+      ok: true, provider,
+      discovery,
+      liveModelCount: getProviderLiveModelCount(provider) ?? null,
+      newArrivals: recentArrivals.filter(row => !before.has(arrivalKey(row))),
+      recentArrivals,
+      catalogRefresh: { status: "skipped", reason: "not-requested", retryable: false },
+    });
   }
 
   if (url.pathname === "/api/aliases" && req.method === "GET") {
@@ -444,7 +474,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   }
 
   if (url.pathname === "/api/models" && req.method === "GET") {
-    return jsonResponse(await listManagementModelRows(config));
+    return jsonResponse(await listManagementModelRows(config, { allowSuperseded: true }));
   }
 
   const modelCostsMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/model-costs$/);
@@ -667,6 +697,8 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       baseUrl,
       models,
       config,
+      // `baseUrl` is this server's own keyless listener whenever that listener is enabled (#9069).
+      ...(config.unauthenticatedLoopbackListener?.enabled === true ? { keylessInference: true } : {}),
       ...(modelNames === undefined ? {} : { modelNames }),
     });
     const document = built.document;

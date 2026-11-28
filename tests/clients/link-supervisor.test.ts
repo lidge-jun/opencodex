@@ -46,6 +46,148 @@ function baseStore(...links: LinkStore["links"]): LinkStore {
   return { version: 1, listenerPort: 19001, links };
 }
 
+function heldForwardFixture(replacementExitsImmediately = true) {
+  const fake = fakeRunner();
+  const listen = (port: number) => Bun.listen({ hostname: "127.0.0.1", port, socket: { data() {} } });
+  // Model sshd's listener separately from the old Home ssh process. Its port stays bound even after that process exits.
+  const oldForward = listen(0);
+  const link = { ...record("hub-initiated", "lnk_0123456789abcdef"), tunnelPort: oldForward.port };
+  const oldExit = deferred<void>();
+  const teardown = deferred<void>();
+  const live = new Set<SshChild>();
+  const signals: Array<[number, string]> = [];
+  let current = 0;
+  let tick = () => {};
+  const supervisor = createLinkSupervisor({
+    readStore: () => baseStore(link),
+    runner: { ...fake.runner, spawnTunnel(argv) {
+      const child = fake.runner.spawnTunnel(argv);
+      const item = fake.children.at(-1)!;
+      const index = fake.children.length - 1;
+      expect(live.size).toBe(0);
+      live.add(child);
+      void child.exited.then(() => live.delete(child));
+      Object.defineProperty(child, "stderr", { value: child.exited.then(() => item.stderr) });
+      child.kill = signal => {
+        signals.push([index, signal ?? "SIGTERM"]);
+        if (index === 0) {
+          teardown.resolve();
+          void oldExit.promise.then(() => item.resolve(143));
+        } else item.resolve(143);
+      };
+      if (index > 0 && (index !== 1 || replacementExitsImmediately)) {
+        try {
+          const replacementForward = listen(link.tunnelPort);
+          void child.exited.then(() => replacementForward.stop(true));
+        } catch (error) {
+          expect((error as NodeJS.ErrnoException).code).toBe("EADDRINUSE");
+          item.stderr = `Error: remote port forwarding failed for listen port ${link.tunnelPort}`;
+          item.resolve(255);
+        }
+      }
+      return child;
+    } },
+    now: () => current,
+    setTimer: callback => { tick = callback; return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+    readPidfile: () => null, writePidfile: () => {}, removePidfile: () => {},
+    killProcess: () => { throw new Error("cannot signal an unowned process"); },
+    sshCapture: () => null,
+  });
+  async function advance(ms: number) {
+    current += ms;
+    tick();
+    for (let turn = 0; turn < 12; turn++) await Promise.resolve();
+  }
+  supervisor.start();
+  supervisor.notifyAuthenticatedRequest?.(link.apiKeyId);
+  return {
+    ...fake, link, supervisor, signals, advance,
+    releaseForward: () => oldForward.stop(true),
+    async reconnect() {
+      const restarting = supervisor.reconnect(link.id);
+      await teardown.promise;
+      try { expect(fake.children).toHaveLength(1); } finally { oldExit.resolve(); }
+      expect(await restarting).toBe(true);
+      await advance(0);
+    },
+  };
+}
+
+test("#8753 waits for the owned ssh exit, then retries its held remote forward on the same port", async () => {
+  const h = heldForwardFixture();
+  try {
+    await h.reconnect();
+    expect(h.children).toHaveLength(2);
+    expect(h.supervisor.status()[0]).toMatchObject({
+      pid: null, state: { kind: "failed", reason: "forward", detail: "remote_forward_conflict", retryAt: 1_000 },
+    });
+    await h.advance(999);
+    expect(h.children).toHaveLength(2);
+    h.releaseForward();
+    await h.advance(1);
+    expect(h.children).toHaveLength(3);
+    expect(h.children[2]!.child.argv).toEqual(h.children[0]!.child.argv);
+    expect(h.signals).toEqual([[0, "SIGTERM"]]);
+    h.supervisor.notifyAuthenticatedRequest?.(h.link.apiKeyId);
+    expect(h.supervisor.status()[0]?.state.kind).toBe("connected");
+  } finally { h.releaseForward(); await h.supervisor.stop(); }
+});
+
+test("#8753 still retries a refusal after the replacement outlived the SSH liveness grace", async () => {
+  const h = heldForwardFixture(false);
+  try {
+    await h.reconnect();
+    await h.advance(5_000);
+    expect(h.supervisor.status()[0]?.state.kind).toBe("connected");
+    h.children[1]!.stderr = `Error: remote port forwarding failed for listen port ${h.link.tunnelPort}`;
+    h.children[1]!.resolve(255);
+    await h.advance(0);
+    expect(h.supervisor.status()[0]?.state).toMatchObject({ detail: "remote_forward_conflict", retryAt: 6_000 });
+    h.releaseForward();
+    await h.advance(1_000);
+    expect(h.children).toHaveLength(3);
+  } finally { h.releaseForward(); await h.supervisor.stop(); }
+});
+
+test.each(["exhausted", "late tick", "disconnect", "reconnect", "shutdown"] as const)(
+  "#8753 bounds the old forward retry or cancels it on %s", async action => {
+    const h = heldForwardFixture();
+    try {
+      await h.reconnect();
+      expect(h.supervisor.status()[0]?.state).toMatchObject({ retryAt: 1_000 });
+      if (action === "exhausted") {
+        await h.advance(1_000);
+        expect(h.children).toHaveLength(3);
+        expect(h.supervisor.status()[0]?.state).toMatchObject({ retryAt: 3_000 });
+        await h.advance(2_000);
+        expect(h.children).toHaveLength(4);
+        expect(h.supervisor.status()[0]?.state).toMatchObject({
+          kind: "failed", reason: "forward", detail: "remote_forward_conflict", retryAt: 63_000, inFlight: false,
+        });
+        await h.advance(9_000);
+        expect(h.children).toHaveLength(4);
+      } else if (action === "late tick") {
+        await h.advance(9_000);
+        expect(h.children).toHaveLength(2);
+        expect(h.supervisor.status()[0]?.state).toMatchObject({ retryAt: 60_000 });
+      } else {
+        if (action === "disconnect") await h.supervisor.stopLink(h.link.id);
+        else if (action === "shutdown") await h.supervisor.stop();
+        else {
+          expect(await h.supervisor.reconnect(h.link.id)).toBe(true);
+          await h.advance(0);
+          expect(h.supervisor.status()[0]?.state).toMatchObject({ retryAt: 60_000 });
+        }
+        h.releaseForward();
+        await h.advance(3_000);
+        expect(h.children).toHaveLength(action === "reconnect" ? 3 : 2);
+      }
+      expect(h.signals).toEqual([[0, "SIGTERM"]]);
+    } finally { h.releaseForward(); await h.supervisor.stop(); }
+  },
+);
+
 test.each([
   ["Host key verification failed.", "hostkey"],
   ["Permission denied (publickey).", "auth"],

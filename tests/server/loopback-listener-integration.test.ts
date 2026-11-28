@@ -7,7 +7,7 @@
  * one, or serves routes outside its allowlist. These tests start real servers and speak HTTP
  * to them, so those regressions have somewhere to fail.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { connect } from "node:net";
@@ -26,6 +26,13 @@ import {
 import type { OcxConfig } from "../../src/types";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { allowOwnInterfaceAddressesForTest } from "../helpers/network-egress-guard";
+
+// This suite connects to the machine's own non-loopback interface address on purpose; the
+// test network guard (#8848) refuses that address everywhere else.
+let restoreEgressGuard: (() => void) | undefined;
+beforeAll(() => { restoreEgressGuard = allowOwnInterfaceAddressesForTest(); });
+afterAll(() => restoreEgressGuard?.());
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
@@ -396,6 +403,27 @@ describe("unauthenticated loopback listener", () => {
       // And an allowlisted route is genuinely reachable, so the rejections above are not
       // passing merely because nothing works on this listener.
       expect((await fetch(`${base}/v1/models`)).status).toBe(200);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("account probe requires management credentials and stays off the inference-only listener", async () => {
+    const loopbackPort = await freePort();
+    saveConfig(baseConfig(loopbackPort));
+    const server = await startLoopbackTestServer(loopbackPort);
+    const probe = (port: number, token?: string) => fetch(`http://127.0.0.1:${port}/api/oauth/accounts/probe`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { "x-opencodex-api-key": token } : {}) },
+      body: JSON.stringify({ provider: "google-antigravity" }),
+    });
+    try {
+      expect((await probe(server.port!)).status).toBe(401);
+      expect((await probe(server.port!, "public-secret")).status).toBe(401);
+      expect((await probe(loopbackPort, "admin-secret")).status).toBe(404);
+      const authorized = await probe(server.port!, "admin-secret");
+      expect(authorized.status).toBe(200);
+      expect(await authorized.json()).toMatchObject({ provider: "google-antigravity", results: [] });
     } finally {
       await server.stop(true);
     }

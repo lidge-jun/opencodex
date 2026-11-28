@@ -18,10 +18,10 @@ import {
 import { mapQuotaRoster, readProviderApiKeyQuotas, type ProviderApiKeyQuota } from "./quota-key-accounts";
 import { mistralUnknownBudgetWindows } from "./quota-mistral-budget";
 import type { OcxConfig, OcxProviderConfig } from "../types";
-import { isPassiveRead } from "../lib/passive-read";
+import { isPassiveRead, runPassiveReadSync } from "../lib/passive-read";
 import type { ProviderQuota, QuotaFailureCode } from "./quota-types";
 import {
-  accountReportCurrent, observedQuotaFor,
+  accountReportCurrent, observedQuotaFor, captureReportOwner, collectOwnedReport, providerQuotaBeforeObservationForTests, captureObservationAuthority,
   AUTHORITATIVE_EMPTY_QUOTA,
   bumpProviderQuotaInvalidationEpoch,
   captureProviderReportEpochs, providerReportEpochChanged,
@@ -48,9 +48,7 @@ import {
   accountQuotaInflight,
   explicitAccountEpoch,
   explicitAccountReader,
-  explicitQuotaConfig,
-  explicitQuotaDestination,
-  explicitQuotaIdentity,
+  explicitQuotaConfig, explicitQuotaDestination, explicitQuotaIdentity, quotaCredentialIdentity,
   accountQuotaProbeSkip, getTokenForAccountQuotaProbe,
   hasPassiveAccountQuota,
   hydrateAccountQuotaCache,
@@ -125,12 +123,12 @@ async function maybeFetchProviderQuota(
   try {
     if (provider.adapter === "claude-cli") return await fetchClaudeCliObservedQuota(name, forceRefresh);
     if (isBuiltInChatGptForwardProvider(name, provider)) {
-      return fetchChatGptForwardQuota(config, name, provider, forceRefresh, prefetchedCodexSnapshot);
+      return await fetchChatGptForwardQuota(config, name, provider, forceRefresh, prefetchedCodexSnapshot);
     }
     if (provider.authMode === "oauth" && explicitAccountReader(name)) return await fetchExplicitCurrentQuota(name, provider, config);
-    if (provider.authMode === "oauth" && configuredAnthropicInstance(config, name)) return fetchAnthropicQuota(name, config);
+    if (provider.authMode === "oauth" && configuredAnthropicInstance(config, name)) return await fetchAnthropicQuota(name, config);
     if (provider.authMode === "oauth" && name === ANTIGRAVITY_OAUTH_STORE_KEY) return await fetchAntigravityQuota(name, { ...provider });
-    if (provider.authMode === "oauth" && name === "kiro") return fetchKiroQuota(name);
+    if (provider.authMode === "oauth" && name === "kiro") return await fetchKiroQuota(name);
     // meta-muse: a device-logged-in account can be probed at the key endpoint; an
     // imported or pasted one cannot, and falls back to its last in-band observation.
     // The probe is tried first and its failure is never fatal to the row.
@@ -140,7 +138,7 @@ async function maybeFetchProviderQuota(
     const reader = keyQuotaReaderForProvider(name, provider);
     // Keep destination/auth fields bound to the same request as the reader's captured
     // bearer, even if the live provider object changes while the quota probe awaits.
-    return reader ? reader(name, { ...provider }) : null;
+    return reader ? await reader(name, { ...provider }) : null;
   } catch {
     return null;
   }
@@ -208,7 +206,8 @@ function notifyProviderQuotaSnapshot(
   // Resolved here, synchronously, while the identity is still the one that produced these
   // reports.
   // Claude CLI rows are display-only: one reset key would span every account that signs in.
-  const observations = reports.filter(report => config.providers[report.provider]?.adapter !== "claude-cli").map(report => ({
+  const current = captureObservationAuthority(config, reports), observations = reports.filter(report => config.providers[report.provider]?.adapter !== "claude-cli").map(report => ({
+    report,
     scope: report.provider,
     accountKey: providerObservationAccountKey(report.provider, config, report),
     quota: observedQuotaFor.get(report) ?? report.quota,
@@ -217,10 +216,10 @@ function notifyProviderQuotaSnapshot(
   if (observations.length === 0) return;
   pendingProviderObservation = pendingProviderObservation
     .then(async () => {
-      const observer = await import("../quota/reset-observer");
+      await providerQuotaBeforeObservationForTests?.(); const observer = await import("../quota/reset-observer");
       if (!observer.hasQuotaResetSink()) return;
       const { providerWindowObservations } = await import("../quota/window-mapping");
-      for (const observation of observations) observer.observeQuotaSnapshot({ scope: observation.scope, accountKey: observation.accountKey, windows: providerWindowObservations(observation.quota), ...(observation.retainUnknownWindows ? { retainUnknownWindows: observation.retainUnknownWindows } : {}) });
+      for (const observation of observations) if (runPassiveReadSync(() => current(observation.report))) observer.observeQuotaSnapshot({ scope: observation.scope, accountKey: observation.accountKey, windows: providerWindowObservations(observation.quota), ...(observation.retainUnknownWindows ? { retainUnknownWindows: observation.retainUnknownWindows } : {}) });
     })
     .catch(() => {
       // Detection is best-effort: a quota refresh must never fail because of it. Swallowing
@@ -276,9 +275,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     const previousCache = getProviderQuotaReportCache();
     const previous = previousCache && previousCache.key === key ? previousCache.response.reports : [];
     const probeResults = await Promise.all(
-      Object.entries(config.providers).map(([name, provider]) => (
-        maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot)
-      )),
+      Object.entries(config.providers).map(([name, provider]) => collectOwnedReport(name, provider, () => maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot))),
     );
     await providerQuotaBeforePublishForTests?.();
     let commitKey: string | null = null;
@@ -288,7 +285,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     }
     // Reconcile both rows and empty results after all awaits against the last recorded sign-in.
     Object.entries(config.providers).forEach(([name, provider], index) => {
-      if (provider.adapter === "claude-cli" && provider.disabled !== true) probeResults[index] = heldClaudeCliObservedQuota(name);
+      if (provider.adapter === "claude-cli" && provider.disabled !== true) { const held = heldClaudeCliObservedQuota(name); if (held && typeof held !== "symbol") captureReportOwner(name, provider)(held); probeResults[index] = held; }
     });
     const fresh = probeResults.filter((item): item is ProviderQuotaReport => (
       item !== null && item !== TERMINAL_QUOTA_FAILURE && item !== AUTHORITATIVE_EMPTY_QUOTA
@@ -365,7 +362,7 @@ async function readExplicitAccountQuota(provider: string, accountId: string, con
   const credential = getAccountCredential(provider, accountId);
   if (!credential || credential.access !== accessToken) return null;
   // Pair the post-renewal credential with the destination captured before renewal.
-  const identity = explicitQuotaIdentity(provider, accountId, config);
+  const identity = quotaCredentialIdentity(provider, accountId, credential, config);
   const isCurrent = () => epoch === explicitAccountEpoch
     && identity === explicitQuotaIdentity(provider, accountId, configured);
   if (!isCurrent()) return null;
@@ -403,10 +400,12 @@ async function fetchExplicitAccountQuota(provider: string, accountId: string, fo
     const current = epoch === explicitAccountEpoch && isCurrent();
     const quota = current && result && typeof result !== "symbol" ? result.quota : null;
     const empty = result === AUTHORITATIVE_EMPTY_QUOTA;
+    const retained = current && result !== TERMINAL_QUOTA_FAILURE && !empty
+      && lastGood && Date.now() - lastGood.updatedAt < LAST_GOOD_MAX_AGE_MS ? lastGood : null;
     const entry: AccountQuotaCacheEntry = {
       ts: Date.now(),
-      quota: quota ?? (current && result !== TERMINAL_QUOTA_FAILURE && !empty
-        && lastGood && Date.now() - lastGood.updatedAt < LAST_GOOD_MAX_AGE_MS ? lastGood : null),
+      quota: quota ?? retained,
+      quotaOwnerIsCurrent: quota ? isCurrent : retained ? cached?.quotaOwnerIsCurrent : undefined,
       ...(!current || (!quota && !empty) ? { unavailable: true as const } : {}),
       identity: read?.identity ?? identity,
       isCurrent: () => epoch === explicitAccountEpoch && isCurrent(),
@@ -418,12 +417,12 @@ async function fetchExplicitAccountQuota(provider: string, accountId: string, fo
   return flight;
 }
 async function fetchExplicitCurrentQuota(provider: string, config: OcxProviderConfig, liveConfig: OcxConfig): Promise<ProviderQuotaProbeResult> {
-  const id = getAccountSet(provider)?.activeAccountId;
+  const selection = getAccountSet(provider), id = selection?.activeAccountId;
   if (!id) return null;
   const read = await readExplicitAccountQuota(provider, id, config);
   if (!read) return null;
-  const isCurrent = () => liveConfig.providers[provider] === config
-    && read.isCurrent() && getAccountSet(provider)?.activeAccountId === id;
+  // A switch away and back keeps the same active id, so the revision is what proves this caller's selection survived.
+  const isCurrent = () => liveConfig.providers[provider] === config && read.isCurrent() && getAccountSet(provider)?.activeAccountId === id && getAccountSet(provider)?.selectionRevision === selection.selectionRevision;
   if (!isCurrent()) return TERMINAL_QUOTA_FAILURE;
   if (read.result && typeof read.result !== "symbol") accountReportCurrent.set(read.result, isCurrent);
   return read.result;
@@ -473,6 +472,7 @@ async function fetchAccountQuota(
       const entry: AccountQuotaCacheEntry = {
         ts: Date.now(),
         quota: cached?.quota ?? null,
+        quotaOwnerIsCurrent: cached?.quotaOwnerIsCurrent,
         unavailable: true,
         ...(provider === "kiro" ? { identity: kiroIdentity } : {}),
         ...(provider === "google-antigravity" ? { isCurrent: antigravityIsCurrent } : {}),
@@ -514,7 +514,7 @@ async function fetchAccountQuota(
       const entry: AccountQuotaCacheEntry = {
         ts: Date.now(), quota,
         ...(provider === "kiro" ? { identity: kiroIdentity } : {}),
-        ...(provider === "google-antigravity" ? { isCurrent: antigravityIsCurrent } : {}),
+        ...(provider === "google-antigravity" ? { isCurrent: antigravityIsCurrent, quotaOwnerIsCurrent: antigravityIsCurrent } : {}),
       };
       if (mayCommitAccountQuotaKey(key, writerGeneration)
         && entry.isCurrent?.() !== false

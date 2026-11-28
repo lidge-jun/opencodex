@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
-import { existsSync, readFileSync, lstatSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { runOwnedPnpm } from "../../src/update/index";
+import { join } from "node:path";
+import { resolvePnpmActiveLauncher, runOwnedPnpm } from "../../src/update/index";
 import { runPnpmGlobalUpdate } from "../../src/update/pnpm-global-install.mjs";
 import { PNPM_READ_CWD, pnpmReadEnvironment, withPnpmCommandCwd } from "../../src/update/pnpm-read-policy.mjs";
 
@@ -27,7 +28,48 @@ test("mutation workspaces are unique, bounded to known files, and cleaned after 
   for (const cwd of seen) expect(existsSync(cwd)).toBe(false);
 });
 
+const fixtureHome = realpathSync(mkdtempSync(join(tmpdir(), "ocx-isolation-home-")));
+const fixtureStore = join(fixtureHome, "store", "v11");
+mkdirSync(fixtureStore, { recursive: true });
+/** A legacy global group: the released owner shape, with no store query. */
 const owner = { commandPath: "/trusted/pnpm", packagePath: "/pkg", globalDir: "/global", globalRoot: "/global", globalBinDir: "/bin" };
+const storeOwner = { ...owner, globalStore: true, store: realpathSync(fixtureStore), storePath: fixtureStore, virtualStoreDirs: [], homeAnchor: fixtureHome };
+test("read-only owned pnpm permits only the anchored store path query and refuses store mutation", () => {
+  let calls = 0;
+  const spawn = ((_bin: unknown, _argv: unknown, options: { cwd: string }) => {
+    calls++;
+    // Same cwd policy as list -g: the store answer must come from the context the listing used.
+    expect(options.cwd).toBe(PNPM_READ_CWD);
+    return { status: 0, stdout: fixtureStore, stderr: "", pid: 1, output: [], signal: null };
+  }) as never;
+  expect(runOwnedPnpm(storeOwner, ["store", "path", `--dir=${fixtureHome}`], true, "pipe", spawn).status).toBe(0);
+  for (const args of [["store", "path"], ["store", "path", "--store-dir=/elsewhere"], ["store", "path", "--dir=relative"], ["store", "prune"]]) {
+    expect(runOwnedPnpm(storeOwner, args, true, "pipe", spawn).status).toBe(1);
+  }
+  expect(calls).toBe(1);
+});
+
+test.skipIf(process.platform === "win32")("GUI active launcher verification runs the selected fixture pnpm store probe", () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "ocx-gui-pnpm-")));
+  try {
+    const globalDir = join(home, "global"), globalRoot = join(globalDir, "v11"), globalBinDir = join(home, "bin");
+    const store = join(home, "custom", "v11"), group = join(store, "links", "pkg", "node_modules");
+    const packagePath = join(group, "@bitkyc08", "opencodex"), launcher = join(packagePath, "bin", "ocx.mjs");
+    for (const dir of [globalBinDir, globalRoot, join(packagePath, "bin"), join(group, "bun", "bin"), join(group, "zod")]) mkdirSync(dir, { recursive: true });
+    writeFileSync(join(packagePath, "package.json"), JSON.stringify({ version: "2.0.0", dependencies: { bun: "1", zod: "1" } }));
+    writeFileSync(launcher, "x".repeat(1024));
+    writeFileSync(join(group, "bun", "package.json"), "{}");
+    writeFileSync(join(group, "zod", "package.json"), "{}");
+    const binary = join(group, "bun", "bin", "bun"); closeSync(openSync(binary, "w")); truncateSync(binary, 10 * 1024 * 1024);
+    for (const name of ["ocx", "opencodex"]) {
+      const shim = join(globalBinDir, name); writeFileSync(shim, `#!/bin/sh\nexec node '${launcher}' "$@"\n`); chmodSync(shim, 0o755);
+    }
+    const commandPath = join(home, "pnpm");
+    const listing = JSON.stringify([{ path: globalRoot, dependencies: { "@bitkyc08/opencodex": { version: "2.0.0", path: packagePath } } }]);
+    writeFileSync(commandPath, `#!/usr/bin/env node\nconst command = process.argv[2];\nif (command === 'list') console.log(${JSON.stringify(listing)});\nelse if (command === '--version') console.log('12.16.1');\nelse if (command === 'store' && process.argv[3] === 'path' && process.argv[4] === ${JSON.stringify("--dir=" + home)}) console.log(${JSON.stringify(store)});\nelse if (command === 'config') console.log('undefined');\nelse process.exit(1);\n`, { mode: 0o755 });
+    expect(resolvePnpmActiveLauncher({ commandPath, packagePath, globalDir, globalRoot, globalBinDir, globalStore: true, store, storePath: store, virtualStoreDirs: [], homeAnchor: home })).toBe(launcher);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
 for (const fail of [false,true]) {
   test(`actual pnpm spawn options isolate ${fail ? "rollback" : "install"} and registry reads`, () => {
     const mutations: string[] = [];

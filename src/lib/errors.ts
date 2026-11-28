@@ -28,6 +28,8 @@ export const SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE = "spend_ledger_storage_unava
 export const UNDECLARED_TOOL_CALL_ERROR_CODE = "undeclared_tool_call";
 /** A buffered combo child completed without the call explicitly required by tool_choice. */
 export const REQUIRED_TOOL_CONTRACT_CODE = "required_tool_contract_unsatisfied";
+/** A combo child ended its turn carrying only reasoning/commentary prelude — no tool call or final answer. */
+export const COMBO_DEGENERATE_COMPLETION_CODE = "degenerate_completion";
 
 /**
  * Wire code for a provider's model-scoped plan refusal (#7684): the account's plan does not
@@ -62,6 +64,22 @@ export function isVerifiedModelNotInPlanResponse(response: Response): boolean {
   return verifiedPlanRefusalResponses.has(response);
 }
 
+/**
+ * Request contexts whose undeclared-tool guard refused the turn (#9163). The guard records its
+ * own trip on the context of the attempt it rewrote, so a combo reads the refusal's provenance
+ * from the guard rather than from the words: an upstream body that merely repeats the code or
+ * message never sets it, and a wire on which the guard stands down never trips it.
+ */
+const undeclaredToolGuardRefusals = new WeakSet<object>();
+
+export function markUndeclaredToolGuardRefusal(context: object): void {
+  undeclaredToolGuardRefusals.add(context);
+}
+
+export function undeclaredToolGuardRefused(context: object | undefined): boolean {
+  return context !== undefined && undeclaredToolGuardRefusals.has(context);
+}
+
 /** True for a verified plan refusal that still carries the canonical code in its 400 body. */
 export function isModelNotInPlanRefusal(response: Response, bodyCode: string | null | undefined): boolean {
   return response.status === 400 && bodyCode === MODEL_NOT_IN_PLAN_CODE && verifiedPlanRefusalResponses.has(response);
@@ -89,6 +107,34 @@ export function namesModelNotInPlanCode(code: string | null | undefined): boolea
   return typeof code === "string" && code.trim().toLowerCase().replaceAll("-", "_") === MODEL_NOT_IN_PLAN_CODE;
 }
 
+type CompletionError = { type?: string; code?: string; message?: string };
+
+/** Meaningful error evidence on either carrier overrides an SSE completion. */
+export function responsesCompletionError(payload: unknown): CompletionError | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const event = payload as {
+    type?: unknown;
+    error?: unknown;
+    last_error?: unknown;
+    response?: { error?: unknown; last_error?: unknown };
+  };
+  if (event.type !== "response.completed") return undefined;
+  const nonblank = (value: unknown): string | undefined =>
+    typeof value === "string" && value.trim() ? value : undefined;
+  for (const candidate of [event.error, event.last_error, event.response?.error, event.response?.last_error]) {
+    if (typeof candidate === "string") {
+      if (nonblank(candidate)) return { message: candidate };
+    } else if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+      const record = candidate as Record<string, unknown>;
+      const type = nonblank(record.type);
+      const code = nonblank(record.code);
+      const message = nonblank(record.message);
+      if (type || code || message) return { type, code, message };
+    }
+  }
+  return undefined;
+}
+
 /** First nonblank string across the canonical upstream error paths, in priority order. */
 export function upstreamErrorMessageFromPayload(payload: unknown): string | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
@@ -99,12 +145,14 @@ export function upstreamErrorMessageFromPayload(payload: unknown): string | unde
     last_error?: { message?: unknown };
     response?: {
       error?: { message?: unknown };
+      last_error?: { message?: unknown };
       incomplete_details?: { message?: unknown };
     };
   };
   const messages = [json.error?.message,
     json.last_error?.message,
     json.response?.error?.message,
+    json.response?.last_error?.message,
     json.response?.incomplete_details?.message,
     // The Responses stream error event carries a flat message (type/code/message),
     // unlike the response.failed envelope the branches above already cover.
@@ -214,7 +262,7 @@ export function safetyRefusalCodeFromMessage(text: string): string | undefined {
   return undefined;
 }
 
-function isSubscriptionGateMessage(text: string): boolean {
+export function isSubscriptionGateMessage(text: string): boolean {
   return (
     text.includes("requires a subscription") ||
     text.includes("requires subscription") ||

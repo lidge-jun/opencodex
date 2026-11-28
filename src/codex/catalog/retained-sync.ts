@@ -4,6 +4,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { initializeConfigOwnership } from "../../lib/config-ownership";
 import { getConfigDir, loadConfig, ultraFastTierEnabled, websocketsEnabled, withConfigMutationLockSync } from "../../config";
+import { resolveMultiAgentMode } from "../../config/multi-agent-surface";
+import { resolveRoutedCatalogDefaults } from "../../config/schema/routed-catalog-defaults";
 import { shouldSyncCodexOnStart } from "../desired-state";
 import { legacyCustomModelCatalogSlugs } from "../custom-model-catalog-migration";
 import { getCodexHome } from "../paths";
@@ -15,7 +17,7 @@ import { providerCodexAccountMode } from "../../providers/registry";
 import { COMBO_NAMESPACE } from "../../combos";
 import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../account-namespaces";
 import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
-import { applyNativeAccessPrograms } from "./access-programs";
+import { applyNativeRosterMetadata } from "./access-programs";
 import { advanceNativeInheritanceTemplate, captureNativeInheritanceTemplate } from "./native-template";
 import { omitDisabledNativeCatalogEntries } from "./native-omission";
 import {
@@ -334,7 +336,7 @@ function writeRetainedCatalogSync({
     catalogModelsForMerge,
   );
   const modelPickerOrder = config.modelPickerOrder ?? [];
-  const multiAgentMode: MultiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
+  const multiAgentMode: MultiAgentMode = resolveMultiAgentMode(config);
   const exactComboSlugs = exactComboCatalogSlugs(config);
   const bareEligibleAccountIds = providerCodexAccountMode(
     OPENAI_CODEX_PROVIDER_ID,
@@ -465,6 +467,7 @@ function writeRetainedCatalogSync({
     disabledNativeAccountSlugs: new Set(),
     multiAgentV2Enabled,
     openaiContextCap,
+    routedCatalogDefaults: resolveRoutedCatalogDefaults(config),
   });
   // Keep genuine native entries (gpt-*, codex-*) with their real per-model fields and append
   // routed providers as namespaced slugs. Cursor and other adopted providers can expose model ids
@@ -555,7 +558,7 @@ function writeRetainedCatalogSync({
       warningPolicy: "emit",
     },
   });
-  applyNativeAccessPrograms(catalog.models, modelEntitlements, accountTargets);
+  applyNativeRosterMetadata(catalog.models, modelEntitlements, accountTargets, openaiContextCap, catalogModelsForMerge);
   clampCatalogModelsToCodexSupport(catalog.models, { observedCatalog: bundledCodexCatalogSnapshot() });
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
   advanceNativeInheritanceTemplate(catalog, catalog.models, shouldUpgradeToUpstreamEntry);

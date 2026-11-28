@@ -78,7 +78,7 @@ Sol이 세션을 이끌고 Kimi K3 서브에이전트를 호출합니다.
 </table>
 
 <p align="center">
-  <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <b>한국어</b> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/ko/"><b>전체 문서 →</b></a>
+  <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <b>한국어</b> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.es.md">Español</a> · 📖 <a href="https://opencodex.me/ko/"><b>전체 문서 →</b></a>
 </p>
 
 opencodex는 코딩 도구와 모델 프로바이더를 연결하는 가벼운 로컬 게이트웨이입니다. Responses, Chat Completions, Anthropic Messages API 요청을 받아 프로바이더의 프로토콜로 변환하며, 클라이언트와 모델, 프로바이더가 지원하는 경우 스트리밍, 도구 호출, 추론과 이미지를 전달합니다. Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama 등의 프로바이더를 Codex, Claude Code, Claude Desktop, Grok Build 및 [클라이언트 지원 페이지](https://opencodex.me/ko/reference/client-support/)에 나열된 도구와 함께 사용하세요.
@@ -103,11 +103,11 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 
 | 도구 | 연결 방법 |
 |---|---|
-| Codex | 대시보드 **Connect** 페이지에서 Codex 스위치를 켠 다음 평소처럼 `codex`를 실행하세요. 로컬 리스너에서는 Codex 내장 프로바이더가 프록시를 가리킵니다. 터미널에서는 대시보드에 프로바이더를 추가하기 전에 `ocx init`을 실행하고 Codex 프롬프트를 수락하세요. |
+| Codex | 대시보드 **라우트** 페이지에서 Codex 스위치를 켠 다음 평소처럼 `codex`를 실행하세요. 로컬 리스너에서는 Codex 내장 프로바이더가 프록시를 가리킵니다. 터미널에서는 대시보드에 프로바이더를 추가하기 전에 `ocx init`을 실행하고 Codex 프롬프트를 수락하세요. |
 | Claude Code | `claude` CLI가 설치된 상태에서 `ocx claude`를 실행하세요. 필요하면 프록시를 시작하고 이를 통해 Claude Code를 실행합니다. |
 | Claude Desktop | `ocx claude desktop`을 실행하세요. 새로 설치할 때는 앱 전체에 게이트웨이 프로필을 설정합니다. 기존 first-party 설정은 유지되며, `ocx claude desktop apply --gateway`로 명시적으로 전환할 수 있습니다. [Claude Code 가이드](https://opencodex.me/ko/guides/claude-code/)를 참조하세요. 전환한 뒤에는 Claude Desktop을 완전히 종료했다가 다시 여세요. |
 | Grok Build | 로컬 리스너에서 Grok 통합이 활성화되어 있고 `~/.grok`이 있으면 `ocx start`가 모델을 등록합니다. Grok Build에서 `ocx-*` 모델을 선택하세요. 원격 설정은 [Grok Build 가이드](https://opencodex.me/ko/guides/grok-build/)를 참조하세요. 프로바이더를 추가한 뒤에는 프록시를 재시작해(또는 Codex 자동 시작이 활성화된 경우 `ocx ensure`를 실행해) 목록을 갱신하세요. |
-| 관리형 통합이 있는 도구 | 대시보드의 **Connect** 페이지 또는 `ocx integration client enable --client <id>`를 사용하세요. |
+| 관리형 통합이 있는 도구 | 대시보드의 **라우트** 페이지 또는 `ocx integration client enable --client <id>`를 사용하세요. |
 | 그 밖의 도구 | OpenAI 호환 기본 URL을 `http://localhost:10100/v1`로, 또는 Anthropic 기본 URL을 `http://localhost:10100`으로 설정하세요. |
 
 [클라이언트 지원 페이지](https://opencodex.me/ko/reference/client-support/)에서 각 도구의 연결 방식과 프로토콜을 확인할 수 있습니다.
@@ -154,6 +154,10 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 <tr>
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
 <td><a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a>의 후원에 감사합니다. TokenLab은 코딩 에이전트에게 주요 모델용 API 키 하나를 제공하며, OpenAI Responses와 Chat Completions, Anthropic Messages, Gemini 네이티브 API 형식을 스트리밍과 도구 호출까지 지원합니다. MCP 서버와 에이전트 Skills도 제공해 쉽게 연동할 수 있습니다. 전달 모드를 고르고 쓴 만큼 결제하세요. Add provider 선택기에서 <code>TokenLab</code>을 고르거나 <code>ocx provider add tokenlab</code>을 실행하세요.<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
+</tr>
+<tr>
+<td width="180"><a href="https://runapi.co"><img src="../assets/sponsors/runapi.png" alt="RunAPI" width="64"></a></td>
+<td>이 프로젝트를 후원해 주시는 <a href="https://runapi.co">RunAPI</a>에 감사합니다. RunAPI는 통합 AI API 게이트웨이로, API 키 하나로 OpenAI, Anthropic, Google, xAI, DeepSeek, Alibaba, Moonshot 등 200개 이상 모델의 카탈로그를 쓸 수 있으며, OpenAI Chat Completions와 Responses, Anthropic Messages, Gemini 네이티브 API 형식으로 제공됩니다(쓸 수 있는 형식은 모델마다 다릅니다). 스마트 라우팅이 요청마다 빠르고 안정적인 공급자 노드를 고르고 장애가 나면 자동으로 전환하며, 요금은 쓴 만큼 내는 방식으로 대개 표준 요금보다 훨씬 저렴합니다. Add provider 선택기에서 <code>RunAPI</code>를 고르거나 <code>ocx provider add runapi</code>를 실행하세요.</td>
 </tr>
 </tbody>
 </table>
@@ -246,9 +250,12 @@ ocx start     # 또는 `ocx service`
 ocx init      # 대화형 설정: ~/.opencodex/config.json을 쓰고 Codex를 연결합니다
 ```
 
-`ocx init`은 프록시를 시작하지 않습니다. 먼저 시작하세요. 나중이어도 순서는 상관없지만,
-`ocx provider add`와 `ocx combo set` 같은 헤드리스 명령은 **실행 중인** 프록시와 통신하며
-닿지 않으면 nonzero로 종료합니다. `ocx status` / `ocx doctor` / `ocx health`는 실행 상태를 보고합니다.
+프록시는 `ocx init` 전이나 후에 시작할 수 있습니다. `ocx init` 자체는 프록시를 시작하지 않습니다.
+`ocx provider add`는 프록시가 실행 중이 아니어도 로컬 설정을 저장합니다. `--sync`를 사용하면
+프로바이더를 먼저 저장한 다음 실행 중인 프록시를 통해 모델을 Codex에 동기화합니다. 프록시에
+연결할 수 없으면 프로바이더는 저장된 상태로 유지되지만 명령은 0이 아닌 코드로 종료됩니다.
+프록시가 시작되면 `ocx sync`를 실행하세요. `ocx provider add --live`와 `ocx combo set`은
+실행 중인 프록시가 필요합니다. `ocx status` / `ocx doctor` / `ocx health`로 실행 상태를 확인할 수 있습니다.
 
 > **opencodex를 설치하거나 실행하는 에이전트:**
 > [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md)를 읽으세요. 대화형 `ocx start`는 이 저장소를 star할지
@@ -295,12 +302,12 @@ CLI 설치에는 [Node](https://nodejs.org) 18 이상이 필요하고, 데스크
 
 OpenCodex는 프로세스가 붙잡고 있는 상태를 아래 항목에서 추적합니다. 각각에 문서화된 한도가 있습니다:
 
-- **유지 저장소 14개**(요청 로그, debug ring, image cache, model cache, vision 설명, cursor blob,
+- **유지 저장소 15개**(요청 로그, debug ring, image cache, model cache, vision 설명, cursor blob,
   responses continuation 등)는 바이트 단위로 집계되며, 앱이 소유한 메모리 예산(기본 256 MiB)이
   eviction합니다. 단, native control replay 저장소는 고정되어 eviction되지 않습니다.
 - **관측 버퍼 4개**(translator accumulator, image/OAuth/Grok tail)는 진행 중 바이트 압력을 감시만
   하고 eviction하지 않습니다.
-- **state-store 등록 31개**는 만료 sweep(60초 간격)과 config-generation reconciliation을 돌려,
+- **state-store 등록 32개**는 만료 sweep(60초 간격)과 config-generation reconciliation을 돌려,
   낡은 프로바이더/계정 키를 지웁니다.
 - **경로·fingerprint 메모**(워크스페이스 메타데이터, hardened identity, 설치 salt, mode-hint
   capability)는 삽입 순서 LRU cap(8–128개)을 씁니다.
@@ -411,10 +418,11 @@ npm uninstall -g @bitkyc08/opencodex
 
 ## 원격 접근
 
-기본적으로 opencodex는 `127.0.0.1`에 바인딩되며 추가 인증이 필요 없습니다. 루프백 밖으로 바인딩하면
-(`"hostname": "0.0.0.0"`) bearer 토큰이 **필수**입니다. `OPENCODEX_API_AUTH_TOKEN`이 없으면 프록시가
-시작을 거부하고, 모든 클라이언트 요청은 `x-opencodex-api-key`로 토큰을 실어야 합니다. 자세한 내용은
-[설정 레퍼런스](https://opencodex.me/ko/reference/configuration/)를 보세요.
+opencodex는 기본적으로 `127.0.0.1`에 바인딩되며 데이터 요청에 추가 인증이 필요하지 않습니다.
+루프백 외부에 바인딩하려면(예: `"hostname": "0.0.0.0"`) **구성된 클라이언트 API 키 또는 공유 데이터 토큰이 필요합니다**.
+공유 토큰은 `OPENCODEX_API_AUTH_TOKEN`, `OCX_API_TOKEN_FILE` 또는 설치 시 생성된 소유자 전용
+`service-api-token`에서 가져옵니다. 추론 클라이언트는 `x-opencodex-api-key`에 유효한 인증 정보를 보냅니다.
+관리에는 별도 관리자 인증 정보를 사용합니다. 자세한 내용은 [설정 레퍼런스](https://opencodex.me/ko/reference/configuration/)를 보세요.
 
 ## 고급 사용
 

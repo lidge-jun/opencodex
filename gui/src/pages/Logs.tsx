@@ -30,9 +30,9 @@ import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydo
 import { isModelRerouted, modelTitle, type ModelTitleTierOutcome } from "./logs-model-title";
 import { speedLabel } from "./logs-speed-label";
 import { decodeRateLabelKeys } from "./logs-decode-rate";
-import { failureAttributionLabels, failureDetailLabel, failureSummary, upstreamConditionLabel } from "./logs-failure-summary";
+import { failureAttributionLabels, failureDetailLabel, failureSummary, isInterruptedWebSocketDelivery, upstreamConditionLabel } from "./logs-failure-summary";
 import "./logs-decode-rate.css";
-import { formatEstimatedUsd, formatEstimatedUsdValue, summarizeEstimatedCosts } from "./logs-cost-format";
+import { effectivePriorityLowerBound, estimateReasonsForBilling, formatCredits, formatEstimatedUsd, formatEstimatedUsdValue, formatUsdPrecise, summarizeEstimatedCosts, type CostBilling, type PartialCostResult, type CostEstimateReason as BillingEstimateReason } from "./logs-cost-format";
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
 import {
   sanitizeLogEntryRouteDecision,
@@ -46,6 +46,7 @@ import type {
   RequestSpendTotals,
   ResendPermission,
 } from "../../../src/usage/telemetry-contract";
+import { ACCOUNT_LOG_LABEL_RE } from "../../../src/usage/telemetry-contract";
 import {
   classifyRequestOutcome,
   type RequestOutcomeClass,
@@ -76,14 +77,11 @@ type MetricUnavailableReason =
   | "usage_missing" | "usage_unsupported" | "output_missing" | "invalid_duration"
   | "price_unmatched" | "invalid_cache_breakdown"
   | "invalid_usage" | "combo_attempt_unavailable"
-  | "ttft_missing" | "decode_window_too_short";
+  | "ttft_missing" | "decode_window_missing" | "decode_window_too_short"
+  | "credit_cost_unrepresentable";
 
-type CostEstimateReason =
-  | "usage_estimated"
-  | "cache_detail_missing"
-  | "expected_price_overlay"
-  | "provider_cost_overlay"
-  | "priority_lower_bound";
+/** The proxy's reason vocabulary; the shared formatter owns the billing-basis filter. */
+type CostEstimateReason = BillingEstimateReason;
 
 type TokPerSecondResult =
   | { kind: "value"; value: number; estimated: boolean }
@@ -111,10 +109,12 @@ type CostResult =
       estimated: boolean;
       priorityLowerBound?: boolean;
       price?: MatchedPriceInfo;
-      attempts?: Array<{ ordinal: number; price: MatchedPriceInfo }>;
+      billing?: CostBilling;
+      attempts?: Array<{ ordinal: number; price: MatchedPriceInfo; billing?: CostBilling }>;
     };
     estimateReasons: CostEstimateReason[];
   }
+  | PartialCostResult
   | { kind: "unavailable"; reason: MetricUnavailableReason };
 
 interface LogDisplayMetrics {
@@ -142,10 +142,17 @@ interface LogFailureAttribution {
 }
 
 interface LogAttempt extends LogFailureAttribution {
+  codexWsStage?: {
+    sent: boolean;
+    closeCode: number | null;
+    relayedEvents: number;
+    terminalEvent: string | null;
+  };
   ordinal: number;
   provider: string;
   model: string;
   adapter: string;
+  accountLogLabel?: string;
   status: number;
   durationMs: number;
   sendCount: number;
@@ -208,6 +215,8 @@ export interface LogEntry extends LogFailureAttribution {
    * numeric HTTP status alone and reported an incomplete 200 as a plain success.
    */
   terminalStatus?: string;
+  terminalSource?: string;
+  transportPhase?: string;
   closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
   /** Upstream spend for the whole logical request, aggregated across attempts and combo children. */
   spend?: RequestSpendTotals;
@@ -333,7 +342,9 @@ const METRIC_REASON_KEYS = {
   invalid_usage: "logs.detail.reason.invalid_usage",
   combo_attempt_unavailable: "logs.detail.reason.combo_attempt_unavailable",
   ttft_missing: "logs.detail.reason.ttft_missing",
+  decode_window_missing: "logs.detail.reason.decode_window_missing",
   decode_window_too_short: "logs.detail.reason.decode_window_too_short",
+  credit_cost_unrepresentable: "logs.detail.reason.credit_cost_unrepresentable",
 } as const satisfies Record<MetricUnavailableReason, string>;
 
 const ESTIMATE_REASON_KEYS = {
@@ -342,6 +353,7 @@ const ESTIMATE_REASON_KEYS = {
   expected_price_overlay: "logs.detail.estimate.expected_price_overlay",
   provider_cost_overlay: "logs.detail.estimate.provider_cost_overlay",
   priority_lower_bound: "logs.detail.estimate.priority_lower_bound",
+  service_tier_transmitted: "logs.detail.estimate.service_tier_transmitted",
 } as const satisfies Record<CostEstimateReason, string>;
 
 /**
@@ -357,6 +369,7 @@ const ESTIMATE_REASON_KEYS = {
 const RECOVERY_KIND_KEYS = {
   "transient-5xx": "logs.detail.attempt.recovery.transient5xx",
   "connection-reset": "logs.detail.attempt.recovery.connectionReset",
+  "offline-resend": "logs.detail.attempt.recovery.offlineResend",
   "oauth-401": "logs.detail.attempt.recovery.oauth401",
   "oauth-account-403": "logs.detail.attempt.recovery.oauthAccount403",
   "key-401": "logs.detail.attempt.recovery.key401",
@@ -959,6 +972,9 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                        {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
                        <ProtocolBadge trace={log.protocolTrace} t={t} />
                      </span>
+                     {isInterruptedWebSocketDelivery(log) && (
+                       <span className="text-[12px] text-danger">{t("logs.status.streamInterrupted")}</span>
+                     )}
                      <span className="log-reqid block max-w-full truncate font-mono text-[11.5px] text-fg-subtle" title={log.requestId}>{log.requestId ?? "-"}</span>
                    </span>
                  </td>
@@ -1013,7 +1029,12 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                   </td>
                   )}
                   {columns.cost && (
-                  <td className={cn("text-right tabular-nums", log.displayMetrics?.cost?.kind === "value" ? "font-mono" : "font-sans text-fg-subtle")}>
+                  <td
+                    className={cn("text-right tabular-nums", log.displayMetrics?.cost?.kind === "value" ? "font-mono" : "font-sans text-fg-subtle")}
+                    title={log.displayMetrics?.cost?.kind === "partial"
+                      ? t("logs.cost.partialMissing", { count: log.displayMetrics.cost.unpricedAttempts })
+                      : undefined}
+                  >
                     {formatEstimatedUsd(log.displayMetrics?.cost, t, localeTag)}
                   </td>
                   )}
@@ -1091,11 +1112,18 @@ function LogDetailDialog({
   const [copied, setCopied] = useState(false);
   const tokenSplit = cacheSplit(detail);
   const cost = detail.displayMetrics?.cost;
+  const unavailableCredit = cost?.kind === "unavailable" && cost.reason === "credit_cost_unrepresentable";
   const decodeRate = detail.displayMetrics?.decodeTokPerSecond;
   const decodeRateLabels = decodeRateLabelKeys(decodeRate?.kind === "value" ? decodeRate : {});
   const reasoningWire = reasoningWireLabel(detail);
   const detailFailure = failureAttributionLabels(detail, t);
   const summary = failureSummary(detail, detailInfo, t);
+  // A row seeded by an older build or served by an older proxy can still carry token-price
+  // reasons beside a credit basis. Filter them at the one place that renders them, so the list
+  // never contradicts the basis printed above it.
+  const billedReasons = cost?.kind === "value"
+    ? estimateReasonsForBilling(cost.estimateReasons, cost.estimate)
+    : [];
 
   const copyRequestId = async () => {
     if (!detail.requestId) return;
@@ -1124,7 +1152,9 @@ function LogDetailDialog({
           </h3>
           <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} aria-label={t("common.cancel")}><IconX /></button>
         </div>
-        {summary.description && <p className="modal-desc">{summary.description}</p>}
+        {isInterruptedWebSocketDelivery(detail)
+          ? <p className="modal-desc">{t("logs.detail.streamInterrupted1006")}</p>
+          : summary.description && <p className="modal-desc">{summary.description}</p>}
 
         <section className="log-detail-section" aria-labelledby="log-detail-basic">
           <h4 id="log-detail-basic" className="log-detail-section-title">{t("logs.detail.section.basic")}</h4>
@@ -1261,17 +1291,54 @@ function LogDetailDialog({
         </section>
 
         <section className="log-detail-section" aria-labelledby="log-detail-cost">
-          <h4 id="log-detail-cost" className="log-detail-section-title">{t("logs.detail.section.cost")}</h4>
+          <h4 id="log-detail-cost" className="log-detail-section-title">{
+            // A credit-priced or mixed total is not a list-price equivalent, and a heading that
+            // says it is would contradict the basis printed under it.
+            (cost?.kind === "value" && cost.estimate.billing) || unavailableCredit
+              ? t("logs.detail.section.costBilled")
+              : t("logs.detail.section.cost")
+          }</h4>
           <p className="log-detail-notes-line muted">{t("usage.cost.disclaimer")}</p>
           {cost?.kind === "value" ? (
             <>
               <div className="log-detail-grid">
-                <span className="muted">{t("logs.detail.costTotal")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.total, t, localeTag, cost.estimate.priorityLowerBound)}</span>
-                <span className="muted">{t("logs.tokens.input")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.input, t, localeTag, cost.estimate.priorityLowerBound)}</span>
-                <span className="muted">{t("logs.tokens.cacheRead")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheRead, t, localeTag, cost.estimate.priorityLowerBound)}</span>
-                <span className="muted">{t("logs.tokens.cacheWrite")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheWrite, t, localeTag, cost.estimate.priorityLowerBound)}</span>
-                <span className="muted">{t("logs.tokens.output")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.output, t, localeTag, cost.estimate.priorityLowerBound)}</span>
-                {cost.estimate.price && (
+                <span className="muted">
+                  {cost.estimate.billing?.source === "provider-credits"
+                    ? t("logs.detail.creditTotal")
+                    : cost.estimate.billing?.source === "mixed"
+                      ? t("logs.detail.mixedTotal")
+                      : t("logs.detail.costTotal")}
+                </span>
+                <span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.total, t, localeTag, effectivePriorityLowerBound(cost.estimate))}</span>
+                {cost.estimate.billing?.source === "provider-credits" ? (
+                  <>
+                    <span className="muted">{t("logs.detail.creditBasis")}</span>
+                    <span className="log-detail-credit-billing">
+                      {t("logs.detail.creditCharge", {
+                        credits: formatCredits(cost.estimate.billing.providerCredits, localeCode),
+                        price: formatUsdPrecise(cost.estimate.billing.creditPriceUsd),
+                      })}
+                    </span>
+                  </>
+                ) : cost.estimate.billing?.source === "mixed" ? (
+                  <>
+                    <span className="muted">{t("logs.detail.creditBasis")}</span>
+                    <span className="log-detail-credit-billing">{t("logs.detail.creditMixed")}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="muted">{t("logs.tokens.input")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.input, t, localeTag, effectivePriorityLowerBound(cost.estimate))}</span>
+                    <span className="muted">{t("logs.tokens.cacheRead")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheRead, t, localeTag, effectivePriorityLowerBound(cost.estimate))}</span>
+                    <span className="muted">{t("logs.tokens.cacheWrite")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.cacheWrite, t, localeTag, effectivePriorityLowerBound(cost.estimate))}</span>
+                    <span className="muted">{t("logs.tokens.output")}</span><span className="mono">{formatEstimatedUsdValue(cost.estimate.cost.output, t, localeTag, effectivePriorityLowerBound(cost.estimate))}</span>
+                  </>
+                )}
+                {/* Token price provenance belongs to the amount that price produced. A credit
+                    charge is `credits x price`, and the token key is still resolved on the way
+                    in only to decide whether the row falls back to it — printing it here named a
+                    rate the total never used. The per-attempt table below still names each
+                    token-priced leg's own key. */}
+                {cost.estimate.price && !cost.estimate.billing && (
                   <>
                     <span className="muted">{t("logs.detail.matchedKey")}</span>
                     <span className="mono log-detail-break">{cost.estimate.price.jawcodeProvider ?? cost.estimate.price.provider}/{cost.estimate.price.modelId}</span>
@@ -1280,15 +1347,23 @@ function LogDetailDialog({
                   </>
                 )}
               </div>
-              {cost.estimateReasons.length > 0 && (
+              {billedReasons.length > 0 && (
                 <ul className="log-detail-notes">
-                  {cost.estimateReasons.map(reason => <li key={reason}>{t(estimateReasonKey(reason))}</li>)}
+                  {billedReasons.map(reason => <li key={reason}>{t(estimateReasonKey(reason))}</li>)}
                 </ul>
               )}
             </>
+          ) : cost?.kind === "partial" ? (
+            <div className="log-detail-grid">
+              <span className="muted">{t("logs.detail.costSubtotal")}</span>
+              <span className="mono">{formatEstimatedUsdValue(cost.subtotalUsd, t, localeTag)}</span>
+              <span className="muted">{t("logs.detail.unavailableReason")}</span>
+              <span>{t("logs.cost.partialMissing", { count: cost.unpricedAttempts })}</span>
+            </div>
           ) : (
             <div className="log-detail-grid">
-              <span className="muted">{t("logs.detail.costTotal")}</span><span className="mono">{t("logs.cost.unavailable")}</span>
+              <span className="muted">{t(unavailableCredit ? "logs.detail.section.costBilled" : "logs.detail.costTotal")}</span>
+              <span className="mono">{t("logs.cost.unavailable")}</span>
               <span className="muted">{t("logs.detail.unavailableReason")}</span>
               <span>{cost?.kind === "unavailable" ? t(metricReasonKey(cost.reason)) : t("logs.detail.reason.usage_missing")}</span>
             </div>
@@ -1311,27 +1386,35 @@ function LogDetailDialog({
                 </tr></thead>
                 <tbody>{detail.attempts.toSorted((a, b) => a.ordinal - b.ordinal).map(attempt => {
                   const attemptCost = attempt.displayMetrics?.cost;
+                  const attemptBilling = attemptCost?.kind === "value" ? attemptCost.estimate.billing : undefined;
                   const decodeRate = attempt.displayMetrics?.decodeTokPerSecond;
                   const decodeRateLabels = decodeRateLabelKeys(decodeRate?.kind === "value" ? decodeRate : {});
                   const attemptReasoningWire = reasoningWireLabel(attempt);
-                  const matched = attemptCost?.kind === "value" ? attemptCost.estimate.price : undefined;
+                  // A credit-billed attempt has no token allocation, so its resolved token key
+                  // explains nothing about the amount; only a token-priced leg names one.
+                  const matched = attemptCost?.kind === "value" && !attemptCost.estimate.billing
+                    ? attemptCost.estimate.price
+                    : undefined;
                   const attemptFailure = failureAttributionLabels(attempt, t);
                   // The derived cause leads, because it is the one value in this row that says
                   // WHY in a vocabulary an operator can act on. `errorCode` stays behind it
                   // rather than being dropped: it is the exact wire code, which is what a bug
                   // report needs.
-                  const reason = attemptFailure.cause
-                    ?? attempt.errorCode
-                    ?? (attempt.recoveryKinds.length
-                      ? attempt.recoveryKinds.map(kind => t(recoveryKindKey(kind))).join(", ")
-                      : undefined)
-                    ?? (attemptCost?.kind === "unavailable" ? t(metricReasonKey(attemptCost.reason)) : t("logs.detail.attempt.completed"));
+                  const recovery = attempt.recoveryKinds.map(kind => t(recoveryKindKey(kind))).join(", ");
+                  const reason = attemptFailure.cause ?? attempt.errorCode
+                    ?? (recovery || attemptCost?.kind !== "unavailable"
+                      ? t("logs.detail.attempt.completed") : t(metricReasonKey(attemptCost.reason)));
                   return (
                     <tr key={`${attempt.ordinal}-${attempt.provider}-${attempt.model}`}>
                       <td className="num mono">{attempt.ordinal}</td>
                       <td>
                         <span>{formatProviderDisplayName(attempt.provider, t)}</span><br />
                         <span className="mono muted log-detail-break">{attempt.model}</span>
+                        {typeof attempt.accountLogLabel === "string" && ACCOUNT_LOG_LABEL_RE.test(attempt.accountLogLabel) && (
+                          <div className="muted text-caption log-detail-break">
+                            {t("logs.detail.attempt.account")} <span className="mono">{attempt.accountLogLabel}</span>
+                          </div>
+                        )}
                         {(attempt.requestedEffort || attempt.effectiveEffort) && (
                           <>
                             <br />
@@ -1362,8 +1445,22 @@ function LogDetailDialog({
                           </span>
                         )}
                       </td>
-                      <td className="num mono">{formatEstimatedUsd(attemptCost, t, localeTag)}</td>
-                      <td className="log-detail-break">{reason}</td>
+                      <td className="num mono">
+                        {formatEstimatedUsd(attemptCost, t, localeTag)}
+                        {attemptBilling?.source === "provider-credits" && (
+                          <span className="logs-stack-end muted text-caption">
+                            {t("logs.detail.creditCharge", {
+                              credits: formatCredits(attemptBilling.providerCredits, localeCode),
+                              price: formatUsdPrecise(attemptBilling.creditPriceUsd),
+                            })}
+                          </span>
+                        )}
+                      </td>
+                      <td className="log-detail-break">
+                        {attempt.status >= 100 && <><span className="mono">{attempt.status}</span>{" · "}</>}
+                        {reason}
+                        {recovery && <div className="muted text-caption">{recovery}</div>}
+                      </td>
                     </tr>
                   );
                 })}</tbody>

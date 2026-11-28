@@ -60,7 +60,6 @@ import { getDebugLogEntries } from "../../src/lib/debug-log-buffer";
 import { setDebugSettings } from "../../src/lib/debug-settings";
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { deferredResetSseUpstream } from "../helpers/deferred-reset-sse-upstream";
 import { serverAuthConfig as config } from "../helpers/server-auth-config";
 import { POOL_RETRY_TEST_DIR, redirectCanonicalCodexTo } from "../helpers/pool-retry-harness";
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -1478,8 +1477,9 @@ describe("server local API auth", () => {
       }
       return originalGlobalFetch(input, init);
     }) as typeof fetch;
+    // Keep native WSS inside this HTTP fixture instead of contacting chatgpt.com.
+    redirectCanonicalCodexTo(upstream.url.toString());
     globalThis.fetch = matrixFetch;
-
     const request = (server: ReturnType<typeof startServer>, headers?: HeadersInit, model = "gpt-test") => {
       const requestHeaders = new Headers(headers);
       requestHeaders.set("content-type", "application/json");
@@ -1518,7 +1518,6 @@ describe("server local API auth", () => {
         ws.addEventListener("error", () => reject(new Error("tier websocket failed")), { once: true });
       });
     };
-
     try {
       const directConfig = {
         port: 0,
@@ -2564,6 +2563,59 @@ describe("server local API auth", () => {
       expect(response.status).toBe(400);
       expect(await response.text()).toBe(body);
       expect(harness.dispatches).toEqual(Array(8).fill("acct-pool-a"));
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("an explicit five-send cap includes the initial sends and gated-model recovery", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    const body = unsupportedModelBody(model);
+    let sends = 0;
+    const harness = await startPoolRetryHarness(
+      () => ++sends <= 2
+        ? Response.json({ error: { code: "server_is_overloaded" } }, { status: 503, headers: { "Retry-After": "0" } })
+        : rejectionResponse(body),
+      {
+        secondAccount: false,
+        modelRosterByAccount: { "acct-pool-a": ["gpt-5.6-sol", model] },
+        transientRetryAttempts: 5,
+      },
+    );
+    try {
+      const response = await harness.request({ model });
+      expect(response.status).toBe(400);
+      expect(await response.text()).toBe(body);
+      expect(harness.dispatches).toEqual(Array(5).fill("acct-pool-a"));
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("an explicit one-send cap preserves a Pool quota refusal without rotating", async () => {
+    const refusal = { error: { code: "usage_limit_reached", message: "Usage limit reached" } };
+    const harness = await startPoolRetryHarness(account => account === "acct-pool-a"
+      ? Response.json(refusal, { status: 429, headers: { "Retry-After": "600" } })
+      : Response.json({ id: "alternate", status: "completed", output: [] }), { transientRetryAttempts: 1 });
+    try {
+      const response = await harness.request();
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(response.status).toBe(429);
+      expect(await response.json()).toEqual(refusal);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("an explicit one-send cap preserves a Pool 401 without replaying the request", async () => {
+    const refusal = { error: { code: "invalid_token", message: "Credential rejected" } };
+    const harness = await startPoolRetryHarness(() => Response.json(refusal, { status: 401 }),
+      { transientRetryAttempts: 1 });
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual(refusal);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
     } finally {
       await stopPoolRetryHarness(harness);
     }
@@ -4093,14 +4145,19 @@ describe("server local API auth", () => {
   }, { timeout: SERVER_BUDGET_MS });
 
   test("native passthrough upstream reset still logs 502 and penalizes the pool", async () => {
-    const upstream = deferredResetSseUpstream('data: {"type":"response.output_text.delta","delta":"hello"}\n\n');
-    const harness = await startPoolRetryHarness(() => upstream.response(), { secondAccount: false, streamMode: "legacy-tee" });
+    const harness = await startPoolRetryHarness(() => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"type":"response.output_text.delta","delta":"hello"}\n\n'));
+      },
+    }), { headers: { "content-type": "text/event-stream" } }), { secondAccount: false, streamMode: "legacy-tee" });
     try {
       const response = await harness.request({ stream: true });
       const requestId = response.headers.get("x-opencodex-request-id");
       const reader = response.body!.getReader();
       expect((await reader.read()).done).toBe(false);
-      upstream.reset();
+      // Reset the owned upstream socket after its first chunk. Throwing from a
+      // fixture stream instead makes Bun's server sink report an uncaught error.
+      await harness.upstream.stop(true);
       while (!(await reader.read()).done) { /* drain the synthetic failed terminal */ }
       const deadline = Date.now() + INTERNAL_DEADLINE_MS;
       while (!getRequestLogEntries().some(entry => entry.requestId === requestId) && Date.now() < deadline) {

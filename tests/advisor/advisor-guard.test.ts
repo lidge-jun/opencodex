@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { parseRequest } from "../../src/responses/parser";
-import { createAdvisorGuard, type AdvisorPlan, type AdvisorConsultOutcome } from "../../src/server/responses/advisor-slot";
-import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
+import { createAdvisorCallResolver, createAdvisorGuard, type AdvisorPlan, type AdvisorConsultOutcome } from "../../src/server/responses/advisor-slot";
+import { guardEmptyCompletionEventStream } from "../../src/server/responses/empty-completion-guard";
+import { scanEventsForWebSearch } from "../../src/web-search/loop";
+import type { AdapterEvent, OcxParsedRequest, OcxToolChoice } from "../../src/types";
 
 const ADVICE: AdvisorConsultOutcome = {
   ok: true,
@@ -56,7 +58,246 @@ const baseParsed = (): OcxParsedRequest => parseRequest({
   input: [{ role: "user", content: "task" }],
 });
 
+describe("caller-owned Advisor delivery policy", () => {
+  const aliases = [
+    { name: "advisor", namespace: undefined },
+    { name: "work__advisor", namespace: "work" },
+    { name: "work.advisor", namespace: "work" },
+    { name: "functions.advisor", namespace: "functions" },
+    { name: "functions__advisor", namespace: "functions" },
+    { name: "default.work__advisor", namespace: "work" },
+  ];
+  const advisor = { type: "function", name: "advisor", parameters: { type: "object" } };
+  const modes = ["streaming", "buffered", "empty-completion retry", "fetch search"] as const;
+
+  test.each(modes.flatMap(mode => aliases.map(alias => ({ mode, ...alias }))))(
+    "retains no denied call fields in %j",
+    async ({ mode, name, namespace }) => {
+      const parsed = parseRequest({ model: "worker", input: "task", stream: mode !== "buffered",
+        tools: [namespace ? { type: "namespace", name: namespace, tools: [advisor] } : advisor],
+        tool_choice: { type: "web_search" },
+      });
+      expect(parsed.options.toolChoice).toBe("auto");
+      const resolve = createAdvisorCallResolver(parsed, false);
+      expect(resolve(name)).toBe("refused");
+
+      const workerEvents: AdapterEvent[] = [
+        { type: "tool_call_start", id: "fixture-call-field", name },
+        { type: "tool_call_delta", arguments: '{"question":"fixture-argument-field"}' },
+        { type: "tool_call_end" },
+        { type: "done" },
+      ];
+      const recorder = { consults: [] };
+      const { requests, continuation } = makeContinuation();
+      const guard = createAdvisorGuard(planFrom(recorder));
+      const guarded = () => guard({ parsed, continuation, firstEvents: (async function* () { yield* workerEvents; })() });
+      let events: AdapterEvent[];
+      if (mode === "fetch search") {
+        const split = scanEventsForWebSearch(workerEvents, resolve);
+        expect(split.calls).toEqual([]);
+        events = split.passthrough;
+      } else if (mode === "empty-completion retry") {
+        events = await collect(guardEmptyCompletionEventStream({
+          firstEvents: (async function* (): AsyncGenerator<AdapterEvent> { yield { type: "done" }; })(),
+          continuation: guarded,
+          preserveRetryError: event => event.type === "error" && event.code === "undeclared_tool_call",
+        }));
+      } else {
+        events = await collect(guarded());
+      }
+      expect(events.at(-1)).toMatchObject({ type: "error", code: "undeclared_tool_call" });
+      expect(events.some(event => event.type.startsWith("tool_call"))).toBe(false);
+      expect(JSON.stringify(events)).not.toContain("fixture-call-field");
+      expect(JSON.stringify(events)).not.toContain("fixture-argument-field");
+      expect(recorder.consults).toEqual([]);
+      expect(requests).toEqual([]);
+    },
+  );
+
+  test.each(["auto", "required", { type: "custom", name: "advisor" }])(
+    "allows the matching caller tool under %j",
+    tool_choice => {
+      const parsed = parseRequest({ model: "worker", input: "task", tool_choice,
+        tools: [{ type: "custom", name: "advisor" }] });
+      const resolve = createAdvisorCallResolver(parsed, false);
+      for (const name of ["advisor", "functions.advisor"]) {
+        expect(resolve(name)).toEqual({ clientWireName: "advisor" });
+        const split = scanEventsForWebSearch([
+          { type: "tool_call_start", id: "client-call", name },
+          { type: "tool_call_delta", arguments: '{"input":"client-tool-input"}' },
+          { type: "tool_call_end" },
+          { type: "done" },
+        ], resolve);
+        expect(split.calls).toEqual([]);
+        expect(split.hasRealToolCall).toBe(true);
+        expect(split.passthrough[0]).toMatchObject({ type: "tool_call_start", name: "advisor", id: "client-call" });
+      }
+    },
+  );
+
+  test("keeps an unrelated exact wire name distinct from an Advisor alias", () => {
+    const parsed = parseRequest({ model: "worker", input: "task", tool_choice: { type: "web_search" },
+      tools: [{ type: "namespace", name: "work", tools: [advisor] }, { ...advisor, name: "work.advisor" }],
+    });
+    const resolve = createAdvisorCallResolver(parsed, false);
+    expect(resolve("work.advisor")).toBeUndefined();
+    expect(resolve("work__advisor")).toBe("refused");
+  });
+
+  test.each([false, true])("keeps original namespace authority when effective choice becomes auto (allowlist=%s)", allowlist => {
+    const selector = { type: "function", namespace: "work", name: "advisor" };
+    const parsed = parseRequest({ model: "worker", input: "task",
+      tool_choice: allowlist ? { type: "allowed_tools", mode: "required", tools: [selector] } : selector,
+      tools: ["work", "other"].map(name => ({ type: "namespace", name, tools: [advisor] })),
+    });
+    parsed.options.toolChoice = "auto";
+    const resolve = createAdvisorCallResolver(parsed, false);
+    expect(resolve("work__advisor")).toEqual({ clientWireName: "work__advisor" });
+    expect(resolve("other__advisor")).toBe("refused");
+  });
+});
+
 describe("createAdvisorGuard — manual advisor() interception", () => {
+  test.each([
+    { type: "web_search" },
+    { type: "custom", name: "advisor" },
+    { type: "allowed_tools", mode: "auto", tools: [{ type: "web_search", name: "advisor" }] },
+  ])("translated choice %j cannot authorize Advisor on a later worker leg", async tool_choice => {
+    const recorder = { consults: [] as { reason: string; question: string | undefined }[] };
+    const denied = parseRequest({ model: "worker", input: "task", stream: true, tool_choice });
+    const calls = async function* (): AsyncGenerator<AdapterEvent> {
+      yield* advisorCallEvents("worker-call");
+      yield { type: "done" };
+    };
+    let continuations = 0;
+    const events = await collect(createAdvisorGuard(planFrom(recorder))({ parsed: baseParsed(), firstEvents: calls(),
+      continuation: parsed => {
+        continuations++;
+        parsed.options = denied.options;
+        return calls();
+      },
+    }));
+    expect(recorder.consults).toHaveLength(1);
+    expect(continuations).toBe(1);
+    expect(events.some(event => event.type.startsWith("tool_call"))).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "undeclared_tool_call" });
+  });
+
+  for (const choice of ["none", { name: "shell" }, { allowedTools: ["shell"], mode: "auto" },
+    { allowedTools: [], mode: "required" }, { name: "other.advisor" }] satisfies OcxToolChoice[]) {
+    test(`a guard cannot consult outside the effective tool choice: ${JSON.stringify(choice)}`, async () => {
+      const recorder = { consults: [] as { reason: string; question: string | undefined }[] };
+      const { requests, continuation } = makeContinuation();
+      const parsed = baseParsed();
+      parsed.options.toolChoice = choice;
+      parsed.context.tools = [{ name: "shell", parameters: {} }, { name: "advisor", namespace: "work", parameters: {} }];
+      const events = await collect(createAdvisorGuard(planFrom(recorder))({ parsed, continuation,
+        firstEvents: (async function* () { yield* advisorCallEvents("private-forbidden-call"); yield { type: "done" }; })(),
+      }));
+      expect(recorder.consults).toEqual([]);
+      expect(requests).toEqual([]);
+      expect(events.some(event => event.type.startsWith("tool_call"))).toBe(false);
+      expect(events.at(-1)).toMatchObject({ type: "error", status: 502, code: "undeclared_tool_call" });
+    });
+  }
+
+  for (const ambiguous of [false, true]) {
+    test(`a caller-owned bare Advisor alias requires one authorized identity (ambiguous=${ambiguous})`, async () => {
+      const recorder = { consults: [] as { reason: string; question: string | undefined }[] };
+      const { requests, continuation } = makeContinuation();
+      const parsed = baseParsed();
+      parsed.options.toolChoice = { allowedTools: ["work.advisor", "other.advisor"], mode: "auto" };
+      parsed.context.tools = [{ name: "advisor", namespace: "work", parameters: {} },
+        ...(ambiguous ? [{ name: "advisor", namespace: "other", parameters: {} }] : [])];
+      const events = await collect(createAdvisorGuard(planFrom(recorder))({ parsed, continuation,
+        firstEvents: (async function* () { yield* advisorCallEvents("client-call"); yield { type: "done" }; })(),
+      }));
+      expect(recorder.consults).toEqual([]);
+      expect(requests).toEqual([]);
+      expect(events.some(event => event.type === "tool_call_start")).toBe(!ambiguous);
+      expect(events.at(-1)?.type).toBe(ambiguous ? "error" : "done");
+    });
+  }
+
+  for (const choice of ["auto", "required", { name: "advisor" }, { allowedTools: ["advisor"], mode: "auto" }] satisfies OcxToolChoice[]) {
+    test(`an authorized synthetic Advisor remains usable: ${JSON.stringify(choice)}`, async () => {
+      const recorder = { consults: [] as { reason: string; question: string | undefined }[] };
+      const { requests, continuation } = makeContinuation();
+      const parsed = baseParsed();
+      parsed.options.toolChoice = choice;
+      const events = await collect(createAdvisorGuard(planFrom(recorder))({ parsed, continuation,
+        firstEvents: (async function* () { yield* advisorCallEvents("allowed-call"); yield { type: "done" }; })(),
+      }));
+      expect(recorder.consults).toHaveLength(1);
+      expect(requests).toHaveLength(1);
+      expect(events.some(event => event.type.startsWith("tool_call"))).toBe(false);
+      expect(events.at(-1)?.type).toBe("done");
+    });
+  }
+
+  test("a continuation that disables tools cannot reuse earlier Advisor permission", async () => {
+    const recorder = { consults: [] as { reason: string; question: string | undefined }[] };
+    let continuations = 0;
+    const calls = async function* (): AsyncGenerator<AdapterEvent> { yield* advisorCallEvents("advisor-call"); yield { type: "done" }; };
+    const events = await collect(createAdvisorGuard(planFrom(recorder))({ parsed: baseParsed(), firstEvents: calls(),
+      continuation: parsed => { continuations++; parsed.options.toolChoice = "none"; return calls(); },
+    }));
+    expect(recorder.consults).toHaveLength(1);
+    expect(continuations).toBe(1);
+    expect(events.some(event => event.type.startsWith("tool_call"))).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "error", status: 502, code: "undeclared_tool_call" });
+  });
+
+  test("buffered forbidden Advisor usage includes the rejected leg once after an earlier consultation", async () => {
+    const recorder = { consults: [] as { reason: string; question: string | undefined }[] };
+    const parsed = baseParsed();
+    parsed.stream = false;
+    let continuations = 0;
+    const events = await collect(createAdvisorGuard(planFrom(recorder))({ parsed,
+      firstEvents: (async function* () {
+        yield* advisorCallEvents("allowed-call");
+        yield { type: "done", usage: { inputTokens: 11, outputTokens: 3, totalTokens: 14 } };
+      })(),
+      continuation: next => {
+        continuations++;
+        next.options.toolChoice = "none";
+        return (async function* () {
+          yield* advisorCallEvents("forbidden-call");
+          yield { type: "text_delta", text: "private rejected suffix" };
+          yield { type: "done", usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 } };
+        })();
+      },
+    }));
+    expect(recorder.consults).toHaveLength(1);
+    expect(continuations).toBe(1);
+    expect(events.some(event => event.type.startsWith("tool_call") || event.type === "text_delta")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "undeclared_tool_call",
+      usage: { inputTokens: 111, outputTokens: 23, totalTokens: 134 } });
+  });
+
+  test("a forbidden streaming Advisor call does not drain the upstream for usage", async () => {
+    const recorder = { consults: [] as { reason: string; question: string | undefined }[] };
+    const parsed = baseParsed();
+    parsed.options.toolChoice = "none";
+    let suffixRead = false, closed = false;
+    const { requests, continuation } = makeContinuation();
+    const events = await collect(createAdvisorGuard(planFrom(recorder))({ parsed, continuation,
+      firstEvents: (async function* (): AsyncGenerator<AdapterEvent> {
+        try {
+          yield { type: "tool_call_start", id: "private-call", name: "advisor" };
+          suffixRead = true;
+          yield { type: "done", usage: { inputTokens: 100, outputTokens: 20 } };
+        } finally { closed = true; }
+      })(),
+    }));
+    expect(suffixRead).toBe(false);
+    expect(closed).toBe(true);
+    expect(recorder.consults).toEqual([]);
+    expect(requests).toEqual([]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "error", code: "undeclared_tool_call" });
+  });
+
   test("holds the synthetic call, consults, reinjects advice, and re-dispatches the worker", async () => {
     const recorder = { consults: [] as { reason: string; question: string | undefined }[] };
     const { requests, continuation, queues } = makeContinuation();
@@ -271,5 +512,29 @@ describe("createAdvisorGuard — manual advisor() interception", () => {
     expect(events.some(e => e.type === "text_delta" && e.text === "recovered after retry")).toBe(true);
     expect(recorder.consults).toEqual([{ reason: "manual", question: "how to retry?" }]);
     expect(requests).toHaveLength(1);
+  });
+
+  test("emits heartbeat events while a slow advisor consultation is in flight", async () => {
+    const { continuation, queues } = makeContinuation();
+    queues.push([{ type: "text_delta", text: "after heartbeat" }, { type: "done" }]);
+    const slowPlan: AdvisorPlan = {
+      consult: async () => {
+        await Bun.sleep(35);
+        return ADVICE;
+      },
+      formatUnavailable: (kind, error) => `<opencodex_advisor_unavailable>\n${kind}: ${error}\n</opencodex_advisor_unavailable>`,
+    };
+    const guard = createAdvisorGuard(slowPlan, 5);
+    const events = await collect(guard({
+      parsed: baseParsed(),
+      firstEvents: (async function* () {
+        yield* advisorCallEvents("a_slow", { question: "slow model?" });
+        yield { type: "done" };
+      })(),
+      continuation,
+    }));
+    const heartbeats = events.filter(e => e.type === "heartbeat");
+    expect(heartbeats.length).toBeGreaterThanOrEqual(2);
+    expect(events.some(e => e.type === "text_delta" && e.text === "after heartbeat")).toBe(true);
   });
 });

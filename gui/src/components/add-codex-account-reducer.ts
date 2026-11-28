@@ -15,6 +15,8 @@ export interface AddCodexAccountUiState {
   instructions: string;
   /** What the proxy reported about opening the browser for this login. */
   browserLaunch?: BrowserLaunch;
+  /** The proxy's `codexAuthMethod: "device-only"` imposed the device grant on this login. */
+  deviceOnly?: boolean;
   manualCode: string;
   manualCodeState: ManualCodeState;
   statusNotice: string;
@@ -41,7 +43,7 @@ export type AddCodexAccountUiAction =
   | { type: "set-id"; id: string }
   | { type: "set-error"; error: string }
   | { type: "set-auth-url"; authUrl: string }
-  | { type: "set-login-hint"; authUrl: string; deviceCode?: string; instructions?: string; browserLaunch?: BrowserLaunch }
+  | { type: "set-login-hint"; authUrl: string; deviceCode?: string; instructions?: string; browserLaunch?: BrowserLaunch; deviceOnly?: boolean }
   | { type: "set-manual-code"; manualCode: string }
   | { type: "set-manual-code-state"; manualCodeState: ManualCodeState }
   | { type: "set-status-notice"; statusNotice: string; statusTone?: StatusTone }
@@ -67,6 +69,7 @@ export function addCodexAccountUiReducer(state: AddCodexAccountUiState, action: 
         deviceCode: action.deviceCode ?? "",
         instructions: action.instructions ?? "",
         browserLaunch: action.browserLaunch,
+        deviceOnly: action.deviceOnly === true,
       };
     case "set-manual-code":
       return { ...state, manualCode: action.manualCode };
@@ -81,7 +84,7 @@ export function addCodexAccountUiReducer(state: AddCodexAccountUiState, action: 
     case "reset-oauth-start":
       // The launch outcome belongs to the login being replaced: a restart (for instance into the
       // device flow after a failed launch) must not keep warning about a browser it never tried.
-      return { ...state, error: "", statusNotice: "", statusTone: "ok", flowId: null, browserLaunch: undefined };
+      return { ...state, error: "", statusNotice: "", statusTone: "ok", flowId: null, browserLaunch: undefined, deviceOnly: false };
     case "oauth-code-submitted":
       return { ...state, error: "", manualCode: "", manualCodeState: "waiting", statusTone: "ok", statusNotice: "" };
     default:

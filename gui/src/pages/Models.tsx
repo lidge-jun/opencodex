@@ -17,7 +17,9 @@ import { modelLabel } from "../model-display";
 import { formatProviderDisplayName, providerDisplaySlug } from "../provider-icons";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { ownRecordValue } from "../own-record-value";
-import { describeIntegrationRefusalParts } from "./integrations/refusal-copy";
+import { IntegrationRefreshWarning } from "../components/integration-refresh-warning";
+import { rowVisibilityTarget, savedRowVisible } from "../model-visibility-rows";
+import { ModelsOverallPanel } from "./models-overall/ModelsOverallPanel";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { setClientResourceData } from "../client-resource";
 import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
@@ -80,14 +82,16 @@ import {
   REASONING_EFFORT_LEVELS,
   routedModelOptions,
   parseContextWindowDraft,
+  normalizeV2Status,
   type ModelPresetView,
   type ModelRow,
   type ProviderContextCapsResponse,
   type V2Status,
 } from "./models-shared";
 import { DiscoveryDependencyHint, EmptyProviderHint } from "./models-provider-hints";
+import PlaintextV2ConsentModal from "../components/PlaintextV2ConsentModal";
 import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningModal";
-import { SUBAGENT_SURFACE_GUIDE_URL, readSubagentSurfaceAdvisory } from "../subagent-surface";
+import { SUBAGENT_SURFACE_GUIDE_URL, confirmsPlaintextV2Mode, readSubagentSurfaceAdvisory, subagentSurfaceModes, type SubagentSurfaceMode } from "../subagent-surface";
 import { shadowCallModelOptions } from "./dashboard-shared";
 import { ShadowCallSettingsRow } from "./shadow-call-settings-row";
 import { ModelCatalogDelivery } from "./models-catalog-state";
@@ -113,6 +117,7 @@ type CachedModelsPage = {
 /** One plain lead line per tab; a longer description (if any) opens from the "?" beside it. */
 const SUBTITLE_TKEY: Record<ModelsTab, [lede: TKey, about?: TKey]> = {
   catalog: ["modelsV2.ledeCatalog", "models.subtitle"],
+  overall: ["modelsOverall.lede"],
   combos: ["modelsV2.ledeCombos", "models.subtitle.combos"],
   routing: ["models.subtitle.routing"],
   compatibility: ["models.subtitle.compatibility"],
@@ -226,6 +231,8 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   }, [activateTab]);
 
   const catalogActive = tab === "catalog";
+  // Overall reads the same catalog rows; only the catalog resource follows it there.
+  const catalogDataActive = catalogActive || tab === "overall";
 
   /** Counts reported up by the panels that own the underlying lists. */
   const [comboCount, setComboCount] = useState<number | null>(null);
@@ -365,6 +372,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   const [v2HelpOpen, setV2HelpOpen] = useState(false);
   /** A base/v2 selection waiting on the approval dialog. Null while nothing is pending. */
   const [pendingSurface, setPendingSurface] = useState<"default" | "v2" | null>(null);
+  const [plaintextConsent, setPlaintextConsent] = useState<string | null>(null);
   const [customModalOpen, setCustomModalOpen] = useState(false);
   const [displayNameModel, setDisplayNameModel] = useState<ModelRow | null>(null);
   const [priceModel, setPriceModel] = useState<ModelRow | null>(null);
@@ -489,13 +497,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       const data = await readJsonIfOk<V2Status>(r);
       if (!fresh()) return;
       if (!data || typeof data.enabled !== "boolean") { setV2(null); return; }
-      setV2({
-        enabled: data.enabled,
-        agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
-        maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
-        multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
-        keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
-      });
+      setV2(normalizeV2Status(data));
     } catch {
       if (fresh()) setV2(null); // old server / network: hide the section instead of guessing
     } finally {
@@ -573,7 +575,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     // reads Combos or Routing is exactly the hidden work this workspace avoids.
     // Live model discovery is slow; the catalog gets a raised deadline so a slow
     // response is never misread as a hung one.
-    { isEmpty: () => false, pollMs: 10_000, initialData: cached ?? undefined, enabled: catalogActive, deadlineMs: 60_000 },
+    { isEmpty: () => false, pollMs: 10_000, initialData: cached ?? undefined, enabled: catalogDataActive, deadlineMs: 60_000 },
   );
   const catalogState = catalogResource.state;
 
@@ -1093,13 +1095,13 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           setStatus(t("models.saveFailed"));
           return;
         }
-        setV2({
-          enabled: data.enabled,
-          agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
-          maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
-          multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
-          keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
-        });
+        // Fail closed like the CLI: the write is unconfirmed unless the full contract returns.
+        if (body.multiAgentMode === "v2-plaintext" && !confirmsPlaintextV2Mode(data)) {
+          setOk(false);
+          setStatus(t("models.saveFailed"));
+          return;
+        }
+        setV2(normalizeV2Status(data));
         setOk(true);
         setStatus(t("models.v2Applied"));
         setV2Note((data.warnings ?? []).join(" "));
@@ -1115,12 +1117,14 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     }
   };
 
-  const setMultiAgentMode = async (mode: "v1" | "default" | "v2") => {
+  const setMultiAgentMode = async (mode: SubagentSurfaceMode) => {
     if (!v2 || v2.multiAgentMode === mode) return;
     // v1 applies immediately: confirming a move toward the safe default would be noise.
     // base and v2 both put ChatGPT-native parents on the v2 surface, where a task handed
     // to a routed child is undeliverable ciphertext, so those wait for an answer.
     if (mode === "v1") { await putV2Setting({ multiAgentMode: "v1" }); return; }
+    // v2-plaintext uses its own consent dialog; its PUT carries the plaintext acknowledgement.
+    if (mode === "v2-plaintext") { setPlaintextConsent(apiBase); return; }
     setPendingSurface(mode);
   };
 
@@ -1236,13 +1240,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           setStatus(t("models.saveFailed"));
           return;
         }
-        setV2({
-          enabled: data.enabled,
-          agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
-          maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
-          multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
-          keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
-        });
+        setV2(normalizeV2Status(data));
         setOk(true);
         setStatus(t("models.v2ThreadsApplied"));
         setShowThreadsCustom(false);
@@ -1966,7 +1964,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
         {(v2Loading || v2) && (
           <SettingsRow label={t("models.v2Label")}>
             <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.v2Label")}>
-              {(["v1", "default", "v2"] as const).map(mode => (
+              {subagentSurfaceModes(v2?.supportsPlaintextV2Mode === true).map(mode => (
                 <button
                   key={mode}
                   type="button"
@@ -2023,6 +2021,14 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             onDismiss={() => setPendingSurface(null)}
           />
         )}
+        {plaintextConsent === apiBase && (
+          <PlaintextV2ConsentModal
+            busy={v2Busy}
+            onConfirm={() => void putV2Setting({ multiAgentMode: "v2-plaintext", plaintextAgentMessagesAcknowledged: true })
+              .finally(() => setPlaintextConsent(null))}
+            onDismiss={() => setPlaintextConsent(null)}
+          />
+        )}
       </div>
 
       {v2 && (
@@ -2068,6 +2074,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             <span className="mono text-label" style={{ color: "var(--err, #e5484d)" }}>{t("models.v2Conflict")}</span>
           )}
           {v2Note && <span className="muted text-label">{v2Note}</span>}
+          {v2.plaintextAgentMessagesEnabled === true && <span className="muted text-label">{t("models.v2PlaintextOn")}</span>}
         </div>
       )}
 
@@ -2512,6 +2519,14 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     </>
   );
 
+  // Fixed-position apply feedback, shown by both tabs that toggle models (catalog and Overall).
+  const actionToast = status ? (
+    <div className={`action-toast notice ${ok ? "notice-ok" : "notice-err"}`} role="status" aria-live="polite">
+      {ok ? <IconCheck /> : <IconAlert />}
+      <span>{status}</span>
+    </div>
+  ) : null;
+
   /*
    * The catalog tab body: everything this page rendered before it grew tabs. It keeps
    * `.models-workspace-shell`, so the wider-column rule and every workspace style below
@@ -2519,25 +2534,10 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
    */
   const catalogPanel = (
     <div className="models-workspace-shell">
-      {status && (
-        <div className={`action-toast notice ${ok ? "notice-ok" : "notice-err"}`} role="status" aria-live="polite">
-          {ok ? <IconCheck /> : <IconAlert />}
-          <span>{status}</span>
-        </div>
-      )}
+      {actionToast}
       {/* Keep the last-good catalog interactive but make a failed revalidation explicit. */}
       {catalogState.showError && <Notice tone="err">{t("models.loadFail")}</Notice>}
-      {integrationFailures.length > 0 && <div className="models-integration-warning">
-        <Notice tone="warn">
-          {t("models.integrationRefreshWarning")}
-          <ul>{integrationFailures.map(row => <li key={`${row.client}:${row.profileId ?? "all"}`}>
-            {row.client}{row.profileId === undefined ? "" : `:${row.profileId}`}: {describeIntegrationRefusalParts(t, {
-              clientId: row.client, message: row.reason === "integration_mutation_busy" ? t("integrations.error.busy") : row.reason,
-              reason: row.refusalReason, snapshotPath: row.snapshotPath, residual: row.residual,
-            })}
-          </li>)}</ul>
-        </Notice>
-      </div>}
+      <IntegrationRefreshWarning failures={integrationFailures} />
       <ModelsSettingsPanel title={t("models.settingsPanel.title")} attentionLabel={t("models.settingsPanel.attention")}
         warn={!!(v2?.enabled && v2.agentsMaxThreadsConflict) || v2Note !== "" || pickerResource.state.showError}
         summary={modelsSettingsSummary(t, { multiAgentMode: v2?.multiAgentMode, v2Threads: v2ThreadsChildren, keepNativeOnV1: v2?.keepNativeChatGptOnV1 === true,
@@ -2629,6 +2629,21 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
               )
               : catalogPanel}
         </ErrorBoundary>
+      </div>
+
+      <div className="models-tab-panel" role="tabpanel" id={modelsPanelDomId("overall")} aria-labelledby={modelsTabDomId("overall")} hidden={tab !== "overall"}>
+        {mounted.has("overall") && actionToast}
+        {mounted.has("overall") && (
+          <ErrorBoundary pageName={t("models.tab.overall")} title={t("errorBoundary.title")} message={t("errorBoundary.message")}
+            detailsLabel={t("errorBoundary.details")} reloadLabel={t("errorBoundary.reload")}>
+            {/* Same rows, same visibility rule, same queue and switch gate as the catalog rows. */}
+            <ModelsOverallPanel rows={groups.flatMap(group => group.rows)} failures={integrationFailures}
+              loading={catalogCold} error={catalogColdFailure} stale={catalogState.showError} onRetry={() => catalogResource.refresh()}
+              isOn={row => visibility.visible(row.provider, row.id, row.native === true, savedRowVisible(selectedModelMap, disabled, row))}
+              switchDisabled={row => (busy && !visibility.pending) || row.initialSelectionPending === true}
+              onToggle={(row, enable) => void applyVisibility("models", row.provider, [rowVisibilityTarget(row)], enable)} />
+          </ErrorBoundary>
+        )}
       </div>
 
       {/*

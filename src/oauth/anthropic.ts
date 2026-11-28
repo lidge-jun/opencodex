@@ -1,6 +1,7 @@
 /** Anthropic OAuth flow (Claude Pro/Max). Ported from jawcode oauth/anthropic.ts. */
 import { OAuthCallbackFlow } from "./callback-server";
-import { bindAnthropicIdentity, normalizeAnthropicIdentity, resolveAnthropicAccountIdentity } from "./anthropic-identity";
+import { bindAnthropicIdentity, bindAnthropicOrganizationScope, normalizeAnthropicIdentity,
+  normalizeAnthropicOrganizationUuid, resolveAnthropicAccountIdentity } from "./anthropic-identity";
 import { generatePKCE } from "./pkce";
 import type { LocalTokenImportMode, OAuthController, OAuthCredentials } from "./types";
 import { outboundProxyConfigured, startupOutboundProxyConfigured } from "../lib/proxy-env";
@@ -48,6 +49,7 @@ interface AnthropicTokenResponse {
   refresh_token: string;
   expires_in: number;
   account?: { uuid?: string; email_address?: string };
+  organization?: { uuid?: string };
 }
 
 export class AnthropicTokenError extends Error {
@@ -155,19 +157,35 @@ function credsFrom(data: AnthropicTokenResponse, refreshFallback?: string): OAut
     refresh: data.refresh_token || refreshFallback || "",
     access: data.access_token,
     expires,
-    anthropicIdentity: bindAnthropicIdentity(data.access_token, accountUuid),
+    anthropicIdentity: bindAnthropicIdentity(data.access_token, accountUuid, data.organization?.uuid),
     accountId: typeof accountUuid === "string" && accountUuid.length > 0 ? accountUuid : undefined,
     email: typeof email === "string" && email.length > 0 ? email : undefined,
   };
 }
 
-async function withAccountProfile(credential: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials> {
-  const profile = await resolveAnthropicAccountIdentity(credential.access, signal);
-  if (!profile) return credential;
-  // Token-response identity remains authoritative here; enrichment changes display metadata only.
+async function withAccountProfile(data: AnthropicTokenResponse, signal?: AbortSignal, refreshToken?: string): Promise<OAuthCredentials> {
+  const credential = credsFrom(data, refreshToken);
+  const exchangeOrganization = normalizeAnthropicOrganizationUuid(data.organization?.uuid);
   const identity = normalizeAnthropicIdentity(credential.anthropicIdentity, credential.access);
-  if (identity && identity.accountUuid !== profile.accountUuid) return credential;
-  return { ...credential, plan: profile.plan ?? null };
+  const exchangeScope = !identity
+    ? bindAnthropicOrganizationScope(credential.access, exchangeOrganization) : undefined;
+  const exchangeCredential = exchangeScope ? { ...credential, anthropicOrganizationScope: exchangeScope } : credential;
+  const profile = await resolveAnthropicAccountIdentity(credential.access, signal);
+  if (!profile) return exchangeCredential;
+  const { plan, organizationName, ...profileIdentity } = profile;
+  if (identity && identity.accountUuid !== profileIdentity.accountUuid) return credential;
+  if (exchangeOrganization && exchangeOrganization !== profileIdentity.organizationUuid) {
+    if (identity) return credential;
+    if (profileIdentity.organizationUuid) {
+      if (refreshToken === undefined) throw new Error("Anthropic OAuth returned conflicting organization information. Sign in again.");
+      // Keep the rotated grant and the exchange scope, without making an account claim.
+      return exchangeCredential;
+    }
+    return { ...credential, accountId: profileIdentity.accountUuid,
+      anthropicIdentity: { ...profileIdentity, organizationUuid: exchangeOrganization } };
+  }
+  return { ...credential, accountId: profileIdentity.accountUuid, anthropicIdentity: profileIdentity,
+    plan: plan ?? null, organizationName: organizationName ?? null };
 }
 
 export class AnthropicOAuthFlow extends OAuthCallbackFlow {
@@ -232,7 +250,7 @@ export class AnthropicOAuthFlow extends OAuthCallbackFlow {
       redirect_uri: redirectUri,
       code_verifier: this.#verifier,
     });
-    return withAccountProfile(credsFrom(parseTokenResponse(responseBody)), this.ctrl.signal);
+    return withAccountProfile(parseTokenResponse(responseBody), this.ctrl.signal);
   }
 }
 
@@ -255,7 +273,8 @@ export async function loginAnthropic(
         const identity = await resolveAnthropicAccountIdentity(local.access, ctrl.signal);
         ctrl.signal?.throwIfAborted();
         return { ...local, ...(identity ? { accountId: identity.accountUuid,
-          anthropicIdentity: normalizeAnthropicIdentity(identity, local.access), plan: identity.plan ?? null } : {}) };
+          anthropicIdentity: normalizeAnthropicIdentity(identity, local.access), plan: identity.plan ?? null,
+          organizationName: identity.organizationName ?? null } : {}) };
       }
       try {
         return { ...(await refreshAnthropicToken(local.refresh)), source: "local-cli" };
@@ -283,5 +302,5 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
   });
   // Refresh can sit on a request path, so the profile enrichment gets a short deadline. A
   // missed read leaves plan unobserved and the stored label survives through mergeOAuthPlan.
-  return withAccountProfile(credsFrom(parseTokenResponse(responseBody), refreshToken), AbortSignal.timeout(REFRESH_PROFILE_TIMEOUT_MS));
+  return withAccountProfile(parseTokenResponse(responseBody), AbortSignal.timeout(REFRESH_PROFILE_TIMEOUT_MS), refreshToken);
 }

@@ -1,13 +1,21 @@
 import type { OcxProviderConfig } from "./provider";
-import type { CodexAccount } from "./accounts";
+import type { CodexAccount, CodexAccountLoginConfig } from "./accounts";
 import type { AnthropicAccountPoolConfig, OcxAccountPoolRotationStrategy } from "./anthropic-account-pool";
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { OcxFallbackConfig } from "./fallback";
+import type { MultiAgentMode } from "./multi-agent";
 import type { OcxTelemetryConfig } from "./telemetry";
 import type { OcxClaudeCodeToolLoadingConfig } from "./claude-tool-loading";
+import type { OcxLinkHomeConfig, OcxLinkTransportConfig } from "./link";
+import type { OcxRoutingProfileConfig } from "./routing-profile";
 export type { AnthropicAccountPoolConfig, AnthropicModelRoute, OcxAccountPoolRotationStrategy, OcxAccountPoolQuotaWindow } from "./anthropic-account-pool";
 export type { OcxFallbackConfig, OcxFallbackDeviceConfig, OcxFallbackKind, OcxFallbackSwitches } from "./fallback";
 export type { OcxClaudeCodeToolLoadingConfig } from "./claude-tool-loading";
+export type {
+  OcxRoutingUnknownEvidenceMode, OcxRoutingProfileCandidate, OcxRoutingProfileRequirements, OcxRoutingProfileOptimize,
+  OcxRoutingUnknownCostCapMode, OcxRoutingProfileLimits, OcxRoutingProfileUnknownEvidence,
+  OcxRoutingProfileCompatibilitySuite, OcxRoutingProfileCompatibility, OcxRoutingProfileConfig,
+} from "./routing-profile";
 
 /** Public inference API exposure. Responses and Chat Completions are always served. */
 export interface OcxApiSurfacesConfig {
@@ -16,6 +24,8 @@ export interface OcxApiSurfacesConfig {
    * `claudeCode.enabled !== false`"; a present non-boolean value disables the surface.
    */
   messages?: { enabled?: boolean };
+  /** Gemini-compatible routes. The surface is open by default. */
+  gemini?: { enabled?: boolean };
 }
 
 /** Protocol delivery policy (devlog/_plan/260924_protocol_first_class). */
@@ -40,6 +50,8 @@ export interface OcxProtocolsConfig {
      * answered through the direct encoders, with no internal Responses body in either direction.
      */
     antigravityDirect?: boolean;
+    /** Preserve native Gemini payloads for concrete Antigravity OAuth routes on /v1beta. Default off. */
+    geminiNativeAntigravity?: boolean;
     /** Compare the dispatch plan with the observed path; never sends a second request. */
     shadowPlan?: boolean;
   };
@@ -54,6 +66,13 @@ export interface OcxClaudeCodeConfig extends OcxClaudeCodeToolLoadingConfig {
   /** Route the standalone Claude Code CLI through the first-party intercept (settings.json env).
    * Independent of Desktop's first-party mode. Absent/false = off. */
   cliFirstParty?: boolean;
+  /**
+   * Extra Claude Code config directories (`CLAUDE_CONFIG_DIR` homes) the operator registered so
+   * the Connections view reports each one. Read-only: OpenCodex never writes them and never
+   * discovers homes on disk; the first-party toggle keeps acting on the default home only.
+   * Absolute paths or `~/`-relative paths; anything else is ignored.
+   */
+  extraConfigDirs?: string[];
   /**
    * Opt-in relocation of supported trailing Claude harness notices from system instructions
    * to a user input message on translated routes. Changes the Desktop cache-key prefix.
@@ -461,7 +480,7 @@ export interface OcxRemoteGuiConfig {
   allowInsecureHttp?: boolean;
 }
 
-export type OcxConnectedClientId = "codex" | "claude";
+export type OcxConnectedClientId = "codex" | "claude" | "claude-desktop" | "grok" | import("../clients/client-ids").ExportClientId;
 
 /**
  * Redaction policy for management and CLI projections (#3859).
@@ -481,11 +500,6 @@ export interface OcxPrivacyConfig {
    * those accounts.
    */
   maskEmails?: boolean;
-}
-
-export interface OcxLinkTransportConfig {
-  tunnelPort: number;
-  linkId: string;
 }
 
 export interface OcxClientConnectionConfig {
@@ -527,7 +541,7 @@ export interface OcxClientConnectionConfig {
   };
 }
 
-export interface OcxConfig {
+export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
   /** Experimental macOS app-server stdout shim; absent or false disables it. */
   chatgptDesktop?: { appServerShim?: boolean };
   port: number;
@@ -676,6 +690,13 @@ export interface OcxConfig {
   googleAntigravityStaticCatalogVersion?: 1 | 2;
   /** Claude Code inbound + launcher settings. */
   claudeCode?: OcxClaudeCodeConfig;
+  /** Opt-in weekly reserve for explicitly marked caller-forward Claude subscription turns. */
+  subscriptionReserve?: {
+    enabled?: boolean;
+    soft?: number;
+    hard?: number;
+    targets?: string[];
+  };
   /**
    * Which public inference APIs this proxy serves. Read only through
    * `resolveApiSurfaceSettings` in `src/protocols/settings.ts`, which fails closed on a
@@ -793,6 +814,11 @@ export interface OcxConfig {
    */
   grokExcludedModels?: string[];
   /**
+   * Provider names the dashboard's suggested combos leave out (Combos page). View-only:
+   * existing combos that name one keep routing to it.
+   */
+  comboSuggestionExcludedProviders?: string[];
+  /**
    * When true, OpenAI-routed requests include `service_tier: "priority"` (fast inference).
    * When false, service_tier is stripped so requests use default speed.
    * Undefined = passthrough (don't modify what the client sends).
@@ -858,10 +884,10 @@ export interface OcxConfig {
    * Unknown windows use maxTokens alone; overflow is archived locally with a path notice.
    * Native and opaque compaction output keep their existing protocols. */
   reasoningRetention?: { enabled?: boolean; maxContextPercent?: number; maxTokens?: number };
-  /** Canonical ChatGPT reasoning replay allowances; both default off. */
-  nativeReasoningRetention?: { modelSwitch?: boolean; accountSwitch?: boolean };
+  nativeReasoningRetention?: { modelSwitch?: boolean; accountSwitch?: boolean }; // canonical ChatGPT reasoning replay allowances; both default off
   /** Per-root fan-out ceilings (src/lib/workflow-budget.ts); omitted fields keep 8 / 256 / 64. */
   workflowBudget?: { maxConcurrentChildren?: number; maxPhysicalSends?: number; maxDistinctChildren?: number };
+  routedCatalogDefaults?: import("./routed-catalog-defaults").OcxRoutedCatalogDefaultsConfig; // #6872; provider/model declarations win
   /** Explicit opt-in; resumes Observe only using an existing trusted certificate and endpoints. */
   desktopCompatibility?: { startOnProxyStart: boolean };
   /**
@@ -944,13 +970,8 @@ export interface OcxConfig {
    * Unset or omitted by default.
    */
   blockedModelRedirects?: Record<string, string>;
-  /**
-   * 3-state multi-agent surface override:
-   * - "v1": force ALL models to v1 surface (override upstream pins)
-   * - "default" | undefined: respect upstream model pins (sol/terra=v2, luna=v1, rest=codex flag)
-   * - "v2": force ALL models to v2 surface (override upstream pins)
-   */
-  multiAgentMode?: "v1" | "default" | "v2";
+  /** Multi-agent surface override; mode selection and consent follow MultiAgentMode. */
+  multiAgentMode?: MultiAgentMode;
   /**
    * Which revision of the sub-agent surface advisory this install has answered.
    * Absent means it has answered none. Written by the dashboard, never by a mode change.
@@ -959,6 +980,7 @@ export interface OcxConfig {
   /**
    * When `multiAgentMode` is `"v2"`, keep ChatGPT-native catalog rows on v1.
    * Routed parents get v2 tools; Sol/Terra can still spawn Grok/Claude (issue #92).
+   * Stored but inactive under `"v2-plaintext"`, which pins ChatGPT-native rows on v2.
    */
   keepNativeChatGptOnV1?: boolean;
   /** Experimental plaintext delivery for native v2 collaboration messages; disabled unless true. */
@@ -1075,10 +1097,12 @@ export interface OcxConfig {
    * can hold the connection silent for minutes on a large prompt before the first header arrives.
    */
   connectTimeoutMs?: number;
+  /** Opt-in (#7958): seconds (max 300) to wait for DNS after a pre-connect failure, then resend once. Unset or 0 is off. */ offlineResendWaitSec?: number;
   /** Graceful shutdown drain timeout (ms). Active turns are aborted after this deadline. Default 5000. */
   shutdownTimeoutMs?: number;
-  /** Advertise supports_websockets so Codex opens the WS endpoint. Default false; set true to opt in. */
-  websockets?: boolean;
+  /** Advertise supports_websockets so Codex opens the WS endpoint. Default false; set true to opt in. */ websockets?: boolean;
+  /** Accept the Responses WebSocket from linked Children over the Remote Link. Default false; needs websockets too. */ linkResponsesWebsocket?: boolean;
+  /** On a Remote Link Child: true keeps Codex on HTTP over the link even when the Home offers the link WebSocket. Default: follow the Home. */ linkResponsesWebsocketOptOut?: boolean;
   /** Experimental single-lane native OpenAI WebSocket steering; default off. */
   codexNativeSteering?: boolean;
   /** Experimental, default-off saved function-result injection on native multi-agent WebSockets. */
@@ -1109,6 +1133,10 @@ export interface OcxConfig {
    * non-loopback binds, whose admission token contract is unchanged.
    */
   codexDesktopAuthless?: boolean;
+  /** Luna Reserve (#4961): seeded once from `codexDesktopAuthless`, then independent (absent = off). Grants no entitlement. */
+  codexReserveEnabled?: boolean;
+  /** Internal marker recording that one-time seed. */
+  codexReserveMigration?: number;
   /**
    * Opt into Codex-owned client compaction while keeping OpenCodex routing. On an authenticated
    * loopback bind, inject the dedicated `opencodex` model provider instead of overriding the
@@ -1335,6 +1363,8 @@ export interface OcxConfig {
   codexPinnedTransientPolicy?: "hold" | "detour-new-threads";
   /** Opt-in: retain one Codex WebSocket per account and thread across turns. Default off. */
   codexWsReuseAcrossTurns?: boolean;
+  /** Opt-in native WS upload deltas; implies cross-turn reuse. Default off. */
+  codexWsIncrementalUpload?: boolean;
   /**
    * Opt-in provider-origin circuit threshold for proven pre-connection reachability failures.
    * Default 0 (disabled); range 0..20. The circuit never counts timeouts or HTTP responses.
@@ -1358,6 +1388,8 @@ export interface OcxConfig {
    * and every other destination are unchanged. Compression runs synchronously on the event loop.
    */
   upstreamRequestCompression?: "off" | "gzip" | "zstd";
+  /** Optional lossy shortening of historical native Codex images/tool text. */
+  upstreamHistorySlim?: "off" | "codex";
   /**
    * Opt-in ceiling, in bytes, on a decompressed INBOUND data-plane request body (#3573).
    *
@@ -1490,6 +1522,10 @@ export interface OcxComboTarget {
 
 export interface OcxComboConfig {
   targets: OcxComboTarget[];
+  /** Ordered failover advances only on confirmed target quota or billing exhaustion. */
+  quotaOnlyFallback?: boolean;
+  /** Require every failover destination to resolve to the original model ID. */
+  preserveFallbackModel?: boolean;
   /** Operator consent for metered targets on a loopback-only proxy. Default false; public listeners still require key consent. */
   allowMeteredTargets?: boolean;
   /** Ordered failover (default), round-robin, weighted random, least-used, or quota reset-window selection. */
@@ -1532,6 +1568,8 @@ export interface OcxComboConfig {
    */
   reasoningEffortMode?: OcxComboReasoningEffortMode;
   jevEffortMode?: import("./combo-jev-effort-mode").OcxComboJevEffortMode; // wire-effort owner on a `jev` combo; omitted = "decide"
+  capabilityPolicy?: import("./combo-capability-policy").OcxComboCapabilityPolicy; // omitted = "intersection"
+  onUnservable?: import("./combo-capability-policy").OcxComboOnUnservable; // `union` only; omitted = "degrade"
   /**
    * Disable image input even when every target supports it.
    * Omitted / `"auto"` keeps automatic capability derivation (default: enabled when
@@ -1580,96 +1618,6 @@ export interface OcxComboConfig {
   sessionPin?: import("../combos/jev-session-pin-config").JevSessionPinConfig | null;
 }
 
-export type OcxRoutingUnknownEvidenceMode = "allow" | "penalize" | "exclude";
-
-export interface OcxRoutingProfileCandidate {
-  provider: string;
-  model: string;
-}
-
-export interface OcxRoutingProfileRequirements {
-  /** Minimum model context window in tokens. */
-  minContextWindow?: number;
-  /** Minimum remaining quota headroom fraction (0..1). */
-  minQuotaHeadroom?: number;
-  tools?: boolean;
-  imageInput?: boolean;
-  structuredOutput?: boolean;
-  reasoningEffort?: string;
-  serviceTier?: string;
-  localOnly?: boolean;
-  remoteAllowed?: boolean;
-  /** Special encrypted Codex task readability (ChatGPT forward pool). */
-  encryptedCodexTasks?: boolean;
-}
-
-export interface OcxRoutingProfileOptimize {
-  latency?: number;
-  health?: number;
-  cost?: number;
-  quota?: number;
-}
-
-/**
- * Policy for the hard cost ceiling when a candidate has no finite cost
- * estimate. `"allow"` (default) preserves the documented dry-run contract:
- * the cap only excludes evidence known to exceed it, and the candidate's
- * `cost.capOutcome` is `"unknown-allowed"`. `"exclude"` makes the ceiling
- * fail-closed (`cost-limit-unknown` + `capOutcome: "unknown-excluded"`).
- */
-export type OcxRoutingUnknownCostCapMode = "allow" | "exclude";
-
-export interface OcxRoutingProfileLimits {
-  /** Hard per-request estimated-cost ceiling in USD. */
-  maxEstimatedCostUsd?: number;
-  /**
-   * How `maxEstimatedCostUsd` behaves when the estimate is unknown.
-   * Defaults to `"allow"` (eligible + `cost.capOutcome: "unknown-allowed"`);
-   * opt in to `"exclude"` for a true hard ceiling.
-   */
-  onUnknownCost?: OcxRoutingUnknownCostCapMode;
-}
-
-export interface OcxRoutingProfileUnknownEvidence {
-  capability?: OcxRoutingUnknownEvidenceMode;
-  health?: OcxRoutingUnknownEvidenceMode;
-  quota?: OcxRoutingUnknownEvidenceMode;
-  cost?: OcxRoutingUnknownEvidenceMode;
-}
-
-export interface OcxRoutingProfileCompatibilitySuite {
-  suiteId: string;
-  evidenceLayer: "protocol_conformance" | "live_route_compatibility";
-}
-
-export interface OcxRoutingProfileCompatibility {
-  requiredSuites?: OcxRoutingProfileCompatibilitySuite[];
-  minStatus?: "PROBED" | "VERIFIED";
-  maxEvidenceAgeMs?: number;
-  unknownEvidence?: OcxRoutingUnknownEvidenceMode;
-  degradedEvidence?: OcxRoutingUnknownEvidenceMode;
-}
-
-export interface OcxRoutingProfileConfig {
-  /**
-   * Explicit candidate allowlist (`provider/model` refs). No implicit
-   * expansion in v1.
-   */
-  candidates: OcxRoutingProfileCandidate[];
-  /** Optional public model name replacing the default `policy/<id>` slug. */
-  alias?: string;
-  /** Hard requirements evaluated before scoring. */
-  require?: OcxRoutingProfileRequirements;
-  /** Optimization weights; normalized deterministically. */
-  optimize?: OcxRoutingProfileOptimize;
-  limits?: OcxRoutingProfileLimits;
-  /** How unknown evidence is handled per dimension. */
-  unknownEvidence?: OcxRoutingProfileUnknownEvidence;
-  /** Optional Compatibility Lab policy (CL-06). */
-  compatibility?: OcxRoutingProfileCompatibility;
-}
-
-
 export interface OcxTokenGuardianConfig {
   /** Global kill-switch. Default false — the guardian does nothing unless explicitly enabled. */
   enabled?: boolean;
@@ -1700,7 +1648,7 @@ export interface OcxImagesConfig {
   timeoutMs?: number;
   /** Master switch for the image bridge. Default false — set true to enable paid xAI Grok Imagine generation. */
   bridgeEnabled?: boolean;
-  /** xAI image model id. Default "grok-imagine-image-quality" (see DEFAULT_MODEL in images/plan.ts). */
+  /** xAI image model id. Default "grok-imagine-image-2.0". */
   bridgeModel?: string;
   /** Max image-generation loop iterations before forced-final. Default 3; clamped to [0, 10]. */
   maxRounds?: number;
@@ -1708,7 +1656,10 @@ export interface OcxImagesConfig {
   artifactsKeepCount?: number;
   /** Master switch for the video bridge. Default false — must be explicitly opted in. */
   videoBridgeEnabled?: boolean;
-  /** Model for xAI video generation. Default "grok-imagine-video". */
+  /** Optional API-key provider that serves `video_gen` (its own baseUrl and key). Unset keeps xAI; an unusable value fails closed. */
+  videoProvider?: string;
+  /** Model for xAI video generation. Default "grok-imagine-video-1.5-lite" (see src/images/video-capabilities.ts). */
+  /** Defaults to grok-imagine-video-1.5-lite. */
   videoBridgeModel?: string;
   /** Max video-gen rounds before forced-final. Default 2 (video is slower than image). */
   videoMaxRounds?: number;
@@ -1767,11 +1718,11 @@ export interface OcxAdvisorConfig {
    * or a tool result after the latest user message).
    */
   policy?: "manual" | "preflight" | "adaptive";
-  /** question-only sends only the worker's explicit question and disables automatic consultations. */
-  contextMode?: "context" | "question-only";
+  /** question-only sends only the worker's explicit question and disables automatic consultations; full sends expanded, bounded task history (up to 128,000 characters per message and 512,000 characters total across the transcript). */
+  contextMode?: "context" | "full" | "question-only";
   /** Adaptive task consultation attempts (manual + automatic). Integer 1–3, default 3. */
   maxConsultationsPerTask?: number;
-  /** Advisor fetch timeout (ms). Default 120000. */
+  /** Advisor fetch timeout (ms). Default 600000 (10 minutes). Max 1800000 (30 minutes). */
   timeoutMs?: number;
   /**
    * Operator consent to send task conversation and tool results to the configured Advisor
@@ -1779,6 +1730,10 @@ export interface OcxAdvisorConfig {
    * send task context. `enabled: true` does not grant this, and upgrades do not write it.
    */
   contextSharingConsent?: "v1";
+  /** Auto-mount `opencodex-advisor` MCP + hooks/skills for compatible active client routes. Default: false. */
+  autoMountMcp?: boolean;
+  /** Explicit client selection works independently of auto-mount; absent follows active routes only when auto-mount is enabled. */
+  mcpClients?: string[];
 }
 
 export interface OcxWebSearchSidecarConfig {

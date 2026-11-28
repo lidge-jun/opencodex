@@ -5,8 +5,10 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildClientContribution, type ExportModel } from "../../src/clients/config-export";
+import { refreshOwnedCatalogIntegrations } from "../../src/integrations/catalog-refresh";
 import { assertIntegrationWriteOwnership, fileIO, type IntegrationIO } from "../../src/integrations/config-io";
-import { canonicalContribution, fingerprint } from "../../src/integrations/ownership";
+import { canonicalContribution, fingerprint, semanticContribution } from "../../src/integrations/ownership";
+import { serializeDocument } from "../../src/integrations/serialize";
 import { protectedContributionFingerprint } from "../../src/integrations/ownership-policy";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
@@ -466,6 +468,89 @@ describe("apply", () => {
     expect(readIntegrationState(request)).toMatchObject({ state: "current" });
   });
 
+  describe("OpenCode admission key per destination (#9069)", () => {
+    type OpencodeDocument = {
+      provider: { opencodex: { options: Record<string, unknown> } };
+      providers: { opencodex: { settings: Record<string, unknown>; headers?: Record<string, string> } };
+    };
+    const LISTENER_HUB = {
+      ...CONFIG,
+      runtimeRole: "hub",
+      hostname: "100.64.0.10",
+      unauthenticatedLoopbackListener: { enabled: true, port: 10102 },
+    } as unknown as OcxConfig;
+    const read = (path: string) => JSON.parse(readFileSync(path, "utf8")) as OpencodeDocument;
+
+    test("the keyless listener gets the placeholder in both generations, on enable and refresh", () => {
+      const configPath = installOpencode();
+      const request = input({ clientId: "opencode", config: LISTENER_HUB });
+      expect(applyIntegration(request).ok).toBe(true);
+
+      const document = read(configPath);
+      // An unset `{env:…}` reference resolves to "", which OpenCode refuses before sending.
+      expect(document.provider.opencodex.options).toMatchObject({
+        baseURL: "http://127.0.0.1:10102/v1",
+        apiKey: "opencodex-loopback",
+      });
+      expect(document.provider.opencodex.options.headers).toBeUndefined();
+      expect(document.providers.opencodex.settings).toMatchObject({
+        baseURL: "http://127.0.0.1:10102/v1",
+        apiKey: "opencodex-loopback",
+      });
+      expect(document.providers.opencodex.headers).toBeUndefined();
+      expect(readIntegrationState(request)).toMatchObject({ state: "current" });
+
+      // A block the previous generator wrote carries the reference; refresh replaces it.
+      const previous = read(configPath);
+      previous.provider.opencodex.options.apiKey = "{env:OPENCODEX_OPENCODE_API_KEY}";
+      previous.providers.opencodex.settings.apiKey = "{env:OPENCODEX_OPENCODE_API_KEY}";
+      const previousText = `${JSON.stringify(previous, null, 2)}\n`;
+      writeFileSync(configPath, previousText);
+      const written = {
+        clientId: "opencode" as const,
+        fragments: [
+          { path: ["provider", "opencodex"], value: previous.provider.opencodex },
+          { path: ["providers", "opencodex"], value: previous.providers.opencodex },
+        ],
+      };
+      store.putRecord({
+        ...store.readRecords().opencode!,
+        fileFingerprint: fingerprint(previousText),
+        blockFingerprint: fingerprint(canonicalContribution(written)),
+        semanticBlockFingerprint: fingerprint(semanticContribution(written)),
+      });
+      expect(readIntegrationState(request)).toMatchObject({ state: "stale" });
+
+      const refreshed = refreshIntegration(request);
+      expect(refreshed.ok).toBe(true);
+      if (refreshed.ok) expect(refreshed.changed).toBe(true);
+      const after = read(configPath);
+      expect(after.provider.opencodex.options.apiKey).toBe("opencodex-loopback");
+      expect(after.providers.opencodex.settings.apiKey).toBe("opencodex-loopback");
+      expect(readIntegrationState(request)).toMatchObject({ state: "current" });
+    });
+
+    test("an authenticated bind keeps the admission header and a loopback bind keeps the reference", () => {
+      const authenticatedPath = installOpencode();
+      const authenticated = input({ clientId: "opencode", config: { ...CONFIG, hostname: "100.64.0.10" } as OcxConfig });
+      expect(applyIntegration(authenticated).ok).toBe(true);
+      const remote = read(authenticatedPath);
+      expect(remote.provider.opencodex.options).toMatchObject({
+        apiKey: "opencodex-loopback",
+        headers: { "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}" },
+      });
+      expect(remote.providers.opencodex.headers).toEqual({ "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}" });
+      expect(disableIntegration(authenticated).ok).toBe(true);
+
+      // Without the listener, a loopback base URL does not prove a keyless destination.
+      expect(applyIntegration(input({ clientId: "opencode" })).ok).toBe(true);
+      const loopback = read(authenticatedPath);
+      expect(loopback.provider.opencodex.options.apiKey).toBe("{env:OPENCODEX_OPENCODE_API_KEY}");
+      expect(loopback.providers.opencodex.settings.apiKey).toBe("{env:OPENCODEX_OPENCODE_API_KEY}");
+      expect(exportContextOf({ models: MODELS, config: CONFIG, port: 10100 }).keylessInference).toBeUndefined();
+    });
+  });
+
   test("ZCode key-order normalization stays refreshable with derived metadata (#2759)", () => {
     const configPath = installZcode();
     const models: ExportModel[] = [
@@ -912,6 +997,180 @@ describe("disable", () => {
   });
 });
 
+describe("Kimi source preservation (#9152)", () => {
+  const original = [
+    "# user header",
+    "default_model = \"kimi-k3\"",
+    "",
+    "# >>> other-tool-hooks >>>",
+    "[[hooks]]",
+    "event = \"SessionStart\"",
+    "command = \"echo start\"",
+    "",
+    "[[hooks]]",
+    "event = \"Stop\"",
+    "command = \"echo stop\"",
+    "# <<< other-tool-hooks <<<",
+    "",
+  ].join("\n");
+
+  function installKimi(text: string): string {
+    mkdirSync(join(home, ".kimi-code"), { recursive: true });
+    const configPath = join(home, ".kimi-code", "config.toml");
+    writeFileSync(configPath, text);
+    return configPath;
+  }
+
+  test("apply and disable leave the user's comments and hook tables as written", () => {
+    const configPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const applied = readFileSync(configPath, "utf8");
+    expect(applied.startsWith(original)).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+  });
+
+  test("another tool's block added after apply survives refresh and disable", () => {
+    const configPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const sibling = "# >>> late-tool >>>\n[[hooks]]\nevent = \"UserPromptSubmit\"\n# <<< late-tool <<<\n";
+    writeFileSync(configPath, `${readFileSync(configPath, "utf8")}\n${sibling}`);
+    expect(refreshIntegration(input({ clientId: "kimi", models: MODELS.slice(1) })).ok).toBe(true);
+    const refreshed = readFileSync(configPath, "utf8");
+    expect(refreshed.startsWith(original)).toBe(true);
+    expect(refreshed.endsWith(sibling)).toBe(true);
+    expect(refreshed).not.toContain("claude-opus-4-8");
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(`${original}\n${sibling}`);
+  });
+
+  test("disable cleans up a file the whole-document writer left behind", () => {
+    const configPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const rerendered = serializeDocument(Bun.TOML.parse(readFileSync(configPath, "utf8")), "toml");
+    expect(rerendered).toContain("[providers]\n[providers.opencodex]");
+    writeFileSync(configPath, rerendered);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(Bun.TOML.parse(readFileSync(configPath, "utf8"))).toEqual(Bun.TOML.parse(original));
+  });
+
+  test("trailing blank lines in the user's file survive apply and disable", () => {
+    const padded = `${original}\n\n`;
+    const configPath = installKimi(padded);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8").startsWith(padded)).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(padded);
+  });
+
+  test("disable keeps a comment the user put on a parent table header", () => {
+    const configPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const rerendered = serializeDocument(Bun.TOML.parse(readFileSync(configPath, "utf8")), "toml")
+      .replace("[providers]\n", "[providers] # mine\n");
+    writeFileSync(configPath, rerendered);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const after = readFileSync(configPath, "utf8");
+    expect(after).toContain("[providers] # mine");
+    expect(after).not.toContain("opencodex");
+  });
+
+  test("an overwrite refuses a provider table it cannot replace in place", () => {
+    const inline = `providers = { opencodex = { type = "openai" } }\n${original}`;
+    const configPath = installKimi(inline);
+    const result = overwriteIntegration(input({ clientId: "kimi" }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("unsafe");
+    expect(readFileSync(configPath, "utf8")).toBe(inline);
+  });
+
+  test("refuses refresh or disable when a user added a comment inside a managed table", () => {
+    const configPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const commented = readFileSync(configPath, "utf8").replace(
+      "[providers.opencodex]\n",
+      "[providers.opencodex]\n# keep my note\n",
+    );
+    writeFileSync(configPath, commented);
+    const refreshed = refreshIntegration(input({ clientId: "kimi", models: MODELS.slice(1) }));
+    expect(refreshed.ok).toBe(false);
+    if (!refreshed.ok) expect(refreshed.reason).toBe("unsafe");
+    expect(readFileSync(configPath, "utf8")).toBe(commented);
+    const disabled = disableIntegration(input({ clientId: "kimi" }));
+    expect(disabled.ok).toBe(false);
+    if (!disabled.ok) expect(disabled.reason).toBe("unsafe");
+    expect(readFileSync(configPath, "utf8")).toBe(commented);
+  });
+
+  test("preserves CRLF line endings, absent trailing newline, and surrounding blank lines", () => {
+    const crlf = original.replace(/\n/g, "\r\n");
+    const crlfPath = installKimi(crlf);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    const appliedCrlf = readFileSync(crlfPath, "utf8");
+    expect(appliedCrlf.startsWith(crlf)).toBe(true);
+    expect(appliedCrlf.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(crlfPath, "utf8")).toBe(crlf);
+
+    const noNewline = 'default_model = "kimi-k3"';
+    const noNewlinePath = installKimi(noNewline);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(refreshIntegration(input({ clientId: "kimi", models: MODELS.slice(1) })).ok).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(noNewlinePath, "utf8")).toBe(noNewline);
+
+    // Removing the blank separator before the managed block after apply must NOT strip
+    // the preceding user line's trailing newline on disable when the file originally had one.
+    const compactPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    writeFileSync(compactPath, readFileSync(compactPath, "utf8").replace(`${original}\n[providers.opencodex]`, `${original}[providers.opencodex]`));
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(compactPath, "utf8")).toBe(original);
+
+    // Trailing blank lines added after the final managed table stay after it on refresh.
+    const trailingPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    writeFileSync(trailingPath, `${readFileSync(trailingPath, "utf8")}\n\n`);
+    expect(refreshIntegration(input({ clientId: "kimi", models: MODELS.slice(1) })).ok).toBe(true);
+    const refreshedTrailing = readFileSync(trailingPath, "utf8");
+    expect(refreshedTrailing.startsWith(`${original}\n[providers.opencodex]`)).toBe(true);
+    expect(refreshedTrailing.endsWith("\n\n\n")).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(trailingPath, "utf8")).toBe(`${original}\n\n`);
+
+    const sibling = "# >>> late-tool >>>\n[[hooks]]\nevent = \"Stop\"\n# <<< late-tool <<<\n";
+    const blankPath = installKimi(original);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    writeFileSync(blankPath, `${readFileSync(blankPath, "utf8")}\n\n${sibling}`);
+    expect(refreshIntegration(input({ clientId: "kimi", models: MODELS.slice(1) })).ok).toBe(true);
+    expect(readFileSync(blankPath, "utf8").endsWith(`\n\n\n${sibling}`)).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(blankPath, "utf8")).toBe(`${original}\n\n${sibling}`);
+
+    // Overwriting a pre-existing managed table in a newline-less file must not strip the
+    // preceding user line's newline on disable.
+    const existingNoEof = 'default_model = "kimi-k3"\n\n[providers.opencodex]\ntype = "old"';
+    const overwritePath = installKimi(existingNoEof);
+    expect(overwriteIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(overwritePath, "utf8")).toBe('default_model = "kimi-k3"\n');
+
+    // Adding a sibling line before the managed block after an initial append to a newline-less
+    // file invalidates the EOF provenance, so disable keeps the new sibling's trailing newline.
+    const editedBeforePath = installKimi(noNewline);
+    expect(applyIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    writeFileSync(
+      editedBeforePath,
+      readFileSync(editedBeforePath, "utf8").replace(
+        `${noNewline}\n\n[providers.opencodex]`,
+        `${noNewline}\ntheme = "dark"\n\n[providers.opencodex]`,
+      ),
+    );
+    expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
+    expect(readFileSync(editedBeforePath, "utf8")).toBe(`${noNewline}\ntheme = "dark"\n`);
+  });
+});
+
 describe("OMP source preservation", () => {
   test("disables a generated OMP config without leaving its created container", () => {
     const configPath = installOmp();
@@ -997,6 +1256,15 @@ describe("OMP source preservation", () => {
 });
 
 describe("DSH source preservation", () => {
+  test("the default catalog refresh updates an already-owned DSH block", async () => {
+    const path = installDsh();
+    const first = input({ clientId: "dsh" });
+    expect(applyIntegration(first).ok).toBe(true);
+    const models = [...MODELS, { namespaced: "openai/new-model", provider: "openai", id: "new-model" }];
+    expect(await refreshOwnedCatalogIntegrations({ ...first, models })).toEqual([{ client: "dsh", ok: true, changed: true }]);
+    expect(readFileSync(path, "utf8")).toContain("openai/new-model");
+  });
+
   test("preserves defaults, namespaces, providers, comments, and formatting through refresh and disable", () => {
     const configPath = installDsh();
     const original = [

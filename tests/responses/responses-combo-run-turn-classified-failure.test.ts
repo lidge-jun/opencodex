@@ -565,6 +565,15 @@ for (const media of ["image", "video"]) {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "policy/daily--high", reasoning_effort: "low", stream: false, messages }),
       }), cfg, { model: "", provider: "" }, {});
+      if (media === "video") {
+        // The Chat projection cannot carry video, so the shared input media guard refuses the turn
+        // before any target is selected; no request leaves and no TRAE session opens.
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({ error: { code: "unsupported_input_modality" } });
+        expect(requests).toHaveLength(0);
+        expect(open).not.toHaveBeenCalled();
+        return;
+      }
       expect(response.status, await response.clone().text()).toBe(200);
       expect(requests).toHaveLength(1);
       const sent = JSON.parse(String(requests[0]?.body)) as {
@@ -620,9 +629,13 @@ for (const media of ["image", "video"]) for (const wire of ["responses", "chat"]
       const response = await (wire === "responses" ? handleResponses : handleChatCompletions)(request, cfg, { model: "", provider: "" });
       expect(response.status).toBe(400);
       const refused = await response.json() as { error: { code: string; type: string; message: string } };
+      // On the Chat wire the shared input media guard refuses video before the TRAE check runs.
+      const chatVideo = wire === "chat" && media === "video";
       expect(refused.error).toMatchObject({ type: "invalid_request_error",
-        code: wire === "responses" && !combo ? "unsupported_input_modality" : "invalid_request_error" });
-      expect(refused.error.message).toContain("TRAE CN ACP supports text conversations only");
+        code: chatVideo || (wire === "responses" && !combo) ? "unsupported_input_modality" : "invalid_request_error" });
+      expect(refused.error.message).toContain(chatVideo
+        ? "OpenCodex cannot translate video input on this route"
+        : "TRAE CN ACP supports text conversations only");
       expect(open).not.toHaveBeenCalled(); expect(fallbackCalls).toBe(0);
     } finally { open.mockRestore(); }
   });

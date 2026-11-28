@@ -252,6 +252,31 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "medium", "high"] } },
   },
+  // #8918: Cursor's models pages list Gemini 4 Hydrogen (low..xhigh) and Gemini 4 Carbon
+  // (low..high), shaped like Argon. The issue reporter's account served both through Cursor.
+  "gemini-4-hydrogen": {
+    displayName: "Gemini 4 Hydrogen",
+    window: CONTEXT_GEMINI,
+    defaultVariant: "regular",
+    variants: { regular: { levels: ["low", "medium", "high", "xhigh"] } },
+  },
+  // 261126 preemptive cold-start fallback: Cursor's models page lists Gemini 4 Neon with model ID
+  // gemini-4-neon (cursor.com/docs/models/gemini-4-neon). cursorUmbrellaRows() exposes this row in
+  // CURSOR_STATIC_MODELS before live discovery confirms the account serves it. Cursor publishes no
+  // effort section for Neon, so the ladder is Google's (low..xhigh) and no default is claimed. The
+  // window is Cursor's published 1M maximum, the same value the Hydrogen row uses for that pair.
+  "gemini-4-neon": {
+    displayName: "Gemini 4 Neon",
+    window: CONTEXT_GEMINI,
+    defaultVariant: "regular",
+    variants: { regular: { levels: ["low", "medium", "high", "xhigh"] } },
+  },
+  "gemini-4-carbon": {
+    displayName: "Gemini 4 Carbon",
+    window: CONTEXT_GEMINI,
+    defaultVariant: "regular",
+    variants: { regular: { levels: ["low", "medium", "high"] } },
+  },
   // Seeded from the live GetUsableModels roster attached to #4820, which advertises six
   // muse-spark-1.3 effort variants. The ladder stops at xhigh on purpose: see the matching
   // effort-map entry for why Cursor advertising `-max` is not evidence that it runs.

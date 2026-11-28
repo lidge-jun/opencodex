@@ -94,7 +94,8 @@ pub fn ensure_port_available_for_attach(port: u16, owned_pid: Option<u32>) -> Re
     Ok(())
 }
 
-fn send_attested_shutdown(port: u16, shutdown_secret: &str) -> bool {
+/// The authenticated shutdown `stop_owned_daemon` sends (public for the link WebSocket's integration test).
+pub fn send_attested_shutdown(port: u16, shutdown_secret: &str) -> bool {
     let Ok(nonce) = random_hex(32) else {
         return false;
     };

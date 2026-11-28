@@ -1,4 +1,4 @@
-import { accountAutoPauseFenceMatchesDisk, type AccountAutoPauseFence } from "../config/account-auto-pause-revisions";
+import { accountAutoPauseFenceMatchesDisk, effectiveAccountAutoPause, type AccountAutoPauseFence } from "../config/account-auto-pause-revisions";
 import { randomUUID } from "node:crypto";
 import { clearModelCache } from "../codex/model-cache";
 import type { OcxConfig } from "../types";
@@ -11,6 +11,7 @@ import { resolveProviderApiKey } from "./api-key-resolve";
 import { captureProviderApiKeySelection, commitProviderApiKeySelection } from "./api-key-selection";
 import { forgetApiKeyRotationCursor } from "./key-failover";
 import { clearProviderQuotaCacheFor } from "./quota/report-cache";
+import { clearPassiveKeyAccount } from "./passive-key-observation";
 
 export { ProviderApiKeyPausedError, isProviderApiKeyPaused } from "./api-key-pause-state";
 
@@ -37,7 +38,7 @@ export function setProviderApiKeyPausedWithResult(config: OcxConfig, name: strin
     };
     const entry = pool.find(e => e.id === id);
     if (!entry || automatic && (entry.disabled || entry.key !== automatic.selection.reference || entry.pauseRevision !== automatic.pauseRevision
-      || provider.accountAutoPause?.enabled !== true || resolveProviderApiKey(entry.key) !== automatic.resolvedKey)) {
+      || !effectiveAccountAutoPause(provider) || resolveProviderApiKey(entry.key) !== automatic.resolvedKey)) {
       return { changed: false, value: resultForCurrentSelection(false) };
     }
     const beforeApiKey = provider.apiKey;
@@ -81,6 +82,8 @@ export function setProviderApiKeyPausedWithResult(config: OcxConfig, name: strin
       clearProviderQuotaCacheFor(name);
     }
   }
+  // A pause changes which credential may own a passive observation.
+  if (ok) clearPassiveKeyAccount(name, id);
   return response;
 }
 

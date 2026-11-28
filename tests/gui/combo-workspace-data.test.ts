@@ -21,6 +21,51 @@ import {
 } from "../../gui/src/combo-workspace-data";
 import { comboImageBlockedTargets, comboImagesSupported, comboVisionSidecarTargets } from "../../gui/src/combo-capabilities";
 
+test("ordinary combo saves omit metered metadata from the loaded draft", () => {
+  const [draft] = parseComboList({
+    combos: [{ id: "chain", targets: [{ provider: "a", model: "m", metered: true }] }],
+  });
+  expect(draft!.targets[0]?.metered).toBe(true);
+  expect(toPutBody(draft!).combo.targets[0]).not.toHaveProperty("metered");
+});
+
+test("a dashboard edit sends only the paid-call and failover settings changed since loading", () => {
+  const [stored] = parseComboList({ combos: [{
+    id: "chain", strategy: "failover", allowMeteredTargets: true, quotaOnlyFallback: true,
+    targets: [{ provider: "a", model: "m", metered: true }, { provider: "b", model: "m2" }],
+  }] });
+  for (const untouched of [toPutBody(stored!).combo, toPutBody(stored!, { stored: stored! }).combo]) {
+    for (const key of ["allowMeteredTargets", "quotaOnlyFallback", "preserveFallbackModel"]) {
+      expect(untouched).not.toHaveProperty(key);
+    }
+    expect(untouched.targets.some(target => Object.hasOwn(target, "metered"))).toBe(false);
+  }
+  const edited = {
+    ...stored!,
+    allowMeteredTargets: false,
+    preserveFallbackModel: true,
+    targets: [{ ...stored!.targets[1]!, metered: true }, stored!.targets[0]!],
+  };
+  const body = toPutBody(edited, { stored: stored! }).combo;
+  expect(body).toMatchObject({ allowMeteredTargets: false, preserveFallbackModel: true });
+  expect(body).not.toHaveProperty("quotaOnlyFallback");
+  expect(body.targets).toEqual([{ provider: "b", model: "m2", metered: true }, { provider: "a", model: "m" }]);
+});
+
+test("a new combo sends every enabled paid-call and failover setting", () => {
+  const draft: ComboItem = {
+    ...emptyDraft("quota-route"),
+    allowMeteredTargets: true,
+    quotaOnlyFallback: true,
+    preserveFallbackModel: false,
+    targets: [{ provider: "a", model: "m", metered: false }, { provider: "b", model: "m", metered: true }],
+  };
+  const body = toPutBody(draft, { stored: null }).combo;
+  expect(body).toMatchObject({ allowMeteredTargets: true, quotaOnlyFallback: true });
+  expect(body).not.toHaveProperty("preserveFallbackModel");
+  expect(body.targets).toEqual([{ provider: "a", model: "m" }, { provider: "b", model: "m", metered: true }]);
+});
+
 const configuredProviders = {
   a: {},
   b: {},

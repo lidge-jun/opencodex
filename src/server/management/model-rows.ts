@@ -10,7 +10,7 @@
  */
 import type { CatalogModel } from "../../codex/catalog";
 import { antigravityFamilyDisabled } from "../../providers/antigravity-effort-families";
-import { observeModelCacheRevision } from "../../codex/model-cache";
+import { expireModelCache, getProviderDiscoveryStatus, observeModelCacheRevision } from "../../codex/model-cache";
 import { isPassiveRead } from "../../lib/passive-read";
 import {
   captureExportConfigAdmission,
@@ -28,6 +28,7 @@ import {
   nativeModelRows,
   nativeReasoningEfforts,
   uniqueCatalogModelsForPublicList,
+  isNativeOpenAiProviderEnabled,
   shouldIncludeAccountBoundNativeOpenAi,
   catalogModelEfforts,
 } from "../../codex/catalog";
@@ -40,6 +41,7 @@ import {
 } from "../../clients/config-export/contracts";
 import { customRowExportMetadata } from "./model-row-export-metadata";
 import { attachExportAliasSelectors } from "../../clients/config-export/alias-selectors";
+import { attachNestedSelectors } from "../../clients/config-export/nested-selectors";
 import { resolveExportReasoningAxes } from "../../clients/config-export/reasoning-metadata";
 import { providerContextCap } from "../../providers/context-cap";
 import { isVisionReasoningEffort, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
@@ -48,13 +50,41 @@ import type { OcxConfig } from "../../types";
 import { enrichProviderFromRegistry } from "../../providers/derive";
 import { ensureCodexEntitlementFreshness } from "../../codex/model-entitlements";
 import { fetchAllModels } from "./shared";
-import { CatalogGatherBusyError } from "../../codex/catalog/routed-gather";
+import { CatalogGatherBusyError, gatherRoutedModels, type GatherRoutedModelsOptions } from "../../codex/catalog/routed-gather";
+import { isProviderDiscoveryInFlight, withProviderDiscoveryInFlight } from "../../codex/catalog/provider-models";
 import { captureModelDiscoveryBaseline, finalizeModelDiscovery } from "../../providers/new-model-policy-runtime";
 import { reconcileSuccessfulModelDiscoveries } from "../../providers/new-model-policy";
 import { initialModelSelectionPending, pendingModelSelectionProviders } from "../../providers/initial-model-selection";
+import { captureInitialSelectionBaseline, finalizeInitialModelSelection } from "../../providers/initial-model-selection-runtime";
 import { catalogFastRowEligible, fastRowId } from "../fast-row";
 import { knownEffortRowIds } from "../effort-row";
 import { visionSidecarConsumerClassifier } from "../../vision/eligibility";
+
+/** Admit one manual discovery without joining work started by any caller. */
+export async function refreshProviderDiscovery(config: OcxConfig, name: string) {
+  const provider = config.providers[name];
+  if (!provider || provider.disabled || provider.adapter === "jev-decision") return undefined;
+  if (isProviderDiscoveryInFlight(name)) return "in-progress" as const;
+  if (!expireModelCache(name)) return getProviderDiscoveryStatus(name);
+  return withProviderDiscoveryInFlight(name, async () => {
+    const baseline = captureModelDiscoveryBaseline(config);
+    const initial = initialModelSelectionPending(provider) ? captureInitialSelectionBaseline(config) : null;
+    const outcomes: NonNullable<GatherRoutedModelsOptions["providerModelOutcomes"]> = [];
+    const revisions = new Map<string, string>();
+    const models = await gatherRoutedModels(config, {
+      onlyProvider: name, providerModelOutcomes: outcomes, providerContentRevisions: revisions,
+    });
+    // A later full gather can start while this action runs. Its publication is not this action's receipt.
+    if (observeModelCacheRevision(name) !== revisions.get(name)) return undefined;
+    const discovery = getProviderDiscoveryStatus(name);
+    if (discovery?.status === "ok" && outcomes.some(outcome => outcome.state === "authoritative")) {
+      if (initial) finalizeInitialModelSelection(config, { ...initial, providers: [name] },
+        uniqueCatalogModelsForPublicList(models), [name]);
+      if (!finalizeModelDiscovery(config, baseline, models, [name], revisions)) throw new CatalogGatherBusyError();
+    }
+    return discovery;
+  });
+}
 
 /**
  * One row of the `/api/models` list. Routed rows spread a `CatalogModel`, so the shape is
@@ -307,6 +337,7 @@ export async function listManagementModelRows(
   options: {
     entitlementWaitMs?: number;
     models?: readonly CatalogModel[];
+    allowSuperseded?: boolean;
     /** Filled with each provider's content revision as of the moment its rows were chosen. */
     providerContentRevisions?: Map<string, string>;
   } = {},
@@ -322,7 +353,11 @@ export async function listManagementModelRows(
   // A passive read (#6959) also skips the entitlement refresh, which reaches the Codex accounts.
   const models = options.models === undefined
     ? isPassiveRead() ? [] : (await Promise.all([
-      fetchAllModels(config, options.providerContentRevisions, projection => { config = projection; }),
+      fetchAllModels(config, {
+        providerContentRevisions: options.providerContentRevisions,
+        allowSuperseded: options.allowSuperseded,
+        publishProjection: projection => { config = projection; },
+      }),
       ensureCodexEntitlementFreshness(config, {
         waitMs: options.entitlementWaitMs ?? 3_000,
       }),
@@ -676,8 +711,15 @@ export async function loadExportModels(
   // Management deliberately lists the full roster so hidden models can be enabled.
   // A client picker must also honor the provider selection, not just its blocklist.
   const visibleRouted = new Set(filterCatalogVisibleModels(rows.filter(row => !row.native), admitted));
-  const projected = attachExportAliasSelectors(admitted, rows.map(toExportModel));
-  const exported = projected.filter((_, index) => !rows[index]!.disabled && (rows[index]!.native || visibleRouted.has(rows[index]!)));
+  // A native row is only selectable while the canonical OpenAI provider can route it. The
+  // router answers a bare `gpt-*` with `NoEnabledOpenAiProviderError` as soon as that provider
+  // is disabled, so exporting the row would hand a client a selector the proxy refuses. The
+  // account-qualified rows that `listManagementModelRows` only builds under
+  // `shouldIncludeAccountBoundNativeOpenAi` are therefore already absent here in that state.
+  const nativeRoutable = isNativeOpenAiProviderEnabled(admitted);
+  const projected = attachNestedSelectors(admitted, attachExportAliasSelectors(admitted, rows.map(toExportModel)));
+  const exported = projected.filter((_, index) => !rows[index]!.disabled
+    && (rows[index]!.native ? nativeRoutable : visibleRouted.has(rows[index]!)));
   // Retain the FINAL projection, not an input to it. A preview that rebuilt from raw provider
   // caches would miss static and forward providers, which never populate one, and would skip the
   // retention, metadata, combo and filtering this function applies afterwards.

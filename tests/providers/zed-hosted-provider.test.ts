@@ -1,4 +1,6 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { waitForProviderRequestSlot, withProviderRequestSlot } from "../../src/providers/request-pacing";
+import { pacingHeaderDeadline } from "../../src/web-search/header-deadline";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +31,7 @@ import { createRequestExecutionBudget } from "../../src/lib/request-execution-bu
 import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY } from "../../src/lib/spend-reservation-ledger";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
 import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
+import { providerFetch } from "../../src/server/responses/fetch-helpers";
 
 const originalFetch = globalThis.fetch;
 
@@ -224,18 +227,25 @@ describe("Zed Hosted AI provider", () => {
     expect(body.provider_request).toMatchObject({ model: "gpt-5.6", stream: true });
 
     let completionRequest: Request | undefined;
+    globalThis.fetch = (async (input, init) => {
+      completionRequest = new Request(input, init);
+      return new Response([
+        `data: ${JSON.stringify({ type: "response.completed", response: { output: [] } })}`,
+        "data: [DONE]",
+        "",
+      ].join("\n"), {
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    }) as typeof globalThis.fetch;
+    const budget = createRequestExecutionBudget();
+    const usedAtPublication: number[] = [];
     const response = await adapter.fetchResponse!(request, {
-      executor: (async (input, init) => {
-        completionRequest = new Request(input, init);
-        return new Response([
-          `data: ${JSON.stringify({ type: "response.completed", response: { output: [] } })}`,
-          "data: [DONE]",
-          "",
-        ].join("\n"), {
-          headers: { "Content-Type": "text/event-stream" },
-        });
-      }) as typeof globalThis.fetch,
+      executor: providerFetch(provider, undefined, {
+        onPhysicalDispatch: () => { usedAtPublication.push(budget.used); },
+      }),
+      sendBudget: budget,
     });
+    expect(usedAtPublication).toEqual([1]);
     expect(response.ok).toBe(true);
     expect(completionRequest?.url).toBe("https://cloud.zed.dev/completions");
     expect(completionRequest?.headers.get("authorization")).toBe("Bearer llm-token-1");
@@ -931,17 +941,52 @@ describe("Zed inference send accounting", () => {
 });
 
 describe("Zed stream framing", () => {
-  async function translate(chunks: string[], provider: ZedProvider = "anthropic"): Promise<Array<Record<string, unknown>>> {
+  async function translate(chunks: Array<string | Uint8Array>, provider: ZedProvider = "anthropic"): Promise<Array<Record<string, unknown>>> {
     const encoder = new TextEncoder();
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        for (const chunk of chunks) controller.enqueue(typeof chunk === "string" ? encoder.encode(chunk) : chunk);
         controller.close();
       },
     });
     const text = await new Response(zedEventStream(body, provider)).text();
     return text.split("\n\n").filter(Boolean).map(frame => JSON.parse(frame.replace(/^data: /, "")) as Record<string, unknown>);
   }
+
+  test("bounds newline search work for a large fragmented frame", async () => {
+    const event = { type: "content_block_delta", delta: { text: "a".repeat(256 * 256) } };
+    const wire = `${JSON.stringify({ event })}\n${JSON.stringify({ status: "stream_ended" })}\n`;
+    const chunks = Array.from({ length: Math.ceil(wire.length / 256) }, (_, i) => wire.slice(i * 256, (i + 1) * 256));
+    const indexOf = String.prototype.indexOf;
+    const includes = String.prototype.includes;
+    let scannedChars = 0;
+    const recordScan = (text: string, search: string, start: number, found: number) => {
+      if (search === "\n") scannedChars += Math.max(0, (found < 0 ? text.length : found + 1) - start);
+    };
+    const indexing = spyOn(String.prototype, "indexOf").mockImplementation(function (search, start = 0) {
+      const found = Reflect.apply(indexOf, this, [search, start]);
+      recordScan(String(this), search, start, found);
+      return found;
+    });
+    const checking = spyOn(String.prototype, "includes").mockImplementation(function (search, start = 0) {
+      recordScan(String(this), search, start, Reflect.apply(indexOf, this, [search, start]));
+      return Reflect.apply(includes, this, [search, start]);
+    });
+    let frames: Array<Record<string, unknown>>;
+    try { frames = await translate(chunks); } finally { indexing.mockRestore(); checking.mockRestore(); }
+    expect(frames).toEqual([event, { type: "message_stop" }]);
+    expect(scannedChars).toBeLessThanOrEqual(4 * wire.length);
+  });
+
+  test("preserves split UTF-8, CRLF, coalesced lines and terminal suppression", async () => {
+    const event = { type: "content_block_delta", delta: { text: "é한😀" } };
+    const wire = `: keepalive\r\ndata: ${JSON.stringify({ event })}\r\n${JSON.stringify({ event: { type: "ping" } })}\n${JSON.stringify({ status: "stream_ended" })}\n{malformed after terminal\n`;
+    const bytes = new TextEncoder().encode(wire);
+    for (const size of [1, 7, bytes.length]) {
+      const chunks = Array.from({ length: Math.ceil(bytes.length / size) }, (_, i) => bytes.subarray(i * size, (i + 1) * size));
+      expect(await translate(chunks)).toEqual([event, { type: "ping" }, { type: "message_stop" }]);
+    }
+  });
 
   test("forwards events and stops at the explicit stream-ended status", async () => {
     const frames = await translate([
@@ -1028,3 +1073,109 @@ describe("Zed OAuth identity", () => {
       .toBe("zed-user-7 zed-access-token");
   });
 });
+
+for (const [transport, outcome] of [
+  ["direct", "denied"], ["direct", "cancelled"], ["direct", "completed"],
+  ["search", "denied"], ["search", "cancelled"], ["search", "completed"],
+  ["media", "denied"], ["media", "cancelled"], ["media", "completed"],
+] as const) {
+  test(`Zed preparation receipt isolation (${transport}, ${outcome})`, async () => {
+    const preparation = [
+      jsonResponse({ default_organization_id: "org-1" }),
+      jsonResponse({ token: "llm-token-1" }),
+      jsonResponse({ models: [{ id: "gpt-5.6", provider: "open_ai" }] }),
+    ];
+    globalThis.fetch = (async () => preparation.shift()!) as typeof globalThis.fetch;
+    const provider: OcxProviderConfig = { adapter: "zed", baseUrl: "https://cloud.zed.dev", authMode: "oauth", apiKey: "access-token",
+      requestPacing: transport === "direct" ? { enabled: true, maxConcurrentRequests: 1 } : undefined };
+    const parsed = parseRequest({ model: "gpt-5.6", input: "hello", stream: true });
+    parsed._zedAuthContext = { userId: "user-1" };
+    const adapter = withTestTranslatorBudget(createZedAdapter(provider));
+    const request = await adapter.buildRequest(parsed);
+    clearZedCaches();
+
+    const abort = new AbortController();
+    const paths: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+      paths.push(path);
+      if (path === "/client/users/me" && outcome === "cancelled") {
+        abort.abort();
+        return jsonResponse({ default_organization_id: "org-1" });
+      }
+      if (outcome === "completed") {
+        if (path === "/client/users/me") return jsonResponse({ default_organization_id: "org-1" });
+        if (path === "/client/llm_tokens") return jsonResponse({ token: "llm-token-2" });
+        if (path === "/completions") return new Response("completed");
+      }
+      return new Response("denied", { status: 403 });
+    }) as typeof globalThis.fetch;
+    let published = 0;
+    const budget = createRequestExecutionBudget();
+    let charged = 0;
+    const providerName = `zed-prep-${outcome}`;
+    const run = async (slot?: Awaited<ReturnType<typeof waitForProviderRequestSlot>>) => {
+      const release = slot && spyOn(slot, "release");
+      const competitorAbort = new AbortController();
+      let competitorAdmitted = false;
+      let competitor: Promise<void> | undefined;
+      const send = globalThis.fetch;
+      globalThis.fetch = (async (input, init) => {
+        const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+        if (slot && path === (outcome === "completed" ? "/client/llm_tokens" : "/client/users/me")) {
+          competitor = waitForProviderRequestSlot(providerName, provider, undefined, competitorAbort.signal)
+            .then(next => {
+              competitorAdmitted = true;
+              next.release();
+            }, error => {
+              if (!competitorAbort.signal.aborted) throw error;
+            });
+        }
+        if (path === "/completions") {
+          expect(slot?.released ?? false).toBe(false);
+          expect(competitorAdmitted).toBe(false);
+        }
+        return send(input, init);
+      }) as typeof globalThis.fetch;
+      const providerExecutor = providerFetch(provider, undefined, {
+        providerName, pacingSlotAcquired: !!slot, pacingSlot: slot,
+        onPhysicalDispatch: () => { published++; },
+      });
+      const deadline = pacingHeaderDeadline(200_000, abort.signal);
+      const executor = transport === "search" ? deadline.pacedFetch(providerExecutor)
+        : transport === "media" ? providerExecutor.unpacedFetch! : providerExecutor;
+      try {
+        const response = adapter.fetchResponse!(request, {
+          executor,
+          abortSignal: transport === "search" ? deadline.signal : abort.signal,
+          sendBudget: budget,
+          onPhysicalSend: () => { charged++; },
+        });
+        if (outcome === "completed") {
+          const upstream = await response;
+          expect(competitorAdmitted).toBe(false);
+          expect(release?.mock.calls.length ?? 0).toBe(0);
+          expect(await upstream.text()).toBe("completed");
+          expect(paths).toEqual(["/client/users/me", "/client/llm_tokens", "/completions"]);
+          expect([charged, budget.used, published]).toEqual([1, 1, 1]);
+        } else {
+          await expect(response).rejects.toThrow();
+          expect(paths).toEqual(["/client/users/me"]);
+          expect([charged, budget.used, published]).toEqual([0, 0, 0]);
+        }
+      } finally {
+        deadline.clear();
+        if (outcome === "completed" && !slot?.released) competitorAbort.abort();
+      }
+      return { competitor, release, admitted: () => competitorAdmitted };
+    };
+    if (transport === "direct") {
+      const result = await withProviderRequestSlot(providerName, provider, undefined, abort.signal, run);
+      await result.competitor;
+      expect(result.admitted()).toBe(true);
+      expect(result.release).toHaveBeenCalledTimes(1);
+    } else {
+      await run();
+    }
+  });
+}

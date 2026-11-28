@@ -94,6 +94,15 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
     )?;
+    #[cfg(target_os = "macos")]
+    let hide_dock = CheckMenuItem::with_id(
+        app,
+        "hide-dock-icon",
+        "Hide Dock icon",
+        true,
+        app.state::<crate::dock::Preference>().enabled(),
+        None::<&str>,
+    )?;
     // The tray is built before the startup sequence has decided anything, so nothing owns a
     // runtime yet. Ownership arrives later and reaches this item through [`set_owned`].
     let owned = app
@@ -127,6 +136,8 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             &cli_command,
             &PredefinedMenuItem::separator(app)?,
             &login,
+            #[cfg(target_os = "macos")]
+            &hide_dock,
             &stop,
             &PredefinedMenuItem::separator(app)?,
             &check_updates,
@@ -242,6 +253,8 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
                     }
                 }
             }
+            #[cfg(target_os = "macos")]
+            "hide-dock-icon" => crate::dock::toggle(app, &hide_dock),
             "stop-proxy" => {
                 // Through the coordinator, not beside it: Stop pressed twice, Stop then Quit, and
                 // Stop during an update all have to be one execution over one child.
@@ -257,7 +270,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(error) = updater::install_pending(&app).await {
-                        crate::logging::log_once("updater install failed", &error);
+                        error.log();
                     }
                 });
             }

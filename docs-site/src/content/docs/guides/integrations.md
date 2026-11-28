@@ -33,6 +33,8 @@ file, and removes it again. Each client below has its own switch:
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
 | T3 Code | `$T3CODE_HOME/userdata/settings.json` (default `~/.t3/userdata/settings.json`) | JSON | immediately — T3 Code watches the file | non-secret loopback marker |
 
+From the CLI, `ocx integration client enable|disable --client <id>` changes this machine only, like the dashboard toggle. On a Remote Link Home that uses route intent, the change is recorded as the Home's own decision, so `ocx sync` keeps it, and linked Children keep their defaults. To change what Children inherit, use `ocx route to <client> on|off`. On a Remote Link Child a plain toggle is refused and prints the Home command for that device; use `ocx route to <client> off --local` there to opt that Child out. See [Remote Link](/guides/remote-link/#route-clients-per-device).
+
 ## Gentle Shell
 
 Choose **Connect → Gentle Shell**, or use the same managed-integration commands:
@@ -250,6 +252,7 @@ fragment: Apply and Refresh replace it, Disable removes it, and Restore puts bac
 snapshot. These operations do not change the user's default model or the native
 `deepseek-official` provider.
 The managed DSH integration is currently loopback-only and never writes a real credential.
+With a live proxy, explicit sync and background catalog refresh update an already-connected DSH block.
 
 MiniMax Code follows `MINIMAX_DATA_DIR`, then `MAVIS_DATA_DIR`, before falling
 back to `~/.minimax`. Its managed block owns only `custom_provider.opencodex`.
@@ -264,7 +267,7 @@ Prime Agent follows `PRIME_AGENT_CODING_AGENT_DIR` before falling back to
 disagree about which file is meant. Its managed block owns only
 `providers.opencodex`, so other providers and any `modelOverrides` you have set
 stay untouched. Prime Agent reads `models.json` when a session starts, so start
-a new session after connecting it.
+a new session after connecting it. The generated block sets `compat.supportsDeveloperRole` to `false`, so the agent sends its system prompt as `system`; several OpenAI-compatible upstreams reject `developer` with a 400.
 
 Aside keeps a separate model catalog for each registered profile, including local profiles. OpenCodex lists
 all registered profiles, including local profiles, and can synchronize them together or control
@@ -273,7 +276,7 @@ Aside connection enables all profiles by default; individual exclusions survive 
 
 One caveat specific to Aside: the running app rewrites `models.json` itself, so
 fully quit and reopen Aside after applying, the same way Claude Desktop needs a
-restart. Aside's block is loopback-only and never carries a real credential.
+restart. Aside's block is loopback-only and never carries a real credential. The generated block sets `compat.supportsDeveloperRole` to `false`, so the agent sends its system prompt as `system`; several OpenAI-compatible upstreams reject `developer` with a 400.
 
 The managed Raycast integration supports **macOS and Windows**. Custom Providers
 is a **Raycast Pro** feature: on a free plan the file is still written, but
@@ -391,10 +394,10 @@ normalized. The exception is something JSON cannot rewrite exactly — a non-fin
 number like `1e999`, a number a rewrite would round (a very large integer, or one
 so small it collapses to zero), `-0`, the same key written twice in one object, or nesting deeper
 than 1000 levels — which locks the switch instead, so nothing is silently changed or dropped.
-**OMP, DSH and Hermes** are unaffected by sibling edits too, for a different reason: their writers
+**OMP, DSH, Hermes and Kimi Code** are unaffected by sibling edits too, for a different reason: their writers
 patch only their own managed provider ranges byte-wise, so the rest of the
 file is never rewritten. For the remaining formats that can carry comments
-(OpenClaw, Kimi Code, gjc, MiniMax Code, Raycast — JSON5 and TOML
+(OpenClaw, gjc, MiniMax Code, Raycast — JSON5
 written as whole documents, or generic YAML without source preservation), or
 whenever our own entries were edited, the switch locks and disable refuses rather
 than guessing which edits were yours.
@@ -505,12 +508,14 @@ exported model list before retrying. **Replace** does not bypass the limit. If t
 configuration must stay larger, manage it manually instead of using the Connect switch.
 
 **Formatting is generally not preserved.** Applying parses a config and writes it back
-out, so JSON, JSON5 and TOML may be reformatted and comments in JSON5 or TOML are lost.
-OMP, DSH and Hermes are the exceptions: OMP and Hermes patch only `providers.opencodex`.
+out, so JSON and JSON5 may be reformatted and comments in JSON5 are lost.
+OMP, DSH, Hermes and Kimi Code are the exceptions: OMP and Hermes patch only `providers.opencodex`.
 DSH patches only `[id=llm-pi-ai].config.providers.opencodex` in the Desktop profile patch,
 or `llm-pi-ai.providers.opencodex` in `settings.yaml` when there is no Desktop profile.
 Their YAML writers preserve unrelated provider comments and formatting byte-for-byte. If that exact
-source range cannot be identified safely, the operation refuses instead. For other clients, use
+source range cannot be identified safely, the operation refuses instead. Kimi Code's writer replaces
+only its own `[providers.opencodex]` and `[models."opencodex/…"]` tables in `config.toml`, keeping
+comments and `[[hooks]]` tables, and refuses when those tables are written another way. For other clients, use
 Restore when you need the previous file bytes: the snapshot is a verbatim copy.
 
 **If a value cannot be rewritten faithfully, the switch refuses instead.** The round
@@ -1226,3 +1231,44 @@ OpenCodex refuses those ambiguous settings. It also refuses an
 unsafe target or a row edited since apply. The integration is loopback only and
 never copies provider credentials. Factory documents the [BYOK schema](https://docs.factory.ai/model-independence/byok)
 and [personal settings path](https://docs.factory.ai/droid-cli/settings).
+
+## Antigravity app and agy CLI
+
+Google's Antigravity desktop app (2.15 and newer) and the `agy` CLI (1.2.15 and newer) can run through
+OpenCodex's gateway. Connect from the dashboard, or from a terminal:
+
+```bash
+ocx connect antigravity --model <id>   # desktop app: ~/.antigravity/settings.json
+ocx connect agy                        # agy CLI: a marked shell function in your profiles
+ocx connect antigravity status         # or: ocx connect agy status
+ocx disconnect antigravity             # or: ocx disconnect agy
+```
+
+Use `--model` only with `ocx connect antigravity` to set the desktop app's default model.
+
+Connect records what it replaced. Disconnect puts the original bytes back when the file is unchanged, and
+otherwise reverts only OpenCodex's own entries and keeps your other edits. Antigravity can restore
+settings after JSON keys are reordered and keeps the file and restore record when a managed setting conflicts.
+To resolve an Antigravity conflict, put the managed setting back to the value OpenCodex applied and
+retry. If OpenCodex reports `agy-profile-restore-required`, open the shell profile named in the error.
+Restore the complete `agy` block from a copy, including both marker lines and the function between
+them, then retry disconnect or uninstall. OpenCodex removes the whole block and keeps edits outside
+it. You can also restore the saved original profile, which replaces any later edits. An `agy` profile symlink must resolve
+to another supported profile for the same shell family under your home. Antigravity settings must resolve
+to the exact `~/.antigravity/settings.json` path. Restart Antigravity, or open a new terminal for `agy`,
+to apply a change. During disconnect, `agy` skips profiles without a restore record if they cannot be
+resolved or read. `ocx uninstall` disconnects clients with saved restore records
+before removing configuration. If a client cannot be restored, uninstall stops and keeps its record.
+
+OpenCodex writes a placeholder key, never a real credential, so it refuses to connect when the proxy bind
+requires one. A file with comments or trailing commas is also refused and left untouched. Antigravity reads
+an organization `admin_settings.json` first, then the `AGY_LLM_GATEWAY_*` variables, then the user settings;
+status warns about organization settings and environment overrides it can see. It checks the
+OpenCodex process environment. An override set only in the Antigravity process will not appear.
+On Windows `agy` is untested because Google lists it for macOS and Linux only.
+
+To preserve Gemini JSON, sign in with `ocx login google-antigravity` and turn on **Native Gemini
+passthrough** in the Google Antigravity **Accounts** tab. The JSON setting is
+`protocols.rollout.geminiNativeAntigravity`. This opt-in
+applies to `/v1beta` Gemini generation routed to the canonical `google-antigravity` OAuth
+provider. Other routes use the Chat bridge. See [Native Gemini with Antigravity](/reference/proxy-formats/#native-gemini-with-antigravity).

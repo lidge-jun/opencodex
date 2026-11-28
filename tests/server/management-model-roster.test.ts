@@ -74,6 +74,59 @@ describe("a supplied roster replaces the gather and keeps the projection", () =>
   });
 });
 
+/**
+ * A native row is only a real choice while the canonical OpenAI provider can route it. This is
+ * the export half of a defect the launcher had too: `/api/client-config` and every integration
+ * route read this roster, so listing bare `gpt-*` rows under a disabled provider handed a client
+ * a picker whose selections the router refuses with `NoEnabledOpenAiProviderError`.
+ */
+describe("native rows follow the provider that can actually serve them", () => {
+  const FORWARDED = {
+    adapter: "openai-responses" as const,
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    authMode: "forward" as const,
+  };
+  const ROSTER: CatalogModel[] = [{ id: "supplied-model", provider: "supplied" }];
+
+  function withOpenAi(provider: Record<string, unknown> | undefined): OcxConfig {
+    return {
+      ...CONFIG,
+      providers: {
+        supplied: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" },
+        ...(provider === undefined ? {} : { openai: provider }),
+      },
+    } as OcxConfig;
+  }
+
+  const nativesOf = (models: readonly { native?: boolean; namespaced: string }[]) =>
+    models.filter(model => model.native).map(model => model.namespaced);
+
+  test("an enabled provider keeps them, in both account modes", async () => {
+    for (const codexAccountMode of ["direct", "pool"] as const) {
+      const exported = await loadExportModels(withOpenAi({ ...FORWARDED, codexAccountMode }), ROSTER);
+      expect(nativesOf(exported).length).toBeGreaterThan(0);
+    }
+  });
+
+  test("a disabled provider drops them, in both account modes", async () => {
+    for (const codexAccountMode of ["direct", "pool"] as const) {
+      const exported = await loadExportModels(
+        withOpenAi({ ...FORWARDED, codexAccountMode, disabled: true }), ROSTER,
+      );
+      expect(nativesOf(exported)).toEqual([]);
+      // The routed rows are untouched: only the native half depends on this provider.
+      expect(exported.some(model => model.namespaced === "supplied/supplied-model")).toBe(true);
+    }
+  });
+
+  test("an absent provider drops them too", async () => {
+    // A fresh install materializes `providers.openai`, so this is the pre-materialization shape
+    // of a non-OpenAI-only config. The router refuses bare slugs here as well.
+    const exported = await loadExportModels(withOpenAi(undefined), ROSTER);
+    expect(nativesOf(exported)).toEqual([]);
+  });
+});
+
 describe("a preview reads only a roster an authoritative load already finished", () => {
   test("a cold process has none, and an ordinary load leaves the final projection behind", async () => {
     resetExportSnapshotForTests();

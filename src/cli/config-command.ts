@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { clearCodexAccountPin } from "../codex/account-priority";
 import { getConfigPath, mutatePersistedConfig, readConfigDiagnostics, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate, withConfigMutationLockSync } from "../config";
+import { MALFORMED_CODEX_AUTH_METHOD_WARNING } from "../config/load-degrade";
 import { readClientConnectionState } from "../client/state";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import { readCliConfigForMutation } from "./config-mutation";
@@ -18,7 +19,8 @@ const USAGE = `Usage:
   ocx config unset <dot.path> [--json]
   ocx config validate [path|-] [--json]
   ocx config export <path|-> [--json]
-  ocx config import <path|-> --yes [--json]`;
+  ocx config import <path|-> --yes [--json]
+Entering v2-plaintext requires: ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages`;
 
 /**
  * Keys whose VALUE is a credential and must never be printed by display commands.
@@ -148,7 +150,9 @@ function pathSegments(path: string): string[] {
  * management listener (`hub.managementIngress`)
  * (`LIVE_TOPOLOGY_KEYS`); `corsAllowOrigins` reaches the running config only when some later live
  * save adopts the file. Saying only "Set <path>." left an operator retrying a refused
- * `ocx hub invite` against the old list. Limited to these keys, so the note never claims a restart
+ * `ocx hub invite` against the old list. `codexAuthMethod` (#8082) is read from the running config by the
+ * Codex login route, so a device-only policy set here would not stop a browser login until a restart.
+ * Limited to these keys, so the note never claims a restart
  * that is not needed.
  */
 export function startupOnlyConfigNotes(path: string): string[] {
@@ -158,6 +162,9 @@ export function startupOnlyConfigNotes(path: string): string[] {
   }
   if (segments[0] === "hub" && (segments.length === 1 || segments[1] === "managementPublicOrigin" || segments[1] === "managementIngress")) {
     return [`A running OpenCodex applies ${segments.join(".")} only when it starts; restart it to use the new value.`];
+  }
+  if (segments[0] === "codexAuthMethod") {
+    return ["A running OpenCodex keeps its previous codexAuthMethod for Codex pool account logins until it restarts; restart it to apply the new value now."];
   }
   return [];
 }
@@ -230,6 +237,12 @@ function validate(value: unknown): OcxConfig {
   return normalizeVisionConfig(result.config);
 }
 
+function requireDedicatedPlaintextTransition(current: OcxConfig, candidate: OcxConfig): void {
+  if (candidate.multiAgentMode === "v2-plaintext" && current.multiAgentMode !== "v2-plaintext") {
+    throw new CliUsageError("Entering v2-plaintext requires ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages. Task text may remain in history, provider requests and debug state. Complete that transition before restoring a config with this mode.");
+  }
+}
+
 export async function handleConfigCommand(argv: string[]): Promise<number> {
   let outcome = 0;
   const status = await runCliAction(async () => {
@@ -293,6 +306,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
         const candidate = structuredClone(fresh) as unknown as Record<string, unknown>;
         setPath(candidate, path, raw === undefined ? undefined : parseValue(raw), action === "unset");
         const config = validate(candidate);
+        requireDedicatedPlaintextTransition(fresh, config);
         savedValue = action === "unset" ? null : getPath(config, path);
         // Setting the order here is the operator restating it, exactly as through
         // `ocx account priority` or the management route, so it releases the manual pin
@@ -327,13 +341,20 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
     if (action === "validate") {
       const path = args.shift();
       rejectArgs(args, USAGE);
-      const result = path ? validateCandidate(loadInput(path)) : (() => {
-        const diagnostics = readConfigDiagnostics();
-        if (diagnostics.error) return { ok: false as const, error: diagnostics.error };
-        return validateCandidate(diagnostics.config);
-      })();
-      printData(result.ok ? { ok: true, source: path ?? getConfigPath() } : result, wantsJson,
-        [result.ok ? "Config is valid." : `Config is invalid: ${result.error}`]);
+      const diagnostics = path ? undefined : readConfigDiagnostics();
+      const result = diagnostics?.error
+        ? { ok: false as const, error: diagnostics.error }
+        : validateCandidate(path ? loadInput(path) : diagnostics?.config);
+      // General diagnostics can include file contents. Validate emits only the fixed policy warning.
+      const warnings = diagnostics?.warnings?.includes(MALFORMED_CODEX_AUTH_METHOD_WARNING)
+        ? [MALFORMED_CODEX_AUTH_METHOD_WARNING] : [];
+      printData({
+        ...(result.ok ? { ok: true, source: path ?? getConfigPath() } : result),
+        ...(warnings.length ? { warnings } : {}),
+      }, wantsJson, [
+        result.ok ? (warnings.length ? "Config is usable with warnings." : "Config is valid.") : `Config is invalid: ${result.error}`,
+        ...warnings.map(warning => `Warning: ${warning}`),
+      ]);
       if (!result.ok) outcome = 1;
       return;
     }
@@ -357,6 +378,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       if (!yes) throw new CliUsageError("import requires --yes", USAGE);
       rejectArgs(args, USAGE);
       await withConfigDirHardeningSettled(getConfigDir(), () => {
+        // Reject invalid authority before lock preparation creates coordination files.
         const current = readCliConfigForMutation();
         const rawInput = loadInput(path);
         if (rawInput && typeof rawInput === "object" && !Array.isArray(rawInput) && Object.hasOwn(rawInput, "telemetry")) {
@@ -364,6 +386,9 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
           console.warn("Note: ignored telemetry block during config import; use `ocx telemetry` to manage telemetry consent.");
         }
         const imported = validate(rawInput);
+        // Do not hold the shared lock while reading stdin. Recheck the live mode and
+        // the active client connection, then save in the same synchronous transaction;
+        // saveConfig reuses this transaction.
         withConfigMutationLockSync(() => {
           const client = readClientConnectionState();
           if (client.kind === "connected" && (imported.runtimeRole !== "client"
@@ -376,6 +401,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
           } else {
             delete imported.telemetry;
           }
+          requireDedicatedPlaintextTransition(readCliConfigForMutation(), imported);
           saveConfig(imported);
         });
       });

@@ -17,6 +17,7 @@ import {
   GUI_PAIR_METHOD,
   GUI_PAIR_NONCE_HEADER,
   GUI_PAIR_PATH,
+  DESKTOP_GUI_PAIR_PATH,
   canonicalGuiBrowserOrigin,
   canonicalHttpOrigin,
   createGuiPairCapability,
@@ -34,6 +35,7 @@ export type GuiPairRequestResult =
   | { kind: "unavailable"; reason: "unattested-target" | "runtime-mismatch" | "attestation" | "capability" | "transport" | "rejected" | "local-intent" | "origin-refused" | "rate-limited" };
 
 export interface GuiPairClientDeps {
+  desktopPurpose?: boolean;
   fetchImpl?: typeof fetch;
   readRuntime?: (pid: number) => RuntimePortState | null;
   createChallenge?: () => string;
@@ -150,11 +152,12 @@ export async function requestBoundGuiPairingGrant(
     return { kind: "unavailable", reason: "runtime-mismatch" };
   }
   const expiresAt = (deps.now ?? Date.now)() + GUI_PAIR_CAPABILITY_TTL_MS;
+  const path = deps.desktopPurpose ? DESKTOP_GUI_PAIR_PATH : GUI_PAIR_PATH;
   const capability = createGuiPairCapability(
     runtime.attestationSecret,
     challenge,
     GUI_PAIR_METHOD,
-    GUI_PAIR_PATH,
+    path,
     browserOrigin,
     target.pid,
     target.port,
@@ -163,10 +166,10 @@ export async function requestBoundGuiPairingGrant(
   if (!capability) return { kind: "unavailable", reason: "capability" };
   let intent: GuiPairIntent | undefined;
   try {
-    if (deps.requireLocalIntent !== false) intent = (deps.createIntent ?? createGuiPairIntent)(capability);
+    if (deps.desktopPurpose || deps.requireLocalIntent !== false) intent = (deps.createIntent ?? createGuiPairIntent)(capability);
   } catch { return { kind: "unavailable", reason: "local-intent" }; }
   try {
-    const response = await fetchImpl(`${baseUrl}${GUI_PAIR_PATH}`, {
+    const response = await fetchImpl(`${baseUrl}${path}`, {
       method: GUI_PAIR_METHOD,
       headers: {
         "Content-Length": "0",

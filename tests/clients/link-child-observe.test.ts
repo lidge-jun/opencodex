@@ -10,6 +10,7 @@ import { ConfigMutationLockError } from "../../src/config/mutation-lock";
 import type { LinkPeerEntry } from "../../src/link/peer-report";
 import type { ParsedRemoteRuntimeInspection } from "../../src/link/remote-plant";
 import { SshRunnerError, type SshRunResult } from "../../src/link/ssh-runner";
+import { LinkSshArgumentError } from "../../src/link/ssh-argv";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 
 const NOW = new Date("2026-11-11T00:00:00.000Z");
@@ -33,8 +34,9 @@ function deps(answer: SshResult | (() => SshResult | Promise<SshResult>), overri
     runner: { run: async argv => { calls.push([...argv]); return typeof answer === "function" ? answer() : answer; } },
     knownHostsFile: "/tmp/known_hosts", homeVersion: "2.100.0", peer: () => peer("2.97.0"),
     platformOf: async () => "posix",
-    inspect: async (_runner, _alias, _known, platform) => {
-      inspections.push(platform);
+    inspect: async (_runner, _alias, route, _known, platform) => {
+      // The link's explicit route travels with the inspection; these records have none.
+      inspections.push(route === null ? platform : "routed:" + platform);
       return { runtimeKind: "full", targetTriple: null, rawArch: "x86_64", ocxVersionLine: "opencodex 2.96.0" } satisfies ParsedRemoteRuntimeInspection;
     },
     now: () => NOW,
@@ -105,19 +107,36 @@ describe("observeChild", () => {
     expect(ephemeralVerdict).toMatchObject({ state: "succeeded", observation: { installKind: "ocx-child", updateInFlight: null, runtimeOwner: null, targetVersion: null } });
   });
 
-  test("Windows plan without an entry marker is classified with platform windows", async () => {
+  test("Windows plan without an entry marker is classified with platform windows and recorded as a local update (#9172)", async () => {
     const spy = spyOn(gated, "classifyUpdatePlanProbe");
     try {
       const outcome = await observeChild(record({ remotePlatform: undefined }), deps(ran(plan(), "ocx-fanout:selected:2.97.0\n"), { platformOf: async () => "windows" }).value);
       expect(spy.mock.calls[0]?.[1]).toEqual({ homeVersion: "2.100.0", desktopUpdateRequest: false, platform: "windows" });
-      expect(outcome).toMatchObject({ state: "succeeded", probe: { platform: "windows" }, observation: { updateRoute: "orchestrated" } });
+      // The probe keeps the plan's route for the runner; the observation the dashboard reads says the Home cannot apply it.
+      expect(outcome).toMatchObject({ state: "succeeded", probe: { platform: "windows", classification: { updateRoute: "orchestrated" } },
+        observation: { installKind: "npm", updateRoute: "owner-action", updateReason: "windows-apply", platform: "windows" } });
     } finally { spy.mockRestore(); }
   });
 
+  test("a Windows Desktop request and a POSIX npm plan keep their routes (#9172)", async () => {
+    const desktop = await observeChild(record({ remotePlatform: "windows" }), deps(ran(plan({ installer: "desktop-app", canApply: false, reason: "desktop-app-owned" })), {
+      platformOf: async () => "windows", peer: () => peer("2.97.0", ["desktop-update-request/1"]) }).value);
+    expect(desktop.observation).toMatchObject({ installKind: "desktop-app", updateRoute: "desktop-request", updateReason: "desktop-app-owned" });
+    const posix = await observeChild(record(), deps(ran(plan())).value);
+    expect(posix.observation).toMatchObject({ installKind: "npm", updateRoute: "orchestrated", updateReason: null, platform: "posix" });
+  });
+
   test("a Windows argv over the budget is failed windows-command-too-long with no SSH", async () => {
-    const version = "1.0.0-a" + createHash("sha512").update("x").digest("hex").slice(0, 120);
-    const windows = deps(ran(plan()), { homeVersion: version });
-    expect(await observeChild(record({ remotePlatform: "windows" }), windows.value)).toEqual({ state: "failed", reason: "windows-command-too-long", observation: null, probe: null });
+    // The longest valid Home version fits since the payload is packed 14 bits per character (#8359), so the
+    // builder's own overflow error is injected to keep the mapping covered.
+    const longest = "1.0.0-a" + createHash("sha512").update("x").digest("hex").slice(0, 120);
+    expect(gated.remoteUpdatePlanArgv(longest, "windows")[5]!.length).toBeGreaterThan(0);
+    const spy = spyOn(gated, "remoteUpdatePlanArgv").mockImplementation(() => { throw new LinkSshArgumentError("windows-command-too-long"); });
+    let windows: ReturnType<typeof deps>;
+    try {
+      windows = deps(ran(plan()), { homeVersion: longest });
+      expect(await observeChild(record({ remotePlatform: "windows" }), windows.value)).toEqual({ state: "failed", reason: "windows-command-too-long", observation: null, probe: null });
+    } finally { spy.mockRestore(); }
     const invalid = deps(ran(plan()), { homeVersion: "not-a-version" });
     expect(await observeChild(record(), invalid.value)).toEqual({ state: "failed", reason: "home-version-invalid", observation: null, probe: null });
     expect([...windows.calls, ...invalid.calls]).toEqual([]);

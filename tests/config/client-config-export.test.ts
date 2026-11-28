@@ -24,6 +24,14 @@ import {
 } from "../../src/clients/config-export";
 import { buildOpencodeProviderBlockFromCatalog, opencodeCatalogFromProxyRows, opencodeGlobalConfigPath } from "../../src/cli/opencode";
 import { exportModelsFromProxyRows } from "../../src/cli/export-command";
+import { attachNestedSelectors } from "../../src/clients/config-export/nested-selectors";
+import { routeModel } from "../../src/router";
+import { resolveResponsesCodexAuth } from "../../src/server/responses/core-auth";
+import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { clearMainAccountInfoCache } from "../../src/codex/main-account-cache";
+import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex/routing";
+import { clearAccountQuota } from "../../src/codex/quota";
+import { tryAdmitTurn } from "../../src/server/lifecycle";
 import type { OcxConfig } from "../../src/types";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -73,7 +81,7 @@ function cfg(extra?: Partial<OcxConfig>): OcxConfig {
  * dedupe+sort precondition, so it is compared entry-by-entry against the same truth.
  */
 const GOLDEN_OPENCODE_BLOCK = JSON.parse(
-  '{"npm":"@ai-sdk/openai-compatible","name":"OpenCodex","options":{"baseURL":"http://127.0.0.1:10100/v1","apiKey":"{env:OPENCODEX_OPENCODE_API_KEY}"},"models":{"gpt-5.6-luna":{"name":"gpt-5.6-luna (native)","limit":{"context":272000,"output":128000}},"anthropic/claude-opus-5":{"name":"Claude Opus 5 (anthropic)","limit":{"context":200000,"output":128000}},"custom/no-context":{"name":"no-context (custom)"},"tiny/small-ctx":{"name":"small-ctx (tiny)","limit":{"context":8000,"output":8000}}}}',
+  '{"npm":"@ai-sdk/openai","name":"OpenCodex","options":{"baseURL":"http://127.0.0.1:10100/v1","apiKey":"{env:OPENCODEX_OPENCODE_API_KEY}"},"models":{"gpt-5.6-luna":{"name":"gpt-5.6-luna (native)","limit":{"context":272000,"output":128000}},"anthropic/claude-opus-5":{"name":"Claude Opus 5 (anthropic)","limit":{"context":200000,"output":128000}},"custom/no-context":{"name":"no-context (custom)"},"tiny/small-ctx":{"name":"small-ctx (tiny)","limit":{"context":8000,"output":8000}}}}',
 ) as {
   npm: string;
   name: string;
@@ -84,6 +92,306 @@ const GOLDEN_OPENCODE_BLOCK = JSON.parse(
 function opencodeConfig(context: ExportContext = ctx()): OpencodeGeneratedConfig {
   return buildClientConfig("opencode", context) as OpencodeGeneratedConfig;
 }
+
+test("OpenCode selects the protocol for each concrete model in both config generations", () => {
+  const models: ExportModel[] = [
+    { namespaced: "mock/chat", provider: "mock", id: "chat", supportsReasoning: true, fastRowAvailable: true },
+    { namespaced: "mock/responses", provider: "mock", id: "responses", supportsReasoning: true },
+    { namespaced: "deepseek/deepseek-flash", provider: "deepseek", id: "deepseek-flash" },
+    { namespaced: "oauth/model", provider: "oauth", id: "model" },
+    { namespaced: "combo/dynamic", provider: "combo", id: "dynamic" },
+    { namespaced: "unknown/cold", provider: "unknown", id: "cold" },
+  ];
+  const doc = opencodeConfig(ctx({ models, config: cfg({
+    providers: {
+      mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1", allowPrivateNetwork: true,
+        modelAdapters: { responses: "openai-responses" } },
+      deepseek: { adapter: "openai-chat", baseUrl: "https://api.deepseek.com" },
+      oauth: { adapter: "openai-chat", baseUrl: "https://example.com/v1", authMode: "oauth" },
+    },
+  }) }));
+  const v1 = doc.provider.opencodex!;
+  const v2 = doc.providers.opencodex!;
+  expect(v1.npm).toBe("@ai-sdk/openai");
+  expect(v2.package).toBe("@opencode/ai/providers/openai-compatible-responses");
+  expect(v1.models["mock/chat"]).toMatchObject({
+    provider: { npm: "@ai-sdk/openai-compatible" }, interleaved: { field: "reasoning_content" },
+  });
+  expect(v2.models["mock/chat"]).toMatchObject({
+    package: "@opencode/ai/providers/openai-compatible", compatibility: { reasoningField: "reasoning_content" },
+  });
+  for (const key of ["mock/chat--fast", ...models.slice(1).map(model => model.namespaced)]) {
+    expect(v1.models[key]).not.toBeUndefined();
+    expect(v1.models[key]!.provider).toBeUndefined();
+    expect(v1.models[key]!.interleaved).toBeUndefined();
+    expect(v2.models[key]).not.toBeUndefined();
+    expect(v2.models[key]!.package).toBeUndefined();
+    expect(v2.models[key]!.compatibility).toBeUndefined();
+  }
+});
+
+test("OpenCode managed document drops native rows in Codex Direct and keeps them in pool", () => {
+  // Direct forwards the caller's own bearer while opencode sends the proxy key, so a native
+  // row would only answer 401. The launcher, Pi and DSH already omit them; the managed
+  // integration writes the same client's file and must agree, or an applied config lists a
+  // model that fails when selected.
+  const models: ExportModel[] = [
+    { namespaced: "gpt-5.6-luna", provider: "openai", id: "gpt-5.6-luna", native: true, fastRowAvailable: true },
+    { namespaced: "openai/gpt-routed", provider: "openai", id: "gpt-routed" },
+    { namespaced: "safe/model", provider: "safe", id: "model" },
+  ];
+  const direct = cfg({
+    providers: {
+      openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", codexAccountMode: "direct" },
+      safe: { adapter: "openai-chat", baseUrl: "https://safe.example/v1" },
+    },
+  });
+
+  const routedKeys = ["openai/gpt-routed", "safe/model"];
+  const directDoc = opencodeConfig(ctx({ models, config: direct }));
+  for (const block of [directDoc.provider.opencodex!.models, directDoc.providers.opencodex!.models]) {
+    // The synthetic Fast row inherits the native flag, so it must go with its parent.
+    expect(Object.keys(block).sort()).toEqual(routedKeys);
+  }
+
+  const pool = cfg({ ...direct, providers: { ...direct.providers, openai: { ...direct.providers.openai!, codexAccountMode: "pool" } } });
+  const poolDoc = opencodeConfig(ctx({ models, config: pool }));
+  for (const block of [poolDoc.provider.opencodex!.models, poolDoc.providers.opencodex!.models]) {
+    expect(Object.keys(block).sort()).toEqual(["gpt-5.6-luna", "gpt-5.6-luna--fast", ...routedKeys].sort());
+  }
+});
+
+test("OpenCode, Pi-family (pi/prime/aside/omo/gentle-shell), and DSH drop bare native rows and keep account-qualified rows in Direct mode", () => {
+  // Bare native `gpt-*` rows require a caller-owned bearer in Codex Direct and 401 for
+  // proxy-key / loopback clients. Account-qualified `<namespace>/gpt-*` rows route with
+  // `codexAccountMode: "pool"` and a fixed account, so every proxy-key/loopback export
+  // keeps them while omitting only the bare form.
+  const models: ExportModel[] = [
+    { namespaced: "gpt-5.6-luna", provider: "openai", id: "gpt-5.6-luna", native: true, fastRowAvailable: true, contextWindow: 128_000 },
+    { namespaced: "main/gpt-5.6-luna", provider: "openai", id: "main/gpt-5.6-luna", native: true, fastRowAvailable: true, contextWindow: 128_000 },
+    { namespaced: "work/gpt-5.6-luna", provider: "openai", id: "work/gpt-5.6-luna", native: true, fastRowAvailable: true, contextWindow: 128_000 },
+    { namespaced: "safe/model", provider: "safe", id: "model", contextWindow: 128_000 },
+  ];
+  const direct = cfg({
+    codexAccountNamespaces: { main: "__main__", work: "acct_work" },
+    providers: {
+      openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", codexAccountMode: "direct" },
+      safe: { adapter: "openai-chat", baseUrl: "https://safe.example/v1" },
+    },
+  });
+  const pool = cfg({
+    ...direct,
+    providers: { ...direct.providers, openai: { ...direct.providers.openai!, codexAccountMode: "pool" } },
+  });
+  const directExpected = [
+    "main/gpt-5.6-luna", "main/gpt-5.6-luna--fast",
+    "safe/model",
+    "work/gpt-5.6-luna", "work/gpt-5.6-luna--fast",
+  ];
+  const poolExpected = ["gpt-5.6-luna", "gpt-5.6-luna--fast", ...directExpected].sort();
+
+  const doc = opencodeConfig(ctx({ models, config: direct }));
+  for (const block of [doc.provider.opencodex!.models, doc.providers.opencodex!.models]) {
+    expect(Object.keys(block).sort()).toEqual(directExpected);
+  }
+
+  for (const client of ["pi", "prime", "aside", "omo", "gentle-shell"] as const) {
+    const directExport = buildClientConfig(client, ctx({ models, config: direct })) as PiGeneratedConfig;
+    expect(directExport.providers.opencodex.models.map(m => m.id).sort()).toEqual(directExpected);
+    const directContrib = buildClientContribution(client, ctx({ models, config: direct }));
+    const contribModels = (directContrib.fragments[0]!.value as { models: Array<{ id: string }> }).models;
+    expect(contribModels.map(m => m.id).sort()).toEqual(directExpected);
+
+    const poolExport = buildClientConfig(client, ctx({ models, config: pool })) as PiGeneratedConfig;
+    expect(poolExport.providers.opencodex.models.map(m => m.id).sort()).toEqual(poolExpected);
+  }
+
+  const dsh = dshConfig(ctx({ models, config: direct }));
+  expect(dsh["llm-pi-ai"].providers.opencodex!.models.map(m => m.id).sort()).toEqual(directExpected);
+
+  // OMP, WorkBuddy / WorkBuddy AI, Gajae, and every other exported client in EXPORT_CLIENT_IDS
+  // also drop bare native rows in Codex Direct mode while keeping account-qualified rows.
+  const omp = buildClientConfig("omp", ctx({ models, config: direct })) as { providers: { opencodex: { models: Array<{ id: string }> } } };
+  expect(omp.providers.opencodex.models.map(m => m.id).sort()).toEqual(directExpected);
+  const gajae = buildClientConfig("gajae", ctx({ models, config: direct })) as { providers: { opencodex: { models: Array<{ id: string }> } } };
+  expect(gajae.providers.opencodex.models.map(m => m.id).sort()).toEqual(directExpected);
+  for (const wbClient of ["workbuddy", "workbuddy-ai"] as const) {
+    const wb = buildClientConfig(wbClient, ctx({ models, config: direct })) as { models: Array<{ id: string }> };
+    expect(wb.models.map(m => m.id).sort()).toEqual(directExpected);
+  }
+  for (const client of EXPORT_CLIENT_IDS) {
+    const text = buildClientConfigText(client, ctx({ models, config: direct })).text;
+    expect(text).not.toContain('"gpt-5.6-luna"');
+    expect(text).not.toContain("id: gpt-5.6-luna\n");
+    expect(text).toContain("work/gpt-5.6-luna");
+    expect(text).toContain("safe/model");
+  }
+});
+
+test("HTTP-layer Direct-mode auth resolution across loopback, dedicated proxy key, proxy bearer, and caller Codex JWT", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ocx-direct-cred-routing-"));
+  const oldCodex = process.env.CODEX_HOME;
+  const oldOcx = process.env.OPENCODEX_HOME;
+  process.env.CODEX_HOME = dir;
+  process.env.OPENCODEX_HOME = dir;
+  clearThreadAccountMap();
+  clearCodexUpstreamHealth();
+  clearAccountQuota();
+  clearMainAccountInfoCache();
+  try {
+    const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const makeJwt = (sub: string, accountId: string) =>
+      `${part({ alg: "none" })}.${part({ sub, exp: Math.floor(Date.now() / 1000) + 3600, "https://api.openai.com/auth": { chatgpt_account_id: accountId } })}.sig`;
+
+    const callerJwt = makeJwt("caller-user", "acct-caller-distinct");
+    const storedMainJwt = makeJwt("stored-main-user", "acct-stored-main-distinct");
+    const storedWorkJwt = makeJwt("stored-work-user", "acct-stored-work-distinct");
+    const proxySecret = "ocx-proxy-admission-secret-distinct";
+
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({
+      tokens: { access_token: storedMainJwt, refresh_token: "fake-main-refresh", account_id: "acct-stored-main-distinct" },
+    }));
+    clearMainAccountInfoCache();
+    saveCodexAccountCredential("acct_work", {
+      accessToken: storedWorkJwt,
+      refreshToken: "fake-work-refresh",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-stored-work-distinct",
+    });
+
+    const directConfig = cfg({
+      codexAccounts: [{ id: "acct_work", email: "work@example.test", chatgptAccountId: "acct-stored-work-distinct", isMain: false }],
+      codexAccountNamespaces: { main: "__main__", work: "acct_work" },
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", codexAccountMode: "direct" },
+      },
+    });
+
+    const resolveHttp = async (model: string, headers: Record<string, string>, admission?: { kind: "configured"; keyId: string; source: "dedicated" | "bearer" }) => {
+      const lease = tryAdmitTurn();
+      expect(lease).not.toBeNull();
+      try {
+        const route = routeModel(directConfig, model);
+        const req = new Request("http://127.0.0.1:10100/v1/responses", { method: "POST", headers });
+        return {
+          route,
+          result: await resolveResponsesCodexAuth(req, directConfig, route, {
+            admission,
+            turnAdmissionLease: lease!,
+          }),
+        };
+      } finally {
+        lease?.release();
+      }
+    };
+
+    // 1. Loopback placeholder (Pi/Prime/Aside/omo/Gentle Shell/OpenCode/OMP/WorkBuddy/Gajae on loopback):
+    //    - bare `gpt-5.6-luna` stays in caller-Direct mode without substituting stored credentials
+    //      (so the placeholder key reaches upstream and 401s — why exports omit bare Direct rows);
+    //    - `main/gpt-5.6-luna` resolves to stored `main-pool` with storedMainJwt;
+    //    - `work/gpt-5.6-luna` resolves to exact stored `acct_work` with storedWorkJwt.
+    const loopbackBare = await resolveHttp("gpt-5.6-luna", { authorization: `Bearer ${LOOPBACK_API_KEY_PLACEHOLDER}` });
+    expect(loopbackBare.route.codexAccountMode).toBe("direct");
+    expect(loopbackBare.result.ok).toBe(true);
+    if (loopbackBare.result.ok) {
+      expect(loopbackBare.result.authCtx).toMatchObject({ kind: "main", accountId: null });
+      expect(loopbackBare.result.substituteMainCredential).toBe(false);
+      expect(loopbackBare.result.headers.get("authorization")).toBe(`Bearer ${LOOPBACK_API_KEY_PLACEHOLDER}`);
+      expect(loopbackBare.result.headers.get("authorization")).not.toContain(storedMainJwt);
+      expect(loopbackBare.result.headers.get("authorization")).not.toContain(storedWorkJwt);
+    }
+
+    const loopbackMain = await resolveHttp("main/gpt-5.6-luna", { authorization: `Bearer ${LOOPBACK_API_KEY_PLACEHOLDER}` });
+    expect(loopbackMain.result.ok).toBe(true);
+    if (loopbackMain.result.ok) {
+      expect(loopbackMain.result.authCtx).toMatchObject({ kind: "main-pool", accountId: "__main__", fixedAccount: true });
+      expect(loopbackMain.result.headers.get("authorization")).toBe(`Bearer ${storedMainJwt}`);
+      expect(loopbackMain.result.headers.get("chatgpt-account-id")).toBe("acct-stored-main-distinct");
+    }
+
+    const loopbackWork = await resolveHttp("work/gpt-5.6-luna", { authorization: `Bearer ${LOOPBACK_API_KEY_PLACEHOLDER}` });
+    expect(loopbackWork.result.ok).toBe(true);
+    if (loopbackWork.result.ok) {
+      expect(loopbackWork.result.authCtx).toMatchObject({ kind: "pool", accountId: "acct_work", fixedAccount: true });
+      expect(loopbackWork.result.headers.get("authorization")).toBe(`Bearer ${storedWorkJwt}`);
+      expect(loopbackWork.result.headers.get("chatgpt-account-id")).toBe("acct-stored-work-distinct");
+    }
+
+    // 2. Dedicated proxy admission header (`x-opencodex-api-key`, OpenCode non-loopback path):
+    //    - bare `gpt-5.6-luna` never substitutes stored credentials or leaks proxySecret;
+    //    - `work/gpt-5.6-luna` resolves strictly to stored `acct_work` and never leaks proxySecret.
+    const dedicatedAdmission = { kind: "configured" as const, keyId: "k1", source: "dedicated" as const };
+    const dedicatedBare = await resolveHttp("gpt-5.6-luna", {
+      "x-opencodex-api-key": proxySecret,
+      authorization: `Bearer ${LOOPBACK_API_KEY_PLACEHOLDER}`,
+    }, dedicatedAdmission);
+    expect(dedicatedBare.result.ok).toBe(true);
+    if (dedicatedBare.result.ok) {
+      expect(dedicatedBare.result.authCtx).toMatchObject({ kind: "main", accountId: null });
+      expect(dedicatedBare.result.substituteMainCredential).toBe(false);
+      expect(dedicatedBare.result.headers.get("authorization")).toBe(`Bearer ${LOOPBACK_API_KEY_PLACEHOLDER}`);
+      expect(dedicatedBare.result.headers.get("authorization")).not.toContain(storedMainJwt);
+      expect(dedicatedBare.result.headers.get("authorization")).not.toContain(proxySecret);
+    }
+
+    const dedicatedWork = await resolveHttp("work/gpt-5.6-luna", {
+      "x-opencodex-api-key": proxySecret,
+      authorization: `Bearer ${LOOPBACK_API_KEY_PLACEHOLDER}`,
+    }, dedicatedAdmission);
+    expect(dedicatedWork.result.ok).toBe(true);
+    if (dedicatedWork.result.ok) {
+      expect(dedicatedWork.result.headers.get("authorization")).toBe(`Bearer ${storedWorkJwt}`);
+      expect(dedicatedWork.result.headers.get("authorization")).not.toContain(proxySecret);
+    }
+
+    // 3. Proxy bearer admission (`Authorization: Bearer <proxySecret>`, admission.source === "bearer"):
+    //    - bare `gpt-5.6-luna` substitutes stored main credential (never forwards proxySecret);
+    //    - `work/gpt-5.6-luna` resolves strictly to stored `acct_work` (never stored main or proxySecret).
+    const bearerAdmission = { kind: "configured" as const, keyId: "k1", source: "bearer" as const };
+    const bearerBare = await resolveHttp("gpt-5.6-luna", { authorization: `Bearer ${proxySecret}` }, bearerAdmission);
+    expect(bearerBare.result.ok).toBe(true);
+    if (bearerBare.result.ok) {
+      expect(bearerBare.result.substituteMainCredential).toBe(true);
+      expect(bearerBare.result.headers.get("authorization")).toBe(`Bearer ${storedMainJwt}`);
+      expect(bearerBare.result.headers.get("authorization")).not.toContain(proxySecret);
+    }
+
+    const bearerWork = await resolveHttp("work/gpt-5.6-luna", { authorization: `Bearer ${proxySecret}` }, bearerAdmission);
+    expect(bearerWork.result.ok).toBe(true);
+    if (bearerWork.result.ok) {
+      expect(bearerWork.result.authCtx).toMatchObject({ kind: "pool", accountId: "acct_work", fixedAccount: true });
+      expect(bearerWork.result.headers.get("authorization")).toBe(`Bearer ${storedWorkJwt}`);
+    }
+
+    // 4. Caller carrying its own distinct Codex JWT:
+    //    - `work/gpt-5.6-luna` (non-main namespace) uses exact stored `acct_work` (never callerJwt);
+    //    - `main/gpt-5.6-luna` preserves the pre-existing #7410 caller-owned `main` contract (`callerJwt`).
+    const callerHeaders = { authorization: `Bearer ${callerJwt}`, "chatgpt-account-id": "acct-caller-distinct" };
+    const callerWork = await resolveHttp("work/gpt-5.6-luna", callerHeaders);
+    expect(callerWork.result.ok).toBe(true);
+    if (callerWork.result.ok) {
+      expect(callerWork.result.authCtx).toMatchObject({ kind: "pool", accountId: "acct_work", fixedAccount: true });
+      expect(callerWork.result.headers.get("authorization")).toBe(`Bearer ${storedWorkJwt}`);
+      expect(callerWork.result.headers.get("chatgpt-account-id")).toBe("acct-stored-work-distinct");
+    }
+
+    const callerMain = await resolveHttp("main/gpt-5.6-luna", callerHeaders);
+    expect(callerMain.result.ok).toBe(true);
+    if (callerMain.result.ok) {
+      expect(callerMain.result.authCtx).toMatchObject({ kind: "main", accountId: null });
+      expect(callerMain.result.headers.get("authorization")).toBe(`Bearer ${callerJwt}`);
+      expect(callerMain.result.headers.get("chatgpt-account-id")).toBe("acct-caller-distinct");
+    }
+  } finally {
+    clearThreadAccountMap();
+    clearCodexUpstreamHealth();
+    clearAccountQuota();
+    clearMainAccountInfoCache();
+    if (oldCodex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodex;
+    if (oldOcx === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcx;
+    removeTreeWithRetry(dir);
+  }
+});
 
 function piConfig(context: ExportContext = ctx()): PiGeneratedConfig {
   return buildClientConfig("pi", context) as PiGeneratedConfig;
@@ -167,7 +475,7 @@ describe("relocated OpenCode serializer (accept criterion 1)", () => {
 
   test("a non-loopback bind moves admission to the header branch", () => {
     const block = opencodeConfig(ctx({ config: cfg({ hostname: "0.0.0.0" }) })).provider.opencodex!;
-    expect(block.options.apiKey).toBeUndefined();
+    expect(block.options.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
     expect(block.options.headers).toEqual({ "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF });
   });
 
@@ -279,7 +587,7 @@ describe("OpenCode V2 block (reasoning-effort variants)", () => {
     expect(v2.settings).toEqual(v1.options);
     // opencode V2 merges both blocks by provider and model id, so the same ids must not
     // produce duplicate picker entries.
-    expect(v2.package).toBe("@opencode/ai/providers/openai-compatible");
+    expect(v2.package).toBe("@opencode/ai/providers/openai-compatible-responses");
     for (const [key, entry] of Object.entries(v2.models)) {
       expect(entry.name).toBe(v1.models[key]!.name);
       expect(entry.limit).toEqual(v1.models[key]!.limit);
@@ -288,14 +596,76 @@ describe("OpenCode V2 block (reasoning-effort variants)", () => {
 
   test("a non-loopback bind moves admission to the header branch in both blocks", () => {
     const config = buildClientConfig("opencode", ladderCtx(cfg({ hostname: "0.0.0.0" }))) as OpencodeGeneratedConfig;
-    for (const block of [config.provider.opencodex!.options, config.providers.opencodex!.settings]) {
-      expect(block.headers).toEqual({ "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF });
-      expect(block.apiKey).toBeUndefined();
-    }
+    const { headers, ...settings } = config.provider.opencodex!.options;
+    expect(headers).toEqual({ "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF });
+    expect(settings.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
+    expect(config.providers.opencodex!.headers).toEqual(headers);
+    expect(config.providers.opencodex!.settings).toEqual(settings);
   });
 });
 
 describe("Pi serializer (accept criterion 2)", () => {
+  test("Pi emits a proven raw nested selector and leaves every unproven row alone", () => {
+    const input = ctx({ models: [
+      { namespaced: "openrouter/openrouter-free", provider: "openrouter", id: "openrouter/free", fastRowAvailable: true,
+        nestedNamespaced: "openrouter/openrouter/free" },
+      { namespaced: "openrouter/org-cold", provider: "openrouter", id: "org/cold" },
+      { namespaced: "provider/chosen-alias", provider: "provider", id: "org/model" },
+      { namespaced: "gpt-5.6-luna", native: true, provider: "openai", id: "gpt-5.6-luna" },
+    ] });
+    const provider = piConfig(input).providers.opencodex!;
+    expect(provider.models.map(model => model.id)).toEqual([
+      "gpt-5.6-luna", "openrouter/openrouter/free", "openrouter/openrouter/free--fast", "openrouter/org-cold",
+      "provider/chosen-alias",
+    ]);
+    expect(buildClientContribution("pi", input).fragments[0]!.value).toEqual(provider);
+    const omo = buildClientConfig("omo", input) as PiGeneratedConfig;
+    expect(omo.providers.opencodex!.models.map(model => model.id)).toEqual([
+      "gpt-5.6-luna", "openrouter/openrouter-free", "openrouter/openrouter-free--fast", "openrouter/org-cold",
+      "provider/chosen-alias",
+    ]);
+  });
+
+  test("a flattened management row exports a Pi selector that routes to the native slug", () => {
+    const config = cfg({ defaultProvider: "openrouter", providers: {
+      openrouter: { adapter: "openai-chat", baseUrl: "https://openrouter.example.test/v1", models: ["openrouter/free"] },
+    } });
+    const models = attachNestedSelectors(config, exportModelsFromProxyRows([
+      { namespaced: "openrouter/openrouter-free", provider: "openrouter", id: "openrouter/free" },
+    ], config));
+    const selector = piConfig(ctx({ models, config })).providers.opencodex!.models[0]!.id;
+    expect(selector).toBe("openrouter/openrouter/free");
+    expect(routeModel(config, selector)).toMatchObject({ providerName: "openrouter", modelId: "openrouter/free" });
+  });
+
+  test("the serving configuration proves a nested selector, or the encoded key stays (#8172)", () => {
+    const nested = (models: string[]) => cfg({ defaultProvider: "acme", providers: {
+      acme: { adapter: "openai-chat", baseUrl: "https://acme.example.test/v1", models },
+    } });
+    const row = { namespaced: "acme/org-model", provider: "acme", id: "org/model" };
+    // Proven: the raw spelling reaches the same concrete model, and so does its Fast row.
+    expect(attachNestedSelectors(nested(["org/model"]), [{ ...row, fastRowAvailable: true }])[0]!.nestedNamespaced)
+      .toBe("acme/org/model");
+    // Cold inventory: the encoded key cannot be decoded, so nothing proves the raw one equivalent.
+    expect(attachNestedSelectors(nested([]), [row])[0]!.nestedNamespaced).toBeUndefined();
+    // A self-namespaced model owns the raw spelling; it must never be handed to the other row.
+    const both = attachNestedSelectors(nested(["org/model", "acme/org/model"]), [
+      row, { namespaced: "acme/acme-org-model", provider: "acme", id: "acme/org/model" },
+    ]);
+    expect(both.map(model => model.nestedNamespaced)).toEqual([undefined, "acme/acme/org/model"]);
+    // Another row already keyed by the raw spelling keeps it; the candidate is withdrawn.
+    const claimed = attachNestedSelectors(nested(["org/model"]), [
+      row, { namespaced: "acme/org/model", provider: "other", id: "model" },
+    ]);
+    expect(claimed[0]!.nestedNamespaced).toBeUndefined();
+    // An explicit alias is not an encoded slug, and a stale candidate never survives a reload.
+    const reloaded = attachNestedSelectors(nested([]), [
+      { namespaced: "acme/chosen", provider: "acme", id: "org/model" },
+      { ...row, nestedNamespaced: "acme/org/model" },
+    ]);
+    expect(reloaded.map(model => model.nestedNamespaced)).toEqual([undefined, undefined]);
+  });
+
   test("models is an array keyed by id, not a keyed object", () => {
     const provider = piConfig().providers.opencodex!;
     expect(Array.isArray(provider.models)).toBe(true);
@@ -772,7 +1142,7 @@ describe("hub-resolved Fast exports", () => {
     expect(expanded.v1.models["remote/model--fast"]).toEqual({
       name: "Remote Model Fast (remote)", limit: { context: 8192, output: 8192 },
       attachment: true, modalities: { input: ["text", "image"], output: ["text"] },
-      reasoning: true, interleaved: { field: "reasoning_content" },
+      reasoning: true,
       options: { reasoningEffort: "high" },
       tool_call: true,
       variants: { none: { reasoningEffort: "none" }, high: { reasoningEffort: "high" }, ultra: { reasoningEffort: "ultra" } },
@@ -780,7 +1150,6 @@ describe("hub-resolved Fast exports", () => {
     expect(expanded.v2.models["remote/model--fast"]).toEqual({
       name: "Remote Model Fast (remote)", limit: { context: 8192, output: 8192 },
       capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
-      compatibility: { reasoningField: "reasoning_content" },
       settings: { reasoningEffort: "high" },
       variants: [
         { id: "none", settings: { reasoningEffort: "none" } },
@@ -791,8 +1160,11 @@ describe("hub-resolved Fast exports", () => {
     expect(expanded.v1.options).toEqual({ baseURL: BASE_URL, apiKey: OPENCODE_API_KEY_ENV_REF });
     expect(expanded.v2.settings).toEqual({ baseURL: BASE_URL, apiKey: OPENCODE_API_KEY_ENV_REF });
     const remote = opencodeProviderBlocks(BASE_URL, [eligible], cfg({ hostname: "0.0.0.0" }));
-    expect(remote.v1.options).toEqual({ baseURL: BASE_URL, headers: { "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF } });
-    expect(remote.v2.settings).toEqual(remote.v1.options);
+    const { headers, ...settings } = remote.v1.options;
+    expect(headers).toEqual({ "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF });
+    expect(settings).toEqual({ baseURL: BASE_URL, apiKey: LOOPBACK_API_KEY_PLACEHOLDER });
+    expect(remote.v2.headers).toEqual(headers);
+    expect(remote.v2.settings).toEqual(settings);
   });
 
   test("opencodeClientExport timeouts are omitted by default and emitted into both blocks when set", () => {
@@ -917,7 +1289,7 @@ describe("EXPORT_CLIENTS registry", () => {
   "$schema": "https://opencode.ai/config.json",
   "provider": {
     "opencodex": {
-      "npm": "@ai-sdk/openai-compatible",
+      "npm": "@ai-sdk/openai",
       "name": "OpenCodex",
       "options": {
         "baseURL": "http://127.0.0.1:10100/v1",
@@ -953,7 +1325,7 @@ describe("EXPORT_CLIENTS registry", () => {
   },
   "providers": {
     "opencodex": {
-      "package": "@opencode/ai/providers/openai-compatible",
+      "package": "@opencode/ai/providers/openai-compatible-responses",
       "name": "OpenCodex",
       "settings": {
         "baseURL": "http://127.0.0.1:10100/v1",

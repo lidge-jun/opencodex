@@ -75,10 +75,12 @@ import {
   admissionFields,
   resolveApiAuth,
   resolveResponsesApiAuth,
+  isContextPrincipalCurrent,
   type RequestPolicyView,
   withCors,
   withManagementCors,
 } from "../auth-cors";
+import { connectionReplayScopeLive, releaseConnectionReplayScope } from "../../responses/state/connection-scope";
 import {
   disableResponsesRequestTimeout,
   handleResponses,
@@ -92,9 +94,12 @@ import {
 } from "../live";
 import type { ServeOptionsContext } from "./serve-options";
 import type { RequestMetricsRecorder } from "../request-metrics";
-import { resolveInboundBodyLimitBytes } from "../request-decompress";
+import { attachParsedRequestBody, resolveInboundBodyLimitBytes } from "../request-decompress";
 import { responseToolOwnership } from "../responses/response-tool-ownership";
 import { runTurnStateCallerScope } from "../turn-state-handles";
+import { runWithRequestPeer } from "../../lib/request-peer-scope";
+/** The socket recorded a local peer at its upgrade; any other socket has no local snapshot. */
+const LOCAL_PEER = Object.freeze({ local: true });
 import { admitHttpWorkflowTurn, workflowDecisionRefusalResponse } from "../workflow-refusal";
 
 /**
@@ -230,6 +235,9 @@ export function createWebsocketHandler(
         }
         if (frame.type === "response.inject" || frame.type === "response.steer" || (frame.type === "response.create" && ws.data.nativeControl)) {
           try {
+            // Remote Link sockets never carry native control (design T4 1.1); the link wrapper has
+            // already re-checked this frame's authorization before it reached the shared handler.
+            if (ws.data.nativeControlDisabled && frame.type !== "response.create") throw new NativeSteeringError("native_control_unavailable_on_link", "Native response control is unavailable on a Remote Link WebSocket.");
             if (frame.type === "response.inject") {
               if (!ws.data.nativeControl?.inject) throw new NativeSteeringError("injection_not_supported", "Native injection is disabled or unavailable on this route.");
               ws.data.nativeControl.inject(frame);
@@ -262,7 +270,7 @@ export function createWebsocketHandler(
         try {
           const idleMs = typeof config.stallTimeoutSec === "number" && Number.isFinite(config.stallTimeoutSec)
             ? Math.max(1, config.stallTimeoutSec) * 1000 : 300_000;
-          const mode = nativeResponseControlMode(frame, config);
+          const mode = ws.data.nativeControlDisabled ? undefined : nativeResponseControlMode(frame, config);
           nativeControl = mode === "injection" ? new NativeInjectionChannel(frame, idleMs, config.maxUpstreamBodyBytes)
             : mode === "steering" ? new NativeSteeringChannel(frame, idleMs, config.maxUpstreamBodyBytes) : undefined;
         } catch {
@@ -314,7 +322,7 @@ export function createWebsocketHandler(
         delete payload.type;
         turnAdmissionLease.bindAbortController(turnAbort);
         // The frame runs with its own caller slot, which admission fills for turn-state handle binding.
-        void runTurnStateCallerScope(async () => {
+        void runWithRequestPeer(ws.data.peerLocal === true ? LOCAL_PEER : undefined, () => runTurnStateCallerScope(async () => {
           const start = Date.now();
           const requestId = nextRequestLogId(start);
           // Resolved once at the handshake — a frame has no request headers left
@@ -342,11 +350,18 @@ export function createWebsocketHandler(
           const baseHeaders = ws.data.headers ?? new Headers();
           const fwd = new Headers({ "content-type": "application/json" });
           baseHeaders.forEach((value, key) => fwd.set(key, value));
+          // A Remote Link socket hands the pipeline the create it parsed (#8600): serializing it into the request and
+          // parsing it back would hold two more request-sized copies for the turn. Local sockets keep the request body.
+          // turnBody is a shallow copy: preparation's in-place edits to nested input reach frame.input too, which the
+          // socket's activity book reads again later, for the array's identity and each result's type and ids only.
+          const turnBody = { ...payload, stream: true };
+          const linkSocket = ws.data.link !== undefined;
           const req = new Request("http://localhost/v1/responses", {
             method: "POST",
             headers: fwd,
-            body: JSON.stringify({ ...payload, stream: true }),
+            ...(linkSocket ? {} : { body: JSON.stringify(turnBody) }),
           });
+          if (linkSocket) attachParsedRequestBody(req, turnBody);
           try {
             // A socket can be the first ingress for a root. Admit every inference frame,
             // then keep its workflow lease with the turn until terminal output or cancellation.
@@ -360,12 +375,24 @@ export function createWebsocketHandler(
             if (workflow?.admitted) turnAdmissionLease.attach(workflow.lease);
             ws.data.nativeControl = nativeControl;
             let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
+            const retainedPrincipal = ws.data.replayPrincipal;
+            const replayPrincipal = retainedPrincipal && (isContextPrincipalCurrent(retainedPrincipal.clientPrincipalId, config)
+              ? retainedPrincipal : { clientPrincipalId: undefined });
+            // The connection scope is a live-socket capability, not a retained credential:
+            // once closed or expired it stops backfilling the replay owner entirely.
+            const retainedScope = ws.data.replayScope;
+            const replayScope = retainedScope && connectionReplayScopeLive(retainedScope) ? retainedScope : undefined;
             const response = await handleResponses(req, config, logCtx, {
               advisorAdmissionPolicy,
               ...(wsAdmission ? { admission: wsAdmission } : {}),
+              // Keep an empty holder after revocation: a different forwarded bearer
+              // must not become this connection's retained replay owner.
+              ...(replayPrincipal ? { replayPrincipal } : {}),
+              ...(replayScope ? { replayScope } : {}),
               forceEmptyResponseId: true,
               inboundTransport: "websocket",
               nativeControl,
+              ...(ws.data.linkTurnObserver ? { linkTurn: ws.data.linkTurnObserver(turnId) } : {}),
               abortSignal: turnAbort.signal,
               turnAdmissionLease,
               onFirstOutput: () => recordFirstOutput(logCtx, start),
@@ -381,12 +408,15 @@ export function createWebsocketHandler(
               logCtx.causeHint = "transport-ambiguous";
               logCtx.terminalSource = "synthetic";
             }
+            // Remote Link holds release only for a turn every admission accepted (link-websocket.ts).
+            if (response.ok) ws.data.responsesActivity?.notifyAccepted(frame.input);
             const observeLog = nativeControl?.relayActive
               ? createNativeSteeringLogObserver(logCtx, () => recordFirstOutput(logCtx, start))
               : (payload: string) => inspectResponseLogSsePayload(logCtx, payload);
             const providerExecuted = responseToolOwnership(response);
             await sendResponseToWebSocket(ws, response, isCurrent, {
-              untilEof: nativeControl?.relayActive === true,
+              // A native-control body is the upstream itself, with no relay tail behind it.
+              untilEof: nativeControl?.relayActive === true, rawUpstream: nativeControl?.relayActive === true,
               onSsePayload: payload => {
                 ws.data.responsesActivity?.observePayload(payload, providerExecuted);
                 observeLog(payload);
@@ -445,9 +475,10 @@ export function createWebsocketHandler(
             turnAdmissionLease.release();
             if (ws.data.nativeControl === nativeControl) ws.data.nativeControl = undefined;
             if (!logged && turnAbort.signal.aborted) finalizeLog(499);
+            ws.data.linkTurnEnded?.(turnId);
             if (ws.data.cancel === cancelTurn) ws.data.cancel = undefined;
           }
-        });
+        }));
       },
       close(ws: ServerWebSocket<WsData>, code: number, reason: string) {
         if (ws.data.kind === "remote-workspace-agent") {
@@ -464,6 +495,10 @@ export function createWebsocketHandler(
         unregisterCodexWebSocket(ws);
         ws.data.admissionLease?.release();
         ws.data.admissionLease = undefined;
+        // Close the connection scope before cancelling the turn so a late completion
+        // write is refused; then drop every entry this socket still owns.
+        releaseConnectionReplayScope(ws.data.replayScope);
+        ws.data.replayScope = undefined;
         ws.data.cancel?.(); // RC2: abort the upstream when the client disconnects
       },
   } as const;

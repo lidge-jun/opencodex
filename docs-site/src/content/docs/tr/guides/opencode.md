@@ -27,6 +27,8 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # yerel slug'lar öneksiz kalır
 ```
 
+Öneksiz yerel OpenAI `gpt-*` satırları yalnızca kanonik `openai` sağlayıcısı etkinken ve Codex Direct modunda değilken görünür; Codex Direct modu açıkken kullanılabilir hesap nitelikli `<namespace>/gpt-*` satırları dışa aktarımda korunur. Direct modu her çağıranın kendi OpenAI kimlik bilgisini iletirken opencode proxy'nin anahtarını gönderir ve devre dışı bir `openai` sağlayıcısı proxy'nin öneksiz tüm `gpt-*` seçicilerini reddetmesine yol açar; her iki durumda da başlatıcı, yönetilen entegrasyon ve `ocx export` çalıştırılamayan bir model sunmak yerine öneksiz `gpt-*` satırlarını atlar.
+
 ## Kendi yapılandırmanız asla değiştirilmez
 
 Başlatıcı `~/.config/opencode/opencode.json`, proje `opencode.json` /
@@ -87,8 +89,8 @@ anlık görüntüdür: kataloğunuzu takip etmez. Bir sağlayıcı ekledikten ve
 görünürlüğünü değiştirdikten sonra `ocx export`'u yeniden çalıştırın.
 
 Birleştirildikten sonra opencode'u başlatmadan önce kabul anahtarını dışa
-aktarın — proxy'nin geri döngüde olduğu durumlar hariç (orada hiçbir anahtar
-gerekmez):
+aktarın. Yalnızca geri döngüye bağlı bir dinleyici anahtarı denetlemez, ancak OpenCode
+ayarlanmamış bir anahtarı reddeder; orada boş olmayan herhangi bir değer yeterlidir:
 
 ```bash
 export OPENCODEX_OPENCODE_API_KEY=<anahtarınız>
@@ -114,9 +116,11 @@ Geri döngü örneği:
 
 Geri döngü olmayan örnek:
 
+Bu örnek uzak istemcide elle yapılandırılır. Önce bir TLS ön ucu yapılandırın ve HTTPS URL'sini kullanın; OpenCodex TLS sonlandırmaz ve `ocx opencode` bu URL'yi otomatik bulmaz. LAN üzerinde düz HTTP, kimlik bilgisini aktarım sırasında açığa çıkarır. Alternatif olarak proxy'yi loopback üzerinde tutup yerel bir SSH tüneli kullanın. Bkz. [Veri dinleyicisi için TLS](/tr/guides/remote-hub/#giving-the-data-listener-tls).
+
 ```json
 "options": {
-  "baseURL": "http://192.168.1.10:10100/v1",
+  "baseURL": "https://proxy.example.com/v1",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }
@@ -128,10 +132,17 @@ Gerçek değer yalnızca alt süreç ortamı üzerinden iletilir.
 belirteci dosyası, ardından yapılandırılmış bir API anahtarı gelir — geri döngü
 olmayan bir bağlantının gerektirdiği budur.
 
-Bir geri döngü bağlantısı (`127.0.0.1`, varsayılan) hiçbir şeyi doğrulamaz, bu
-nedenle `{env:…}` referansı etkisizdir ve değişkeni ayarlanmamış
-bırakabilirsiniz. Yalnızca `hostname` geri döngünün ötesine ayarlandığında
-önemlidir; bkz. [Uzaktan erişim](/tr/reference/configuration/server/#uzaktan-erişim). Bu
+Bir geri döngü bağlantısı (`127.0.0.1`, varsayılan) veri düzlemi anahtarı istemez.
+Ancak OpenCode boş olmayan bir `apiKey` gerektirir ve ayarlanmamış bir `{env:…}` referansını
+istek gönderilmeden `Missing auth credential: apiKey` ile reddeder. Yönetilen entegrasyon veya
+panodaki istemci yapılandırması kimlik doğrulamasız geri döngü dinleyicisini hedeflediğinde `apiKey`
+olarak gizli olmayan `opencodex-loopback` yer tutucusunu yazar; dışa aktarılacak bir şey kalmaz.
+`ocx export` dahil diğer yollar referansı korur: gerektiği yerde kabul anahtarını, anahtarı denetlemeyen bir geri döngü bağlantısında ise boş
+olmayan herhangi bir değeri `OPENCODEX_OPENCODE_API_KEY` olarak dışa aktarın. Yalnızca bir geri döngü URL'si,
+hiçbir anahtarın denetlenmediğini göstermez: `0.0.0.0` adresine bağlı genel bir dinleyici `127.0.0.1` üzerinden
+erişildiğinde de kabul edilen bir anahtar ister; SSH yönlendirmesiyle erişilen kimlik doğrulamalı bir dinleyici de
+öyledir. Hedef anahtarı denetlediğinde anahtarı dışa aktarın; örneğin `hostname` geri
+döngünün ötesine ayarlandığında ve istemci kimlik doğrulamasız geri döngü dinleyicisini hedeflemediğinde; bkz. [Uzaktan erişim](/tr/reference/configuration/server/#uzaktan-erişim). Bu
 kabul anahtarı opencodex'in kendisine aittir ve
 [Sağlayıcılar](/tr/guides/providers/) altında yapılandırılan yukarı akış
 sağlayıcı anahtarlarıyla ilgisizdir.

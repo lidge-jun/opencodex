@@ -5,6 +5,7 @@ import { normalizeBindHostname } from "./bind-host";
 import { configureInboundBodyBudget } from "./inbound-body-admission";
 import { createAdmittedHttpTurn } from "./admitted-http-turn";
 import { isOllamaNativePath } from "./ollama-native-paths";
+import { geminiRouteAllows, isGeminiNativePath, parseGeminiNativePath } from "./gemini-native-paths";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
@@ -30,9 +31,11 @@ import {
 import { flushConfigDirHardeningAndReaps } from "../config/paths";
 import { trackBackgroundWork } from "../lib/background-work";
 import { migrateStartupSubagentModels } from "./subagent-models-startup";
+import { migrateStartupReserveCapability } from "./reserve-capability-startup";
 import { migrateStartupXaiResponses } from "./xai-responses-startup";
 import { migrateStartupZaiResponses } from "./zai-responses-startup";
 import { reconcileOAuthProviders } from "../oauth";
+import { coolComboTargetForCommittedTerminal } from "../combos";
 import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
 import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
 import { currentServiceHomes, serviceStatePathsForOpenCodexHome } from "../service";
@@ -114,6 +117,7 @@ import {
   inspectResponseLogSsePayload,
   nextRequestLogId,
   recordFirstOutput,
+  registerCommittedTerminalCooldownHandler,
   type RequestLogContext,
   type RequestLogEntry,
 } from "./request-log";
@@ -200,6 +204,7 @@ import {
 import { createReadinessGate, type ReadinessGate } from "./readiness";
 import { createServeOptions, type ServerIngress } from "./index/serve-options";
 import { createOptionalListenerSet, LINK_INGRESS_HOSTNAME } from "./index/optional-listeners";
+import { matchVideoRoute } from "../lib/video-routes";
 import { createPackageTreeIntegrityGuardForServer } from "./index/package-tree-guard";
 import { inspectStartupOwnership, logProxyEndpoints, resolveInboundBodyLimitWithWarning, setStartupCacheInvalidationWrite, warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup, type StartServerDeps } from "./index/startup-warnings";
 import { acquireSpendLedgerServerLifecycle, recordFailedStartRollback, type SpendLedgerServerLifecycle } from "./index/spend-ledger-lifecycle";
@@ -217,13 +222,13 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // Captured before loadConfig() starts the optional ACL flight so stop() drains the same dir
   // even if OPENCODEX_HOME changes underneath a long-lived process.
   const startupConfigDir = getConfigDir();
-  const startupConfig = migrateStartupSubagentModels(
+  const startupConfig = migrateStartupReserveCapability(migrateStartupSubagentModels(
     runModelRenameStartupMigration(
       runDevinProviderMergeStartupMigration(
         runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig())),
       ),
     ),
-  );
+  ));
   // Reconcile disk-backed presets first: it replaces provider rows and must not undo
   // an in-memory wire upgrade when that upgrade's persistence is temporarily unavailable.
   reconcileOAuthProviders(startupConfig);
@@ -231,6 +236,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   warnPlaintextV2AgentMessagesStartup(config);
   warnAgentTaskRecoveryStartup(config);
   setLiveStateStoreConfig(config);
+  registerCommittedTerminalCooldownHandler(coolComboTargetForCommittedTerminal);
   applyProxyEnv(config, true);
   assertServerAuthConfig(config);
   const managementAuth = deps.managementAuthState ?? initializeManagementAuthState(config);
@@ -417,7 +423,14 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     if (path === "/v1/images/generations" || path === "/v1/images/edits") {
       return req.method === "POST";
     }
+    // Videos (#9110) mirror images: a direct-spawn client may create, poll and fetch through this socket; handles
+    // minted here belong to the shared "loopback" principal, so every local process on it is one caller.
+    if (path === "/v1/videos" || path.startsWith("/v1/videos/")) return matchVideoRoute(req.method, path) !== undefined;
     if (path === "/v1/models") return req.method === "GET";
+    // Gemini wire (#8732): `ocx connect agy` points the CLI at this socket. Same admission as the
+    // chat wire it is translated into; each Gemini path admits only its own HTTP method.
+    const gemini = parseGeminiNativePath(path);
+    if (gemini) return geminiRouteAllows(gemini, req.method);
     // Realtime voice — a directly-spawned `codex app-server` needs these for desktop voice
     // the same way it needs /v1/responses. Two shapes, same trust model as /v1/responses:
     //  - standalone sessions (codex-rs thread/realtime/start, WebSocket transport):
@@ -431,6 +444,9 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     const isWebSocketUpgrade = req.headers.get("upgrade")?.toLowerCase() === "websocket";
     if (path === "/v1/realtime") return isWebSocketUpgrade;
     if (path === "/v1/live") return isWebSocketUpgrade || req.method === "POST";
+    // Public GPT-Live sessions: external audio keys only, checked again at the handler.
+    if (path === "/v1/live/sessions") return isWebSocketUpgrade || req.method === "POST";
+    if (/^\/v1\/live\/sessions\/[^/]+\/attach\/?$/.test(path)) return isWebSocketUpgrade;
     if (path === "/v1/realtime/calls") return req.method === "POST";
     if (/^\/v1\/(?:live|realtime\/calls)\/[^/]+\/?$/.test(path)) return isWebSocketUpgrade;
     return false;
@@ -451,6 +467,8 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     if (rawPath === "/opencodex-session") return req.method === "GET" || req.method === "POST";
     // Ollama-compatible inference paths are data plane, not management: never via Tailscale Serve.
     if (isOllamaNativePath(rawPath)) return false;
+    // Gemini-compatible inference paths are data plane too, and /v1beta/ is never a management route.
+    if (isGeminiNativePath(rawPath) || rawPath.startsWith("/v1beta/")) return false;
     if (rawPath.startsWith("/api/")) return true;
     if (req.method !== "GET" && req.method !== "HEAD") return false;
     let decodedPath: string;
@@ -646,7 +664,8 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       ingressForServer,
       loopbackRouteAllowed,
       managementIngressRouteAllowed,
-      linkRouteAllowed: optionalListeners.linkRouteAllowed, linkPolicy, onAuthenticatedCatalog: optionalListeners.notifyAuthenticatedCatalog,
+      linkRouteAllowed: optionalListeners.linkRouteAllowed, linkPolicy,
+      onAuthenticatedCatalog: (apiKeyId, routeProofId) => { optionalListeners.notifyAuthenticatedCatalog(apiKeyId, routeProofId); deps.observeAuthenticatedCatalog?.(apiKeyId, routeProofId); },
       packageTreeChangedResponse,
       serverBusyResponse,
       runAdmittedHttpTurn,
@@ -713,7 +732,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     }
     configureInboundBodyBudget(config.maxConcurrentInboundBodyBytes);
     optionalListeners.start({ config, publicPort: server.port ?? listenPort, requestedPort: listenPort, startProxy: deps.startClaudeInterceptProxy,
-      maxRequestBodySize: inboundBodyLimitBytes, dispatch: (req, requestServer) => serveOptions.fetch(req, requestServer) });
+      maxRequestBodySize: inboundBodyLimitBytes, dispatch: (req, requestServer) => serveOptions.fetch(req, requestServer), websocket: serveOptions.websocket, linkPolicy });
   } catch (error) {
     unregisterQuotaAutoRefresh?.();
     unregisterAnthropicCooldownRecovery?.();
@@ -835,6 +854,10 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, "startup"))
       .catch(() => {}));
   }
+
+  // Remote Link (lane O2): after an upgrade of a packaged install, cache the ocx-child builds its package's digests
+  // vouch for. Background work that never delays listen; until a release ships digests it fetches nothing and only creates ocx-child-builds/ with its baseline marker.
+  if ((config.runtimeRole ?? "standalone") !== "client") void trackBackgroundWork("ocx-child-cache-fill", import("../link/child-binary-cache-start").then(fill => fill.startChildBinaryCacheFill(config.runtimeRole)).catch(() => {}));
 
   // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.
   backgroundLifecycle.scheduleStartupRun();

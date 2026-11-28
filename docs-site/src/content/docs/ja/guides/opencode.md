@@ -20,6 +20,8 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ```
 
+前置きのないネイティブ OpenAI の `gpt-*` 行は、正規の `openai` プロバイダーが有効で、かつ Codex Direct モードでない間だけ表示されます。Codex Direct モードが有効な間も、利用可能なアカウント修飾付き `<namespace>/gpt-*` 行はエクスポートに残ります。Direct モードでは各呼び出し元自身の OpenAI 認証情報を転送しますが、opencode はプロキシのキーを送信します。また、`openai` プロバイダーが無効な場合、プロキシは前置きのない `gpt-*` セレクターをすべて拒否します。どちらの状態でも、ランチャー、管理対象の統合、および `ocx export` は、実行できないモデルを提示する代わりに前置きのない `gpt-*` 行を省略します。
+
 ## あなた自身の設定は決して変更されません
 
 ランチャーは、`~/.config/opencode/opencode.json`、プロジェクト `opencode.json` / `opencode.jsonc`、またはその他のディスク上の構成レイヤーをコピーしたり書き換えたりしません。既存のプロバイダー、エージェント、キーバインド、MCP エントリ、および相対的な `{file:…}` 参照は元のファイルから解決され続けますが、`provider.opencodex` または `providers.opencodex` オーバーライドを検出するためにグローバルまたはプロジェクト設定を読み取ることがあります。
@@ -54,7 +56,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 
 ランチャーのランタイム ブロックとは異なり、マージされたブロックは静的なスナップショットであり、カタログに従いません。プロバイダーを追加するか、モデルの可視性を変更した後、`ocx export` を再実行します。
 
-マージしたら、オープンコードを起動する前にアドミッション キーをエクスポートします。プロキシがループバック上にある場合を除き、何も必要ありません。
+マージしたら、opencode を起動する前にアドミッション キーをエクスポートします。ループバックのみにバインドされたリスナーはキーを検証しませんが、OpenCode は未設定のキーを拒否するため、その場合は空でない任意の値で構いません。
 
 ```bash
 export OPENCODEX_OPENCODE_API_KEY=<your key>
@@ -75,9 +77,11 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 非ループバックの例:
 
+これはリモートクライアントを手動で設定する例です。先に TLS フロントエンドを設定し、その HTTPS URL を使ってください。OpenCodex は TLS を終端せず、`ocx opencode` もその URL を自動検出しません。LAN 上でも平文 HTTP では転送中の認証情報が露出します。代わりにプロキシをループバックにバインドし、ローカル SSH トンネルを使うこともできます。[データリスナーの TLS](/ja/guides/remote-hub/#giving-the-data-listener-tls) を参照してください。
+
 ```json
 "options": {
-  "baseURL": "http://192.168.1.10:10100/v1",
+  "baseURL": "https://proxy.example.com/v1",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }
@@ -86,7 +90,7 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 実際の値は、子プロセス環境を介してのみ渡されます。 `OPENCODEX_API_AUTH_TOKEN` が優先され、次に強化されたサービス トークン ファイル、次に設定された API キーが優先されます。これは、非ループバック バインドに必要なものです。
 
-ループバック バインド (`127.0.0.1`、デフォルト) は何も認証しないため、`{env:…}` 参照は不活性であり、変数を設定しないままにすることができます。 `hostname` がループバックを超えて設定されている場合にのみ問題になります。 [リモートアクセス](/ja/reference/configuration/server/#リモートアクセス)を参照してください。このアドミッション キーは opencodex 独自のものであり、[プロバイダー](/guides/providers/) で構成されたアップストリーム プロバイダー キーとは無関係です。
+ループバック バインド (`127.0.0.1`、デフォルト) はデータ プレーン キーを要求しません。ただし OpenCode 自体は空でない `apiKey` を必要とし、未設定の `{env:…}` 参照をリクエスト送信前に `Missing auth credential: apiKey` で拒否します。管理統合またはダッシュボードのクライアント設定が認証なしのループバック リスナーを対象とする場合は、秘密ではないプレースホルダー `opencodex-loopback` を `apiKey` に書き込むため、エクスポートは不要です。`ocx export` などその他の経路は参照を保持するため、必要な場所ではアドミッション キーを、キーを検査しないループバック バインドでは空でない任意の値を `OPENCODEX_OPENCODE_API_KEY` にエクスポートしてください。ループバック URL だけではキーが検査されないとは言えません。`0.0.0.0` にバインドされた公開リスナーは `127.0.0.1` 経由でも受理されるキーを要求し、SSH フォワード経由で到達する認証付きリスナーも同様です。接続先がキーを検査する場合は必ずキーをエクスポートしてください。たとえば `hostname` がループバックを超えて設定され、クライアントが認証なしのループバック リスナーを対象としていない場合です。 [リモートアクセス](/ja/reference/configuration/server/#リモートアクセス)を参照してください。このアドミッション キーは opencodex 独自のものであり、[プロバイダー](/guides/providers/) で構成されたアップストリーム プロバイダー キーとは無関係です。
 
 ## 元に戻す
 

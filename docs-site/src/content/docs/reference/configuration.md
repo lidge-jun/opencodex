@@ -109,6 +109,28 @@ resolve that variable at request time. For outbound proxying, an already-set `HT
 
 Routing has its own ordered resolution rules; see [Routing](/reference/configuration/routing/).
 
+### Anthropic image-context recovery
+
+Set `anthropicImageContextRecovery: true` on the Anthropic provider to enable recovery after an image 413.
+The setting defaults to off. See [the Anthropic adapter](/reference/adapters/#anthropic) for limits
+and billing behavior.
+
+## Claude subscription reserve
+
+Set the optional top-level `subscriptionReserve` block in `config.json`.
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `subscriptionReserve.enabled` | `false` | Enables weekly quota steering for explicitly marked Claude subscription requests. |
+| `subscriptionReserve.soft` | `0.60` | Weekly utilization at which background requests can switch routes. |
+| `subscriptionReserve.hard` | `0.80` | Weekly utilization at which a downgrade is logged as hard reserve. Interactive requests keep the subscription at either threshold. |
+| `subscriptionReserve.targets` | `[]` | Ordered concrete `provider/model` routes. Use configured provider IDs. The proxy selects the first route that resolves to its named provider and is allowed by the admission key's scope. If no target qualifies, the request stays on the subscription route. |
+
+Both thresholds are fractions greater than zero and at most one. The effective hard threshold must
+be at least the effective soft threshold. Invalid policy edits disable the reserve on startup while
+other settings still load. `ocx config` rejects invalid policy writes. See the
+[Claude Code guide](/guides/claude-code/#weekly-subscription-reserve) for how to mark requests.
+
 ## Configuration domains
 
 - [Providers](/reference/configuration/providers/) — provider entries, authentication, endpoints,

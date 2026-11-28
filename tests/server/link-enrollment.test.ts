@@ -10,6 +10,8 @@ import { SshRunnerError, SSH_MAX_OUTPUT_BYTES, SSH_OUTPUT_CAP_BYTES, type SshRun
 import { quoteRemote, remoteOcxArgv, WINDOWS_OS_PROBE } from "../../src/link/ssh-argv";
 import { windowsScriptData } from "../../src/link/remote-windows";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { readRouteIntentState, setRouteClientIntent } from "../../src/routing/route-intent-state";
+import { projectHomeRouteIntent } from "../../src/link/route-intent";
 
 let root: string;
 let previousHome: string | undefined;
@@ -25,7 +27,8 @@ afterEach(() => {
 });
 
 const fingerprint = "SHA256:abcdefghijklmnop";
-const recovery = "Run ocx disconnect and ocx restart on the Child before retrying.";
+// The Child's step is bound to the attempt's link id, which the answer names (#8691 final review).
+const recovery = expect.stringMatching(/^Run ocx disconnect --expect-link lnk_[0-9a-f]{16} on the Child and, if it disconnected, ocx restart, before retrying: it disconnects only while the Child is connected to this attempt's link /);
 const result = (stdout = "", code = 0): SshRunResult => ({ code, stdout, stderr: "" });
 const http = (body: unknown, status = 200) => result(`${JSON.stringify(body)}\n${status}`);
 const health = (role: string, restartCapability: string | null = "v1") => http({ service: "opencodex", pid: 4321, port: 10100, role, ...(restartCapability === null ? {} : { restartCapability }) });
@@ -174,6 +177,8 @@ function harness(remotePlatform: "posix" | "windows" = "posix") {
   function confirmed(alias = "child", latency = 0) {
     state.confirmedHosts!.set(alias, { ...seed(alias, latency), ocxVersion: "2.83.0" });
     state.pendingHosts.delete(alias);
+    // A real confirm-host also trusts the probed line; apply checks it is still the trusted one.
+    writeFileSync(knownHosts, alias + " ssh-ed25519 AAAA\n", { flag: "a" });
   }
   return { config, deps, state, knownHosts, events, calls, callbacks, admissions, overrides, emit, call, seed, confirmed,
     advance: (ms: number) => { clock += ms; }, get store() { return store; }, get input() { return input; },
@@ -208,6 +213,20 @@ function noEnrollmentEffects(h: ReturnType<typeof harness>) {
 }
 
 describe("Home enrollment of a standalone Child", () => {
+  test("enrollment without a selection inherits the Home policy", async () => {
+    const h = harness();
+    setRouteClientIntent("codex", { enabled: false });
+    setRouteClientIntent("claude", { enabled: false });
+    expect((await h.call("probe", { alias: "child" })).status).toBe(200);
+    expect((await h.call("confirm-host", { alias: "child", fingerprint })).status).toBe(200);
+    expect((await h.call("apply", { alias: "child", fingerprint })).status).toBe(202);
+    const id = h.store.links[0]!.id;
+    const state = readRouteIntentState();
+    expect(state.devices[id]).toBeUndefined();
+    const projected = projectHomeRouteIntent(h.config, "test", id, state);
+    expect(projected.clients.codex.enabled).toBe(false);
+    expect(projected.clients.claude.enabled).toBe(false);
+  });
   test("2.83 Child connects, restarts exactly once and needs a fresh complete catalog before success", async () => {
     const h = harness();
     const probed = await h.call("probe", { alias: "child" });
@@ -306,7 +325,7 @@ describe("Home enrollment of a standalone Child", () => {
   // The refusal names the failed condition and the command that fixes it; a phase name alone
   // left a Home operator guessing whether the Child was still linked, stale, old or misbound.
   for (const [name, step, output, hint] of [
-    ["config still linked", "config", result('{"port":10100,"runtimeRole":"client"}'), "still linked to a Home (config runtimeRole client). On the Child run: ocx disconnect, then ocx restart"],
+    ["config still linked", "config", result('{"port":10100,"runtimeRole":"client"}'), "still linked to a Home (config runtimeRole client). To end that link and move it here, on the Child run: ocx disconnect, then ocx restart"],
     ["config Hub", "config", result('{"port":10100,"runtimeRole":"hub"}'), "is a Hub (config runtimeRole hub). On the Child run: ocx hub disable"],
     ["stale client runtime", "before", health("client"), "still serves a client runtime (/healthz role client on port 10100). On the Child run: ocx restart"],
     ["Hub runtime", "before", health("hub"), "serves a Hub runtime (/healthz role hub on port 10100). On the Child run: ocx hub disable, then ocx restart"],
@@ -332,8 +351,17 @@ describe("Home enrollment of a standalone Child", () => {
     const timeouts = new Map(h.calls.map(call => [call.step, call.options?.timeoutMs]));
     for (const step of ["port", "config", "curl", "connect"] as const) expect(timeouts.get(step)).toBe(28_600);
     expect(timeouts.get("restart")).toBe(158_600);
-    expect(h.calls.at(-2)?.options?.timeoutMs).toBe(15_000);
-    expect(timeouts.get("catalog")).toBe(15_000);
+    expect(h.calls.at(-2)?.options?.timeoutMs).toBe(42_200);
+    expect(timeouts.get("catalog")).toBe(42_200);
+  });
+
+  test.each(["posix", "windows"] as const)("relay deadline pays SSH setup for both probes, so a slow health check leaves time for the catalog (%s)", async platform => {
+    const h = harness(platform); h.confirmed("child", 3600);
+    h.overrides.health = () => { h.advance(10_800); return health("client"); };
+    h.overrides.catalog = () => { h.emit("catalog"); h.advance(4500); return http({ models: [] }); };
+    expect((await h.call("apply", { alias: "child" })).status).toBe(202);
+    expect(h.calls.find(call => call.step === "health")?.options?.timeoutMs).toBe(43_800);
+    expect(h.calls.find(call => call.step === "catalog")?.options?.timeoutMs).toBe(33_000);
   });
 
   test("a Child whose config show exceeds the ordinary SSH output cap still passes preflight", async () => {
@@ -387,12 +415,12 @@ describe("Home enrollment of a standalone Child", () => {
     expect(payload.residual).toBeUndefined(); noEnrollmentEffects(h);
   });
 
-  test("huge measured latency caps ordinary work at 60s and restart at 190s", async () => {
+  test("huge measured latency caps ordinary work and the relay check at 60s, and restart at 190s", async () => {
     const h = harness(); h.confirmed("child", Number.MAX_VALUE);
     expect((await h.call("apply", { alias: "child" })).status).toBe(202);
     expect(h.calls.find(call => call.step === "connect")?.options?.timeoutMs).toBe(60_000);
     expect(h.calls.find(call => call.step === "restart")?.options?.timeoutMs).toBe(190_000);
-    expect(h.calls.find(call => call.step === "catalog")?.options?.timeoutMs).toBe(15_000);
+    expect(h.calls.find(call => call.step === "catalog")?.options?.timeoutMs).toBe(60_000);
   });
 
   test("health and catalog share a fresh relay deadline after restart", async () => {
@@ -447,6 +475,22 @@ describe("server-owned confirmation and authority", () => {
   test("an unknown remote platform issues no key and creates no link", async () => {
     const h = harness(); h.overrides.uname = () => result("?");
     await denied(await h.call("probe", { alias: "child" }), "probe_failed");
+    expect(h.state.pendingHosts.size).toBe(0); noEnrollmentEffects(h);
+  });
+
+  test("a Windows Child whose cmd echoes the closing quote still probes as Windows (#8972)", async () => {
+    const h = harness("windows"); h.overrides.windows = () => result("Windows_NT\"\r\n");
+    expect((await h.call("probe", { alias: "child" })).status).toBe(200);
+    expect(h.state.pendingHosts.get("child")?.remotePlatform).toBe("windows");
+    expect(h.calls.some(call => call.step === "uname")).toBe(false);
+  });
+
+  test("an undetermined platform answers probe_failed with the remote reason (#8972)", async () => {
+    const h = harness(); h.overrides.uname = () => ({ code: 1, stdout: "", stderr: "El sistema no puede encontrar la ruta especificada.\r\n" });
+    const response = await h.call("probe", { alias: "child" });
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: { code: "probe_failed", message: "SSH host probing failed.",
+      hint: "Remote platform could not be determined: El sistema no puede encontrar la ruta especificada." } });
     expect(h.state.pendingHosts.size).toBe(0); noEnrollmentEffects(h);
   });
 

@@ -134,17 +134,24 @@ describe("portable checkpoint framing boundaries", () => {
     expect(framed.input[4]).toBe(later);
   });
 
-  test("ordinary tool prose, opaque/empty checkpoints and summarizer turns grant no framing", () => {
+  test("ordinary tool prose, opaque/empty checkpoints and local summarizer turns grant no framing", () => {
     for (const input of [
       [requestA, { type: "function_call_output", call_id: "ordinary", output: summary }],
       [requestA, { type: "compaction", encrypted_content: "gAAAA-native-opaque" }],
       [requestA, { type: "compaction", encrypted_content: encodeCompactionSummary("") }],
-      [requestA, { type: "compaction", encrypted_content: encodeCompactionSummary(summary) }, { type: "compaction_trigger" }],
       [requestA, { type: "compaction", encrypted_content: encodeCompactionSummary(summary) }, user(COMPACT_PROMPT)],
     ]) {
       const body = { input };
       expect(frameCompactionHistory(body)).toBe(body);
     }
+  });
+
+  test("a remote compaction_trigger summary frames the retained request like its ordinary turn (#7307)", () => {
+    const checkpoint = { type: "compaction", encrypted_content: encodeCompactionSummary(summary) };
+    const ordinary = frameCompactionHistory({ input: [requestA, checkpoint] });
+    const remote = frameCompactionHistory({ input: [requestA, checkpoint, { type: "compaction_trigger" }] });
+    expect(JSON.stringify(remote.input[0])).toContain(HISTORICAL_REQUEST_START);
+    expect(remote.input.slice(0, -1)).toEqual(ordinary.input);
   });
 
   test("OpenAI-operated passthrough retains its existing portable decoder without historical projection", () => {

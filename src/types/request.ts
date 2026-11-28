@@ -38,9 +38,10 @@ export interface OcxReasoningReplayScopeRef {
    */
   readonly clientPrincipalId?: string;
   /**
-   * Conversation namespace for replay state. Historically this was always the Codex parent-thread
-   * id; headerless Responses callers use a raw sanitized thread/Cursor/session fallback, never the
-   * hashed request-log conversation id.
+   * Conversation namespace for replay state. The request's own thread-id wins so a child agent
+   * cannot write its route into the parent's record (#8632); otherwise this is the Codex
+   * parent-thread id, and headerless Responses callers use a raw sanitized thread/Cursor/session
+   * fallback, never the hashed request-log conversation id.
    */
   readonly clientThreadId: string;
   current?: Readonly<OcxReasoningReplayIdentity>;
@@ -69,6 +70,8 @@ export interface OcxParsedRequest {
   _rawBody?: unknown;
   /** Trusted ingress provenance: preserve Chat's tool defaults only on the final Responses wire. */
   _chatCompletionsInput?: boolean;
+  /** Server-owned request provenance. All system text on this turn belongs at system priority. */
+  _proxyOwnedSystemPrompt?: true;
   /** Claude replay tags, retained only until each route binding verifies them. */
   _nativeReasoningReplay?: ReadonlyMap<string, string>;
   _nativeReasoningBoundOwner?: NativeReasoningOwner;
@@ -84,6 +87,18 @@ export interface OcxParsedRequest {
    */
   _summaryProhibitsToolCalls?: boolean;
   /**
+   * Routed Anthropic compaction summary: the caller's hosted web_search, kept aside from
+   * `_webSearch` so the summary declares the synthetic tool the ordinary request would declare
+   * without ever running the sidecar (#7307).
+   */
+  _summaryWebSearch?: Record<string, unknown>;
+  /**
+   * Compaction request after a decoded checkpoint. The parser withholds the continuation note from
+   * every summary; a prefix-preserving route adds it back where the ordinary request carries it,
+   * so the summary keeps that request's system prompt (#7307).
+   */
+  _summaryCheckpointNote?: boolean;
+  /**
    * Completed server-tool exchanges from the Claude client's history, keyed by the block that
    * followed them (`call:<tool_use id>` / `text:<text>`). Same audience as `_anthropicServerTools`.
    */
@@ -93,12 +108,16 @@ export interface OcxParsedRequest {
    * adapter ends a system block there so the breakpoint stays off the per-turn tail.
    */
   _anthropicSystemCachePrefix?: string;
+  /** The request arrived on the Anthropic Messages surface (Claude Code, Claude Desktop). */
+  _anthropicInbound?: boolean;
   /**
    * Boundary between replayed history and this turn's newly appended input. Usually the
    * items the proxy restored from local previous_response_id state; also set when the
    * CLIENT already carried that history verbatim and the proxy skipped the prepend.
    */
   _replayPrefixLen?: number;
+  /** First parsed message eligible as current input. Recomputed when a projection removes historical messages. */
+  _currentInputMessageStart?: number;
   /** Parsed-message index before the first conversational item in a continuation's current delta. */
   _continuationConversationMessageIndex?: number;
   /**
@@ -146,6 +165,8 @@ export interface OcxParsedRequest {
   _dropForeignReasoningItemIds?: boolean;
   /** Final-route opt-in: emit v2 collaboration message arguments as plaintext on ChatGPT. */
   _plaintextV2AgentMessages?: boolean;
+  _plaintextV2Decision?: boolean;
+  _plaintextV2EverPrepared?: boolean;
   /**
    * Optional authenticated tenant/operator namespace for Cursor thread→conversation derivation.
    * When absent (single-operator local proxy), derivation stays local-scoped.
@@ -167,6 +188,10 @@ export interface OcxParsedRequest {
   _providerContinuationCandidate?: OcxProviderContinuationState;
   /** Exact process-local route owner attached to newly persisted provider state. */
   _providerContinuationOwner?: OcxProviderContinuationOwner;
+  /** Serving owner of image history that was summarized within this request. */
+  _anthropicImageOwner?: OcxProviderContinuationOwner;
+  /** Internal image recovery summary that must bypass native adaptive thinking defaults. */
+  _anthropicImageSummary?: true;
   /**
    * The hosted `{type:"web_search", ...}` tool config, stashed when Codex enables web search. Routed
    * (non-OpenAI) providers can't run it server-side, so the proxy re-exposes it as a function tool and
@@ -218,6 +243,16 @@ export interface OcxParsedRequest {
    */
   _contextCompactionBoundary?: boolean;
   /**
+   * Codex's own per-turn metadata for this request says `history_initialization: "New"` (HTTP header,
+   * or a WebSocket frame's own `client_metadata`). Read once in request preparation; the experimental
+   * Anthropic `perMessageEffort` option takes it as the new-transcript receipt (#6895).
+   */
+  _codexNewHistory?: boolean;
+  /** This turn's per-message effort bookkeeping (src/adapters/anthropic/per-message-effort.ts). */
+  _perMessageEffort?: PerMessageEffortTurn;
+  /** Internal-only Chat session fallback for advisor adaptive ledger scoping (never sent upstream). */
+  _advisorSessionIdentity?: string;
+  /**
    * Core-owned registration slot for the optional advisor subsystem (src/advisor). Set per request
    * by the sidecar planner, never at module load: the core Responses path only sees this
    * structural shape, so an advisor-disabled install imports no advisor module. When present, the
@@ -235,6 +270,9 @@ export interface OcxParsedRequest {
 
 export interface OcxContext {
   systemPrompt?: string[];
+  /** Proxy-authored suffixes in systemPrompt (including any joining separator). Keeping their
+   * provenance lets adapters relocate caller text while preserving the original system layout. */
+  proxySystemPrompt?: { blockIndex: number; suffix: string }[];
   messages: OcxMessage[];
   tools?: OcxTool[];
 }
@@ -404,6 +442,10 @@ export interface OcxRequestOptions {
   topP?: number;
   stopSequences?: string[];
   toolChoice?: OcxToolChoice;
+  /** Root functions explicitly selected by the caller. An empty list permits no synthetic root function. */
+  explicitRootFunctionChoices?: readonly string[];
+  /** Caller-owned function and custom selectors before hosted tools are lowered for the provider. */
+  explicitClientToolChoices?: readonly { type: "function" | "custom"; name: string; namespace?: string }[];
   parallelToolCalls?: boolean;
   reasoning?: string;
   /**
@@ -414,6 +456,8 @@ export interface OcxRequestOptions {
   hideThinkingSummary?: boolean;
   /** Provider policy: suppress raw content-channel reasoning while summaries stay visible. */
   hideRawReasoning?: boolean;
+  /** Final-route Chat-to-Responses display compatibility, off unless explicitly enabled. */
+  rawReasoningAsSummary?: boolean;
   serviceTier?: string;
   /** Final outbound tier action, resolved after the provider/model wire is settled. */
   tierDecision?: TierDecision;
@@ -557,6 +601,17 @@ export type AdapterEvent =
 export interface OcxUrlCitation {
   url: string;
   title?: string;
+}
+
+/**
+ * One turn's per-message effort state (#6895). Spread copies of the parsed request share it, so a
+ * rebuild of the same turn is seen as a second build.
+ */
+export interface PerMessageEffortTurn {
+  /** The pending decision this turn owns, until it commits or is abandoned. */
+  token?: string;
+  generation: string;
+  builds: number;
 }
 
 /**

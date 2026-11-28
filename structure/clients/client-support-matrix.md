@@ -25,6 +25,9 @@ fields, reviewed claims and linked tests. Generation fails when one no longer ho
   with a no-secret loopback fixture. Every named field must be present and every value must map to a
   known protocol. OMP's Responses override is checked per model: the native OpenAI fixture model
   carries it and no other model does.
+  A field marked `perModel` (OpenCode's per-model `provider.npm` / `package` overrides) is the one
+  exception to "every matched entry carries it": entries may inherit the provider default, but the
+  fixture must contain at least one explicit override, which the direct-Chat fixture model provides.
 - Rows whose client picks the endpoint (ZCode, Raycast) and native rows are curated. Each keeps a
   source anchor; the client-selected rows also pin the exporter file's sha256, so any edit asks for a
   fresh review.

@@ -5,14 +5,16 @@ import { usageApp, type UsageApp, type UsageAppSummary } from "./app-breakdown";
 import { isLegacyCodexUsage, matchesUsageSource, snapshotConfiguredKeyIds, type UsageSourceFilter } from "./source-filter";
 import type { UsageTimeWindow } from "./time-range";
 import { isUnresolvedRequestedModel, usageModelPriceOptions } from "./model-identity";
+import { cacheObservationFromUsage, cacheTokensFromUsage } from "./cache-provenance";
 import {
-  classifyCacheTelemetryProvenance,
   isCodexUsageAccountLogLabel,
   type CacheTelemetryProvenance,
   type PersistedUsageEntry,
   type UsageStatus,
 } from "./log";
 import { type AttemptCostEstimate, type CostEstimate, estimateAttemptCost, estimateRequestCost, isMeasuredStatus, serviceTierContext, type ServiceTierContext, tokensPerSecond } from "./cost";
+
+export { cacheObservationFromUsage, cacheTokensFromUsage } from "./cache-provenance";
 
 /**
  * Canonical range members. The warm-up loop in the management usage route
@@ -253,44 +255,6 @@ export interface EntryCostInfo {
   attemptEstimates?: (AttemptCostEstimate | null)[];
   costTotal: number;
   isPriced: boolean;
-}
-
-export function cacheTokensFromUsage(usage?: PersistedUsageEntry["usage"]): {
-  read: number | undefined;
-  creation: number | undefined;
-  hasCacheTelemetry: boolean;
-} {
-  if (!usage) return { read: undefined, creation: undefined, hasCacheTelemetry: false };
-  const creation = usage.cacheCreationInputTokens;
-  const read = typeof usage.cacheReadInputTokens === "number"
-    ? usage.cacheReadInputTokens
-    : typeof usage.cachedInputTokens === "number" && typeof creation === "number"
-      ? Math.max(0, usage.cachedInputTokens - creation)
-      : usage.cachedInputTokens;
-  const hasCacheTelemetry = typeof usage.cachedInputTokens === "number"
-    || typeof usage.cacheReadInputTokens === "number"
-    || typeof usage.cacheCreationInputTokens === "number";
-  return { read, creation, hasCacheTelemetry };
-}
-
-/**
- * Cache tokens plus the provenance that says whether they may be averaged.
- *
- * A persisted `cacheProvenance` wins; a row written before the field existed is reconstructed
- * from its own shape, which reproduces the previous reading exactly (telemetry present is
- * observed, absent is unknown) so historical rows do not change meaning. Only `observed` reaches
- * a hit-rate denominator: a synthesized zero was emitted for wire compatibility and an unknown
- * was never measured, and averaging either as a zero is how a cold pool reports a warm cache.
- */
-export function cacheObservationFromUsage(
-  usage: PersistedUsageEntry["usage"],
-  provenance: CacheTelemetryProvenance | undefined,
-): { read: number | undefined; creation: number | undefined; provenance: CacheTelemetryProvenance } {
-  const { read, creation, hasCacheTelemetry } = cacheTokensFromUsage(usage);
-  // A row cannot have observed what it does not carry, so a stored label never opens the
-  // denominator for a record with no cache fields in it.
-  if (!usage || !hasCacheTelemetry) return { read, creation, provenance: "unknown" };
-  return { read, creation, provenance: provenance ?? classifyCacheTelemetryProvenance(usage) };
 }
 
 export function calculateCacheHitRate(
@@ -859,15 +823,16 @@ function blankRequestCounts(): UsageRequestCounts {
 /**
  * A usage-less attempt that provably cost nothing: it never reached upstream, or upstream refused it
  * with an HTTP error before any output (providers do not bill a pre-generation 429/401/5xx). One
- * whose stream began, aborted, or ended without a status may have generated billed tokens, so it
- * stays an unknown cost. A request made only of such zeros carries neither fact and counts unpriced.
+ * whose stream began, aborted, or lost the connection before a confirmed status may have billed
+ * tokens, so its cost stays unknown. A request made only of known zeros carries neither fact and counts unpriced.
  */
 function spentNothing(attempt: NonNullable<PersistedUsageEntry["attempts"]>[number] | undefined): boolean {
   if (!attempt || attempt.usage) return false;
   if (attempt.sendCount === 0 || attempt.locallyAnswered === true) return true;
-  // A 499 is the client hanging up on a send upstream may already be generating for.
+  // A client cancellation or ambiguous disconnect may leave generation running upstream.
   return attempt.status >= 400 && attempt.status !== 499
-    && attempt.streamAborted !== true && attempt.firstOutputMs === undefined;
+    && attempt.failureCause !== "transport-ambiguous" && attempt.streamAborted !== true
+    && attempt.firstOutputMs === undefined;
 }
 
 function bumpRequestCounts(counts: UsageRequestCounts, facts: number, amount = 1): void {

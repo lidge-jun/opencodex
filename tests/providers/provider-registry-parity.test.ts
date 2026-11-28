@@ -42,7 +42,7 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 const EXPECTED_KEY_PROVIDER_IDS = PROVIDER_REGISTRY
-  .filter(entry => entry.authKind === "key" && !entry.deprecated)
+  .filter(entry => entry.authKind === "key" && !entry.deprecated && entry.id !== "antigravity-acp")
   .map(entry => entry.id);
 
 describe("provider registry parity", () => {
@@ -323,7 +323,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-glm-5.2"]).toBe(405_504);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-coder"]).toEqual(["text", "image"]);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-glm-5.2"]).toEqual(["text"]);
-    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].models).toEqual(["gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro", "daybreak-red-latest", "daybreak-blue-latest", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"]);
+    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].models).toEqual(["gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro", "daybreak-red-latest", "daybreak-blue-latest", "gpt-6-astra", "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"]);
     expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelContextWindows?.["gpt-6-astra"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelMaxInputTokens?.["gpt-6-astra"]).toBe(922_000);
     expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelMaxOutputTokens?.["gpt-6-astra"]).toBe(128_000);
@@ -549,7 +549,7 @@ describe("provider registry parity", () => {
       defaultModel: "qwen3.8-max",
       liveModels: false,
       models: [
-        "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+        "qwen4-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
         "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "glm-5.2", "glm-5.3",
       ],
       modelInputModalities: {
@@ -577,7 +577,7 @@ describe("provider registry parity", () => {
       preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"]),
     });
     expect(PROVIDER_REGISTRY.find(entry => entry.id === "alibaba-token-plan")?.directReasoningEffortModels)
-      .toEqual(["qwen3.8-max", "qwen3.8-flash"]);
+      .toEqual(["qwen3.8-max", "qwen3.8-flash", "qwen4-max"]);
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
       .not.toContain("qwen3.8-max");
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
@@ -592,28 +592,20 @@ describe("provider registry parity", () => {
 
     const neuralwatt = PROVIDER_REGISTRY.find(entry => entry.id === "neuralwatt");
     expect(neuralwatt?.models).toEqual([
-      "glm-5.3", "glm-5.3-fast", "glm-5.3-short", "glm-5.3-short-fast",
-      "glm-5.3-flash",
-      "glm-5.2", "glm-5.2-fast", "glm-5.2-short", "glm-5.2-short-fast",
-      "kimi-k2.6", "kimi-k2.6-fast", "kimi-k2.7-code",
-      "qwen3.5-397b", "qwen3.5-397b-fast", "qwen3.6-35b", "qwen3.6-35b-fast",
+      "glm-5.3", "glm-5.3-flex", "glm-5.3-flash", "glm-5.3-flash-flex",
+      "deepseek-v4.1-flash", "deepseek-v4.1-flash-flex", "deepseek-v4.1-flash-speed", "nw-flash", "nw-flash-flex",
+      "kimi-k3.1-pro", "kimi-k3.1-pro-flex", "nw-large", "nw-large-flex", "mimo-v2.6-pro", "mimo-v2.6-pro-flex",
+      "qwen-3.8-27b", "qwen-3.8-27b-flex", "nw-small", "nw-small-flex",
+      "qwen3.6-35b", "qwen3.6-35b-flex", "qwen3.6-35b-fast", "gemma-4-31b",
     ]);
-    expect(neuralwatt?.models).not.toContain("moonshotai/Kimi-K2.5");
-    expect(neuralwatt?.models).not.toContain("kimi-k2.5-fast");
-    expect(neuralwatt?.modelReasoningEfforts?.["glm-5.2-short"])
-      .toEqual(neuralwatt?.modelReasoningEfforts?.["glm-5.2"]);
-    expect(neuralwatt?.modelReasoningEfforts?.["glm-5.2-short-fast"]).toEqual([]);
-    expect(neuralwatt?.modelReasoningEfforts).not.toHaveProperty("moonshotai/Kimi-K2.5");
-    expect(neuralwatt?.modelReasoningEfforts).not.toHaveProperty("kimi-k2.5-fast");
-    expect(neuralwatt?.noReasoningModels).toContain("glm-5.2-short-fast");
-    expect(neuralwatt?.noReasoningModels).not.toContain("kimi-k2.5-fast");
-    expect(neuralwatt?.noVisionModels).toEqual([
-      "glm-5.3", "glm-5.3-fast", "glm-5.3-short", "glm-5.3-short-fast",
-      "glm-5.2", "glm-5.2-fast", "glm-5.2-short", "glm-5.2-short-fast",
-      "qwen3.5-397b", "qwen3.5-397b-fast",
-    ]);
+    expect(neuralwatt?.modelReasoningEfforts?.["nw-flash"]).toEqual(["none", "low", "high", "xhigh", "max"]);
+    expect(neuralwatt?.modelDefaultReasoningEfforts?.["nw-flash"]).toBe("high");
+    expect(neuralwatt?.modelContextWindows?.["deepseek-v4.1-flash"]).toBe(1_048_560);
+    expect(neuralwatt?.modelMaxOutputTokens?.["deepseek-v4.1-flash"]).toBe(393_216);
+    expect(neuralwatt?.modelInputModalities?.["glm-5.3"]).toEqual(["text"]);
+    expect(neuralwatt?.modelInputModalities?.["glm-5.3-flash"]).toEqual(["text", "image"]);
+    expect(neuralwatt?.noReasoningModels).toEqual(["qwen3.6-35b-fast"]);
     expect(neuralwatt?.preserveReasoningContentModels).toContain("glm-5.2-short");
-    expect(neuralwatt?.preserveReasoningContentModels).not.toContain("moonshotai/Kimi-K2.5");
   });
 
   test("first-party DeepSeek Flash advertises native images without widening gateway aliases (#4436)", () => {
@@ -672,7 +664,7 @@ describe("provider registry parity", () => {
       .map(entry => entry.id);
     // The 5.3 family carries the number its own catalog reports, 1_048_576, which is what the
     // domestic Responses row already used. 5.2 keeps the round figure it was seeded with.
-    expect(zai?.modelContextWindows).toEqual({ "glm-5.3": 1_048_576, "glm-5.3[1m]": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 });
+    expect(zai?.modelContextWindows).toEqual({ "glm-5.4": 1_048_576, "glm-5.4[1m]": 1_048_576, "glm-5.3": 1_048_576, "glm-5.3[1m]": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 });
     // BUG-R5: glm-5.3-flash is a native VLM (docs.z.ai/guides/vlm/glm-5.3-flash), so it
     // must never sit in noVisionModels - that list routes a model's images through the
     // proxy's vision sidecar, which hands the model a text description of a picture it
@@ -715,8 +707,8 @@ describe("provider registry parity", () => {
     // no default effort and no output cap - and this assertion pinned that gap in
     // place rather than catching it, because it was written from the incomplete
     // state instead of from the family definition.
-    expect(zai?.modelDefaultReasoningEfforts).toEqual({ "glm-5.3": "max", "glm-5.3[1m]": "max", "glm-5.3-flash": "max" });
-    expect(zai?.modelMaxOutputTokens).toEqual({ "glm-5.3": 131_072, "glm-5.3[1m]": 131_072, "glm-5.3-flash": 131_072 });
+    expect(zai?.modelDefaultReasoningEfforts).toEqual({ "glm-5.4": "max", "glm-5.4[1m]": "max", "glm-5.3": "max", "glm-5.3[1m]": "max", "glm-5.3-flash": "max" });
+    expect(zai?.modelMaxOutputTokens).toEqual({ "glm-5.4": 131_072, "glm-5.4[1m]": 131_072, "glm-5.3": 131_072, "glm-5.3[1m]": 131_072, "glm-5.3-flash": 131_072 });
     // Every 5.3 row carries the same three-tier ladder. Asserted per member rather
     // than as one object literal so adding a member cannot quietly skip it.
     for (const id of ["glm-5.3", "glm-5.3[1m]", "glm-5.3-flash"]) {
@@ -797,7 +789,7 @@ describe("provider registry parity", () => {
       baseUrl: "https://open.bigmodel.cn/api/v1",
       authKind: "key",
       defaultModel: "glm-5.3",
-      models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"],
+      models: ["glm-5.4", "glm-5.3", "glm-5.3-flash", "glm-5-turbo"],
       liveModels: false,
       preserveCustomDestination: true,
       preserveResponsesReasoningContent: true,
@@ -808,13 +800,13 @@ describe("provider registry parity", () => {
     // Pinned separately from the global VLM rule above so that copying glm-5.3's ["text"] onto
     // Flash fails here, naming this preset, rather than only in a loop over every provider.
     const upstreamModalities = {
-      "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"], "glm-5-turbo": ["text"],
+      "glm-5.4": ["text", "image"], "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"], "glm-5-turbo": ["text"],
     };
     expect(registry.modelInputModalities).toEqual(upstreamModalities);
     expect(registry.modelInputModalities?.["glm-5.3-flash"]).toContain("image");
     expect(registry.noVisionModels ?? []).not.toContain("glm-5.3-flash");
     expect(KEY_LOGIN_PROVIDERS[id]).toMatchObject({
-      models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"], liveModels: false, apiKeyValidation: "unknown",
+      models: ["glm-5.4", "glm-5.3", "glm-5.3-flash", "glm-5-turbo"], liveModels: false, apiKeyValidation: "unknown",
     });
     const provider = providerConfigSeed(registry);
     enrichProviderFromRegistry(id, provider);
@@ -829,6 +821,8 @@ describe("provider registry parity", () => {
     // alike below, and this assertion is what keeps the reason for them different.
     expect(provider.modelInputModalities).toEqual(upstreamModalities);
     expect(models).toMatchObject([
+      { id: "glm-5.4", contextWindow: 1_048_576, reasoningEfforts: ["low", "high", "max"],
+        defaultReasoningEffort: "max", supportsReasoningSummaries: true, inputModalities: ["text", "image"] },
       { id: "glm-5.3", contextWindow: 1_048_576, reasoningEfforts: ["low", "high", "max"],
         defaultReasoningEffort: "max", supportsReasoningSummaries: true, inputModalities: ["text", "image"] },
       { id: "glm-5.3-flash", contextWindow: 1_048_576, reasoningEfforts: ["low", "high", "max"],
@@ -838,6 +832,7 @@ describe("provider registry parity", () => {
     ]);
     const entries = buildCatalogEntries(nativeTemplate(), [], models);
     for (const [modelId, window, efforts] of [
+      ["glm-5.4", 1_048_576, ["low", "high", "max", "ultra"]],
       ["glm-5.3", 1_048_576, ["low", "high", "max", "ultra"]],
       ["glm-5.3-flash", 1_048_576, ["low", "high", "max", "ultra"]],
       ["glm-5-turbo", 204_800, []],
@@ -1118,7 +1113,8 @@ describe("provider registry parity", () => {
       "kimi-k2.7-code-highspeed": 262_144,
       "kimi-k2.6": 262_144,
     });
-    expect(moonshot?.modelInputModalities?.["kimi-k3"]).toEqual(["text", "image"]);
+    // Kimi's vision guide lists video input for kimi-k3 and kimi-k3.1-pro (read 2026-11-25).
+    expect(moonshot?.modelInputModalities?.["kimi-k3"]).toEqual(["text", "image", "video"]);
     expect(moonshot?.noReasoningModels).not.toContain("kimi-k3");
     expect(moonshot?.noReasoningModels).toEqual(["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6"]);
     for (const field of ["noTemperatureModels", "noTopPModels", "noPenaltyModels", "preserveReasoningContentModels"] as const) {
@@ -1136,7 +1132,7 @@ describe("provider registry parity", () => {
       expect(moonshot?.noReasoningModels).not.toContain(modelId);
       expect(moonshot?.modelReasoningEfforts?.[modelId]).toEqual(["low", "high", "max"]);
       expect(moonshot?.modelDefaultReasoningEfforts?.[modelId]).toBe("max");
-      expect(moonshot?.modelInputModalities?.[modelId]).toEqual(["text", "image"]);
+      expect(moonshot?.modelInputModalities?.[modelId]).toEqual(modelId === "kimi-k3.1-pro" ? ["text", "image", "video"] : ["text", "image"]);
       for (const field of ["noTemperatureModels", "noTopPModels", "noPenaltyModels", "preserveReasoningContentModels"] as const) {
         expect(moonshot?.[field]).toContain(modelId);
       }
@@ -1211,7 +1207,8 @@ describe("provider registry parity", () => {
     expect(providerConfigSeed(litellm!).keyOptional).toBe(true);
     // claude-cli joins them as the first CLI-backed member: its row is `key` because the turn
     // leaves this machine, and keyless because the Claude Code CLI reads the operator's sign-in.
-    expect(optionalKeyProviders).toEqual(["litellm", "mimo-free", "claude-cli"]);
+    // antigravity-acp follows claude-cli for the same reason: the official agy CLI owns the Google sign-in.
+    expect(optionalKeyProviders).toEqual(["litellm", "mimo-free", "step-cli", "claude-cli", "antigravity-acp"]);
   });
 
   test("NVIDIA NIM is free-tier priced but still requires an API key", () => {

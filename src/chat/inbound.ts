@@ -5,11 +5,28 @@
  * Same translate-and-replay pattern as Claude Messages: the produced body must pass
  * responsesRequestSchema so routing/OAuth/pool/sidecars are inherited unchanged.
  */
+import { normalizedClientExtraContent } from "../responses/provider-opaque-metadata";
 import { chatImageUrlFromPart } from "./image-parts";
 import { signedReasoningInputItems } from "./reasoning-details";
-import { untranslatedChatInputMedia, untranslatedInputMediaMessage } from "../responses/input-media";
+import { chatAudioToResponsesPart, untranslatedChatInputMedia, untranslatedInputMediaMessage } from "../responses/input-media";
+import { chatBodyVideoRefusal } from "../responses/video-input";
 
 export class ChatCompletionsRequestError extends Error {}
+
+/**
+ * A video the Chat conversion cannot carry (outside user content, or over the inline cap). The
+ * Chat handler answers it as 400 `unsupported_input_modality`, the code the Responses core uses.
+ */
+export class ChatUnsupportedInputModalityError extends ChatCompletionsRequestError {
+  readonly code = "unsupported_input_modality";
+}
+
+/** The refusal for a Chat body's video, or undefined. Shared by both Chat conversions. */
+export function chatVideoRefusal(kind: string | undefined, raw: unknown): ChatUnsupportedInputModalityError | undefined {
+  if (kind === "video") return new ChatUnsupportedInputModalityError(untranslatedInputMediaMessage("video"));
+  const refusal = chatBodyVideoRefusal(raw);
+  return refusal ? new ChatUnsupportedInputModalityError(refusal) : undefined;
+}
 
 type Rec = Record<string, unknown>;
 type ChatCompletionsRoutingBody = Rec & { model: string; messages: unknown[] };
@@ -76,7 +93,7 @@ export function videoFromPart(part: Rec): { url: string; processing?: string } |
   return null;
 }
 
-function userContentToBlocks(content: unknown): Rec[] {
+function userContentToBlocks(content: unknown, allowInlineAudio?: boolean): Rec[] {
   if (typeof content === "string") {
     return content.length > 0 ? [{ type: "input_text", text: content }] : [];
   }
@@ -112,7 +129,8 @@ function userContentToBlocks(content: unknown): Rec[] {
       continue;
     }
     const file = fileFromPart(raw);
-    if (file) blocks.push(file);
+    const attachment = file ?? (allowInlineAudio ? chatAudioToResponsesPart(raw) : undefined);
+    if (attachment) blocks.push(attachment);
   }
   return blocks;
 }
@@ -221,7 +239,9 @@ function toolCallsToItems(
     if (!name) name = knownNameByCallId.get(callId) ?? "";
     if (!name) throw new ChatCompletionsRequestError("tool_calls entries require function.name");
     knownNameByCallId.set(callId, name);
-    input.push({ type: "function_call", call_id: callId, name, arguments: args });
+    // A Gemini thought signature rides on extra_content (the Responses carrier); keep only a
+    // well-formed one so a malformed echo is dropped instead of failing the request.
+    input.push({ type: "function_call", call_id: callId, name, arguments: args, ...(normalizedClientExtraContent(raw.extra_content) ?? {}) });
     awaitingToolResult.add(callId);
   }
 }
@@ -461,13 +481,14 @@ export interface ChatResponsesProjectionOptions {
   acceptAnthropicReasoningSignatures?: boolean;
   /** Preserve instruction attachments when a policy retry can select a media-capable target. */
   preserveInstructionMedia?: boolean;
+  allowInlineAudio?: boolean;
 }
 
 export function chatCompletionsToResponsesBody(raw: unknown, options: ChatResponsesProjectionOptions = {}): Rec {
   assertChatCompletionsRoutingBody(raw);
-  // Only the translated path reaches this function. Native Chat can retain its
-  // provider-specific file/audio blocks; projecting them here would discard them.
-  const unsupportedMedia = untranslatedChatInputMedia(raw);
+  const unsupportedMedia = untranslatedChatInputMedia(raw, options.allowInlineAudio);
+  const videoRefusal = chatVideoRefusal(unsupportedMedia, raw);
+  if (videoRefusal) throw videoRefusal;
   if (unsupportedMedia) {
     throw new ChatCompletionsRequestError(untranslatedInputMediaMessage(unsupportedMedia));
   }
@@ -546,7 +567,7 @@ export function chatCompletionsToResponsesBody(raw: unknown, options: ChatRespon
       }
       case "user": {
         beginConversationTurn();
-        const blocks = userContentToBlocks(msg.content);
+        const blocks = userContentToBlocks(msg.content, options.allowInlineAudio);
         if (blocks.length > 0) input.push({ type: "message", role: "user", content: blocks });
         break;
       }

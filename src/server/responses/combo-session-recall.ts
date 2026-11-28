@@ -1,15 +1,27 @@
 /** Process-local recall of the last completed combo response on an explicit session lane. */
 import { getCombo, targetKey } from "../../combos/types";
 import { captureConfigGeneration, type GenerationContext } from "../../lib/state-store-sweeper";
-import type { OcxConfig, OcxComboTarget } from "../../types";
+import type { OcxComboDefaultEffort, OcxConfig, OcxComboTarget } from "../../types";
+
+/** The effort a JEV decision set for a lane's turn; `null` is its explicit no-effort choice. */
+export interface ComboTurnEffort {
+  effort: OcxComboDefaultEffort | null;
+}
 
 interface ComboRecallEntry {
   comboId: string;
   target: Pick<OcxComboTarget, "provider" | "model">;
+  routeIdentity?: string;
+  /** The resolved model that served the turn, which a continuation's model lock keeps. */
+  servingModel?: string;
   responseModel: string;
   at: number;
   /** UTF-8 size of `responseModel`, the only client-influenced field of unbounded length. */
   bytes: number;
+  /** Present only when a JEV decision, not ordinary Combo policy, set the completed request's effort. */
+  turnEffort?: ComboTurnEffort;
+  /** A quota-only turn whose Combo, target or provider left the config. It keeps the lane so its continuation is refused. */
+  orphaned?: true;
 }
 
 const RECALL_CAPACITY = 256;
@@ -33,6 +45,14 @@ function deleteEntry(lane: string): boolean {
   recall.delete(lane);
   recallBytes -= entry.bytes;
   return true;
+}
+
+/**
+ * Forget a lane whose target can no longer serve, unless a fresh entry still decides its continuation: a
+ * quota-only turn's pin or the serving model a model lock keeps.
+ */
+function forgetUnusableEntry(lane: string, entry: ComboRecallEntry): void {
+  if ((!entry.routeIdentity && !entry.servingModel) || Date.now() - entry.at >= RECALL_TTL_MS) deleteEntry(lane);
 }
 
 /**
@@ -60,10 +80,15 @@ export function rememberComboForLane(
   target: Pick<OcxComboTarget, "provider" | "model">,
   responseModel: string,
   writerGeneration: number,
+  turnEffort?: ComboTurnEffort,
+  routeIdentity?: string,
+  servingModel?: string,
 ): void {
   if (!lane || !comboId || !responseModel.trim()) return;
-  // Reject even a same-named recreated owner: its previous in-flight turn is obsolete.
-  if (writerGeneration < Math.max(lastReconciledGeneration, captureConfigGeneration())) return;
+  // Reject even a same-named recreated owner: its previous in-flight turn is obsolete. A quota-only turn is judged
+  // by the ownership check below and by its route identity when its continuation arrives, so a reconcile that
+  // only touched other Combos keeps its pin.
+  if (!routeIdentity && writerGeneration < Math.max(lastReconciledGeneration, captureConfigGeneration())) return;
   // An unretainable model id DECLINES the write; it must not clear the lane. Every other
   // rejection above returns the same way, and clearing here would let a late completion erase
   // a newer selection that this function has no ordering information to compare against.
@@ -75,6 +100,9 @@ export function rememberComboForLane(
     responseModel,
     at: Date.now(),
     bytes,
+    ...(turnEffort ? { turnEffort: { effort: turnEffort.effort } } : {}),
+    ...(routeIdentity ? { routeIdentity } : {}),
+    ...(servingModel ? { servingModel } : {}),
   };
   if (liveOwners && !ownsEntry(liveOwners, entry)) return;
   deleteEntry(lane);
@@ -90,6 +118,21 @@ export function rememberComboForLane(
   }
 }
 
+/**
+ * The quota-only Combo that answered the lane's last Combo turn while the lane is fresh, whether or not its
+ * target can still serve. Only a quota-only turn records its route identity.
+ */
+export function quotaOnlyComboForLane(lane: string | undefined): string | undefined {
+  const entry = lane ? recall.get(lane) : undefined;
+  return entry?.routeIdentity && Date.now() - entry.at < RECALL_TTL_MS ? entry.comboId : undefined;
+}
+
+/** The resolved model that served the lane's last turn for `comboId` while the lane is fresh, whether or not its target can still serve. */
+export function servingModelForLane(lane: string | undefined, comboId: string): string | undefined {
+  const entry = lane ? recall.get(lane) : undefined;
+  return entry?.comboId === comboId && Date.now() - entry.at < RECALL_TTL_MS ? entry.servingModel : undefined;
+}
+
 export function recallComboForLane(
   config: OcxConfig,
   lane: string | undefined,
@@ -100,11 +143,11 @@ export function recallComboForLane(
   if (!entry) return undefined;
   const combo = getCombo(config, entry.comboId);
   const provider = config.providers[entry.target.provider];
-  if (Date.now() - entry.at >= RECALL_TTL_MS
+  if (entry.orphaned || Date.now() - entry.at >= RECALL_TTL_MS
     || !Object.hasOwn(config.providers, entry.target.provider)
     || !provider || provider.disabled === true
     || !combo?.targets.some(target => targetKey(target) === targetKey(entry.target))) {
-    deleteEntry(lane);
+    forgetUnusableEntry(lane, entry);
     return undefined;
   }
   return entry.responseModel === model ? entry.comboId : undefined;
@@ -119,20 +162,53 @@ export function recallComboTargetForLane(
   config: OcxConfig,
   lane: string | undefined,
   comboId: string,
-): Pick<OcxComboTarget, "provider" | "model"> | undefined {
+): (Pick<OcxComboTarget, "provider" | "model"> & Pick<ComboRecallEntry, "routeIdentity" | "servingModel">) | undefined {
   if (!lane || !comboId) return undefined;
   const entry = recall.get(lane);
   if (!entry || entry.comboId !== comboId) return undefined;
+  const target = peekComboTargetForLane(config, lane, comboId);
+  if (!target) forgetUnusableEntry(lane, entry);
+  return target;
+}
+
+/**
+ * `recallComboTargetForLane` without forgetting a lane whose target can no longer serve, so a
+ * caller that refuses the continuation finds the same Combo on the next attempt.
+ */
+export function peekComboTargetForLane(
+  config: OcxConfig,
+  lane: string | undefined,
+  comboId: string,
+): (Pick<OcxComboTarget, "provider" | "model"> & Pick<ComboRecallEntry, "routeIdentity" | "servingModel">) | undefined {
+  const entry = lane ? recall.get(lane) : undefined;
+  if (!entry || entry.comboId !== comboId) return undefined;
   const combo = getCombo(config, entry.comboId);
   const provider = config.providers[entry.target.provider];
-  if (Date.now() - entry.at >= RECALL_TTL_MS
+  if (entry.orphaned || Date.now() - entry.at >= RECALL_TTL_MS
     || !Object.hasOwn(config.providers, entry.target.provider)
     || !provider || provider.disabled === true
-    || !combo?.targets.some(target => targetKey(target) === targetKey(entry.target))) {
-    deleteEntry(lane);
-    return undefined;
-  }
-  return { provider: entry.target.provider, model: entry.target.model };
+    || !combo?.targets.some(target => targetKey(target) === targetKey(entry.target))) return undefined;
+  return {
+    ...entry.target,
+    ...(entry.routeIdentity ? { routeIdentity: entry.routeIdentity } : {}),
+    ...(entry.servingModel ? { servingModel: entry.servingModel } : {}),
+  };
+}
+
+/**
+ * The effort a JEV decision set for the lane's turn, when `target` is the one that completed it.
+ * Freshness and ownership are `recallComboTargetForLane`'s job: a tool-loop pin reads this only
+ * for the target that call just returned, in the same synchronous turn.
+ */
+export function recallComboTurnEffortForLane(
+  lane: string | undefined,
+  comboId: string,
+  target: Pick<OcxComboTarget, "provider" | "model">,
+): ComboTurnEffort | undefined {
+  if (!lane || !comboId) return undefined;
+  const entry = recall.get(lane);
+  if (!entry || entry.comboId !== comboId || targetKey(entry.target) !== targetKey(target)) return undefined;
+  return entry.turnEffort ? { effort: entry.turnEffort.effort } : undefined;
 }
 
 /**
@@ -158,9 +234,12 @@ export function reconcileComboRecall(context: GenerationContext): number {
   };
   let removed = 0;
   for (const [lane, entry] of recall) {
-    if (!ownsEntry(context, entry) || Date.now() - entry.at >= RECALL_TTL_MS) {
-      if (deleteEntry(lane)) removed += 1;
-    }
+    const expired = Date.now() - entry.at >= RECALL_TTL_MS;
+    if (!expired && ownsEntry(context, entry)) continue;
+    // A fresh quota-only turn keeps owning its lane once its Combo, target or provider leaves the config, so
+    // its tool continuation is refused instead of reaching another model.
+    if (!expired && entry.routeIdentity) entry.orphaned = true;
+    else if (deleteEntry(lane)) removed += 1;
   }
   return removed;
 }

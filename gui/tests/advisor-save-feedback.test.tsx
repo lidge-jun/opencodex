@@ -385,3 +385,136 @@ test("malformed catalog is a load error and preserves the current identifier", a
   expect(container.querySelector("#advisor-model")?.textContent).toContain(initialSettings.model);
   await act(async () => root.unmount());
 });
+
+test("partial MCP sync error on HTTP 200 save shows warning with retry without needing a new edit", async () => {
+  let putCalls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/api/advisor/settings") && init?.method === "PUT") {
+      putCalls += 1;
+      if (putCalls === 2) return new Response(null, { status: 503 });
+      return new Response(
+        JSON.stringify({
+          settings: { ...initialSettings, model: "expert/gpt-first" },
+          runnable: true,
+          mcpClients: [
+            {
+              clientId: "qoder",
+              label: "Qoder",
+              detected: true,
+              routed: true,
+              mounted: false,
+              selected: true,
+              defaultAutoMount: true,
+              supportsHooks: true,
+              supportsSkills: true,
+              hooksMounted: false,
+              skillMounted: false,
+              trustStatus: "not_mounted",
+              configPath: "~/.qoder/settings.json",
+              trustNoteZh: "",
+              trustNoteEn: "",
+            },
+          ],
+          mcpSync: putCalls === 1
+            ? { mounted: [], unmounted: [], errors: [{ clientId: "qoder", message: "invalid JSON" }] }
+            : { mounted: ["qoder"], unmounted: [], errors: [] },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    if (url.endsWith("/api/models/all")) {
+      return Response.json([{ namespaced: "expert/gpt-partial" }]);
+    }
+    return new Response(null, { status: 404 });
+  }) as typeof fetch;
+
+  const { root, container } = await mountEditor();
+  await setModel(container, "expert/gpt-first");
+  await clickSave(container);
+
+  expect(container.querySelector(".notice-ok")).toBeNull();
+  const warnTexts = [...container.querySelectorAll(".notice-warn")].map(el => el.textContent ?? "");
+  expect(warnTexts.some(text => text.includes("Qoder (invalid JSON)"))).toBe(true);
+
+  const retryBtn = [...container.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === "Retry");
+  expect(retryBtn).toBeDefined();
+  await act(async () => { retryBtn!.click(); });
+
+  expect(putCalls).toBe(2);
+  const retryAfterFailure = [...container.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === "Retry");
+  expect(retryAfterFailure).toBeDefined();
+  await act(async () => { retryAfterFailure!.click(); });
+  expect(putCalls).toBe(3);
+  expect(container.querySelector(".notice-ok")?.textContent).toContain("Advisor settings saved.");
+  await act(async () => root.unmount());
+});
+
+test("auto mode client selection reflects draft autoMountMcp toggle immediately", async () => {
+  const { AdvisorClientMcpPanel } = await import("../src/pages/advisor/AdvisorClientMcpPanel");
+  const qoder = {
+    clientId: "qoder" as const,
+    label: "Qoder",
+    detected: true,
+    routed: true,
+    mounted: true,
+    selected: true,
+    defaultAutoMount: true,
+    supportsHooks: true,
+    supportsSkills: true,
+    hooksMounted: true,
+    skillMounted: true,
+    trustStatus: "needs_confirmation" as const,
+    configPath: "~/.qoder/settings.json",
+    trustNoteZh: "",
+    trustNoteEn: "",
+  };
+  const onHtml = renderToStaticMarkup(
+    <LanguageProvider>
+      <AdvisorClientMcpPanel
+        clients={[qoder]}
+        autoMountMcp={true}
+        explicitClients={null}
+        disabled={false}
+        onChangeAutoMount={() => {}}
+        onChangeClients={() => {}}
+        onUseAutoMode={() => {}}
+      />
+    </LanguageProvider>,
+  );
+  const offHtml = renderToStaticMarkup(
+    <LanguageProvider>
+      <AdvisorClientMcpPanel
+        clients={[qoder]}
+        autoMountMcp={false}
+        explicitClients={null}
+        disabled={false}
+        onChangeAutoMount={() => {}}
+        onChangeClients={() => {}}
+        onUseAutoMode={() => {}}
+      />
+    </LanguageProvider>,
+  );
+  // Two checkboxes: auto-mount toggle + qoder client checkbox.
+  expect((onHtml.match(/checked=""/g) ?? []).length).toBe(2);
+  expect((offHtml.match(/checked=""/g) ?? []).length).toBe(0);
+  // The mode badge says auto-connect is off instead of claiming it follows routes.
+  expect(onHtml).toContain("Auto — follows active compatible routes");
+  expect(onHtml).toContain('aria-labelledby="advisor-mcp-client-qoder"');
+  expect(onHtml).toContain('aria-describedby="advisor-mcp-note-qoder"');
+  expect(offHtml).toContain("Off — choose clients below or turn on auto-connect");
+  expect(offHtml).not.toContain("Auto — follows active compatible routes");
+  const calls: string[] = [];
+  const container = testWindow.document.createElement("div") as unknown as HTMLElement;
+  testWindow.document.body.append(container as never);
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(container);
+  await act(async () => root.render(<LanguageProvider><AdvisorClientMcpPanel clients={[qoder]} autoMountMcp={false}
+    explicitClients={["qoder"]} disabled={false} onChangeAutoMount={v => calls.push(`auto:${v}`)}
+    onChangeClients={v => calls.push(`clients:${v}`)} onUseAutoMode={() => calls.push("auto-mode")} /></LanguageProvider>));
+  const auto = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.includes("Use automatic sync"));
+  expect(auto).toBeDefined();
+  await act(async () => { auto!.click(); });
+  expect(calls).toEqual(["auto-mode"]);
+  await act(async () => root.unmount());
+});

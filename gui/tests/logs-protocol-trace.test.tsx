@@ -31,11 +31,28 @@ const native: ProtocolTraceV1 = {
   attempts: undefined,
 };
 
+const gemini: ProtocolTraceV1 = {
+  ...native,
+  inbound: "gemini",
+  upstream: "gemini",
+  requestPath: ["gemini", "gemini"],
+  responsePath: ["gemini", "gemini"],
+};
+
 describe("ProtocolBadge", () => {
   test("writes the path and the mode as text", () => {
     const html = renderToStaticMarkup(<ProtocolBadge trace={native} t={t} />);
     expect(html).toContain("Chat → Chat · Native");
     expect(html).toContain('data-protocol-mode="native"');
+  });
+
+  test("labels native Gemini in both the list and the detail", () => {
+    const translate: TFn = (key, vars) => interpolate(DICTS.zh[key], vars);
+    const badge = renderToStaticMarkup(<ProtocolBadge trace={gemini} t={translate} />);
+    const panel = renderToStaticMarkup(<ProtocolTracePanel trace={gemini} t={translate} />);
+    expect(badge).toContain("Gemini → Gemini · 原生");
+    expect(panel).toContain("Gemini → Gemini");
+    expect(panel).not.toContain("protocol-deep-link");
   });
 
   test("renders nothing for a row without a valid trace", () => {

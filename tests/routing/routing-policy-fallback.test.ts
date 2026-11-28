@@ -1,6 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 import { formatErrorResponse } from "../../src/bridge";
+import { jsonContextOverflowResponse } from "../../src/server/responses/context-overflow";
 import { isProxyError } from "../../src/lib/client-error-body";
 import { finalizeAccountLease } from "../../src/server/responses/core-lifetime";
 import { MandatoryToolChoiceUnavailableError, PolicyCandidateUnavailableError, policyCandidateRefusalResponse } from "../../src/server/responses/policy-request-scope";
@@ -13,6 +18,12 @@ import type { RouteDecisionTraceV1 } from "../../src/routing/trace";
 import { clearFallbackEventsForTests, recentFallbackEvents } from "../../src/routing/fallback-policy";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { parseSyntheticRowId } from "../../src/server/fast-row";
+import { boundEntryIdForLane, clearProviderCacheAffinityForTests, recordProviderCacheAffinity } from "../../src/providers/cache-affinity";
+import { finalizeProviderCacheAffinity } from "../../src/server/request-log-cache-affinity";
+import { currentCacheAffinityIdentity } from "../../src/providers/cache-affinity-identity";
+import { routedProviderConfig } from "../../src/providers/routed-config";
+import { stampApiKeyAccountLabel } from "../../src/providers/label";
+import { saveConfig } from "../../src/config";
 import {
   handleResponsesWithPolicyFallback,
   rankPolicyFallbackCandidates,
@@ -65,6 +76,79 @@ function seedAttempt(logCtx: RequestLogContext, provider: string, model: string)
 }
 
 describe("policy candidate fallback", () => {
+  let home: string;
+  let previousHome: string | undefined;
+  beforeEach(() => { previousHome = process.env.OPENCODEX_HOME; home = mkdtempSync(join(tmpdir(), "ocx-policy-fallback-")); process.env.OPENCODEX_HOME = home; });
+  afterEach(() => { if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome; removeTreeWithRetry(home); });
+  test.each(["long request id", "envelope limit", "over limit", "conflicting tail", "hostile diagnostic"] as const)(
+    "exact effort fallback checks the complete bounded envelope: %s", async kind => {
+      const error = { type: "invalid_request_error", param: "reasoning_effort", message: "Invalid reasoning effort." };
+      let body = JSON.stringify({ request_id: "x".repeat(1100), error,
+        ...(kind === "conflicting tail" ? { details: { param: "temperature", message: "Invalid temperature." } } : {}),
+        ...(kind === "hostile diagnostic" ? { details: { message: "parameter" + " ".repeat(1100) + "!" } } : {}),
+      });
+      if (kind === "envelope limit" || kind === "over limit") body = body.padEnd(16_384 + (kind === "over limit" ? 1 : 0), " ");
+      const shouldHop = kind === "long request id" || kind === "envelope limit";
+      const seenModels: string[] = [];
+      const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {}, {}, {
+        runCore: async (req, _config, context, options) => {
+          const parsed = await req.json();
+          options.onRequestBodyParsed?.(parsed);
+          context.routeDecision = policyTrace();
+          seenModels.push(parsed.model);
+          return seenModels.length === 1
+            ? new Response(body, { status: 400, headers: { "content-type": "application/json" } })
+            : Response.json({ status: "completed" });
+        },
+      });
+      expect(body.length).toBeGreaterThan(1024);
+      expect(seenModels).toEqual(shouldHop ? ["policy/daily", "provider-b/model-b"] : ["policy/daily"]);
+      expect(response.status).toBe(shouldHop ? 200 : 400);
+      if (shouldHop) expect(await response.json()).toEqual({ status: "completed" });
+      else expect(await response.text()).toBe(body);
+    },
+  );
+  test.each([401, 402, 429, "local"] as const)("synthetic failure attribution across candidates (%s)", async outcome => {
+    clearProviderCacheAffinityForTests();
+    const lane = "policy-terminal-source";
+    const providerName = outcome === "local" ? "provider-a" : "provider-b";
+    const config = fixtureConfig();
+    config.providers[providerName]!.apiKeyPool = [{ id: "a", key: "fixture-key" }, { id: "b", key: "other-key" }];
+    saveConfig(config);
+    recordProviderCacheAffinity({ lane, providerName, entryId: "a", identity: currentCacheAffinityIdentity(providerName, config.providers[providerName], "a"), model: outcome === "local" ? "model-a" : "model-b", cacheWrite: 4000 });
+    const log: RequestLogContext = { model: "model-a", provider: "provider-a", affinityLane: lane };
+    const trace = policyTrace();
+    trace.candidates[2]!.eligible = false;
+    let calls = 0;
+    const response = await handleResponsesWithPolicyFallback(request(), config, log, {}, {
+      runCore: async (req, _config, context, options) => {
+        options.onRequestBodyParsed?.(await req.json());
+        context.routeDecision = trace;
+        if (++calls === 1) {
+          context.terminalSource = "synthetic";
+          context.affinityProviderName = "provider-a";
+          context.affinityKeyEntryId = "a";
+          context.cacheAffinityApplicable = true;
+          if (outcome === "local") stampApiKeyAccountLabel(context, "provider-a", routedProviderConfig("provider-a", config.providers["provider-a"]!));
+          return Response.json({ error: { message: "local failure" } }, { status: outcome === "local" ? 429 : 503 });
+        }
+        if (outcome === "local") return policyCandidateRefusalResponse(new PolicyCandidateUnavailableError())!;
+        seedAttempt(context, "provider-b", "model-b");
+        noteAttemptSend(context.activeAttempt, undefined);
+        context.affinityProviderName = "provider-b";
+        context.affinityKeyEntryId = "a";
+        context.cacheAffinityApplicable = true;
+        stampApiKeyAccountLabel(context, "provider-b", routedProviderConfig("provider-b", config.providers["provider-b"]!));
+        return Response.json({ error: { message: "upstream refusal" } }, { status: outcome });
+      },
+    });
+    expect(calls).toBe(2);
+    expect(response.status).toBe(outcome === "local" ? 429 : outcome);
+    expect(log.terminalSource).toBe(outcome === "local" ? "synthetic" : undefined);
+    finalizeProviderCacheAffinity(log, response.status, undefined);
+    expect(boundEntryIdForLane(lane)).toBe(outcome === "local" ? "a" : undefined);
+    clearProviderCacheAffinityForTests();
+  });
   test.each([false, true])("upstream failure body settles when the next policy hop is refused=%s", async denied => {
     const config = fixtureConfig();
     if (denied) config.fallback = { routes: { "policy/daily": { provider: false } } };
@@ -272,7 +356,13 @@ describe("policy candidate fallback", () => {
     },
   );
 
-  for (const hardCode of ["upstream_no_response", "origin_rejected", "origin-rejected", " ORIGIN-REJECTED ", "cyber_policy"]) {
+  for (const hardCode of [
+    "upstream_no_response",
+    "origin_rejected",
+    "origin-rejected",
+    " ORIGIN-REJECTED ",
+    "cyber_policy",
+  ]) {
     test.each(["root", "nested"])(`policy preserves ${hardCode} at %s beside a competing code`, async location => {
       let calls = 0;
       const refusal = "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.";
@@ -386,6 +476,39 @@ describe("policy candidate fallback", () => {
       { authorization, chatgptAccountId: "sidecar-account" },
     ]);
     expect(snapshots[1]).toBe(snapshots[0]);
+  });
+  test("a policy hop does not persist the previous candidate's cache-affinity outcome", async () => {
+    const log: RequestLogContext = { model: "", provider: "" };
+    let calls = 0;
+    const response = await handleResponsesWithPolicyFallback(
+      request(),
+      fixtureConfig(),
+      log,
+      {},
+      {
+        runCore: async (req, _config, context, options) => {
+          options.onRequestBodyParsed?.(await req.json());
+          context.routeDecision = policyTrace();
+          if (++calls === 1) {
+            context.cacheAffinity = "kept";
+            context.cacheAffinityReason = "cache";
+            context.affinityKeptEntryId = "old-key";
+            context.cacheAffinityApplicable = true;
+            context.affinityKeyEntryId = "old-key";
+            return Response.json({ error: { message: "retry next candidate" } }, { status: 503 });
+          }
+          context.provider = "provider-b";
+          context.cacheAffinityApplicable = false;
+          return Response.json({ status: "completed" });
+        },
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(calls).toBe(2);
+    expect(log.cacheAffinity).toBeUndefined();
+    expect(log.cacheAffinityReason).toBeUndefined();
+    expect(log.affinityKeptEntryId).toBeUndefined();
+    expect(log.affinityKeyEntryId).toBeUndefined();
   });
 
   test("ranks only eligible untried candidates by score and stable original order", () => {
@@ -719,6 +842,35 @@ describe("policy candidate fallback", () => {
     expect(response.status).toBe(200);
     expect(seenModels).toEqual(["policy/daily", "provider-b/model-b"]);
   });
+
+  test.each([
+    ["a readable provider 413", "provider"],
+    ["a 413 past the bounded read", "oversized"],
+    ["the proxy's rewritten context-overflow 413", "rewritten"],
+  ] as const)("%s keeps dev's stop on a routing-profile route (#9017)", async (_name, kind) => {
+    // Core delivery rewrites a provider 413 into the proxy's own envelope before this decision, so the
+    // original body is gone; the provider-413 hop is a combo rule and does not open policy candidates.
+    const trace = policyTrace();
+    const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    const runCore: NonNullable<PolicyFallbackDeps["runCore"]> = async (req, _config, ctx, options) => {
+      const body = await req.clone().json() as { model?: string };
+      options.onRequestBodyParsed?.(body);
+      seenModels.push(String(body.model));
+      ctx.routeDecision = trace;
+      seedAttempt(ctx, "provider", String(body.model));
+      if (seenModels.length === 1) {
+        if (kind === "rewritten") return jsonContextOverflowResponse();
+        return Response.json({ error: { message: "Request Entity Too Large", type: "invalid_request_error" },
+          ...(kind === "oversized" ? { padding: "x".repeat(70_000) } : {}) }, { status: 413 });
+      }
+      return Response.json({ id: "resp", object: "response", status: "completed", output: [] });
+    };
+    await handleResponsesWithPolicyFallback(request(), fixtureConfig(), logCtx, {}, { runCore });
+    expect(seenModels).toEqual(["policy/daily"]);
+  });
+
+
   test("retries the next policy candidate and keeps distinct physical attempts", async () => {
     const trace = policyTrace();
     const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;

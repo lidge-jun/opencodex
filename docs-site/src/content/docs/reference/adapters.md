@@ -3,8 +3,7 @@ title: Adapters
 description: The provider adapters — what each targets, how it builds requests, and its quirks.
 ---
 
-An **adapter** translates between opencodex's internal request/response model and one provider wire
-format. Every adapter implements the `ProviderAdapter` interface (`src/adapters/base.ts`):
+An **adapter** translates between opencodex's internal request/response model and one provider wire format. Every adapter implements `ProviderAdapter`. The following excerpt is abbreviated; the complete, authoritative interface is in `src/adapters/base.ts`:
 
 ```ts
 interface ProviderAdapter {
@@ -42,6 +41,50 @@ Empty content, malformed or opaque parts, file-id-only images and partial envelo
 remain invalid. Ordinary function/custom tool results still require a nonempty
 `call_id`. The envelope metadata identifies a compatibility shape and grants no
 additional permissions. Native passthrough and routed (portable) compaction apply the same user-turn mapping to their raw bodies; the direct native `/responses/compact` forward keeps its existing raw-body rules.
+
+## Video input on translated routes
+
+A video reaches a model only on a wire with a published video carrier. Clients send it as the
+Responses part `{"type": "input_video", "video_url": "…"}` or the Chat Completions part
+`{"type": "video_url", "video_url": {"url": "…"}}`; `url` is a base64 `data:` URL or a URL
+the upstream fetches itself.
+
+An inline video must be exactly `data:<type>/<subtype>[;<attribute>=<value>]...;base64,<payload>`,
+where the payload is standard base64 with a length that is a multiple of four, at most two `=`
+only at the end, and no URL escapes, whitespace or URL-safe characters. Every other spelling is
+refused. One decoder applies this for input admission, the refusal check, both Chat conversions
+and the Gemini and Chat builders, which send its canonical base64, so no two of them can disagree
+about a clip.
+
+| Route | Carried as |
+| --- | --- |
+| `google` | `inline_data`, or `file_data` for YouTube and Gemini Files API URLs (see [`google`](#google)) |
+| `openai-chat`, for a model whose input modalities include `video` | the Chat `video_url` part, in user messages |
+| Responses passthrough (`openai-responses`, Azure) | the original `input_video` part, unchanged |
+| every other route | refused |
+
+The Chat `video_url` part is model-specific: OpenRouter, Qwen on DashScope's OpenAI-compatible
+API and Kimi document it, but most Chat models have no video input. The translated Chat adapter
+therefore sends it only when the routed model declares video through
+`modelCapabilities.<id>.inputModalities`, `modelInputModalities` or the provider-wide
+`inputModalities`. The Moonshot preset declares it for `kimi-k3` and `kimi-k3.1-pro`. xAI's
+Grok chat models do not accept video input as of 2026-11-25 (xAI documents text and image input
+for `grok-4.6` and `grok-4.7`), so a video sent to Grok is refused.
+
+A refused video returns HTTP 400 with code `unsupported_input_modality` before anything is sent,
+so a combo moves on to a member that can read it.
+Previously the translated Chat, Anthropic and Cursor routes replaced the clip with a text marker,
+Gemini flattened an unfetchable URL into one, and the request went upstream anyway. A video
+outside user content (system, assistant or tool output) has no converter on any translated route
+and is refused too, as is a video in a developer message on the Chat route. An inline video larger
+than 50 MiB decoded is refused on every translated route; send the provider's file URL instead.
+Responses passthrough and native Chat forward the original body and leave size and support to
+the upstream. A Chat request that is translated is checked for both cases (a `video_url` outside
+user content, or over the cap) before its conversion builds anything, and answers the same HTTP
+400 `unsupported_input_modality`. Input
+admission charges inline video by size at about 1,250 bytes per token (a clip in any other
+form is charged its largest possible size, since Responses passthrough still forwards it) and a fetched URL as one
+minute (6,000 tokens). The refusal names neither the URL nor the bytes.
 
 ## Checkpoint continuation after routed compaction
 
@@ -320,6 +363,14 @@ request before inference. `reasoning.encrypted_content` and other include entrie
 intact, so stateless reasoning replay is preserved. The same exact-entry normalization
 applies to xAI and to Kimi Code at its exact HTTPS Responses endpoint
 (`https://api.kimi.com/coding/v1/responses`); unrelated Responses destinations keep their original include list.
+The exact [OpenCode Go Responses endpoint](https://opencode.ai/zen/go/v1/responses) uses the same
+output-include cleanup across its models because some backends reject the field. This preserves
+`reasoning.encrypted_content` and other include entries, and the cleanup itself does not drop encrypted
+reasoning history. When `authMode` is not `forward`, a provider that lists the model in
+`arkKimiResponsesModels` still runs the separate Ark Kimi strip first. It removes `encrypted_content` only
+from an unreferenced reasoning item with an empty summary and no other fields, when the item follows a
+user message or a matched function call and its output, and precedes a user message or, after such a
+tool pair, a developer message.
 
 These request-shape fixes do not change account entitlements. Meta limits Muse Code
 subscription credentials to the Muse Code client; other clients require a separately
@@ -402,20 +453,52 @@ tool arrives or the turn finishes cleanly. A freeform call echoed without its
 `</function>` close counts as complete once `</tool_call>` arrives. This applies to every
 MiMo model Command Code serves.
 
+Command Code also lists its System One decision models (`typesafe/jev`,
+`typesafe/jev-1.14.0`) in its model catalog, but serves them only at
+`POST https://api.commandcode.ai/provider/v1/systemone`. Neither Command Code preset offers them
+as chat models, and a chat request that still names one (for example a saved selection) is
+answered with a 404 `model_not_found` that points at that endpoint, without reaching Command
+Code; a combo or routing policy that lists one moves on to its next target. To use JEV for
+routing decisions, add a `jev-decision` provider whose `baseUrl` is that endpoint and name it as
+a JEV combo's `decisionProvider` (see [Combos](/guides/combos/)).
+
 ## `anthropic`
 
 **Targets:** Anthropic **Messages** (`/v1/messages`).
 **Auth:** `key` (`x-api-key` by default, or `Authorization: Bearer` with `apiKeyTransport: "bearer"`) or `oauth` (Bearer + `anthropic-beta`, for Claude Pro/Max).
 
 - Converts messages to Anthropic content blocks (text, base64 image, `tool_use`, `thinking`).
+- Caller system instructions retain top-level `system` placement by default, including OAuth.
+  An operator can set `providers.<name>.anthropicOAuthUserInstructions: true` for a provider to
+  opt into compatibility placement for translated OAuth requests only. With this option,
+  caller system instructions move to the beginning of the first
+  user turn. If the history starts with an assistant message, the adapter adds an initial user
+  turn for those instructions. The compatibility identity, OpenCodex tool contract, checkpoint
+  continuation guidance, and system prompts for requests initiated by the proxy remain in top-level
+  `system`. Relocated instructions have user-role priority.
+  When prompt caching is enabled, the adapter adds an explicit breakpoint to those instructions.
+  API-key requests and native Messages passthrough keep their existing instruction placement.
 - Routed Codex compaction keeps the client tool catalog, system prompt and tool-selection
   options to preserve their prompt-cache prefix. Summary requests disable search/media
   sidecars; upstream-hosted tools retain their declarations with `tool_choice: none`, as does a
-  mandatory tool choice, while the advertised catalog stays the same. A request that advertises a
-  sidecar web-search tool (for example Exa) still changes its tool prefix on compaction.
+  mandatory tool choice, while the advertised catalog stays the same. When the ordinary turn
+  would declare the sidecar `web_search` tool (for example Exa or the ChatGPT helper), the summary
+  declares the same tool and keeps the replayed searches with their recorded results, but never
+  searches.
   A summary that attempts a tool call fails without publishing a function call or replacing
-  history. A successful summary returns exactly one compaction item. Image normalization
-  and the existing one-shot tighter-image retry after HTTP 413 remain unchanged.
+  history. A successful summary returns exactly one compaction item. With image-context recovery off, requests
+  continue to use the existing image normalization and single tighter-image retry after HTTP 413.
+- `anthropicImageContextRecovery: true` enables one recovery after an upstream image-context HTTP 413.
+  The proxy summarizes an older complete part of the conversation with tools and reasoning disabled,
+  then makes one smaller resend that retains the newest image and the current turn. The billable
+  summary is limited to 1,024 output tokens or the original wire limit, whichever is lower.
+  Both sends use the original credential, Messages URL, send and spend budgets, and cancellation
+  signal. The proxy returns the refusal if the proposed cut covers a developer instruction,
+  a recovery leg cannot reserve spend under an enforced ceiling, or the account or endpoint changes. This option
+  defaults to off and applies to routed requests through this adapter, including search and media
+  bridges when their send accounting can admit recovery. Under an enforced spend ceiling, each
+  send in the recovery flow uses its own reported usage, including HTTP errors. When the provider
+  reports no usage, the send's reservation estimate continues to count toward the limit.
 - Translated Anthropic Messages reasoning replay shares the request translation budget, including
   encoding/decoding copy overhead. Requests exceeding it return HTTP 413 with
   `translation_buffer_limit`; signatures and opaque reasoning data are never truncated to fit.
@@ -467,6 +550,11 @@ MiMo model Command Code serves.
 
 ## `google`
 
+The Gemini-compatible `/v1beta` inbound can opt in to source-preserving generation over the
+canonical `google-antigravity` OAuth provider with `protocols.rollout.geminiNativeAntigravity: true`.
+The default is off. This applies to Gemini inbound requests after routing and admission. See
+[Native Gemini with Antigravity](/reference/proxy-formats/#native-gemini-with-antigravity).
+
 **Targets:** Google **Gemini**, **Vertex AI**, and Antigravity **Cloud Code Assist**. AI Studio uses
 `/v1beta/models/{model}:streamGenerateContent`; the other modes use their native Google endpoints.
 **Auth:** API key, Vertex ADC, or Google Antigravity OAuth, selected by `googleMode`.
@@ -477,8 +565,12 @@ that environment key takes precedence. ADC also needs a project and location, su
 form or by `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` on the proxy
 host. Adding the provider does not verify that credentials or permissions are usable. A key
 without an explicit project uses Vertex express mode.
-The dashboard preset uses a static catalog seeded by the configured default model; its connection
-test does not verify Vertex credentials or permissions.
+The dashboard preset uses a static catalog seeded by the configured default model. With ADC its
+connection test mints a new access token on every run, never reusing a cached one, which proves the
+credential but not Vertex permissions; the provider shows as verified once the proxy has minted a
+token from the current ADC source, and only while ADC is the credential the row uses. A keyless row
+with `GOOGLE_CLOUD_API_KEY` set sends that key, so it is never shown as verified from ADC. An API
+key on a static catalog is not tested.
 Existing Vertex rows without `liveModels` retain live discovery through the generic discovery endpoint.
 Use `liveModels: false` for a static catalog; Settings can switch between the two modes.
 
@@ -490,7 +582,23 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   upstream 400; message-only terminal paths infer 403 (permission class). The restriction itself
   is Google's — the proxy does not route around it.
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →
-  `functionDeclarations`. Data-URL images → `inline_data`.
+  `functionDeclarations`. Data-URL images → `inline_data`. WAV and MP3 audio → `inline_data`
+  (`audio/wav`, `audio/mp3`), except for Claude models on Antigravity, which keep the text marker. A
+  tool result flagged as an error is sent as `functionResponse.response.error`, Google's documented key
+  for a failed call; other results use `response.result`.
+- Vertex project endpoints use `aiplatform.googleapis.com` for `global`,
+  `aiplatform.us.rep.googleapis.com` and `aiplatform.eu.rep.googleapis.com` for the `us` and `eu`
+  multi-regions, and `<location>-aiplatform.googleapis.com` for a region such as `us-central1`.
+- Vertex AI and Antigravity retry a `429` only when the response carries retry evidence, such as a
+  valid `Retry-After` header, and surface hard quota exhaustion immediately.
+- For Cloud Code Assist requests routed to `gemini-3.7-flash`, `gemini-3.8-flash`, or
+  `gemini-4-neon`, the proxy removes the three Claude Code / Claude Agent SDK identity-opener
+  paragraphs when each stands alone as its own paragraph (an opener that shares a paragraph with
+  other text stays in the prompt), and rewords two trigger sentences in the system prompt. These
+  generations otherwise respond with `429 RESOURCE_EXHAUSTED` to those phrases.
+- The shared tool-catalog guidance uses wording verified with Antigravity Gemini 3.8 Flash to
+  avoid a prompt-triggered `429 RESOURCE_EXHAUSTED`. The available tools, argument constraints,
+  and Codex code-mode helper rules stay the same. This does not suppress real quota errors.
 - Tool-call ids are synthesized when Gemini omits them. Vertex and Antigravity preserve and replay
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
@@ -510,6 +618,25 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   frame, and a buffered response that carries no candidate at all returns
   `google response contained no candidates`. A root `data: null` keepalive frame is still skipped as
   padding.
+- **Rate limits and quota follow Google's typed error details.** A `429` whose `ErrorInfo.reason` is
+  `QUOTA_EXHAUSTED` or `INSUFFICIENT_G1_CREDITS_BALANCE` is quota exhaustion and is not retried; on
+  Antigravity `RATE_LIMIT_EXCEEDED` is a short rate limit even when the message sounds like quota. A
+  valid `Retry-After` header, including zero, takes precedence. If it is absent or invalid, a
+  delay stated in the body (`RetryInfo.retryDelay`, `quotaResetDelay`, or "after 1h2m3s" in the
+  message) sets the earliest next attempt. A delay longer than the retry ceiling returns the
+  `429` with the effective `Retry-After`.
+- **Usage and finish outcomes are the same on every Google mode.** Reported output tokens include
+  Gemini's thinking tokens (`candidatesTokenCount` plus `thoughtsTokenCount`), and input tokens include
+  `toolUsePromptTokenCount`, which Google reports for search grounding and URL context. A turn that ends
+  with `MALFORMED_FUNCTION_CALL`, or with `MAX_TOKENS` after a tool call started, fails with HTTP 502
+  `upstream_error`. So does a turn ending with `UNEXPECTED_TOOL_CALL` or `MALFORMED_RESPONSE` when no
+  text, image or tool call reached the client; thought text does not count. A stream that has already
+  sent output answered with HTTP 200, so there the same `upstream_error` arrives as the stream's error
+  event. When visible output did
+  arrive, `MALFORMED_RESPONSE` ends as a content filter, as `SAFETY`, `IMAGE_SAFETY` and the other block
+  reasons do, and `UNEXPECTED_TOOL_CALL` ends as a normal stop. A prompt Google refuses before generating
+  (`promptFeedback.blockReason`) returns HTTP 400 `invalid_prompt` naming only the reason, never Google's
+  message; Codex does not retry it and a combo does not fail over on it.
 - Tool-call batches are closed by one immediately adjacent user turn containing one ordered
   `functionResponse` per representable call. Interrupted histories receive an explicit missing-result marker;
   duplicate or standalone results are preserved as marked text (and image siblings) rather than
@@ -527,12 +654,13 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
 
   | `url` | sent as |
   | --- | --- |
-  | `data:` URL | `inline_data` with the data URL's own media type |
+  | canonical base64 `data:` URL (see [video input](#video-input-on-translated-routes)) | `inline_data` with the data URL's media type, without parameters, and its canonical base64 |
   | YouTube watch URL (`youtube.com`, `youtu.be`, `m.`/`music.`/`-nocookie` variants) | `file_data.file_uri` |
   | `https://generativelanguage.googleapis.com/<version>/files/<id>` — the Files API resource form, where `<version>` is `v1`, `v1beta` or `v1alpha` | `file_data.file_uri` |
 
-  Any other remote URL is kept as the text marker `[video: <url>]`, because the adapter has no
-  media type for it and no evidence Gemini will fetch it. The allowlist is matched on the parsed
+  Any other remote URL is refused before send with HTTP 400 `unsupported_input_modality`, because
+  the adapter has no media type for it and no evidence Gemini will fetch it; it used to become a
+  `[video: <url>]` text marker the model answered about. The allowlist is matched on the parsed
   URL's host and path over HTTPS — not on a substring — so a look-alike host does not become a
   `file_data` reference the proxy asks Gemini to fetch. The path is anchored at the start, so the
   resumable-upload endpoint (`/upload/<version>/files/<id>`) is *not* accepted: it is not a
@@ -577,6 +705,26 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
 - Accepts Responses `text` controls that are not structured output — `text.verbosity` and
   `text.format: {"type":"text"}` — without forwarding them. Kiro has no wire field for either, so
   they are ignored rather than rejected.
+- Sends at most 48 client tools and 96 KB of converted tool JSON per request, and cuts each tool
+  description to 1,024 characters (9,216 for `gpt-5.6-sol`). Tools loaded through tool search and the Codex code-mode
+  execution tool are admitted first; the model is told which tools were omitted. Set
+  `OCX_KIRO_TOOL_BUDGET=off` in the proxy's environment to send the whole client catalog, and
+  `OCX_KIRO_TOOL_DESCRIPTION_LIMIT=off` to send full descriptions. Both are read when a request is
+  converted, apply to every Kiro model, and leave other limits unchanged. Disabling the budget
+  removes the limit itself, so there is nothing to prioritize or omit: every declared tool goes
+  on the wire in declaration order, the omission notice disappears, and a client that declares
+  more than Kiro accepts gets the upstream `ValidationException` instead of a trimmed catalog.
+  Request sizes then grow with the client's own catalog. These switches are an opt-out for an
+  account measured to accept the larger request, not a way to make an oversized catalog safe.
+- Strips the JSON Schema keywords Kiro's validator rejects (`pattern`, `minLength`, `maximum`,
+  `additionalProperties` and 25 others) from tool and structured-output schemas, except the
+  keywords a probe measured a model taking. `claude-opus-4.5` keeps all of them. `claude-opus-5.5`
+  keeps the twelve keywords the Claude Desktop and Claude Code catalogs carry (`$schema`, `additionalProperties`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`, `exclusiveMinimum`, `minItems`, `maxItems`, `propertyNames`),
+  measured on production traffic; `claude-sonnet-5.5` keeps `pattern` and `maximum`. Their other keywords
+  stay stripped, because nothing sent them to those models. Every other Kiro
+  model, including the other Claude ids, keeps the full strip. The exception is per model and per
+  keyword because this wire already separates Claude models on reasoning effort, and a keyword
+  Kiro rejects fails the whole request rather than just costing the model a hint.
 - Emulates structured output (Responses `text.format` of type `json_schema` or `json_object`, and
   Messages `output_config.format`). The Kiro wire cannot constrain the response shape, so the
   adapter advertises a private output tool whose input schema is the requested schema and returns
@@ -714,13 +862,42 @@ The continuation's instruction tells the model that its ordinary text has not re
 
 ### Reasoning effort
 
-The GPT-5.6 family uses `additionalModelRequestFields.reasoning.effort`; `claude-opus-5`
-uses `additionalModelRequestFields.output_config.effort`. For `gpt-5.6-luna` and
-`gpt-5.6-terra`, only `low`, `medium`, `high`, and `max` use the verified native path.
-Their `xhigh` selection retains the previous bounded thinking instructions in user content
-because that native rung has not been verified. `gpt-5.6-sol` and `claude-opus-5` keep
-their existing native `low`, `medium`, `high`, `xhigh`, and `max` behavior. Other Kiro
-models use emulated reasoning; an advertised effort control is not proof of native support.
+The GPT-5.6 family and the GPT-6 models (`gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`,
+`gpt-6.1-terra`) use `additionalModelRequestFields.reasoning.effort`; the Claude ids listed
+below use `additionalModelRequestFields.output_config.effort`.
+For `gpt-5.6-luna` and `gpt-5.6-terra`, only `low`, `medium`, `high`, and `max` use the
+verified native path. Their `xhigh` selection retains the previous bounded thinking
+instructions in user content because that native rung has not been verified. `gpt-5.6-sol`
+and the GPT-6 models keep their native `low`, `medium`, `high`, `xhigh`, and `max`
+behavior through that same `reasoning.effort` field.
+
+Kiro accepts `output_config.effort` for `claude-opus-5`, `claude-opus-5.5`,
+`claude-opus-4.8`, `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`,
+`claude-sonnet-5`, `claude-sonnet-4.6`, and `claude-haiku-5.5` at `low`, `medium`,
+`high`, `xhigh` and `max`, with one exception: `claude-opus-4.6` and `claude-sonnet-4.6`
+reject native `xhigh`, so that rung keeps the emulated thinking block.
+
+Kiro has no `minimal` rung. On all nine models except `claude-opus-5` and `claude-opus-5.5`,
+`minimal` keeps the emulated block instead of failing a request that worked before native effort
+was enabled. Those two Opus 5 models, and the GPT models that carry native effort, reject
+`minimal` with a 400 `invalid_request_error` before anything is sent.
+
+The surfaces report that refusal differently. A Responses request puts a sentence naming the model
+and the rejected effort in `error.message`. The Messages and Chat Completions paths put their fixed
+condition copy there instead — `The provider rejected the request.` — because those paths replace an
+adapter detail with their own sentence rather than relaying it. Only Responses names the model and
+the effort. Stream and non-stream requests read identically on every surface: the refusal is raised
+while the wire payload is built, so no stream has opened and no request has gone upstream.
+
+A caller's `ultra` is reduced to `max` during parsing. The configured pins
+`pinnedReasoningEffort`, `modelPinnedReasoningEfforts` and `modelPinnedEfforts` are applied later;
+for models with native Kiro effort, the adapter also folds a pinned `ultra` to native `max`.
+For models using emulated reasoning, a pinned `ultra` is dropped and the request is sent without
+a reasoning signal.
+
+`claude-haiku-4.5`, `claude-opus-4.5` and `claude-sonnet-4.5`, along with any Kiro
+model not listed above, use emulated reasoning at every effort; an advertised effort control is
+not proof of native support.
 
 ## `cursor`
 
@@ -844,7 +1021,17 @@ configuration that names the old id is rewritten at startup.
 - Tool definitions are encoded in the request and tool-call events are decoded from the response
   stream. Cognition enforces a per-tool-description length limit (6,998 chars) and an exact-phrase
   blocklist; the adapter sanitizes known triggers and truncates over-long descriptions before
-  encoding.
+  encoding. Known trigger rewrites also apply to the leading system prompt (request field #2).
+- `OPENCODEX_DEVIN_SANITIZE_DATA_SURFACES` is off by default and enables only for the exact value
+  `"1"`; an unset variable or any other value leaves history data outside the sanitizer. When
+  enabled, it also rewrites joined message text (#3), tool-call `arguments_json` (#6.3), image
+  captions (#10.3), and replayed thinking (#11). Tool names, tool-call IDs, and image bytes remain
+  untouched. This changes literal history received by the model, including quoted file content
+  and tool arguments. If a rewrite changes thinking, that prompt sends the rewritten #11 text
+  without its original #12 signature or #18 signature type. Unchanged thinking preserves both
+  signature fields byte-for-byte, even when another data field changes; signature-only replay
+  also remains intact. Rewritten thinking therefore uses unsigned replay, which can weaken
+  signed reasoning continuity for that turn. This option does not guarantee upstream acceptance.
 - Devin/Cognition API keys have no refresh endpoint. If Cognition rejects a stored key with 401,
   OpenCodex marks that account for reauthentication and can use another signed-in account for
   the turn. Run `ocx login devin` again for a revoked browser-login key. A CLI-imported account
@@ -905,7 +1092,8 @@ configuration that names the old id is rewritten at startup.
 
 The model id you pick is a model family, and the reasoning effort picks the
 variant. With no effort, the family's own default variant is used: `swe-1-7`
-selects `swe-1-7-medium` and `swe-2` selects `swe-2-high`. An effort changes only
+selects `swe-1-7-medium`, `swe-2` selects `swe-2-high`, and `swe-2-1` (SWE-2.1)
+selects `swe-2-1-medium` even though the catalog's bare `swe-2-1` row is its Low variant. An effort changes only
 the effort and lands on the lowest variant at or above it, or the highest one
 below when nothing is above, so a missing rung never turns reasoning down:
 `swe-1-7` at `high` selects the Max row `swe-1-7`, `swe-2` at `low` selects
@@ -918,7 +1106,10 @@ An id naming a variant your account has disabled is sent as named when the effor
 still lands on it, so the request fails with that variant's own error rather than
 quietly switching tier. Resolution never moves
 to another family. When the account catalog is unavailable, the effort is
-appended to the id instead.
+appended to the id instead, except on SWE-2 (Medium, High, Max) and SWE-2.1
+(Low, Medium, High, XHigh, Max), where it still rounds onto one of the family's
+own lanes and `fast`, or an id ending in `-lightning`, selects that lane's
+Ultrafast row.
 
 ## `zed`
 
@@ -933,6 +1124,38 @@ appended to the id instead.
   the roster is not a model allowlist, so a caller-supplied model id is still forwarded.
 - Experimental, unofficial, and not endorsed by Zed. Using it may break Zed's terms of service
   and can get the Zed account limited or suspended; that risk is the user's to accept.
+
+## `agy-acp`
+
+**Targets:** the official Antigravity CLI (`agy acp`, 1.5.3 or newer) as a local child process over the Agent Client
+Protocol v1 (newline-delimited JSON-RPC on stdio).
+**Auth:** none in OpenCodex; the CLI owns its Google sign-in.
+
+- `runTurn` only: one ACP session per turn (`initialize`, `session/new`, `session/set_config_option`, `session/prompt`).
+  The model and thinking level are selected through the options the CLI advertises; the selected Gemini model must be
+  confirmed before the prompt and stay selected during it, or the turn fails closed.
+- The conversation is flattened into one text prompt; system text travels on `session/new` when the CLI advertises
+  system prompt support. The flattened prompt keeps the newest 200,000 characters and adds a `[truncated]` marker
+  when it cuts older text. When the CLI lacks separate system prompt support, the system block is prepended to the
+  flattened prompt and can be partly or wholly truncated.
+- Permission requests are answered `cancelled`, file system and terminal requests from the CLI are not executed, and
+  errors carry fixed text: the CLI's stderr and its error messages are never returned.
+- OpenCodex scans answer and reasoning text for supported credential patterns, including values split across ACP frames.
+  For quoted JSON OAuth fields, whitespace and line breaks around the colon can also span frames.
+- Each turn starts in a fresh, empty private workspace containing only its own empty temp directory.
+  On POSIX, cleanup confirms that the CLI's process group is gone before removing the workspace.
+  A descendant that deliberately leaves the group is outside that check. Removing the workspace exposes no
+  pre-existing user files.
+- `end_turn` completes; `max_tokens` truncates the answer. A `refusal` ends a Responses stream with `response.failed` and `invalid_prompt` so Codex stops retrying.
+  `max_turn_requests`, an unrequested `cancelled` and an unknown stop reason fail the turn.
+- Refuses subagent, spawned-thread, Codex memory and automatic compaction turns, combo members and combo decision calls, and
+  subagent-fallback routing. Chat Completions, Responses and Responses Compact return `403 agy_acp_interactive_only`
+  for labeled unattended turns. Gemini and Ollama generation routes apply the same policy and
+  return HTTP 403 in their native error format. Responses WebSocket applies the automatic compaction check to each frame. Manual
+  compaction remains available. OpenCodex determines locality from the observed connection and refuses requests carrying
+  recognized forwarding headers. A loopback relay or SSH port forward that adds none can still appear local.
+  On the public listener, declare the reverse proxy in `dashboardTrustedProxy` or keep this port out of the relay.
+  See the [API-key catalog](/guides/api-key-catalog/#antigravity-cli-acp-local).
 
 ## `azure-openai` (alias: `azure`)
 
@@ -982,3 +1205,7 @@ For the official DeepSeek Chat Completions endpoint, opencodex relaxes regex and
 schema-validation HTTP 400 errors. Strict mode is omitted for this tool. Fields
 defined only inside an `anyOf` are no longer constrained by that union; the tool
 must validate its inputs. Other tools and providers retain their existing behavior.
+
+## Microsoft 365 Copilot
+
+The `m365-copilot` adapter owns native Microsoft ChatHub WebSocket turns from `runTurn`. It reuses Chat tool lowering internally and emits the normal OpenCodex events; it requires no separate compatibility server. See [setup and limitations](/guides/m365-copilot/).

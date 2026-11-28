@@ -87,7 +87,8 @@ fallback, capability JSON, and provider-specific error handling retain their exi
 `ocx message send (--thread <uuid> | --name <exact-name>) --stdin [--json]`
 submits one correlated peer message, without starting a daemon or resuming a thread.
 See [Local Codex Messaging](/reference/cli/messaging/) for sender context, kinds,
-the tested runtime and `not_sent`/`queued`/`unknown` receipts. No remote transport is included.
+the tested runtime and `not_sent`/`queued`/`unknown` receipts. Without `--host`, these operations are local.
+[Remote peer messaging over SSH](/reference/cli/messaging/#explicit-remote-peers) requires an enrolled host and `--host`; it does not autostart the receiver or automatically resend messages.
 
 ### `ocx provider`
 
@@ -262,6 +263,12 @@ ocx help models
 ocx help models preset show
 ```
 
+For account pools, configuration, remote connections, models, and providers,
+the family help's **Inspect first** line gives a read-only starting point and
+identifies whether it inspects local settings or the running service. A read-only
+command can still check a connection. Live catalogue reads can fetch upstream and
+reconcile discovery state; use the local view or recorded arrivals for passive inspection.
+
 Read the corresponding chapter in the repository's `skills/ocx/references/01_management_surface.md`
 or one of the public command-family pages above. Full `ocx help --all` is an
 escape to the top-level reference. A broad machine inventory is optional:
@@ -336,6 +343,8 @@ Integer options such as `--limit` require decimal whole numbers within JavaScrip
 ## Windows JSON configuration files
 
 `ocx config validate <file>` and `ocx config import <file> --yes` accept UTF-8 JSON with or without a leading BOM, including stdin (`-`). This supports UTF-8 exports from Windows PowerShell and editors. UTF-16 input is not accepted.
+
+To enter the experimental plaintext subagent mode, use `ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages`. Generic `config set` and `config import` refuse a new entry into this mode because the dedicated command also coordinates the native mode transition. Before restoring an exported config that contains `multiAgentMode: "v2-plaintext"`, complete that acknowledged transition first, then import the file. Restoring an already-active mode, changing other settings, and leaving plaintext mode remain allowed. The independent `plaintextV2AgentMessages` preference is unchanged.
 
 ## Default alias listing
 

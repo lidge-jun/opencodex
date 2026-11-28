@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { WorkspaceSuggestions } from "../components/route-board/WorkspaceSuggestions";
 import ComboWorkspace from "../components/ComboWorkspace";
 import { comboVisionSidecarTargets } from "../combo-capabilities";
 import {
@@ -19,12 +20,17 @@ import { DataSurfaceSkeleton } from "../components/data-surface";
 import { replaceHash } from "../hash-routing";
 import { jevAutoCreateDecisionProvider } from "../app-routing";
 import type { ComboAddIntent } from "../components/combo-workspace-types";
+import type { ComboProviderBilling } from "../../../src/combos/suggestion-channel";
 
 type ProviderOption = {
   name: string;
   disabled?: boolean;
   hiddenFromPicker?: boolean;
   authMode?: string;
+  googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
+  canonicalOpenAiForward?: boolean;
+  knownSubscriptionOAuth?: boolean;
+  vertexCredentialKind?: "marker" | "ambient" | "reference" | "api-key";
   adapter?: string;
   baseUrl?: string;
   defaultModel?: string;
@@ -41,11 +47,16 @@ type ModelOption = {
 };
 type ProviderDto = {
   adapter: string;
+  alias?: string;
   baseUrl: string;
   disabled?: boolean;
   defaultModel?: string;
   models?: string[];
   authMode?: string;
+  googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
+  canonicalOpenAiForward?: boolean;
+  knownSubscriptionOAuth?: boolean;
+  vertexCredentialKind?: "marker" | "ambient" | "reference" | "api-key";
 };
 type ConfigDto = { providers?: Record<string, ProviderDto> };
 type CachedCombosPage = {
@@ -54,6 +65,8 @@ type CachedCombosPage = {
   models: ModelOption[];
   capabilityModels?: ModelOption[];
   cataloguedComboIds: string[];
+  hiddenModels?: string[];
+  routingRevision?: string;
 };
 type ProviderQuotasDto = { reports?: unknown };
 
@@ -108,6 +121,7 @@ export default function Combos({
    * on the load success path, never during render and never from an effect.
    */
   const [retainedData, setRetainedData] = useState<CachedCombosPage | null>(cached ?? null);
+  const routingGeneration = useRef(Number(cached?.routingRevision) || 0);
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(false);
   const [addIntent, setAddIntent] = useState<ComboAddIntent | null>(() => (
@@ -152,7 +166,7 @@ export default function Combos({
     if (!combosRes.ok || !configRes.ok || !modelsRes.ok) {
       throw new Error("combo workspace load failed");
     }
-    const combosJson = await combosRes.json();
+    const combosJson = await combosRes.json() as { providerBilling?: Record<string, ComboProviderBilling> };
     const configJson = await configRes.json() as ConfigDto;
     // /api/models returns a bare array (not { models: [...] }).
     const modelsRaw = await modelsRes.json() as unknown;
@@ -163,15 +177,22 @@ export default function Combos({
         : [];
 
     const combos = parseComboList(combosJson);
+    const providerBilling = combosJson.providerBilling ?? {};
     const allProviders = configJson.providers ?? {};
     // Collapse canonical forward aliases only in the new-member picker. Validation keeps
     // every configured provider id, including legacy chatgpt members already in a combo.
     const visibleProviders = hideRedundantChatGptForwardProviders(allProviders);
     const providers = Object.entries(allProviders).map(([name, p]) => ({
       name,
+      alias: p.alias,
+      comboBilling: Object.hasOwn(providerBilling, name) ? providerBilling[name] : undefined,
       disabled: !!p.disabled,
       hiddenFromPicker: p.adapter === "jev-decision" || !Object.hasOwn(visibleProviders, name),
       authMode: p.authMode,
+      canonicalOpenAiForward: p.canonicalOpenAiForward,
+      knownSubscriptionOAuth: p.knownSubscriptionOAuth,
+      googleMode: p.googleMode,
+      vertexCredentialKind: p.vertexCredentialKind,
       adapter: p.adapter,
       baseUrl: p.baseUrl,
       ...(typeof p.defaultModel === "string" ? { defaultModel: p.defaultModel } : {}),
@@ -180,6 +201,7 @@ export default function Combos({
 
     const models: ModelOption[] = [];
     const capabilityModels: ModelOption[] = [];
+    const hiddenModels: string[] = [];
     const catalogued = new Set<string>();
     const parseModalities = (raw: unknown): string[] | undefined =>
       Array.isArray(raw)
@@ -222,6 +244,7 @@ export default function Combos({
         ...(inputModalitiesDeclared && inputModalitiesDeclared.length > 0 ? { inputModalitiesDeclared } : {}),
         visionSidecarConsumer: model.visionSidecarConsumer === true,
       };
+      if (model.disabled === true) hiddenModels.push(`${provider}/${id}`);
       capabilityModels.push(option);
       models.push(option); // Catalog visibility does not restrict internal Combo selection.
     }
@@ -235,7 +258,8 @@ export default function Combos({
       }
     }
 
-    const next = { combos, providers, models, capabilityModels, cataloguedComboIds: [...catalogued] } satisfies CachedCombosPage;
+    // /api/config omits redirects, so each successful poll invalidates the route snapshot.
+    const next = { combos, providers, models, capabilityModels, hiddenModels, cataloguedComboIds: [...catalogued], routingRevision: String(++routingGeneration.current) } satisfies CachedCombosPage;
     writeSessionListCacheEntry(cacheKey, next);
     // Retain the coherent payload here — one place, on the success path, never during
     // render. See the `retainedData` note below.
@@ -258,6 +282,7 @@ export default function Combos({
       initialData: cached ?? undefined,
       initialDataCachedAt: seedCombosCachedAt(cacheKey),
       staleAfterMs: 60_000,
+      pollMs: 60_000,
       enabled: active,
     },
   );
@@ -340,13 +365,16 @@ export default function Combos({
   const capabilityModels = data?.capabilityModels ?? models;
   const cataloguedComboIds = new Set(data?.cataloguedComboIds ?? []);
 
-  const saveCombo = async (item: ComboItem, isCreate: boolean, renameFrom?: string) => {
+  const saveCombo = async (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null) => {
     try {
       const res = await fetch(`${apiBase}/api/combos`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(toPutBody(item, {
           ...(renameFrom ? { renameFrom } : {}),
+          // A create never replaces a combo another client saved under the same id meanwhile.
+          ...(isCreate ? { ifAbsent: true as const } : {}),
+          stored,
           // Enabling images declares text-only members for the Vision Sidecar so the
           // operator never has to hand-edit provider config for a multimodal combo.
           ...(item.imageInput !== "disabled"
@@ -358,8 +386,21 @@ export default function Combos({
         ? await res.json() as unknown
         : await res.json().catch(() => null) as unknown;
       const serverError = responseError(data);
+      if (res.status === 409 && data && typeof data === "object" && "code" in data && data.code === "combo_revision_conflict") {
+        resource.refresh();
+        return { ok: false as const, error: t(isCreate ? "cws.err.duplicateId" : "pws.draftConflict") };
+      }
       if (!res.ok || serverError || !responseSucceeded(data)) {
         const err = serverError || t("cws.saveFailed");
+        notify(err, false);
+        return { ok: false as const, error: err };
+      }
+      const savedResponse = data as { id?: unknown; model?: unknown; combo?: unknown };
+      const saved = savedResponse.combo && typeof savedResponse.combo === "object"
+        ? parseComboList({ combos: [{ ...savedResponse.combo, id: savedResponse.id, model: savedResponse.model }] })[0]
+        : undefined;
+      if (!saved) {
+        const err = t("cws.saveFailed");
         notify(err, false);
         return { ok: false as const, error: err };
       }
@@ -370,7 +411,7 @@ export default function Combos({
           : isCreate ? t("cws.created", { model: item.model }) : t("cws.saved"),
         true,
       );
-      return { ok: true as const };
+      return { ok: true as const, item: saved };
     } catch {
       const err = t("cws.saveFailed");
       notify(err, false);
@@ -442,6 +483,7 @@ export default function Combos({
         </span>
         <ComboWorkspace
           apiBase={apiBase}
+          routingRevision={data?.routingRevision}
           combos={combos}
           providerQuotaStates={providerQuotaStates}
           providers={providers}
@@ -451,6 +493,21 @@ export default function Combos({
           visionEnabled={visionEnabled}
           loading={false}
           onRefresh={() => { resource.refresh(); quotaResource.refresh(); }}
+          renderSuggestions={(lockedComboId) => (
+            <WorkspaceSuggestions
+              key={apiBase}
+              apiBase={apiBase}
+              active={active}
+              combos={combos}
+              providers={providers}
+              models={models}
+              hiddenModels={data?.hiddenModels}
+              quotaReports={quotaReports}
+              quotaNow={quotaNow}
+              lockedComboId={lockedComboId}
+              onRefresh={() => resource.refresh()}
+            />
+          )}
           onSave={saveCombo}
           onRemove={removeCombo}
           onAdd={(intent = "blank") => setAddIntent(intent)}

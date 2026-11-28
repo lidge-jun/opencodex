@@ -4,6 +4,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createScanner, LanguageVariant, SyntaxKind } from "typescript/unstable/ast";
 import { fetchWithHeaderTimeout, providerFetch, sendWithConnectionPolicy, storedPoolReplayDispatchNotifier } from "../../src/server/responses/fetch-helpers";
+import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
+import { createSidecarSendBudget } from "../../src/server/responses/sidecar-send-budget";
+import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
 import { createPhysicalSendReporter, createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { errorDestinationLabel, SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
@@ -157,21 +160,19 @@ describe("native Codex HTTP upload representation", () => {
     expect(capture.calls[0]!.init?.body).toBe(body);
   });
 
-  test("preserves abort rejection and signal without retrying the executor", async () => {
+  test("preserves the abort reason without invoking the executor", async () => {
     const controller = new AbortController();
     const failure = new DOMException("synthetic cancellation", "AbortError");
     controller.abort(failure);
     let calls = 0;
-    const physical = (async (_input, init) => {
+    const physical = (async () => {
       calls++;
-      expect(init?.signal).toBe(controller.signal);
-      expect(init?.body instanceof Uint8Array).toBe(true);
       throw controller.signal.reason;
     }) as typeof fetch;
     await expect(sendWithConnectionPolicy(physical, endpoint, {
       method: "POST", body: "x".repeat(1024 * 1024), signal: controller.signal,
     })).rejects.toBe(failure);
-    expect(calls).toBe(1);
+    expect(calls).toBe(0);
   });
 });
 
@@ -211,13 +212,18 @@ function expectRuntimeImportBoundary(source: string): string[] {
 describe("Responses fetch-helper import boundary", () => {
   test("loads only transport-owned runtime dependencies", () => {
     expect(expectRuntimeImportBoundary(readFileSync(helperPath, "utf8"))).toEqual([
+      // Import-free receipt shared with adapter-owned dispatch.
+      "../../lib/executor-physical-send-receipt",
       // Import-free sent-header registry read by the request log (#6911).
       "../../lib/outbound-credential-registry",
+      // Import-free proof that the executor preserves destination and credentials.
+      "../../lib/passive-key-fetch-proof",
       "../../lib/provider-admission-wait",
       "../../lib/provider-egress",
       "../../lib/provider-tls-profile",
       "../../lib/proxy-env",
       "../../lib/redact",
+      "../../lib/tls-context-proof",
       "../../lib/upstream-http-version",
       // Import-free plugin rewrite slot (src/plugins/upstream-hooks.ts).
       "../../plugins/upstream-hooks",
@@ -225,9 +231,27 @@ describe("Responses fetch-helper import boundary", () => {
       // Turn-state handle redemption at the send (src/server/turn-state-handles.ts); node: built-ins only.
       "../turn-state-handles",
       // Opt-in request-body codec at the final send (#7247); runtime imports are node: built-ins only.
+      // Opt-in incremental Codex WS upload gate; the flag itself lives in src/config.
+      "./codex-ws-incremental",
+      // Opt-in outbound Codex history slimming at the final send.
+      "./history-slim",
       "./request-compression",
+      // Combo admission checked again at the send (src/server/responses/send-admission.ts); node: built-ins only.
+      "./send-admission",
       "./ws-upstream",
     ]);
+  });
+
+  test("the physical-send receipt is an import-free runtime leaf", () => {
+    expect(expectRuntimeImportBoundary(readFileSync(resolve(repoRoot, "src/lib/executor-physical-send-receipt.ts"), "utf8"))).toEqual([]);
+  });
+
+  test("the passive key transport proof is an import-free runtime leaf", () => {
+    expect(expectRuntimeImportBoundary(readFileSync(resolve(repoRoot, "src/lib/passive-key-fetch-proof.ts"), "utf8"))).toEqual([]);
+  });
+
+  test("the TLS context proof is an import-free runtime leaf", () => {
+    expect(expectRuntimeImportBoundary(readFileSync(resolve(repoRoot, "src/lib/tls-context-proof.ts"), "utf8"))).toEqual([]);
   });
 
   test("the guard recognizes runtime edges and ignores type-only imports", () => {
@@ -398,4 +422,48 @@ describe("storedPoolReplayDispatchNotifier", () => {
     expect(releases).toBe(1);
     expect(sends).toBe(0);
   });
+});
+
+test.each(["direct", "combo", "credential replacement"] as const)("%s sidecar cancellation leaves the HTTP send uncharged", async mode => {
+  const budget = createRequestExecutionBudget();
+  const intent = { sendClass: mode === "credential replacement" ? "auth-recovery" : "initial",
+    targetKey: "fixture", countedExternally: true } as const;
+  const booked = mode === "direct" ? undefined : budget.reserveDispatch(intent);
+  if (booked && !booked.allowed) throw new Error("fixture booking was denied");
+  const permit = booked?.permit;
+  const remaining = budget.remainingBaseSends(100) + (permit ? 1 : 0);
+  const controller = new AbortController();
+  const options = { sendBudget: budget, ...(mode === "combo" && permit
+    ? { comboInitialSend: { permit }, comboAttempt: true } : {}) };
+  const sendBudget = createResponsesSendBudget({ options, req: new Request("http://localhost/v1/responses"),
+    logCtx: { model: "fixture", provider: "fixture" } });
+  const sidecar = createSidecarSendBudget(options, sendBudget, () => undefined);
+  if (mode === "credential replacement") sidecar.ownCredentialHop(permit);
+  const receipt = sidecar.fetchOptions(createOpenAIChatAdapter({ adapter: "openai-chat", baseUrl: "https://fixture.example/v1" })).onPhysicalDispatch;
+  let attemptOpened = false;
+  let executorCalls = 0;
+  const physical = (async (_input, init) => {
+    executorCalls++;
+    init?.signal?.throwIfAborted();
+    throw new Error("unexpected upstream send");
+  }) as typeof fetch;
+  const send = providerFetch({ adapter: "openai-chat", baseUrl: "https://fixture.example/v1", fetch: physical }, undefined, {
+    httpOnly: true,
+    dispatchOverride: (input, init, execute) => {
+      controller.abort();
+      return execute(input, init);
+    },
+    onPhysicalDispatch: () => {
+      receipt?.();
+      attemptOpened = true;
+    },
+  });
+  try {
+    await expect(send("https://fixture.example/v1", { signal: controller.signal })).rejects.toHaveProperty("name", "AbortError");
+  } finally {
+    sidecar.release();
+  }
+  expect({ used: budget.used, attemptOpened, remaining: budget.remainingBaseSends(100) })
+    .toEqual({ used: 0, attemptOpened: false, remaining });
+  expect(executorCalls).toBe(0);
 });

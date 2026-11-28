@@ -14,8 +14,9 @@ without a control socket. It does not change the loaded-only commands above.
 
 ## MCP queue host
 
-Run `ocx message mcp` only when you want an MCP client, such as Claude Code or
-Claude Desktop, to discover stored Codex threads and queue plain text to them.
+Run `ocx message mcp` when you want an MCP client, such as Claude Code CLI or
+the Code tab in Claude Desktop, to discover stored Codex threads and queue
+plain text to them.
 The host runs over stdio; it exposes no network listener and registers itself in
 no client. Configure the MCP client with an explicit Codex CLI and existing home:
 
@@ -47,7 +48,7 @@ Windows is explicitly refused.
   to 16 KiB; NUL and empty text are refused. There is no name guessing, model
   override, permission grant or automatic response.
 
-Each tool call starts a short-lived, explicitly selected Codex CLI app-server
+Each queue/metadata or stored-read tool call starts a short-lived, explicitly selected Codex CLI app-server
 over stdio. It uses `thread/list` or the same experimental `thread/queue/add`
 method as `codex queue`, without putting text in subprocess arguments. It issues
 no daemon-start, login, thread-resume, turn-start or steer request. Ordinary
@@ -173,6 +174,70 @@ live state, so even a stored terminal status does not stop the wait early.
 Refresh revisits partially written items; callers still manage pagination and
 update item IDs. Cancellation/disconnect clears pauses and reaps owned helpers.
 The host adds no background watch, automatic delivery, session creation or resume.
+
+### Send from Claude Code and check the reply
+
+First check that `ocx help message mcp` shows the MCP host options in your
+installed OpenCodex. Use an explicit local Codex executable and existing Codex
+home, as in the host config above. Register the server for a local workspace:
+
+- **Claude Code CLI:** Run this from that workspace. `--scope local` keeps the
+  registration in your own Claude Code settings for the workspace.
+
+  ```bash
+  claude mcp add --scope local --transport stdio opencodex-queue -- \
+    /absolute/path/to/ocx message mcp \
+    --codex /absolute/path/to/codex --codex-home /absolute/path/to/.codex \
+    --allow-reply-read
+  ```
+
+- **Claude Desktop, Code tab:** Add the server from the JSON example above to
+  the workspace's `.mcp.json`, use the absolute `ocx` path as `command`, and
+  append `--allow-reply-read` to `args`. Select that local workspace in the
+  Code tab, start a Code session and approve the project server if prompted.
+  This `.mcp.json` entry applies to Code sessions. The Desktop Chat surface
+  uses [a separate Desktop configuration](https://code.claude.com/docs/en/desktop#mcp-servers-from-the-claude-desktop-chat-app).
+
+Only enable `--allow-reply-read` if you intend to share stored Codex answer
+text with the client. For a round trip:
+
+1. Open a test conversation in your native Codex client and leave it idle.
+   In Claude Code, check that `opencodex-queue` is connected via `/mcp` in the
+   CLI or under **Connectors** in the Code tab.
+2. Have Claude call `codex_threads` to find the exact conversation UUID, then
+   call `codex_queue_message` once with a test message such as “Reply with
+   exactly `OCX_MCP_OK`.” Approve each tool call for this test if prompted. The
+   `queued` receipt contains `clientMessageId`; it does not confirm Codex has
+   processed the message. If submission is `unknown`, do not send it again.
+3. Have Claude call `codex_wait_reply` with that same `threadId` and
+   `clientMessageId`. `reply_observed` with the expected test reply confirms
+   the round trip. If the wait expires, check the same receipt again or inspect
+   the Codex conversation. A wait timeout does not justify another send.
+
+## List local Claude Code sessions
+
+On macOS or Linux, pass the absolute path to your trusted native Claude Code
+executable. It must support [`claude agents --json`](https://code.claude.com/docs/en/agent-view#list-sessions-as-json).
+
+```bash
+ocx message claude-sessions --claude /absolute/path/to/claude --json
+```
+
+The `ocx-claude-sessions/1` result lists session UUIDs (`id`), `kind`
+(`interactive` or `background`) and the activity reported by Claude Code
+(`busy`, `waiting` or `idle`). Rows with a missing or null session ID or PID
+are skipped. When both fields are present, a shortened or otherwise invalid
+session UUID or an invalid PID causes the entire lookup to fail.
+`CLAUDE_CONFIG_DIR`, if set, selects the local Claude configuration. Names,
+paths, PIDs and history are omitted from the result. The command invokes the
+Claude CLI once with a five-second deadline, 256 KiB output limit and 256-row
+limit. It respects the `CLAUDE_CODE_DISABLE_AGENT_VIEW` opt-out and disables
+nonessential Claude CLI traffic for the lookup. Claude Code can initialize
+its own configuration on first use. On failure the command returns a
+sanitized error and no partial list.
+
+A listed session is an observed local session. This command does not test
+inbox reachability, send messages, or use enrolled SSH peers.
 
 ## Discover and send
 
@@ -433,3 +498,41 @@ is not controlled by it.
 
 Mesh, dashboard/cache controls, isolation, Claude messaging, managed skills and
 idle notifications remain outside this contribution.
+
+
+## Explicit existing-server resume
+
+**Execution is currently blocked pending native atomic conditional resume support.**
+This pending tool cannot safely resume an unloaded conversation with the checked
+Codex 0.166.0 API. It performs bounded preflight and returns a refusal; it does not
+run queued work. Existing queue and stored-reply tools remain available separately.
+
+To expose the preflight tool, configure all three arguments:
+
+```sh
+ocx message mcp --codex /absolute/path/to/codex --codex-home /absolute/path/to/.codex --allow-reply-read --allow-resume --resume-socket /absolute/path/to/existing.sock --resume-permissions :read-only
+```
+
+The socket must be an existing trusted local Unix App Server reporting the same
+canonical Codex home. No server is installed or started. An exact thread UUID is
+normalized before metadata-only lookup. Observed loaded idle/active targets return
+`already_loaded`; unhealthy targets refuse. For an unloaded target, managed policy,
+unsupported APIs, invalid metadata or a missing/disallowed/unobserved profile refuse.
+The profile is configured by the host, never by tool arguments or queued messages.
+The check reads one bounded catalog page of at most 50 profiles in the target cwd.
+
+Even when these checks pass, the result is `not_resumed` with
+`resume_atomicity_unsupported`. No `thread/resume` is sent. Another client could load
+and unsubscribe from the conversation between the metadata read and resume; the
+checked native server can replace that idle cache entry using supplied permissions.
+A client-side lock or second read cannot eliminate this window. Execution requires
+a native unloaded-only condition enforced atomically before changing a live thread;
+there is no supported conditional-resume API in the checked version. Do not bypass
+this refusal, infer safety from a version string or treat an acknowledgement as a
+way to undo work already started.
+
+`executionVerified` is always false. The tool starts no conversation or turn,
+changes no permission and answers no approval requests. Each call shares a
+20-second budget and the host's four-operation limit; overlapping calls for one
+UUID refuse. Disconnect closes only the bridge connection. Network/SSH endpoints
+and Windows remain outside this tool's scope.

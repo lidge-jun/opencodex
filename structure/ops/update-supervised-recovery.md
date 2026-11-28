@@ -103,9 +103,14 @@ is a home failure and an actually started unsupervised fallback remains a failur
 `src/update/job-pinned-start.ts` performs pinned-start I/O and checks after log setup, just
 before spawning. Its caller passes the same latched authorizer.
 `src/update/job-windows-restart.ts` receives that same authorizer at all worker call
-sites. It rechecks service permission after backend observation, before each backend
-stop and after the blocking stop or its catch path before wrapper termination. Path
-setup precedes a final service check at the scoped scheduler-wrapper killer.
+sites. It checks service permission after backend observation and before the backend stop.
+WinSW keeps its stop; Task Scheduler runs Part A of the checked Windows stop
+(`guardedStopWindowsChecked`, [Windows checked service stop](windows-checked-stop.md)), whose
+authorizer is the service mutation gate at entry and again before every bound-wrapper
+terminate. A refusal, or any outcome other than stopped or absent, returns false, and each of
+the three call sites in `src/update/job.ts` then fails the restart before reclaim or a start;
+the one in front of the synchronous pinned-start preparation runs before it so its outcome can
+abort.
 
 The Node launcher, Bun updater and dashboard worker use the same transition policy in
 `src/update/service-home-policy.mjs`. Their direct recovery helpers reacquire the ownership
@@ -186,6 +191,21 @@ when that runtime's own stop/update is permitted and succeeds, not to every cros
 
 ## The dashboard update worker
 
+### Managed source release checks
+
+The dashboard and `ocx system update check` use `GET /api/update/check`. For source
+installs, `src/update/managed-release.ts` requires an operator-provided `OCX_MANAGED_RELEASE=1`.
+The plain Node launcher in `bin/ocx.mjs` captures it in the proof-bound context before
+Bun loads project dotenv. `src/cli/launcher-context.ts` requires that context for managed
+release mode and removes the marker from `process.env` before dispatch.
+The scheduler uses the read-only npm lookup on demand. A successful check reports
+`managed_release` without a command.
+A failed lookup reports `latest_unavailable` so the caller can retry. Unmarked source
+checkouts retain their `git pull` guidance. The check in `src/update/job.ts` keeps every
+source install ineligible for dashboard jobs.
+
+### Worker lifecycle
+
 `src/update/service-home-authority.ts` distinguishes matching service homes, a known foreign
 registration, unknown evidence and confirmed absence. It combines service-state resolution with
 the unattended native ownership inspector and the lifecycle SQLite-home comparison; physical
@@ -212,7 +232,7 @@ restart refusal, including after a transient re-match; void-returning preparatio
 The manager helper checks independently after lease release, immediately before contacting the
 manager, and returns distinct `refused` for foreign or unknown homes; callers cannot treat this as
 an ordinary failed restart. `src/update/job-windows-restart.ts` owns scoped Windows
-wrapper cleanup under the same latched service guard. Pinned direct recovery receives global service-stop authority only for a matching
+service stops under the same latched service guard. Pinned direct recovery receives global service-stop authority only for a matching
 managed home; foreground recovery does not acquire that authority.
 The preparation callback tests the current `serviceAllowed` after preparation's fresh mutation
 gate: a matching registration disappearing still allows foreground PID/port cleanup, while

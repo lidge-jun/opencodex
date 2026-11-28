@@ -6208,6 +6208,7 @@ describe("Codex catalog routed normalization", () => {
     };
     enrichProviderFromRegistry("GLM", opinionated);
     expect(opinionated.modelSupportsReasoningSummaries).toEqual({
+      "glm-5.4": true, "glm-5.4[1m]": true,
       "glm-5.2": false,
       "glm-5.2[1m]": true,
       "glm-5.3": true,
@@ -6847,7 +6848,7 @@ describe("OpenAI API trusted catalog augmentation", () => {
     "gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
     "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro",
     "daybreak-red-latest", "daybreak-blue-latest",
-    "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna",
+    "gpt-6-astra", "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna",
   ];
 
   test("Astra API registry metadata reaches the emitted catalog independently of native limits", async () => {

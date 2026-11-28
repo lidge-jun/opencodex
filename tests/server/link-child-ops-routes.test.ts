@@ -10,7 +10,7 @@ import type { OcxConfig } from "../../src/types";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import type { LinkSupervisor } from "../../src/link/supervisor";
 import type { SshRunResult, SshRunner } from "../../src/link/ssh-runner";
-import { readChildObservations } from "../../src/link/child-observations";
+import { emptyChildObservations, patchChildObservation, readChildObservations } from "../../src/link/child-observations";
 import { resetSharedChildOpsEngineForTests, sharedChildOpsEngine } from "../../src/link/child-ops-engine";
 import { catalogEtag } from "../../src/server/catalog-download";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -86,7 +86,9 @@ function harness(options: { links?: LinkRecord[]; runtimeRole?: OcxConfig["runti
       flushCatalogPulls: () => { options.onFlush?.(); },
     } : {}),
   };
-  const config = { port: 10100, hostname: "127.0.0.1", runtimeRole: options.runtimeRole ?? "hub", defaultProvider: "mock", providers: {}, apiKeys: [] } as OcxConfig;
+  // Every stored link's issued key is listed, as in a real Home; revoking removes it.
+  const config = { port: 10100, hostname: "127.0.0.1", runtimeRole: options.runtimeRole ?? "hub", defaultProvider: "mock", providers: {},
+    apiKeys: current.links.map(record => ({ id: record.apiKeyId })) } as unknown as OcxConfig;
   const deps: ManagementApiDeps = {
     readLinkStore: () => current,
     writeLinkStore: next => { current = next; events.push("store"); },
@@ -94,7 +96,7 @@ function harness(options: { links?: LinkRecord[]; runtimeRole?: OcxConfig["runti
     linkListener: () => listener,
     linkKnownHostsPath: () => join(temp, "known_hosts"),
     sshRunner: runner,
-    revokeApiKey: () => { events.push("revoke"); return true; },
+    revokeApiKey: (_config, id) => { events.push("revoke"); config.apiKeys = (config.apiKeys ?? []).filter(key => key.id !== id); return true; },
     now: () => 1_762_819_200_000,
   };
   const call = async (path: string, method = "GET", body?: unknown, principal: "admin-token" | "gui-session" | null = "admin-token",
@@ -263,6 +265,33 @@ describe("link child operations routes", () => {
     const invalid = await h.call("/api/link/children/jobs/job-1");
     expect(invalid?.status).toBe(400);
     expect(((await invalid!.json()) as { error: { code: string } }).error.code).toBe("invalid_job_id");
+  });
+
+  test("a Windows observation cached as orchestrated before #9172 reads as a local update; POSIX keeps its route", async () => {
+    const h = harness({ full: true, links: [link(HUB, { remotePlatform: "windows" }), link(CLIENT)] });
+    const file = emptyChildObservations();
+    const cached = { source: "plan" as const, installedVersion: "2.95.0", installKind: "npm" as const, updateRoute: "orchestrated" as const, updateReason: null };
+    patchChildObservation(file, HUB, cached, new Date(1_762_000_000_000));
+    patchChildObservation(file, CLIENT, cached, new Date(1_762_000_000_000));
+    writeFileSync(join(temp, "ocx", "link", "child-observations.json"), JSON.stringify(file));
+    const body = await (await h.call("/api/link/status?children=1"))!.json() as { links: Array<{ id: string; child: { update: unknown } }> };
+    expect(body.links.find(row => row.id === HUB)!.child.update).toMatchObject({ route: "owner-action", reason: "windows-apply" });
+    expect(body.links.find(row => row.id === CLIENT)!.child.update).toMatchObject({ route: "orchestrated", reason: null });
+  });
+  test("without a recorded link platform the observation's platform decides, and an unknown one asks for a fresh check (#9172)", async () => {
+    const LEGACY = "lnk_00000000000000aa";
+    const h = harness({ full: true, links: [link(HUB, { remotePlatform: undefined }), link(CLIENT, { remotePlatform: undefined }), link(LEGACY, { remotePlatform: undefined })] });
+    const file = emptyChildObservations();
+    const cached = { source: "plan" as const, installedVersion: "2.95.0", installKind: "npm" as const, updateRoute: "orchestrated" as const, updateReason: null };
+    patchChildObservation(file, HUB, { ...cached, platform: "windows" }, new Date(1_762_000_000_000));
+    patchChildObservation(file, CLIENT, { ...cached, platform: "posix" }, new Date(1_762_000_000_000));
+    patchChildObservation(file, LEGACY, cached, new Date(1_762_000_000_000));
+    writeFileSync(join(temp, "ocx", "link", "child-observations.json"), JSON.stringify(file));
+    const body = await (await h.call("/api/link/status?children=1"))!.json() as { links: Array<{ id: string; child: { update: unknown } }> };
+    const update = (id: string) => body.links.find(row => row.id === id)!.child.update;
+    expect(update(HUB)).toMatchObject({ route: "owner-action", reason: "windows-apply" });
+    expect(update(CLIENT)).toMatchObject({ route: "orchestrated", reason: null });
+    expect(update(LEGACY)).toMatchObject({ route: "owner-action", reason: "recheck-required" });
   });
 
   test("?children=1 adds child to Home rows only and nothing without the query", async () => {

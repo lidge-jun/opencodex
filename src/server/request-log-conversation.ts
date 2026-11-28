@@ -2,7 +2,10 @@
  * Best-effort chat/session correlation for Logs / usage.jsonl (#330).
  * Opaque ids only — never persist raw emails or Claude Desktop system-hash fallbacks.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
+import type { OcxConfig } from "../types";
+import { resolveContextPrincipal, type DataPlaneAdmission } from "./auth-cors";
+import { principalScopedSessionId, safeCallerSessionId } from "./caller-session-identity";
 
 /** Reject absurdly long client strings before hashing (DoS / JSONL bloat). */
 export const LOG_CONVERSATION_ID_INPUT_MAX = 4096;
@@ -130,6 +133,42 @@ export function sessionLaneIdFromRequest(headers: Headers): string | undefined {
   return specific ?? parent;
 }
 
+/**
+ * The affinity lane a request binds under, derived once so every entry path agrees.
+ *
+ * `sessionLaneIdFromRequest` first (explicit thread/session/parent identity), then the
+ * explicit `x-opencode-session` header the Claude-Go handoff and
+ * `getOrAllocateRequestSessionLane` already treat as lane identity, then the log
+ * conversation id — except the Hermes digest, which is log correlation only and must
+ * never affect lanes or routing (#330). This expression used to be inlined at four
+ * entry paths and drifted: three of the four missed the `x-opencode-session` fallback
+ * until PR #7738 aligned them.
+ *
+ * Scope authenticated lanes to the admitted principal with a process-local HMAC. A translated
+ * request carries the principal captured before its caller credential was stripped. Loopback
+ * without a recognized credential retains the existing local lane; an authenticated admission
+ * without a principal cannot bind. The distinct prefix prevents local lanes from colliding.
+ */
+const AFFINITY_SCOPE_KEY = randomBytes(32);
+
+export function affinityLaneFromRequest(
+  req: Request,
+  slot: LogConversationSlot,
+  config: OcxConfig,
+  admission?: DataPlaneAdmission,
+  capturedPrincipal?: Readonly<{ clientPrincipalId: string | undefined }>,
+): string | undefined {
+  const lane = sessionLaneIdFromRequest(req.headers)
+    ?? normalizeLogConversationId(req.headers.get("x-opencode-session"))
+    ?? (slot.conversationIdIsHermesFallback ? undefined : normalizeLogConversationId(slot.conversationId));
+  if (!lane) return undefined;
+  const principal = capturedPrincipal ? capturedPrincipal.clientPrincipalId : resolveContextPrincipal(req, config, admission);
+  if (principal) return `principal:${createHmac("sha256", AFFINITY_SCOPE_KEY).update(JSON.stringify([principal, lane])).digest("hex")}`;
+  // An authenticated admission with no identity must not join any other caller's lane.
+  if (admission && admission.kind !== "loopback") return undefined;
+  return lane;
+}
+
 function firstSanitizedConversationId(
   ...values: Array<string | null | undefined>
 ): string | undefined {
@@ -143,7 +182,11 @@ function firstSanitizedConversationId(
 /**
  * Conversation namespace for reasoning replay. Unlike the persisted log id, this stays the raw
  * sanitized identity so mixed headers that carry the same conversation still hit one serving
- * record. Do not hash, and do not prefer session_id over a true per-conversation thread/Cursor
+ * record. The request's own thread-id precedes the parent routing identity: a child agent sends
+ * both, and letting it resolve to the parent's record lets a successful child route overwrite
+ * the parent's serving provenance, which strips the parent's replayed thinking signatures on its
+ * next turn (#8632). The parent header stays the fallback for callers that only carry it.
+ * Do not hash, and do not prefer session_id over a true per-conversation thread/Cursor
  * identity: session_id can be synthesized from a shared prompt_cache_key.
  */
 export function reasoningReplayConversationIdFromResponsesRequest(input: {
@@ -153,8 +196,8 @@ export function reasoningReplayConversationIdFromResponsesRequest(input: {
   sessionIdHeader?: string | null;
 }): string | undefined {
   return firstSanitizedConversationId(
-    input.clientThreadId,
     input.threadIdHeader,
+    input.clientThreadId,
     input.cursorConversationId,
     input.sessionIdHeader,
   );
@@ -172,6 +215,33 @@ export function conversationIdFromResponsesRequest(input: {
       ?? input.threadIdHeader
       ?? input.cursorConversationId,
   );
+}
+
+/**
+ * A Responses caller that names its conversation only through the body `prompt_cache_key`
+ * (Oh My Pi, for one) sends no session header, so its turns bound no affinity lane and reached
+ * the ChatGPT Codex backend without the `session_id` it keys prefix reuse on (#9137). The body is
+ * read after ingress, so the key is promoted onto the request's own headers there. Any session
+ * header the caller sent, `x-session-id` included, wins, and authenticated callers are scoped to
+ * their principal exactly as an `x-session-id` is.
+ */
+export function promotePromptCacheKeySession(
+  headers: Headers,
+  body: unknown,
+  admission: DataPlaneAdmission | undefined,
+): string | undefined {
+  if (!admission || !body || typeof body !== "object" || Array.isArray(body)) return undefined;
+  if (["session_id", "session-id", "thread-id", "x-session-id"].some(name => headers.has(name))) return undefined;
+  const key = (body as { prompt_cache_key?: unknown }).prompt_cache_key;
+  const conversation = typeof key === "string" ? safeCallerSessionId(key) : undefined;
+  const sessionId = conversation ? principalScopedSessionId(conversation, admission) : undefined;
+  if (!sessionId) return undefined;
+  try {
+    headers.set("session_id", sessionId);
+  } catch {
+    return undefined;
+  }
+  return sessionId;
 }
 
 /**
@@ -248,8 +318,8 @@ export function conversationIdFromClaudeMetadata(
   metadata: { user_id?: unknown } | null | undefined,
 ): string | undefined {
   if (!metadata || typeof metadata.user_id !== "string") return undefined;
-  // Too long to persist: skip parsing a blob normalizeLogConversationId rejects anyway.
-  if (metadata.user_id.trim().length > LOG_CONVERSATION_ID_INPUT_MAX) return undefined;
+  // No length guard before stripping tk: an oversized tk still leaves a valid session id,
+  // which also gates Claude routing identity (claude-messages.ts claudeNativeSessionId).
   return normalizeLogConversationId(claudeSessionUserId(metadata.user_id));
 }
 

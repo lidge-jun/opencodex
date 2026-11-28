@@ -1,14 +1,29 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { contextCompatibleBaseLine } from "../../src/codex/context-compat";
 import { createNativeRoutingVerifier, matchesNativeCompatibilityRouting } from "../../src/codex/desktop-compatibility/routing-preflight";
 import { bindNativeCompatibilityOwner, nativeCompatibilityOwner, type NativeCompatibilityOwner } from "../../src/codex/desktop-compatibility/routing-binding";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 const owner: NativeCompatibilityOwner = { hostname: "127.0.0.1", port: 12001, loopbackPort: 12002, config: { port: 10100, providers: {} } };
 const text = 'model_provider = "openai"\nopenai_base_url = "http://127.0.0.1:12001/v1"\n';
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) removeTreeWithRetry(root); });
+const desktopOverrides = ["CODEX_API_BASE_URL", "CODEX_APP_SERVER_WS_URL", "CODEX_ELECTRON_USER_DATA_PATH", "ELECTRON_RUN_AS_NODE"];
+const savedOverrides = new Map<string, string>();
+beforeEach(() => {
+  for (const name of desktopOverrides) {
+    const value = process.env[name];
+    if (value !== undefined) savedOverrides.set(name, value);
+    delete process.env[name];
+  }
+});
+afterEach(() => {
+  for (const name of desktopOverrides) delete process.env[name];
+  for (const [name, value] of savedOverrides) process.env[name] = value;
+  savedOverrides.clear();
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
+});
 
 test("address family matches the bound listener instead of any loopback alias", () => {
   const ipv6 = text.replace("127.0.0.1", "[::1]");
@@ -42,6 +57,26 @@ test("the actual bound listener and companion port are accepted, not a stale con
   expect(matchesNativeCompatibilityRouting(text, { ...owner, config: { ...owner.config, codexDesktopAuthless: true } })).toBe(false);
   expect(matchesNativeCompatibilityRouting(text, { ...owner, config: { ...owner.config, runtimeRole: "client" } })).toBe(false);
 });
+test("the injected context-management base URL qualifies on the active listener", () => {
+  const baseLine = 'openai_base_url = "http://127.0.0.1:12001/v1"';
+  const optedIn = text + '[features.context_management]\nexperimental_mode = true\n';
+  const injected = optedIn.replace(baseLine, contextCompatibleBaseLine(optedIn, baseLine));
+  expect(injected).toContain('openai_base_url = "http://127.0.0.1:12001/backend-api/codex"');
+  expect(matchesNativeCompatibilityRouting(injected, owner)).toBe(true);
+  expect(matchesNativeCompatibilityRouting(injected.replace('/codex"', '/codex/"'), owner)).toBe(true);
+});
+
+test("the context-management alias still requires opt-in and a valid local route", () => {
+  const alias = text.replace("/v1", "/backend-api/codex");
+  const optedIn = alias + '[features]\ncontext_management = true\n';
+  expect(matchesNativeCompatibilityRouting(optedIn, owner)).toBe(true);
+  for (const candidate of [alias, optedIn.replace("= true", "= false"),
+    optedIn.replace(":12001", ":10100"), optedIn.replace("127.0.0.1", "example.test"),
+    optedIn.replace("/codex", "/codex/extra"), optedIn.replace("/codex", "/codex?x=1")]) {
+    expect(matchesNativeCompatibilityRouting(candidate, owner)).toBe(false);
+  }
+});
+
 test("foreign providers, destinations, credentials and unknown profiles cannot qualify", () => {
   for (const candidate of [text.replace('"openai"', '"custom"'), text.replace("127.0.0.1", "example.test"),
     text.replace("http://", "https://"), text.replace("127.0.0.1", "user:pass@127.0.0.1"), text.replace("/v1", "/v1?x=1"),

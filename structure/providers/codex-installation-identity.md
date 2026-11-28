@@ -24,6 +24,12 @@ while empty installation and turn-metadata headers retain their existence gates.
 `src/codex/forward-transport-headers.ts` also isolates a present installation field inside native
 turn metadata and strips caller attestations from substituted credentials. Its selected-header merge
 prevents removed identity fields from reappearing through provider defaults.
+Its `FORWARD_HEADERS` allowlist also carries Codex's stream-exclusion requests, `x-codex-exclude`
+and `x-codex-exclude-stream-fields`, to the canonical destination only. These requests keep the
+backend from echoing the tool catalog and per-item usage attribution, and from sending delta sequence
+numbers or preliminary reasoning ciphertext. No canonical-path consumer reads those fields; sequence
+numbers are validated only when present. Destinations OpenCodex does not operate never receive the
+headers (`tests/codex-integration/codex-metadata-integrity.test.ts`).
 For an object with a nonblank string `installation_id`, including one already matching the selected
 identity, turn-metadata JSON is canonicalized and escapes every code unit outside
 printable ASCII: `JSON.stringify` escapes U+0000–U+001F (with short forms such as `\n` and
@@ -47,6 +53,8 @@ metadata-free frames; main and main-pool remain outside this validation.
 `src/adapters/openai-responses/transport.ts` and `src/adapters/openai-responses/passthrough.ts`
 apply the same identity to HTTP headers and a cloned client-metadata map. The serialized body feeds
 `src/server/responses/codex-ws-request.ts`; WebSocket preparation preserves these existence gates.
+The inbound `buildResponsesWsData` contract in `src/server/ws-bridge.ts` keeps the observational usage client separate from the admitted replay principal. `src/server/index/serve-options.ts` passes both; client classification never grants replay authority.
+For an unidentified loopback WebSocket, the upgrade also mints a separate opaque replay scope bound to its own thread. `src/server/index/websocket-handler.ts` retains it only for that socket and releases it before cancelling on close. It grants no credential, history or notes authority; keyed callers retain the durable principal path. The [Responses replay contract](../transports/responses.md) defines its memory-only retention and refusal boundaries.
 `src/server/responses/codex-ws-pool.ts` includes immutable outgoing headers and account in its reuse
 identity. `src/server/ws-bridge.ts` isolates explicit Pool header overrides as well.
 Its inbound handshake snapshot also retains caller-supplied `user-agent` and
@@ -66,12 +74,19 @@ Native compact in `src/server/responses/compact.ts` projects the body per physic
 failover uses the newly selected account ID. Alternate construction reports identity failures as
 503 instead of treating them as absence of an eligible account, while recording the first
 account's completed rejection and quota headers without attributing a send to the alternate.
+The first native compact send and a credential replay each enter the
+[usage attempt log](../usage-client-attribution.md#credential-recovery-attempts) at guarded dispatch.
 `src/server/context-history.ts` applies the same clone
 and header contract. `src/server/search.ts`, `src/server/images.ts` and `src/server/live.ts`
 retain the selected context and project cloned client metadata immediately before each physical
 JSON send, including live's converted multipart session. Live inspects JSON content independently
 of Content-Type; non-JSON SDP retains its original bytes. Their selected headers authoritatively
 replace or remove mixed-case provider identity defaults; main and main-pool preserve caller values.
+For hosted search, the selected pool account's network route takes precedence over the provider
+route. A caller's own bearer retains the process route. A local routing refusal releases the
+probe lease without recording an upstream connection failure.
+Hosted search passes a configured deadline over 200 seconds to the transport as an idle budget.
+The search signal still enforces the total deadline and caller cancellation.
 Vision, audio and sidecar credential selection share materialization.
 Dictation in `src/server/audio-dictation.ts` has a 600,000 ms recording budget and
 opts into a separate 60,000 ms finalization window after a validated `session.close`.
@@ -110,3 +125,11 @@ contracts are covered by `tests/responses/codex-installation-compact-empty.test.
 `tests/responses/codex-installation-turn-limit.test.ts`.
 
 The Claude bridge carries its private pool identity through Codex selection; see [Claude affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch).
+
+## Claude system prompt placement for GPT-6.2
+
+The canonical Codex Responses adapter sends the translated Messages system prompt as the first
+`developer` item for GPT-6.2 Sol and Astra, so it participates in prefix caching. The projection
+uses the final outbound model and only changes the outbound copy. Cache keys and chronological
+system messages retain their original translation. Native Responses requests and compaction
+retain their existing prompt envelopes.

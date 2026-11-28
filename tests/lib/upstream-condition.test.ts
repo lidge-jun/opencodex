@@ -15,6 +15,9 @@ describe("classifyUpstreamCondition", () => {
     expect(classifyUpstreamCondition({ status: 404, code: "model_not_found" })).toBe("model_unavailable");
     expect(classifyUpstreamCondition({ status: 429, type: "rate_limit_error" })).toBe("rate_limited");
     expect(classifyUpstreamCondition({ status: 529, type: "overloaded_error" })).toBe("upstream_unavailable");
+    expect(classifyUpstreamCondition({ status: 429, code: "upstream_reset_replay_refused" })).toBe("upstream_failed");
+    expect(classifyUpstreamCondition({ status: 502, code: "upstream_closed_before_response" })).toBe("upstream_failed");
+    expect(classifyUpstreamCondition({ status: 504, code: "upstream_no_response" })).toBe("upstream_failed");
     expect(classifyUpstreamCondition({ status: 400, code: " Context_Length_Exceeded " })).toBe("context_overflow");
   });
 
@@ -25,6 +28,28 @@ describe("classifyUpstreamCondition", () => {
     expect(classifyUpstreamCondition({ status: 403, message: "Your organization must be verified to stream this model." })).toBe("account_verification_required");
     expect(classifyUpstreamCondition({ status: 400, message: "Your credit balance is too low" })).toBe("billing_exhausted");
     expect(classifyUpstreamCondition({ status: 400, message: "The model does not exist" })).toBe("model_unavailable");
+  });
+
+  test("the Claude account notice is specific to a 403 and is not triggered by a quoted value or URL alone", () => {
+    const message = "Your account can't receive replies from Claude right now. You can find the next step in the Anthropic Verification Portal:";
+    expect(classifyUpstreamCondition({ status: 403, message })).toBe("account_verification_required");
+    expect(classifyUpstreamCondition({ status: 403, message: `Invalid tool name: ${message}` })).toBe("access_denied");
+    expect(classifyUpstreamCondition({ status: 403, message: "See https://portal.anthropic.com/verify" })).toBe("access_denied");
+    expect(classifyUpstreamCondition({ status: 401, message })).toBe("auth_failed");
+    expect(classifyUpstreamCondition({ status: 500, message })).toBe("upstream_failed");
+    // Only the portal link may follow the sentence; another diagnostic after it keeps its own class.
+    expect(classifyUpstreamCondition({ status: 403, message: `${message} https://portal.anthropic.com/verify?org=x` })).toBe("account_verification_required");
+    expect(classifyUpstreamCondition({ status: 403, message: `${message} invalid x-api-key` })).toBe("access_denied");
+    expect(classifyUpstreamCondition({ status: 403, message: `${message} https://example.test/verify` })).toBe("access_denied");
+  });
+
+  test.each([
+    "upstream_reset_replay_refused",
+    "upstream_closed_before_response",
+    "upstream_no_response",
+  ])("transport code %s takes precedence over the generic error type", (code) => {
+    expect(classifyUpstreamCondition({ status: 429, type: "rate_limit_error", code })).toBe("upstream_failed");
+    expect(classifyUpstreamCondition({ status: 401, type: "rate_limit_error", code })).toBe("auth_failed");
   });
 
   test("context overflow from text needs the combo router's definite verdict", () => {

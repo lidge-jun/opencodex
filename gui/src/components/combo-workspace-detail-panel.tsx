@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type ComboItem,
   type ProviderQuotaStates,
@@ -14,9 +14,10 @@ import { IconChevron, IconTrash } from "../icons";
 import { useT } from "../i18n/shared";
 import { Notice, Switch } from "../ui";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
-import { ComboCapabilities, EffortSelect, StrategySeg, TargetEditor } from "./combo-workspace-controls";
+import { ComboCapabilities, EffortSelect } from "./combo-workspace-controls";
+import { ComboRoutingEditor } from "./combo-workspace-fallback";
+import { applySavedTargetOrder, mergeComboDraft } from "./combo-workspace-merge";
 import { ComboJevDecisionSection } from "./combo-workspace-jev-decision";
-import { COMBO_STRATEGY_HINT_KEYS, COMBO_TARGETS_HINT_KEYS } from "../combo-workspace-data";
 import { clampedNumberInput, comboDraftErrorText } from "./combo-workspace-utils";
 import type { JevDecisionRow } from "../jev-decision-service";
 import { JevStatsPanel } from "./jev-stats-panel";
@@ -39,6 +40,7 @@ const NO_COMBOS: readonly ComboItem[] = [];
 
 export function DetailPanel({
   apiBase,
+  routingRevision,
   baseline,
   combos = NO_COMBOS,
   isCreate = false,
@@ -55,9 +57,11 @@ export function DetailPanel({
   onRequestRemove,
   onSave,
   onDirtyChange,
+  storedRemoved = false,
 }: {
   /** Management API target; without it the candidate path preview is not offered and JEV stats use same-origin paths. */
   apiBase?: string;
+  routingRevision?: string;
   baseline: ComboItem;
   /** All OTHER combos; a JEV decision model may not name this combo or any JEV combo. */
   combos?: readonly ComboItem[];
@@ -76,8 +80,11 @@ export function DetailPanel({
   onBack?: () => void;
   onSaved: (item: ComboItem) => void;
   onRequestRemove?: () => void;
-  onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string) => Promise<{ ok: boolean; error?: string }>;
+  /** `isCreate` saves create-only: the server refuses an id that is already taken. */
+  onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null) => Promise<{ ok: boolean; error?: string; item?: ComboItem }>;
   onDirtyChange: (dirty: boolean) => void;
+  /** The server no longer has this combo while the draft is kept; Recreate creates it from the draft only if the id is still free. */
+  storedRemoved?: boolean;
 }) {
   const t = useT();
   const [tab, setTab] = useState<DetailTab>("config");
@@ -101,12 +108,14 @@ export function DetailPanel({
       ?.focus();
   }, [detailTabs]);
   const [draft, setDraft] = useState<ComboItem>(baseline);
+  const draftRef = useRef(draft);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [conflicts, setConflicts] = useState<string[]>([]);
   const dirty = !draftEquals(draft, baseline);
   const allTargetsExhausted = comboQuotaState(draft.targets, providerQuotaStates, providerMap) === "exhausted";
-  const baselineSyncKey = JSON.stringify([baseline.id, baseline.alias, baseline.nativeAlias, baseline.displayName, baseline.strategy, baseline.stickyLimit, baseline.defaultEffort, baseline.imageInput, baseline.reasoningEffortMode, baseline.decisionProvider, baseline.decisionModel, baseline.decisionTimeoutMs, baseline.sessionPin === undefined, baseline.sessionPin, baseline.targets.map(t => [t.provider, t.model, t.weight, t.reasoningEfforts, t.modelProfile])]);
+  const baselineSyncKey = JSON.stringify([baseline.revision, baseline.id, baseline.alias, baseline.nativeAlias, baseline.displayName, baseline.strategy, baseline.stickyLimit, baseline.defaultEffort, baseline.imageInput, baseline.reasoningEffortMode, baseline.decisionProvider, baseline.decisionModel, baseline.decisionTimeoutMs, baseline.sessionPin === undefined, baseline.sessionPin, Boolean(baseline.allowMeteredTargets), Boolean(baseline.quotaOnlyFallback), Boolean(baseline.preserveFallbackModel), baseline.targets.map(t => [t.provider, t.model, t.weight, t.reasoningEfforts, t.modelProfile, Boolean(t.metered)])]);
   const effortMap = useMemo(() => {
     const map = new Map<string, string[] | undefined>();
     for (const model of capabilityModels) {
@@ -121,21 +130,37 @@ export function DetailPanel({
 
   const updateDraft = useCallback((updater: (prev: ComboItem) => ComboItem) => {
     const next = updater(draft);
+    draftRef.current = next;
     setDraft(next);
     onDirtyChange(!draftEquals(next, baseline));
   }, [draft, baseline, onDirtyChange]);
 
+  // The draft starts from the baseline, so only a later baseline change resets it. Resetting on
+  // mount ran after the first paint and could undo an edit made in that window.
+  const syncedBaselineKey = useRef(baselineSyncKey);
+  // A save compares against the baseline this draft was synced from, which a poll can outrun.
+  const draftBaseline = useRef(baseline);
   useEffect(() => {
+    if (syncedBaselineKey.current === baselineSyncKey) return;
     const timer = window.setTimeout(() => {
-      setDraft(baseline);
-      setMsg(null);
-      setTab("config");
-      onDirtyChange(false);
+      const result = mergeComboDraft(draftBaseline.current, draftRef.current, baseline);
+      syncedBaselineKey.current = baselineSyncKey;
+      draftBaseline.current = baseline;
+      draftRef.current = result.merged;
+      setDraft(result.merged);
+      setConflicts(current => [...new Set([...current, ...result.conflicts])]);
+      setMsg(current => current?.text === t("pws.draftConflict") ? current : null);
+      onDirtyChange(!draftEquals(result.merged, baseline));
     }, 0);
     return () => window.clearTimeout(timer);
     // oxlint-disable-next-line react/react-compiler -- existing exhaustive-deps exception is intentional
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: key captures baseline payload
   }, [baselineSyncKey]);
+
+  // A removed combo has no revision to check against: say so, and offer Recreate instead of Save.
+  useEffect(() => {
+    if (storedRemoved) setMsg({ ok: false, text: t("cws.removedOnServer") });
+  }, [storedRemoved, t]);
 
   const copyModel = async () => {
     try {
@@ -148,7 +173,22 @@ export function DetailPanel({
   };
 
   const save = async () => {
-    const code = validateComboDraft(draft, {
+    if (conflicts.length) return;
+    let workingDraft = draft;
+    if (syncedBaselineKey.current !== baselineSyncKey) {
+      const result = mergeComboDraft(draftBaseline.current, draftRef.current, baseline);
+      syncedBaselineKey.current = baselineSyncKey;
+      draftBaseline.current = baseline;
+      draftRef.current = result.merged;
+      workingDraft = result.merged;
+      setDraft(result.merged);
+      onDirtyChange(!draftEquals(result.merged, baseline));
+      if (result.conflicts.length) {
+        setConflicts(result.conflicts);
+        return;
+      }
+    }
+    const code = validateComboDraft(workingDraft, {
       existingIds: otherIds,
       existingAliases: otherAliases,
       combos,
@@ -156,25 +196,26 @@ export function DetailPanel({
       providers: providerMap,
     });
     if (code) {
-      setMsg({ ok: false, text: comboDraftErrorText(t, code, draft, providerMap) });
+      setMsg({ ok: false, text: comboDraftErrorText(t, code, workingDraft, providerMap) });
       return;
     }
     setBusy(true);
-    const trimmedId = draft.id.trim();
-    const alias = draft.alias?.trim() || null;
-    const displayName = draft.displayName?.trim() || null;
+    const trimmedId = workingDraft.id.trim();
+    const alias = workingDraft.alias?.trim() || null;
+    const displayName = workingDraft.displayName?.trim() || null;
     const item = {
-      ...draft,
+      ...workingDraft,
       id: trimmedId,
       alias,
       displayName,
       model: comboPublicModelId(trimmedId, alias),
       // The server keeps these only for JEV, so the saved baseline must not carry stale ones.
-      ...(draft.strategy === "jev" ? {} : { decisionProvider: null, decisionModel: null, decisionTimeoutMs: null, sessionPin: undefined }),
+      ...(workingDraft.strategy === "jev" ? {} : { decisionProvider: null, decisionModel: null, decisionTimeoutMs: null, sessionPin: undefined }),
     };
-    const renameFrom = !isCreate && trimmedId !== baseline.id ? baseline.id : undefined;
+    const recreate = !isCreate && storedRemoved;
+    const renameFrom = !isCreate && !recreate && trimmedId !== baseline.id ? baseline.id : undefined;
     try {
-      const res = await onSave(item, isCreate, renameFrom);
+      const res = await onSave(item, isCreate || recreate, renameFrom, isCreate || recreate ? null : draftBaseline.current);
       if (!res.ok) {
         setMsg({ ok: false, text: res.error || t("cws.saveFailed") });
         return;
@@ -183,7 +224,12 @@ export function DetailPanel({
         ok: true,
         text: isCreate ? t("cws.created", { model: item.model }) : t("cws.saved"),
       });
-      onSaved(item);
+      const saved = res.item ?? item;
+      draftBaseline.current = saved;
+      draftRef.current = saved;
+      setDraft(saved);
+      setConflicts([]);
+      onSaved(saved);
     } finally {
       setBusy(false);
     }
@@ -202,7 +248,7 @@ export function DetailPanel({
             {t("cws.allCombos")}
           </button>
         )}
-        <h2 className={`combos-workspace-detail-title${isCreate && !draft.id.trim() ? " combos-workspace-detail-title--label" : ""}`}>{headerModel}</h2>
+        <h2 tabIndex={-1} className={`combos-workspace-detail-title${isCreate && !draft.id.trim() ? " combos-workspace-detail-title--label" : ""}`}>{headerModel}</h2>
         {!isCreate && (
           <button type="button" className="chip cwi-copy-chip" onClick={() => { void copyModel(); }} title={t("cws.copyModel")}>
             {copied ? t("cws.copied") : t("cws.copyModel")}
@@ -214,13 +260,32 @@ export function DetailPanel({
               <IconTrash width={14} height={14} /> {t("common.remove")}
             </button>
           )}
-          <button id={isCreate ? "cwi-edit-create" : "cwi-edit-save"} type="button" className="btn btn-primary btn-sm" disabled={(!isCreate && !dirty) || busy || allTargetsExhausted} onClick={() => { void save(); }}>
-            {busy ? t("common.saving") : t(isCreate ? "cws.create" : "common.save")}
+          <button id={isCreate ? "cwi-edit-create" : "cwi-edit-save"} type="button" className="btn btn-primary btn-sm" disabled={(!isCreate && !dirty) || busy || allTargetsExhausted || conflicts.length > 0} onClick={() => { void save(); }}>
+            {busy ? t("common.saving") : t(isCreate ? "cws.create" : storedRemoved ? "cws.recreate" : "common.save")}
           </button>
         </div>
       </div>
 
       {msg && <Notice tone={msg.ok ? "ok" : "err"}>{msg.text}</Notice>}
+      {conflicts.length > 0 && <Notice tone="err">
+        {t("pws.draftConflictFields")} {conflicts.map(key => key === "targets order" ? t("cws.targets.order") : key).join(", ")} {t("pws.draftConflictResolveFirst")}
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => {
+          updateDraft(current => {
+            const next = { ...current };
+            for (const conflict of conflicts) {
+              if (conflict === "targets order") continue;
+              Object.assign(next, { [conflict]: draftBaseline.current[conflict as keyof ComboItem] });
+            }
+            // An order conflict takes the saved order alone; membership and target fields stay merged.
+            if (conflicts.includes("targets order") && !conflicts.includes("targets")) {
+              next.targets = applySavedTargetOrder(next.targets, draftBaseline.current.targets);
+            }
+            return next;
+          });
+          setConflicts([]);
+        }}>{t("pws.draftConflictUseSaved")}</button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConflicts([])}>{t("pws.draftConflictKeepDraft")}</button>
+      </Notice>}
       {allTargetsExhausted && (
         <div className="cwi-quota-banner" role="status" aria-live="polite">
           {t("cws.quota.allExhausted")}
@@ -275,6 +340,17 @@ export function DetailPanel({
       >
         {(
           <div className="cwi-form-grid">
+            <ComboRoutingEditor
+              apiBase={apiBase}
+              routingRevision={routingRevision}
+              draft={draft}
+              providers={providers}
+              models={models}
+              capabilityModels={capabilityModels}
+              providerQuotaStates={providerQuotaStates}
+              disabled={busy}
+              onChange={(patch) => updateDraft((d) => ({ ...d, ...patch }))}
+            />
             <div className="cwi-field">
               <label htmlFor="cwi-edit-id">{t("cws.field.id")}</label>
               <input
@@ -328,17 +404,6 @@ export function DetailPanel({
                 {t("cws.field.displayNameHint")}
               </p>
             </div>
-            <div className="cwi-field">
-              <span className="field-label">{t("cws.strategy")}</span>
-              <StrategySeg
-                value={draft.strategy}
-                disabled={busy}
-                onChange={(strategy) => updateDraft((d) => ({ ...d, strategy }))}
-              />
-              <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
-                {t(COMBO_STRATEGY_HINT_KEYS[draft.strategy])}
-              </p>
-            </div>
             {draft.strategy === "jev" && (
               <ComboJevDecisionSection
                 idPrefix="cwi-edit"
@@ -387,21 +452,6 @@ export function DetailPanel({
                 />
               </div>
             )}
-            <div className="cwi-field">
-              <span className="field-label">{t("cws.targets")}</span>
-              <TargetEditor
-                targets={draft.targets}
-                strategy={draft.strategy}
-                providers={providers}
-                models={models}
-                capabilityModels={capabilityModels}
-                providerQuotaStates={providerQuotaStates}
-                onChange={(targets) => updateDraft((d) => ({ ...d, targets }))}
-              />
-              <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
-                {t(COMBO_TARGETS_HINT_KEYS[draft.strategy])}
-              </p>
-            </div>
             <ComboCapabilities
               targets={draft.targets}
               models={capabilityModels}

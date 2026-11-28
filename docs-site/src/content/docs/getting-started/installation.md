@@ -130,6 +130,8 @@ ocx update --tag preview
 
 To hack on opencodex itself:
 
+Building from a source checkout requires a separate Bun executable on PATH before running `bun install`. The npm package exposes `ocx` and `opencodex`, not a global `bun` command.
+
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
@@ -160,8 +162,7 @@ under `$CODEX_HOME` (default `~/.codex`).
 | `$CODEX_HOME/opencodex-catalog.json` | Synced native and routed model catalog used by Codex. |
 
 :::note
-opencodex never deletes your Codex config. Every injection is reversible — `ocx stop`, `ocx restore`,
-or `ocx eject` strip exactly the lines opencodex added and restore native Codex.
+opencodex preserves your Codex configuration. On the owning standalone instance, `ocx stop`, `ocx restore` and `ocx eject` remove the managed lines and restore native Codex. A connected Hub client keeps its routing, and stopping a sibling leaves shared client configuration unchanged. See [lifecycle and ownership](/reference/cli/lifecycle/#runtime-ownership) before relying on restoration.
 :::
 
 ## Next

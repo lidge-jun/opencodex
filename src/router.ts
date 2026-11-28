@@ -1,4 +1,4 @@
-import { CODEX_INTERNAL_OPENAI_MODELS } from "./codex/control-plane-models";
+import { isBareOpenAiFamilyModel } from "./codex/control-plane-models";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "./types";
 import { createHash } from "node:crypto";
 import { peekAuthStore } from "./oauth/store";
@@ -12,6 +12,10 @@ import {
   type ComboPick,
 } from "./combos";
 import type { NormalizedComboConfig } from "./combos/types";
+import { cachedProviderQuotaIsExhausted } from "./combos/resolve";
+import { getCachedProviderRoutingQuota } from "./providers/quota-routing-cache";
+import { codexQuotaScopeForModel } from "./codex/routing/health-store";
+import { codexPoolHasConfirmedUsageLimit } from "./codex/routing/selection";
 import { hasOwnProvider } from "./config/provider-name";
 import { anthropicInstanceRowShapeMatches } from "./providers/anthropic-instance-id";
 import { isProviderApiKeyPaused } from "./providers/api-key-pause";
@@ -327,11 +331,7 @@ function crossProviderRedirectTarget(config: OcxConfig, providerName: string, va
   }
 }
 
-/** Exported for the main-account hard-lock fallback: only this family is ever redirected. */
-export function isBareOpenAiFamilyModel(modelId: string): boolean {
-  return !modelId.includes("/")
-    && (/^(?:gpt-|o1-|o3-|o4-)/.test(modelId) || CODEX_INTERNAL_OPENAI_MODELS.has(modelId));
-}
+export { isBareOpenAiFamilyModel } from "./codex/control-plane-models";
 
 function routeResult(
   config: OcxConfig | undefined,
@@ -521,7 +521,7 @@ function routeModelInternal(
   }
 
   if (!bypassCombos && !preservesPhysicalComboProvider(config)) {
-    const combo = tryPickComboModel(config, modelId, preview);
+    const combo = tryPickComboModel(config, modelId, preview, (target, now) => comboDestinationQuotaExhausted(config, target, now));
     if (combo) {
       const concrete = `${combo.target.provider}/${combo.target.model}`;
       // The selected target is already a concrete provider/model reference. Resolve it without
@@ -757,6 +757,40 @@ export function routeCompactionModel(
 /** Resolve a combo-selected provider/model target without consulting public combo aliases again. */
 export function routeConcreteModel(config: OcxConfig, modelId: string): RouteResult {
   return routeModelInternal(config, modelId, true, undefined);
+}
+
+/**
+ * OCX-11: where a combo target physically dispatches, after provider aliases and
+ * blockedModelRedirects. A target that does not resolve keeps its configured selector; its
+ * dispatch fails on its own.
+ */
+export function resolvedComboDestination(config: OcxConfig, target: { provider: string; model: string }): { provider: string; model: string } {
+  try {
+    const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
+    return { provider: route.providerName, model: route.modelId };
+  } catch {
+    return { provider: target.provider, model: target.model };
+  }
+}
+
+/**
+ * Quota-only selection reads the quota of the destination a target resolves to, after redirects:
+ * the cached quota of a key provider, or the confirmed usage limits of the canonical Codex pool.
+ */
+export function comboDestinationQuotaExhausted(config: OcxConfig, target: { provider: string; model: string }, now: number): boolean {
+  let route: RouteResult;
+  try {
+    route = routeConcreteModel(config, `${target.provider}/${target.model}`);
+  } catch {
+    return false;
+  }
+  if (cachedProviderQuotaIsExhausted(getCachedProviderRoutingQuota(route.providerName, route.provider, now), now, route.modelId)) {
+    return true;
+  }
+  return route.codexAccountMode === "pool" && !route.codexAccountId
+    && isCanonicalOpenAiForwardProvider(route.provider)
+    && codexQuotaScopeForModel(route.modelId) === "shared"
+    && codexPoolHasConfirmedUsageLimit(config, now);
 }
 
 function routeByKnownModelPattern(config: OcxConfig, modelId: string, redirectState: BlockedModelRedirectState): RouteResult | undefined {

@@ -52,10 +52,24 @@ back, `ocx restore back` re-points Codex at the proxy.
 
 **Or bring the proxy back instead:**
 
+In one terminal, start the foreground proxy and leave that terminal open:
+
 ```bash
 ocx start
-ocx service install   # keep it running across restarts
 ```
+
+In a second terminal, confirm that `ocx ready --json` reports `ready: true` before installing the service. Then repeat the checks to verify the resulting service:
+
+```bash
+ocx ready --json
+ocx status --json
+ocx service install   # keep it running across restarts
+ocx ready --json
+ocx status --json
+ocx service status --json
+```
+
+An explicit service install stops the tracked foreground proxy before starting the managed service, so the first terminal may exit during installation. It refuses installation if that cleanup cannot be completed safely, then checks that an OpenCodex runtime answers on the installed service port. The pre-install readiness check only verifies the foreground proxy; use the post-install readiness, proxy status and service status together to check the handover.
 
 `ocx status` reports whether the proxy is answering and whether Codex is
 currently routed through it. `ocx doctor` explains the same state in more
@@ -128,3 +142,9 @@ Before a response starts, this temporary refusal returns HTTP 503 with
 error. Capacity refusal does not mark the account as needing reauthentication,
 so signing in again is unnecessary for this error. A refresh that never settles
 can continue occupying capacity; the limit does not impose a refresh deadline.
+
+## A listed model is unavailable
+
+A model in the picker is not a grant for every account in the pool. For a registered ungated native model, when an account returns the exact unsupported-model refusal, automatic routing remembers that account/model pair and prefers another usable account on later requests. This also covers newly configured and discovered native models; an absent roster entry alone does not deny them. Explicit account selections remain authoritative, and no alternative can serve the request when every usable account lacks that model or has exhausted its quota.
+
+Check the failed request's account and error in **Usage & Logs**. As an immediate workaround, pause the refusing account in **Accounts & Quotas**, or select an account that has served that model and still has quota. Pausing preserves its login and does not cancel already-sent requests. Overload and timeout errors are separate failures; signing in again does not resolve them.

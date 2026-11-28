@@ -6,7 +6,8 @@
  * when this process starts its own replacement, so:
  *
  * - Under the desktop app or a viable service supervisor the restart is refused (409
- *   `restart_supervised`) and the runtime keeps serving. The supervisor owns this process and its
+ *   `restart_supervised`) and the runtime keeps serving. A runtime whose only owner evidence is a
+ *   bare OCX_SERVICE=1 is always refused (`legacy-flag`), connection ended or not (#8545). The supervisor owns this process and its
  *   port; handing off to it means exiting before anything proves the replacement can start.
  * - Unless the connection it serves is no longer the durable one (`ocx disconnect`, or a newer
  *   connect). Then there is nothing to keep, and under every owner the restart hands off to the
@@ -36,12 +37,18 @@ type ClientConnectionState = ReturnType<typeof readClientConnectionState>;
  * `service-unproven`: a service manager's marker shows it launched and owns this process, but its
  * relaunch cannot be proven (for example a systemd unit started by hand while disabled). Neither
  * exiting for it nor detaching from it is safe, so the restart is refused.
+ *
+ * `legacy-flag`: the only owner evidence is a bare OCX_SERVICE=1, which a service registered before
+ * the manager marker existed (before 2.49.0) and the proxies of ocx claude, ocx codex and ocx opencode
+ * all carry. Nothing tells them apart, and the owner is never inferred (not from the service
+ * diagnostic, not from the parent's command line), so the restart is refused with advice to
+ * re-register the service once (#8545 owner decision, 2026-11-16).
  */
-export type ClientRestartSupervisor = "service" | "desktop" | "service-unproven";
+export type ClientRestartSupervisor = "service" | "desktop" | "service-unproven" | "legacy-flag";
 
-/** Verdicts that keep the runtime: an owner exists, but exiting for it or detaching is not proven safe. */
-export function restartRefusedByOwner(supervisor: ClientRestartSupervisor | null): supervisor is "service-unproven" {
-  return supervisor === "service-unproven";
+/** Verdicts that keep the runtime: exiting for the owner or detaching from it is not proven safe. */
+export function restartRefusedByOwner(supervisor: ClientRestartSupervisor | null): supervisor is "service-unproven" | "legacy-flag" {
+  return supervisor === "service-unproven" || supervisor === "legacy-flag";
 }
 
 export type ClientRestartAdmission =
@@ -58,7 +65,7 @@ export interface ClientRestartIo {
   connectionChanged?: () => boolean;
   /**
    * Positive evidence of who owns this process ({@link restartOwnerProven}). Without it the
-   * ended-connection recycle is never reached and the restart is origin/dev's.
+   * ended-connection recycle is never reached, and the supervisor check refuses the restart.
    */
   ownerProven?: () => boolean;
   /**
@@ -66,6 +73,11 @@ export interface ClientRestartIo {
    * Receives the same supervisor verdict as the refusal path (a service only when it is viable).
    */
   recycle?: (supervisor: ClientRestartSupervisor | null) => Promise<void>;
+  /**
+   * Fence syncs before anything stops: resolves false when they could not be fenced, and the
+   * restart is then abandoned with this runtime still serving.
+   */
+  fence?: () => Promise<boolean>;
   /** Stop the tunnel supervisor and the listener, giving in-flight requests up to `drainMs`. */
   stop(drainMs: number): Promise<void>;
   /** Start the replacement; resolves once it answers, rejects when none survives. */
@@ -101,6 +113,15 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
   const run = async (acceptedAt: number): Promise<void> => {
     // Let the 202 reach the CLI before the listener starts closing.
     await sleep(200);
+    // A sync already past admission must stand down before the teardown. Without that fence it
+    // could commit while the listener closes, so the restart does not start; the CLI sees this
+    // process still serving and reports the restart as failed.
+    let fenced = false;
+    try { fenced = io.fence ? await io.fence() : true; } catch (error) { warn(`[client] restart: syncs could not be fenced (${failureCode(error)})`); }
+    if (!fenced) {
+      warn("[client] restart: in-flight syncs could not be fenced; this runtime keeps serving");
+      return;
+    }
     try {
       await io.stop(CLIENT_RESTART_DRAIN_MS);
     } catch (error) {
@@ -109,7 +130,7 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
     try {
       await io.spawnReplacement(acceptedAt + CLIENT_RESTART_READY_BY_MS);
     } catch (error) {
-      warn(`[client] restart: the replacement did not start (${failureCode(error)}); this runtime keeps serving`);
+      warn(`[client] restart: the replacement did not start (${failureCode(error)}); attempting recovery`);
       try {
         await io.resume();
       } catch (resumeError) {
@@ -126,7 +147,7 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
     async request() {
       if (io.stopping?.()) return { kind: "stopping" };
       // Only positive ownership evidence opens the ended-connection recycle; without it (a bare
-      // OCX_SERVICE=1) the request takes origin/dev's path below.
+      // OCX_SERVICE=1) the supervisor check below refuses the request as `legacy-flag`.
       if (io.recycle && (io.ownerProven?.() ?? true) && io.connectionChanged?.()) {
         if (flight) return { kind: "accepted", alreadyRestarting: true };
         // An owner that cannot be proven to relaunch this process keeps it, connection ended or not.
@@ -140,6 +161,7 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
         // The recheck is the last step before the recycle, after the (asynchronous) supervisor lookup.
         flight = sleep(200).then(async () => {
           const supervisor = await io.supervisor();
+          if (io.stopping?.()) return;
           if (restartRefusedByOwner(supervisor)) { warn("[client] restart: this runtime's owner could not be proven to relaunch it; it keeps serving"); return; }
           if (changed()) await recycle(supervisor);
         }).finally(() => { flight = null; });
@@ -161,8 +183,7 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
 /** Production supervision check: the desktop app, then a service that will really relaunch us. */
 export async function clientRestartSupervisor(): Promise<ClientRestartSupervisor | null> {
   const { diagnoseService } = await import("../service/diagnostics");
-  const { isServiceViable } = await import("../service/orchestration");
-  return classifyClientRestartSupervisor({ desktop: isDesktopSupervised(), env: process.env, diagnose: diagnoseService, legacyServiceViable: isServiceViable });
+  return classifyClientRestartSupervisor({ desktop: isDesktopSupervised(), env: process.env, diagnose: diagnoseService });
 }
 
 /**
@@ -188,26 +209,32 @@ export function restartOwnerEvidence(input: { desktop: boolean; env: NodeJS.Proc
   return input.env.OCX_SERVICE !== "1" ? "none" : null;
 }
 
+/** What a client runtime with a bare OCX_SERVICE=1 states in its record: no owner, and `ocx disconnect` gives the advice. */
+export const LEGACY_FLAG_RESTART_OWNER = "legacy-flag";
+export type RecordedRestartOwner = RestartOwner | typeof LEGACY_FLAG_RESTART_OWNER;
+
+/** The record's `restartOwner`: the proven owner, or `legacy-flag` for a bare OCX_SERVICE=1. */
+export function recordedRestartOwner(input: { desktop: boolean; env: NodeJS.ProcessEnv; managed?: (env: NodeJS.ProcessEnv) => boolean }): RecordedRestartOwner {
+  return restartOwnerEvidence(input) ?? LEGACY_FLAG_RESTART_OWNER;
+}
+
 /**
  * Ownership and relaunch are separate facts. With a manager's marker, only a service diagnostic
  * that is viable and running lets this process exit for the manager to relaunch it; otherwise it is
- * `service-unproven` and keeps the runtime. A bare OCX_SERVICE=1 keeps origin/dev's decision
- * unchanged (b1148220574917c8 src/client/runtime-restart.ts:114-119): a viable service, else none.
+ * `service-unproven` and keeps the runtime. A bare OCX_SERVICE=1 is `legacy-flag` whatever the
+ * service diagnostic says: refused, never stopped or replaced on inference (#8545).
  */
 export function classifyClientRestartSupervisor(input: {
   desktop: boolean;
   env: NodeJS.ProcessEnv;
   diagnose: () => { viable: boolean; running: boolean };
-  /** origin/dev's check for a bare OCX_SERVICE=1: src/service/orchestration.ts isServiceViable. */
-  legacyServiceViable: () => boolean;
   /** Manager-launched evidence; defaults to the current markers only (isMarkedSupervisedServiceChild). */
   managed?: (env: NodeJS.ProcessEnv) => boolean;
 }): ClientRestartSupervisor | null {
   if (input.desktop) return "desktop";
   // The managed marker (launchd, systemd, WinSW) or the Windows wrapper's protocol marker.
   if (!(input.managed ?? isMarkedSupervisedServiceChild)(input.env)) {
-    if (input.env.OCX_SERVICE !== "1") return null;
-    return input.legacyServiceViable() ? "service" : null;
+    return input.env.OCX_SERVICE !== "1" ? null : "legacy-flag";
   }
   // Relaunch needs positive evidence: viable AND running (launchd's viable also covers an
   // unknown load state for its other callers; running there means loaded).

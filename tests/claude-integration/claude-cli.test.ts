@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { withClaudeContextSettings } from "../../src/cli/claude-context-settings";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
   buildClaudeEnv as buildClaudeEnvWithIo,
@@ -61,6 +62,185 @@ function buildClaudeEnv(
     },
   });
 }
+
+describe("ocx claude per-model compact settings", () => {
+  const windows = { "mock/mid": 524_000, "ocx-claude-mock--mid": 524_000, "native-large": 872_000 };
+  const env = { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "829800", KEEP: "unchanged" };
+  const build = (args: string[] = [], base: Record<string, string> = {}, map = windows, config = cfg()) =>
+    withClaudeContextSettings(args, env, config, map, base, { selectors: Object.keys(map) });
+  const settings = (args: string[]) => JSON.parse(args[args.indexOf("--settings") + 1]!);
+
+  test("switchable selectors get safe windows without changing the large-model default or source env", () => {
+    const result = build(["--model", "mock/mid"]);
+    expect(settings(result.args)).toEqual({ autoCompactWindow: 829_800, modelSettings: {
+      "mock/mid": { autoCompactWindow: 497_800 }, "ocx-claude-mock--mid": { autoCompactWindow: 497_800 },
+    } });
+    expect(result.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
+    expect(result.env.KEEP).toBe("unchanged");
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("829800");
+  });
+
+  test("only discovery selectors and launcher model slots are emitted", () => {
+    const map = { ...windows, "claude-ocx-mock--mid": 524_000, mid: 524_000, "mock/other": 400_000 };
+    const config = cfg({ claudeCode: { authMode: "proxy", tierModels: { sonnet: "mock/mid" } } });
+    const childEnv = buildClaudeEnv(config, 10100, {}, map);
+    const result = withClaudeContextSettings([], childEnv, config, map, {}, {
+      selectors: ["ocx-claude-mock--mid", "unknown"], platform: "win32",
+    });
+    expect(settings(result.args).modelSettings).toEqual({
+      "mock/mid": { autoCompactWindow: 497_800 },
+      "ocx-claude-mock--mid": { autoCompactWindow: 497_800 },
+    });
+  });
+
+  test("large Windows settings fall back to the original argv and compact env", () => {
+    const map = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`ocx-claude-fixture--model-${i}`, 524_000]));
+    const args = ["--print", "hello"];
+    const result = withClaudeContextSettings(args, env, cfg(), map, {}, { selectors: Object.keys(map), platform: "win32" });
+    expect(result).toEqual({ args, env });
+    expect(result.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("829800");
+  });
+
+  test("escaped Windows shim command falls back when the JSON fits but the full command is too long", () => {
+    const map = Object.fromEntries(Array.from({ length: 55 }, (_, i) => [`ocx-claude-fixture--model-${i}`, 524_000]));
+    const args = ["--print", "hello world ".repeat(210)];
+    const config = cfg({ claudeCode: { authMode: "proxy" } });
+    const childEnv = buildClaudeEnv(config, 10100, {}, map);
+    const selectors = Object.keys(map);
+    const cmdLength = (argv: string[]) => {
+      const shim = "C:\\tools\\node_modules\\.bin\\claude.cmd";
+      const inv = commandInvocation(shim, argv, "win32", { env: {} });
+      return [inv.file, ...inv.args].join(" ").length;
+    };
+
+    for (const platform of ["darwin", "linux"] as const) {
+      const result = withClaudeContextSettings(args, childEnv, config, map, {}, { selectors, platform });
+      expect(result.args[0]).toBe("--settings");
+      expect(result.args[1]!.length).toBeLessThan(4_000);
+      expect(Object.keys(settings(result.args).modelSettings)).toEqual(selectors);
+      expect(result.args.slice(2)).toEqual(args);
+      expect(result.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
+      expect(cmdLength(result.args)).toBeGreaterThan(8_191);
+    }
+
+    const result = withClaudeContextSettings(args, childEnv, config, map, {}, { selectors, platform: "win32" });
+    expect(result.args).toEqual(args);
+    expect(result.env).toEqual(childEnv);
+    expect(result.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("829800");
+    expect(cmdLength(result.args)).toBeLessThan(7_000);
+  });
+
+  test("a large registry with one pickable model stays small", () => {
+    const map = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`unused-${i}`, 524_000]));
+    map["mock/mid"] = 524_000;
+    const result = withClaudeContextSettings([], env, cfg(), map, {}, { selectors: ["mock/mid"], platform: "win32" });
+    expect(settings(result.args).modelSettings).toEqual({ "mock/mid": { autoCompactWindow: 497_800 } });
+    expect(result.args[1]!.length).toBeLessThanOrEqual(4000);
+  });
+
+  test("preserves explicit compact env, autocompact CLI, disabled accounting and missing metadata", () => {
+    for (const result of [
+      build([], { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "600000" }),
+      build(["--autocompact", "400k"]), build(["--autocompact=400k"]),
+      build([], {}, windows, cfg({ claudeCode: { autoContext: false } })),
+      build([], {}, windows, cfg({ claudeCode: { contextAccounting: "200k" } })),
+      build([], {}, windows, cfg({ claudeCode: { maxContextTokens: 500_000 } })),
+      build([], {}, {}), build([], {}, { huge: 1_000_000, invalid: Number.NaN, tiny: 50_000 }),
+    ]) {
+      expect(result.args).not.toContain("--settings");
+      expect(result.env).toEqual(env);
+    }
+  });
+
+  test("repeated settings and option values retain native client semantics", () => {
+    for (const args of [
+      ["--settings", '{"env":{"EXAMPLE":"discarded"}}', "--settings", '{"theme":"dark"}'],
+      ["--append-system-prompt", "--settings", "{}"],
+    ]) {
+      expect(build(args)).toEqual({ args, env });
+    }
+  });
+
+  test("explicit settings are forwarded unchanged and flags after the delimiter stay positional", () => {
+    for (const args of [["--settings", '{"autoCompactWindow":350000}'], ["--settings={\"theme\":\"dark\"}"]]) {
+      expect(build(args)).toEqual({ args, env });
+    }
+    const positional = ["--", "--settings", "literal prompt"];
+    expect(build(positional).args.slice(-3)).toEqual(positional);
+    expect(settings(build(positional).args).modelSettings["mock/mid"].autoCompactWindow).toBe(497_800);
+  });
+
+  test.each([
+    [["remote-control", "--help"]],
+    [["rc", "--help"]],
+    [["bridge", "--help"]],
+    [["remote", "--help"]],
+    [["sync", "--help"]],
+    [["--verbose", "remote-control", "--help"]],
+    [["--model", "mock/mid", "remote-control", "--help"]],
+    [["--", "remote-control", "--help"]],
+    [["-nfixture", "remote-control", "--help"]],
+    [["--name", "-x", "remote-control", "--help"]],
+    [["--debug-to-stderr", "remote-control", "--help"]],
+    [["--model=mock/mid", "rc", "--help"]],
+    [["--verbose", "bridge"]],
+    [["--debug", "hooks", "--verbose", "bridge", "--help"]],
+    [["--append-system-prompt", "rc", "remote", "--help"]],
+    [["--settings", "{}", "remote-control", "--help"]],
+    [["--remote-control", "rc"]],
+    [["--print", "remote-control"]],
+    [["--verbose", "-p", "rc"]],
+    [["--model", "remote-control"]],
+    [["--model", "rc"]],
+    [["--append-system-prompt", "rc"]],
+    [["--debug", "rc"]],
+    [["--tools", "Read", "rc"]],
+    [["--verbose", "explain", "remote-control"]],
+  ])("preserves argv and env when a Remote Control token appears in %j", args => {
+    const original = { args: [...args], env: { ...env } };
+    const result = build(args);
+    expect(result).toEqual(original);
+    expect(result.args).toBe(args);
+    expect(result.env).toBe(env);
+  });
+
+  test.each([
+    [[]],
+    [["--print", "hello"]],
+    [["--verbose", "-p", "hello"]],
+    [["--remote-control"]],
+    [["--remote-control", "fixture"]],
+    [["--remote-control=rc"]],
+    [["--verbose", "explain remote-control"]],
+  ])("still injects session settings for %j", args => {
+    const result = build(args);
+    expect(settings(result.args).modelSettings["mock/mid"].autoCompactWindow).toBe(497_800);
+    expect(result.args.slice(2)).toEqual(args);
+    expect(result.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
+  });
+
+  test("injected options precede variadic client options and the positional prompt", () => {
+    const input = ["--mcp-config", '{"mcpServers":{}}', "/context"];
+    const result = build(input);
+    expect(result.args.slice(0, 1)).toEqual(["--settings"]);
+    expect(result.args.slice(2)).toEqual(input);
+  });
+
+  test("settings files and invalid settings remain the client's responsibility", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-compact-settings-"));
+    try {
+      const path = join(dir, "settings.json");
+      const text = '{"modelSettings":{"mock/mid":{"autoCompactWindow":420000}},"env":{"OTHER":"value"}}';
+      writeFileSync(path, text);
+      expect(build(["--settings", path])).toEqual({ args: ["--settings", path], env });
+      for (const input of ["{", "[]", join(dir, "missing.json")]) {
+        const result = build(["--settings", input]);
+        expect(result.args).toEqual(["--settings", input]);
+        expect(result.env).toEqual(env);
+      }
+    } finally { removeTreeWithRetry(dir); }
+  });
+});
 
 describe("ocx claude proxy liveness", () => {
   test("retries the initial liveness probe before spawning a proxy", async () => {
@@ -524,6 +704,16 @@ describe("ocx claude env assembly", () => {
     // Claude Code names its own first-party ids; only an alias slot gets a label.
     expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBeUndefined();
     expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME).toBeUndefined();
+  });
+
+  test.each([
+    ["2.1.280", "claude-fable-5-1[1m]"],
+    ["2.1.290", "claude-fable-5-2[1m]"],
+    [null, "claude-fable-5-1[1m]"],
+  ])("the launcher fills Fable for Claude Code %s", (claudeCodeVersion, expected) => {
+    const windows = buildClaudeContextWindows([], [], undefined, {});
+    const deps = { ...AUTH_PRESENT, claudeCodeVersion };
+    expect(buildClaudeEnv(cfg(), 10100, {}, windows, deps).ANTHROPIC_DEFAULT_FABLE_MODEL).toBe(expected);
   });
 
   test("an alias tier slot this launch writes carries its /model label (#6926)", () => {
@@ -1017,6 +1207,22 @@ describe("ocx claude management discovery destination", () => {
     }
   }
 
+  test.each([
+    ["TimeoutError", "Timed out after 3000 ms while loading model context information"],
+    ["TypeError", "Could not load model context information"],
+  ])("reports a %s without exposing raw error text", async (name, message) => {
+    const fetch = spyOn(globalThis, "fetch").mockRejectedValue(new DOMException("private diagnostic detail", name));
+    const warn = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await fetchClaudeCodeState(cfg({}), 10100)).toEqual({ contextWindows: {} });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(`⚠ ${message}. Automatic [1m] marking is skipped for this launch.`);
+    } finally {
+      fetch.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
   test("a hub with a management ingress is asked on the ingress, not the proxy bind", async () => {
     const seen = await captureDiscovery(cfg({
       hostname: "100.76.170.81",
@@ -1024,7 +1230,7 @@ describe("ocx claude management discovery destination", () => {
       hub: { managementIngress: { enabled: true, port: 10102 } },
       unauthenticatedLoopbackListener: { enabled: true, port: 10104 },
     } as Partial<OcxConfig>));
-    expect(seen.url).toBe("http://127.0.0.1:10102/api/claude-code");
+    expect(seen.url).toBe("http://127.0.0.1:10102/api/claude-code?view=launch");
     // The listener's port must NOT be used: it serves no /api/* at all.
     expect(seen.url).not.toContain("10104");
     expect(seen.header).toBe(FAKE_ADMIN_TOKEN);
@@ -1036,7 +1242,7 @@ describe("ocx claude management discovery destination", () => {
       runtimeRole: "hub",
       unauthenticatedLoopbackListener: { enabled: true },
     } as Partial<OcxConfig>));
-    expect(seen.url).toBe("http://100.76.170.81:10100/api/claude-code");
+    expect(seen.url).toBe("http://100.76.170.81:10100/api/claude-code?view=launch");
     expect(seen.header).toBe(FAKE_ADMIN_TOKEN);
   });
 
@@ -1044,8 +1250,8 @@ describe("ocx claude management discovery destination", () => {
     for (const hostname of [undefined, "127.0.0.1", "localhost", "0.0.0.0"]) {
       const seen = await captureDiscovery(cfg(hostname === undefined ? {} : { hostname }));
       const expected = hostname === "localhost"
-        ? "http://localhost:10100/api/claude-code"
-        : "http://127.0.0.1:10100/api/claude-code";
+        ? "http://localhost:10100/api/claude-code?view=launch"
+        : "http://127.0.0.1:10100/api/claude-code?view=launch";
       expect({ hostname, url: seen.url }).toEqual({ hostname, url: expected });
     }
   });

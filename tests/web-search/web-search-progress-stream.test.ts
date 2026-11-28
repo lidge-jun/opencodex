@@ -31,6 +31,30 @@ async function collect(stream: AsyncIterable<AdapterEvent>): Promise<AdapterEven
   return result;
 }
 
+test("zero raw-body inactivity budget preserves parent cancellation", async () => {
+  const abort = new AbortController();
+  const reading = Promise.withResolvers<void>();
+  const cancelled = Promise.withResolvers<unknown>();
+  const body = new ReadableStream<Uint8Array>({
+    pull() { reading.resolve(); },
+    cancel(reason) { cancelled.resolve(reason); },
+  }, { highWaterMark: 0 });
+  const pending = collect(parseStreamWithProgress(new Response(body), async function* (response) {
+    await response.text();
+    yield { type: "done" };
+  }, { signal: abort.signal, inactivityTimeoutMs: 0, translatorBudget: createTestTranslatorBudget() }));
+  try {
+    await Promise.race([reading.promise, pending]);
+    const reason = new Error("fixture client cancelled");
+    abort.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    expect(await cancelled.promise).toBe(reason);
+  } finally {
+    abort.abort();
+    await pending.catch(() => {});
+  }
+});
+
 function chunkStream(chunks: Array<{ after?: number; value: string }>): ReadableStream<Uint8Array> {
   let index = 0;
   return new ReadableStream<Uint8Array>({

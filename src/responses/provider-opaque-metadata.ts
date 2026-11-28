@@ -51,6 +51,16 @@ export function providerMetadataFromResponsesFunctionCall(
   return { google: { thoughtSignature: signature } };
 }
 
+/**
+ * A client-sent `extra_content` reduced to the one carrier this proxy understands. Malformed or
+ * oversized values become absent rather than an error, so an echo can never fail a request.
+ */
+export function normalizedClientExtraContent(
+  extra: unknown,
+): { extra_content: { google: { thought_signature: string } } } | undefined {
+  return responsesExtraContentFromProviderMetadata(providerMetadataFromResponsesFunctionCall({ extra_content: extra }));
+}
+
 /** Serialize provider metadata onto an outbound Responses function_call item. */
 export function responsesExtraContentFromProviderMetadata(
   metadata: OcxProviderOpaqueToolCallMetadata | undefined,

@@ -41,7 +41,7 @@ describe("planVideoBridge", () => {
     const config = makeConfig({ images: { videoBridgeEnabled: true } } as unknown as OcxConfig);
     const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
     expect(plan).toBeDefined();
-    expect(plan!.model).toBe("grok-imagine-video");
+    expect(plan!.model).toBe("grok-imagine-video-1.5-lite");
     expect(plan!.auth.token).toBe("xai-test-key");
     expect(plan!.auth.baseUrl).toBe("https://api.x.ai/v1");
     expect(plan!.toolNames.has(VIDEO_GEN_TOOL_NAME)).toBe(true);

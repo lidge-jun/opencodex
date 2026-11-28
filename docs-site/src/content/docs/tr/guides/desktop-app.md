@@ -57,7 +57,7 @@ Uygulama, paketindeki CLI'dan `ocx resolve --json` çalıştırmasını ister ve
 
 Gömülü kontrol paneli ile normal tarayıcınız arasında geçmek için tepsideki **Open dashboard** veya **Open in browser** eylemini kullanın. Tepsi, güncelleme denetimlerini de sunar.
 
-macOS’te kontrol panelini kapattığınızda uygulama menü çubuğunda çalışmaya devam eder. Proxy’yi yeniden başlatmadan kontrol panelini geri getirmek için OpenCodex’i Dock veya Finder üzerinden yeniden açın.
+macOS’te kontrol panelini kapattığınızda uygulama menü çubuğunda çalışmaya devam eder. Proxy’yi yeniden başlatmadan kontrol panelini açmak için menü çubuğunda **Open Dashboard** öğesini seçin veya OpenCodex’i Finder’dan yeniden açın. Kontrol paneli açıkken de Dock simgesini gizlemek için aynı menüde **Hide Dock icon** seçeneğini işaretleyin.
 
 ## Tepside kullanım
 
@@ -80,6 +80,8 @@ Tauri güncelleyici yeni bir uygulama sürümü bulduğunda macOS menü çubuğu
 Masaüstü uygulamasında, kontrol panelindeki güncelleme düğmesi uygulamanın güncelleme sayfasını açar. Buradan yeniden denetleyebilir, bekleyen imzalı güncellemeyi kurabilir veya kontrol paneline dönebilirsiniz. Aynı kurulum işlemi tepsi menüsünde de bulunur. Kurulum başarısız olursa güncelleme yeniden denenmek üzere tutulur. Bu sayfa, masaüstünde tepsi simgesi bulunmayan Linux'ta da çalışır. Normal bir tarayıcı kontrol paneli bunun yerine o proxy'nin paket kurulumunu yönetir.
 
 Güncellemeler kurulmadan önce projenin imzalı güncelleyici açık anahtarıyla doğrulanır. macOS'ta uygulama içi güncellemeler `OpenCodex-<version>-macos.app.tar.gz` dosyasını indirir; DMG ilk kurulum içindir. Sürüm bildirimi yalnızca güncelleyici anahtar sırrı yapılandırıldığında üretilir ve o durumda dört platformun tamamının imzalanmasını gerektirir.
+
+Windows'ta uygulama penceresi olmadan da güncelleyebilirsiniz; örneğin SSH üzerinden. Kurulumun kendi `ocx.exe` dosyasını OpenCodex'i çalıştıran Windows hesabıyla açılmış, yönetici yetkili bir terminalde çalıştırın: `"C:\Program Files\OpenCodex\ocx.exe" update --desktop` (başka bir klasöre kurduysanız yolu değiştirin). Bir hizmet, SYSTEM olarak çalışan zamanlanmış bir görev veya başka bir hesap kendi OpenCodex ana dizinini kullanır, bu proxy'yi bulamaz ve eski sürümde bırakır. Komut tepsi menüsüyle aynı yayımlanmış sürümü denetler, MSI'yı aynı güncelleyici anahtarıyla doğrular ve herhangi bir uyuşmazlıkta reddeder, arayüzsüz kurar, ardından hâlâ eski sürümü çalıştıran proxy'yi yeniden başlatarak yeni sürümün yanıt vermesini sağlar. `--check` yalnızca durumu bildirir, `--json` makine tarafından okunabilir bir sonuç yazar. Çıkış kodu 0 tamamlandı ya da zaten güncel, 1 hiçbir şey kurulmadı, 2 güncelleme kuruldu ama eski proxy hâlâ çalışıyor (veya önce Windows yeniden başlatılmalı), 3 kurucu zamanında bitmedi demektir. Başka bir kurulumdan başlatılmış bir proxy asla durdurulmaz. MSI'yı elle kurduysanız `ocx status`, kurulu sürümün çalışan proxy'den yeni olduğunu söyler ve bu komutu gösterir.
 
 ## Widget
 

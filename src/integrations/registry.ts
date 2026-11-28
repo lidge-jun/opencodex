@@ -146,6 +146,8 @@ export interface IntegrationClientSpec {
   };
   /** Patch only this block-map YAML leaf; never re-render the shared file. */
   sourcePreservingYaml?: { path: readonly string[] };
+  /** Replace only the owned TOML tables; never re-render the shared file (#9152). */
+  sourcePreservingToml?: true;
   /** Coordinate the complete mutation through a sibling config lock. */
   writerLock?: { suffix: ".lock" };
   /**
@@ -342,6 +344,7 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     // Kimi reads credentials only from config.toml — it never consults the
     // environment — so there is no way to point it at a remote bind without
     // serializing the user's key.
+    sourcePreservingToml: true,
   },
   gajae: {
     id: "gajae",

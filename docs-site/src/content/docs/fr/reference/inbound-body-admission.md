@@ -75,7 +75,7 @@ Les points de terminaison POST concernés sont `/v1/responses`, `/v1/responses/c
 `/v1/chat/completions`, `/v1/messages`, `/v1/messages/count_tokens`,
 `/v1/images/generations`, `/v1/images/edits` et `/v1/alpha/search`.
 Les images, la recherche et le comptage de jetons conservent leurs limites configurables
-existantes par corps. Les traductions directes internes et les appels combo ne réservent pas
+existantes par corps. Les modifications d’images via le pont xAI ont aussi un plafond fixe de 100 MiB par requête. La limite la plus basse s’applique. Les traductions directes internes et les appels combo ne réservent pas
 une deuxième marge HTTP. Les limites de gestion, d'audio, d'historique de contexte et de
 WebSocket restent inchangées.
 

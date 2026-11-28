@@ -137,6 +137,16 @@ window, closes the usage popup if it is open, and loads the dashboard if a hidde
 it. This is separate from the single-instance callback, which handles a second process notifying
 the existing one.
 
+The macOS tray's **Hide Dock icon** checkbox is a local desktop preference. The
+`desktop/src-tauri/src/dock.rs` marker in the desktop app configuration directory
+is loaded before AppKit launches and updated before the live preference changes.
+When the preference is enabled, showing the dashboard keeps the app in accessory
+mode while the window can still take focus. A failed tray installation restores
+Dock access when startup shows the dashboard. The shell reads the current
+dashboard visibility, preference, and tray verdict in the same main-thread
+turn that applies both native policies. The preference and its tray item are
+macOS-only and do not depend on the proxy.
+
 The host window also answers whether the dashboard is visible at all. Windows WebView2 is reported
 to keep `document.visibilityState === "visible"` while the Tauri window sits hidden in the tray
 (tauri issues #10592 and #6864; macOS WKWebView does flip it, measured), so a hidden dashboard went
@@ -193,6 +203,10 @@ sequence brings one back in recovery mode. A runtime already stopped from the tr
 explicitly requests startup while that update drain is in flight; that newer request wins over the
 captured stopped intent. A quit's drain is never aborted.
 
+Without the window, `ocx update --desktop` installs the same signed Windows MSI from the bundled
+`ocx.exe` and restarts the runtime still serving the old version; the app's own updater path is
+unchanged ([headless Windows Desktop update](ops/desktop-supervision.md#headless-windows-desktop-update)).
+
 > Decision record: [ADR-6033](decisions/ADR-6033-desktop-update-intent.md)
 
 The Tauri updater also publishes a bounded desktop snapshot over its identity-bound ProxyClient. A random process-session id travels in the embedded dashboard URL, and the dashboard requests GET /api/update/badge?surface=desktop&session=<id>. A normal browser keeps the package badge. The shell posts each updater-state change and a 60-second heartbeat; if the proxy loses the snapshot or the shell stops, the desktop badge becomes unknown after 180 seconds. This display path never installs an update or replaces the signed Tauri result. The tray shows the same pending state: macOS draws a blue child NSView dot over the template status-item image; Windows/Linux swap a generated dotted PNG when a tray host exists. The Windows base glyph is unchanged.
@@ -203,7 +217,7 @@ commands. Tray and page installation share one atomic claim before taking `Pendi
 a failed download or drain restores that pending signed update and reenables retry. The
 page returns through the startup sequence's resolved dashboard URL, independently of the
 one-time initial navigation claim. The loopback dashboard has no updater IPC permission.
-Install/download failures with a known version show a manual-download hint and that version's GitHub release link; navigation errors do not.
+Install errors identify the failed stage. Only a package download request failure with a known version shows the manual-download hint and release link. Signature, runtime and installer diagnostics use bounded messages on the page. The native log retains the detailed error.
 
 The window may navigate to the `tauri://` scheme, to the loopback endpoint the sequence resolved,
 and on Windows to `tauri.localhost`, which is where the pinned Tauri serves the app itself because

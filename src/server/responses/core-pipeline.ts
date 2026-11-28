@@ -11,8 +11,8 @@ import type {
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { prepareResponsesRequest } from "./request-prepare";
 import { prepareResponsesTransport } from "./request-transport";
-import { prepareResponsesSidecarAuth, resolveResponsesOpenAiSidecar } from "./request-sidecar-auth";
-import { shouldResolveOpenAiVisionSidecar } from "../../vision";
+import { initialHostedAdvisorSpendRefusal } from "./hosted-advisor-spend";
+import { prepareResponsesSidecarAuth, resolveResponsesCaptionSidecar, responsesVisionPlan } from "./request-sidecar-auth";
 import { createResponsesEffects } from "./response-effects";
 import { createResponsesSendBudget } from "./request-send-budget";
 import { executePassthroughResponse } from "./passthrough-execution";
@@ -28,8 +28,9 @@ import { formatErrorResponse } from "../../bridge";
 import { InvalidRetainedCompactionSummary, prepareCompactionRetention } from "./compaction-retention";
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
 import { responsesHasUnsupportedInputMedia, responsesHasUnsupportedToolMedia } from "../../adapters/trae-cn/input-media";
-import { planVisionSidecar } from "../../vision";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
+import { agyAcpPreflightResponse } from "./agy-acp-preflight";
+import { commandCodeDecisionRouteRefusal } from "./command-code-decision-refusal";
 
 function traeMediaRefusal(logCtx: RequestLogContext): Response {
   const message = "TRAE CN ACP supports text conversations only; media, documents and tool replay are not supported.";
@@ -59,6 +60,11 @@ export async function handleResponsesInner(
   try {
     const requestState = await prepareResponsesRequest(requestContext, admissionState, requestDispatchers);
     if (requestState instanceof Response) return requestState;
+    // #8997: refuse a Command Code decision model before transport preparation (OAuth credential
+    // resolution or refresh), sidecar auth or sidecar work. Nothing is sent, so the candidate is not
+    // reported as a compaction-recovery source route either.
+    const decisionRefusal = commandCodeDecisionRouteRefusal(requestState.route.provider, requestState.parsed.modelId, logCtx);
+    if (decisionRefusal) return decisionRefusal;
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
     if (transportState instanceof Response) return markProxyError(transportState);
     const unsupportedTraeReplayMedia = transportState.runTurnAdapter.name === "trae-cn"
@@ -66,20 +72,26 @@ export async function handleResponsesInner(
         || responsesHasInstructionImage(requestState.parsed._rawBody)
         || responsesHasUnsupportedInputMedia(requestState.parsed._rawBody, { captionUserImages: true })
         || responsesHasUnsupportedToolMedia(requestState.parsed._rawBody));
-    let sidecarState: Awaited<ReturnType<typeof prepareResponsesSidecarAuth>> | undefined;
     if (unsupportedTraeReplayMedia) return traeMediaRefusal(logCtx);
+    const agyAcpRefusal = agyAcpPreflightResponse({
+      adapterName: transportState.runTurnAdapter.name, requestHeaders: req.headers,
+      forwardHeaders: requestState.selectedForwardHeaders, body: requestState.parsed._rawBody, comboAttempt: options.comboAttempt === true,
+      internalDecisionCall: options.internalDecisionCall === true, subagentFallback: requestState.subagentFallbackSelected,
+      inboundTransport: options.inboundTransport, unattendedHttpTurn: options.agyAcpUnattendedHttpTurn, logCtx,
+    });
+    if (agyAcpRefusal) return agyAcpRefusal;
+    const hostedAdvisorRefusal = initialHostedAdvisorSpendRefusal(requestContext, requestState, transportState);
+    if (hostedAdvisorRefusal) return hostedAdvisorRefusal;
+    let sidecarState: Awaited<ReturnType<typeof prepareResponsesSidecarAuth>> | undefined;
     if (transportState.runTurnAdapter.name === "trae-cn") {
-      const needsVision = shouldResolveOpenAiVisionSidecar(config, requestState.route.provider,
-        requestState.route.modelId, requestState.parsed, requestState.route.providerName);
-      const openAiSidecar = await resolveResponsesOpenAiSidecar(requestContext, requestState, transportState, needsVision);
+      const caption = await resolveResponsesCaptionSidecar(requestContext, requestState.route, requestState.parsed);
       const needsCaption = options.responsesUnsupportedInputMedia
         || responsesHasUnsupportedInputMedia(requestState.parsed._rawBody);
-      if (needsCaption && planVisionSidecar(config, requestState.route.provider, requestState.route.modelId,
-        requestState.parsed, openAiSidecar, { providerName: requestState.route.providerName }) === undefined) {
-        openAiSidecar?.releaseProbeLease?.();
+      if (needsCaption && !caption.plannable) {
+        caption.openAiSidecar?.releaseProbeLease?.();
         return traeMediaRefusal(logCtx);
       }
-      sidecarState = await prepareResponsesSidecarAuth(requestContext, requestState, transportState, openAiSidecar);
+      sidecarState = await prepareResponsesSidecarAuth(requestContext, requestState, transportState, caption.openAiSidecar);
     }
     if (transportState.runTurnAdapter.name === "claude-cli" || transportState.runTurnAdapter.name === "trae-cn") {
       const instructionImage = options.chatInstructionImage || options.responsesInstructionImage
@@ -88,8 +100,9 @@ export async function handleResponsesInner(
           && Array.isArray(message.content) && message.content.some(part => part.type === "image"));
       const unsupportedTraeMedia = transportState.runTurnAdapter.name === "trae-cn"
         && (() => {
-          const captionUserImages = planVisionSidecar(config, requestState.route.provider, requestState.route.modelId,
-            requestState.parsed, sidecarState?.openAiSidecar, { providerName: requestState.route.providerName }) !== undefined;
+          const resolvedSidecar = sidecarState instanceof Response ? undefined : sidecarState?.openAiSidecar;
+          const captionUserImages = responsesVisionPlan(requestContext, requestState.route, requestState.parsed,
+            resolvedSidecar) !== undefined;
           return options.chatUnsupportedInstructionMedia
             || options.responsesUnsupportedInputMedia && !captionUserImages
             || responsesHasUnsupportedInputMedia(requestState.parsed._rawBody, { captionUserImages });

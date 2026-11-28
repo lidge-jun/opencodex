@@ -132,7 +132,7 @@ describe("Cursor inner retries and the request send budget", () => {
     const budget = budgetOf(2);
 
     await expect(runCursorTurnWithRetry(
-      () => { calls += 1; return failingCursorTransport(); },
+      input => { calls += 1; input.onRunDispatch?.(); return failingCursorTransport(); },
       { provider: { adapter: "cursor" } } as never,
       cursorRequest,
       undefined,

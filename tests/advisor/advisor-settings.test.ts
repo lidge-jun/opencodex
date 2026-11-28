@@ -9,8 +9,9 @@ import {
 } from "../../src/advisor/settings";
 
 describe("resolveAdvisorSettings", () => {
-  test("question-only is opt-in and resolves independently from the policy", () => {
+  test("question-only and full are opt-in and resolve independently from the policy", () => {
     expect(resolveAdvisorSettings({ advisor: { contextMode: "question-only", policy: "adaptive" } }).contextMode).toBe("question-only");
+    expect(resolveAdvisorSettings({ advisor: { contextMode: "full", policy: "manual" } }).contextMode).toBe("full");
     expect(resolveAdvisorSettings({ advisor: { contextMode: "context" } }).contextMode).toBe("context");
   });
 
@@ -106,9 +107,9 @@ describe("resolveAdvisorSettings", () => {
   });
 
   test("timeoutMs is bounded to a sane window", () => {
-    expect(resolveAdvisorSettings({ advisor: { timeoutMs: 100 } }).timeoutMs).toBe(120_000);
+    expect(resolveAdvisorSettings({ advisor: { timeoutMs: 100 } }).timeoutMs).toBe(600_000);
     expect(resolveAdvisorSettings({ advisor: { timeoutMs: 5_000 } }).timeoutMs).toBe(5_000);
-    expect(resolveAdvisorSettings({ advisor: { timeoutMs: 10_000_000 } }).timeoutMs).toBe(600_000);
+    expect(resolveAdvisorSettings({ advisor: { timeoutMs: 10_000_000 } }).timeoutMs).toBe(1_800_000);
   });
 });
 
@@ -185,9 +186,54 @@ describe("ocx advisor consent", () => {
       { model: "expert/m" },
     ]);
   });
+
+  // The human line is the operator's only confirmation. An unconditional "stops transfer" claim
+  // would promise cancellation the runtime cannot perform: consent is re-read before dispatch, so
+  // a revocation reaches pending consultations and nothing already sent.
+  test("the human revoke line names the undispatched-only boundary", async () => {
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line?: unknown) => { lines.push(String(line)); };
+    try {
+      expect(await handleAdvisorCommand(["consent", "--revoke"], depsWith([]))).toBe(0);
+    } finally {
+      console.log = original;
+    }
+    const output = lines.join("\n");
+    expect(output).toContain("not yet dispatched");
+    expect(output).toContain("cannot be cancelled");
+    expect(output).toContain("cannot be retracted");
+  });
+
+  test("revoke JSON remains the settings payload without the human line", async () => {
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line?: unknown) => { lines.push(String(line)); };
+    try {
+      expect(await handleAdvisorCommand(["consent", "--revoke", "--json"], depsWith([]))).toBe(0);
+    } finally {
+      console.log = original;
+    }
+    expect(JSON.parse(lines.join("\n"))).toEqual({ settings: { contextSharingConsent: null }, runnable: false });
+  });
 });
 
 describe("ocx advisor set — clearing the model", () => {
+  test("text output reports failed MCP reconciliation while JSON retains the payload", async () => {
+    const payload = { mcpSync: { errors: [{ clientId: "workbuddy", message: "permission denied" }] }, mcpClients: [] };
+    const deps = { baseUrl: "http://proxy.test", fetchImpl: (async () => Response.json(payload)) as typeof fetch };
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line?: unknown) => { lines.push(String(line)); };
+    try {
+      expect(await handleAdvisorCommand(["set", "--mcp-clients", "workbuddy"], deps)).toBe(0);
+      expect(lines.join("\n")).toContain("workbuddy");
+      expect(lines.join("\n")).toContain("permission denied");
+      lines.length = 0;
+      expect(await handleAdvisorCommand(["set", "--mcp-clients", "workbuddy", "--json"], deps)).toBe(0);
+      expect(JSON.parse(lines.join("\n"))).toEqual(payload);
+    } finally { console.log = original; }
+  });
   const depsWith = (requests: Array<{ path: string; method: string; body: unknown }>) => ({
     baseUrl: "http://proxy.test",
     fetchImpl: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -211,6 +257,7 @@ describe("ocx advisor set — clearing the model", () => {
     expect(await handleAdvisorCommand(["set", "--effort", "", "--json"], deps)).toBe(2);
     expect(await handleAdvisorCommand(["set", "--model"], deps)).toBe(2);
     expect(await handleAdvisorCommand(["set", "--timeout-ms", "", "--json"], deps)).toBe(2);
+    expect(await handleAdvisorCommand(["set", "--mcp-clients", ", ,", "--json"], deps)).toBe(2);
     // Not one of them reached the settings route.
     expect(requests).toHaveLength(0);
   });

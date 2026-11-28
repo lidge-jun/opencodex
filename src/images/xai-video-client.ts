@@ -1,3 +1,5 @@
+import { DEFAULT_VIDEO_MODEL } from "./video-capabilities";
+import { readSafeXaiErrorDetail, safeVideoFailureCode, safeXaiErrorDetail } from "./xai-upstream-error";
 /**
  * xAI video generation client.
  *
@@ -6,14 +8,50 @@
  * The submit call uses a 60 s timeout (it only returns an ID); the poll call uses 30 s.
  * Non-2xx responses throw with the original status code so callers can distinguish
  * rate-limit / auth failures from transient errors.
+ *
+ * Both calls go through the provider outbound transport, which resolves the destination host,
+ * applies the selected row's `allowPrivateNetwork` to every DNS answer and pins the connection to
+ * a validated address, so a hostname that resolves to loopback or private space never receives the
+ * bearer key without the opt-in and a later DNS answer cannot redirect it (rebinding).
+ * The poll GET carries the same key as the submit POST, so it obeys the same cleartext rules.
  */
+import type { OcxProviderConfig, OcxVideoApi } from "../types";
+import { getProviderRegistryEntry } from "../providers/registry";
+import {
+  providerOutboundGet,
+  providerOutboundPost,
+  type ProviderOutboundDependencies,
+} from "../lib/provider-outbound";
+
+/**
+ * Destination and credential of one video provider. `providerName` and the destination fields are
+ * the selected row's, read by the outbound policy; the pinned xAI path uses `xai` with no
+ * private-network opt-in because its destination is the registry host.
+ */
+export interface VideoProviderAuth {
+  baseUrl: string;
+  token: string;
+  providerName: string;
+  allowPrivateNetwork?: boolean;
+  proxy?: OcxProviderConfig["proxy"];
+  noProxy?: OcxProviderConfig["noProxy"];
+  /** Wire the destination speaks; absent means the xAI wire. The pinned xAI destination is always xAI. */
+  videoApi?: OcxVideoApi;
+}
+
+/** Test seam for DNS resolution and the pinned transport; production passes nothing. */
+export type VideoOutboundDependencies = Pick<ProviderOutboundDependencies, "resolveAddresses" | "pinnedGet" | "pinnedPost">;
 
 export interface XaiVideoSubmitRequest {
   prompt: string;
-  model?: string; // default "grok-imagine-video"
+  model?: string; // default grok-imagine-video-1.5-lite
   duration?: number; // 1-15 seconds
-  resolution?: string; // "480p" | "720p"
-  aspectRatio?: string; // "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "3:2" | "2:3"
+  resolution?: string; // model-dependent: 480p, 720p, or 1080p
+  aspectRatio?: string; // model-dependent aspect ratio
+  image?: string;
+  lastFrame?: string;
+  keyframes?: { image: string; timestampS: number }[];
+  referenceImages?: string[];
 }
 
 export interface XaiVideoSubmitResult {
@@ -24,11 +62,47 @@ export interface XaiVideoPollResult {
   status: "processing" | "done" | "failed" | "expired";
   videoUrl?: string;
   progress?: number;
+  error?: { code?: string; message?: string };
 }
 
 const SUBMIT_TIMEOUT_MS = 60_000;
 const POLL_TIMEOUT_MS = 30_000;
-const DEFAULT_VIDEO_MODEL = "grok-imagine-video";
+
+function xaiRegistryBaseUrl(): string {
+  return (getProviderRegistryEntry("xai")?.baseUrl ?? "https://api.x.ai/v1").replace(/\/+$/, "");
+}
+
+/**
+ * Only the registry xAI video endpoints qualify for the outbound fake-IP TUN exception, which
+ * keeps the pinned xAI path reachable under Clash/Surge TUN mode as it was with plain fetch.
+ */
+function isCanonicalXaiVideoUrl(name: string, url: string): boolean {
+  return name === "xai" && url.startsWith(`${xaiRegistryBaseUrl()}/videos/`);
+}
+
+/** The selected row's destination fields, as the provider outbound policy reads them. */
+export function videoOutboundConfig(auth: VideoProviderAuth) {
+  return {
+    baseUrl: auth.baseUrl,
+    ...(auth.allowPrivateNetwork === true ? { allowPrivateNetwork: true } : {}),
+    ...(auth.proxy !== undefined ? { proxy: auth.proxy } : {}),
+    ...(auth.noProxy !== undefined ? { noProxy: auth.noProxy } : {}),
+  };
+}
+
+/** Outbound policy shared by every credentialed video request, whatever the wire. */
+export function videoOutboundDependencies(dependencies: VideoOutboundDependencies): ProviderOutboundDependencies {
+  return {
+    ...dependencies,
+    isCanonicalUrl: isCanonicalXaiVideoUrl,
+    // A self-hosted http video service is reachable only on localhost or a local address
+    // literal, and only when the row itself sets allowPrivateNetwork (see provider-outbound).
+    allowLocalCleartextPost: true,
+    // The poll GET sends the bearer key too, so it gets exactly the submit POST's cleartext rules:
+    // a public answer for an http host, or a proxied http route, is refused before any send.
+    cleartextPolicy: "credentialed",
+  };
+}
 
 /** Maximum response body size for the submit and poll calls (responses are small JSON). */
 const MAX_RESPONSE_BYTES = 1024 * 1024; // 1 MiB — these endpoints return small JSON
@@ -37,7 +111,7 @@ const MAX_RESPONSE_BYTES = 1024 * 1024; // 1 MiB — these endpoints return smal
  * Read an HTTP response body as text with a hard byte cap. Used for the non-streaming
  * video submit/poll endpoints.
  */
-async function readBoundedText(resp: Response): Promise<string> {
+export async function readBoundedText(resp: Response): Promise<string> {
   const reader = resp.body?.getReader();
   if (!reader) throw new Error("xAI video API returned no body");
   const decoder = new TextDecoder();
@@ -64,8 +138,9 @@ async function readBoundedText(resp: Response): Promise<string> {
  */
 export async function submitVideoJob(
   req: XaiVideoSubmitRequest,
-  auth: { baseUrl: string; token: string },
+  auth: VideoProviderAuth,
   signal?: AbortSignal,
+  dependencies: VideoOutboundDependencies = {},
 ): Promise<XaiVideoSubmitResult> {
   const body: Record<string, unknown> = {
     model: req.model ?? DEFAULT_VIDEO_MODEL,
@@ -75,23 +150,26 @@ export async function submitVideoJob(
   if (typeof req.resolution === "string") body.resolution = req.resolution;
   if (typeof req.aspectRatio === "string") body.aspect_ratio = req.aspectRatio;
 
+  if (req.image !== undefined) body.image = { url: req.image };
+  if (req.lastFrame !== undefined) body.last_frame = { url: req.lastFrame };
+  if (req.keyframes !== undefined) body.keyframes = req.keyframes.map(frame => ({ image: { url: frame.image }, timestamp_s: frame.timestampS }));
+  if (req.referenceImages !== undefined) body.reference_images = req.referenceImages.map(url => ({ url }));
+
   const timeout = AbortSignal.timeout(SUBMIT_TIMEOUT_MS);
   const linkedSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
-  const resp = await fetch(`${auth.baseUrl}/videos/generations`, {
-    method: "POST",
-    redirect: "manual",
+  const resp = await providerOutboundPost(auth.providerName, videoOutboundConfig(auth), `${auth.baseUrl}/videos/generations`, {
     headers: {
       "Authorization": `Bearer ${auth.token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
     signal: linkedSignal,
-  });
+  }, videoOutboundDependencies(dependencies));
 
   if (!resp.ok) {
-    try { await resp.body?.cancel(); } catch { /* ignore */ }
-    const err = new Error("xAI videos API returned " + resp.status) as Error & { status: number };
+    const detail = await readSafeXaiErrorDetail(resp, linkedSignal);
+    const err = new Error("xAI videos API returned " + resp.status + (detail ? `: ${detail}` : "")) as Error & { status: number };
     err.status = resp.status;
     throw err;
   }
@@ -111,25 +189,25 @@ export async function submitVideoJob(
  */
 export async function pollVideoJob(
   requestId: string,
-  auth: { baseUrl: string; token: string },
+  auth: VideoProviderAuth,
   signal?: AbortSignal,
+  dependencies: VideoOutboundDependencies = {},
 ): Promise<XaiVideoPollResult> {
   const timeout = AbortSignal.timeout(POLL_TIMEOUT_MS);
   const linkedSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
-  const resp = await fetch(`${auth.baseUrl}/videos/${encodeURIComponent(requestId)}`, {
-    method: "GET",
-    redirect: "manual",
+  const resp = await providerOutboundGet(auth.providerName, videoOutboundConfig(auth), `${auth.baseUrl}/videos/${encodeURIComponent(requestId)}`, {
     headers: {
       "Authorization": `Bearer ${auth.token}`,
     },
     signal: linkedSignal,
-  });
+  }, videoOutboundDependencies(dependencies));
 
   if (!resp.ok) {
-    try { await resp.body?.cancel(); } catch { /* ignore */ }
-    const err = new Error("xAI videos poll API returned " + resp.status) as Error & { status: number };
+    const detail = await readSafeXaiErrorDetail(resp, linkedSignal);
+    const err = new Error("xAI videos poll API returned " + resp.status + (detail ? `: ${detail}` : "")) as Error & { status: number; detail?: string };
     err.status = resp.status;
+    if (detail) err.detail = detail;
     throw err;
   }
 
@@ -140,6 +218,7 @@ export async function pollVideoJob(
     video?: { url?: string };
     videos?: Array<{ url?: string }>;
     progress?: number;
+    error?: { code?: unknown; message?: unknown };
   };
 
   // Normalize status — xAI uses "done"/"processing"/"failed"/"expired" but be lenient.
@@ -159,6 +238,7 @@ export async function pollVideoJob(
 
   return {
     status,
+    ...(json.error ? { error: { code: safeVideoFailureCode(json.error.code), message: safeXaiErrorDetail(json.error.message) } } : {}),
     ...(typeof videoUrl === "string" ? { videoUrl } : {}),
     ...(typeof json.progress === "number" ? { progress: json.progress } : {}),
   };

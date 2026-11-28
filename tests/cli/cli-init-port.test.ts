@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as init from "../../src/cli/init";
+import { pinSponsorsWithinKind } from "../../src/providers/sponsor-order";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -69,6 +70,18 @@ describe("setup port validation", () => {
     expect(run.stderr).toContain("Proxy port must be a whole decimal number from 1 to 65535. Please try again.");
     expect(portPrompts(run.output)).toBe(2);
     expect(run.config?.port).toBe(10101);
+  }, 30_000);
+
+  test("an invalid Antigravity ACP default model reports the field without publishing config", async () => {
+    const providers = pinSponsorsWithinKind(init.buildInitProviders());
+    const choice = providers.findIndex(provider => provider.id === "antigravity-acp") + 1;
+    expect(choice).toBeGreaterThan(0);
+    const run = await runWizard([
+      ["Select default provider (number):", String(choice)], ["Default model", "gpt-test"], [PORT_PROMPT, ""],
+    ]);
+    expect(run.stderr).toContain("providers.antigravity-acp.defaultModel: The Antigravity CLI (ACP) provider serves Gemini and Claude models only.");
+    expect(run.exitCode).toBe(1);
+    expect(run.config).toBeUndefined();
   }, 30_000);
 
   test("EOF at the repeated port prompt cancels without saving", async () => {

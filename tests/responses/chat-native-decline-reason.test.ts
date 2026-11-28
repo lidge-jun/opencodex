@@ -20,6 +20,15 @@ function route(overrides: Partial<RouteResult> & { adapter?: string; authMode?: 
 }
 
 describe("native Chat decline reasons", () => {
+  test("Advisor self-route requires the resolved provider as well as the model", () => {
+    const cfg = { defaultProvider: "expert", providers: {
+      expert: { adapter: "openai-chat", baseUrl: "https://expert.invalid", apiKey: "x", models: ["m"] },
+      p: { adapter: "openai-chat", baseUrl: "https://worker.invalid", apiKey: "x", models: ["m"] },
+    }, advisor: { enabled: true, model: "m" } } as never;
+    expect(nativeChatDeclineReason(route(), {}, cfg)).toBe("responses-only-feature");
+    expect(nativeChatDeclineReason(route({ providerName: "expert" }), {}, cfg)).toBeUndefined();
+    expect(nativeChatDeclineReason(route(), {}, cfg, { advisorInternal: true })).toBeUndefined();
+  });
   test("an eligible route has no reason", () => {
     expect(nativeChatDeclineReason(route(), { messages: [] })).toBeUndefined();
     expect(isNativeChatRouteEligible(route(), { messages: [] })).toBe(true);

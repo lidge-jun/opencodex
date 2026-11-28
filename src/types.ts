@@ -11,6 +11,7 @@ export {
   isCodeModeMcpDirectName,
   toolChoiceAliases,
   createToolChoiceResolver,
+  isQualifiedToolChoiceName,
   toolChoiceCandidates,
   toolAllowedByChoice,
   resolveToolChoiceWireName,
@@ -29,6 +30,7 @@ export type { AnthropicInstanceId } from "./providers/anthropic-instance-id";
 export { ANTHROPIC_INSTANCE_IDS, ANTHROPIC_PRIMARY_INSTANCE, ANTHROPIC_POOL2_INSTANCE, isAnthropicInstanceId } from "./providers/anthropic-instance-id";
 export type { AnthropicAccountPoolConfig, AnthropicModelRoute } from "./types/anthropic-account-pool";
 export type { OcxComboJevEffortMode } from "./types/combo-jev-effort-mode";
+export type { OcxComboCapabilityPolicy, OcxComboOnUnservable } from "./types/combo-capability-policy";
 export {
   UPSTREAM_HTTP_VERSION_VALUES,
   REASONING_SUMMARY_DELIVERY_VALUES,
@@ -69,6 +71,7 @@ export type {
   AnthropicServerBlocks,
   OcxUrlCitation,
   OcxUsage,
+  PerMessageEffortTurn,
 } from "./types/request";
 
 export type {
@@ -122,6 +125,10 @@ export type {
 
 export type {
   RefreshPolicy,
+  CacheAffinityMode,
+  OcxVideoApi,
+  CacheAffinityOutcome,
+  CacheAffinityLogReason,
   OpenRouterProviderRouting,
   VercelGatewayRouting,
   ResponsesItemIdRepairConfig,
@@ -143,12 +150,14 @@ export type {
   ReasoningCapabilities,
 } from "./types/provider";
 
-export { PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS } from "./types/provider";
+export { OCX_VIDEO_APIS, PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS } from "./types/provider";
 
 export type {
   CodexAccount,
   CodexAccountCredentials,
   CodexAccountCredentialRecord,
+  CodexAccountLoginConfig,
+  CodexAuthMethod,
 } from "./types/accounts";
 
 export type { OcxTelemetryConfig, OcxTelemetryDecision } from "./types/telemetry";

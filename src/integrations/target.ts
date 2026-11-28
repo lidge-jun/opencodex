@@ -42,6 +42,8 @@ export interface IntegrationTarget {
    * different shapes, so this belongs to the target rather than the client.
    */
   readonly sourcePreservingYaml: { readonly path: readonly string[] } | null;
+  /** The owned TOML tables are replaced in place rather than the document re-rendered. */
+  readonly sourcePreservingToml: boolean;
   /**
    * Set when a write to the file above would not reach the client.
    *
@@ -93,6 +95,7 @@ function configFileTarget(
     format: exportSpec.format,
     buildContribution: exportSpec.buildContribution,
     sourcePreservingYaml: INTEGRATION_CLIENTS[clientId].sourcePreservingYaml ?? null,
+    sourcePreservingToml: INTEGRATION_CLIENTS[clientId].sourcePreservingToml === true,
     ineffective,
   };
 }
@@ -107,6 +110,7 @@ function storeTarget(
     format: declared.format,
     buildContribution: declared.buildContribution,
     sourcePreservingYaml: declared.sourcePreservingYaml ?? null,
+    sourcePreservingToml: false,
     ineffective,
   };
 }

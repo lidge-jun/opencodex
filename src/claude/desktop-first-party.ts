@@ -55,6 +55,8 @@ export interface ClaudeDesktopModeObservation {
   ownedGatewaySelected?: boolean;
   /** Claude Code's settings carry first-party env that opencodex wrote (applied or stale). */
   ownedFirstPartySettings?: boolean;
+  /** Claude Code's settings could not be read, so first-party mode could not be ruled out. */
+  firstPartySettingsUnreadable?: boolean;
 }
 
 /**
@@ -152,6 +154,8 @@ export interface DesktopFirstPartyInspection {
 export interface DesktopFirstPartyOptions {
   opencodexConfigDir?: string;
   claudeConfigDir?: string;
+  /** Read-only projections cap settings bytes and validate the opened descriptor. */
+  settingsReadLimit?: number;
 }
 
 /** Prepare rollback before replacing a gateway, without changing settings. */
@@ -176,7 +180,8 @@ export function inspectDesktopFirstParty(
   // so an owned env can never match the empty credential — it classifies stale, and a real
   // apply is what refreshes it.
   const target = firstPartyTarget(config, opencodexConfigDir, readClaudeInterceptProxyToken(opencodexConfigDir) ?? "");
-  const settings = inspectClaudeInterceptSettings(target.env, options.claudeConfigDir);
+  const settings = inspectClaudeInterceptSettings(target.env, options.claudeConfigDir,
+    { maxBytes: options.settingsReadLimit });
   return {
     interceptEnabled: claudeInterceptEnabled(config),
     proxyPort: target.proxyPort,
@@ -206,8 +211,10 @@ export function observeClaudeDesktopMode(
     const kind = inspectDesktopFirstParty(config, options).settings.kind;
     observed.ownedFirstPartySettings = config.claudeCode?.cliFirstParty === true
       ? false : kind === "applied" || kind === "stale";
+    if (kind === "unreadable") observed.firstPartySettingsUnreadable = true;
   } catch { // no-excuse-ok: catch -- unreadable settings are no first-party evidence.
     observed.ownedFirstPartySettings = false;
+    observed.firstPartySettingsUnreadable = true;
   }
   return observed;
 }

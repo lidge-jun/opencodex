@@ -1,3 +1,4 @@
+import { sealCredentialRefusal } from "./credential-recovery-attempt";
 import { recordUpstreamProviderErrorDetail } from "./request-log-failure-detail";
 import { normalizeNativeChatContent } from "../adapters/openai-chat/native-content";
 import { attachComboFailureEvidence, ownedChatErrorPayload, type ClientErrorContract } from "../lib/client-error-body";
@@ -8,6 +9,7 @@ import { createPhysicalSendReporter } from "../lib/request-execution-budget";
 import { createInferenceSendBudget } from "./inference/context";
 import { observeAdvisorNativeReasoning } from "./inference/advisor-diagnostics";
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../adapters/openai-chat";
+import { affinityLaneFromRequest } from "./request-log-conversation";
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import { isNativeChatRouteEligible } from "./chat-native-eligibility";
 import {
@@ -68,8 +70,10 @@ import { fastPolicyForModel } from "../providers/service-tier";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import { stampApiKeyAccountLabel } from "../providers/label";
 import { distributedKeyPhysicalFetch, distributedKeyResponseOwner } from "../providers/api-key-response-ownership";
+import { passiveKeyPhysicalFetch } from "../providers/passive-key-observation";
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
-import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
+import { providerAffinityGenerationIsCurrent, providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
+import { isXaiGrokOAuth, isXaiLegacyPrivacyError, xaiPrivacyModeRefusal } from "../providers/xai-privacy-mode";
 import type { OcxProviderTransport } from "../providers/xai-transport";
 import type { RouteResult } from "../router";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -79,12 +83,11 @@ import { resolveConnectTimeoutMs, resolveJsonBodyReadTimeoutMs } from "../stall-
 import { linkAbortSignal } from "./responses";
 import {
   noteProviderAttemptSend,
-  recordKeyAttemptFailure,
   recordKeyWireAttemptUsage,
   recordFirstOutput,
-  recordAttemptCredentialSource,
   type RequestLogContext,
 } from "./request-log";
+import { recordKeyAttemptFailure } from "./request-log-key-failure";
 import { chatResponseHasUndeclaredToolCalls, UNDECLARED_CHAT_TOOL_MESSAGE, jsonCompletionSse, nativeChatSse, structuredError, usageFromChat } from "./chat-native-sse";
 import { beginInferenceAttempt, type InferenceAttempt } from "./inference/attempt";
 import { createFinalRequestLog } from "./inference/final-log";
@@ -358,7 +361,10 @@ export async function runNativeChatAttempt(
   // Transport variant: the bare picker answers with the persisted row, which for a built-in
   // provider carries no adapter id or base URL until routedProviderConfig backfills it.
   try {
-    const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
+    const affinityLane = affinityLaneFromRequest(req, logCtx, config, execution.admission ?? logIds?.admission);
+    if (affinityLane) logCtx.affinityLane = affinityLane;
+    const chatMessages = Array.isArray(execution.chatBody.messages) ? execution.chatBody.messages : [];
+    const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider, undefined, Date.now(), { lane: affinityLane, model: route.modelId, log: logCtx, continuation: (chatMessages.at(-1) as { role?: unknown } | undefined)?.role === "tool" });
     if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
     if (isProviderApiKeyPaused(route.provider)) throw new ProviderApiKeyPausedError();
   } catch (error) {
@@ -367,6 +373,7 @@ export async function runNativeChatAttempt(
       return failLocal(403, error.message, "permission_error");
     }
     if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
+    logCtx.terminalSource = "synthetic";
     const refusal = failLocal(429, error.message, "rate_limit_error");
     const advice = formatClientRetryAfter(error.retryAfterSeconds);
     if (advice !== undefined) refusal.headers.set("Retry-After", advice);
@@ -394,7 +401,6 @@ export async function runNativeChatAttempt(
   };
   const buildActiveRequest = () => {
     bindNativeChatReplayScope(replayScope, activeProvider, route.providerName, route.modelId);
-    recordAttemptCredentialSource(attempt, route.providerName, activeProvider, activeAdapter.name);
     const request = buildOpenAIChatPassthroughRequest(
       activeProvider,
       execution.chatBody,
@@ -523,6 +529,7 @@ export async function runNativeChatAttempt(
             dispatchOverride: async (_input, init, execute, reacquirePacing) => {
               for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider); attempt++) {
                 if (outputDelivered) throw new Error("Provider key selection is unavailable during the native Chat turn");
+                if (!providerAffinityGenerationIsCurrent(config, route.providerName, activeProvider)) throw new Error("Provider affinity selection is no longer available");
                 if (attempt >= 3) throw new Error("Provider key selection changed repeatedly before native Chat dispatch");
                 let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
                 if (!current && activeProvider.requestPacing?.enabled
@@ -572,12 +579,11 @@ export async function runNativeChatAttempt(
                 // before the wire refunds the booking rather than charging it.
                 if (physicalBudget.spendEnforced) initialSendStarted = true;
                 else if (!comboReceipt) settleNonEnforcedSend(request.url);
-                noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
                 // A reselected provider transport is still a physical send: the connection policy
                 // and manual-redirect ownership wrap the selected implementation (#4992).
                 const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
-                  distributedKeyPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute,
-                    route.providerName, activeProvider, request.url),
+                  passiveKeyPhysicalFetch(distributedKeyPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute,
+                    route.providerName, activeProvider, request.url), config, route.providerName, activeProvider),
                   String(input), physicalInit, { providerName: route.providerName, provider: activeProvider },
                 )) as typeof fetch;
                 localUpstream = isLocalUpstream(request.url);
@@ -585,7 +591,9 @@ export async function runNativeChatAttempt(
                   request.url,
                   applyUpstreamRecoveryInit({
                     ...init, method: request.method, headers, body: request.body,
-                    ...physicalSendObserverInit(observeAutoPause, request.url),
+                    ...physicalSendObserverInit(observeAutoPause, request.url, () => {
+                      noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
+                    }),
                   }, transportRecovery),
                   init.signal ?? upstream.signal,
                   resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream }),
@@ -638,6 +646,7 @@ export async function runNativeChatAttempt(
         const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...activeProvider, _apiKeyAttempt: undefined });
         const next = fresh && (selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh);
         if (!next) break;
+        sealCredentialRefusal(logCtx, response.status, "key-401");
         try { void response.body?.cancel().catch(() => {}); } catch { /* closed */ }
         activeProvider = next;
         stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
@@ -655,7 +664,7 @@ export async function runNativeChatAttempt(
       // exists to stop. It kept the same shape under the old 502 only because 502 never
       // matched this branch.
       && !isNonReplayableResponse(response) && !isSameTargetRetryHold(response)
-      && retryPolicy
+      && retryPolicy && providerAffinityGenerationIsCurrent(config, route.providerName, activeProvider)
       && retries < retryPolicy.attempts
       && transientSendAvailable()
     ) {
@@ -686,6 +695,8 @@ export async function runNativeChatAttempt(
       // Keep that bookkeeping when this request has spent its final send, but preserve the
       // terminal 429 body and do not dispatch with the replacement credential.
       if (!transientSendAvailable()) break;
+      const recovery = failureStatus === 401 ? "key-401" : "key-429";
+      sealCredentialRefusal(logCtx, failureStatus, recovery);
       try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
       activeProvider = rotated;
       stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
@@ -693,7 +704,7 @@ export async function runNativeChatAttempt(
       releaseRetainedRequest();
       activeRequest = buildActiveRequest();
       retainRequest(activeRequest);
-      response = await send(activeRequest, failureStatus === 401 ? "key-401" : "key-429");
+      response = await send(activeRequest, recovery);
     }
       if (response !== priorResponse && wasAccountAutoPaused(response)) continue;
       break;
@@ -709,12 +720,14 @@ export async function runNativeChatAttempt(
       return failLocal(403, sendError.message, "permission_error");
     }
     if (sendError instanceof RequestPacingQueueOverloadError) {
+      logCtx.terminalSource = "synthetic";
       const refusal = failLocal(429, sendError.message, "rate_limit_error");
       const advice = formatClientRetryAfter(sendError.retryAfterSeconds);
       if (advice !== undefined) refusal.headers.set("Retry-After", advice);
       return refusal;
     }
     if (sendError instanceof SendBudgetExhaustedError) {
+      logCtx.terminalSource = "synthetic";
       const refusal = workflowSendCeilingRefusalResponse(logCtx, req.headers.get("x-codex-parent-thread-id")?.trim() || undefined,
         execution.workflowRefusalContext);
       if (refusal) { finishLog(429); return refusal; }
@@ -747,6 +760,11 @@ export async function runNativeChatAttempt(
     if (req.signal.aborted) {
       upstream.abort();
       return failLocal(499, "Client cancelled request", "client_cancelled");
+    }
+    if (isXaiGrokOAuth(route.providerName, route.provider) && isXaiLegacyPrivacyError(response.status, bodyText)) {
+      const refusal = xaiPrivacyModeRefusal(logCtx);
+      finishLog(refusal.status);
+      return refusal;
     }
     const detail = activeAdapter.formatErrorBody?.(response.status, response.headers, bodyText) ?? "";
     let upstreamType: string | undefined;

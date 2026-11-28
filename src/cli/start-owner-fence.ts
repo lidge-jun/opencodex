@@ -1,7 +1,7 @@
 import type { ServiceChildOwnershipDecision } from "../service/service-child-ownership";
 import { removePidIfValueIs } from "../config/process-state";
 import { observeProxyLiveness, START_OWNERSHIP_LIVENESS, type LiveProxy } from "../server/proxy-liveness";
-import { markCrossHomeSibling, reconcileStartupJournal } from "./cross-home-owner";
+import { hasLiveStartupJournalOwner, markCrossHomeSibling, reconcileStartupJournal } from "./cross-home-owner";
 
 /** Called only under the ownership lease; a negative early probe grants no mutation authority. */
 export async function recoverStartJournalAfterOwnerRecheck(
@@ -14,8 +14,11 @@ export async function recoverStartJournalAfterOwnerRecheck(
   if (observation.kind !== "absent") {
     throw new Error("Proxy ownership is unverified; startup refused. PID record and recovery journal were preserved. Retry when the owner can be verified.");
   }
-  removePidIfValueIs(owner.pidSnapshot);
   if (!sibling) sibling = await markCrossHomeSibling();
+  if (!sibling && observation.loopbackBindProven && hasLiveStartupJournalOwner()) {
+    throw new Error("Proxy ownership is unverified; startup refused. A live process still owns the recovery journal.");
+  }
+  removePidIfValueIs(owner.pidSnapshot);
   if (!sibling) reconcileStartupJournal();
   return sibling;
 }

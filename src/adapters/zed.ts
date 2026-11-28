@@ -7,6 +7,7 @@ import { createOpenAIChatAdapter } from "./openai-chat";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
 import { liftZedAdditionalTools, translateZedOpenAiStream } from "./zed-openai-stream";
 import { zedDiagnosticUsage } from "./zed-diagnostic-usage";
+import { adapterSupportExecutor } from "../lib/executor-physical-send-receipt";
 import { createAdapterPhysicalSend } from "./physical-send";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { createTranslatorBudget, releaseTranslatedEvent, retainTranslatedEvent, type TranslatorBudget } from "../lib/translator-budget";
@@ -168,9 +169,11 @@ export function zedEventStream(
   const output = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       if (finished) return;
-      buffer += decoder.decode(chunk, { stream: true });
+      const decoded = decoder.decode(chunk, { stream: true });
+      buffer += decoded;
       let start = 0;
-      let newline = buffer.indexOf("\n", start);
+      // A drained suffix has no newline; only new text can complete a frame.
+      let newline = decoded.includes("\n") ? buffer.indexOf("\n", start) : -1;
       while (newline >= 0 && !finished) {
         processLine(buffer.slice(start, newline), controller);
         start = newline + 1;
@@ -413,7 +416,7 @@ export function createZedAdapter(provider: OcxProviderConfig, cacheRetention?: A
     buildRequest,
     async fetchResponse(request, ctx) {
       if (!credentials) throw new Error("Zed request credentials were not initialized");
-      const fetchFn = ctx?.executor ?? globalThis.fetch;
+      const fetchFn = adapterSupportExecutor(ctx?.executor ?? globalThis.fetch);
       const send = createAdapterPhysicalSend(ctx);
       let completionAttempts = 0;
       return zedLlmFetch(credentials, "/completions", {

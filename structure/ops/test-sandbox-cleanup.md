@@ -41,6 +41,12 @@ Owner publication probes before exposing a new directory; failed publication
 never recursively deletes through the current canonical path. Retirement checks
 directory identity and owner contents before and after quarantine rename. An
 unexpected displaced object is preserved rather than restored over another owner.
+The quarantine rename retries an `EACCES`/`EPERM` refusal inside the gate for two
+seconds while the generation is unchanged: Windows refuses to rename a directory
+while any process holds a file in it open, and giving up the gate on the first
+refusal handed the retirement the holder had already decided to the next waiter.
+Waiters read `owner.json` outside the gate only to announce the wait or explain a
+timeout, never on every poll, so they do not cause that refusal themselves.
 Only the original owner capability releases a generation; joined release is a no-op.
 
 The canonical name, version 1 owner records, member names and legacy live-PID veto
@@ -51,6 +57,15 @@ freedom. `tests/ci-workflows/test-run-lock-generation.test.ts` exercises private
 paths, delayed generation transitions, member/release ordering and gate-holder death.
 
 ## Sandbox lifecycle
+
+`scripts/test.ts` removes inherited live credential keys, `OCX_SERVICE`, and the markers from
+`src/lib/supervisor-markers.ts` before spawning test processes. Bun 1.4.4 can pass its startup
+environment to children spawned without an explicit environment. When Bun loads `tests/preload.ts`,
+the preload refuses to run tests if any of those keys are present. Use `bun run test` or unset
+inherited keys. Remove the listed keys from any dotenv files Bun loads, including `.env.test`,
+because Bun can load those files again in the test process. Both paths match names
+case-insensitively on Windows and case-sensitively on POSIX.
+`tests/ci-workflows/test-runner.test.ts` covers the scrub, bare-run refusal, and child inheritance.
 
 The batch runner's per-process home isolation and live-home/service-manager guards remain active
 because the preload installs them before the lock boundary. `tests/preload.ts` resolves cleanup
@@ -110,6 +125,11 @@ draining producers/reaps and restoring or removing a home. The helper does not r
 fixture-specific cleanup or claim OS ACL coverage for synthetic tests.
 The response-state stalled-runner child proves queue settlement while its synthetic runner remains held, then releases and drains that work before removing its home.
 
+The CC-Switch fixtures in `tests/providers/cc-switch-import.test.ts` close connections with
+uncached prepared statements using `Database.close(true)`. This finalizes those statements and
+releases Windows file handles before unlinking hard-link aliases or removing the fixture home;
+cleanup does not depend on garbage collection. The real-home removal guard remains in force.
+
 `tests/helpers/fixture-teardown.ts` owns management-auth, OAuth live-update, Codex quota-auto-refresh
 case roots (`tests/codex-integration/codex-quota-auto-refresh.test.ts`), and Anthropic instance
 root removal (`tests/helpers/anthropic-instance-fixture.ts`).
@@ -150,3 +170,67 @@ handoff log, including when the parent is terminated before its probe returns.
 The fixture bundles the product graph once into the recognized source-launch entry before
 spawning. Cold module resolution and transpilation count as setup, not handoff work. The
 18-second handoff watchdog starts after spawn; bundling counts against the outer test budget.
+
+## Git environment isolation
+
+A test process can inherit GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and the rest of git's
+`--local-env-vars` from a hook, `git rebase --exec`, `git bisect run` or a
+`--git-dir/--work-tree` wrapper. Every git command the suite spawns then runs against THAT
+repository whatever its cwd: a fixture's `git init` reinitialises it (writing core.worktree when
+GIT_WORK_TREE is set), `git config` writes its .git/config, and add/commit land in it. A shared
+checkout once gained user.name/user.email from a fixture helper and a core.worktree pointing at a
+deleted temp tree, which re-authored every later commit and broke `--show-toplevel` in every
+linked worktree on that host.
+
+- `scripts/git-repository-env.ts` owns the variable list (git's own `--local-env-vars` plus the
+  numbered GIT_CONFIG_KEY/VALUE pairs). `createIsolatedTestEnvironment` drops them, so a wrapped
+  `bun run test` starts every test process clean. `inspectChangedRun`, the test-layout move/verify
+  tooling, `structure-ssot.ts` and `file-size-ratchet.ts` pass a scrubbed env because each reads a
+  root it was given.
+- `tests/preload.ts` deletes them from process.env and warns with their names. That reaches
+  node:child_process and spread envs only: Bun.spawn / Bun.spawnSync without an `env` option keep
+  the environment the process started with (Bun 1.4.4), so a bare `bun test` cannot be fully
+  cleaned in-process.
+- Hence every test-side git call passes an env from `tests/helpers/git-fixture.ts`:
+  `fixtureGitEnv()` for throwaway repositories (no inherited repository, no system or global
+  config, commit identity in GIT_AUTHOR_*/GIT_COMMITTER_*, so no fixture writes user.* to any
+  config file) or `repositoryGitEnv()` for reads of this checkout (keeps the global config so
+  safe.directory still applies). `initFixtureRepo` writes no config.
+- `tests/helpers/git-config-guard.ts`, armed by the preload for each test file, compares the
+  checkout's common .git/config bytes after every case and, when they change, asks git for
+  core.bare, core.hookspath, core.worktree, user.email and user.name. A changed key fails that
+  case by name (never by value); a missing or unparsable config is reported once. Limits: a change
+  undone before the next check is invisible, another worktree's legitimate change to a guarded key
+  fails one case per worker, and config.worktree is not watched.
+
+Enforced by `tests/ci-workflows/test-git-isolation.test.ts`, whose fixture and script cases were
+red against the pre-fix helpers.
+
+## Network egress
+
+`tests/preload.ts` installs `tests/helpers/network-egress-guard.ts` right after the home guard
+arms (#8848). A full suite once sent fixture credentials to nine provider hosts through requests
+that got past a mock: native WebSocket upstreams, `node:https` behind `src/lib/pinned-http.ts`,
+and module-level quota and refresh fetches. The guard turns any such request into a local
+connection failure, the same answer an offline runner gives.
+
+- It wraps `globalThis.fetch`, `globalThis.WebSocket` and `net.Socket.prototype.connect`. Bun
+  1.4.4 routes `net.connect`, `tls.connect`, `http(s).request` and `http2.connect` through that
+  prototype method with Node's normalized `[options, callback]` array, so named imports of
+  `node:http` are covered too. A refused WebSocket is redirected to a Unix path that does not
+  exist, so it dispatches `error` and `close` without dialing.
+- Allowed: loopback and wildcard addresses, `localhost` and `*.localhost`, the reserved `.test`,
+  `.example` and `.invalid` names, Unix sockets, `data:`/`blob:`/`file:` fetches, and a fetch or
+  WebSocket whose proxy is loopback. An explicit non-loopback proxy is refused whatever the target,
+  and any other fetch scheme (`s3:`) is refused. Followed redirects are walked one hop at a time,
+  because real fetch follows them internally past both hooks; every hop must pass, the final
+  response keeps `redirected`, and `redirect: "manual"` / `"error"` callers are untouched.
+  `allowOwnInterfaceAddressesForTest()` admits this machine's own interface addresses until its
+  returned function runs; only `tests/server/loopback-listener-integration.test.ts` needs it.
+- Child processes never run the preload. Pass `NETWORK_EGRESS_GUARD_PRELOAD` as `--preload` to a
+  Bun child, or call `installNetworkEgressGuard()` first in a child entrypoint, as
+  `tests/helpers/native-profile-startup-child.ts` and the children of
+  `tests/codex-integration/codex-retained-root-serialization.test.ts` do.
+
+Enforced by `tests/ci-workflows/test-network-egress-guard.test.ts`, whose refusal cases were red
+without the preload line.

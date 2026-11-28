@@ -14,13 +14,15 @@ import { oauthTosRisk } from "../oauth-tos-risk";
 import OAuthTosWarningModal from "./OAuthTosWarningModal";
 import ProviderCatalog from "./provider-catalog/ProviderCatalog";
 import ProviderNoteModal from "./provider-catalog/ProviderNoteModal";
+import { isTopmostOverlayLayer } from "./overlay-layers";
 import type { AccountLoginRow, AccountLoginStatus } from "./provider-catalog/ProviderCatalog";
 import type { CatalogPreset } from "./provider-catalog/provider-presets";
 import type { CatalogLoginHint } from "./provider-catalog/login-hint-visibility";
 import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../base-url-choice";
 import { AddProviderOAuthPane } from "./add-provider-oauth-pane";
+import { sharedLoginRow } from "./shared-login-row";
 import { AddProviderFormPane } from "./add-provider-form-pane";
-import { useAddProviderOAuth } from "./use-add-provider-oauth";
+import { useAddProviderOAuth, type OAuthLoginCaptureOwner } from "./use-add-provider-oauth";
 import type { BrowserLaunch } from "../oauth-browser-launch";
 import {
   addProviderModalReducer,
@@ -35,7 +37,8 @@ type Preset = CatalogPreset;
 export default function AddProviderModal({
   apiBase, targetKey, existingNames, onClose, onAdded, initialTier, initialCustom = false,
   accountRows, accountStatus, accountBusy, accountLoginHint = null,
-  onAccountLogin, onAccountCancelLogin, onAccountLogout, onAccountManage, onOpen,
+  accountLoginCaptures, onAccountLogin, onAccountCancelLogin, onAccountLogout, onAccountManage, onOpen,
+  stackedOverlayOpen = false,
 }: {
   apiBase: string;
   targetKey?: string;
@@ -49,11 +52,18 @@ export default function AddProviderModal({
   accountBusy?: string | null;
   /** Login hint for an Accounts-tab login in flight, owned by the providers page. */
   accountLoginHint?: CatalogLoginHint | null;
+  /** The providers page's captures for those logins; a code pasted into an Accounts row uses them (#8618). */
+  accountLoginCaptures?: OAuthLoginCaptureOwner;
   onAccountLogin?: (provider: string, addAccount?: boolean) => void;
   onAccountCancelLogin?: (provider: string) => void;
   onAccountLogout?: (provider: string) => void;
   onAccountManage?: (provider: string) => void;
   onOpen?: () => void;
+  /**
+   * A dialog the providers page owns is open above this modal: the OAuth risk warning of an
+   * Accounts-tab login, the Codex login, or a page confirmation (#8849). Escape belongs to it.
+   */
+  stackedOverlayOpen?: boolean;
 }) {
   const t = useT();
   const fallbackPresets = useMemo<Preset[]>(() => [
@@ -73,6 +83,7 @@ export default function AddProviderModal({
   const aliveRef = useRef(true);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
   // The full-note popup is owned here, not in the catalog: it has to render as a sibling
   // of this overlay, and its open state has to be visible to the Escape handler below.
   const [notePreset, setNotePreset] = useState<Preset | null>(null);
@@ -148,8 +159,16 @@ export default function AddProviderModal({
       // Kept as a `!oauthTosPending` expression on purpose: tests/gui/oauth-tos-warning.test.ts
       // source-scans this file for that exact substring, because the guard is the only thing
       // stopping Escape from closing the modal out from under a stacked overlay.
-      const noOverlayOpen = !oauthTosPending && !notePreset;
+      // Page-owned dialogs are named by `stackedOverlayOpen`: this modal cannot see their state.
+      const noOverlayOpen = !oauthTosPending && !notePreset && !stackedOverlayOpen;
       if (e.key !== "Escape" || !noOverlayOpen) return;
+      // Another layer already took this Escape (a confirmation above this modal cancels and
+      // prevents it). Its state update can remove that layer before this listener runs, so the
+      // topmost check below alone would see this modal on top and close it on the same keystroke.
+      if (e.defaultPrevented) return;
+      // A layer opened elsewhere on the page can sit visually above this modal (a Settings
+      // confirmation's backdrop has a higher z-index); Escape is that layer's, not ours.
+      if (overlayRef.current && !isTopmostOverlayLayer(overlayRef.current)) return;
       // Escape unwinds one layer at a time: the note popup, then a live search, then the
       // dialog. Closing the modal on the keystroke that was meant to clear a query throws
       // away everything the user typed into the form behind it.
@@ -158,7 +177,7 @@ export default function AddProviderModal({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, oauthTosPending, notePreset, catalogQuery]);
+  }, [onClose, oauthTosPending, notePreset, catalogQuery, stackedOverlayOpen]);
 
   const presetDescription = (candidate: Preset): string | undefined => {
     const key = codexPresetDescriptionKey(candidate);
@@ -188,7 +207,8 @@ export default function AddProviderModal({
     });
   };
 
-  const submit = async () => {
+  /** `sharedLogin`: add a Kimi (Responses)-style row on the owner's existing login (authMode oauth). */
+  const submit = async (sharedLogin = false) => {
     if (!form) return;
     if (renderedTargetKey !== renderCapture.targetKey) {
       dispatch({ type: "set-error", error: t("prov.targetChanged") });
@@ -205,6 +225,7 @@ export default function AddProviderModal({
     let postBody: { name: string; provider: ProviderPayload };
     try {
       postBody = buildProviderPostBody(preset ?? { id: "custom" }, submitForm);
+      if (sharedLogin) postBody.provider.authMode = "oauth";
     } catch {
       dispatch({ type: "set-error", error: t("modal.invalidPreset") });
       return;
@@ -260,22 +281,34 @@ export default function AddProviderModal({
   };
 
   const dup = form ? existingNames.includes(form.name.trim()) && form.name.trim() !== "" : false;
+  // Kimi (Responses) logs in through Kimi and publishes only its own row.
+  const loginRow = preset ? sharedLoginRow(preset) : undefined;
   const requestLoginOAuth = (providerId: string) => {
     if (oauthBusy) return;
     if (oauthTosRisk(providerId)) {
       dispatch({ type: "set-oauth-tos-pending", providerId });
       return;
     }
-    void loginOAuth(providerId, oauthSetters);
+    void loginOAuth(providerId, oauthSetters, false, loginRow);
   };
 
-  const submitManualCode = (providerId: string) => {
+  // A code typed for one Accounts login belongs to that login on this target. A new login (its
+  // hint changes) or a target change clears it, so it can never be submitted to the next one.
+  const accountLoginIdentity = accountLoginHint
+    ? [accountLoginHint.provider, accountLoginHint.url ?? "", accountLoginHint.deviceCode ?? ""].join("\u0000")
+    : "";
+  useEffect(() => {
+    dispatch({ type: "set-manual-code", code: "" });
+    dispatch({ type: "set-manual-code-msg", msg: "", ok: true });
+  }, [accountLoginIdentity, apiBase, suppliedTargetKey]);
+
+  const submitManualCode = (providerId: string, owner?: OAuthLoginCaptureOwner) => {
     void submitManualCodeApi(providerId, manualCode, manualCodeBusy, {
       setManualCodeBusy: busy => dispatch({ type: "set-manual-code-busy", busy }),
       setManualCode: code => dispatch({ type: "set-manual-code", code }),
       setManualCodeOk: ok => dispatch({ type: "set-manual-code-msg", msg: manualCodeMsg, ok }),
       setManualCodeMsg: msg => dispatch({ type: "set-manual-code-msg", msg }),
-    });
+    }, owner);
   };
 
   const isCustom = preset?.id === "custom";
@@ -288,7 +321,7 @@ export default function AddProviderModal({
         selection drag that is released outside the card — would wipe every
         field the user already filled in. Close only via the × button,
         Escape, or a successful add. */}
-    <div role="dialog" aria-modal="true" aria-label={t("modal.add")} className="modal-overlay">
+    <div ref={overlayRef} role="dialog" aria-modal="true" aria-label={t("modal.add")} className="modal-overlay">
       <div ref={dialogRef} className="modal-card">
         <div className="modal-head">
           <h3>{preset ? t("modal.addNamed", { label: preset.label }) : t("modal.add")}</h3>
@@ -321,7 +354,8 @@ export default function AddProviderModal({
               message: manualCodeMsg,
               ok: manualCodeOk,
               onChange: code => dispatch({ type: "set-manual-code", code }),
-              onSubmit: providerId => { void submitManualCode(providerId); },
+              // Accounts rows log in through the providers page, which owns their capture.
+              onSubmit: providerId => { void submitManualCode(providerId, accountLoginCaptures); },
             }}
           />
         ) : form && (
@@ -340,7 +374,11 @@ export default function AddProviderModal({
               manualCodeBusy={manualCodeBusy}
               manualCodeMsg={manualCodeMsg}
               manualCodeOk={manualCodeOk}
+              ownerLoggedIn={loginRow !== undefined && accountStatus?.[preset.oauthProvider ?? ""]?.loggedIn === true}
+              saving={saving}
+              error={error}
               onRequestLogin={requestLoginOAuth}
+              onUseExistingLogin={() => { void submit(true); }}
               onCancelLogin={providerId => { void cancelLoginOAuth(providerId, oauthSetters, preset.label); }}
               onUseApiKeyInstead={() => {
                 if (oauthBusy && preset.oauthProvider) void cancelLoginOAuth(preset.oauthProvider, oauthSetters, preset.label);
@@ -385,7 +423,7 @@ export default function AddProviderModal({
           const id = oauthTosPending;
           if (!id) return;
           dispatch({ type: "set-oauth-tos-pending", providerId: null });
-          void loginOAuth(id, oauthSetters);
+          void loginOAuth(id, oauthSetters, true, loginRow);
         }}
       />
     )}

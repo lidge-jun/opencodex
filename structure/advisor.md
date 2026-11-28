@@ -19,6 +19,13 @@ The server composition root registers it synchronously at startup; a successful 
 updates activation, including enable after startup and disable/reset. The runtime is loaded only
 when an active factory is used, so its process-local ledger is not constructed by an inactive
 install. `sidecar-execution.ts` reads the core-owned slot, not Advisor settings or runtime.
+Request-scoped copies of the live config, such as the Claude replay config `/v1/messages` passes to
+the Responses pipeline, are linked with `linkAdvisorPlanConfig` so they resolve the live config's
+factory at lookup time. The view's `advisor` reads through to the live config, so a consent
+revocation after the copy still blocks outbound transfer up to dispatch: the runtime rechecks
+consent immediately before the loopback call, and a revocation after that call has been dispatched
+neither cancels it nor retracts context already sent
+(`tests/advisor/advisor-messages-replay-config.test.ts`).
 Advisor settings admit the complete synchronous candidate/read/patch/save/activation phase through the [config admission contract](config.md). Production uses the current disk candidate when present, preserving unrelated disk edits during admission. Successful saves adopt the committed Advisor subtree and its field-scoped live baseline together, including known absence after reset, without advancing unrelated pending live edits. Fallback or error-bearing diagnostics are refused before mutation. Deadline refusal leaves live and durable settings untouched and retains the existing `write_failed` response. Successful receipts are serialized in that callback before another settings mutation can run.
 Management loads `advisor-routes.ts` only for the Advisor namespace. The guard is attached through
 `_advisorGuard`. `tests/advisor/advisor-core-boundary.test.ts` enforces the transitive load-time
@@ -55,6 +62,35 @@ multi-call pairing, overlap and lifecycle release.
   `tests/advisor/advisor-responses-wiring.test.ts` exercises real streaming and buffered delivery.
   Client catalog checks wrap the Advisor guard, so synthetic calls are consumed internally before
   final worker output is checked against current client declarations, including direct encoders.
+  Synthetic injection requires the request's effective `tool_choice` to permit Advisor. For an
+  explicit selector or allowlist, `src/responses/parser-tools.ts` retains typed client selectors
+  and the selected root function names before provider translation. An unqualified function
+  selector can permit synthetic Advisor. An explicit root selector using the reserved `functions`
+  namespace also permits synthetic Advisor when no caller declaration owns the root name.
+  A caller-owned `advisor` can pass through when its
+  declared kind, name and any explicit namespace match the original selector and the effective choice permits it. With `auto`
+  or `required`, caller-owned tools follow the effective choice alone. A forced hosted search
+  excludes a caller-owned `advisor` even when the worker receives `auto`.
+  The guard resolves worker call names against the caller catalog, including flattened, dotted,
+  and compatible bare or reserved `functions` echoes. It checks the declaration against
+  the original typed selector and checks the effective choice on each worker leg. A forbidden call
+  is refused before consultation, continuation, or disclosure of its ID and arguments.
+  Linked Messages replay uses the same check. `src/claude/inbound-content-options.ts` identifies
+  an explicitly selected hosted Advisor from the original declaration before choice lowering.
+  The Responses core validates the original choice against the resolved route and admitted
+  catalog. Duplicate matches return a request-wide HTTP 400 before dispatch. A declaration
+  unavailable on the current route, under its model scope, or under the selected credential's
+  captured token spend ceiling refuses that candidate before dispatch.
+  Combo and policy fallback can try another candidate with the original declaration and choice.
+  When all attempted candidates are incompatible, delivery retains the public HTTP 400.
+  An admitted named choice drives Anthropic wire encoding and grants no root
+  function permission. Explicit hosted selections skip proxy preflight. Other automatic
+  consultations follow operator policy. The translated Messages wire and guard are covered by
+  `tests/claude-integration/claude-translated-hosted-advisor-choice.test.ts`.
+  A buffered refusal preserves the already-parsed rejected worker leg's terminal usage, merged
+  with earlier intercepted legs once. Streaming refusal closes its iterator immediately.
+  The empty-completion retry preserves `undeclared_tool_call` and merges available usage.
+  A streaming refusal can close the retry before that send reports terminal usage.
 - Run-turn adapters: preflight support only — the automatic pre-dispatch consultation attempt
   applies, but the synthetic tool is never injected because the run-turn loop cannot intercept it.
 - Native OpenAI passthrough: no advisor support in PR1. The request path is byte-identical to a
@@ -63,10 +99,11 @@ multi-call pairing, overlap and lifecycle release.
   consultation and continuation bounds with the normal guard. The search scanner consumes advisor
   calls alongside `web_search`, fulfills them in worker order, and replays paired results without
   exposing the synthetic call to the client. The synthetic tool and scanner are enabled only when
-  the request's effective `tool_choice` permits Advisor; an `allowed_tools` scope that permits only
-  web search cannot be widened into an expert consultation. Without an active Advisor sidecar,
-  an emitted `advisor` call is refused before its ID or arguments reach the client unless that
-  iteration declares and permits it as an ordinary client tool. Partial calls are refused at
+  the caller's selection and effective `tool_choice` permit Advisor. The same call resolver runs on each
+  search iteration and leaves the search tool's outbound translation intact. A caller-owned
+  `advisor` must be declared and permitted by both the original selector and current iteration's
+  effective choice. The loop refuses other unauthorized calls before their IDs or arguments
+  reach the client. Partial calls are refused at
   their start, and the terminal refusal retains worker usage. Synthetic permission is also
   iteration-scoped: tools-disabled empty-answer recovery refuses Advisor even when the original
   turn installed the sidecar; ordinary exhausted-Advisor iterations retain paired limit handling.
@@ -89,11 +126,61 @@ reason `advisor-tool-shadowed-by-proxy-advisor` for a destination that would oth
 `planAnthropicServerTools` (`src/adapters/anthropic/advisor-tool.ts`) also withholds the completed
 Advisor history and the beta while a function tool named `advisor` owns the name, the same rule that
 keeps the web-search sidecar's `web_search` ahead of a typed search. With
-this sidecar off, the declaration reaches first-party Anthropic, or a gateway with
-`forwardAdvisorTool: true`, and its blocks round-trip to the client. Destination, replay and scope
+this sidecar off and no applicable token spend ceiling, the declaration reaches first-party
+Anthropic, or a gateway with `forwardAdvisorTool: true`, and its blocks round-trip to the client. Destination, replay and scope
 rules are in [providers and adapters](providers-and-adapters.md);
 `tests/claude-integration/claude-translated-advisor-tool.test.ts` covers both sides of the precedence
 through the Responses core.
+
+Translated turns evaluate the current send's selected identity and effective wire. An applicable
+root, identity or pool token ceiling withholds the optional hosted declaration, completed Advisor
+history and beta from that send onward, while the main model and other tools continue. The same
+rule applies when the effective Anthropic provider appends an operator credential header recognized
+by `src/providers/api-key-response-ownership.ts`, which makes credential ownership ambiguous.
+An explicit Messages selection refuses either target before vision preprocessing or worker dispatch. An
+eligible fallback candidate can still fulfill the selection. The client receives HTTP 400 if no compatible route serves the request
+before response streaming starts. During streaming, a refused continuation emits a terminal error.
+`hosted-advisor-spend.ts` and `sidecar-execution.ts` use the transport's `initialAdapterProvider`
+to check the actual authenticated target's ceilings without starting main-model accounting. The
+original translated turn owns the numeric ceiling snapshot and shares it with the default policy
+candidate and translated Combo trackers. The budget's read-only
+`hasCapturedSpendCeiling` checks the original numeric ceilings against that target, including an
+identity selected after Combo prepayment. An inherited budget can also supply its published
+snapshot for that check. See [Responses spend](transports/responses-spend.md#prepaid-initial-sends)
+for precedence. The request-owned `hostedAdvisorSpendGuard` runs in the selected adapter's
+`buildRequest` wrapper after credential admission, including sidecar copies and dispatch-time
+reselection. The builder supplies its own resolved provider and reuses the captured policy.
+Eligibility follows its effective wire, even when credential rebuilding restores a provider-wide
+adapter. Once withheld, the optional hosted tool and replay stay withheld across later credentials,
+policy candidates and translated Combo children in the same turn.
+`src/server/responses/request-transport.ts` uses the effective Anthropic serializer to bind each
+hosted Advisor request to the credential it applied, including on local-mode gateways.
+`request-spend-target.ts` keeps the hosted binding separate from ordinary accounting scopes. For
+Anthropic OAuth, the existing OAuth label function hashes the admitted serving snapshot's provider
+and account ID. This keeps same-ID accounts in separate instances distinct. Identity changes only
+when normal credential admission accepts a new snapshot. Provider display tags and generic account
+log fields stay the same.
+After upstream plugin rewrites and before the physical-send receipt, the HTTP guard requires an
+exact match and uses the same ownership classifier to reject conflicting credential headers. On
+failure, it refuses the explicit selection or rebuilds the optional request with its original
+serializer inputs and hosted Advisor withheld. The final headers omit the Advisor beta.
+Removing Advisor blocks from a validated mixed replay run preserves the other completed search
+or fetch exchanges at their original unique anchor and in their original order, subject to the
+existing destination checks.
+For a choice without an explicit hosted selection, after the final tool catalog is known, an
+unmatched named `advisor` choice becomes `auto` when spend policy has removed its hosted tool or
+replay. A named selection with an ordinary or proxy function owner keeps that owner. The delivery
+maps are rebuilt once and charged for newly usable tools;
+normal, web-search and image/video paths apply this before the adapter builds its request.
+An existing entry trace receives `advisor-tool-withheld-by-spend-policy`; unmarked
+Combo children retain the existing trace behavior. Main-model terminal usage does not independently account for
+the hosted Advisor. The proxy Advisor retains its separately budgeted consultations; see
+[Responses spend](transports/responses-spend.md). The same integration test covers all three scopes,
+streaming and buffered responses, replay, opted-in gateways, accounting and admitted identity,
+and policy changes after capture.
+`tests/responses/responses-first-send-spend-policy.test.ts` also covers target-dependent authority
+across key rotation, including a rebuilt provider whose default differs from its pinned wire,
+the web-search retry copy, post-rotation named-choice delivery and explicit hosted refusal.
 
 ## Recursion fence (server-owned authority)
 
@@ -129,9 +216,13 @@ Its random 256-bit handle is honored only beside the current process-owned capab
 or missing handles are refused. Consultation completion or failure releases the entry; abort
 revokes it immediately, even while transport work is still settling. Registration owns a frozen copy.
 The bounded scope envelope remains validated separately. Neither handle nor capability is sent upstream.
+Advisor and shared local Chat self-fetches use direct transport, including when the destination
+is the hub's non-loopback bind address. Outbound provider requests still follow provider egress policy.
 
-Routed vision carries the same frozen policy through its plan and a scoped registry entry. Its
-separate sidecar capability header authenticates inheritance without suppressing Advisor on the helper.
+Routed vision carries the same frozen policy through its plan and a scoped registry entry. The
+shared local Chat helper registers every self-fetch and attaches a frozen policy when supplied.
+Its separate sidecar capability authenticates origin and any inherited policy without suppressing
+Advisor on the helper.
 Chat intersects that registration with the host snapshot captured at authentication; missing or
 expired registrations presented with a valid capability are refused. Completion, failure and abort
 release the entry. Ordinary client headers cannot grant inherited policy authority.
@@ -231,9 +322,8 @@ substring search. Automatic preflight is not decided from developer-message text
 manual tool result is a separate provenance check; every other history form — ordinary tool
 output, developer text, user text, and failure notices (`<opencodex_advisor_unavailable>`) —
 matches nothing. The guard never composes failure prose itself: `AdvisorPlan.formatUnavailable`
-owns that text and neutralizes untrusted fragments. Upstream HTTP failures are logged as a
-status code only, so an error body that echoes the prompt is not written to the worker context
-or the log line.
+owns that text and neutralizes untrusted fragments. Upstream HTTP failures use a status code only; transport exceptions use a fixed failure category.
+Neither upstream error bodies nor exception messages enter worker context or consultation logs.
 
 Keys are SHA-256 digests, never a short fold and never raw text: one domain-separated digest
 over `conversation identity + task boundary + worker model`, where the task boundary digests the
@@ -367,7 +457,9 @@ request under the advisor model. Consultation usage is never merged into the wor
 usage; intercepted worker legs are, via the same usage-merge rule the terminal guard applies.
 
 `src/advisor/activity.ts` holds config-scoped process memory: at most 100 records, at most 24
-hours old, with pruning on access and no timer. `GET /api/advisor/activity` and `ocx advisor
+hours old, with pruning on access and no timer. The store is keyed by the LIVE config object, so a
+request that runs on a linked view (the Claude replay config) records into the feed the management
+route reads. `GET /api/advisor/activity` and `ocx advisor
 activity` expose trigger, status, models, requested/mapped effort, duration and reported tokens.
 There are no task bodies, commands, advice, conversation identifiers or provider error bodies
 in these records. Dashboard polling runs only while its page is visible. Restart clears activity,
@@ -378,3 +470,88 @@ loopback response only for the process-capability-authenticated Advisor caller. 
 paths use adapter-owned `effectiveEffort`; native Chat observes the finalized request body.
 No requested value is substituted for missing wire evidence. The activity UI displays unknown
 when unreported and does not claim verification of a provider's internal reasoning.
+
+Translated union combos check the selected hosted Advisor against each candidate’s destination and caller model scope before evaluating image or context capability. Child preparation checks the selected tool again on the settled route.
+
+## Streaming, stability and external MCP / CLI host
+
+`src/server/chat-native-eligibility.ts` and `src/server/messages-native-eligibility.ts`
+(`bridgeOnlyPolicyApplies`, excluding first-party `oauth` when `managedMessagesNativeOAuth` preserves
+native wire fidelity) decline direct native Chat / Messages forwarding when `config.advisor.enabled`
+is true with a non-self advisor model so worker turns enter the Responses sidecar pipeline.
+`advisorPlan.injectWorkerNotice` places a runtime-marked `developer` worker notice (`ADVISOR_RUNTIME_NOTICE_START` / `ADVISOR_RUNTIME_NOTICE_END`) ahead of the latest user
+turn only on paths where an advisor tool is actually callable (external `consult_advisor` MCP tool
+when permitted by `tool_choice` and `explicitClientToolChoices`, `webSearchAdvisor`, or normal
+translated exchange after attaching the synthetic `advisor` tool — excluding run-turn and
+image/video paths without an allowed external advisor tool, and skipping duplicate synthetic
+attachment on both normal and web-search paths only when `advisorPlan.hasExternalMcpTool` is true
+for the effective `tool_choice`).
+When long tool loops or repeated errors push an older runtime notice beyond `ADVISOR_TAIL_NOTICE_WINDOW`,
+only validated runtime-marked copies are stripped and re-anchored at the tail (`urgentRepair` wording
+after `>= 2` errors or long loops) without touching application-owned `## Advisor` developer messages
+or splitting `tool_call`/`tool_result` pairs.
+`src/advisor/state.ts` keeps in-flight preflight ledger claims alive for the full duration of an
+active consultation (`isAlive` liveness predicate settled in `finally`) while retaining
+`ADVISOR_INFLIGHT_TTL_MS` for untracked/abandoned claims.
+`src/server/chat-completions.ts` derives `advisorSessionIdentity` from `x-opencode-session`,
+`x-session-id`, `x-conversation-id`, and W3C `baggage` `codebuddy.session_id`
+internally into `parsed._advisorSessionIdentity` (without mutating upstream `session-id` HTTP headers)
+so `policy: adaptive` retains task identity without altering upstream wire headers.
+
+During intercepted tool calls, `src/server/responses/advisor-slot.ts` (`withAdvisorHeartbeats`)
+yields `{ type: "heartbeat" }` events so the worker SSE stall timer stays alive during long
+expert turns. `src/advisor/consult.ts` sends `stream: true`, detects headerless SSE incrementally
+while streaming; it assembles multiline SSE data fields per event and stops at `[DONE]`. Data fields reset `createInactivitySignal` before EOF (ignoring `: ` heartbeat
+comments; default `timeoutMs` is `600_000` ms / 10 min, max `1_800_000` ms / 30 min).
+`src/server/advisor-destination.ts` compares the Advisor selector's resolved provider and model with the actual route for native Chat and Messages self-route exemptions; unresolved, combo and policy selectors stay on the bridge.
+
+For harnesses whose built-in models bypass the OpenCodex proxy,
+`src/server/management/advisor-routes.ts` exposes `POST /api/advisor/consult`, backed by `src/advisor/external-consult.ts` with uniform consent checks
+(matching routed paths, including `question-only`), fail-closed adaptive task-budget enforcement
+(deriving `external:<taskId|sessionId>` or canonical `external:transcript:<path>` and rejecting
+adaptive requests without a stable identity with `400 advisor_budget_identity_required`),
+content-hashed request dedup (including `taskId` and transcript digest), explicit-ID/path local
+`.jsonl` session transcript attachment in `contextMode: "full"` across `~/.workbuddy`,
+`~/.workbuddy-ai`, `~/.qoder`, `~/.qoder-cn`, `~/.commandcode`, and `~/.claude/projects`,
+preferring exact session IDs over task-ID fallbacks and excluding prior Advisor calls and results
+with a hard 4 MiB plus one-byte read bound even when an active transcript grows after discovery,
+(`loadWorkBuddySessionMessages`), and a bounded 32-entry 30-minute consultation store that never
+evicts pending entries (returning `429 advisor_capacity_exceeded` when saturated) and separates
+TTL expiry pruning from insertion eviction. Long-poll `waitMs` is capped at `240_000` ms across
+API, CLI (`ocx advisor consult`), and stdio MCP (`src/advisor/mcp-server.ts`, `ocx advisor mcp`,
+annotated `readOnlyHint: false, openWorldHint: true`)
+to stay below the 255s HTTP listener idle timeout; `nextCallArguments` (`{ consultationId, afterElapsedMs }`)
+accepts any nonnegative integer cursor alongside `notifications/progress` heartbeats.
+The MCP client bounds the local HTTP request and body read to `waitMs` plus one second, combines caller cancellation, and advises polling the same ID after a transport deadline.
+Advisor CLI settings output reports MCP reconciliation errors separately from mounted-client trust status; JSON retains the management response.
+The dashboard keeps a failed MCP reconciliation retry available across edits and failed saves, until a response confirms successful reconciliation.
+Choosing automatic client sync enables auto-mount and clears manual selection together; client checkboxes use their client names as accessible labels.
+Integration pages show completed-installation guidance only for a mounted Advisor client.
+`contextMode: "full"` expands bounded per-message/transcript caps (128k/512k chars) and strips
+`<system-reminder>` wrappers before clipping.
+
+`src/advisor/client-mcp.ts` manages per-client `opencodex-advisor` MCP registration (`selfLaunchArgv`
+for both source-entrypoint and standalone executable installs plus explicit `OPENCODEX_HOME` and `BUN_BE_BUN=1`
+propagation), hooks (OpenCodex appends one standalone `UserPromptSubmit` group running the POSIX single-quoted script path, and records it with the hook script and skill file in `<configDir>/advisor-hook-registrations.json`; when the same command is already registered by the user, or ambiguously, the file is left as it is and nothing is recorded; the hook script's own path assignments are single-quoted too), and skills across compatible clients (`workbuddy`, `workbuddy-ai`, `qoder`, `qoder-cn`,
+`commandcode`, `cline` with 900s timeout and explicit user confirmation, `opencode` with 900_000ms
+timeout and `skills/`, optional `claude`). The reminder requires readable Advisor settings and an executable runtime before checking proxy health. Skill files (`ADVISOR_SKILL_MARKER`) and hook scripts
+(`ADVISOR_HOOK_MARKER`) carry markers for status display only; ownership is the recorded path and content hash, so a marked file OpenCodex did not record writing, and symlinks, are never
+overwritten, and unmounting deletes only verified OpenCodex files (never recursive
+directory removal, preserving sibling user files). An `opencodex-advisor` MCP entry is replaced or removed only when it is
+exactly what OpenCodex writes now or what it recorded writing in `<configDir>/advisor-mcp-entries.json`; a
+same-named entry the user created is refused on mount and left in place on unmount. For clients sharing the same canonical config path and entry container, mounting accepts matching recorded ownership from either client and records the newly selected client; unmount still requires that client's own record. Protected paths resolve existing aliases and existing parent directories before comparison. Cleanup goes through a queue, `<configDir>/advisor-pending-cleanup.json`: unmount queues everything the client recorded, and a mount whose config directory moved queues the old location's entry, hook registration, script and skill only after the new destination passed its checks. Each mount, unmount and sync works the queue: an MCP entry is removed only when it still holds the recorded bytes; a hook registration only when exactly one group exactly as OpenCodex wrote it runs the command and nothing else does; a hook script or skill only when its content still has the SHA-256 recorded when OpenCodex wrote it and, for the script, no hook in the config that may run it (recorded even when that registration is the user's) invokes its path, quoted or not. The queue is written before the records that justify it are released, so an interrupted handoff leaves the record in place for the next pass. An unreadable or unparseable file, an ambiguous registration or a failed write stays queued and is reported for a later pass without stopping the other items, and an artifact another client still records is left to that client. A batch sync protects every selected client's paths during the cleanup each mount runs, and a deselected client with any unprotected recorded artifact is cleaned up even when status sees no mount. The reminder hook announces readiness only on a 2xx `/healthz` status, without following redirects. `autoMountMcp` defaults
+to off: writing into another tool's configuration needs that explicit opt-in or a manual `mcpClients`
+selection. An explicit `homeDir` without an explicit `env` ignores the host's client config-directory
+overrides, so tests and previews cannot reach a real client configuration. Sync targets are gated on `advisorRunnable` (so
+missing or revoked consent unmounts existing MCP registrations, hooks, and owned skills), reconciled
+by resolved filesystem path (`collectProtectedPaths`) so shared custom directories (e.g. `WORKBUDDY_CONFIG_DIR`)
+are never unmounted by an unselected sibling client, isolated per client for errors, backed up once
+before edits. On shared JSON configs an Advisor write advances the Routing `OwnershipRecord.fileFingerprint`,
+so Routing toggles do not read it as a conflict, but not the Undo journal: Undo of the Routing apply sees
+the Advisor edit as drift and asks before restoring a snapshot that would remove it. Bidirectional sync links `PUT /api/advisor/settings` (`autoMountMcp` / `mcpClients`) with
+client route toggles in `src/server/management/integration-routes.ts` (`reconcileAdvisorMcpForRoutedClient`,
+wrapped so optional MCP failures degrade via `advisorMcp` without interrupting committed Routing
+mutations or Home route-intent recording). `gui/src/pages/Advisor.tsx`,
+`gui/src/pages/advisor/AdvisorClientMcpPanel.tsx`, and `gui/src/pages/integrations/FileIntegrationPage.tsx`
+surface draft-derived auto selection, `runnable`-gated mount notices, partial MCP sync errors with
+retry, mounted config paths, and client-specific trust steps.

@@ -9,6 +9,7 @@ import { ensureManagementClaudeIntercept, interceptStartRefusal, interceptStatus
 import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
 import { captureDesktopAppliedMarker, commitDesktopAppliedMarker } from "../../claude/desktop-applied-marker";
 import { isPassiveRead } from "../../lib/passive-read";
+import { captureHomeRouteDefaultsBeforeHomeSwitch } from "../../routing/home-route-capture";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -18,8 +19,11 @@ import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, filterCatalogVisibleModels, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { mergeModelPinnedEfforts, modelPinnedEffortsConfigError } from "../../config/provider-validation";
 import { MULTI_AGENT_SURFACE_ADVISORY_VERSION, multiAgentSurfaceAdvisory, resolveMultiAgentMode } from "../../config/multi-agent-surface";
+import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { captureConfigTopLevelRollback, parsedConfigRebaseDeletionKeys, projectConfigRebaseProvenance } from "../../config/rebase-provenance";
+import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
+import { agyAcpUnattendedTargetIssues } from "../../config/schema/agy-acp-references";
 import { isAnthropicInstanceId } from "../../providers/anthropic-instance-id";
 import {
   adoptPersistedClaudeCode,
@@ -51,7 +55,7 @@ import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
-import { routedSlug, slugEquals } from "../../providers/slug-codec";
+import { hasRoutedSlug, routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
@@ -294,6 +298,8 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       multiAgentMode: resolveMultiAgentMode(config),
       multiAgentSurfaceAdvisory: multiAgentSurfaceAdvisory(config),
       keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
+      plaintextAgentMessagesEnabled: isPlaintextV2AgentMessagesEnabled(config),
+      supportsPlaintextV2Mode: true,
       agentsEnabled: getAgentsEnabled(),
       agentsMaxDepth: getAgentsMaxDepth(),
       subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
@@ -301,7 +307,9 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       multiAgentModeHintRecommendation: MULTI_AGENT_MODE_HINT_RECOMMENDATION,
       // max_depth is V1-only upstream; this is the global-flag statement, derived
       // server-side so no client can present it as an effective V2 limit.
-      agentsMaxDepthAppliesWhenV2Disabled: !enabled,
+      // 'v2-plaintext' keeps the flag off but still runs the V2 surface through
+      // catalog pins, so the V1 limit does not apply there either.
+      agentsMaxDepthAppliesWhenV2Disabled: !enabled && resolveMultiAgentMode(config) !== "v2-plaintext",
     });
   }
   if (url.pathname === "/api/v2" && req.method === "PUT") {
@@ -315,6 +323,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       subagentDeveloperInstructions?: unknown;
       multiAgentModeHintText?: unknown;
       multiAgentSurfaceAdvisoryAcknowledged?: unknown;
+      plaintextAgentMessagesAcknowledged?: unknown;
     };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const wantsFlag = body.enabled !== undefined;
@@ -326,12 +335,13 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const wantsSubagentInstructions = body.subagentDeveloperInstructions !== undefined;
     const wantsModeHintText = body.multiAgentModeHintText !== undefined;
     const wantsAdvisoryAck = body.multiAgentSurfaceAdvisoryAcknowledged !== undefined;
+    const wantsPlaintextAck = body.plaintextAgentMessagesAcknowledged !== undefined;
     if (!wantsFlag && !wantsThreads && !wantsMode && !wantsKeepNative && !wantsAgentsEnabled && !wantsMaxDepth && !wantsSubagentInstructions && !wantsModeHintText && !wantsAdvisoryAck) {
       return jsonResponse({ error: "body must set enabled, multiAgentMode, keepNativeChatGptOnV1, maxConcurrentThreadsPerSession, agentsEnabled, agentsMaxDepth, subagentDeveloperInstructions, multiAgentModeHintText, and/or multiAgentSurfaceAdvisoryAcknowledged" }, 400);
     }
     if (wantsFlag && typeof body.enabled !== "boolean") return jsonResponse({ error: "body.enabled must be a boolean" }, 400);
-    if (wantsMode && body.multiAgentMode !== "v1" && body.multiAgentMode !== "default" && body.multiAgentMode !== "v2") {
-      return jsonResponse({ error: "body.multiAgentMode must be 'v1', 'default', or 'v2'" }, 400);
+    if (wantsMode && body.multiAgentMode !== "v1" && body.multiAgentMode !== "default" && body.multiAgentMode !== "v2" && body.multiAgentMode !== "v2-plaintext") {
+      return jsonResponse({ error: "body.multiAgentMode must be 'v1', 'default', 'v2', or 'v2-plaintext'" }, 400);
     }
     if (wantsKeepNative && typeof body.keepNativeChatGptOnV1 !== "boolean") {
       return jsonResponse({ error: "body.keepNativeChatGptOnV1 must be a boolean" }, 400);
@@ -367,25 +377,37 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     if (wantsAdvisoryAck && typeof body.multiAgentSurfaceAdvisoryAcknowledged !== "boolean") {
       return jsonResponse({ error: "body.multiAgentSurfaceAdvisoryAcknowledged must be a boolean" }, 400);
     }
-    const mode = wantsMode ? body.multiAgentMode as "v1" | "default" | "v2" : undefined;
+    if (wantsPlaintextAck && typeof body.plaintextAgentMessagesAcknowledged !== "boolean") {
+      return jsonResponse({ error: "body.plaintextAgentMessagesAcknowledged must be a boolean" }, 400);
+    }
+    const mode = wantsMode ? body.multiAgentMode as "v1" | "default" | "v2" | "v2-plaintext" : undefined;
     const readModePlan = () => {
       const effectiveMode = mode ?? config.multiAgentMode ?? "default";
       const effectiveKeepNative = wantsKeepNative
         ? body.keepNativeChatGptOnV1 === true
         : config.keepNativeChatGptOnV1 === true;
       const hybridPinActive = effectiveMode === "v2" && effectiveKeepNative;
-      const modeFlag = mode === "v2" ? !hybridPinActive : mode === "v1" ? false : undefined;
+      const pinDrivenV2 = hybridPinActive || effectiveMode === "v2-plaintext";
+      const pinConflict = effectiveMode === "v2-plaintext"
+        ? "body.enabled=true conflicts with multiAgentMode 'v2-plaintext': Codex's global multi_agent_v2 override outranks catalog pins"
+        : "body.enabled=true conflicts with keepNativeChatGptOnV1: Codex's global multi_agent_v2 override outranks catalog pins";
+      const modeFlag = mode === "v2" ? !hybridPinActive : mode === "v1" || mode === "v2-plaintext" ? false : undefined;
       if (wantsFlag && modeFlag !== undefined && body.enabled !== modeFlag) {
         return jsonResponse({
-          error: hybridPinActive
-            ? "body.enabled=true conflicts with keepNativeChatGptOnV1: Codex's global multi_agent_v2 override outranks catalog pins"
+          error: pinDrivenV2
+            ? pinConflict
             : `body.enabled conflicts with multiAgentMode '${mode}'`,
         }, 400);
       }
-      if (wantsFlag && body.enabled === true && hybridPinActive) {
+      if (wantsFlag && body.enabled === true && pinDrivenV2) {
         return jsonResponse({
-          error: "body.enabled=true conflicts with keepNativeChatGptOnV1: Codex's global multi_agent_v2 override outranks catalog pins",
+          error: pinConflict,
         }, 400);
+      }
+      // Recheck consent against the admitted state as well as the initial snapshot.
+      if (mode === "v2-plaintext" && resolveMultiAgentMode(config) !== "v2-plaintext"
+          && body.plaintextAgentMessagesAcknowledged !== true) {
+        return jsonResponse({ error: "body.multiAgentMode 'v2-plaintext' requires plaintextAgentMessagesAcknowledged === true: native v2 collaboration messages are delivered as plaintext on the canonical ChatGPT route" }, 400);
       }
       const requestedFlag = wantsFlag
         ? body.enabled as boolean
@@ -457,6 +479,9 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
           else config.multiAgentMode = mode;
           saveConfigPreservingClaudeCode(config);
           warnings.push(`Multi-agent mode set to '${mode}'. Applies to new sessions.`);
+          if (mode === "v2-plaintext" && config.keepNativeChatGptOnV1 === true) {
+            warnings.push("keepNativeChatGptOnV1 is stored but inactive under 'v2-plaintext': ChatGPT-native rows are pinned on v2.");
+          }
         }
         if (wantsKeepNative) {
           if (body.keepNativeChatGptOnV1 === true) config.keepNativeChatGptOnV1 = true;
@@ -465,6 +490,8 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
           warnings.push(body.keepNativeChatGptOnV1 === true
             ? (effectiveMode === "v2"
               ? "ChatGPT-native models stay on v1 while other models use v2. Applies to new sessions."
+              : effectiveMode === "v2-plaintext"
+              ? "keepNativeChatGptOnV1 is stored but inactive under 'v2-plaintext': ChatGPT-native rows are pinned on v2. Applies to new sessions."
               : "keepNativeChatGptOnV1 is stored but inactive until multi-agent mode is v2. Applies to new sessions.")
             : "ChatGPT-native models follow the selected v1/v2/base surface. Applies to new sessions.");
         }
@@ -527,12 +554,14 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       multiAgentMode: resolveMultiAgentMode(config),
       multiAgentSurfaceAdvisory: multiAgentSurfaceAdvisory(config),
       keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
+      plaintextAgentMessagesEnabled: isPlaintextV2AgentMessagesEnabled(config),
+      supportsPlaintextV2Mode: true,
       agentsEnabled: getAgentsEnabled(),
       agentsMaxDepth: getAgentsMaxDepth(),
       subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
       multiAgentModeHintText: getMultiAgentModeHintText(),
       multiAgentModeHintRecommendation: MULTI_AGENT_MODE_HINT_RECOMMENDATION,
-      agentsMaxDepthAppliesWhenV2Disabled: !enabled,
+      agentsMaxDepthAppliesWhenV2Disabled: !enabled && resolveMultiAgentMode(config) !== "v2-plaintext",
       warnings,
       catalogRefresh,
     });
@@ -728,6 +757,11 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       }
       if (nextSyncCodexSubagentDefaults && nextEffort !== undefined && !isCodexReasoningEffort(nextEffort)) {
         return jsonResponse({ error: "syncCodexSubagentDefaults requires a supported Codex reasoning effort" }, 400);
+      }
+      if (nextSyncCodexSubagentDefaults) {
+        const issue = agyAcpUnattendedTargetIssues({ ...config, injectionModel: nextModel, syncCodexSubagentDefaults: true })
+          .find(({ path }) => path[0] === "injectionModel");
+        if (issue) return jsonResponse({ error: `injectionModel: ${issue.message}` }, 400);
       }
 
       config.multiAgentGuidanceEnabled = nextEnabled;
@@ -1121,9 +1155,9 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
         const { claudeInterceptProxyPort } = await import("../../claude/intercept/runtime");
         const configured = claudeInterceptProxyPort(config, config.port ?? 10100);
         if (started.state.proxyPort !== configured) return jsonResponse({ ok: false, code: "port_mismatch", bound: started.state.proxyPort, configured }, 409);
-        const { setIntegrationEnabled } = await import("../../codex/desired-state");
+        const { setHomeIntegrationEnabled } = await import("../../routing/home-route-capture");
         const desired = await withFirstPartySecretsSettled(configRoot(), () => {
-          const result = setIntegrationEnabled("claude-desktop", true);
+          const result = setHomeIntegrationEnabled("claude-desktop", true);
           if (result.ok) mirrorDesiredEnabledOntoSnapshot(config, "claude-desktop", true);
           return result;
         });
@@ -1212,9 +1246,10 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
           }
         });
       }
-      const { setIntegrationEnabled, claudeDesktopIntegrationEnabled } = await import("../../codex/desired-state");
+      const { claudeDesktopIntegrationEnabled } = await import("../../codex/desired-state");
+      const { setHomeIntegrationEnabled } = await import("../../routing/home-route-capture");
       const desired = await settleConfigRoot(configRoot(), () => {
-          const result = setIntegrationEnabled("claude-desktop", true);
+          const result = setHomeIntegrationEnabled("claude-desktop", true);
           if (result.ok) mirrorDesiredEnabledOntoSnapshot(config, "claude-desktop", true);
           return result;
         });
@@ -1500,37 +1535,11 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       return jsonResponse({ error: code, code }, code === "settings_changed" ? 409 : 500);
     }
   }
+  if (url.pathname.startsWith("/api/claude-code/first-party/")) return (await import("./claude-first-party-preview-routes")).handleClaudeFirstPartyPreviewRoute(ctx);
   if (url.pathname === "/api/claude-code" && req.method === "GET") {
     const models = await fetchAllModels(config);
-    const { listCatalogNativeSlugs } = await import("../../codex/catalog");
-    const { claudeCodeAlias, claudeCodeNativeAlias } = await import("../../claude/alias");
-    const { buildClaudeContextWindows, effectiveModelEnv, nativeClaudePassthroughFor } = await import("../../claude/context-windows");
+    const { buildClaudeContextWindows, effectiveModelEnv, nativeClaudePassthroughFor, probeClaudeCodeVersionForTierFill } = await import("../../claude/context-windows");
     const { visibleNativeSlugs } = await import("../../codex/catalog");
-    const disabled = new Set(config.disabledModels ?? []);
-    const isDisabled = (provider: string, id: string) =>
-      [...disabled].some(stored => slugEquals(stored, provider, id));
-    const available = [
-      ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
-      // Claude-facing values stay RAW native selectors (resolved inbound via routeModel,
-      // which accepts the raw full-slash form); only the disabled check goes tolerant.
-      ...models.filter(m => !isDisabled(m.provider, m.id)).map(m => `${m.provider}/${m.id}`),
-    ];
-    const aliases: { id: string; display_name: string }[] = [];
-    // Resolved once, not per model: with the global fast switch on, Claude Code discovers the
-    // fast identity, so the dashboard must list the same id rather than the umbrella one.
-    const cursorFastIdFor = config.fastMode === true
-      ? (await import("../../adapters/cursor/catalog")).cursorFastIdFor
-      : undefined;
-    for (const slug of listCatalogNativeSlugs()) {
-      // Readable CLI-surface alias with hash fallback (devlog 050 / audit 051 #2) —
-      // the same shared helper the /v1/models ?ids=cli path uses.
-      if (!disabled.has(slug)) aliases.push({ id: claudeCodeNativeAlias(slug), display_name: `${slug} (native)` });
-    }
-    for (const m of models) {
-      if (isDisabled(m.provider, m.id)) continue;
-      const listedId = (m.provider === "cursor" ? cursorFastIdFor?.(m.id) : undefined) ?? m.id;
-      aliases.push({ id: claudeCodeAlias(m.provider, listedId), display_name: `${listedId} (${m.provider})` });
-    }
     // Auto is a RESOLUTION, recomputed per request — never stored state. Detection is
     // daemon-side, so it cannot see a key exported only in the user's terminal; the
     // GUI labels the badge with detectionScope for exactly that reason.
@@ -1546,6 +1555,39 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       nativeContextLimits(config),
       nativeClaudePassthroughFor(config.claudeCode, resolvedAuthMode.markerMode),
     );
+    const launchState = {
+      enabled: config.claudeCode?.enabled !== false,
+      forceAvailable: [...visibleNativeSlugs(config), ...filterCatalogVisibleModels(models, config).map(catalogModelSlug)],
+      contextWindows,
+    };
+    // The launcher probes its own CLI. Only the dashboard snapshot needs the daemon's version.
+    if (url.searchParams.get("view") === "launch") return jsonResponse(launchState);
+    const { listCatalogNativeSlugs } = await import("../../codex/catalog");
+    const { claudeCodeAlias, claudeCodeNativeAlias } = await import("../../claude/alias");
+    const disabled = new Set(config.disabledModels ?? []);
+    const availableRouted = models.filter(m => !hasRoutedSlug(disabled, m.provider, m.id));
+    const available = [
+      ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
+      // Claude-facing values stay RAW native selectors (resolved inbound via routeModel,
+      // which accepts the raw full-slash form); only the disabled check goes tolerant.
+      ...availableRouted.map(m => `${m.provider}/${m.id}`),
+    ];
+    const aliases: { id: string; display_name: string }[] = [];
+    // Resolved once, not per model: with the global fast switch on, Claude Code discovers the
+    // fast identity, so the dashboard must list the same id rather than the umbrella one.
+    const cursorFastIdFor = config.fastMode === true
+      ? (await import("../../adapters/cursor/catalog")).cursorFastIdFor
+      : undefined;
+    for (const slug of listCatalogNativeSlugs()) {
+      // Readable CLI-surface alias with hash fallback (devlog 050 / audit 051 #2) —
+      // the same shared helper the /v1/models ?ids=cli path uses.
+      if (!disabled.has(slug)) aliases.push({ id: claudeCodeNativeAlias(slug), display_name: `${slug} (native)` });
+    }
+    for (const m of availableRouted) {
+      const listedId = (m.provider === "cursor" ? cursorFastIdFor?.(m.id) : undefined) ?? m.id;
+      aliases.push({ id: claudeCodeAlias(m.provider, listedId), display_name: `${listedId} (${m.provider})` });
+    }
+    const claudeCodeVersion = await probeClaudeCodeVersionForTierFill(config.claudeCode, contextWindows);
     const webSearchOverride = config.claudeCode?.webSearchSidecar;
     const visionOverride = config.claudeCode?.visionSidecar;
     const helperParent = config.claudeCode?.model?.includes("/") ? config.claudeCode.model.split("/")[0] : undefined;
@@ -1562,7 +1604,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const eligible = claudeInterceptEnabled(config);
     const sharedProxy = readFirstPartyProxyStatus(config, bound?.proxyPort ?? null);
     return jsonResponse({
-      enabled: config.claudeCode?.enabled !== false,
+      ...launchState,
       cliFirstParty: config.claudeCode?.cliFirstParty === true,
       cliFirstPartyApplied: config.claudeCode?.cliFirstParty === true && sharedProxy === "live",
       desktopFirstParty: desired.desktop,
@@ -1598,6 +1640,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       contextAccounting: config.claudeCode?.contextAccounting === "200k" ? "200k" : "1m",
       blockedSkills: config.claudeCode?.blockedSkills ?? null,
       injectAgents: config.claudeCode?.injectAgents !== false,
+      nativePassthrough: config.claudeCode?.nativePassthrough !== false,
       sidecarPools: {
         webSearchSidecar: sidecarAnthropicPoolOptions(config, { ...config.webSearchSidecar, ...webSearchOverride }, helperParent),
         visionSidecar: sidecarAnthropicPoolOptions(config, { ...helperVision, backend: helperVisionBackend }, helperParent),
@@ -1609,9 +1652,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
         ? { visionSidecar: { enabled: visionOverride.enabled, backend: visionOverride.backend, model: visionOverride.model, ...(visionOverride.anthropicInstance ? { anthropicInstance: visionOverride.anthropicInstance } : {}) } }
         : {}),
       fastMode: config.fastMode,
-      forceAvailable: [...visibleNativeSlugs(config), ...filterCatalogVisibleModels(models, config).map(catalogModelSlug)],
-      contextWindows,
-      effectiveModelEnv: effectiveModelEnv(config.claudeCode, contextWindows),
+      effectiveModelEnv: effectiveModelEnv(config.claudeCode, contextWindows, undefined, claudeCodeVersion),
       available,
       aliases,
       port: config.port,
@@ -1632,14 +1673,15 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       return prototype === Object.prototype || prototype === null;
     };
     if (!isPlainObject(parsedBody)) return jsonResponse({ error: "body must be an object" }, 400);
-    const body = parsedBody as { enabled?: unknown; cliFirstParty?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; classifierModel?: unknown; classifierFallbacks?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; contextAccounting?: unknown; blockedSkills?: unknown; injectAgents?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
+    const body = parsedBody as { enabled?: unknown; cliFirstParty?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; classifierModel?: unknown; classifierFallbacks?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; contextAccounting?: unknown; blockedSkills?: unknown; injectAgents?: unknown; nativePassthrough?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
     if (body.cliFirstParty !== undefined && typeof body.cliFirstParty !== "boolean")
       return jsonResponse({ error: "cliFirstParty must be a boolean" }, 400);
     if (body.cliFirstParty !== undefined && Object.keys(body).length !== 1)
       return jsonResponse({ error: "cliFirstParty must be sent alone", code: "cli_first_party_not_alone" }, 400);
     if (body.cliFirstParty !== undefined) {
       const { claudeInterceptEnabled, claudeInterceptProxyPort, getClaudeInterceptState } = await import("../../claude/intercept/runtime");
-      const { captureDesktopFirstPartyRollback, inspectDesktopFirstParty, observeClaudeDesktopMode, resolveClaudeDesktopMode, withFirstPartySecretsSettled } = await import("../../claude/desktop-first-party");
+      const { captureDesktopFirstPartyRollback, inspectDesktopFirstParty, observeClaudeDesktopMode, withFirstPartySecretsSettled } = await import("../../claude/desktop-first-party");
+      const { claudeFirstPartyTransition } = await import("../../claude/first-party-transition");
       const { firstPartyDesired, readFirstPartyProxyStatus, reconcileClaudeFirstPartySettings } = await import("../../claude/first-party-settings");
       const { commitClaudeCodeBlock } = await import("../../claude/claude-code-block");
       let bound = (deps.getClaudeInterceptState ?? getClaudeInterceptState)();
@@ -1679,25 +1721,9 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
             refusal: { error: `Claude intercept port mismatch (configured ${persistedPort}, bound ${bound?.proxyPort ?? "none"})`,
               code: "port_mismatch" as const, bound: bound?.proxyPort, configured: persistedPort } } };
         }
-        const before = structuredClone(persisted);
-        const previous = { present: Object.hasOwn(persisted.claudeCode ?? {}, "cliFirstParty"),
-          value: persisted.claudeCode?.cliFirstParty === true };
-        // Pin the mode Desktop resolves to *after* this mutation: while cliFirstParty is set the
-        // shared env is suppressed as Desktop evidence, so an opt-out observed with the flag still
-        // on would pin gateway and disconnect a Desktop install that predates the marker.
-        const observedBefore = structuredClone(before);
-        if (!body.cliFirstParty) delete observedBefore.claudeCode?.cliFirstParty;
-        const pinnedMode = persisted.claudeCode?.desktopMode === undefined
-          ? resolveClaudeDesktopMode(before, observeClaudeDesktopMode(observedBefore)) : undefined;
-        const nextBlock = { ...(persisted.claudeCode ?? {}) };
-        if (body.cliFirstParty) nextBlock.cliFirstParty = true;
-        else delete nextBlock.cliFirstParty;
-        if (pinnedMode) nextBlock.desktopMode = pinnedMode;
+        // Shared with GET /api/claude-code/first-party/preview, so the preview shows this transition.
+        const { nextBlock, previous, pinnedMode, retainedAmbiguous } = claudeFirstPartyTransition(persisted, body.cliFirstParty === true);
         commitClaudeCodeBlock(persisted, nextBlock);
-        // An opt-out that pins first-party from the shared env cannot tell whether that env was
-        // Desktop's or a hand-configured CLI-only one; the env is retained (Desktop keeps its
-        // route) and the caller is warned so it can pin gateway explicitly to release it.
-        const retainedAmbiguous = !body.cliFirstParty && previous.value && pinnedMode === "first-party";
         return { changed: true, value: { claudeCode: structuredClone(persisted.claudeCode), previous, pinnedMode, retainedAmbiguous } };
         });
         if (outcome.status !== "unavailable" && !("refusal" in outcome.value)) {
@@ -1759,6 +1785,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
         && readFirstPartyProxyStatus(config, bound?.proxyPort ?? null) !== "none";
       await syncClaudeAgentDefsBestEffort();
       return jsonResponse({ ok: true, enabled: config.claudeCode?.enabled !== false,
+        nativePassthrough: config.claudeCode?.nativePassthrough !== false,
         cliFirstParty: body.cliFirstParty,
         warnings: [
           ...(committed.retainedAmbiguous ? ["shared_proxy_retained"] : []),
@@ -1775,7 +1802,6 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const webEvidence = isPlainObject(webPatch) && (webPatch.model !== undefined || webPatch.backend !== undefined || webPatch.anthropicInstance !== undefined)
       ? await webSearchCandidateRows({ ...config, webSearchSidecar: { ...config.webSearchSidecar, ...sidecarSettingsAfterPatch(config.claudeCode?.webSearchSidecar, webPatch) } }) : undefined;
     const { commitClaudeCodeBlock } = await import("../../claude/claude-code-block");
-    const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     const refusal = await settleConfigRoot(configRoot(), () => {
       if ((visionEvidence || webEvidence) && JSON.stringify(config) !== evidenceState) return jsonResponse({ error: "Sidecar validation state changed during discovery", code: "config_changed" }, 409);
       const instanceError = anthropicSidecarPatchError(config, body, true);
@@ -1843,14 +1869,20 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       const prepared = prepareClaudeCodePatch(config, body);
       if (prepared instanceof Response) return prepared;
       const { next, nextFastMode } = prepared;
-      // Stamps the auth-mode migration sentinel on EVERY persist of this block. Without it,
-      // choosing Auto (which DELETES authMode) or merely toggling Claude on (App.tsx PUTs
-      // `{enabled}` alone and creates the block) would be converted into a sticky manual
-      // subscription by the next startServer, with no way back.
-
-      if (body.fastMode !== undefined) config.fastMode = nextFastMode;
-      commitClaudeCodeBlock(config, next);
-      save(config);
+      // The Claude toggle is this Home's alone: freeze what Children inherit before it moves, and
+      // refuse before anything changes when that cannot be saved.
+      const captureRefused = body.enabled !== undefined ? captureHomeRouteDefaultsBeforeHomeSwitch() : null;
+      if (captureRefused) return jsonResponse({ error: captureRefused.message, code: "route_intent_unavailable" }, captureRefused.retryable ? 409 : 500);
+      const rollback = captureConfigTopLevelRollback(config, body.fastMode === undefined
+        ? ["claudeCode"] : ["claudeCode", "fastMode"]);
+      try {
+        if (body.fastMode !== undefined) config.fastMode = nextFastMode;
+        commitClaudeCodeBlock(config, next);
+        saveConfigPreservingClaudeCode(config);
+      } catch (error) {
+        if (!(error instanceof ConfigWritePublishedError)) rollback();
+        throw error;
+      }
       return null;
     });
     if (refusal) return refusal;
@@ -1872,7 +1904,8 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     // Keep the file-backed live registry symmetric: OFF prunes immediately, while
     // ON and config changes restore definitions without requiring a restart.
     await syncClaudeAgentDefsBestEffort();
-    return jsonResponse({ ok: true, enabled: config.claudeCode?.enabled !== false, warnings });
+    return jsonResponse({ ok: true, enabled: config.claudeCode?.enabled !== false,
+      nativePassthrough: config.claudeCode?.nativePassthrough !== false, warnings });
   }
   return null;
 }

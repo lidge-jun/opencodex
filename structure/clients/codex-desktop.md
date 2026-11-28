@@ -6,7 +6,9 @@
 endpoint. `src/codex/app-server-restart-service.ts` also requests a full quit and relaunch of the
 desktop app whenever a root shell is running, because the picker is built at shell launch and an
 app-server restart cannot refresh it. A shell at or before the mtime of the catalog
-`config.toml` binds through `model_catalog_json` is provably stale. A newer shell is still
+`config.toml` binds through `model_catalog_json` is provably stale. Picker freshness resolves
+the binding relative to that config file, including the basename shared by Windows and WSL.
+A newer shell is still
 `unknown`: its start time cannot prove which binding it loaded, because an earlier sync may
 have rebound an already-existing, byte-identical catalog. An unbound config or an unreadable
 shell list or catalog mtime is unknown; an unreadable shell start time is unknown unless another
@@ -50,6 +52,8 @@ loopback URL shape, rechecks the discovered package manifest, activates with
 argument. Normal launches keep the existing AppsFolder route. A standalone compatibility
 launch refuses an already running app; it never quits an app or installs a watcher.
 Activation reads the final non-empty JSON line after trimming a BOM or preceding warnings. Invalid output and executor failures remain unverified, without automatic relaunch retries.
+The process probe and activation each use a fixed PowerShell script. They decode package inputs
+from base64-encoded UTF-8 JSON in the child environment.
 `tests/clients/desktop-compatibility-launch.test.ts` covers restart integration and the
 real Windows parser/COM service without launching the user's app.
 
@@ -87,21 +91,48 @@ in-process, and the helper's cmdlet-free script on every platform.
 `src/server/management/desktop-compatibility-routes.ts` exposes the authenticated
 `/api/codex/desktop-compatibility/certificate` setup endpoint. GET is read-only public metadata and OS-trust inspection;
 it does not decrypt a key, create a file, acquire a lease or register trust. POST
-uses `src/server/management/desktop-compatibility-authorization.ts` to require an
-operator-paired GUI session on trusted loopback ingress and explicit confirmation.
-Trust mutations also require the exact SHA-256 fingerprint. Raw admin tokens cannot
-substitute the pairing ceremony, and automatically issued loopback sessions cannot mutate trust.
+requires a current GUI session with a Desktop-purpose grant on trusted standalone loopback ingress and explicit confirmation.
+Trust mutations also require the exact SHA-256 fingerprint. Raw admin tokens and ordinary
+pairing alone cannot supply Desktop scope. A current automatically issued loopback session can
+receive it by exchanging a valid Desktop-purpose grant; its issuance remains loopback.
+No session mutates before that step-up succeeds, so the grant carries the consent rather than the
+session's issuance mode. Consuming it requires the current session's own origin, CSRF token and
+loopback listener, and a forwarded or proxied request is refused outright. The exchange refuses a
+remembered-admin session before it reads the body: that cookie carries the durable admin token, so
+it proves possession rather than the operator's presence at this machine. A Desktop grant never
+mints pairing, a general session or data-key disclosure authority.
 The certificate response carries request-specific `mutationAuthorized` metadata. The local
-dashboard reuses `gui/src/connect-pairing.tsx` with a machine-plane handoff, validates that
-authority through a read-only certificate request, and commits the session before refreshing
-or enabling actions. Pairing never submits a certificate/runtime mutation or changes auto-start.
+dashboard uses `gui/src/pages/desktop-compatibility-authorization.tsx` for the Desktop grant
+exchange through `authorizeDesktop` in `gui/src/desktop-compatibility-api.ts`: POST consumes the
+grant on `/api/codex/desktop-compatibility/authorization`, then GET on that same endpoint verifies
+Desktop scope. The existing browser session and credentials are retained before refreshing status
+and enabling actions. Authorization never submits a certificate/runtime mutation or changes auto-start.
+Both dashboard editions mount that same component: the classic overlay in
+`gui/classic/src/pages/codex-desktop-compatibility.tsx` resolves the step-up from `gui/src` through the
+overlay plugin, so `/classic/` offers the Desktop grant rather than the ordinary pairing form, which
+cannot issue Desktop scope. Either edition treats a `desktop_authorization_required` refusal of a
+certificate, runtime or startup-setting write as lost scope: the open confirmation closes, the
+actions and the auto-start switch disable, and the step-up becomes available again.
 Machine-session changes discard pending consent and disable actions until fresh authority is read.
 The startup-setting child synchronously aborts its own in-flight operation on a machine-session
 change and rejects late completions by generation. An interrupted preference operation stays
 uncertain until a fresh settings GET, independently of refreshed certificate authorization.
-`gui/tests/desktop-compatibility-panel.test.tsx`, `gui/tests/local-link-pairing.test.ts` and
-`tests/server/management-desktop-compatibility-routes.test.ts` cover the UI, credential plane
-and real loopback-versus-paired session boundary.
+`gui/tests/desktop-compatibility-panel.test.tsx`, `gui/tests/classic-desktop-compatibility-authorization.test.tsx`
+(which resolves the page through the classic overlay, not either file directly) and
+`tests/server/management-desktop-compatibility-routes.test.ts` cover the UI and real
+Desktop grant boundary for both loopback-issued and locally paired sessions.
+
+`ocx gui pair --desktop --origin <dashboard-origin>` uses the attested runtime and private-home
+one-use intent through a separately signed pairing path. `/api/codex/desktop-compatibility/authorization`
+consumes that purpose only for the existing current browser session. After common management admission,
+GET returns HTTP 200 with `ok: true`, `supported`, `authorized` and `rememberedSession`, including absent or unsupported
+Desktop scope. Both editions hide the grant form for a remembered session and direct the operator to a private browser window on the same local origin; its fresh loopback session has separate credentials. POST returns HTTP 200 with `ok: true`, `authorized: true` on success, 400 for malformed
+JSON/body shape, or 403 `desktop_authorization_required` for a refused grant exchange.
+The scope expires after at most five minutes without renewal and disappears with session revocation,
+eviction, restart or an observed role/listener change. It changes neither pairing issuance nor key
+disclosure authority. Certificate, runtime and startup-setting POSTs revalidate it before reading
+the body and after body/import awaits immediately before their service calls. An admitted operation
+finishes even if its scope expires while the service runs. Hub and connected-client writes stay refused.
 
 `src/codex/desktop-compatibility/certificate-service.ts` serializes setup and refuses
 busy operations. Only prepare may generate a key. Trust/removal load existing validated
@@ -127,16 +158,17 @@ compatibility integration owner; it currently has an authenticated HTTP contract
 
 `src/codex/desktop-compatibility/runtime.ts` owns an explicit, default-off runtime.
 Construction and status do not start listeners, load credentials or enroll trust. Start
-loads an existing DPAPI key, verifies CurrentUser trust and a fresh native file-login
-identity, then creates only loopback TLS/CONNECT/PAC listeners. The currently assessed
-Windows package version is declared in the module. Unknown builds refuse activation.
-The assessed family/publisher, full package basename and App entry must also agree;
-matching the version prefix alone does not qualify a foreign package identity.
+checks routing and package proof first, then loads an existing DPAPI key, verifies CurrentUser
+trust and a fresh native file-login identity before creating loopback TLS/CONNECT/PAC listeners.
+Admission requires a healthy
+current-user Microsoft Store package with the expected Codex family, package publisher, basename
+and App entry. The package full name includes the version and participates in the trial identity.
 HTTP, identity verification and upgraded sockets use the explicit desktop egress policy
 described in the [transport inventory](../transports/inventory.md#native-desktop-proxy-egress).
 Invalid proxy routes refuse rather than falling back to direct egress.
 Native routing verification binds both the actual listener address family and port; the companion
 is IPv4-only. Ambiguous localhost aliases cannot qualify, and listener identity changes revoke observation.
+It accepts the native `/v1` base path and the `/backend-api/codex` alias when experimental context management is enabled.
 
 `relay-listener.ts` forwards HTTP with the existing upstream-header filter, cookies and
 streaming bodies, and pipes upgraded TLS sockets without decoding their frames. The
@@ -198,28 +230,53 @@ OpenCodex preferences, TOML formatting, object-key order and the native root `mc
 table do not invalidate the routing snapshot. Desktop refreshes that tool-transport table
 after launch; all other native fields, including unknown ones and selected profiles, remain bound.
 It does not claim knowledge of project-local overrides or a conversation's selected model.
-Each record that would be corrected checks routing and the assessed installed build asynchronously,
-then rechecks account identity and trial generation before emitting it. `installed-build.ts` uses a
-compatibility-only current-user package query that reads the registered manifest's actual App and
-fixed ChatGPT.exe entry in the installed package's app directory, binds its publisher/name/version to the exact official family,
-and refuses missing/reparse executable facts. It coalesces concurrent probes without caching a positive
-result across requests, and aborts/reaps its bounded child before shutdown completes. Observe and
-unchanged responses do not query Windows. Background refresh runs once a minute in Observe,
-every ten seconds during Apply, and stops probing after the safety deadline. Failed checks
-disarm Apply. Native update/routing failures are
-public diagnostic codes; originals continue to relay and no app/config repair is automatic.
-The package proof's manifest digest and canonical executable metadata stay private. An observed
-identity change or failed proof invalidates trial generation, prior exhaustion and outputs before
-another correction; a supported-version A-to-B-to-A transition cannot revive old consent. Later
-success requires a new original exhaustion and explicit account-wide consent with the unchanged
-maximum three-minute trial. Stop/start replaces the observation context, and old probe completions
-cannot affect its replacement. Identical observed registration/file metadata cannot detect every
-same-version reinstall; this is not continuous file/process or signature attestation.
-Every volume-root-to-file ancestor is checked for reparse points before manifest/file consumption
-and rechecked before proof publication. FullName is lexical and is not a held-handle canonical-path
-proof; the bounded before/after metadata walk does not exclude a transient replace-and-restore
-between observations. Such unobserved replacement remains outside this observation contract. The launcher,
-exact version allowlist, GET/SSE surface and default-off behavior remain unchanged.
+Each record that would be corrected checks routing and the proof-verified installed build asynchronously,
+then rechecks account identity and trial generation before emitting it. `installed-build.ts` uses
+`src/codex/desktop-compatibility/windows-package-proof.ts` for native proof. Windows PowerShell 5.1
+looks up the exact installed package for the current user, requires the Store signature kind and
+healthy deployment status, and calls
+[Package.VerifyContentIntegrityAsync](https://learn.microsoft.com/en-us/uwp/api/windows.applicationmodel.package.verifycontentintegrityasync)
+to verify the installed contents through Windows' signed MSIX package integrity mechanism
+([AppxBlockMap.xml and AppxSignature.p7x](https://learn.microsoft.com/en-us/windows/msix/package/signing-package-overview#package-integrity-enforcement)).
+It independently requires Windows Authenticode status Valid for the expected OpenAI code-signing
+subject on `ChatGPT.exe`. The manifest and executable stay open with read-only sharing during
+these checks; the manifest's application entry and identity are read only after its path is
+validated and its handle is held, before the content and signer checks. A failed proof still
+reports the observed package version. The probe compares their handle-resolved paths to the
+registered paths, checks their ancestors for reparse points, and hashes their bytes with SHA-256
+from the held handles. Any
+unavailable, failed or inconsistent check refuses admission. The probe coalesces concurrent
+checks, refreshes proof on each new check and aborts and reaps its bounded child on shutdown.
+Background refresh runs once a minute in Observe, every ten seconds during Apply and stops at
+the safety deadline. Failed checks disarm Apply. Originals continue to relay.
+
+The package name, digests, signer thumbprint and path evidence stay private. An observed identity
+change or failed proof invalidates trial generation, prior exhaustion and outputs before another
+correction. A package-identity A-to-B-to-A transition also revokes the old consent. Later success
+requires a new original exhaustion observation and explicit account-wide consent. Stop/start
+replaces the observation context and fences off late completions.
+
+Both compatibility launch entry points pass the approved build to the activation command.
+Runtime-owned launch runs process discovery and full activation proof in asynchronous children,
+leaving PAC and relay requests serviceable. Concurrent launch requests share the owned pending
+child, which is bound to the build revision it launched. Stop aborts and drains it before
+releasing runtime ownership. Completion rechecks the runtime, then initiates cleanup after a
+refused or indeterminate activation even if the build revision moved meanwhile, and only then
+refuses success to any caller whose verified revision differs from the launched one or from the
+current probe. The synchronous managed-restart adapter retains its separate existing execution
+contract.
+The managed restart also checks the captured runtime generation and build revision after the stop
+ladder. Before activation, the command rechecks the live registration and the full proof against
+the approved package while holding the two files open. Windows activates by AUMID. Readback uses
+one process handle to check the exact package full name and kernel-reported image path, then
+checks the PAC argument and the held image file's SHA-256 before returning success. A refused or
+indeterminate activation unbinds launch ownership and invalidates the account-wide trial and
+its exhaustion observation before initiating listener and socket cleanup. Closure is confirmed
+only when cleanup succeeds; a failure retains `cleanup-required` until Stop succeeds. A process may still start.
+The runtime leaves any returned PID alone. A fresh runtime start returns to Observe and requires
+another eligible exhaustion record and explicit Apply consent.
+The checks rely on Windows deployment, filesystem and code-signing trust. The executable hash
+covers the on-disk image, and verification is bounded to the described probe and launch points.
 Each completed check also publishes a `buildAssessment` record on runtime status holding only
 `assessedVersion`, `observedVersion`, `verified` and `completedAt`. A status read never starts
 a probe, a runtime without a real probe omits the field, and an aborted or in-flight check never
@@ -228,10 +285,12 @@ routing failures. A newly completed failed probe supersedes that prior observati
 metadata is diagnostic only and never authorizes a new start or Apply. `observedVersion` is reported only when the discovered
 package matches the assessed family, App entry and canonical basename, so a foreign or unidentifiable
 install reports `null` rather than raw discovery data, an identified newer build reports its own
-version with `verified` false, and a failed or missing read is unverified rather
-than a stale success. The allowlist stays pinned to one exact package version because the
-correction contract is verified per build, which is why a newer installed client is reported
-unverified instead of treated as covered.
+version once its official package proof completes, and a failed or missing read is unverified rather
+than a stale success. Admission binds the official package proof rather than one exact
+version: a verified newer client reports its own observed version next to `assessedVersion`,
+which remains the baseline holding native acceptance evidence. The changed package identity
+still revokes an earlier trial before another correction, and per-build consumer coverage
+stays a separate receipt outside this verdict.
 
 `runtime-ownership.ts` serializes certificate mutations against active/starting runtimes.
 The existing sibling guard blocks all runtime mutations in sibling instances. Core shutdown
@@ -239,9 +298,10 @@ registration occurs only after successful startup. Cleanup stops owned listeners
 a failed cleanup retains ownership and reports `cleanup-required`, never a false `off` state.
 
 `src/server/management/desktop-compatibility-runtime-routes.ts` provides GET status and
-operator-paired local GUI-session POST start/stop/observe/apply/launch, with explicit confirmation and
-separate account-wide consent for apply. No setting, login, quota, automatic startup or
-dashboard preference is changed by this API. The separate startup preference below never saves Apply.
+current local GUI-session POST start/stop/observe/apply/launch with Desktop scope, explicit confirmation and
+separate account-wide consent for apply. That session is refused until it consumes a
+Desktop-purpose grant. No setting, login, quota, automatic startup or dashboard preference is
+changed by this API. The separate startup preference below never saves Apply.
 The status CLI verb remains deferred to this integration owner.
 
 ## Dashboard controls
@@ -251,7 +311,10 @@ The status CLI verb remains deferred to this integration owner.
 OpenCodex client mode does not offer these controls because its local listener deliberately
 does not admit durable machine mutations through a dashboard bootstrap session.
 
-`gui/src/desktop-compatibility-api.ts` projects public status and issues one POST per action.
+`gui/src/desktop-compatibility-api.ts` projects public status and issues one POST per action through
+`fetchDesktopSession` in `gui/src/api.ts`, bypassing automatic renewal, admin fallback and replay.
+`gui/src/pages/desktop-compatibility-authorization.tsx` exchanges a code once, validates Desktop scope,
+then refreshes certificate/runtime status and the startup revision. Earlier actions and consent are discarded.
 Fingerprint-bound trust/renew/removal and the account-wide trial require separate acknowledgement.
 Observe/start/stop/launch follow explicit button actions. No action is replayed after an uncertain
 response; a fresh status read is required. Changing the API target remounts the panel and discards
@@ -260,7 +323,13 @@ reads when a mutation result is published. Certificate status is not repeatedly 
 status polls only while the tab is active. Consent copy exists in all locale catalogs.
 Trial consent and pending withdrawal distinguish stopped response correction from unconfirmed native cache refresh; the panel never reports cache rollback as confirmed.
 The panel offers renewal only for prepared, trusted, expired or renewal-required identities. Unknown trust permits fingerprint-verified removal but not renewal; invalid keys expose neither action.
-Running-state help distinguishes a listening service from a connected native app: ordinary app launches or updates can omit the managed PAC argument. It points to explicit package launch after the user closes Codex and states that a certificate reinstall cannot authorize an unassessed build.
+The `blockedByBuild` message describes correction as unavailable, advises Store repair or
+reinstallation after repeated verification failures, and requires a successful check, fresh
+exhaustion observation and consent for a new trial. The separate running-state `reconnectHint`
+points to explicit package launch after the user saves drafts and closes Codex. As runtime facts,
+a listening service does not establish native app connectivity, ordinary launches or updates
+can omit the managed PAC argument, and a certificate reinstall cannot authorize an unverified
+or changed build. Those limitations are not additional claims about the visible help text.
 
 ## Proxy startup preference
 

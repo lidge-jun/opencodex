@@ -21,6 +21,8 @@ export interface ProviderOutboundDependencies {
   resolveAddresses?: typeof resolvePublicAddresses;
   pinnedGet?: typeof pinnedHttpGet;
   pinnedPost?: typeof pinnedHttpPost;
+  /** Opt in to a bounded 4xx/5xx body on the pinned route. */
+  maxPinnedErrorBytes?: number;
   /**
    * Canonical-URL proof for the transparent fake-IP exception (Clash TUN mode
    * without proxy env). Injected so this transport core stays decoupled from
@@ -32,7 +34,8 @@ export interface ProviderOutboundDependencies {
   /** Recheck caller-owned credential authority after DNS and immediately before transport. */
   beforeSend?: () => boolean;
   /**
-   * Caller opt-in for a cleartext `http:` POST to a self-hosted service. Honoured only when the
+   * Caller opt-in for a cleartext `http:` POST (or credentialed GET, see `cleartextPolicy`) to a
+   * self-hosted service. Honoured only when the
    * URL host is exactly `localhost` or an address literal in the narrow local allowlist
    * (`localCleartextAddressAllowed`) AND the provider row itself sets `allowPrivateNetwork: true`
    * (a registry default does not count). Every resolved answer must stay inside the same
@@ -40,6 +43,13 @@ export interface ProviderOutboundDependencies {
    * LAN. Every other destination keeps the HTTPS-only POST gate. Defaults to refusing.
    */
   allowLocalCleartextPost?: boolean;
+  /**
+   * Which requests the cleartext rules above bind. A POST always obeys them. `"credentialed"`
+   * also holds a GET to them, for a caller whose GET carries the same credential as its POST (the
+   * video poll): HTTPS, or the local cleartext opt-in with its allowlisted answers and direct
+   * route. Without it a GET keeps the discovery behaviour, which admits `http:`.
+   */
+  cleartextPolicy?: "credentialed";
 }
 
 function ipv4Octets(address: string): number[] | null {
@@ -234,10 +244,13 @@ async function providerOutboundRequest(
   const assertSendAllowed = () => {
     if (dependencies.beforeSend?.() === false) throw new ProviderOutboundSendCancelledError("provider credential changed before send");
   };
-  const postUrl = method === "POST" ? new URL(url) : undefined;
+  // A POST, and a GET whose caller declared it carries the POST's credential, must not cross the
+  // network in cleartext. The messages name a GET explicitly so a refusal says which call failed.
+  const label = method === "POST" ? "POST" : "credentialed GET";
+  const postUrl = method === "POST" || dependencies.cleartextPolicy === "credentialed" ? new URL(url) : undefined;
   if (postUrl?.protocol !== undefined && postUrl.protocol !== "https:"
     && !localCleartextPostAllowed(provider, postUrl, dependencies)) {
-    throw new ProviderOutboundPolicyError("provider POST URL must use HTTPS");
+    throw new ProviderOutboundPolicyError(`provider ${label} URL must use HTTPS`);
   }
   // Only reachable after the narrow opt-in above admitted it.
   const localCleartextPost = postUrl?.protocol === "http:";
@@ -248,7 +261,7 @@ async function providerOutboundRequest(
   if (typeof provider.fetch === "function") {
     // An executor resolves names itself, so a cleartext POST through one must name an address.
     if (localCleartextPost && !isIP(unbracketedHostname(postUrl!))) {
-      throw new ProviderOutboundPolicyError("a cleartext provider POST through a caller-supplied executor must use an address literal");
+      throw new ProviderOutboundPolicyError(`a cleartext provider ${label} through a caller-supplied executor must use an address literal`);
     }
     // A caller-owned executor decides its own transport, so a provider egress route cannot be
     // applied to it. Refusing is the only honest answer: running the executor anyway would send
@@ -298,9 +311,10 @@ async function providerOutboundRequest(
   // proxy-only DNS answers.
   //
   // A provider route replaces that decision outright rather than combining with it. An
-  // explicit provider proxy applies even where global NO_PROXY exempts the host, because the
-  // operator named this proxy for this provider; `providers.<name>.noProxy` is the exemption
-  // that belongs to that choice, and `resolveProviderEgress` has already applied it. A
+  // explicit provider proxy is never traded for direct egress where global NO_PROXY exempts the
+  // host: `configuredOutboundFetch` refuses that send, because Bun would skip the proxy there.
+  // `providers.<name>.noProxy` is the exemption that belongs to the operator's choice, and
+  // `resolveProviderEgress` has already applied it. A
   // provider pinned to `direct` keeps the DNS-pinned transport, which reaches the peer
   // through no proxy at all — the one route on this path that needs nothing from Bun.
   const proxyApplies = egress.kind === "inherit"
@@ -310,7 +324,7 @@ async function providerOutboundRequest(
   // the DNS-failure proxy degradation below, which needs one) would carry it off-host unencrypted.
   if (localCleartextPost && proxyApplies) {
     throw new ProviderOutboundPolicyError(
-      `a cleartext provider POST cannot use an outbound proxy; add ${normalizeProxyHostname(parsed.hostname)} to NO_PROXY`,
+      `a cleartext provider ${label} cannot use an outbound proxy; add ${normalizeProxyHostname(parsed.hostname)} to NO_PROXY`,
     );
   }
   const isCanonicalUrl = dependencies.isCanonicalUrl ?? (() => false);
@@ -390,12 +404,13 @@ async function providerOutboundRequest(
   }
   if (localCleartextPost
     && !resolved.addresses.every(answer => localCleartextAddressAllowed(answer.address))) {
-    throw new ProviderOutboundPolicyError("a cleartext provider POST resolved outside the local address allowlist");
+    throw new ProviderOutboundPolicyError(`a cleartext provider ${label} resolved outside the local address allowlist`);
   }
   const requestOptions = {
     headers: init.headers,
     rejectUnauthorized: true,
     context: "provider response",
+    ...(dependencies.maxPinnedErrorBytes === undefined ? {} : { maxErrorBytes: dependencies.maxPinnedErrorBytes }),
   };
   const pinned = pickPinnedAddress(resolved.addresses);
   assertSendAllowed();

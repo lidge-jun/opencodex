@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { managementFetch as fetch } from "../helpers/management-auth";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,10 +16,15 @@ import { getAccountSet } from "../../src/oauth/store";
 import { getValidAccessSnapshotForAccount } from "../../src/oauth";
 import { ACCOUNT_IMPORT_DEADLINE_MS, ACCOUNT_IMPORT_MAX_BYTES, ACCOUNT_IMPORT_MAX_REQUEST_BYTES } from "../../src/oauth/account-import/types";
 import { handleOauthAccountRoutes } from "../../src/server/management/oauth-account-routes";
-import { createManagementSessionControl, requireManagementAuth, type ManagementAuthState } from "../../src/server/management-auth";
+import { createManagementSessionControl, managementPrincipal, requireManagementAuth, type ManagementAuthState } from "../../src/server/management-auth";
 import { handleSessionRoutes } from "../../src/server/management/session-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import { publishAccountSelection } from "../../src/lib/account-selection-events";
+import {
+  createLocalManagementReadCapability, LOCAL_MANAGEMENT_CAPABILITY_TTL_MS,
+  LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER, LOCAL_MANAGEMENT_CAPABILITY_HEADER,
+  LOCAL_MANAGEMENT_EXPECTED_PID_HEADER, LOCAL_MANAGEMENT_NONCE_HEADER,
+} from "../../src/lib/local-management-capability";
 
 function selectionSessionFixture() {
   const origin = "http://127.0.0.1:10100";
@@ -298,6 +304,42 @@ describe("multiauth accounts API", () => {
       await server.stop(true);
     }
   });
+
+  test.each(["local-read-capability", "gui-session", "admin-token"] as const)(
+    "GET projects the Anthropic organization name according to the %s principal", async principal => {
+      const path = "/api/oauth/accounts?provider=anthropic";
+      const { ctx, state } = selectionSessionFixture();
+      const url = new URL(path, ctx.req.url);
+      const headers = new Headers(ctx.req.headers);
+      if (principal === "admin-token") headers.set("x-opencodex-api-key", state.token);
+      const local = { attestationSecret: "D".repeat(43), pid: process.pid, port: Number(url.port) };
+      if (principal === "local-read-capability") {
+        headers.delete("x-opencodex-api-key");
+        const nonce = randomBytes(32).toString("base64url");
+        const expiresAt = Date.now() + LOCAL_MANAGEMENT_CAPABILITY_TTL_MS;
+        const capability = createLocalManagementReadCapability(local.attestationSecret, nonce, "GET", path, local.pid, local.port, expiresAt);
+        expect(capability).not.toBeNull();
+        headers.set(LOCAL_MANAGEMENT_CAPABILITY_HEADER, capability!);
+        headers.set(LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER, String(expiresAt));
+        headers.set(LOCAL_MANAGEMENT_EXPECTED_PID_HEADER, String(local.pid));
+        headers.set(LOCAL_MANAGEMENT_NONCE_HEADER, nonce);
+      }
+      const req = new Request(url, { headers });
+      const admitted = managementPrincipal(req, state, ctx.config, local);
+      expect(admitted).toBe(principal);
+      const authPath = join(testDir, "auth.json");
+      const auth = JSON.parse(readFileSync(authPath, "utf8"));
+      auth.anthropic.accounts[0].credential.organizationName = "Synthetic Workspace";
+      writeFileSync(authPath, JSON.stringify(auth), { mode: 0o600 });
+      const response = await handleOauthAccountRoutes({ ...ctx, req, url, principal: admitted ?? undefined });
+      expect(response?.status).toBe(200);
+      const body = await response!.json() as { accounts: Array<{ id: string; organizationName?: string }> };
+      const row = body.accounts.find(account => account.id === "aaaa1111");
+      expect(row).toBeDefined();
+      if (principal === "local-read-capability") expect(row).not.toHaveProperty("organizationName");
+      else expect(row?.organizationName).toBe("Synthetic Workspace");
+    },
+  );
 
   test("GET keeps the account label masked by default and keeps maskedLabel masked", async () => {
     saveConfig({ ...baseConfig(), privacy: { maskEmails: "false" } } as unknown as OcxConfig);
@@ -619,12 +661,12 @@ describe("multiauth accounts API", () => {
       for (const [body, code] of [
         [{ provider: "openai", format: "cockpit-tools", document: [] }, "unsupported_provider"],
         [{ provider: "unknown", format: "cockpit-tools", document: [] }, "unsupported_provider"],
-        [{ provider: "google-antigravity", format: "unknown", document: [] }, "unsupported_format"],
-        [{ provider: "google-antigravity", format: "cockpit-tools", document: { accounts: [] } }, "invalid_document"],
-        [{ provider: "google-antigravity", format: "cockpit-tools", document: "not-an-array" }, "invalid_document"],
+        [{ provider: "google-antigravity", acknowledgeAntigravityRisk: true, format: "unknown", document: [] }, "unsupported_format"],
+        [{ provider: "google-antigravity", acknowledgeAntigravityRisk: true, format: "cockpit-tools", document: { accounts: [] } }, "invalid_document"],
+        [{ provider: "google-antigravity", acknowledgeAntigravityRisk: true, format: "cockpit-tools", document: "not-an-array" }, "invalid_document"],
         [{ provider: "Google-Antigravity", format: "cockpit-tools", document: [] }, "unsupported_provider"],
         [{ provider: " google-antigravity ", format: "cockpit-tools", document: [] }, "unsupported_provider"],
-        [{ provider: "google-antigravity", format: "Cockpit-Tools", document: [] }, "unsupported_format"],
+        [{ provider: "google-antigravity", acknowledgeAntigravityRisk: true, format: "Cockpit-Tools", document: [] }, "unsupported_format"],
       ] as const) {
         const response = await fetch(new URL("/api/oauth/accounts/import", server.url), {
           method: "POST",
@@ -654,7 +696,7 @@ describe("multiauth accounts API", () => {
       headers: { "Content-Type": "application/json" },
       body: new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(new TextEncoder().encode('{"provider":"google-antigravity",'));
+          controller.enqueue(new TextEncoder().encode('{"provider":"google-antigravity","acknowledgeAntigravityRisk":true,'));
         },
         cancel() { bodyCancelled = true; },
       }),
@@ -725,6 +767,7 @@ describe("multiauth accounts API", () => {
         body: JSON.stringify({
           provider: "google-antigravity",
           format: "cockpit-tools",
+          acknowledgeAntigravityRisk: true,
           document: [
             { email: "first@example.com", refresh_token: "first-refresh" },
             { email: "second@example.com", refresh_token: "second-refresh" },
@@ -769,6 +812,7 @@ describe("multiauth accounts API", () => {
         body: JSON.stringify({
           provider: "google-antigravity",
           format: "cockpit-tools",
+          acknowledgeAntigravityRisk: true,
           document: [{ email: "IMPORTED@example.com", refresh_token: refreshToken, tags: ["tag"], notes: "ignored" }],
         }),
       });
@@ -808,6 +852,7 @@ describe("multiauth accounts API", () => {
       const boundaryBody = JSON.stringify({
         provider: "google-antigravity",
         format: "cockpit-tools",
+        acknowledgeAntigravityRisk: true,
         document: boundaryDocument,
       });
       expect(encoder.encode(JSON.stringify(boundaryDocument)).byteLength).toBe(ACCOUNT_IMPORT_MAX_BYTES);
@@ -864,6 +909,7 @@ describe("multiauth accounts API", () => {
         body: JSON.stringify({
           provider: "google-antigravity",
           format: "cockpit-tools",
+          acknowledgeAntigravityRisk: true,
           document: [
             { email: "claimed@example.com", refresh_token: canary },
             { email: "provider@example.com", refresh_token: "rejected-token" },
@@ -897,6 +943,7 @@ describe("multiauth accounts API", () => {
         body: JSON.stringify({
           provider: "google-antigravity",
           format: "cockpit-tools",
+          acknowledgeAntigravityRisk: true,
           document: [{ email: "provider@example.com", refresh_token: "safe", notes: "x".repeat(ACCOUNT_IMPORT_MAX_BYTES) }],
         }),
       });

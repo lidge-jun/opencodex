@@ -15,9 +15,7 @@
  * is timing-safe and shape-checked, reusing the same secret shape as the local attestation
  * module.
  *
- * The same primitive is what the vision-describe fence would need for the same reason; wiring
- * that surface is deliberately left out of this change (recorded as a pre-existing analogous
- * issue) so the change stays scoped.
+ * Local Chat helpers also pair this capability with a request-lifetime registration.
  */
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { isLocalAttestationSecret } from "./local-management-attestation";

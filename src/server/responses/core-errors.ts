@@ -1,5 +1,5 @@
-import type { ComboExclusionReasons } from "../../combos/resolve";
-import { markProxyError } from "../../lib/client-error-body";
+import type { ComboExclusion, ComboUnavailableDiagnostics } from "../../combos/resolve";
+import { markProxyError, markProxyQuotaExhaustion } from "../../lib/client-error-body";
 import { appendClientRetryIn, formatClientRetryAfter } from "../../lib/client-retry-after";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { redactSecretString } from "../../lib/redact";
@@ -83,7 +83,7 @@ export function normalizeUpstreamErrorText(text: string, fallback: string): Norm
 
 
 
-export function decodeRequestErrorResponse(err: unknown, label: string): Response {
+export function decodeRequestErrorResponse(err: unknown, label: string, limitSource?: "xai-edit"): Response {
   if (isTranslatorBudgetExceededError(err)) {
     return markProxyError(formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
       code: "translation_buffer_limit",
@@ -93,7 +93,7 @@ export function decodeRequestErrorResponse(err: unknown, label: string): Respons
     return markProxyError(formatErrorResponse(415, "invalid_request_error", err.message));
   }
   if (err instanceof DecompressedBodyTooLargeError) {
-    return markProxyError(formatErrorResponse(413, "inbound_body_too_large", describeInboundBodyRefusal(err)), "inbound");
+    return markProxyError(formatErrorResponse(413, "inbound_body_too_large", describeInboundBodyRefusal(err, limitSource)), "inbound");
   }
   console.warn(`[${label}] request body decode/parse failed: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
   return markProxyError(formatErrorResponse(400, "invalid_request_error", "Invalid JSON body"));
@@ -104,7 +104,7 @@ export function decodeRequestErrorResponse(err: unknown, label: string): Respons
 
 export function comboUnavailableResponse(
   message: string,
-  options?: { retryAfter?: string | null; presentation?: "combo" },
+  options?: { retryAfter?: string | null; presentation?: "combo"; diagnostics?: ComboUnavailableDiagnostics },
 ): Response {
   const headers = new Headers({ "Content-Type": "application/json" });
   // Advice leaves in this proxy's format, whatever form the earliest cooldown was recorded in.
@@ -115,17 +115,101 @@ export function comboUnavailableResponse(
   return markProxyError(new Response(
     JSON.stringify({
       // Built from the header value itself, so an HTTP-date cannot make the body and header disagree.
-      error: { message: appendClientRetryIn(message, advice), type: "server_error", code: "combo_unavailable" },
+      // `combo` carries the machine-readable cause class and target counts (#7965).
+      error: { message: appendClientRetryIn(message, advice), type: "server_error", code: "combo_unavailable",
+        ...(options?.diagnostics ? { combo: options.diagnostics } : {}) },
     }),
     { status: 503, headers },
   ), options?.presentation);
 }
 
 
-export function comboUnavailable(comboId: string, now = Date.now(), reasons?: ComboExclusionReasons): Response {
-  return comboUnavailableResponse(new NoAvailableComboTargetsError(comboId, reasons).message, {
+export function comboMeteredConsentRefused(): Response {
+  return markProxyError(formatErrorResponse(403, "permission_error",
+    "This Combo stopped at a paid API target. The current caller has not authorized paid Combo calls.",
+    { code: "combo_metered_consent_required", classified: true }));
+}
+
+export function toolLoopQuotaExhaustedResponse(): Response {
+  return markProxyError(formatErrorResponse(429, "rate_limit_error",
+    "This Combo's tool turn is waiting for its serving target's quota to recover.",
+    { code: "combo_tool_target_quota_exhausted", classified: true }));
+}
+
+export function toolLoopTargetUnavailableResponse(): Response {
+  return markProxyError(Response.json({ error: {
+    type: "invalid_request_error",
+    code: "combo_tool_target_unavailable",
+    message: "This Combo cannot identify or use the target that issued the tool call. Restart the turn to select a new target.",
+  } }, { status: 409 }));
+}
+
+/** A Combo refusal raised while a route resolves. Route resolvers rethrow it, and the request answers with its response. */
+export abstract class ComboRouteRefusal extends Error {
+  abstract response(): Response;
+}
+
+/** A Combo with the model lock on would serve the request with a different resolved model. */
+export class ComboModelChangeRefusedError extends ComboRouteRefusal {
+  constructor() {
+    super("This Combo keeps the original model. Its next target resolves to a different model.");
+    this.name = "ComboModelChangeRefusedError";
+  }
+
+  response(): Response {
+    return comboModelChangeRefused();
+  }
+}
+
+/** A quota-only Combo stopped at a target that needs paid-call consent the caller does not have. */
+export class ComboMeteredConsentRequiredError extends ComboRouteRefusal {
+  constructor() {
+    super("This Combo stopped at a paid API target. The current caller has not authorized paid Combo calls.");
+    this.name = "ComboMeteredConsentRequiredError";
+  }
+
+  response(): Response {
+    return comboMeteredConsentRefused();
+  }
+}
+
+/** A quota-only tool continuation cannot establish or use the target that issued its calls. */
+export class ComboToolTargetUnavailableError extends ComboRouteRefusal {
+  constructor() {
+    super("This Combo cannot identify or use the target that issued the tool call.");
+    this.name = "ComboToolTargetUnavailableError";
+  }
+
+  response(): Response {
+    return toolLoopTargetUnavailableResponse();
+  }
+}
+
+/** A quota-only tool continuation's serving target has spent its quota. */
+export class ComboToolTargetQuotaExhaustedError extends ComboRouteRefusal {
+  constructor() {
+    super("This Combo's tool turn is waiting for its serving target's quota to recover.");
+    this.name = "ComboToolTargetQuotaExhaustedError";
+  }
+
+  response(): Response {
+    return toolLoopQuotaExhaustedResponse();
+  }
+}
+
+export function comboModelChangeRefused(): Response {
+  return markProxyError(Response.json({ error: {
+    type: "invalid_request_error",
+    code: "combo_model_change_refused",
+    message: new ComboModelChangeRefusedError().message,
+  } }, { status: 409 }));
+}
+
+export function comboUnavailable(comboId: string, now = Date.now(), exclusion?: ComboExclusion): Response {
+  return comboUnavailableResponse(new NoAvailableComboTargetsError(comboId, exclusion).message, {
     retryAfter: comboCooldownRetryAfterSeconds(comboId, now),
-    presentation: reasons === undefined ? undefined : "combo",
+    presentation: exclusion === undefined ? undefined : "combo",
+    ...(exclusion ? { diagnostics: exclusion.diagnostics } : {}),
   });
 }
 
@@ -164,8 +248,9 @@ export function anthropicPoolCooldownResponse(
     if (options.logCtx) options.logCtx.errorCode = "usage_limit_reached";
     return markProxyError(formatUsageLimitReachedResponse(refusal.message, refusal.usageLimit.resetsAt, refusal.retryAfterSeconds), refusal.usageLimit.resetsAt === null ? undefined : "usage");
   }
-  return markProxyError(formatErrorResponse(429, "rate_limit_error", refusal.retryableMessage,
-    refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) }));
+  const response = formatErrorResponse(429, "rate_limit_error", refusal.retryableMessage,
+    refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) });
+  return refusal.usageLimit === null ? markProxyError(response) : markProxyQuotaExhaustion(response);
 }
 
 

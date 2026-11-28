@@ -11,7 +11,7 @@ import { handleClientIntegrationCommand, handleGrokCommand, handleClaudeIntercep
 import { handleModelsRuntimeCommand } from "../../src/cli/models-runtime";
 import { handleProviderRuntimeCommand } from "../../src/cli/provider-runtime";
 import { providerQuotaLine } from "../../src/cli/account-extended";
-import { formatAccountTable } from "../../src/cli/account";
+import { cmdAccount, formatAccountTable } from "../../src/cli/account";
 import { handleConnectCommand } from "../../src/cli/connect";
 import { CAPABILITIES, capabilityInvocation } from "../../src/cli/capabilities";
 import { codexRestartLines, handleSystemCommand } from "../../src/cli/system-command";
@@ -130,6 +130,29 @@ describe("ocx system settings desktop switches", () => {
       expect(output).toContain("Auth source: The Codex app will require its own account sign-in.");
     } finally {
       logSpy.mockRestore();
+    }
+  });
+
+  test("reports a saved client-compaction switch whose history preflight refused application", async () => {
+    const { deps } = fakeRuntime(() => ({
+      ok: true,
+      codexDesktopSwitches: {
+        codexClientCompaction: { stored: true, effective: true },
+        apply: { applied: false, reason: "injection_refused", retryable: false,
+          detail: "history_paginated_openai_provider_locked" },
+        authSource: { summary: "Codex sign-in is required." },
+      },
+    }));
+    const output = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await handleSystemCommand(["settings", "--client-compaction", "on"], deps);
+      const text = output.mock.calls.flat().join("\n");
+      expect(text).toContain("Codex client compaction: stored on.");
+      expect(text).toContain("history_paginated_openai_provider_locked");
+      expect(text).not.toContain("effective on.");
+      expect(text).not.toContain("Run 'ocx sync'");
+    } finally {
+      output.mockRestore();
     }
   });
 
@@ -540,6 +563,7 @@ describe("headless GUI parity CLI", () => {
       // for. Listed here so the parity sweep stays exhaustive rather than silently
       // skipping the endpoint.
       ["/api/github/star", "(none — GUI-only)"],
+      ["/api/oauth/accounts/probe", "ocx account probe"],
       ["/api/oauth", "ocx account"],
       // The unified pool-settings route (#695 wp5c). One path answers for every pool
       // kind, and `ocx account strategy` / `ocx account sticky` / `ocx account auto-switch`
@@ -552,10 +576,14 @@ describe("headless GUI parity CLI", () => {
       ["/api/provider-", "ocx provider/models"],
       ["/api/selected-models", "ocx models"],
       ["/api/custom-models", "ocx models"],
+      ["/api/model-discovery/refresh", "ocx models discover"],
       ["/api/model", "ocx models"],
       ["/api/combos", "ocx combo"],
       ["/api/client-config", "ocx export"],
       ["/api/client-integrations", "ocx integration client"],
+      // Antigravity app and agy CLI: status, connect and disconnect are
+      // `ocx connect antigravity|agy [status]` and `ocx disconnect antigravity|agy`.
+      ["/api/gateway-clients", "ocx connect/disconnect antigravity|agy"],
       ["/api/codex-agent-roles", "ocx agent roles"],
       // #2463: both read and write reach the CLI. `ocx alias list` reads /api/aliases,
       // `ocx alias defaults` writes /api/default-aliases, and the per-provider writes sit
@@ -601,6 +629,7 @@ describe("headless GUI parity CLI", () => {
       // inventory and writes one config key. There is no headless equivalent
       // today, and claiming one would be worse than saying so here.
       ["/api/codex-prompt", "(none — GUI prompt-layer surface; keys live in config.toml)"],
+      ["/api/combo-suggestions", "(none — Combos suggestions require a dashboard session)"],
       // Claude reset grants: reading is an owed CLI verb (deferred-verb in the route
       // registry) and spending is dashboard-session-only by design.
       ["/api/anthropic/reset-grants", "(none — GUI reset-grant dialog; spend requires a dashboard session)"],
@@ -617,6 +646,8 @@ describe("headless GUI parity CLI", () => {
       ["/api/routing-profiles", "ocx route policy"],
       ["/api/fallback", "ocx fallback"],
       ["/api/routing-analytics", "(none — GUI analytics surface; history via ocx observe/logs)"],
+      // Catch-up 010: the read-only Connections view; its CLI verb is a deferred-verb owned by 020.
+      ["/api/connections", "(none — read-only Connections view; CLI verb deferred in clients/connections.md)"],
       // Remote Workspace is one product family in both surfaces. The current CLI owns
       // executor pairing, presence, and local status; Hub/device/session inspection is
       // intentionally dashboard-only until the deferred Hub-status verbs documented in
@@ -673,6 +704,35 @@ describe("headless GUI parity CLI", () => {
       method: "PATCH",
       body: { baseUrl: "https://example.test/v1", apiKeyTransport: "bearer", disabled: true, liveModels: true },
     }]);
+  });
+
+  test("account probe routes one alias or the entire Antigravity roster through management", async () => {
+    const body = { provider: "google-antigravity" };
+    const receipt = { provider: body.provider, results: [{ accountId: "acct1", status: "permission_denied", httpStatus: 403, reason: "PERMISSION_DENIED", message: null }] };
+    const runtime = fakeRuntime(req => req.method === "GET" ? { accounts: [{ id: "acct1", alias: "Work" }] } : receipt);
+    const logs = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await cmdAccount(["probe", body.provider, "work", "--json"], runtime.deps)).toBe(0);
+      expect(JSON.parse(String(logs.mock.calls[0]?.[0]))).toEqual(receipt);
+      expect(await cmdAccount(["probe", body.provider], runtime.deps)).toBe(0);
+      expect(String(logs.mock.calls[1]?.[0])).toContain("HTTP 403 · PERMISSION_DENIED");
+      expect(runtime.requests).toEqual([
+        { method: "GET", path: "/api/oauth/accounts?provider=google-antigravity", body: null },
+        { method: "POST", path: "/api/oauth/accounts/probe", body: { ...body, accountId: "acct1" } },
+        { method: "POST", path: "/api/oauth/accounts/probe", body },
+      ]);
+    } finally { logs.mockRestore(); }
+  });
+
+  test("unsupported providers and ambiguous aliases never send a probe", async () => {
+    const runtime = fakeRuntime(() => ({ accounts: [{ id: "acct1", alias: "work" }, { id: "acct2", alias: "Work" }] }));
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await cmdAccount(["probe", "anthropic"], runtime.deps)).toBe(1);
+      expect(runtime.requests).toEqual([]);
+      expect(await cmdAccount(["probe", "google-antigravity", "work"], runtime.deps)).toBe(1);
+      expect(runtime.requests.map(request => request.method)).toEqual(["GET"]);
+    } finally { errors.mockRestore(); }
   });
 
   test.each(["on", "off"])("provider edit --xai-chat %s shares the GUI wire selector", async value => {

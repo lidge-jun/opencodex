@@ -333,6 +333,10 @@ test.each(["mutation", "active config flight", "startup", "offline apply", "nati
       expect(await controller.transition(async () => "lock released")).toBe("lock released");
     } else {
       expect(outcome).toMatchObject({ diagnostic: { stage: "ca", cause: "ETIMEDOUT" } });
+      if (caller === "native PUT") {
+        expect(outcome).toMatchObject({ clientId: "claude-desktop", reason: "write_failed" });
+        expect(existsSync(join(root, "link", "apply-lock.sqlite"))).toBe(false);
+      }
       if (caller === "offline apply") expect(outcome).toMatchObject({ ok: false, reason: "ca_unavailable" });
     }
     expect(mutated).toBe(false);

@@ -159,11 +159,11 @@ normalleştirilebilir. İstisna, JSON'un birebir yeniden yazamayacağı şeylerd
 büyük bir tam sayı ya da sıfıra çökecek kadar küçük bir sayı), `-0`, aynı
 nesnede iki kez yazılmış bir anahtar veya 1000 seviyeden derin iç içe geçme —
 bu durumda anahtar kilitlenir, böylece
-hiçbir şey sessizce değiştirilmez veya düşürülmez. **OMP** de yanındaki
-düzenlemelerden etkilenmez, ama başka bir nedenle: writer'ı yalnızca kendi
-`providers.opencodex` aralığını bayt bayt yamalar, dosyanın geri kalanı hiçbir
-zaman yeniden yazılmaz. Yorum taşıyabilen diğer biçimlerde (Hermes, OpenClaw,
-Kimi Code, gjc, MiniMax Code, Raycast — bütün belge olarak yazılan YAML, JSON5 ve TOML) veya
+hiçbir şey sessizce değiştirilmez veya düşürülmez. **OMP**, **DSH**, **Hermes** ve **Kimi Code** de yanındaki
+düzenlemelerden etkilenmez, ama başka bir nedenle: writer'ları yalnızca kendi
+yönetilen aralıklarını bayt bayt yamalar, dosyanın geri kalanı hiçbir
+zaman yeniden yazılmaz. Yorum taşıyabilen diğer biçimlerde (OpenClaw,
+gjc, MiniMax Code, Raycast — bütün belge olarak yazılan YAML ve JSON5) veya
 kendi girdilerimiz düzenlenmişse, anahtar kilitlenir ve hangi düzenlemelerin
 size ait olduğunu tahmin etmek yerine devre dışı bırakmayı reddeder.
 
@@ -193,14 +193,15 @@ sayfasında değiştirilir.
 ## Dürüstçe ne beklenmeli?
 
 **Biçimlendirme genellikle korunmaz.** Uygulama işlemi bir yapılandırmayı
-ayrıştırır ve geri yazar, bu nedenle JSON, JSON5 ve TOML yeniden
-biçimlendirilebilir ve JSON5 veya TOML içindeki yorumlar kaybolur. OMP ve DSH
-istisnadır: OMP YAML yazıcısı yalnızca `providers.opencodex` bölümünü yamalar.
+ayrıştırır ve geri yazar, bu nedenle JSON ve JSON5 yeniden
+biçimlendirilebilir ve JSON5 içindeki yorumlar kaybolur. OMP, DSH, Hermes ve Kimi Code
+istisnadır: OMP ve Hermes YAML yazıcıları yalnızca `providers.opencodex` bölümünü yamalar.
 DSH yazıcısı, Desktop profili varsa `$DSH_HOME/profiles/desktop/cordis.patch.yml` içindeki
 `[id=llm-pi-ai].config.providers.opencodex` satırını, profil yoksa
 `$DSH_HOME/settings.yaml` içindeki `llm-pi-ai.providers.opencodex` bölümünü yamalar;
 ilgisiz sağlayıcı yorumlarını ve biçimlendirmesini bayt bayt korur. Bu tam
 kaynak aralığı güvenli bir şekilde tanımlanamazsa işlem bunun yerine reddeder.
+Kimi Code yazıcısı `config.toml` içinde yalnızca kendi `[providers.opencodex]` ve `[models."opencodex/…"]` tablolarını değiştirir, yorumları ve `[[hooks]]` tablolarını korur; bu tablolar başka bir biçimde yazılmışsa reddeder.
 Diğer istemciler için önceki dosya baytlarına ihtiyacınız olduğunda Geri
 Yükle'yi kullanın: anlık görüntü birebir bir kopyadır.
 

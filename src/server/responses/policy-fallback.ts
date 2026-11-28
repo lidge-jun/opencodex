@@ -1,9 +1,10 @@
-import { comboFailureDecision } from "../../combos/failover";
+import { comboFailureDecision, isProviderModerationRefusal } from "../../combos/failover";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { isVerifiedModelNotInPlanResponse } from "../../lib/errors";
 import { isShadowSourceModel } from "../../lib/shadow-call";
 import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import { finishRequestAttempt, type RequestLogContext } from "../request-log";
+import { restoreLocalFailureState, takeLocalFailureState, type LocalFailureState } from "../request-log-failure-detail";
 import { linkRequestSessionLane } from "../request-log-conversation";
 import type { OcxConfig } from "../../types";
 import type { RouteCandidateTrace, RouteDecisionTraceV1 } from "../../routing/trace";
@@ -17,6 +18,7 @@ import { routeConcreteModel } from "../../router";
 import { isPolicyCandidateRefusal, isMandatoryToolChoiceRefusal, mandatoryToolChoiceUnavailableResponse, policyWireDestination, type PolicyRequestScope } from "./policy-request-scope";
 import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
+import { captureHostedAdvisorSpendScope } from "./hosted-advisor-spend";
 import { upstreamCodeForComboFailure } from "../../bridge/errors";
 import { chatToResponsesBody } from "../../protocols/codecs/chat";
 import { restoreChatInstructionMedia } from "./chat-policy-media";
@@ -135,11 +137,19 @@ async function shouldHopPolicyCandidate(response: Response, signal?: AbortSignal
   if (isPolicyCandidateRefusal(response)) return true;
   try {
     const inspected = await readBoundedResponseBody(response.clone(), { signal });
-    const text = inspected.displaySafe && !inspected.truncated ? inspected.text : "";
+    const complete = inspected.displaySafe && !inspected.truncated;
+    const text = complete ? inspected.text : "";
     return comboFailureDecision(response.status, text, {
       code: upstreamCodeForComboFailure(response, errorCodeFromText(text)),
       // A passthrough candidate returns its upstream body unchanged, so the code is not provenance.
       verifiedPlanRefusal: isVerifiedModelNotInPlanResponse(response),
+      // The text is the whole bounded body, judged as the combo reader judges it.
+      ...(text && (response.status === 400 || response.status === 422)
+        ? { providerModerationRefusal: isProviderModerationRefusal(response.status, text, undefined, true) } : {}),
+      // A 413 keeps dev's stop on a routing-profile route. Core delivery has already replaced the
+      // provider's 413 with the proxy's own context-overflow envelope, so the original body (a
+      // terminal code, or an unreadable one) is gone and cannot clear the provider-413 hop (#9017).
+      ...(response.status === 413 ? { providerIntakeRefusal: false } : {}),
     }) === "hop";
   } catch {
     return false;
@@ -151,7 +161,7 @@ function isPolicyDecision(trace: RouteDecisionTraceV1 | undefined): trace is Rou
 }
 
 /** Finalize the failed physical attempt so the retry receives a fresh attempt row. */
-function finishFailedPolicyAttempt(logCtx: RequestLogContext, status: number): void {
+function finishFailedPolicyAttempt(logCtx: RequestLogContext, status: number): LocalFailureState {
   const attempt = logCtx.activeAttempt;
   if (attempt) {
     const startedAt = logCtx.activeAttemptStartedAt ?? Date.now();
@@ -163,8 +173,18 @@ function finishFailedPolicyAttempt(logCtx: RequestLogContext, status: number): v
   delete logCtx.usageFromBridge;
   delete logCtx.upstreamError;
   delete logCtx.terminalHttpStatus;
+  delete logCtx.observedTerminalStatus;
   delete logCtx.terminalErrorCode;
   delete logCtx.terminalIncompleteReason;
+  delete logCtx.cacheAffinity;
+  delete logCtx.cacheAffinityReason;
+  delete logCtx.affinityKeptEntryId;
+  delete logCtx.affinityKeyEntryId;
+  delete logCtx.affinityProviderName;
+  delete logCtx.affinityModel;
+  delete logCtx.cacheAffinityApplicable;
+  delete logCtx.terminalSource;
+  return takeLocalFailureState(logCtx);
 }
 
 /**
@@ -188,6 +208,7 @@ export async function handleResponsesWithPolicyFallback(
   const coreOptions: CoreOptions = {
     ...options,
     advisorAdmissionPolicy: options.advisorAdmissionPolicy ?? captureAdmissionPolicy(config, options.admission, options.admissionScope),
+    hostedAdvisorSpendScope: captureHostedAdvisorSpendScope(options),
     policyRequestScope: policyScope,
     openAiSidecarAuth: options.openAiSidecarAuth === undefined
       ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,
@@ -298,7 +319,7 @@ export async function handleResponsesWithPolicyFallback(
     // Retain the failed response's log owner until a candidate actually replaces it. This is
     // deliberately shallow: completed attempts and the live spend tracker keep their identity.
     const failureLog = { ...logCtx };
-    finishFailedPolicyAttempt(logCtx, response.status);
+    const failureLocal = finishFailedPolicyAttempt(logCtx, response.status);
     const retryRequest = requestWithCandidate(req, rawBody, next);
     delete policyScope.preparedDestination;
     try {
@@ -323,6 +344,7 @@ export async function handleResponsesWithPolicyFallback(
             if (!Object.hasOwn(failureLog, key)) Reflect.deleteProperty(logCtx, key);
           }
           Object.assign(logCtx, failureLog);
+          restoreLocalFailureState(logCtx, failureLocal);
         } else {
           // Dispatched: only a candidate that was not locally skipped counts as a taken hop.
           try { await response.body?.cancel(); } catch { /* the dispatched candidate replaces the retained failure */ }

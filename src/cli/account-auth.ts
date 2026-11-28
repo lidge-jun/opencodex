@@ -6,6 +6,14 @@ import { warnIfCodexCatalogRefreshPending } from "./account-catalog-refresh";
 import { isCodexResetCreditOperationId } from "../codex/reset-credit-recovery";
 import { BROWSER_LAUNCH_FAILED_NOTICE } from "../lib/browser-launch-notice";
 import {
+  ANTIGRAVITY_RISK_ACK_FIELD,
+  ANTIGRAVITY_RISK_CLI_FLAG,
+  antigravityRiskDecisionMessage,
+  requiresAntigravityRiskAcknowledgement,
+  resolveAntigravityRiskAcknowledgement,
+} from "../oauth/antigravity-risk";
+import { isAgentDriven } from "./agent-driven";
+import {
   RuntimeApiError,
   CliUsageError,
   printData,
@@ -39,16 +47,19 @@ function writeStdoutFully(text: string): void {
 }
 
 const USAGE = `Usage:
-  ocx account login <provider> [--id <account-id>] [--reauth] [--device] [--method builder-id|google|github] [--open-browser on|off] [--add-account on|off] [--code -] [--no-wait] [--json]
+  ocx account login <provider> [--id <account-id>] [--reauth] [--device] [--method builder-id|google|github] [--open-browser on|off] [--add-account on|off] [--code -] [--no-wait] [--json] [--accept-antigravity-risk]
   ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
   ocx account cancel <provider> [--flow <flow-id>] [--json] (--flow required for codex)
   ocx account reset-credits <account-id|main> [--consume --yes [--operation-id <uuid>]] [--json]
   ocx account grok-reset-coupons [<account-id>] [--consume --yes [--token-id <token-id>] [--operation-id <uuid>]] [--json]
 
---device runs the OpenAI device-code login instead of the browser callback: use
-it when the proxy has no browser or nothing can reach localhost:1455, such as a
-headless or remote hub. Enter the printed code at the printed URL from any other
-machine.
+--device runs the device-code login instead of the browser callback (codex and
+xai): use it when the proxy has no browser or nothing can reach its localhost
+callback, such as a headless or remote hub. Both print a URL and a short code;
+confirm that code in any browser and the login finishes here, so nothing is
+pasted back and no local port is used. Each flow polls until its own deadline:
+Codex's 15-minute device grant, and xAI's provider-issued expires_in bounded to
+30 minutes and to one poll a second.
 
 The redirect URL or authorization code is a short-lived credential. Pipe it in
 rather than passing it as an argument, where it lands in shell history and is
@@ -77,6 +88,8 @@ interface LoginStart {
   deviceCode?: string;
   /** Whether the host actually opened a browser. Absent from older proxies. */
   browserLaunch?: "started" | "failed" | "skipped";
+  /** Set when the proxy's `codexAuthMethod: "device-only"` imposed the device grant (#8082). */
+  authMethod?: "device-only";
   method?: "builder-id" | "google" | "github";
   userCode?: string;
   verificationUri?: string;
@@ -102,6 +115,7 @@ function publicLoginStart(value: unknown, kiro = false): LoginStart {
     if (typeof data[key] === "string") out[key] = data[key];
   }
   if (typeof data.browserLaunch === "string" && ["started", "failed", "skipped"].includes(data.browserLaunch)) out.browserLaunch = data.browserLaunch as LoginStart["browserLaunch"];
+  if (data.authMethod === "device-only") out.authMethod = "device-only";
   if (typeof data.method === "string" && ["builder-id", "google", "github"].includes(data.method)) out.method = data.method as LoginStart["method"];
   if (typeof data.state === "string" && ["pending", "done", "failed", "expired", "cancelled"].includes(data.state)) out.state = data.state as string;
   if (typeof data.warning === "string" && ["duplicate_profile_arn", "manual_review_required"].includes(data.warning)) out.warning = data.warning as string;
@@ -125,6 +139,7 @@ function publicLoginStatus(value: unknown): Record<string, unknown> {
     for (const key of ["id", "alias", "email"]) if (typeof row[key] === "string") account[key] = row[key];
     for (const key of ["active", "needsReauth"]) if (typeof row[key] === "boolean") account[key] = row[key];
     if (row.needsReauthReason === "verify_account") account.needsReauthReason = "verify_account";
+    if (row.needsReauthReason === "verify_account" && row.needsReauthCause === "tos_violation") account.needsReauthCause = "tos_violation";
     if (typeof row.expiresAt === "number" && Number.isFinite(row.expiresAt)) account.expiresAt = row.expiresAt;
     if (row.plan === null) account.plan = null;
     return account;
@@ -162,12 +177,23 @@ const STDIN_SENTINEL = "-";
 
 /** Providers whose ONLY login is already a device flow; --device is redundant, not wrong. */
 const DEVICE_NATIVE_PROVIDERS = new Set(["kimi", "nous", "github-copilot"]);
-const stripTerminalControls = (value: string): string => value.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, "");
+/** Providers with a device grant besides their browser login; --device selects it. */
+const DEVICE_OPT_IN_PROVIDERS = new Set(["xai"]);
+/**
+ * The native Kiro handoff, rendered for a terminal.
+ *
+ * Every field here is provider- or proxy-supplied, so they go through the same sanitizer as the
+ * OAuth CLI's instructions rather than a local strip regex: a narrower strip both left characters
+ * reachable (the Arabic letter mark, the line separators, the deprecated `U+206A`–`U+206F` bidi
+ * controls) and deleted ones that must survive (ZWNJ/ZWJ, which shape Persian and emoji). Escaping
+ * keeps the value readable in a pasted report and leaves the layout below intact, because a
+ * newline inside a field is escaped rather than allowed to add a line.
+ */
 export function formatKiroDeviceInstructions(start: { verificationUriComplete?: string; verificationUri?: string; userCode?: string; flowId?: string }): string {
   return [
-    stripTerminalControls(start.verificationUriComplete ?? start.verificationUri ?? ""),
-    start.userCode ? `User code: ${stripTerminalControls(start.userCode)}` : "",
-    start.flowId ? `Flow: ${stripTerminalControls(start.flowId)}` : "",
+    terminalSafeText(start.verificationUriComplete ?? start.verificationUri ?? ""),
+    start.userCode ? `User code: ${terminalSafeText(start.userCode)}` : "",
+    start.flowId ? `Flow: ${terminalSafeText(start.flowId)}` : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -197,6 +223,25 @@ async function resolveCode(
   return await readSecretLine(deps, "authorization code");
 }
 
+const CODEX_LOGIN_CANCEL_TIMEOUT_MS = 2_000;
+
+async function cancelStartedCodexLogin(flowId: string | undefined, deps: RuntimeApiDeps): Promise<boolean> {
+  if (!flowId) return false;
+  try {
+    await runtimeRequest("/api/codex-auth/login/cancel", {
+      method: "POST", redirect: "error", body: JSON.stringify({ flowId }),
+      signal: AbortSignal.timeout(CODEX_LOGIN_CANCEL_TIMEOUT_MS),
+    }, deps);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function codexLoginCancelFailure(flowId: string | undefined): string {
+  return `Could not cancel the started login flow.${flowId ? ` Flow: ${terminalSafeText(flowId)}` : ""}`;
+}
+
 async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | void> {
   const args = [...argv];
   const provider = args.shift()?.trim().toLowerCase();
@@ -209,8 +254,11 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
   const suppliedCode = takeOptionWithSyntax(args, "--code");
   const openBrowser = loginBoolean(args, "--open-browser");
   const addAccount = loginBoolean(args, "--add-account");
+  const acceptAntigravityRisk = takeFlag(args, ANTIGRAVITY_RISK_CLI_FLAG);
   if (provider && !isValidProviderName(provider)) throw new CliUsageError("invalid provider name", USAGE);
   if (!provider) throw new CliUsageError("provider is required", USAGE);
+  const antigravityRisk = requiresAntigravityRiskAcknowledgement(provider);
+  if (acceptAntigravityRisk && !antigravityRisk) throw new CliUsageError(`${ANTIGRAVITY_RISK_CLI_FLAG} only applies to google-antigravity`, USAGE);
   if (method !== undefined) {
     if (provider !== "kiro" || !["builder-id", "google", "github"].includes(method)) {
       throw new CliUsageError("--method requires kiro and builder-id, google, or github", USAGE);
@@ -225,15 +273,39 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
   // kimi, nous, and github-copilot are already device flows, so --device is a
   // true statement about them and is accepted as a no-op rather than an error.
   // Anything else has no device grant at all and must fail loudly.
-  if (device && !CODEX_NAMES.has(provider) && !DEVICE_NATIVE_PROVIDERS.has(provider)) {
+  if (device && !CODEX_NAMES.has(provider) && !DEVICE_NATIVE_PROVIDERS.has(provider) && !DEVICE_OPT_IN_PROVIDERS.has(provider)) {
     throw new CliUsageError("--device is not supported for this provider", USAGE);
   }
+  // A device grant never asks for a pasted code: the CLI would have spent the caller's stdin, and
+  // the proxy would have accepted the paste into a flow with nothing to do with it (the device flow
+  // is not a code flow, so `submitLoginCode` stashes it and the login still waits for approval).
+  if (device && suppliedCode) throw new CliUsageError("--code cannot be combined with --device", USAGE);
+  if (provider === "xai" && device && wantsJson && !noWait) throw new CliUsageError("xAI device login with --json requires --no-wait; use the returned handoff to complete authorization", USAGE);
   if (addAccount !== undefined && (reauth || CODEX_NAMES.has(provider))) throw new CliUsageError("--add-account is only valid for fresh provider OAuth login", USAGE);
   if (openBrowser !== undefined && (device || DEVICE_NATIVE_PROVIDERS.has(provider))) throw new CliUsageError("--open-browser is not supported for device login", USAGE);
   if (!CODEX_NAMES.has(provider) && id && !reauth) throw new CliUsageError("--id is only valid with --reauth for provider OAuth accounts", USAGE);
+  // Antigravity can get the Google account disabled: warn and get an answer before anything
+  // else touches stdin or the proxy. A refusal here sends no request at all.
+  if (antigravityRisk) {
+    const decision = await resolveAntigravityRiskAcknowledgement({
+      flag: acceptAntigravityRisk,
+      // The question goes to stderr, so a redirected stderr is not a terminal a person can answer.
+      interactive: (deps.stdinImpl ?? process.stdin).isTTY === true
+        && (deps.antigravityRisk?.promptVisible ?? (() => process.stderr.isTTY === true))(),
+      agentDriven: (deps.antigravityRisk?.agentDriven ?? isAgentDriven)(),
+      warn: text => console.error(text),
+      ask: async question => {
+        process.stderr.write(question);
+        return await readSecretLine(deps, "confirmation");
+      },
+    });
+    if (decision !== "accepted") throw new CliUsageError(antigravityRiskDecisionMessage(decision));
+  }
   // Only resolve when --code was actually given: a plain `ocx account login`
   // opens the browser flow and polls, and must not block on stdin.
-  const code = await resolveCode(suppliedCode, deps, false);
+  // Codex resolves a stdin code only after the start answer: under `codexAuthMethod: "device-only"`
+  // a pasted code is refused, and an open stdin with no data must not hold that refusal back (#8082).
+  let code = CODEX_NAMES.has(provider) ? undefined : await resolveCode(suppliedCode, deps, false);
   const pinned = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
 
   if (method) {
@@ -270,15 +342,35 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
         ...(openBrowser === undefined ? {} : { openBrowser }),
       }),
     }, pinned));
+    // `codexAuthMethod: "device-only"` (#8082) imposes the device grant after the request is sent.
+    // A JSON wait prints nothing until the end and a pasted code has no flow to complete, so either
+    // would leave the person without the URL and code: cancel the flow and say what works instead.
+    if (start.authMethod === "device-only" && (suppliedCode !== undefined || (wantsJson && !noWait))) {
+      const cancelled = await cancelStartedCodexLogin(start.flowId, pinned);
+      const advice = suppliedCode !== undefined
+        ? "--code cannot be used; run the login without --code and enter the device code at the returned URL"
+        : "with --json, add --no-wait and complete the login with the returned url and deviceCode";
+      const cleanup = cancelled ? "" : ` ${codexLoginCancelFailure(start.flowId)}`;
+      throw new CliUsageError(`This proxy requires device code login (codexAuthMethod: device-only), so ${advice}.${cleanup}`, USAGE);
+    }
+    try {
+      code = await resolveCode(suppliedCode, deps, false);
+    } catch (error) {
+      if (!await cancelStartedCodexLogin(start.flowId, pinned)) {
+        console.error(codexLoginCancelFailure(start.flowId));
+      }
+      throw error;
+    }
     if (!wantsJson) {
       // One atomic pre-poll block, flushed synchronously so a piped parent
       // reads the URL before the polling window starts (#1007).
       writeLoginInstructions([
-        start.url ? `Open this URL to sign in:\n${start.url}` : "",
-        start.deviceCode ? `Device code: ${start.deviceCode}` : "",
+        start.url ? `Open this URL to sign in:\n${terminalSafeText(start.url)}` : "",
+        start.deviceCode ? `Device code: ${terminalSafeText(start.deviceCode)}` : "",
+        start.authMethod === "device-only" ? "Device code login is required by this proxy (codexAuthMethod: device-only)." : "",
         start.instructions ?? "",
         start.browserLaunch === "failed" ? BROWSER_LAUNCH_FAILED_HINT : "",
-        start.flowId ? `Flow: ${start.flowId}` : "",
+        start.flowId ? `Flow: ${terminalSafeText(start.flowId)}` : "",
       ]);
     }
     if (code && !start.flowId) throw new Error("Code submission requires a returned flow id");
@@ -298,7 +390,9 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
     // enter the code elsewhere. Match the 15-minute grant instead of giving up
     // at minute five while it is still valid, plus settlement margin for the
     // token exchange and credential write after the final poll.
-    const maxAttempts = device ? 480 : 150;
+    // The proxy may impose the device grant on a request that did not ask for it
+    // (`codexAuthMethod: "device-only"`, #8082), so the returned code counts too.
+    const maxAttempts = device || start.deviceCode ? 480 : 150;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await Bun.sleep(2_000);
       const state = publicLoginStatus(await runtimeRequest<unknown>(
@@ -327,13 +421,28 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
 
   const start = publicLoginStart(await runtimeRequest<unknown>("/api/oauth/login", {
     method: "POST", redirect: "error",
-    body: JSON.stringify({ provider, addAccount: addAccount ?? !reauth, ...(openBrowser === undefined ? {} : { openBrowser }), ...(reauth && id ? { accountId: id, reauth: true } : {}) }),
+    body: JSON.stringify({ provider, addAccount: addAccount ?? !reauth, ...(device && DEVICE_OPT_IN_PROVIDERS.has(provider) ? { device: true } : {}), ...(openBrowser === undefined ? {} : { openBrowser }), ...(reauth && id ? { accountId: id, reauth: true } : {}), ...(antigravityRisk ? { [ANTIGRAVITY_RISK_ACK_FIELD]: true } : {}) }),
   }, pinned));
+  const xaiDevice = provider === "xai" && device;
+  const managedM365 = provider === "m365-copilot";
+  if (managedM365 && !start.flowId?.trim()) throw new CliUsageError("Running proxy did not return a Microsoft 365 Copilot login flow ID.");
+  const scopedFlow = xaiDevice || managedM365;
+  if (xaiDevice && (!start.flowId?.trim() || !start.url?.trim() || !start.deviceCode?.trim())) {
+    let cleanupFailed = false;
+    try {
+      await runtimeRequest("/api/oauth/login/cancel", {
+        method: "POST", redirect: "error",
+        body: JSON.stringify({ provider, ...(start.flowId?.trim() ? { flowId: start.flowId } : {}) }),
+      }, pinned);
+    } catch { cleanupFailed = true; }
+    throw new CliUsageError(`Running proxy does not support xAI device login; restart or upgrade it.${cleanupFailed ? " Could not cancel the unintended login flow." : ""}`);
+  }
   if (!wantsJson) {
     writeLoginInstructions([
-      start.url ? `Open this URL to sign in:\n${start.url}` : "",
-      start.instructions ?? "",
-      start.deviceCode ? `Device code: ${start.deviceCode}` : "",
+      start.url ? `Open this URL to sign in:\n${terminalSafeText(start.url)}` : "",
+      provider === "xai" && device ? terminalSafeText(start.instructions ?? "") : start.instructions ?? "",
+      start.deviceCode ? `Device code: ${terminalSafeText(start.deviceCode)}` : "",
+      managedM365 && start.flowId ? `Flow ID: ${terminalSafeText(start.flowId)}` : "",
     ]);
   }
   if (code) {
@@ -347,17 +456,23 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
     printData({ ...start, modelSelection: modelSelectionNextSteps(provider, true) }, wantsJson, modelSelectionGuidance(provider, true));
     return;
   }
-  for (let attempt = 0; attempt < 100; attempt++) {
+  // Outlast the xAI device grant and the proxy-owned M365 browser session.
+  for (let attempt = 0; attempt < (device ? 930 : managedM365 ? 375 : 100); attempt++) {
     await Bun.sleep(2_000);
-    const raw = await runtimeRequest<Record<string, unknown>>(`/api/oauth/status?provider=${encodeURIComponent(provider)}`, { redirect: "error" }, pinned);
+    const raw = await runtimeRequest<Record<string, unknown>>(`/api/oauth/status?provider=${encodeURIComponent(provider)}${scopedFlow ? `&flowId=${encodeURIComponent(start.flowId!)}` : ""}`, { redirect: "error" }, pinned);
     if (loginObject(raw).error) throw new Error("Provider login failed");
+    if (scopedFlow && (raw.flowId !== start.flowId || raw.status === "idle")) throw new Error(managedM365 ? "Microsoft 365 Copilot login flow is unavailable" : "Device login flow is unavailable");
     const state = publicLoginStatus(raw);
-    if (state.done === true && state.loggedIn !== true) throw new Error("Provider login ended without authentication");
-    if (state.loggedIn === true) {
+    if (state.done === true && state.loggedIn !== true && !(scopedFlow && raw.status === "complete")) throw new Error("Provider login ended without authentication");
+    // A device login adds an account, so an already signed-in provider is not done until its flow is.
+    if (scopedFlow ? raw.status === "complete" : state.loggedIn === true && (!device || state.done === true)) {
       printData({ ...state, modelSelection: modelSelectionNextSteps(provider) }, wantsJson, [`Logged in to ${provider}.`, ...modelSelectionGuidance(provider)]);
       return;
     }
   }
+  if (managedM365) await runtimeRequest("/api/oauth/login/cancel", {
+    method: "POST", redirect: "error", body: JSON.stringify({ provider, flowId: start.flowId }),
+  }, pinned);
   throw new CliUsageError("login timed out");
 }
 
@@ -402,12 +517,12 @@ async function cancel(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (!provider) throw new CliUsageError("provider is required", USAGE);
   rejectArgs(args, USAGE);
   const codex = CODEX_NAMES.has(provider);
-  if (codex && !flowId) {
-    throw new CliUsageError("Codex login cancel requires --flow <flow-id> (printed by 'ocx account login').", USAGE);
+  if (!flowId && (codex || provider === "m365-copilot")) {
+    throw new CliUsageError(`${codex ? "Codex" : "Microsoft 365 Copilot"} login cancel requires --flow <flow-id> (printed by 'ocx account login').`, USAGE);
   }
   const result = await runtimeRequest(codex ? "/api/codex-auth/login/cancel" : "/api/oauth/login/cancel", {
     method: "POST",
-    body: JSON.stringify(codex ? { flowId } : { provider, ...(provider === "kiro" && flowId ? { flowId } : {}) }),
+    body: JSON.stringify(codex ? { flowId } : { provider, ...((provider === "kiro" || provider === "xai" || provider === "m365-copilot") && flowId ? { flowId } : {}) }),
   }, deps);
   printData(result, wantsJson, [`Cancelled ${provider} login.`]);
 }

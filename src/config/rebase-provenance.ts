@@ -2,10 +2,22 @@ import type { OcxConfig } from "../types";
 
 // Object provenance survives disk drift without adding serializable config fields.
 const fileBackedConfigs = new WeakMap<OcxConfig, string>();
+// Config paths whose most recent load fell back to defaults (an unreadable file); a later load or
+// save that records the path as file-backed clears it.
+const fallbackConfigPaths = new Set<string>();
 
 export function recordFileBackedConfig(config: OcxConfig, path: string): OcxConfig {
   fileBackedConfigs.set(config, path);
+  fallbackConfigPaths.delete(path);
   return config;
+}
+
+export function recordConfigLoadFallback(path: string): void {
+  fallbackConfigPaths.add(path);
+}
+
+export function configLoadFellBack(path: string): boolean {
+  return fallbackConfigPaths.has(path);
 }
 
 export function fileBackedConfigPath(config: OcxConfig): string | undefined {

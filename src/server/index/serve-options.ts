@@ -1,8 +1,13 @@
 import { messagesUnknownEndpointMessage } from "../../lib/messages-error-body";
 import type { Server, ServerWebSocket } from "bun";
+import {
+  claudeInterceptRouteAllowed,
+  trustedLoopbackForIngress,
+  type ServeOptionsContext,
+} from "./serve-contract";
 import { modelAliasIdPromoter } from "./model-alias-id";
-import type { StartServerDeps } from "./startup-warnings";
 import { isLinkManagementPath } from "../../link/management-routes";
+import { takeRouteProof } from "../../link/route-proof";
 import {
   GUI_PAIRING_EXCHANGE_BODY_LIMIT,
   REMOTE_WORKSPACE_PAIRING_BODY_LIMIT,
@@ -28,7 +33,6 @@ import {
 } from "./startup-warnings";
 
 import { remoteWorkspaceEnabled } from "../../remote-control/workspace-activation";
-import { isClaudeInterceptedPath } from "../../claude/intercept/listener";
 import { markActivity } from "../../lib/sidecar-tracker";
 import { knownModelIdsForProvider } from "../../router";
 import {
@@ -43,7 +47,6 @@ import {
 } from "../ws-bridge";
 import { websocketsEnabled } from "../../config";
 import { metricsExportEnabled } from "../../config/feature-flags";
-import { grokDefaultReasoningEffort } from "../../grok/effort";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
 import {
@@ -89,6 +92,7 @@ import {
   type RequestLogEntry,
 } from "../request-log";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
+import { mintConnectionReplayScope, releaseConnectionReplayScope } from "../../responses/state/connection-scope";
 import { responseWithDeferredRequestLog } from "../relay";
 import { createRequestMetricsOwner } from "../request-metrics";
 import { cachedKiroQuotaMetricRows } from "../../providers/kiro-quota-metrics";
@@ -105,6 +109,8 @@ import {
   admissionFields,
   resolveApiAuth,
   resolveResponsesApiAuth,
+  resolveFilteredReplayPrincipal,
+  resolveContextPrincipal,
   type RequestPolicyView,
   withCors,
   withManagementCors,
@@ -123,13 +129,12 @@ import {
 } from "../claude-messages";
 import { handleChatCompletions } from "../chat-completions";
 import { anthropicErrorResponse } from "../../claude/outbound";
-import {
-  buildDesktop3pRegistry,
-  desktop3pModelOptions,
-  generateDesktop3pModels,
-} from "../../claude/desktop-3p";
+import { desktopSnapshotBusyResponse, renderAnthropicModelListing } from "./anthropic-model-listing";
 import { buildDesktopDiscoveryInputs } from "../../claude/desktop-discovery-inputs";
+import { observeModelCacheRevision } from "../../codex/model-cache";
 import { handleImages } from "../images";
+import { handleVideos } from "../videos";
+import { matchVideoRoute } from "../../lib/video-routes";
 import {
   handleLive,
   logLiveSidebandFrame,
@@ -137,6 +142,7 @@ import {
   resolveLiveSidebandUpgrade,
 } from "../live";
 import { handleAudioTranscriptions } from "../audio-transcriptions";
+import { handleLiveSessionCreate } from "../audio-live-sessions";
 import {
   resolveAudioAdmission,
   TRANSCRIPTION_MODEL,
@@ -149,7 +155,6 @@ import {
 } from "../audio-live";
 import {
   EXTERNAL_CALL_PREFIX,
-  type LiveCallBindings,
 } from "../live-call-bindings";
 import { clearableDeadline } from "../../lib/abort";
 import { handleSearch } from "../search";
@@ -169,9 +174,12 @@ import {
   issueGuiSession,
   managementPrincipal,
   requireManagementAuth,
-  type ManagementAuthState,
-  type ManagementSessionControl,
 } from "../management-auth";
+import {
+  HUB_RELAY_CREDENTIAL_PATH, HUB_RELAY_ENROLLMENT_ID_HEADER, HUB_RELAY_READ_PREFIX, hubRelayReadTarget,
+} from "../../remote/hub-management-relay";
+import { issueHubRelayCredential, revokeHubRelayCredential } from "../hub-relay-auth";
+import { dispatchPassiveManagementRead } from "./passive-management-read";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
   LOCAL_ATTESTATION_PROOF_HEADER,
@@ -184,6 +192,7 @@ import { LOCAL_ASIDE_SYNC_CAPABILITY_VERSION } from "../../lib/local-aside-sync-
 import {
   GUI_PAIR_CAPABILITY_VERSION,
   GUI_PAIR_PATH,
+  DESKTOP_GUI_PAIR_PATH,
 } from "../../lib/gui-pair-capability";
 import {
   GuiPairingGrantRateLimitError,
@@ -201,90 +210,31 @@ import {
   catalogFastRowEligible,
   expandFastRow,
 } from "../fast-row";
-import type { OcxConfig } from "../../types";
 import { classifyUsageClient } from "../../usage/client";
-import type { PackageTreeIntegrityGuard } from "../../lib/package-tree-integrity";
-import type { ReadinessGate } from "../readiness";
-import type { WorkflowRefusalLog } from "../workflow-refusal";
-import type { AdmittedHttpTurnOptions } from "../admitted-http-turn";
 import { isOllamaNativePath } from "../ollama-native-paths";
 import { ollamaError } from "../ollama-inbound";
 import { dispatchOllamaRoute } from "./ollama-routes";
+import { isGeminiNativePath } from "../gemini-native-paths";
+import { geminiError } from "../gemini-inbound";
+import { dispatchGeminiRoute } from "./gemini-routes";
 
 import { readyProtocolMetadata } from "../../remote/protocol";
 import { homeInstanceId, stampServedBy } from "../../remote/served-by";
-import { modelCapabilityFields } from "../models-capabilities";
+import { grokEffortFields, modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
 import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-error";
 import { withGrokSessionIdentity } from "../../grok/session-identity";
 import { withCallerSessionIdentity } from "../caller-session-identity";
 import { agentAssertionUnsupportedResponse, hasAgentAssertionAuthorization } from "../../lib/authorization-scheme";
 import { runTurnStateCallerScope } from "../turn-state-handles";
+import { classifyRequestPeer, runWithRequestPeer } from "../../lib/request-peer-scope";
 
-export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link" | "local-control";
-
-export function trustedLoopbackForIngress(ingress: ServerIngress, hostname: string): boolean {
-  return ingress === "unauthenticated-loopback" || ingress === "local-control"
-    || (ingress === "public" && isLoopbackHostname(hostname));
-}
-
-/**
- * Routes the Claude intercept TLS listener may reach. Everything else on that socket is relayed
- * to the real upstream by the listener itself, so a request that lands here with another path
- * is a bug, not a client — refuse it.
- */
-export function claudeInterceptRouteAllowed(url: URL, req: Request): boolean {
-  return isClaudeInterceptedPath(url.pathname, req.method);
-}
-
-export interface ServeOptionsContext {
-  readonly server: Server<WsData>;
-  readonly boundPort: number | null;
-  readonly remoteWorkspaceStopping: boolean;
-
-  drainingResponse: (req: Request, policy: RequestPolicyView) => Response;
-  ingressForServer: (requestServer: Server<WsData>) => ServerIngress;
-  loopbackRouteAllowed: (url: URL, req: Request) => boolean;
-  managementIngressRouteAllowed: (url: URL, req: Request) => boolean;
-  linkRouteAllowed: (url: URL, req: Request) => boolean;
-  onAuthenticatedCatalog: (apiKeyId: string) => void;
-  linkPolicy: () => RequestPolicyView;
-  packageTreeChangedResponse: (
-    req: Request,
-    policy: RequestPolicyView,
-    message: string,
-  ) => Response;
-  serverBusyResponse: (
-    req: Request,
-    resource: string,
-    policy: RequestPolicyView,
-  ) => Response;
-  runAdmittedHttpTurn: (
-    req: Request,
-    policy: RequestPolicyView,
-    work: (lease: ActiveTurnLease) => Promise<Response>,
-    refusalLog?: WorkflowRefusalLog,
-    options?: AdmittedHttpTurnOptions,
-  ) => Promise<Response>;
-
-  config: OcxConfig;
-  inboundBodyLimitBytes: number;
-  listenPort: number;
-  liveCallBindings: LiveCallBindings;
-  loadRemoteWorkspaceRuntime: () => Promise<
-    typeof import("../../remote-control/workspace-runtime")
-  >;
-  localAttestationSecret: string;
-  loopbackPolicy: () => RequestPolicyView;
-  managementApiDeps: ManagementApiDeps;
-  managementAuth: ManagementAuthState;
-  managementSessionControl: ManagementSessionControl;
-  packageTreeIntegrity: PackageTreeIntegrityGuard;
-  readinessGate: ReadinessGate;
-
-  deps: StartServerDeps;
-  port: number | undefined;
-}
+export {
+  claudeInterceptRouteAllowed,
+  trustedLoopbackForIngress,
+  type ServerIngress,
+  type ServeOptionsContext,
+} from "./serve-contract";
 
 export function createServeOptions(ctx: ServeOptionsContext) {
   const {
@@ -389,9 +339,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       if (ingress === "hub-link") {
         const admission = resolveApiAuth(req, policy);
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
-        if (requestUrl.pathname === "/v1/catalog" && requestUrl.search === ""
-          && (req.method === "GET" || req.method === "HEAD")
-          && admission.kind === "configured") onAuthenticatedCatalog(admission.keyId);
+        if (requestUrl.pathname === "/v1/catalog" && requestUrl.search === "" && (req.method === "GET" || req.method === "HEAD")
+          && admission.kind === "configured") onAuthenticatedCatalog(admission.keyId, takeRouteProof(req));
         // #6957: the Child's read-only view of this Home. Admitted by the link key above and by
         // the shared table in src/link/management-routes.ts; never reachable on another ingress.
         if (isLinkManagementPath(requestUrl.pathname)) {
@@ -399,6 +348,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           return withCors(await handleLinkManagementRequest(
             req, requestUrl, config, requestManagementApiDeps, managementSessionControl,
             admission.kind === "configured" ? admission.keyId : undefined,
+            () => { const current = resolveApiAuth(req, linkPolicy()); return current?.kind === "configured" ? current.keyId : undefined; },
           ), req, policy);
         }
       }
@@ -424,6 +374,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         || readyzPath !== undefined
         || url.pathname.startsWith("/v1/")
         || isOllamaNativePath(url.pathname)
+        || isGeminiNativePath(url.pathname)
       )) {
         const message = "OpenCodex package files changed while this proxy was running; it restarts on its own, or run 'ocx restart' ('ocx service restart' for a background service).";
         const fencedPort = ctx.boundPort ?? requestServer.port ?? listenPort;
@@ -449,7 +400,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             }, 503, req, policy)
           : isOllamaNativePath(url.pathname)
             ? withCors(ollamaError(503, message), req, policy)
-            : packageTreeChangedResponse(req, policy, message);
+            : isGeminiNativePath(url.pathname)
+              ? withCors(geminiError(503, message), req, policy)
+              : packageTreeChangedResponse(req, policy, message);
         const headers = new Headers(response.headers);
         headers.set("Retry-After", "5");
         const challenge = fencedHealth ? req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER) : null;
@@ -467,6 +420,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         // The exact Ollama-compatible paths are data-plane routes and take data-plane CORS.
         const managementPreflight = url.pathname.startsWith("/api/") && !isOllamaNativePath(url.pathname);
+        // Gemini routes are data-plane paths too (never under /api/), so they take the data-plane branch.
         const allowed = managementPreflight
           ? isAllowedManagementOrigin(req, config)
           : isAllowedRequestOrigin(req, policy);
@@ -629,19 +583,27 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const websocketLease = tryReserveCodexWebSocket();
         if (!websocketLease) return serverBusyResponse(req, "Codex WebSockets", policy);
+        const forwardHeaders = selectForwardHeaders(req.headers);
+        const replayPrincipal = resolveFilteredReplayPrincipal(req, config, admission, forwardHeaders);
+        // An unidentified loopback caller gets a server-minted replay scope bound to this
+        // socket and its handshake thread; a keyed caller keeps the durable principal path.
+        const replayScope = admission.kind === "loopback" && resolveContextPrincipal(req, config, admission) === undefined
+          ? mintConnectionReplayScope(req.headers.get("thread-id") ?? undefined)
+          : undefined;
         // Upgrade on the server that RECEIVED this request, not the captured `server`
         // binding. They are the same object for the public listener, but the
         // unauthenticated loopback listener (#1102) is a second Bun.serve, and handing its
         // request to the public server's upgrade would fail or cross sockets.
         if (requestServer.upgrade(req, {
-          data: buildResponsesWsData(
-            selectForwardHeaders(req.headers),
+          data: { ...buildResponsesWsData(
+            forwardHeaders,
             admission,
             websocketLease,
             sessionLaneIdFromRequest(req.headers),
-            classifyUsageClient(req.headers),
-          ),
+            classifyUsageClient(req.headers), replayPrincipal, replayScope,
+          ), peerLocal: classifyRequestPeer(ingress, requestServer.requestIP?.(req)?.address, config.dashboardTrustedProxy, req.headers).local },
         })) return undefined as unknown as Response;
+        releaseConnectionReplayScope(replayScope);
         websocketLease.release();
         return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
       }
@@ -714,8 +676,15 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const native = await dispatchOllamaRoute(req, url, { config, policy, requestServer, requestMetricsLogContext, drainingResponse, runAdmittedHttpTurn });
         if (native) return native;
       }
+      if (isGeminiNativePath(url.pathname)) {
+        const native = await dispatchGeminiRoute(req, url, { config, policy, requestServer, requestMetricsLogContext, drainingResponse, runAdmittedHttpTurn });
+        if (native) return native;
+      }
 
       if (url.pathname.startsWith("/api/")) {
+        if (url.pathname === HUB_RELAY_CREDENTIAL_PATH && req.method === "DELETE") {
+          return withManagementCors(revokeHubRelayCredential(managementAuth, req, config), req, config);
+        }
         const localManagementAuth = {
           attestationSecret: localAttestationSecret,
           pid: process.pid,
@@ -727,7 +696,31 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // gate used. Consent-bearing routes need this: request headers are forgeable
         // by anything holding the admin token, the credential is not.
         const principal = managementPrincipal(req, managementAuth, config, localManagementAuth) ?? undefined;
-        if (url.pathname === GUI_PAIR_PATH) {
+        if (url.pathname === HUB_RELAY_CREDENTIAL_PATH) {
+          const response = principal === "admin-token"
+            || (principal === "gui-session" && managementSessionControl.isPaired(req, config))
+            ? issueHubRelayCredential(managementAuth, req, config)
+            : Response.json({ error: "hub relay enrollment authority required" }, { status: 403 });
+          return withManagementCors(response, req, config);
+        }
+        if (url.pathname.startsWith(HUB_RELAY_READ_PREFIX + "/")) {
+          const target = hubRelayReadTarget(req);
+          if (config.runtimeRole !== "hub" || !target
+            || (principal !== "hub-relay-read" && principal !== "gui-session" && principal !== "admin-token")) {
+            return withManagementCors(Response.json({ error: "hub relay read refused" }, { status: 404 }), req, config);
+          }
+          const keyId = principal === "hub-relay-read" ? req.headers.get(HUB_RELAY_ENROLLMENT_ID_HEADER) : null;
+          if (principal === "hub-relay-read" && !keyId) {
+            return withManagementCors(Response.json({ error: "hub relay enrollment required" }, { status: 401 }), req, config);
+          }
+          const enrollment = keyId ? { keyId, stillAdmitted: () => managementPrincipal(req, managementAuth, config) === "hub-relay-read" } : undefined;
+          const response = await dispatchPassiveManagementRead(req.method, target, config, requestManagementApiDeps, undefined, { enrollment });
+          return withManagementCors(response, req, config);
+        }
+        if (url.pathname === GUI_PAIR_PATH || url.pathname === DESKTOP_GUI_PAIR_PATH) {
+          if (url.pathname === DESKTOP_GUI_PAIR_PATH && (!trustedLoopbackForIngress(ingress, config.hostname ?? "127.0.0.1")
+            || !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(requestServer.requestIP(req)?.address ?? "")
+            || localManagementAuth.port !== config.port)) return Response.json({ error: "desktop_authorization_required" }, { status: 403 });
           if (req.method !== "POST" || principal !== "gui-pair-capability" || !managementAuth.available) {
             return withManagementCors(Response.json({ error: "GUI pairing capability required" }, { status: 403 }), req, config);
           }
@@ -748,7 +741,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           }
         }
         const mgmtResponse = await handleManagementAPI(req, url, config, requestManagementApiDeps, principal, managementSessionControl, {
-          trustedLoopback: trustedLoopbackForIngress(ingress, config.hostname ?? "127.0.0.1"),
+          trustedLoopback: trustedLoopbackForIngress(ingress, config.hostname ?? "127.0.0.1")
+            && (!url.pathname.startsWith("/api/codex/desktop-compatibility/")
+              || ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(requestServer.requestIP(req)?.address ?? "")),
           guiSessionIssuance: managementSessionIssuance(req, managementAuth),
         });
         // A local read capability authenticates the request; sign its single-use nonce so the
@@ -853,6 +848,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         return handleHubUsage(req, config, policy);
       }
 
+      if (url.pathname === "/v1/usage/windows" && req.method === "GET") {
+        const { handleHubUsageWindows } = await import("../hub-usage-windows");
+        return handleHubUsageWindows(req, config, policy);
+      }
+
       if (url.pathname === "/v1/hub-state" && (req.method === "GET" || req.method === "HEAD")) {
         // #4236: a connected client had no way to learn which providers this hub can actually
         // serve, so `ocx status` on the client reported the CLIENT's empty credential store as
@@ -931,6 +931,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       }
 
       if (url.pathname === "/v1/models" && req.method === "GET") {
+        let config = ctx.config;
         // #809: the catalog read sits immediately before model discovery because it shares
         // that route's admission rationale exactly. Keep them adjacent so a future change to
         // one is made in sight of the other.
@@ -949,11 +950,15 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // The Integrations page reports whether a Cursor client has reached this proxy; the
         // recorder keeps only a bounded User-Agent value and a timestamp, in memory.
         recordCursorSeen(req.headers);
+        const providerContentRevisions = new Map<string, string>();
+        // Entitlement resolution and imports can outlive the gather that chose these rows.
+        const canInstallAliases = () => config === ctx.config
+          && [...providerContentRevisions].every(([provider, revision]) => observeModelCacheRevision(provider) === revision);
         let goModels;
         let modelEntitlements;
         try {
           [goModels, modelEntitlements] = await Promise.all([
-            fetchAllModels(config),
+            fetchAllModels(config, { providerContentRevisions, allowSuperseded: true, publishProjection: projection => { config = projection; } }),
             // Codex sends its own client_version on this request, and upstream filters the
             // entitlement roster by it. Passing it through is what stops an entitled account
             // being told it cannot use models a newer client can (#2886).
@@ -967,6 +972,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           ]);
         } catch (error) {
           if (error instanceof CatalogGatherBusyError) {
+            if (wantsDesktopConfig && !canInstallAliases()) return desktopSnapshotBusyResponse(req, policy);
             return withCors(new Response(JSON.stringify({ error: { type: "server_error", code: "catalog_busy", message: error.message } }), {
               status: 503,
               headers: { "content-type": "application/json", "Retry-After": "1" },
@@ -1028,7 +1034,6 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           config, models: goModels, modelEntitlements,
           desktopNativeCandidates: desktopVisibleNativeSlugs(config),
         });
-        const desktopNativeSlugs = desktopInputs.nativeSlugs;
         const goOrdered = desktopInputs.routedModels;
         // Claude Code / Claude Desktop gateway model discovery (GET /v1/models with
         // Anthropic-style headers; 003 G1-G8 + devlog 131). Entries use the official
@@ -1047,10 +1052,6 @@ export function createServeOptions(ctx: ServeOptionsContext) {
          * `additional_speed_tiers` the Codex picker's own toggle is built from — but an
          * operator capability override or the final wire resolution can still make the
          * route ineligible, and `decideTier` would then drop the tier the row advertised.
-         *
-         * Declared here, above the Claude discovery call, because that call reads it while
-         * the raw OpenAI mapper further down does too; defining it there would leave this
-         * use in its temporal dead zone.
          */
         const nativeFastEligible = (metadataId: string): boolean =>
           catalogFastRowEligible(config, { provider: OPENAI_CODEX_PROVIDER_ID, id: metadataId, native: true });
@@ -1063,97 +1064,28 @@ export function createServeOptions(ctx: ServeOptionsContext) {
          * cannot classify it. Its aggregated `supportsServiceTier` is already true only
          * when EVERY member supports the tier (aggregation.ts:201), which is the right
          * rule for a row that fans out to all of them.
-         *
-         * Declared beside nativeFastEligible, above the Claude discovery call that reads
-         * both; defining it near the raw OpenAI mapper below would leave that use in its
-         * temporal dead zone.
          */
         const catalogRowFastEligible = (m: { provider: string; id: string; supportsServiceTier?: boolean }): boolean =>
           catalogFastRowEligible(config, m);
 
         if (wantsAnthropicList && !url.searchParams.has("client_version")) {
-          if (wantsDesktopConfig) {
-            const models = config.claudeCode?.enabled === false ? [] : generateDesktop3pModels(
-              desktopInputs.nativeSlugs, desktopInputs.routedModels,
-              config.claudeCode?.desktopProfile, desktopInputs.nativeContextCap,
-              desktop3pModelOptions(config.claudeCode),
-            );
-            const response = jsonResponse({ version: 1, models }, 200, req, policy);
-            response.headers.set("Cache-Control", "no-store");
-            return response;
-          }
-          if (config.claudeCode?.enabled === false) return jsonResponse({ data: [] }, 200, req, policy);
-          // Build Desktop 3P registry so inbound alias resolution works for subsequent requests.
-          buildDesktop3pRegistry(
-            desktopNativeSlugs,
-            desktopInputs.routedModels,
-            config.claudeCode?.desktopProfile,
-            desktopInputs.nativeContextCap,
-          );
-          const { buildAnthropicModelInfos, configuredRoutedDisplayName } = await import("../../claude/model-info");
-          const { resolveAutoContext } = await import("../../claude/context-windows");
-          const { resolvableDesktop3pAlias } = await import("../../claude/desktop-3p");
-          // Per-surface id family (devlog 050): explicit ?ids= wins; otherwise the
-          // Claude Code CLI discovery UA (`claude-code/<version>`, binary n_()) gets
-          // readable claude-ocx ids and every other client (Desktop 3P) keeps the
-          // hashed family its config was written with. Unknown UA -> hashed (safe).
-          const idsParam = url.searchParams.get("ids");
-          const idStyle = idsParam === "cli"
-            ? "readable" as const
-            : idsParam === "desktop"
-              ? "desktop3p" as const
-              : (/^claude-code\//i.test(req.headers.get("user-agent") ?? "") ? "readable" as const : "desktop3p" as const);
-          const data = buildAnthropicModelInfos(
-            desktopNativeSlugs,
-            goOrdered,
-            resolveAutoContext(config.claudeCode),
-            idStyle,
-            resolvableDesktop3pAlias,
-            desktopInputs.nativeContextCap,
-            config.fastMode,
-            // Explicit opt-out omits the Fast predicate.
-            config.fastRows !== false
-              ? (model: { provider: string; id: string; supportsServiceTier?: boolean }) =>
-                model.provider === "native"
-                  ? nativeFastEligible(model.id)
-                  : catalogRowFastEligible(model)
-              : undefined,
-            { modelPickerOrder: config.modelPickerOrder, featured: config.subagentModels }, configuredRoutedDisplayName(config),
-          );
-          return jsonResponse({ data }, 200, req, policy);
+          return renderAnthropicModelListing({
+            req, url, policy, config, desktopInputs, wantsDesktopConfig, canInstallAliases,
+            fastEligible: model => model.provider === "native"
+              ? nativeFastEligible(model.id)
+              : catalogRowFastEligible(model),
+          });
         }
         if (url.searchParams.has("client_version")) {
           const { buildCodexModelList } = await import("../codex-model-list");
           return jsonResponse(buildCodexModelList({
             config, nativeSlugs, availableAccountNativeSlugs, accountNativeSlugs,
             accountNativeSlugsBySelector, goOrdered, exactComboSlugs, accountSelectors,
-            suppressedBareNativeSlugs, disabledModels,
+            suppressedBareNativeSlugs, disabledModels, roster: { snapshot: modelEntitlements, accountTargets },
           }), 200, req, policy);
         }
         // OpenAI list shape: native gpt bare + routed models namespaced "<provider>/<id>"
         // (pure availability list — disabled natives are omitted entirely).
-        // Grok Build discovers models through this endpoint too, and its model picker only
-        // enables /effort for entries that advertise the reasoning ladder in the Grok model
-        // catalog shape (supports_reasoning_effort + reasoning_efforts[]). The Codex catalog
-        // branch above already carries the same ladders, so mirror them here — native rows
-        // from the upstream snapshot, routed rows from the configured provider tiers. The
-        // default uses the same canonical fallback as the Codex catalog resolver
-        // (configured default, then medium, then high, then the first tier). Extra fields
-        // are ignored by plain OpenAI clients.
-        const grokEffortOption = (value: string, isDefault: boolean) => ({
-          value,
-          label: `${value[0].toUpperCase()}${value.slice(1)} Effort`,
-          ...(isDefault ? { default: true } : {}),
-        });
-        const grokEffortFields = (efforts: string[], configuredDefault?: string) => {
-          const defaultEffort = grokDefaultReasoningEffort(efforts, configuredDefault);
-          if (defaultEffort === undefined) return {};
-          return {
-            supports_reasoning_effort: true,
-            reasoning_effort: defaultEffort,
-            reasoning_efforts: efforts.map(effort => grokEffortOption(effort, effort === defaultEffort)),
-          };
-        };
         // Cursor's local-agent runtime (Private Inference build) reads api_types + capabilities
         // to enable its effort control; every other consumer ignores them. See
         // src/server/models-capabilities.ts.
@@ -1256,9 +1188,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           ));
         };
         const promoteAliasId = modelAliasIdPromoter(config);
-        const routedRows = await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered)
+        const { effectiveModelAliases } = await import("../../providers/default-aliases");
+        // One synchronous view per provider for this projection, including empty collision results.
+        // Keep it request-local so later config or discovery changes cannot reuse stale aliases.
+        const aliasViews = new Map<string, ReturnType<typeof effectiveModelAliases>>();
+        const routedRows = uniqueCatalogModelsForRawPublicList(goOrdered)
           .filter(m => listAllows(m.provider, m.id))
-          .map(async m => {
+          .map(m => {
           // Same rule as the anthropic branch: with the global fast switch on, a client
           // that has no Fast toggle is offered the fast identity directly. An operator
           // alias is an explicit decision and still wins.
@@ -1266,14 +1202,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           const publicId = m.alias ?? `${m.provider}/${fastModelId ?? m.id}`;
           const isCombo = m.provider === "combo" && exactComboSlugs.has(publicId);
           const provider = config.providers[m.provider];
-          const effective = provider
-            ? (await import("../../providers/default-aliases")).effectiveModelAliases(
-                config,
-                provider,
-                knownModelIdsForProvider(m.provider, provider, config),
-                m.provider,
-              ).get(m.id)
-            : undefined;
+          let aliases = aliasViews.get(m.provider);
+          if (provider && aliases === undefined) {
+            aliases = effectiveModelAliases(config, provider, knownModelIdsForProvider(m.provider, provider, config), m.provider);
+            aliasViews.set(m.provider, aliases);
+          }
+          const effective = aliases?.get(m.id);
           const effectiveId = !isCombo && !fastModelId && effective
             ? promoteAliasId(m.provider, m.id, effective.alias, catalogRowFastEligible(m)) ?? publicId
             : publicId;
@@ -1311,7 +1245,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             config,
             effortRowKnownIds,
           ));
-        }));
+        });
         const data = [
           ...visibleNatives
             .filter(id => listAllows(OPENAI_CODEX_PROVIDER_ID, id))
@@ -1390,6 +1324,34 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           addFinalRequestLog(requestId, start, logCtx, response.status, response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);
         }, { requestId, start, logCtx });
+      }
+
+      // Public OpenAI Videos routes (#9110): images-endpoint admission; every upstream call takes a turn slot.
+      const videoRoute = url.pathname.startsWith("/v1/videos") ? matchVideoRoute(req.method, url.pathname) : undefined;
+      if (videoRoute) {
+        // A create keeps the listener timeout until its body is read, so a stalled upload cannot hold its slots.
+        if (videoRoute.kind !== "create") disableResponsesRequestTimeout(req, requestServer);
+        if (isDraining()) return drainingResponse(req, policy);
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
+        }
+        const start = Date.now();
+        const requestId = nextRequestLogId(start);
+        const logCtx: RequestLogContext = {
+          model: "video", provider: "unknown",
+          ...requestMetricsLogContext, client: classifyUsageClient(req.headers),
+          ...admissionFields(admission),
+        };
+        const run = async (lease: import("../../lib/admission").AdmissionLease): Promise<Response> => {
+          const response = await handleVideos(req, url, config, videoRoute, logCtx, admission, {
+            lease, onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
+          });
+          addFinalRequestLog(requestId, start, logCtx, response.status, response.status === 499 ? { closeReason: "client_cancel" } : undefined);
+          return withCors(response, req, policy);
+        };
+        return runAdmittedHttpTurn(req, policy, run, { requestId, start, logCtx }, { existingJobRead: videoRoute.kind !== "create" });
       }
 
       if (req.method === "GET" && url.pathname.startsWith("/v1/opencodex/artifacts/")) {
@@ -1517,6 +1479,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
               advisorAdmissionPolicy,
               onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
               abortSignal: req.signal,
+              comboSelectionKeepalive: {},
               onFirstOutput: () => recordFirstOutput(logCtx, start),
               onNativePassthroughTerminal: status => {
                 finalizeNativePassthroughLog(httpStatusForRequestLogTerminal(status, logCtx), {
@@ -1673,6 +1636,32 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       }
 
       // ChatGPT / Codex App voice (GPT‑Live / Frameless Bidi) + OpenAI Realtime call-create.
+      // Public GPT-Live session creation: an external audio key on an API-key provider only.
+      if (req.method === "POST" && url.pathname === "/v1/live/sessions") {
+        disableResponsesRequestTimeout(req, requestServer);
+        if (isDraining()) return drainingResponse(req, policy);
+        const audioClient = resolveAudioClient(req, config, true, admissionOptions);
+        if (!audioClient || audioClient instanceof Response) {
+          return withCors(audioClient ?? formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        }
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
+        }
+        const start = Date.now();
+        const requestId = nextRequestLogId(start);
+        const logCtx: RequestLogContext = {
+          model: "gpt-live",
+          provider: "unknown",
+          ...requestMetricsLogContext, client: classifyUsageClient(req.headers),
+          ...admissionFields(audioClient.admission),
+        };
+        return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
+          const response = await handleLiveSessionCreate(req, config, logCtx, { client: audioClient, lease: turnAdmissionLease, bindings: liveCallBindings });
+          addFinalRequestLog(requestId, start, logCtx, response.status, response.status === 499 ? { closeReason: "client_cancel" } : undefined);
+          return withCors(response, req, policy);
+        }, { requestId, start, logCtx });
+      }
+
       // Clients hit either /v1/live (Frameless App) or /v1/realtime/calls (codex RealtimeCallClient /
       // public Realtime API). Sideband WS joins are handled just below.
       if (
@@ -1732,6 +1721,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (!audioClient && liveSidebandTarget && "callId" in liveSidebandTarget
           && liveSidebandTarget.callId.startsWith(EXTERNAL_CALL_PREFIX)) {
           return withCors(formatErrorResponse(401, "authentication_error", "Live call requires its creator API key"), req, policy);
+        }
+        if (!audioClient && (liveSidebandTarget?.style === "live-session-start" || liveSidebandTarget?.style === "live-session")) {
+          return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
         }
         const admission = audioClient?.admission ?? resolveApiAuth(req, policy);
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
@@ -1902,11 +1894,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
       }
 
-      // Data-plane guard: unknown /v1/* paths must fail with JSON 404, never fall through to the
+      // Data-plane guard: unknown /v1/* and /v1beta/* paths must fail with JSON 404, never fall through to the
       // GUI static handler (extensionless paths would get index.html with HTTP 200 and codex-rs
       // endpoint clients — memories/*, realtime/* — would surface confusing
       // serde decode errors instead of a clean not-found).
-      if (url.pathname.startsWith("/v1/")) {
+      if (url.pathname.startsWith("/v1/") || url.pathname.startsWith("/v1beta/")) {
         return withCors(formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)), req, policy);
       }
 
@@ -1994,6 +1986,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
   const routeFetch = serveOptions.fetch;
   // x-opencodex-served-by on GET /v1/models, whichever branch answered (src/remote/served-by.ts).
   // Each request runs with its own caller slot, which admission fills for turn-state handle binding.
-  return { ...serveOptions, fetch: (req: Request, requestServer: Server<WsData>): Promise<Response> => runTurnStateCallerScope(async () =>
-    stampServedBy(req.method, codexCompatibleUrl(req.url).pathname, await routeFetch(req, requestServer))) } as const;
+  // Each request also carries its peer snapshot (listener + kernel-observed address), read by local-only providers.
+  return { ...serveOptions, fetch: (req: Request, requestServer: Server<WsData>): Promise<Response> => runWithRequestPeer(
+    classifyRequestPeer(ingressForServer(requestServer), requestServer.requestIP?.(req)?.address, config.dashboardTrustedProxy, req.headers), () => runTurnStateCallerScope(async () =>
+      stampServedBy(req.method, codexCompatibleUrl(req.url).pathname, await routeFetch(req, requestServer)))) } as const;
 }

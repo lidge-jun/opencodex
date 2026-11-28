@@ -4,7 +4,15 @@ import { anthropicProviderIdentityError, cmdAnthropicAccountThreshold } from "./
 import { isReservedCodexAccountWord, reportCodexAccountTargetError, resolveCodexAccountTarget } from "./account-target";
 import { hasPassiveAccountQuota } from "../providers/quota";
 import { isWeeklyAllowancePercent } from "../providers/quota-types";
-import { terminalSafeText } from "./runtime-api";
+import { readSecretLine, terminalSafeText } from "./runtime-api";
+import {
+  ANTIGRAVITY_RISK_ACK_FIELD,
+  ANTIGRAVITY_RISK_CLI_FLAG,
+  ANTIGRAVITY_RISK_REFUSAL_CODE,
+  antigravityRiskDecisionMessage,
+  resolveAntigravityRiskAcknowledgement,
+} from "../oauth/antigravity-risk";
+import { isAgentDriven } from "./agent-driven";
 import { closeSync, openSync, readSync, readFileSync, statSync } from "node:fs";
 import {
   MAX_ACCOUNT_PRIORITY,
@@ -50,7 +58,7 @@ const EXTENDED_USAGE = `Usage:
   ocx account pause <provider> <id|alias|main> [--json]
   ocx account resume <provider> <id|alias|main> [--if-healthy] [--json]
   ocx account pause-exhausted <provider> [--json]
-  ocx account strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>] [--json]
+  ocx account strategy <provider> [<quota|round-robin|fill-first|reset-near-weighted|least-loaded|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
   ocx account routes <anthropic|anthropic2> [--file <json-file>|--clear] [--json]
   ocx account remove <provider> <id|alias|main> --yes [--json]
@@ -558,6 +566,7 @@ export async function cmdImport(args: string[], deps: AccountDeps): Promise<numb
   const formatArg = flagValue(args, "--format");
   const fileArg = flagValue(args, "--file");
   const fromStdin = flag(args, "--stdin");
+  const acceptRisk = flag(args, ANTIGRAVITY_RISK_CLI_FLAG);
   const provider = args.shift();
 
   // Admission happens before source I/O. In particular, an inline JSON positional argument is
@@ -574,6 +583,25 @@ export async function cmdImport(args: string[], deps: AccountDeps): Promise<numb
   const hasFile = fileArg.found && typeof fileArg.value === "string" && fileArg.value.length > 0;
   if (args.length > 0 || hasFile === fromStdin || (fileArg.found && !hasFile)) {
     return usage("Error: choose exactly one bounded source: --file <path> or --stdin");
+  }
+
+  // Before reading the document: an imported Antigravity credential carries the same account
+  // risk as a fresh login. With --stdin the document owns stdin, so only the flag can accept.
+  const stdinInput: AccountStdin = deps.stdinImpl ?? process.stdin;
+  const decision = await resolveAntigravityRiskAcknowledgement({
+    flag: acceptRisk,
+    interactive: !fromStdin && stdinInput.isTTY === true
+      && (deps.antigravityRisk?.promptVisible ?? (() => process.stderr.isTTY === true))(),
+    agentDriven: (deps.antigravityRisk?.agentDriven ?? isAgentDriven)(),
+    warn: text => console.error(text),
+    ask: async question => {
+      process.stderr.write(question);
+      return await readSecretLine(deps, "confirmation");
+    },
+  });
+  if (decision !== "accepted") {
+    console.error(antigravityRiskDecisionMessage(decision));
+    return 1;
   }
 
   let source: string;
@@ -611,6 +639,7 @@ export async function cmdImport(args: string[], deps: AccountDeps): Promise<numb
       provider,
       format: formatArg.value,
       document,
+      [ANTIGRAVITY_RISK_ACK_FIELD]: true,
     }, { signal: controller.signal });
   } finally {
     clearTimeout(timer);
@@ -621,7 +650,9 @@ export async function cmdImport(args: string[], deps: AccountDeps): Promise<numb
     return 1;
   }
   if (response.status !== 200) {
-    if (IMPORT_CODES.has(response.json.code as AccountImportCode)) {
+    if (response.json.code === ANTIGRAVITY_RISK_REFUSAL_CODE) {
+      console.error(`Error: ${ANTIGRAVITY_RISK_REFUSAL_CODE}`);
+    } else if (IMPORT_CODES.has(response.json.code as AccountImportCode)) {
       console.error(`Error: ${response.json.code as AccountImportCode}`);
     } else {
       console.error(`Error: import_request_failed (status ${response.status})`);

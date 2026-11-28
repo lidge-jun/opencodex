@@ -26,6 +26,7 @@ import { isVertexProvider, providerSupportsLiveModelDiscovery } from "../../prov
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import { authModeLabel } from "./ProviderRail";
 import { ProviderProtocolPanel } from "./ProviderProtocolPanel";
+import ProviderModelDiscovery from "./ProviderModelDiscovery";
 import { ProviderKeyPacing, type KeyPacingDraft, type KeyPacingStatus } from "./ProviderKeyPacing";
 import type { WorkspaceItem, ProviderUpdateCallback } from "./types";
 import {
@@ -133,6 +134,7 @@ function ProviderSettingsForm({
   const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(initial.draft.allowPrivateNetwork);
   const [preserveReasoningReplay, setPreserveReasoningReplay] = useState(initial.draft.preserveReasoningReplay);
   const [liveModels, setLiveModels] = useState(initial.draft.liveModels);
+  const [subscriptionRetries, setSubscriptionRetries] = useState(initial.draft.subscriptionRetries);
   const [cursorHttpVersion, setCursorHttpVersion] = useState<CursorHttpVersion>(initial.draft.cursorHttpVersion);
   const [baseline, setBaseline] = useState<ProviderSettingsDraft>(initial.baseline);
   const [saving, setSaving] = useState(false);
@@ -178,11 +180,11 @@ function ProviderSettingsForm({
 
   const draft = useMemo<ProviderSettingsDraft>(() => ({
     adapter, baseUrl, project, location, defaultModel, authMode, apiKeyTransport, note,
-    allowPrivateNetwork, preserveReasoningReplay, liveModels, cursorHttpVersion,
+    allowPrivateNetwork, preserveReasoningReplay, liveModels, cursorHttpVersion, subscriptionRetries,
     pacingEnabled, keyPacing, pacingRpm, pacingDelay, pacingConcurrency, pacingModels,
   }), [adapter, allowPrivateNetwork, apiKeyTransport, authMode, baseUrl, cursorHttpVersion, defaultModel,
     keyPacing, liveModels, location, note, pacingConcurrency, pacingDelay, pacingEnabled, pacingModels, pacingRpm,
-    preserveReasoningReplay, project]);
+    preserveReasoningReplay, project, subscriptionRetries]);
 
   const applyDraft = (next: ProviderSettingsDraft) => {
     setAdapter(next.adapter);
@@ -196,6 +198,7 @@ function ProviderSettingsForm({
     setAllowPrivateNetwork(next.allowPrivateNetwork);
     setPreserveReasoningReplay(next.preserveReasoningReplay);
     setLiveModels(next.liveModels);
+    setSubscriptionRetries(next.subscriptionRetries);
     setCursorHttpVersion(next.cursorHttpVersion);
     setPacingEnabled(next.pacingEnabled);
     setKeyPacing({ ...next.keyPacing, ...(next.keyPacing.keys ? { keys: { ...next.keyPacing.keys } } : {}) });
@@ -574,6 +577,15 @@ function ProviderSettingsForm({
           <input className="input" value={location} onChange={e => setLocation(e.target.value)} placeholder="us-central1" />
         </label>
       </>}
+      {isCanonicalOpenAi && (
+        <div className="pwi-settings-field">
+          <span className="pwi-settings-label">{t("pws.subscriptionRetries")}</span>
+          <Select fullWidth label={t("pws.subscriptionRetries")} value={subscriptionRetries} onChange={setSubscriptionRetries}
+            options={[{ value: "", label: t("pws.subscriptionRetriesDefault") }, ...Array.from({ length: 10 }, (_, i) => ({
+              value: String(i), label: String(i),
+            }))]} />
+        </div>
+      )}
       {adapter.trim() === "cursor" && (
         <label className="pwi-settings-field">
           <span className="pwi-settings-label">{t("pws.cursorTransport")}</span>
@@ -674,6 +686,9 @@ function ProviderSettingsForm({
           <span className="muted text-label" style={{ display: "block", marginTop: 2 }}>{t("pws.liveModelsDesc")}</span>
         </span>
       </label>
+      {apiBase !== undefined && liveModelDiscoverySupported && item.liveModels !== false && (
+        <ProviderModelDiscovery key={JSON.stringify([targetKey, apiBase, item.name])} apiBase={apiBase} provider={item.name} />
+      )}
       <section className="pwi-pacing-card" aria-labelledby="pwi-pacing-title">
         <div className="pwi-pacing-head">
           <div><h3 id="pwi-pacing-title">{t("pws.pacingTitle")}</h3><p>{t("pws.pacingDesc")}</p></div>

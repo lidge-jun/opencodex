@@ -1,4 +1,8 @@
+import { selectResponseReplayOwner } from "./replay-owner";
+import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { attributePhysicalAttempt } from "../request-log-failure-attribution";
+import { failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion } from "../link-turn";
 import { inputAdmissionRefusalMessage } from "./input-admission";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { markProxyError } from "../../lib/client-error-body";
@@ -7,24 +11,32 @@ import type { HandleResponsesOptions, ResponsesRequestContext, ResponsesAdmissio
 import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
 import { addProtocolEntryReason, markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
-import { nativeMessagesToolScopeDenial } from "../messages-native-scope";
+import { admitsHostedAdvisor, scopedAnthropicServerTools } from "../messages-native-scope";
 import { advisorServerToolDestination } from "../../adapters/anthropic/advisor-tool";
 import { isAntigravityRoute } from "../antigravity-direct-eligibility";
-import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
+import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, markPolicyCandidateRefusal, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
 import {
   agentTaskRecoveryConfig,
   restoreCachedEncryptedAgentTasks,
   recoverEncryptedAgentTaskWithResult,
 } from "./agent-task-recovery";
-import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "../request-decompress";
+import { admitParsedJsonRequestBody, readJsonRequestBody, resolveInboundBodyLimitBytes, takeParsedRequestBody } from "../request-decompress";
 import {
   clientCancelledResponse,
   decodeRequestErrorResponse,
+  ComboMeteredConsentRequiredError,
+  ComboModelChangeRefusedError,
+  ComboRouteRefusal,
+  ComboToolTargetQuotaExhaustedError,
+  ComboToolTargetUnavailableError,
   comboUnavailable,
   unreadableEncryptedAgentTaskResponse,
+  comboMeteredConsentRefused,
 } from "./core-errors";
+import { advisorPlanRootConfig } from "./advisor-plan-slot";
+import { requireSendAdmission } from "./send-admission";
 import { parseSyntheticRowId } from "../fast-row";
-import { resolveComboId, comboIdFromRawBody, comboExclusionReasons, NoAvailableComboTargetsError, pickComboTarget } from "../../combos";
+import { resolveComboId, comboIdFromRawBody, comboExclusion, getCombo, NoAvailableComboTargetsError, pickComboTarget, targetKey } from "../../combos";
 import { INTERCEPT_TARGET_UNAVAILABLE_CODE, interceptTargetUnavailableResponse, resolveChosenTarget, resolveShadowCallTarget } from "./shadow-target-availability";
 import {
   MEMORY_MODEL_TARGET_UNAVAILABLE_CODE,
@@ -33,15 +45,15 @@ import {
   memoryModelRouteReason,
   memoryModelTargetUnavailableResponse,
 } from "./memory-models";
-import { recallComboForLane } from "./combo-session-recall";
+import { peekComboTargetForLane, quotaOnlyComboForLane, recallComboForLane, rememberComboForLane } from "./combo-session-recall";
 import {
-  sessionLaneIdFromRequest,
-  conversationIdFromResponsesRequest,
-  assignNativeLogConversationId,
-  fillHermesLogConversationFallback,
-  nativeLogConversationIdFromHeaders,
-  sessionIdHeaderFromRequest,
-  reasoningReplayConversationIdFromResponsesRequest,
+  COMBO_TOOL_LOOP_PIN_REASON, comboStillHasTarget, comboToolLoopLane, comboToolLoopRouteIdentity, isToolLoopContinuation, pinnedRouteStillResolves,
+  toolLoopPinnedPick,
+} from "./combo-tool-loop-pin";
+import {
+  sessionLaneIdFromRequest, conversationIdFromResponsesRequest, assignNativeLogConversationId,
+  fillHermesLogConversationFallback, nativeLogConversationIdFromHeaders, sessionIdHeaderFromRequest,
+  promotePromptCacheKeySession, reasoningReplayConversationIdFromResponsesRequest,
 } from "../request-log-conversation";
 import { contextPrincipalIdOf, resolveContextPrincipal } from "../auth-cors";
 import { responseTurnMembership } from "./turn-membership";
@@ -79,7 +91,7 @@ import {
 import { formatErrorResponse } from "../../bridge";
 import { chatCanPreserveMandatoryToolChoice } from "./combo-required-tool-contract";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
-import type { OcxParsedRequest } from "../../types";
+import type { OcxConfig, OcxParsedRequest } from "../../types";
 import { buildToolBridgeMaps } from "./collaboration";
 import { parseRequest } from "../../responses/parser";
 import { responsesHasFileImage, responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
@@ -88,10 +100,14 @@ import { anthropicSessionKeyFromParts } from "../../oauth/anthropic-routing";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../responses/turn-termination";
-import { noteCodexSelectionAffinity, observeCacheDiagnosticInbound, rebindCacheDiagnosticBody, requestLogSpeedLabel, readConfiguredCodexServiceTier } from "../request-log";
+import { beginRequestAttempt, finishRequestAttempt, markLocalRequestLogRefusal, noteAttemptSend, noteCodexSelectionAffinity, observeCacheDiagnosticInbound, rebindCacheDiagnosticBody, requestLogSpeedLabel, readConfiguredCodexServiceTier, usageFromResponsesPayload } from "../request-log";
+import type { PersistedUsageAttempt } from "../../usage/log";
 import type { RouteResult } from "../../router";
 import {
   captureRouteStaticPolicy,
+  comboDestinationQuotaExhausted,
+  previewRouteModel,
+  resolvedComboDestination,
   routeConcreteModel,
   routeCompactionModel,
   routeModel,
@@ -99,6 +115,8 @@ import {
   AnthropicSecondaryInstanceUnavailableError,
 } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
+import { comboTargetRequiresConsent, liveComboSendRequiresConsent } from "./combo-admission-snapshot";
+import { resolvePolicyProfileId } from "../../routing/profile";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { resolveNativeReasoningRetention } from "../../config/schema/native-reasoning-retention";
 import { isThreadSpawnRequest } from "../effort-policy";
@@ -106,6 +124,7 @@ import {
   resolveSubagentFallbackChain,
   maybePrimeSubagentQuota,
   applySubagentModelFallback,
+  rewriteParsedModel,
 } from "../../codex/subagent-model-fallback";
 import { codexAccountSelectionForTurn } from "../lifecycle";
 import { isNativeMainTrafficBlocked } from "../../codex/native-profile-startup";
@@ -155,6 +174,7 @@ import {
   admissionModelDeniedResponse, projectAdmissionModelDeniedLog,
   AdmissionModelDeniedError,
   assertRouteAllowedByScope,
+  intersectAdmissionModelScopes,
   resolveAdmissionModelScope,
   routeAllowedByScope,
 } from "../admission-model-scope";
@@ -188,6 +208,7 @@ import {
 
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
 import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
+import { codexTurnStartsNewHistory } from "../../adapters/anthropic/per-message-effort";
 
 /** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
 function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
@@ -241,14 +262,15 @@ export async function prepareResponsesRequest(
   const policyScope = options.policyRequestScope ?? { triedDestinations: new Set<string>() };
   const concreteSelection = options.comboAttempt || options.policyFallbackCandidate !== undefined;
 
-  // The Chat and Anthropic surfaces replay through here with a Responses-shaped body,
-  // so an omitted value means a genuine Responses inbound.
+  // The Chat and Anthropic surfaces replay through here with a Responses-shaped body, so an omitted value means a genuine Responses inbound.
   const inboundWire = options.inboundWire ?? "responses";
   const translatorBudget = options.translatorBudget;
   const agentTaskRecovery = agentTaskRecoveryConfig(config);
   let body: unknown;
   try {
-    body = await readJsonRequestBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
+    const limit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
+    const attached = takeParsedRequestBody(req);
+    body = attached ? admitParsedJsonRequestBody(attached.body, limit, translatorBudget) : await readJsonRequestBody(req, translatorBudget, limit);
   } catch (err) {
     if (options.abortSignal?.aborted || req.signal.aborted) {
       return clientCancelledResponse();
@@ -274,6 +296,10 @@ export async function prepareResponsesRequest(
       : options.promptCacheKeyIsSharedCohort === false ? "metadata-derived" : "caller",
     contextPrincipalIdOf(options.admission),
   );
+  // After the diagnostic above: a body prompt_cache_key stands in for a missing session header (#9137).
+  if (inboundWire === "responses" && options.promptCacheKeyIsSharedCohort !== true) {
+    promotePromptCacheKeySession(req.headers, body, options.admission);
+  }
   if (!concreteSelection && !options.compactionRoutingOverride && inboundWire === "responses") {
     options.compactionRoutingOverride = applyCompactionRoutingOverride(body, req.headers, config, {
       endpoint: "responses",
@@ -437,12 +463,17 @@ export async function prepareResponsesRequest(
   // parent all present the same parent id. `codexConversationIdentity` already reads this header
   // for the same reason, and a surface that must tell siblings apart needs it too (#5033).
   const inboundOwnThreadId = req.headers.get("thread-id")?.trim() || undefined;
+  const replayPrincipal = options.replayPrincipal
+    ? options.replayPrincipal.clientPrincipalId : resolveContextPrincipal(req, config, options.admission);
+  const strictReplay = options.plaintextV2Decision ?? isPlaintextV2AgentMessagesEnabled(config);
+  const { replayOwnerKey, replayConnectionScope } = selectResponseReplayOwner(strictReplay, replayPrincipal, inboundOwnThreadId, options);
+  const replayThreadId = strictReplay ? inboundOwnThreadId : inboundClientThreadId;
   const cursorClientThreadId = codexPoolAffinityKey(req.headers);
   const originalBody = body;
   if (options.comboReplaySnapshot) {
     copyPreviousResponseReplayProvenance(options.comboReplaySnapshot.sourceBody, body);
   } else {
-    body = expandPreviousResponseInput(body, inboundClientThreadId);
+    body = expandPreviousResponseInput(body, replayThreadId, replayOwnerKey);
     const replayFailure = previousResponseReplayFailure(body);
     if (replayFailure?.reason === "scope_mismatch") {
       // Bounded and content-free: no task scope and nothing about the retained entry.
@@ -450,9 +481,34 @@ export async function prepareResponsesRequest(
     }
     // Local replay failures require full client replay.
     if (replayFailure) {
+      failLinkTurnExpansion(options.linkTurn, req, logCtx, body, replayFailure.reason);
+      const { code } = replayFailure;
+      if (strictReplay) {
+        logCtx.errorCode = code;
+        if (logCtx.attempts?.some(attempt => attempt.sendCount > 0)) logCtx.terminalSource = "synthetic";
+        else markLocalRequestLogRefusal(logCtx, code);
+        // Attribute a direct native refusal using only request metadata and a route preview.
+        // A miss never enters auth, subagent fallback or encrypted-task recovery for logging.
+        const { model, reasoning } = body as { model?: unknown; reasoning?: unknown };
+        try {
+          const parsed = parseRequest({ model, reasoning });
+          logCtx.requestedModel ??= options.mainHardLockFallbackOverride?.sourceModel
+            ?? options.compactionRoutingOverride?.sourceModel ?? parsed.modelId;
+          logCtx.requestedEffort ??= parsed.options.reasoning;
+          if (!concreteSelection && !memoryModelApplies && !shadowCallMatches
+            && !resolveComboId(config, parsed.modelId) && !resolvePolicyProfileId(config, parsed.modelId)) {
+            const preview = previewRouteModel(config, parsed.modelId);
+            if (isCanonicalOpenAiForwardProvider(preview.provider)) {
+              logCtx.provider = preview.providerName;
+              logCtx.model = preview.modelId;
+              logCtx.routeDecision = preview.routeDecision;
+            }
+          }
+        } catch { /* Unavailable attribution does not change the replay refusal. */ }
+      }
       return markProxyError(formatErrorResponse(
         400,
-        "previous_response_not_found",
+        code,
         "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
       ));
     }
@@ -460,6 +516,9 @@ export async function prepareResponsesRequest(
   const previousResponseInputExpanded = options.comboReplaySnapshot?.previousResponseInputExpanded
     ?? (body !== originalBody
       && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string");
+  // Remote Link holds and request-log fields (design T4 sections 5, 9.1): the expanded input, before any upstream I/O.
+  if (!options.comboReplaySnapshot) observeLinkTurnExpansion(options.linkTurn, req, logCtx, body, previousResponseInputExpanded ? "chained"
+    : body && typeof body === "object" && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string" ? "unexpanded" : "none");
   options.responsesInstructionImage ||= responsesHasInstructionImage(body);
   options.responsesUnsupportedInputMedia ||= responsesHasUnsupportedInputMedia(body, { captionUserImages: true });
   options.responsesFileImage ||= responsesHasFileImage(body);
@@ -537,10 +596,21 @@ export async function prepareResponsesRequest(
       parsed._nativeReasoningReplay = options.nativeReasoningReplay;
       parsed._nativeReasoningMint = options.nativeReasoningMint;
       parsed._anthropicServerTools = options.anthropicServerTools;
+      // The lowered named choice serves the wire builder but grants no client or synthetic tool permission.
+      if (options.anthropicHostedAdvisorSelection) {
+        parsed.options.explicitRootFunctionChoices = [];
+        parsed.options.explicitClientToolChoices = [];
+      }
       parsed._anthropicServerReplay = options.anthropicServerReplay;
       parsed._anthropicSystemCachePrefix = options.anthropicSystemCachePrefix;
+      parsed._anthropicInbound = true;
       if (parsed.options.textFormat?.type === "json_schema") parsed._structuredOutputConformance = true;
     }
+    if (options.advisorInternal || options.internalSidecarCall || options.internalDecisionCall) {
+      parsed._proxyOwnedSystemPrompt = true;
+    }
+    // Codex's own "new" turn metadata, for the experimental Anthropic perMessageEffort option (#6895).
+    parsed._codexNewHistory = codexTurnStartsNewHistory(body, req.headers, options.inboundTransport);
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
     // The body may have been rebuilt since the inbound observation (previous-response
     // expansion); alias the parsed raw body to the same draft so the outbound
@@ -598,9 +668,7 @@ export async function prepareResponsesRequest(
         // The enclosing branch already proves this is not the shared cohort.
         promptCacheKeyIsSharedCohort: false,
       });
-      if (normalizedCacheKey) {
-        parsed._reasoningReplayScope = { clientThreadId: normalizedCacheKey };
-      }
+      if (normalizedCacheKey) parsed._reasoningReplayScope = { clientThreadId: normalizedCacheKey };
     }
     if (cursorClientThreadId) parsed._cursorClientThreadId = cursorClientThreadId;
     if (options.shadowCallIntercepted === true) parsed._cursorIsolateConversation = true;
@@ -608,6 +676,7 @@ export async function prepareResponsesRequest(
       parsed._memoryModelPhase = options.memoryModelPhase;
       parsed._cursorIsolateConversation = true;
     }
+    if (options.advisorSessionIdentity) parsed._advisorSessionIdentity = options.advisorSessionIdentity;
   } catch (err) {
     if (isTranslatorBudgetExceededError(err)) {
       return markProxyError(formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
@@ -616,10 +685,14 @@ export async function prepareResponsesRequest(
     }
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
+  parsed._plaintextV2Decision = strictReplay;
   options.onRequestBodyRead?.();
-  const responseStateOptions = (force = false): { force?: boolean; clientThreadId?: string } => ({
+  const responseStateOptions = (force = false) => ({
+    replayOwnerKey,
+    ...(replayConnectionScope ? { connectionScope: replayConnectionScope } : {}),
+    compiledPlaintext: parsed._plaintextV2EverPrepared === true,
     ...(force ? { force: true } : {}),
-    ...(parsed._clientThreadId ? { clientThreadId: parsed._clientThreadId } : {}),
+    ...((strictReplay ? inboundOwnThreadId : parsed._clientThreadId) ? { clientThreadId: strictReplay ? inboundOwnThreadId : parsed._clientThreadId } : {}),
   });
   const resolvedConversationId = conversationIdFromResponsesRequest({
     clientThreadId: parsed._clientThreadId,
@@ -708,23 +781,116 @@ export async function prepareResponsesRequest(
     return markProxyError(formatErrorResponse(401, "authentication_error", "Anthropic Pool 2 requires an enabled configured provider"));
   }
   const admissionScope = options.admissionScope ?? resolveAdmissionModelScope(config, options.admission);
+  // Whether the admitted key is listed now, taken with the scope and before any later await. A
+  // configured key that is not listed stays unscoped, as resolveAdmissionModelScope treats it.
+  const admittedKeyId = options.admission?.kind === "configured" ? options.admission.keyId : undefined;
+  const admittedKeyListed = (current: OcxConfig): boolean =>
+    admittedKeyId !== undefined && (current.apiKeys ?? []).some(key => key.id === admittedKeyId);
+  const keyListedAtAdmission = admittedKeyListed(advisorPlanRootConfig(config));
   const advisorAdmissionPolicy = options.advisorAdmissionPolicy;
+  // What each Combo pick was admitted under, read from the config that selected it and before any await or
+  // wire normalization rewrites the route in place: its tool-loop identity, as a continuation re-routes the same
+  // target, the quota-only rule its paid consent follows, and whether its prepared destination needs that consent.
+  const comboRouteAdmissions = new WeakMap<RouteResult, { identity: string; model: string; quotaOnly: boolean; requiresConsent: boolean }>();
+  // A quota-only tool continuation keeps the target that issued its calls, as in the Combo loop. Its pin is
+  // consulted before the router's ordered selection, which can stop at an earlier blocked target.
+  const toolLoopPinnedRoutes = new WeakSet<RouteResult>();
+  const pinnedComboContinuation = (selector: string): RouteResult | undefined => {
+    const comboId = resolveComboId(config, selector);
+    const combo = comboId ? config.combos?.[comboId] : undefined;
+    if (!comboId || !combo?.quotaOnlyFallback || !isToolLoopContinuation(body)) return undefined;
+    const pinned = toolLoopPinnedPick({
+      config,
+      comboId,
+      lane: comboToolLoopLane(req.headers, true, options.claudeBridgePoolSession),
+      body,
+      // Consent does not decide the pin. A pinned target that lost paid-call consent is refused for consent below.
+      eligible: () => true,
+      quotaExhausted: (target, now) => comboDestinationQuotaExhausted(config, target, now),
+    });
+    if (pinned === "quota-exhausted") throw new ComboToolTargetQuotaExhaustedError();
+    if (!pinned) throw new ComboToolTargetUnavailableError();
+    const routed = routeConcreteModel(config, `${pinned.target.provider}/${pinned.target.model}`);
+    const pinnedRoute: RouteResult = { ...routed, combo: pinned, routeKind: "combo",
+      routeReason: routed.routeReason === "blocked-model-redirect" ? "blocked-model-redirect" : COMBO_TOOL_LOOP_PIN_REASON };
+    if (comboTargetRequiresConsent(config, pinned.target, true, pinnedRoute)
+      && !admissionMayUseMeteredComboTargets(config, options.admission, combo)) {
+      throw new ComboMeteredConsentRequiredError();
+    }
+    toolLoopPinnedRoutes.add(pinnedRoute);
+    return pinnedRoute;
+  };
+  const routeSelector = (selector: string): RouteResult =>
+    pinnedComboContinuation(selector) ?? routeModel(config, selector, routeEvidence(options, parsed));
+  // The subagent fallback chain checks availability through the same ordered selection, so a tool continuation
+  // answered by one of its quota-only Combos keeps that Combo before the chain is walked. Its result is marked
+  // pinned, so the reroute goes through the pin even when the Combo's selector matches the requested bare model.
+  type SubagentFallback = NonNullable<ReturnType<typeof applySubagentModelFallback>> & { pinned?: true };
+  const pinnedSubagentFallback = (chain: readonly string[] | null): SubagentFallback | undefined => {
+    if (!isToolLoopContinuation(body)) return undefined;
+    const lane = comboToolLoopLane(req.headers, true, options.claudeBridgePoolSession);
+    const comboId = quotaOnlyComboForLane(lane);
+    const combo = comboId === undefined ? undefined : config.combos?.[comboId];
+    if (comboId === undefined || (combo && combo.quotaOnlyFallback !== true)) return undefined;
+    const from = parsed.modelId;
+    // Without a fallback chain, a request that names the Combo itself is pinned by its own route.
+    if (!chain && resolveComboId(config, from) === comboId) return undefined;
+    // A deleted Combo, one that left the chain or a target that cannot serve refuses, and the lane keeps it for a retry.
+    const selector = combo && chain?.find(entry => resolveComboId(config, entry) === comboId);
+    const target = selector ? peekComboTargetForLane(config, lane, comboId) : undefined;
+    if (!selector || !target) return { from, to: from, refusal: new ComboToolTargetUnavailableError().response() };
+    // The same scoped fallback-policy admission as the chain's own rewrite.
+    const hop = guardFallbackHop(config, {
+      site: "subagent",
+      route: from,
+      from: { provider: route.providerName, model: route.modelId },
+      to: resolvedComboDestination(config, target),
+      trigger: "unavailable",
+      admission: options.admission,
+    });
+    if (!hop.ok) return { from, to: from, refusal: hop.response };
+    hop.commit();
+    rewriteParsedModel(parsed, selector);
+    return { from, to: selector, pinned: true };
+  };
   const captureInboundRoutePolicy = (candidate: RouteResult, captureRequestPolicy = true): RouteResult => {
     // Router-collapsed aliases bypass the combo loop. Re-pick before capturing destination
     // policy so random/RR cannot refuse while an unmetered target is still usable.
-    if (candidate.combo?.target.metered && !admissionMayUseMeteredComboTargets(
-      config, options.admission, config.combos?.[candidate.combo.comboId],
-    )) {
+    const collapsed = candidate.combo && config.combos?.[candidate.combo.comboId];
+    const metered = (target: NonNullable<RouteResult["combo"]>["target"], route?: RouteResult) =>
+      comboTargetRequiresConsent(config, target, collapsed?.quotaOnlyFallback === true, route);
+    if (candidate.combo && metered(candidate.combo.target, candidate)
+      && !admissionMayUseMeteredComboTargets(config, options.admission, collapsed)) {
+      const repickNow = Date.now();
+      const quotaExhausted = (target: NonNullable<RouteResult["combo"]>["target"], now: number) =>
+        comboDestinationQuotaExhausted(config, target, now);
+      let blockedByConsent = false;
       const pick = pickComboTarget(config, candidate.combo.comboId, {
-        eligible: target => !target.metered,
+        eligible: target => {
+          const allowed = !metered(target);
+          blockedByConsent ||= !allowed;
+          return allowed;
+        },
         allowCooldownReprobe: false,
+        quotaExhausted,
+        now: repickNow,
       });
       if (!pick) {
+        // A quota-only Combo stops at its first usable target, so a consent block is the reason it stopped.
+        if (blockedByConsent && collapsed?.quotaOnlyFallback) throw new ComboMeteredConsentRequiredError();
         throw new NoAvailableComboTargetsError(candidate.combo.comboId,
-          comboExclusionReasons(config, candidate.combo.comboId, target => !target.metered));
+          comboExclusion(config, candidate.combo.comboId, target => !metered(target), repickNow, quotaExhausted));
       }
       const routed = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
       candidate = { ...routed, combo: pick, routeKind: "combo", routeReason: routed.routeReason === "blocked-model-redirect" ? "blocked-model-redirect" : "combo-pick" };
+    }
+    // The collapsed pick skips executeComboResponses, so its model lock is enforced here.
+    const pickedCombo = candidate.combo && getCombo(config, candidate.combo.comboId);
+    // A pinned continuation stays on the target that issued its calls, so it makes no hop to lock.
+    const lockedTarget = pickedCombo?.preserveFallbackModel && !toolLoopPinnedRoutes.has(candidate)
+      ? pickedCombo.targets[0] : undefined;
+    if (lockedTarget && candidate.modelId !== resolvedComboDestination(config, lockedTarget).model) {
+      throw new ComboModelChangeRefusedError();
     }
     // Every route this request path produces passes through here: the direct
     // name, an alias, a policy or combo selection, a compaction override, a
@@ -748,6 +914,11 @@ export async function prepareResponsesRequest(
       providerName: candidate.providerName,
       modelId: previewXaiOauthWireModel(parsed, candidate, config, inboundWire),
     });
+    if (candidate.combo) {
+      const quotaOnly = config.combos?.[candidate.combo.comboId]?.quotaOnlyFallback === true;
+      comboRouteAdmissions.set(candidate, { identity: comboToolLoopRouteIdentity(candidate), model: candidate.modelId, quotaOnly,
+        requiresConsent: comboTargetRequiresConsent(config, candidate.combo.target, quotaOnly, candidate) });
+    }
     return candidate;
   };
   try {
@@ -760,7 +931,7 @@ export async function prepareResponsesRequest(
         ? routeConcreteModel(config, modelId)
         : parsed._compactionRequest === true
           ? routeCompactionModel(config, modelId, routeEvidence(options, parsed))
-          : routeModel(config, modelId, routeEvidence(options, parsed));
+          : routeSelector(modelId);
       // A Pool 2 selector may leave Pool 2 only through an operator-configured cross-provider
       // blocked-model redirect, which the router marks as a credential-domain rewrite. Any other
       // destination means the selector fell through to default resolution, which stays refused.
@@ -831,6 +1002,8 @@ export async function prepareResponsesRequest(
     if (parsed._compactionRequest === true || options.compactionRoutingOverride) parsed._cursorIsolateConversation = true;
     route = memoryRoute ?? shadowRoute ?? resolveRoute(options.policyFallbackCandidate
       ? `${options.policyFallbackCandidate.provider}/${options.policyFallbackCandidate.model}` : parsed.modelId);
+    // A copy, since final normalization rewrites the route in place.
+    if (options.comboChildRoute) Object.assign(options.comboChildRoute, { route: { ...route }, identity: comboToolLoopRouteIdentity(route) });
     // Selection-free hard-lock preflight grants no hop. Enforce the actual ranked destination
     // against the locked source before admitting this first selection.
     const hardLockProfileTrace = options.mainHardLockFallbackOverride ? route.routeDecision?.profile : undefined;
@@ -888,8 +1061,9 @@ export async function prepareResponsesRequest(
     if (policyRefusal) return policyRefusal;
     if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
     if (err instanceof NoAvailableComboTargetsError) {
-      return comboUnavailable(err.comboId, undefined, err.reasons);
+      return comboUnavailable(err.comboId, undefined, err.exclusion);
     }
+    if (err instanceof ComboRouteRefusal) return err.response();
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the
       // no-eligible reason) so failed policy requests stay auditable.
@@ -990,6 +1164,10 @@ export async function prepareResponsesRequest(
   };
   let selectedForwardHeaders = req.headers;
   let subagentFallbackAccountId = config.activeCodexAccountId ?? null;
+  // A typed fact for providers that refuse fallback-routed turns (the Antigravity ACP policy): set only
+  // where a fallback actually moves the route (a selection that keeps the requested model is not one),
+  // never inferred from headers, models or tools.
+  let subagentFallbackSelected = false;
   let subagentFallbackAccountPreview: SubagentPoolAccountPreview | undefined;
   let subagentFallbackModelEligibleAccountIdsForModel: SubagentModelEligibleAccountIds | undefined;
   let subagentQuotaFailureModel = parsed.modelId;
@@ -1021,6 +1199,10 @@ export async function prepareResponsesRequest(
       await maybePrimeSubagentQuota(config, Date.now(), { nativeMainReadsForbidden });
     }
 
+  // An exact-account request without a fallback chain skips the block below, so its quota-only lane decides here.
+  const exactAccountPinRefusal = threadSpawn && !options.comboAttempt && route.codexAccountId !== undefined
+    && initialSubagentFallbackChain === null ? pinnedSubagentFallback(null)?.refusal : undefined;
+  if (exactAccountPinRefusal) return exactAccountPinRefusal;
   // Subagent fallback must settle the final model/provider BEFORE route-dependent
   // normalization (virtual models, effort caps, service tier, wire protocol).
   // Preview the preferred Codex account without acquiring a probe lease or refreshing
@@ -1070,7 +1252,7 @@ export async function prepareResponsesRequest(
       subagentFallbackModelEligibleAccountIdsForModel?.(route.modelId),
     );
     subagentFallbackAccountId = previewAccountId ?? config.activeCodexAccountId ?? null;
-    const fallback = applySubagentModelFallback(
+    const fallback: SubagentFallback | null = pinnedSubagentFallback(fallbackChain) ?? applySubagentModelFallback(
       parsed,
       req.headers,
       config,
@@ -1086,6 +1268,7 @@ export async function prepareResponsesRequest(
     );
     if (fallback?.refusal) return fallback.refusal;
     if (fallback) {
+      if (fallback.to !== fallback.from) subagentFallbackSelected = true;
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
       if (isInjectionDebugEnabled()) {
@@ -1094,10 +1277,10 @@ export async function prepareResponsesRequest(
     }
     subagentQuotaFailureModel = fallback?.to ?? parsed.modelId;
 
-    if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
+    if (fallback?.to && (fallback.pinned || !slugsEquivalent(fallback.to, route.modelId))) {
       try {
         route = captureInboundRoutePolicy(
-          routeModel(config, fallback.to, routeEvidence(options, parsed)),
+          routeSelector(fallback.to),
         );
         leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
         credentialDomainWasRewritten = true;
@@ -1108,8 +1291,9 @@ export async function prepareResponsesRequest(
         if (policyRefusal) return policyRefusal;
         if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
         if (err instanceof NoAvailableComboTargetsError) {
-          return comboUnavailable(err.comboId, undefined, err.reasons);
+          return comboUnavailable(err.comboId, undefined, err.exclusion);
         }
+        if (err instanceof ComboRouteRefusal) return err.response();
         if (err instanceof NoEligiblePolicyCandidateError) {
           logCtx.routeDecision = err.trace;
         }
@@ -1122,8 +1306,8 @@ export async function prepareResponsesRequest(
   }
 
   let recoveryFailureReason: AgentTaskRecoveryFailureReason | undefined;
-  // Native fallback and explicitly trusted direct Responses routes can consume ciphertext,
-  // so recover only after final route selection.
+  let recoveryAttempts: PersistedUsageAttempt[] | undefined;
+  // Native fallback and explicitly trusted direct Responses routes can consume ciphertext, so recover only after final route selection.
   //
   // Deliberately NOT gated on `threadSpawn` (#4089). Switching a live thread from a native
   // ChatGPT model to a routed provider replays a backend-minted encrypted agent message on every
@@ -1154,7 +1338,24 @@ export async function prepareResponsesRequest(
         (body as { input?: unknown } | undefined)?.input,
         agentTaskRecovery,
         config,
-        { parentThreadId, abortSignal: options.abortSignal },
+        {
+          parentThreadId,
+          abortSignal: options.abortSignal,
+          onSend: hasUnexpandedPreviousResponse ? ({ model, status, durationMs, usage }) => {
+            const attempts = recoveryAttempts ??= [];
+            const ordinal = (logCtx.attempts?.length ?? 0) + attempts.length + 1;
+            const attempt = beginRequestAttempt(ordinal, OPENAI_CODEX_PROVIDER_ID, model, "openai-responses");
+            noteAttemptSend(attempt, undefined);
+            finishRequestAttempt(attempt, status ?? 502, durationMs, usageFromResponsesPayload(usage));
+            if (status === undefined) {
+              attempt.failureStage = "pre-header";
+              attempt.failureCause = "transport-ambiguous";
+            } else {
+              attributePhysicalAttempt(attempt);
+            }
+            attempts.push(attempt);
+          } : undefined,
+        },
       );
       recovered = result.recovered;
       recoveryFailureReason = result.recovered ? undefined : result.reason;
@@ -1170,6 +1371,8 @@ export async function prepareResponsesRequest(
         try {
           const reparsed = parseRequest(body);
           const kept: Array<keyof OcxParsedRequest> = [
+            "_plaintextV2Decision",
+            "_plaintextV2EverPrepared",
             "_previousResponseInputExpanded",
             "_providerContinuation",
             "_providerContinuationCandidate",
@@ -1182,6 +1385,8 @@ export async function prepareResponsesRequest(
             "_reasoningReplayScope",
             "_nativeReasoningRetention",
             "_cursorIsolateConversation",
+            "_codexNewHistory",
+            "_proxyOwnedSystemPrompt",
           ];
           for (const key of kept) {
             if (parsed[key] !== undefined) {
@@ -1199,7 +1404,7 @@ export async function prepareResponsesRequest(
           // makes the assignment readable, run selection again with the full configured chain
           // and keep the route in sync with any newly selected fallback.
           const recoverySelectionAdmission = codexAccountSelectionForTurn(options.turnAdmissionLease)?.();
-          const fallback = (() => {
+          const fallback = ((): SubagentFallback | null => {
             try {
               const recoveryNativeMainBlocked = isNativeMainTrafficBlocked();
               // Recompute ownership here rather than reusing the pre-decryption value: a
@@ -1288,7 +1493,7 @@ export async function prepareResponsesRequest(
                 recoveryNow,
                 subagentFallbackModelEligibleAccountIdsForModel?.(parsed.modelId),
               );
-              return applySubagentModelFallback(
+              return (threadSpawn ? pinnedSubagentFallback(resolveSubagentFallbackChain(parsed, config)) : undefined) ?? applySubagentModelFallback(
                 parsed,
                 req.headers,
                 config,
@@ -1308,6 +1513,7 @@ export async function prepareResponsesRequest(
           })();
           if (fallback?.refusal) return fallback.refusal;
           if (fallback) {
+            if (fallback.to !== fallback.from) subagentFallbackSelected = true;
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
             if (isInjectionDebugEnabled()) {
@@ -1316,10 +1522,10 @@ export async function prepareResponsesRequest(
           }
           subagentQuotaFailureModel = fallback?.to ?? parsed.modelId;
 
-          if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
+          if (fallback?.to && (fallback.pinned || !slugsEquivalent(fallback.to, route.modelId))) {
             try {
               route = captureInboundRoutePolicy(
-                routeModel(config, fallback.to, routeEvidence(options, parsed)),
+                routeSelector(fallback.to),
               );
               leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
               credentialDomainWasRewritten = true;
@@ -1330,8 +1536,9 @@ export async function prepareResponsesRequest(
               if (policyRefusal) return policyRefusal;
               if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
               if (err instanceof NoAvailableComboTargetsError) {
-                return comboUnavailable(err.comboId, undefined, err.reasons);
+                return comboUnavailable(err.comboId, undefined, err.exclusion);
               }
+              if (err instanceof ComboRouteRefusal) return err.response();
               if (err instanceof NoEligiblePolicyCandidateError) {
                 logCtx.routeDecision = err.trace;
               }
@@ -1420,17 +1627,27 @@ export async function prepareResponsesRequest(
   }
 
   // The canonical ChatGPT backend rejects previous_response_id, so a local replay miss leaves no
-  // safe way to recover the omitted history. Fail before auth, adapter construction, or upstream
-  // I/O instead of stripping the id and silently forwarding a context-free delta (#702).
+  // safe way to recover the omitted history. Fail before dispatching the continuation itself
+  // instead of stripping the id and silently forwarding a context-free delta (#702).
   // Codex recognizes previous_response_not_found on WebSocket errors and reconnects with its
   // full input. A generic invalid_request_error instead terminates the task after cache expiry.
   if (
     hasUnexpandedPreviousResponse
     && isCanonicalOpenAiForwardProvider(route.provider)
   ) {
+    markLinkTurnMissing(logCtx);
+    const code = "previous_response_not_found";
+    logCtx.provider = route.providerName;
+    logCtx.model = route.modelId;
+    logCtx.errorCode = code;
+    // A recovery send already finished on its own model and status. Keep it off activeAttempt,
+    // which the log finalizer stamps with the continuation's terminal outcome.
+    if (recoveryAttempts) (logCtx.attempts ??= []).push(...recoveryAttempts);
+    if (logCtx.attempts?.some(attempt => attempt.sendCount > 0)) logCtx.terminalSource = "synthetic";
+    else markLocalRequestLogRefusal(logCtx, code);
     return markProxyError(formatErrorResponse(
       400,
-      "previous_response_not_found",
+      code,
       "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
     ));
   }
@@ -1454,6 +1671,7 @@ export async function prepareResponsesRequest(
       // An unknown adapter is left to the resolution error it already raises below.
       : continuationWire === undefined || PROVIDER_OWNED_CONTINUATION_WIRES.has(continuationWire);
     if (!upstreamOwnsOmittedHistory) {
+      markLinkTurnMissing(logCtx);
       return markProxyError(formatErrorResponse(
         400,
         "previous_response_not_found",
@@ -1484,7 +1702,7 @@ export async function prepareResponsesRequest(
   try {
     assertPolicyNormalizedRoute(policyScope, admittedPolicyRoute, route);
     const copilotNegotiationPending = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
-    if (!copilotNegotiationPending && route.provider.adapter === "openai-chat"
+    if (!options.anthropicHostedAdvisorSelection && !copilotNegotiationPending && route.provider.adapter === "openai-chat"
       && !chatCanPreserveMandatoryToolChoice(parsed._rawBody, route.provider, route.modelId, parsed.context.tools ?? [])) {
       // Combo children carry the refusal's local identity too, so a compatible sibling target
       // can still be tried; a direct request keeps the client-facing 400 below.
@@ -1513,14 +1731,23 @@ export async function prepareResponsesRequest(
   if (!routeAllowedByScope(admissionScope, scopedDestination)) {
     return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(new AdmissionModelDeniedError(inboundSelector, scopedDestination), logCtx));
   }
-  // A typed Advisor runs its own model server-side on this provider (#8448). The native lane refuses
-  // a declaration outside the caller's scope; the Advisor is optional here, so it is not forwarded.
+  // A typed Advisor runs its own model server-side on this provider (#8448). An out-of-scope
+  // declaration is withheld. A named selection also needs that declaration on the final route.
   const serverTools = parsed._anthropicServerTools;
-  const scopedServerTools = serverTools?.filter(tool =>
-    !nativeMessagesToolScopeDenial(admissionScope, route.providerName, route.modelId, { tools: [tool] }));
+  const scopedServerTools = scopedAnthropicServerTools(admissionScope, route, serverTools);
   if (serverTools && scopedServerTools && scopedServerTools.length !== serverTools.length) {
     parsed._anthropicServerTools = scopedServerTools;
     if (advisorServerToolDestination(route.provider)) addProtocolEntryReason(logCtx, "advisor-tool-outside-model-scope");
+  }
+  if (options.anthropicHostedAdvisorSelection) {
+    if (options.anthropicHostedAdvisorSelection === "ambiguous") {
+      return markProxyError(formatErrorResponse(400, "invalid_request_error",
+        "The hosted Advisor tool_choice is ambiguous because multiple tools are named advisor."));
+    }
+    if (!admitsHostedAdvisor(route.provider, scopedServerTools, parsed.context.tools)) {
+      return markPolicyCandidateRefusal(markProxyError(formatErrorResponse(400, "invalid_request_error",
+        "The selected hosted Advisor tool is unavailable for this route or model scope.")));
+    }
   }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
@@ -1566,7 +1793,7 @@ export async function prepareResponsesRequest(
     // A combo child is the one caller that can afford a strict gate: skipping a target it
     // cannot fit is safe before any upstream bytes are sent, and the ladder continues. A
     // direct request has nowhere to go, so it keeps the loose pathological-input gate.
-    const inputAdmission = options.comboAttempt
+    const inputAdmission = options.comboAttempt && options.comboContextDegraded !== true
       ? checkComboTargetInputAdmission(parsed, route.provider, route.providerName, parsed.modelId, nativeContextLimits(config))
       : checkInputAdmission(parsed, route.provider, route.providerName, parsed.modelId, nativeContextLimits(config));
     if (!inputAdmission.admitted) {
@@ -1680,6 +1907,55 @@ export async function prepareResponsesRequest(
     ? admissionState.authCtx.accountId
     : config.activeCodexAccountId ?? null;
 
+  // A collapsed Combo pick skips executeComboResponses, which re-reads the key's live scope and paid
+  // consent before each send, and a Combo child is checked there against its configured target.
+  // Transport, sidecars and provider pacing still wait after this point, so the physical send checks
+  // the live scope again against the settled destination, the model actually sent, and a collapsed
+  // pick's paid consent. The captured scope stays an upper bound, so a widened key cannot widen it.
+  const collapsedCombo = route.combo && config.combos?.[route.combo.comboId];
+  // The pick itself identifies the admitted route, so a Combo deleted before this point still gets the check.
+  const collapsedPick = route.combo;
+  const admittedPick = comboRouteAdmissions.get(route);
+  const admittedQuotaOnly = admittedPick?.quotaOnly ?? collapsedCombo?.quotaOnlyFallback === true;
+  if (options.comboAttempt || collapsedPick) {
+    const admission = options.admission;
+    const sendRefusal = (): Response | undefined => {
+      const liveConfig = advisorPlanRootConfig(config);
+      const liveScope = intersectAdmissionModelScopes(admissionScope, resolveAdmissionModelScope(liveConfig, admission));
+      // A key listed at admission and removed since has no live scope left to intersect.
+      if ((keyListedAtAdmission && !admittedKeyListed(liveConfig)) || !routeAllowedByScope(liveScope, scopedDestination)) {
+        return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(new AdmissionModelDeniedError(inboundSelector, scopedDestination), logCtx));
+      }
+      if (!collapsedPick) return undefined;
+      // A pinned continuation must reach the target that issued its calls. Its selector is re-resolved from
+      // the live config, and a row that changed or no longer resolves refuses the send.
+      if (toolLoopPinnedRoutes.has(route) && (!comboStillHasTarget(liveConfig, collapsedPick.comboId, collapsedPick.target)
+        || !pinnedRouteStillResolves(liveConfig, targetKey(collapsedPick.target), admittedPick?.identity))) {
+        return new ComboToolTargetUnavailableError().response();
+      }
+      // The live target, Combo rule and destination row decide too. The prepared destination's requirement is the
+      // one captured at admission, because the transport rewrites the route.
+      const requiresConsent = admittedPick?.requiresConsent === true
+        || liveComboSendRequiresConsent(liveConfig, collapsedPick.comboId, collapsedPick.target, admittedQuotaOnly, route);
+      return requiresConsent && !admissionMayUseMeteredComboTargets(liveConfig, admission, liveConfig.combos?.[collapsedPick.comboId])
+        ? comboMeteredConsentRefused() : undefined;
+    };
+    const refusal = sendRefusal();
+    if (refusal) return refusal;
+    requireSendAdmission(sendRefusal);
+  }
+  // The Combo loop records its serving lane when a child completes. A collapsed quota-only pick
+  // records it on completion too, so its tool continuation finds the target that issued the call.
+  let rememberCollapsedComboLane: ((model: string) => void) | undefined;
+  const routeIdentity = admittedPick?.identity;
+  if (route.combo && admittedQuotaOnly && routeIdentity
+    && !options.compactionRoutingOverride && !options.mainHardLockFallbackOverride) {
+    const servingPick = route.combo;
+    const lane = comboToolLoopLane(req.headers, true, options.claudeBridgePoolSession);
+    rememberCollapsedComboLane = model => rememberComboForLane(lane, servingPick.comboId, servingPick.target, model,
+      servingPick.writerGeneration, undefined, routeIdentity, admittedPick?.model);
+  }
+
   commitSkillsSnapshot?.();
   return {
     inboundWire,
@@ -1711,10 +1987,12 @@ export async function prepareResponsesRequest(
       subagentFallbackAccountId = value;
     },
     subagentQuotaFailureModel,
+    subagentFallbackSelected,
     poolAffinityKey,
     clientRequestedStream,
     substituteMainCredential,
     callerAuthHeaders,
+    rememberCollapsedComboLane,
   };
 }
 

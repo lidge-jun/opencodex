@@ -143,8 +143,21 @@ async function switchTarget(targetKey: string, releasePrevious: () => void) {
   configureApiTargets(relay("/same", targetKey));
   actEnvironment(false);
   try {
-    root!.render(<Probe targetKey={targetKey} onSwitch={releasePrevious} />);
-    await new Promise(resolve => setTimeout(resolve, 0));
+    // A timer scheduled before React commits can win the race on a loaded runner.
+    // Observe the layout commit itself; release the old read in that same phase so
+    // the regression still exercises the interval before passive effects run.
+    await new Promise<void>(resolve => {
+      root!.render(<Probe targetKey={targetKey} onSwitch={() => { releasePrevious(); resolve(); }} />);
+    });
+    // The new target's first read is kicked from a passive effect plus a queued
+    // microtask, so the layout commit alone cannot prove it started. Wait until the
+    // in-flight state is painted: `refreshing` turns true only after the read's
+    // fetch was issued and React committed the new counter. The timer is the yield
+    // between observations, not an assumption that effects have completed.
+    for (let spins = 0; seen?.refreshing !== true; spins += 1) {
+      if (spins >= 1000) throw new Error("the new target's read never reached in-flight state");
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
   } finally {
     actEnvironment(true);
   }
@@ -152,6 +165,18 @@ async function switchTarget(targetKey: string, releasePrevious: () => void) {
 
 function ids(): string[] {
   return seen!.accounts.map(account => account.id);
+}
+
+/**
+ * Wait until the fixture has received `count` roster reads. A target switch renders outside act, so the read the
+ * new target's commit starts reaches fetch only after React has committed and run that effect; on a loaded CI
+ * runner one macrotask is not always enough (PR gates on #8715 and #8716 saw 2 of 3). The count is still asserted
+ * exactly by the caller.
+ */
+async function readsReach(server: { reads(): number }, count: number, timeoutMs = 2_000): Promise<void> {
+  for (const end = Date.now() + timeoutMs; server.reads() < count && Date.now() < end;) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
 }
 
 beforeEach(() => {
@@ -259,6 +284,7 @@ test("an old visit's read must not give back the new visit's in-flight count", a
   // Back to A with its first read still held. The new A read starts and stays in flight, so the
   // surface is refreshing again.
   await switchTarget("hub-a4", () => {});
+  await readsReach(server, 3);
   expect(server.reads()).toBe(3);
   expect(seen!.refreshing).toBe(true);
 

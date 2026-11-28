@@ -1,3 +1,4 @@
+import { validReplayOwnerKey } from "./state/replay-owner";
 import {
   chmodSync,
   closeSync,
@@ -29,6 +30,7 @@ import {
 } from "../lib/windows-secret-acl";
 import { isValidProviderContinuationOwner } from "./provider-continuation";
 import type { OcxProviderContinuationState } from "../types";
+import { decodeResponseSpill, encodeResponseSpill } from "./state/spill-codec";
 
 export const RESPONSE_SPILL_VERSION = 1;
 export const RESPONSE_SPILL_DIR_NAME = "responses-state-spill";
@@ -59,6 +61,7 @@ export interface ResponseSpillPayload {
   responseId: string;
   createdAt: number;
   clientThreadId?: string;
+  replayOwnerKey?: string;
   items: unknown[];
   /**
    * Index in `items` where the provider output begins, used by replay-overlap detection
@@ -494,6 +497,7 @@ function serializedSpill(
     responseId,
     createdAt: state.createdAt,
     ...(state.clientThreadId ? { clientThreadId: state.clientThreadId } : {}),
+    ...(state.replayOwnerKey ? { replayOwnerKey: state.replayOwnerKey } : {}),
     items: state.items,
     ...(state.providerOutputStart !== undefined ? { providerOutputStart: state.providerOutputStart } : {}),
     ...(state.providers ? { providers: state.providers } : {}),
@@ -501,7 +505,7 @@ function serializedSpill(
   };
   const serialized = JSON.stringify(payload);
   if (serialized === undefined) throw new Error("Response spill serialization failed");
-  const bytes = Buffer.from(serialized, "utf8");
+  const bytes = encodeResponseSpill(Buffer.from(serialized, "utf8"), responseSpillPayloadCap());
   const digest = sha256(bytes);
   return {
     bytes,
@@ -551,11 +555,12 @@ function validPayload(value: unknown, responseId: string): value is ResponseSpil
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const payload = value as Record<string, unknown>;
   const keys = Object.keys(payload);
-  if (keys.some(key => !["version", "responseId", "createdAt", "clientThreadId", "items", "providerOutputStart", "providers", "unforcedStoreFalse"].includes(key))) return false;
+  if (keys.some(key => !["version", "responseId", "createdAt", "clientThreadId", "replayOwnerKey", "items", "providerOutputStart", "providers", "unforcedStoreFalse"].includes(key))) return false;
   if (payload.version !== 1 || payload.responseId !== responseId) return false;
   if (typeof payload.createdAt !== "number" || !Number.isFinite(payload.createdAt)) return false;
   if (payload.clientThreadId !== undefined
     && (typeof payload.clientThreadId !== "string" || payload.clientThreadId.trim().length === 0)) return false;
+  if (payload.replayOwnerKey !== undefined && !validReplayOwnerKey(payload.replayOwnerKey)) return false;
   if (payload.unforcedStoreFalse !== undefined && typeof payload.unforcedStoreFalse !== "boolean") return false;
   if (!Array.isArray(payload.items)) return false;
   if (payload.unforcedStoreFalse === true && payload.providerOutputStart === undefined) return false;
@@ -755,8 +760,9 @@ export function readResponseSpill(responseId: string, ref: ResponseSpillRef): Re
   }
   if (bytes.byteLength !== ref.payloadBytes || sha256(bytes) !== ref.digest) return { ok: false, reason: "corrupt" };
   try {
-    const payload = JSON.parse(bytes.toString("utf8")) as unknown;
-    return validPayload(payload, responseId) ? { ok: true, payload } : { ok: false, reason: "corrupt" };
+    const decoded = decodeResponseSpill(bytes, responseSpillPayloadCap());
+    if (!decoded.ok) return decoded;
+    return validPayload(decoded.payload, responseId) ? { ok: true, payload: decoded.payload } : { ok: false, reason: "corrupt" };
   } catch {
     return { ok: false, reason: "corrupt" };
   }

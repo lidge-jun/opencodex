@@ -1,7 +1,11 @@
 import { clientFacingModelText } from "../../lib/error-destination";
+import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { noteRelaySyntheticTail, noteRequestSentValueGuard } from "../request-log-terminal-status";
+import { createSentValueGuard } from "../../lib/outbound-credential-registry";
 import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { markProxyError, rememberProxyErrorMessage, carryProxyError } from "../../lib/client-error-body";
+import { markUndeclaredToolGuardRefusal } from "../../lib/errors";
 import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
@@ -11,7 +15,7 @@ import { isNativeControlResponse } from "./native-response-control";
 import { guardBufferedComboRequiredTool } from "./combo-required-tool-contract";
 import { createComboRequiredToolStreamGuard } from "./combo-required-tool-stream";
 import { attachResponseToolOwnership } from "./response-tool-ownership";
-import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
+import { createForwardedEvidenceRedaction, createOutboundCredentialMask, createSynthesizedCopyMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -31,9 +35,11 @@ import {
   relayWithAbort,
 } from "../relay";
 import { isUsageDebugEnabled } from "../../usage/debug";
-import { isNonReplayableResponse, isReplayRefusalResponse } from "../../lib/upstream-retry";
+import { isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
-import { teeWithBoundedInspection } from "../inspection-tee";
+import { sliceChunks, teeWithBoundedInspection } from "../inspection-tee";
+import { markPacedStream } from "../../lib/paced-stream";
+import { LINK_PACED_SLICE_BYTES, linkTurnPacesReads } from "../link-turn";
 import {
   codexForwardTerminalOutcomeRecorder,
   usesCodexForwardPoolAuth,
@@ -112,6 +118,7 @@ import {
   createGrokResponsesTimestampBlockRewrite,
 } from "../grok-responses-control-frame";
 import { createGrokResponsesSparseTerminalBlockRewrite } from "../grok-responses-snapshot-repair";
+import { isXaiGrokOAuth, isXaiLegacyPrivacyError, xaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import { isXaiResponsesDestination } from "../../providers/xai-transport";
 import {
   createGrokUpstreamEnvelopeEchoBlockRewrite,
@@ -159,7 +166,12 @@ import { registerTurn, unregisterTurn, trackStreamLifetime } from "../lifecycle"
 import { relaySseEagerBounded } from "../relay-eager";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { idleDeadline } from "../../lib/abort";
-import { resolveStallTimeoutMs } from "../../stall-timeout";
+import { explicitStallTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
+import { guardResponseBodyInactivity, isResponseBodyInactivityGuarded } from "../../lib/response-body-inactivity";
+import {
+  createEstimatedUsagePayloadRewrite, ESTIMATED_USAGE_HEADER, estimatedUsageJson, estimatesMissingUsage,
+} from "./estimated-usage";
+import { estimateInputTokens } from "./input-admission";
 import { formatErrorResponse } from "../../bridge";
 import {
   httpStatusFromTerminalError,
@@ -174,11 +186,14 @@ import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-
 import { responsesJsonToSseStream } from "../responses-json-events";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import {
+  BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS,
   bufferedResponsesReadOptions,
   collectBufferedResponsesSse,
+  type BufferedFailedCompletion,
   type BufferedResponsesSseFailure,
   type BufferedResponsesSseResult,
 } from "./buffered-sse-json";
+import { bufferedResetSelectionStartedAt } from "./passthrough-completion";
 
 const PLAINTEXT_V2_SSE_PREFIX_LIMIT = 4096;
 
@@ -433,6 +448,7 @@ export async function deliverPassthroughResponse(
     | "noteInspectedPayload"
     | "normalizeFunctionCompletionJson"
     | "localUpstream"
+    | "pool401OutcomeSettled"
     | "terminalOutcomeRecorded"
   >,
   dispatchSidecarSend?: AuxiliaryModelSend,
@@ -464,6 +480,11 @@ export async function deliverPassthroughResponse(
   } = nativeExchange;
   const { commitReasoningReplayServingRoute, recordTerminalOutcomes } = responseEffects;
   const { parsed, subagentQuotaFailureModel, clientRequestedStream, translatorBudget } = requestState;
+  // #7427: opt-in estimated usage for a provider that omits it. Client-facing only; the request log,
+  // spend and quota read the provider's original body.
+  const estimateUsage = estimatesMissingUsage(route.provider, options);
+  let usageInputEstimate: number | undefined;
+  const inputEstimate = (): number => usageInputEstimate ??= estimateInputTokens(parsed, route.modelId, route.provider);
   const { openAiSidecar } = sidecarState;
   const { requestBindings } = transportState;
 
@@ -564,7 +585,7 @@ export async function deliverPassthroughResponse(
           }
           options.onNativePassthroughTerminal?.(status);
         });
-      } else if (!shouldDeferCodexResetDerivedCooldown(
+      } else if (!nativeExchange.pool401OutcomeSettled && !shouldDeferCodexResetDerivedCooldown(
         upstreamResponse,
         options.deferCodexResetDerivedCooldown,
       ) && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse)) {
@@ -626,7 +647,8 @@ export async function deliverPassthroughResponse(
     // masquerade as a pre-connection failure after the credential was seen.
     // The numeric outcome above already classified it neutral — no streak.
     if (isNonReplayableResponse(upstreamResponse) && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse)) {
-      return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
+      return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal,
+        isXaiGrokOAuth(route.providerName, route.provider) ? logCtx : undefined);
     }
     if (upstreamResponse.status >= 300 && upstreamResponse.status < 400) {
       return new Response(upstreamResponse.body, {
@@ -636,6 +658,7 @@ export async function deliverPassthroughResponse(
       });
     }
     if (!upstreamResponse.ok) {
+      const grokOAuth = isXaiGrokOAuth(route.providerName, route.provider);
       if (options.comboAttempt) {
         // No pre-read guard here: `consumeComboFailure` -> `readBoundedResponseBody` reads
         // `response.body` itself and already threads the abort signal through its own read,
@@ -643,10 +666,10 @@ export async function deliverPassthroughResponse(
         // "captures passthrough failed usage from its original bounded body exactly once").
         // Attaching a guard would be a second `.body` access and break that contract for no
         // gain, since the bounded reader owns settlement on this path.
-        // Only the plan-refusal cause is carried to this leg's row (#8352); a throwaway holder
+        // Only the plan or account-policy refusal cause is carried to this leg's row (#8352); a throwaway holder
         // keeps the other diagnostics this path has never recorded off it.
         const comboCause: Pick<typeof logCtx, "causeHint"> = {};
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, undefined, comboCause);
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, undefined, comboCause, false, grokOAuth);
         if (comboCause.causeHint) logCtx.causeHint = comboCause.causeHint;
         options.onConsumedComboFailure?.(failure);
         return failure.response;
@@ -654,6 +677,7 @@ export async function deliverPassthroughResponse(
       // The bounded reader owns the original body, deadline, abort settlement, and lock.
       // Unsafe partial data falls back to #452's non-empty status-only JSON.
       const errorText = await readDisplaySafeErrorText(upstreamResponse, upstream.signal, "");
+      if (grokOAuth && isXaiLegacyPrivacyError(upstreamResponse.status, errorText)) return xaiPrivacyModeRefusal(logCtx);
       if (upstreamResponse.status === 413) {
         if (options.clientModelLabel) projectLocalModelRefusalLog(logCtx, options.clientModelLabel);
         return clientRequestedStream
@@ -735,18 +759,26 @@ export async function deliverPassthroughResponse(
       });
       // Capture the binding that actually served the first leg, after its permitted reselection.
       const webSearchBridgeBinding = requestBindings.get(nativeExchange.request);
+      // #8206: an explicit stallTimeoutSec bounds silence on the native upstream body for every
+      // streaming relay. Unset keeps this relay without a clock; the canonical JSON fold keeps
+      // its own deadlines, and reset selection already guarded the bodies it published.
+      const nativeSseStallMs = canonicalBufferedJson || isResponseBodyInactivityGuarded(upstreamResponse)
+        ? 0 : explicitStallTimeoutMs(config.stallTimeoutSec);
+      const nativeSseBody = nativeSseStallMs > 0
+        ? guardResponseBodyInactivity(upstreamResponse, upstream.signal, nativeSseStallMs, { explicitBudget: true }).response.body!
+        : upstreamResponse.body;
       // Repair must observe the raw first leg before the bridge suppresses an intercepted search
       // lifecycle. Otherwise a provider that leaves that complete call open never arms repair's
       // grace timer, so the bridge cannot execute the search or begin its continuation.
       let passthroughSseBody = terminalRepairPolicy
         ? relayResponsesSseWithTerminalRepair(
-          upstreamResponse.body,
+          nativeSseBody,
           upstream,
           terminalRepairPolicy,
           translatorBudget,
           options.responsesTerminalRepairScheduler, logCtx,
         )
-        : upstreamResponse.body;
+        : nativeSseBody;
       passthroughSseBody = webSearchBridgePlan
         ? createPassthroughWebSearchBridgeStream({
           plan: webSearchBridgePlan,
@@ -778,17 +810,24 @@ export async function deliverPassthroughResponse(
             );
             // The same provider can leave a complete continuation open without a terminal, which
             // stalls the bridge's decide loop exactly like the first leg — so every leg gets the
-            // same repair, not only the intercepted first one.
-            if (!terminalRepairPolicy || !continuation.ok || !continuation.body) return continuation;
+            // same repair and the same explicit silence clock, not only the intercepted first one.
+            if (!continuation.ok || !continuation.body) return continuation;
+            // A continuation is a fresh upstream body: guard it from the explicit budget even when
+            // reset selection already guarded the first leg (and so left nativeSseStallMs at 0).
+            const continuationStallMs = explicitStallTimeoutMs(config.stallTimeoutSec);
+            const guardedContinuation = continuationStallMs > 0
+              ? guardResponseBodyInactivity(continuation, upstream.signal, continuationStallMs, { explicitBudget: true }).response
+              : continuation;
+            if (!terminalRepairPolicy) return guardedContinuation;
             return new Response(
               relayResponsesSseWithTerminalRepair(
-                continuation.body,
+                guardedContinuation.body!,
                 upstream,
                 terminalRepairPolicy,
                 translatorBudget,
                 options.responsesTerminalRepairScheduler, logCtx,
               ),
-              continuation,
+              guardedContinuation,
             );
           },
           execute: createPassthroughWebSearchBridgeExecutor(webSearchBridgePlan, {
@@ -867,6 +906,12 @@ export async function deliverPassthroughResponse(
         }, { dispose: () => plaintextInspector.dispose() })
         : undefined;
       const maskCredential = createOutboundCredentialMask(nativeExchange.request.headers);
+      // Copy a boundary synthesizes from upstream evidence, and the row's copy, also refuse any value
+      // this request sent, decided from its own headers.
+      const repeatsSentValue = createSentValueGuard(nativeExchange.request.headers);
+      noteRequestSentValueGuard(logCtx, repeatsSentValue);
+      const synthesizedCopyMask = createSynthesizedCopyMask(nativeExchange.request.headers, repeatsSentValue);
+      const forwardedEvidenceRedaction = createForwardedEvidenceRedaction(nativeExchange.request.headers, maskCredential);
       const requiredStreamEvidence = { replayUnsafe: !!webSearchBridgePlan };
       const normalizeRequiredToolItem = (item: unknown) => {
         item = restoreImageGenCalls(item, imageGenCallAliases).value;
@@ -951,7 +996,10 @@ export async function deliverPassthroughResponse(
             declaredBareWireToolNames,
             recoverableBareCustomWireToolNames,
             { refuseUndeclared: nativeExchange.undeclaredToolGuardActive,
-              onRefusal: message => rememberProxyErrorMessage(logCtx, message, { status: 502, type: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE }) },
+              onRefusal: message => {
+                markUndeclaredToolGuardRefusal(logCtx);
+                rememberProxyErrorMessage(logCtx, message, { status: 502, type: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE });
+              } },
           )
           : undefined,
         grokUpstreamEchoEnabled
@@ -969,7 +1017,12 @@ export async function deliverPassthroughResponse(
         (!canonicalBufferedJson || !options.comboAttempt) && isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)
           ? createHostedImageDisplayRewrite()
           : undefined,
+        // Last, so it sees the response the client receives; never on the canonical JSON fold.
+        estimateUsage && !canonicalBufferedJson
+          ? payloadRewriteAsBlockRewrite(createEstimatedUsagePayloadRewrite(inputEstimate, route.modelId))
+          : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
+      if (estimateUsage && !canonicalBufferedJson) headers.set(ESTIMATED_USAGE_HEADER, "when-missing");
       const clientBlockRewrite = blockRewrites.length > 0
         ? composeSseBlockRewrites(...blockRewrites)
         : undefined;
@@ -977,10 +1030,62 @@ export async function deliverPassthroughResponse(
 
       if (canonicalBufferedJson) {
         const signal = options.abortSignal ?? req.signal;
+        // A turn whose head waited on reset selection keeps the deadline that wait already spent.
         const bufferedRead = bufferedResponsesReadOptions(resolveStallTimeoutMs(
           config.stallTimeoutSec,
           { localUpstream: nativeExchange.localUpstream },
-        ));
+        ), BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS, bufferedResetSelectionStartedAt(nativeExchange.upstreamResponse) ?? Date.now());
+        const cancelAfterValidation = (): Response => {
+          responseEffects.responseCompletionCancelled = true;
+          options.onNativePassthroughCancel?.();
+          return clientCancelledResponse();
+        };
+        const reportNativeTerminal = recordTerminalOutcomes
+          ? (status: ResponsesTerminalStatus, httpStatusOverride?: number) => {
+            if (signal.aborted) return;
+            terminalRecorder?.(status, httpStatusOverride);
+            if (status === "failed" || status === "incomplete") {
+              const quotaFailureMessage = [httpStatusOverride, logCtx.terminalHttpStatus]
+                .find(value => value === 429 || value === 402);
+              if (!isFixedCodexAccount(admissionState.authCtx) && quotaFailureMessage !== undefined) {
+                recordSubagentQuotaFailureForThreadSpawn(
+                  req.headers,
+                  subagentQuotaFailureModel,
+                  quotaFailureMessage,
+                  config,
+                  requestState.subagentFallbackAccountId,
+                );
+              }
+            }
+            options.onNativePassthroughTerminal?.(status);
+          }
+          : undefined;
+        const deliverFailedCompletion = ({ payload, error }: BufferedFailedCompletion): Response => {
+          if (signal.aborted) return cancelAfterValidation();
+          if (Date.now() >= bufferedRead.deadlineAt) {
+            return failBufferedTurn("buffered Responses turn exceeded the safe total deadline");
+          }
+          noteInspectedPayload(payload);
+          inspectResponseLogSsePayloadParsed(logCtx, JSON.stringify(payload), payload);
+          const status = logCtx.terminalHttpStatus ?? httpStatusFromTerminalError(error);
+          logCtx.transportPhase = "terminal_sse";
+          logCtx.terminalSource = "upstream";
+          reportNativeTerminal?.("failed", status);
+          const defaults = bufferedErrorDefaults(status);
+          const clientError = {
+            type: synthesizedCopyMask(error.type ?? defaults.type),
+            code: synthesizedCopyMask(logCtx.terminalErrorCode ?? error.code ?? defaults.code),
+            message: synthesizedCopyMask(error.message ?? "upstream reported a failed completion"),
+          };
+          const failureHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
+          failureHeaders.set("content-type", "application/json");
+          const response = markPreinspectedJsonResponse(formatPassthroughUpstreamError(
+            status, JSON.stringify({ error: clientError }), { headers: failureHeaders },
+          ));
+          // The provider already ended the turn before this JSON projection chose an HTTP status.
+          markResponseNonReplayable(response);
+          return response;
+        };
         const failBufferedTurn = (
           message: string,
           failure?: BufferedResponsesSseFailure,
@@ -994,9 +1099,9 @@ export async function deliverPassthroughResponse(
           const presentation = rawPresentation === undefined ? undefined : {
             status: rawPresentation.status,
             error: {
-              type: maskCredential(rawPresentation.error.type),
-              code: maskCredential(rawPresentation.error.code),
-              message: maskCredential(rawPresentation.error.message),
+              type: synthesizedCopyMask(rawPresentation.error.type),
+              code: synthesizedCopyMask(rawPresentation.error.code),
+              message: synthesizedCopyMask(rawPresentation.error.message),
             },
           };
           if (upstreamError !== undefined) {
@@ -1048,7 +1153,7 @@ export async function deliverPassthroughResponse(
         let raw: BufferedResponsesSseResult | undefined = await collectBufferedResponsesSse(
           passthroughSseBody,
           upstream,
-          { signal, terminalBoundary: codexSafetyBufferingOptions, read: bufferedRead, retainTranscript: true },
+          { signal, terminalBoundary: codexSafetyBufferingOptions, read: bufferedRead, retainTranscript: true, maskCredential: synthesizedCopyMask },
         );
         if (!raw.ok) {
           if (raw.kind === "aborted" || signal.aborted) {
@@ -1065,6 +1170,7 @@ export async function deliverPassthroughResponse(
                 : "upstream SSE response failed before a valid terminal response";
           return failBufferedTurn(message, raw);
         }
+        if (raw.terminal.failedCompletion) return deliverFailedCompletion(raw.terminal.failedCompletion);
         if (!raw.bytes) return failBufferedTurn("upstream SSE transcript was not retained for rewriting");
         let rawBytes: Uint8Array | undefined = raw.bytes;
         raw = undefined; // Release the raw reconstruction graph before building the client copy.
@@ -1080,7 +1186,7 @@ export async function deliverPassthroughResponse(
           )
           : replayBufferedSse(rawBytes);
         const client = await collectBufferedResponsesSse(bufferedClientBody, upstream, {
-          signal,
+          signal, maskCredential: synthesizedCopyMask,
           read: bufferedRead,
           retainTranscript: false,
         });
@@ -1098,15 +1204,11 @@ export async function deliverPassthroughResponse(
               : "rewritten SSE response did not contain one valid terminal response";
           return failBufferedTurn(message, client);
         }
+        if (client.terminal.failedCompletion) return deliverFailedCompletion(client.terminal.failedCompletion);
         if (Date.now() >= bufferedRead.deadlineAt) {
           return failBufferedTurn("buffered Responses turn exceeded the safe total deadline");
         }
 
-        const cancelAfterValidation = (): Response => {
-          responseEffects.responseCompletionCancelled = true;
-          options.onNativePassthroughCancel?.();
-          return clientCancelledResponse();
-        };
         if (signal.aborted) return cancelAfterValidation();
 
         const requiredFailure = await requiredToolFailure(JSON.stringify(client.terminal.response));
@@ -1135,26 +1237,6 @@ export async function deliverPassthroughResponse(
         // Effects intentionally run only after both bounded validations. They inspect the same
         // upstream-facing transcript as the streaming relay and fire once; continuation storage
         // receives the final client-visible response once after all restorations succeeded.
-        const reportNativeTerminal = recordTerminalOutcomes
-          ? (status: ResponsesTerminalStatus, httpStatusOverride?: number) => {
-            if (signal.aborted) return;
-            terminalRecorder?.(status, httpStatusOverride);
-            if (status === "failed" || status === "incomplete") {
-              const quotaFailureMessage = [httpStatusOverride, logCtx.terminalHttpStatus]
-                .find(value => value === 429 || value === 402);
-              if (!isFixedCodexAccount(admissionState.authCtx) && quotaFailureMessage !== undefined) {
-                recordSubagentQuotaFailureForThreadSpawn(
-                  req.headers,
-                  subagentQuotaFailureModel,
-                  quotaFailureMessage,
-                  config,
-                  requestState.subagentFallbackAccountId,
-                );
-              }
-            }
-            options.onNativePassthroughTerminal?.(status);
-          }
-          : undefined;
         const effectInspector = createSseInspector({
           onTerminal: reportNativeTerminal,
           logCtx,
@@ -1196,6 +1278,10 @@ export async function deliverPassthroughResponse(
       }
 
       const relayPlatform = relayPlatformForTests ?? process.platform;
+      // Every relayed Remote Link turn reads its upstream only as its client drains (#8601), feature switch or not;
+      // every other request keeps the relays' read-ahead below. Its chunks travel in slices, and the paced mark makes the
+      // tee, the eager relay and every stage after them read one slice at a time as the client asks (src/lib/paced-stream.ts).
+      if (linkTurnPacesReads(logCtx)) passthroughSseBody = markPacedStream(sliceChunks(passthroughSseBody, LINK_PACED_SLICE_BYTES));
       // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
       // (Bun#32111 JS-sink segfault — text frames pass, the terminal block is
       // lost). The eager single reader applies the same rewrites inline.
@@ -1276,7 +1362,9 @@ export async function deliverPassthroughResponse(
         }, {
           clientGoneSignal: options.abortSignal,
           terminalBoundary: codexSafetyBufferingOptions,
-          maskCredential,
+          maskCredential: synthesizedCopyMask,
+          redactForwardedEvidence: forwardedEvidenceRedaction,
+          onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(logCtx, payload, verdict),
           ...(inlineEagerRewrite ? { rewriteBudget: translatorBudget } : {}),
           ...(logCtx.upstreamError === undefined ? {} : { upstreamError: logCtx.upstreamError }),
         });
@@ -1371,7 +1459,8 @@ export async function deliverPassthroughResponse(
           responseEffects.responseCompletionCancelled = true;
           clientGone.abort(reason);
         },
-        { upstreamError: logCtx.upstreamError, terminalBoundary: codexSafetyBufferingOptions, maskCredential },
+        { upstreamError: logCtx.upstreamError, terminalBoundary: codexSafetyBufferingOptions, maskCredential: synthesizedCopyMask, redactForwardedEvidence: forwardedEvidenceRedaction,
+          onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(logCtx, payload, verdict) },
       );
       return markNativePassthroughSseResponse(new Response(clientBody, {
         status: upstreamResponse.status,
@@ -1435,7 +1524,13 @@ export async function deliverPassthroughResponse(
         return formatErrorResponse(502, "upstream_error", PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE);
       }
       if (grokUpstreamEchoEnabled) {
-        clientJson = stripGrokUpstreamEnvelopeEchoFromResponsesJson(clientJson);
+        try { clientJson = stripGrokUpstreamEnvelopeEchoFromResponsesJson(clientJson); }
+        catch (error) {
+          if (!isTranslatorBudgetExceededError(error)) throw error;
+          return markProxyError(formatErrorResponse(502, "upstream_error", "upstream translation buffer exceeded the safe limit", {
+            code: "translation_buffer_limit", classified: true,
+          }));
+        }
       }
       // Both response formats use this body, before a refused turn can enter continuation state.
       if (nativeExchange.undeclaredToolGuardActive) {
@@ -1454,6 +1549,11 @@ export async function deliverPassthroughResponse(
           }
         })();
         if (undeclared !== undefined) {
+          // Mirror the SSE refusal path's provenance: the buffered JSON branch never runs the
+          // block rewrite, so without this mark `consumeComboFailure` cannot grant the hop and
+          // a healthy combo target would take a cooldown it must not (#9163).
+          markUndeclaredToolGuardRefusal(logCtx);
+          rememberProxyErrorMessage(logCtx, undeclaredToolCallMessage(), { status: 502, type: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE });
           return markProxyError(formatErrorResponse(502, "upstream_error", undeclaredToolCallMessage(), {
             code: UNDECLARED_TOOL_CALL_ERROR_CODE,
           }));
@@ -1486,6 +1586,15 @@ export async function deliverPassthroughResponse(
           }
           throw error;
         } finally { imageDisplay.dispose?.(); }
+      }
+      if (estimateUsage && upstreamResponse.ok) {
+        const estimated = estimatedUsageJson(clientJson, inputEstimate(), route.modelId);
+        if (estimated !== undefined) {
+          clientJson = estimated;
+          headers.set(ESTIMATED_USAGE_HEADER, "true");
+          // The request-log finalizer parses the delivered body again; keep the estimate out of it.
+          logCtx.clientResponseUsage = "estimated";
+        }
       }
       // #875: the transport-neutral reliability policy forced a bounded JSON
       // upstream for a client that asked for SSE. Reframe the completed JSON
@@ -1528,7 +1637,7 @@ export async function deliverPassthroughResponse(
             }
             throw error;
           }
-          const sseHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
+          const sseHeaders = new Headers(headers);
           sseHeaders.set("content-type", "text/event-stream");
           sseHeaders.set("cache-control", "no-store");
           return new Response(stream, {

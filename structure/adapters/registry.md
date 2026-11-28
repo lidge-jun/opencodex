@@ -53,6 +53,84 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
 The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMeta.beforePhysicalSend` fence after awaited tool-bridge setup and before spending its dispatch permit or spawning. Cancellation and stale selections produce no child process; cleanup still returns permits and removes temporary tool files.
 
 - `cursor` stays direct because its `runTurn` transport and gated native-file fallback are distinct.
+- `agy-acp` is direct and `runTurn`-only: it starts the official Antigravity CLI (`agy acp --sandbox`) as a local
+  child per turn and drives one Agent Client Protocol session with CLI 1.5.3 or later (`src/adapters/agy-acp/`; #8480, plan 080 of the
+  Google protocol parity unit in lidge-jun/opencodex#8771). Before launching ACP, `agy --version` must exit zero
+  and print a single numeric version at or above the minimum. The verdict binds to the executable’s
+  real path, device, inode, size, modification time and change time. The adapter checks this identity
+  after workspace setup, re-probes a replacement and launches the verified real path. A cancelled request reaps its uncached probe without recording a verdict. The CLI owns its Google sign-in,
+  so the `antigravity-acp` row is keyless (`authKind: "key"`, `keyOptional`). The init wizard skips the key question
+  and omits the key field for ACP. The login command prints the host sign-in command, and API-key validation
+  refuses ACP before any request. Key-optional LiteLLM still accepts a key or an environment reference. Structural config validation
+  (`src/config/schema/agy-acp-references.ts`) shares the static model roster in `src/providers/registry/agy-acp-models.ts`
+  with the registry and refuses keys, pools, account settings,
+  non-Gemini/Claude models and any use as a combo target, a combo's `decisionModel`, a subagent fallback, a managed subagent default, automatic compaction, a `memoryModels` phase or the
+  `shadowCallIntercept` target. Validation masks credential-shaped diagnostic path segments. A disk
+  read drops an ACP memory phase and ACP subagent fallback entries, disables an ACP shadow-call target or
+  managed subagent default sync, and removes the automatic trigger from an ACP compaction override. Per-model fallback chains emptied by the repair are removed individually. File diagnostics
+  report the repairs. Candidate writes reject those selectors, including
+  matches from an ACP provider's built-in aliases or model alias template. Canonical OpenAI model routing retains
+  precedence for bare native OpenAI IDs when the OpenAI row is enabled. The use policy
+  (`src/adapters/agy-acp/policy.ts`) refuses subagent turns (`x-codex-parent-thread-id`), turns Codex labels as spawned threads (`isThreadSpawnRequest`) or as
+  its memory pipeline (`detectMemoryModelPhase`, `x-openai-subagent: memory_consolidation`, `x-openai-memgen-request`), or as automatic compaction (`request_kind: "compaction"` with `trigger: "auto"`; manual compaction runs).
+  Chat Completions and routed Compact classify the original HTTP headers and body before bridging them to Responses.
+  Responses captures its own HTTP header classification at ingress. The policy carries that decision as a typed
+  flag to preflight and `runTurn`, independently of the upstream header allowlist and body serialization.
+  A spawn label in the WebSocket frame body is sufficient. Explicit user-turn metadata there supersedes a stale spawn
+  label from the upgrade's turn metadata. A connection labeled `collab_spawn` still refuses every frame. A spawn
+  label in the upgrade's turn metadata still refuses frames without explicit user provenance. An HTTP memory label in the header is sufficient even
+  when the body metadata is malformed. For WebSocket memory turns, the frame's metadata decides independently
+  of memory headers from the handshake.
+  The policy also refuses combo members, a combo's internal
+  decision call (`IncomingMeta.internalDecisionCall`, set only by the JEV decision invoke), routes chosen by subagent
+  fallback (`IncomingMeta.subagentFallback`, set only where request-prepare's fallback moves the route), and requests
+  classified as remote. Locality uses the observed connection at the listener and recognized forwarding headers
+  (`src/lib/request-peer-scope.ts`, recorded per HTTP request and per WebSocket). Declared `dashboardTrustedProxy`
+  peers are treated as remote on the public listener only. A loopback relay that carries no recognized forwarding
+  headers can appear local. For refused turns,
+  `src/server/responses/agy-acp-preflight.ts` answers those with a 403 before sidecars run, and `runTurn` repeats the
+  check before any probe or spawn. Chat preserves both ACP refusal codes. Direct unattended
+  Compact turns are refused before reasoning retention can write an archive. In a combo, the
+  preflight refusal excludes the candidate without treating it as an attempted send.
+  Each `session/prompt` reserves and reports one physical inference send from
+  the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the selected Gemini or Claude model is not
+  confirmed against the current complete selector, including after a reply that reuses an opaque model ID.
+  Explicit disallowed or contradictory model-family evidence in the model ID or label invalidates the selection. The adapter checks the model and thinking level again after processing all complete frames in the current stdout batch and before spending the dispatch permit.
+  Selection rejects duplicate setting IDs, oversized snapshots and nested groups. The adapter ignores updates
+  until it has a session ID and accepts updates only for that session. Permission requests are answered `cancelled`.
+  Caller-advertised tools use the capture-only CodeBuddy MCP helper. Each leg returns at most one
+  matching call to the host after child cleanup; the host executes it under its own tool permissions.
+  Updates are tracked by call ID so a same-batch failure or non-permission cancellation drops a pending call.
+  Inline user and tool-result images require ACP image capability and enforce per-image and aggregate
+  encoded byte limits before sending `session/prompt`. Text replay under pressure keeps
+  the latest request, preceding proposal and paired tool result within the prompt limit.
+  Selection errors use fixed text. Answer and reasoning
+  deltas each pass through a bounded streaming redactor for minted OpenCodex credentials, Bearer values,
+  OAuth token fields, and token-shaped JWT and API-key strings. Long values stay masked across frames.
+  For quoted JSON OAuth fields, `src/adapters/agy-acp/output-redaction.ts` recognizes JSON whitespace on both sides
+  of the colon across frames. It retains an unfinished separator up to the lookahead limit, then releases the
+  whitespace and keeps the next value masked even if the colon is missing. Scanning resumes after the value.
+  The redactor publishes safe prefixes on each update and reports buffered activity to the streaming
+  watchdog. It preserves ACP arrival order across channels. If an uncertain suffix holds up a full queue,
+  it masks that suffix and continues scanning for its continuation in the original channel. Protocol errors may include a numeric
+  code. Probe and turn workspaces are created under the
+  system temporary directory outside the OpenCodex home. Windows requires a private NTFS ACL before either
+  child can start. Retained workspaces can accumulate when cleanup repeatedly cannot be confirmed.
+  A confirmed spawn failure without an assigned PID leaves no process to reap. Deferred startup errors
+  are handled even if the child has no pipes. The adapter parses a final stdout reply without a trailing newline and fails an unanswered turn at EOF.
+  The probe and turn workspaces start empty. A turn with caller tools stages a private catalog in its temp directory.
+  On POSIX, workspace removal follows confirmed leader exit and a group check returning ESRCH after SIGKILL or
+  ESRCH. Descendants that deliberately leave the process group are outside that check. Removing the workspace
+  exposes no pre-existing user files. Windows requires successful
+  tree taskkill and leader closure. An inconclusive cleanup retains the workspace and logs a fixed warning.
+  An inconclusive cleanup fails the turn, except that an existing dispatch refusal keeps its original error.
+  If directory removal fails after reaping, cleanup reports a fixed error and keeps its ACL bookkeeping.
+  A completed Windows version probe can supply its version when the exited leader prevents taskkill from confirming
+  cleanup. A POSIX probe requires group cleanup confirmation before supplying a version.
+  The terminal event is published after cleanup settles. Coverage:
+  `tests/adapters/agy-acp-adapter.test.ts`, `tests/adapters/agy-acp-protocol.test.ts`,
+  `tests/adapters/agy-acp-policy.test.ts`, `tests/config/agy-acp-config.test.ts`,
+  `tests/server/server-agy-acp.test.ts` covers all three HTTP surfaces and frame-local automatic compaction.
 - `devin` is direct for a related reason. It streams Cognition's
   `ApiServerService/GetChatMessage` over Connect-RPC from `runTurn` with hand-written protobuf
   framing, so like Cursor it never travels the `buildRequest`/`parseStream` path. Login is
@@ -192,13 +270,30 @@ Connected CLI usage follows the [client-scoped hub usage contract](../dashboard-
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration.
 
 Listener startup diagnostics follow [the runtime lifecycle contract](../runtime.md#lifecycle); malformed optional listener blocks follow [config loading](../config.md#config-surface).
+## Translated Anthropic OAuth instructions
+
+Translated Anthropic OAuth requests preserve caller instructions in top-level `system` by default.
+Only operator configuration `providers.<name>.anthropicOAuthUserInstructions: true` moves
+caller-authored instructions into the first user turn and gives them user-role priority. The adapter adds an
+initial user turn for assistant-leading histories and preserves tool call and result adjacency.
+`src/adapters/anthropic.ts` keeps the compatibility identity, tool contract, checkpoint continuation
+guidance, and system prompts on proxy-originated turns in `system`. In
+`src/server/responses/request-prepare.ts`, trusted handler options identify JEV decision turns and
+Chat self-fetches (Advisor, routed vision and role sizing). Chat validates the existing process
+capability and live registration before setting those options. Request JSON and the vision
+recursion header carry no provenance. With prompt caching enabled, the relocated caller prefix
+receives an explicit breakpoint. The option applies only to translated OAuth requests.
+`tests/adapters/anthropic/anthropic-oauth-caller-system-shape.test.ts` covers default and opt-in
+request shapes. `tests/adapters/anthropic/anthropic-oauth-internal-system-wire.test.ts` covers
+proxy-originated wire placement and caller-supplied provenance lookalikes.
+
 ## Truncated tool finalization
 
 The bridge keeps an open function, custom, or tool-search call incomplete when an adapter ends with a recognized truncated stop reason. Streaming emits no argument/input completion frame for that open call, and buffered JSON applies the same status. A call already closed by its own tool-call end retains its completed state. The response remains incomplete, partial output is preserved, and truncated compaction never replaces history.
 
 A provider web search still in flight at that truncated terminal is finalized as `failed`, the same status it already receives from the error and explicit-incomplete terminals. It never returned results, so reporting it as `completed` would leave the client showing a finished search for a turn the provider cut short.
 
-`src/adapters/anthropic.ts` maps a `refusal` or `content_filter` stop reason to an explicit `incomplete` adapter event with `reason: "content_filter"` and `retryable: false` instead of `done` with that stopReason (#4312). A `done` with that stopReason would reach the client as an incomplete with no verdict at all. `src/adapters/kiro/stream.ts` emits the same event for a `CONTENT_FILTERED` or `GUARDRAIL_INTERVENED` stop. The verdict alone does not stop Codex, which retries every `response.incomplete`; the Responses bridge turns the Anthropic and Kiro event into a terminal `response.failed` for a Responses client ([Adapter-to-Responses bridge](../transports/responses.md#adapter-to-responses-bridge)). Partial output, tool-call integrity, and usage are preserved; `max_tokens` remains a `done` so a legitimate truncation can continue.
+`src/adapters/anthropic.ts` maps a `refusal` or `content_filter` stop reason to an explicit `incomplete` adapter event with `reason: "content_filter"` and `retryable: false` instead of `done` with that stopReason (#4312). A `done` with that stopReason would reach the client as an incomplete with no verdict at all. `src/adapters/kiro/stream.ts` emits the same event for a `CONTENT_FILTERED` or `GUARDRAIL_INTERVENED` stop. `src/adapters/agy-acp/adapter.ts` emits it for an ACP `refusal`. The verdict alone does not stop Codex, which retries every `response.incomplete`; the Responses bridge turns the Anthropic, Kiro and ACP event into a terminal `response.failed` for a Responses client ([Adapter-to-Responses bridge](../transports/responses.md#adapter-to-responses-bridge)). Partial output, tool-call integrity, and usage are preserved; `max_tokens` remains a `done` so a legitimate truncation can continue.
 
 The translated Anthropic stream ends at `message_stop` after emitting its existing terminal
 classification and usage. The parser does not inspect later records in that response body;
@@ -281,6 +376,44 @@ and exempting them would restore the silent drop the scanner exists to prevent. 
 the decoder share one predicate so a request cannot be exempted here and reduced to a marker
 there.
 
+Video is the one kind whose carrier depends on the model. `src/adapters/video-input-carrier.ts`
+checks the normalized request's `video` parts (`src/responses/video-input.ts`) after the typed
+scan, which refuses an `input_video` block outside user or developer content because no
+converter there builds a part.
+
+Every inline video goes through one decoder, `parseMediaDataUrl` in `src/lib/media-data-url.ts`,
+called as `parseInlineVideo` with the `MAX_INLINE_VIDEO_BYTES` (50 MiB decoded) cap. It accepts
+exactly `data:<type>/<subtype>[;<attribute>=<value>]...;base64,<payload>` with canonical standard
+base64 (length a multiple of four, at most two trailing `=`, zero unused bits), which is the set
+of payloads that decode and re-encode to themselves; the size verdict comes from the payload
+length before any scan, and nothing is decoded on the request path. Input admission charges its
+`decodedBytes` (for a URL it refuses, a conservative upper bound: native Responses passthrough
+skips the guard and forwards the original body), the guard refuses on its refusal, both Chat conversions (`chatBodyVideoRefusal`)
+refuse before they build or serialize anything, and the Gemini `inline_data` and translated-Chat
+`video_url` builders send its `mime` and canonical `base64`. Rounds 4–6 of the review on #9131
+each found a different consumer reading a data URL its own way; `tests/lib/media-data-url.test.ts`
+holds the decoder to a strict decode-and-re-encode oracle and `tests/adapters/video-input-guard.test.ts`
+checks every consumer against the decoder over seeded mutations.
+
+The `google` wire carries decoded-valid inline video and the YouTube and Files API URIs that
+`src/adapters/google-video-uri.ts` allowlists; any other remote URL is refused. The translated Chat
+builder (`provider.adapter === "openai-chat"`, not merely the inherited wire) emits the Chat
+`video_url` part only in user messages and only for a model whose `modelCapabilities`,
+`modelInputModalities` or provider `inputModalities` declares `video`; absent evidence is a
+refusal. Every other wire refuses. The exempt Responses wire and native Chat forward the original
+body. Each refusal is fixed vocabulary and names no URL or byte. A builder-path video refusal throws
+`UnsupportedInputModalityError`, which `adapterBuildRefusal` in
+`src/server/responses/passthrough-build-error.ts` answers as 400 `unsupported_input_modality` (the
+code `runTurn` emits, and a combo hop code); audio, file and declaration refusals keep the generic
+builder 400. Both Chat conversions also refuse a `video_url` outside user content (the typed scan
+reads the Chat spelling too); the Chat handler applies `chatBodyVideoRefusal` before the
+Cursor/Kiro usage estimate serializes the messages, and its routing catch returns that refusal
+before the protocol check. Those Chat refusals are `ChatUnsupportedInputModalityError` and reach
+the client as 400 `unsupported_input_modality` too. The builder refusal is not marked
+non-replayable: nothing was sent, and the marker would stop the combo loop before it reads the hop
+code (`tests/responses/responses-combo-video-hop.test.ts`). The Gemini and Chat builders no longer
+write a video text marker.
+
 `src/adapters/input-media-guard.ts` guards adapters created by the registry after effective
 wire selection. It enables the audio exemption only for `openai-chat`. A translated
 `buildRequest` refuses unsupported inputs through the existing 400 error path; `runTurn` emits
@@ -302,7 +435,8 @@ upstream token formula; base64 inflation is not charged, and the scanner and gua
 the payload.
 
 `tests/adapters/openai/openai-chat-audio.test.ts` covers user and tool-result audio mapping;
-`tests/adapters/adapter-input-media-guard.test.ts` covers hook ordering, refusal positions and
+`tests/adapters/video-input-guard.test.ts` covers each video carrier and refusal through registered
+adapters. `tests/adapters/adapter-input-media-guard.test.ts` covers hook ordering, refusal positions and
 raw passthrough; `tests/responses/chat-media-translation.test.ts` reaches the real HTTP
 translation boundary and verifies that supported audio is forwarded while unsupported media
 sends no upstream request; `tests/server/input-admission.test.ts` covers decoded-byte charging.
@@ -342,3 +476,20 @@ upstream `invalid_argument`.
 `src/adapters/unique-tool-call-ids.ts` forwards optional per-exchange stream context while
 retaining tool-call ID reminting; [completed tool blocks](../providers/completed-tool-blocks.md)
 require that context independently of request construction.
+
+## Microsoft 365 Copilot
+
+The `m365-copilot` registry factory in `src/adapters/registry.ts` inherits the Chat tool-lowering contract while `src/adapters/m365-copilot.ts` owns a native ChatHub `runTurn`. The Microsoft transport, account-bound sessions and managed-browser OAuth are described in [the provider contract](../providers/m365-copilot.md). No second adapter factory inventory is introduced.
+
+## Google retry lease ordering
+
+`createAdapterPhysicalSend` reserves dispatch budget before its optional
+`beforePacing` callback, acquires a provider slot afterwards, and preserves the
+existing post-admission `beforeDispatch` callback. Google retries cancel the
+previous response body before abort-aware backoff in `beforePacing`; neither
+the previous response lease nor the next lease is held during backoff. Budget
+refusal preserves the previous response for the caller, including Retry-After.
+Cancellation releases internally owned pending responses; a returned response
+is no longer owned by the retry loop. No account, model, deadline, retry budget
+or concurrency limit changes. The saturated five-response regression is in
+`tests/adapters/google/google-retry-held-lease.test.ts`.

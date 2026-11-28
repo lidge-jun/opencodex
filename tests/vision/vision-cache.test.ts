@@ -4,6 +4,7 @@ import * as oauthModule from "../../src/oauth";
 mock.module("../../src/oauth", () => ({ ...oauthModule, getValidAccessToken: async () => "vision-cache-token" }));
 
 import { parseRequest } from "../../src/responses/parser";
+import { routeAllowedByScope } from "../../src/server/admission-model-scope";
 import type { OcxConfig, OcxContentPart, OcxProviderConfig } from "../../src/types";
 import {
   describeImagesInPlace,
@@ -136,6 +137,58 @@ test("vision auth and planning agree on a routed describer and its legacy fallba
   cfg.visionSidecar!.model = "legacy-bare-model";
   expect(shouldResolveOpenAiVisionSidecar(cfg, textOnlyProvider, "text-model", request)).toBe(true);
   expect(planVisionSidecar(cfg, textOnlyProvider, "text-model", request, plan().forwardSidecar)?.backend).toBe("openai");
+});
+
+test("vision admission distinguishes an unavailable route from a refused route", () => {
+  const config: OcxConfig = {
+    port: 10100, defaultProvider: "main",
+    providers: { main: textOnlyProvider, helper: { adapter: "openai-chat", baseUrl: "https://helper.test/v1" } },
+    visionSidecar: { backend: "routed", model: "helper/vision" },
+  };
+  const request = parsed([{ type: "input_image", image_url: DATA_A }]);
+  const scope = { providers: ["openai"], models: ["openai/gpt-5.6-luna"] };
+  const forward = plan().forwardSidecar;
+  const resolveAuth = () => shouldResolveOpenAiVisionSidecar(config, textOnlyProvider, "text-model", request, "main", scope);
+  const makePlan = () => planVisionSidecar(config, textOnlyProvider, "text-model", request, forward, { admissionScope: scope });
+
+  expect(resolveAuth()).toBe(false);
+  expect(makePlan()).toBeUndefined();
+  delete config.providers.helper;
+  expect(resolveAuth()).toBe(true);
+  expect(makePlan()?.settings.model).toBe("gpt-5.6-luna");
+  scope.models = ["openai/another-model"];
+  expect(resolveAuth()).toBe(false);
+  expect(makePlan()).toBeUndefined();
+  scope.providers = ["main"];
+  scope.models = [];
+  expect(resolveAuth()).toBe(false);
+  expect(makePlan()).toBeUndefined();
+});
+
+test("routed vision honors the host credential and every inherited caller scope", () => {
+  const config: OcxConfig = {
+    port: 10100, defaultProvider: "main",
+    providers: { main: textOnlyProvider, helper: { adapter: "openai-chat", baseUrl: "https://helper.test/v1" } },
+    visionSidecar: { backend: "routed", model: "helper/vision" },
+    apiKeys: [{ id: "fixture", key: "fixture-secret", name: "Fixture", createdAt: "2026-01-01T00:00:00Z", allowedProviders: ["main"] }],
+  };
+  config.providers.helper!.inputModalities = ["text"];
+  const request = parsed([{ type: "input_image", image_url: DATA_A }]);
+  const forward = plan().forwardSidecar;
+  expect(shouldResolveOpenAiVisionSidecar(config, textOnlyProvider, "text-model", request)).toBe(false);
+  expect(planVisionSidecar(config, textOnlyProvider, "text-model", request, forward)).toBeUndefined();
+  config.apiKeys![0]!.allowedProviders = ["helper"];
+  config.providers.helper!.inputModalities = ["text", "image"];
+  const advisorAdmissionPolicy = {
+    modelScope: { providers: ["main"], models: [] as string[] },
+    allowMeteredComboTargets: false, meteredRequiresComboOptIn: false, fallbackPolicies: [],
+  };
+  const options = { admissionScope: { providers: ["helper"], models: ["helper/vision"] }, advisorAdmissionPolicy };
+  expect(planVisionSidecar(config, textOnlyProvider, "text-model", request, forward, options)).toBeUndefined();
+  advisorAdmissionPolicy.modelScope.providers = ["helper"];
+  const permitted = planVisionSidecar(config, textOnlyProvider, "text-model", request, forward, options);
+  expect(permitted?.backend).toBe("routed");
+  expect(routeAllowedByScope(permitted?.advisorAdmissionPolicy?.modelScope, { providerName: "helper", modelId: "other" })).toBe(false);
 });
 
 function parsed(parts: Array<Record<string, unknown>>) {

@@ -18,7 +18,10 @@ import { signalWithTimeout, cancelBodyOnAbort } from "./abort";
 import { readBoundedResponseBytes } from "./bounded-body";
 import { redactSecretString } from "./redact";
 import { sidecarEnter } from "./sidecar-tracker";
+import { internalCallCapability } from "./local-internal-call-capability";
+import { registerAdvisorAdmissionPolicy, SIDECAR_ADMISSION_POLICY_HEADER, SIDECAR_INTERNAL_CAPABILITY_HEADER } from "../server/advisor-admission-scope";
 import { configuredPort } from "../server/auth-cors";
+import type { CapturedAdmissionPolicy } from "../types/admission-policy";
 
 export type LocalChatConfig = Pick<OcxConfig, "port" | "hostname" | "apiKeys" | "unauthenticatedLoopbackListener">;
 
@@ -37,6 +40,7 @@ export interface LocalChatCompletionRequest {
    */
   readonly boundWhileStreaming?: boolean;
   readonly headers?: Record<string, string>;
+  readonly admissionPolicy?: CapturedAdmissionPolicy;
   readonly abortSignal?: AbortSignal;
   /** Test seam; production always self-fetches the resolved local destination. */
   readonly baseUrlOverride?: string;
@@ -44,7 +48,7 @@ export interface LocalChatCompletionRequest {
 
 export type LocalChatCompletionOutcome = { text: string; error?: string };
 
-function destination(config: Pick<OcxConfig, "port" | "hostname" | "unauthenticatedLoopbackListener">) {
+export function localChatCompletionDestination(config: Pick<OcxConfig, "port" | "hostname" | "unauthenticatedLoopbackListener">) {
   // config.port can be 0 (ephemeral bind, tests) or stale after a live port override; the
   // server records its ACTUAL bound port via setCorsOrigin at startup, so prefer that when
   // config carries no positive port. configuredPort() is itself 0 when _corsOrigin has no
@@ -59,13 +63,13 @@ function destination(config: Pick<OcxConfig, "port" | "hostname" | "unauthentica
 export function localChatCompletionBaseUrl(
   config: Pick<OcxConfig, "port" | "hostname" | "unauthenticatedLoopbackListener">,
 ): string {
-  return destination(config).origin;
+  return localChatCompletionDestination(config).origin;
 }
 
 export async function postLocalChatCompletion(request: LocalChatCompletionRequest): Promise<LocalChatCompletionOutcome> {
   const { config, label, logTag } = request;
   const headers: Record<string, string> = { "Content-Type": "application/json", ...request.headers };
-  const target = destination(config);
+  const target = localChatCompletionDestination(config);
   const admission = selfFetchAdmissionToken(config, target);
   if (admission) headers["x-opencodex-api-key"] = admission;
   // A bind that demands admission with no resolvable credential would return 401 with a body
@@ -81,13 +85,18 @@ export async function postLocalChatCompletion(request: LocalChatCompletionReques
   const linkedSignal = signalWithTimeout(request.timeoutMs, request.abortSignal);
   const sidecarExit = sidecarEnter(logTag);
   const t0 = Date.now();
+  let registration: ReturnType<typeof registerAdvisorAdmissionPolicy> | undefined;
   try {
+    registration = registerAdvisorAdmissionPolicy(request.admissionPolicy, linkedSignal.signal);
+    headers[SIDECAR_ADMISSION_POLICY_HEADER] = registration.token;
+    headers[SIDECAR_INTERNAL_CAPABILITY_HEADER] = internalCallCapability();
     const res = await fetch(`${request.baseUrlOverride ?? localChatCompletionBaseUrl(config)}/v1/chat/completions`, {
       method: "POST",
       headers,
       body: JSON.stringify({ ...request.body, stream: false }),
       signal: linkedSignal.signal,
       redirect: "manual",
+      proxy: false,
     });
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     try {
@@ -120,6 +129,7 @@ export async function postLocalChatCompletion(request: LocalChatCompletionReques
     console.warn(`[${logTag}] ${label} ${kind} (${Date.now() - t0}ms)`);
     return { text: "", error: redactSecretString(e instanceof Error ? e.message : String(e)) };
   } finally {
+    registration?.release();
     sidecarExit();
     linkedSignal.cleanup();
   }

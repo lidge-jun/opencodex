@@ -20,13 +20,20 @@ xAI Grok Imagine, so the model you're actually chatting with can still generate 
   The same `bridgeEnabled` flag does arm the separate Codex `/v1/images` relay so the built-in
   `image_gen` client can call Imagine with the Grok CLI grant — see
   [Built-in image generation](/guides/codex-integration/#built-in-image-generation-image_gen).
-  If that grant (or an xAI API key) is missing, `/v1/images` returns an error instead of
-  falling through to ChatGPT.
+  If an xAI provider exists but has neither that grant nor an API key, `/v1/images`
+  returns an error instead of falling through to ChatGPT. If no xAI provider exists,
+  the relay does not handle the request; normal image-provider selection can still
+  choose a configured ChatGPT image provider.
 
   The relay only owns the route when no image provider is configured: it runs when
   `images.bridgeEnabled` is `true` **and** `images.provider` is omitted. Setting
   `images.provider` explicitly hands `/v1/images` to that provider, and its own
   validation errors are returned as-is rather than being retried through xAI.
+
+  For edits routed to xAI, the smaller of `maxInboundBodyBytes` and 100 MiB limits the
+  decompressed JSON request. Each inline image can contain about 66.7 MiB of base64 text.
+  Distinct inline images share a 100 MiB encoded-data budget. HTTPS image URLs count toward
+  the five-source limit and add no inline image data.
 
   ```json
   {
@@ -48,7 +55,7 @@ Image Bridge options live under `images` in `~/.opencodex/config.json`. Bridging
 {
   "images": {
     "bridgeEnabled": true,
-    "bridgeModel": "grok-imagine-image-quality",
+    "bridgeModel": "grok-imagine-image-2.0",
     "maxRounds": 3,
     "timeoutMs": 60000
   }
@@ -58,7 +65,7 @@ Image Bridge options live under `images` in `~/.opencodex/config.json`. Bridging
 | Option | Default | Description |
 | --- | --- | --- |
 | `bridgeEnabled` | `false` | Master switch. Set `true` to enable bridging. Off by default to avoid unexpected xAI charges. |
-| `bridgeModel` | `grok-imagine-image-quality` | The xAI image model id to send prompts to. |
+| `bridgeModel` | `grok-imagine-image-2.0` | The xAI image model id to send prompts to. |
 | `maxRounds` | `3` | Maximum image-generation loop iterations per turn. Floored to an integer and clamped to `[0, 10]`; non-finite values fall back to `3`. |
 | `timeoutMs` | `60000` | Per-call xAI deadline in milliseconds. Finite positive values are floored and passed to the xAI request. |
 | `artifactsKeepCount` | `200` | Maximum number of files retained under `artifacts/`. When exceeded, the oldest files are deleted after each fulfilled call. Set to `0` or a negative value to disable pruning. |
@@ -95,10 +102,9 @@ perspective, image generation works with any routed provider instead of silently
 ## Limitations
 
 - **Only xAI Grok Imagine is supported.** DALL-E and other image providers may be added later.
-- **Web search takes priority** on adapters that support the web-search sidecar loop. If both web
-  search and image generation are requested in the same turn, web-search runs and image
-  generation is skipped. Cursor/`runTurn` adapters cannot use that sidecar today, so the image
-  bridge may still run for those dual-tool turns.
+- **Web search takes priority** when the request is eligible for the web-search loop. If both web search and image generation are requested in an eligible turn, search runs and image generation is skipped. This includes eligible `runTurn` adapters such as Cursor through `runTurnWebSearchLoop`. The image bridge can handle a dual-tool turn only when web search is not eligible.
 - **xAI costs apply.** Image generation via xAI requires an active xAI subscription or API credits.
 - **Streaming only.** The bridge works by intercepting the SSE response stream; requests with
   `stream: false` are rejected with a 400 error.
+
+The default is `grok-imagine-image-2.0`. Its `quality` accepts `low`, `medium`, and `auto`; OpenAI `high` and `hd` map to `medium`. The retired `grok-imagine-image-quality` model (and `grok-imagine-image-pro`, redirected to it since 2026-05-15) is served as 2.0 at low quality. Price depends on quality and resolution; edits add $0.01 per input image. The `/v1/images/edits` relay forwards up to five input images (duplicates are dropped first); the `image_gen` bridge tool sends one.

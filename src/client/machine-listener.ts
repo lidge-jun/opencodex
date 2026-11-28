@@ -1,3 +1,4 @@
+import { isAllowedRequestOrigin } from "../server/auth-cors";
 import { recordLinkDiagnostic } from "../link/diagnostics";
 import type { Server } from "bun";
 import { loadConfig } from "../config";
@@ -18,10 +19,15 @@ import { isLinkConnection, readClientConnectionState } from "./state";
 import { handleMachineApi, type HubReachability, type MachineApiDeps } from "./machine-api";
 import { MACHINE_GUI_ORIGIN_HEADER, requireMachineAuth } from "./machine-auth";
 import { HUB_RELAY_REQUEST_BODY_MAX_BYTES, relayHubManagementRequest } from "./hub-relay";
+import { currentHubRelayAdmission } from "./hub-session";
+import { hubRelayBootstrapAllowed, hubRelayLogoutAllowed, hubRelayReadAllowed, hubRelayRequestTarget } from "../remote/hub-management-relay";
 import { createLinkKeySource, handleLinkIngress, type LinkIngress, type LinkKeySourceDeps } from "./link-ingress";
 import type { LinkTunnelGate } from "./link-relay";
+import { createLinkWebsocketRelay, type LinkWebsocketRelayDeps } from "./link-websocket";
 import { readClientLinkState, type ClientLinkState } from "./link-state";
-import { projectClientLinkChild, type ClientLinkSidecarRead } from "./link-status";
+import { projectClientLinkChild, projectClientLinkRow, type ClientLinkSidecarRead } from "./link-status";
+import { attachLinkTraffic } from "../link/status-projection";
+import { childLinkTraffic } from "../link/traffic";
 import type { ClientLinkSupervisorStatus } from "./link-tunnel";
 import type { LinkReadiness } from "./link-readiness";
 import { packageVersion } from "../lib/package-version";
@@ -40,12 +46,17 @@ import {
 } from "../lib/system-restart-contract";
 import { linkRouteAllowed } from "../link/routes";
 import { linkHomeName, linkHomePhrase } from "./link-home";
-import { relayLinkManagementRead } from "./link-management-relay";
+import { linkChildAdminReadAllowed, relayLinkManagementRead } from "./link-management-relay";
 import type { ClientRestartAdmission } from "./runtime-restart";
 import { clientRestartRollbackAction } from "./runtime-restart";
 import { isLinkConnectionGeneration } from "../link/relay-auth";
 
 const VERSION = packageVersion("0.0.0");
+/** Machine, Link, and stop paths are reserved for the local runtime. */
+function clientLocalApiPath(pathname: string): boolean {
+  return pathname === "/api/machine" || pathname.startsWith("/api/machine/")
+    || pathname === "/api/stop" || pathname === "/api/link/status" || pathname === LINK_DIAGNOSTICS_ROUTE;
+}
 const GUI_SPA_PATHS = new Set([
   "/dashboard", "/startup", "/providers", "/models", "/subagents",
   "/logs", "/usage", "/storage", "/codex-set", "/integrations",
@@ -70,6 +81,8 @@ export interface MachineListenerDeps {
   linkTunnel?: LinkTunnelGate;
   /** Link mode: relay seams (deadline clock and byte cap). */
   linkRelay?: LinkIngress["relay"];
+  /** Link mode: seams of the Responses WebSocket over the link (release gate, timers, limits). */
+  linkWebsocket?: Partial<LinkWebsocketRelayDeps>;
   /**
    * Link mode: whether relayed requests can be served now. `GET /readyz` answers 503 `pending`
    * with `link.reason` while it is not; `/healthz` is unaffected (`link-readiness.ts`).
@@ -86,6 +99,8 @@ export interface MachineListenerDeps {
     attestationSecret: string;
     /** ISO start time of this runtime's process. */
     startedAt: string;
+    /** The owning runtime preserves explicit Link stop fences across restart rollback. */
+    linkStopFence?: true;
     request: () => Promise<ClientRestartAdmission>;
   };
   serve?: (options: Parameters<typeof Bun.serve>[0]) => Server<unknown>;
@@ -100,6 +115,13 @@ function machinePolicyConfig(config: OcxConfig): OcxConfig {
   return { ...config, hostname: "127.0.0.1" };
 }
 
+/** Bare management candidates enter the Hub client's authentication and route policy. */
+function relayedManagementPath(url: URL, linkMode: boolean): boolean {
+  if (linkMode) return false;
+  if (url.pathname.startsWith("/api/machine/hub-relay/")) return false;
+  return url.pathname.startsWith("/api/") && !clientLocalApiPath(url.pathname);
+}
+
 export function machineRouteAllowed(url: URL, req: Request, relayEnabled: boolean, linkMode = false): boolean {
   if (req.headers.get("upgrade")) return false;
   if (linkMode && linkRouteAllowed(url, req)) return true;
@@ -112,6 +134,8 @@ export function machineRouteAllowed(url: URL, req: Request, relayEnabled: boolea
   if (linkMode && (req.method === "GET" || req.method === "HEAD") && (path === "/api/link/status" || path === LINK_DIAGNOSTICS_ROUTE)) return true;
   if (req.method === "POST" && (path === "/api/machine/sync" || path === "/api/machine/shim" || path === "/api/machine/disconnect")) return true;
   if (relayEnabled && path.startsWith("/api/machine/hub-relay/")) return true;
+  // CLI reads go through this listener even when the browser uses the direct Hub transport.
+  if (relayedManagementPath(url, linkMode)) return true;
   // Known machine endpoints are admitted for every method so an unsupported
   // method reaches the authenticated method restriction (403) instead of a
   // bare 404 that hides the endpoint entirely.
@@ -158,6 +182,18 @@ export function startMachineListener(
   // Link mode only. Everything is resolved once here, so a relayed request reads no file and
   // builds no policy: the key is cached, the loopback policy is fixed at bind like the listener.
   const inboundBodyLimit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
+  // Link mode only: Codex's upgrade tries the link only when the relay's wanted() lets it (the Child's
+  // release gate is open, no opt-out, and the Home's last applied answer is not off; a cached off still tries while
+  // the relay drains for a restart); otherwise it keeps today's 426. A tried upgrade can still end in 426 or the
+  // transient 503 (link-websocket.ts).
+  const linkWebsocket = linkMode
+    ? createLinkWebsocketRelay({
+      tunnel: deps.linkTunnel, diagnostic: recordLinkDiagnostic,
+      // D4: read once at start, like the rest of this listener's config.
+      optOut: () => config.linkResponsesWebsocketOptOut === true,
+      ...deps.linkWebsocket,
+    })
+    : null;
   const linkIngress: LinkIngress | null = linkMode
     ? {
       tunnelPort: connection.link!.tunnelPort,
@@ -166,15 +202,18 @@ export function startMachineListener(
       policy: requestPolicyView(config, "127.0.0.1"),
       linkKey: deps.linkKeySource ?? createLinkKeySource(connection.tokenFingerprint, deps.linkKey),
       relay: { diagnostic: recordLinkDiagnostic, fetchImpl: deps.fetchImpl, bodyLimitBytes: inboundBodyLimit, tunnel: deps.linkTunnel, ...deps.linkRelay },
+      ...(linkWebsocket ? { websocket: linkWebsocket } : {}),
     }
     : null;
-  return (deps.serve ?? (options => Bun.serve(options)))({
+  const server = (deps.serve ?? (options => Bun.serve(options)))({
     port: port ?? config.port ?? 10100,
     hostname: "127.0.0.1",
     // A hub client relays only bounded management calls. A link Child carries the Codex data
     // plane, so it admits what a standalone listener admits and keeps its idle limit.
     maxRequestBodySize: linkMode ? inboundBodyLimit : HUB_RELAY_REQUEST_BODY_MAX_BYTES,
     ...(linkMode ? { idleTimeout: LINK_LISTENER_IDLE_TIMEOUT_SECONDS } : {}),
+    // Only an upgrade the link WebSocket admitted ever reaches server.upgrade (link-websocket.ts).
+    ...(linkWebsocket ? { websocket: linkWebsocket.handler() } : {}),
     async fetch(req: Request, server: Server<unknown>) {
       const url = new URL(req.url);
       if (linkIngress) {
@@ -187,6 +226,7 @@ export function startMachineListener(
         const response = Response.json({
           service: "opencodex", version: VERSION, role: "client", uptime: process.uptime(), pid: process.pid, port: server.port,
           ...(restart ? { startedAt: restart.startedAt, restartCapability: SYSTEM_RESTART_CAPABILITY_VERSION, restartBudgetMs: CLIENT_RESTART_BUDGET_MS } : {}),
+          ...(restart?.linkStopFence ? { linkStopFence: true } : {}),
         });
         const challenge = restart ? req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER) : null;
         const proof = challenge && server.port
@@ -217,6 +257,10 @@ export function startMachineListener(
         const linkBody = isLinkConnectionGeneration(connectionGeneration) ? { state: "available", connectionGeneration } : { state: "available" };
         return Response.json({ ...identity, status: "ready", ...facts, ...(link ? { link: linkBody } : {}) });
       }
+      if ((relayedManagementPath(url, linkMode) || (relayEnabled && url.pathname.startsWith("/api/machine/hub-relay/")))
+        && !isAllowedRequestOrigin(req, config)) {
+        return Response.json({ error: "origin_rejected" }, { status: 403 });
+      }
       if (url.pathname.startsWith("/api/machine/hub-relay/")) {
         if (!relayEnabled) return json404(req);
         const prefix = "/api/machine/hub-relay";
@@ -231,7 +275,11 @@ export function startMachineListener(
           }
           const authError = requireManagementAuth(req, managementAuth, config);
           if (authError) return authError;
-          if (managementPrincipal(req, managementAuth, config) !== "gui-session") {
+          // The dashboard session reads the whole relay table; the local admin token reads only the
+          // passive quota pool (#8999), which GOAT polls on every Child.
+          const principal = managementPrincipal(req, managementAuth, config);
+          if (principal !== "gui-session"
+            && !(principal === "admin-token" && linkChildAdminReadAllowed(req.method, url.pathname.slice(prefix.length)))) {
             return Response.json({ error: "opencodex machine GUI session required" }, { status: 401 });
           }
           const response = await relayLinkManagementRead(req, suffix, linkIngress, linkHomePhrase(connection, sidecarOrNull));
@@ -242,11 +290,46 @@ export function startMachineListener(
         }
         const authError = requireMachineAuth(req, managementAuth, config);
         if (authError) return authError;
-        const suffix = `${url.pathname.slice(prefix.length)}${url.search}`;
+        const callerCredential = req.headers.get("x-opencodex-api-key");
+        if (managementPrincipal(req, managementAuth, config)
+          || (!callerCredential && url.pathname !== `${prefix}/opencodex-session`)) {
+          return Response.json({ error: "caller hub credential required" }, { status: 401 });
+        }
+        const raw = hubRelayRequestTarget(req);
+        if (!raw.startsWith(prefix + "/")) return json404(req);
+        const suffix = raw.slice(prefix.length);
+        if (!hubRelayReadAllowed(req.method, suffix) && !hubRelayBootstrapAllowed(req.method, suffix)
+          && !hubRelayLogoutAllowed(req.method, suffix)) return json404(req);
         const response = await relayHubManagementRequest(req, suffix, {
           managementUrl: connection.managementUrl,
           browserOrigin: req.headers.get(MACHINE_GUI_ORIGIN_HEADER) ?? req.headers.get("Origin") ?? "",
         }, { fetchImpl: deps.fetchImpl });
+        if (response.status === 401) hubReachability = "unauthorized";
+        else if (response.status >= 500) hubReachability = "offline";
+        else hubReachability = "online";
+        return response;
+      }
+      // A loopback bootstrap grants the machine GUI session. Only the local admin token
+      // grants access to the persisted Hub relay credential.
+      if (relayedManagementPath(url, linkMode)) {
+        const localPrincipal = managementPrincipal(req, managementAuth, config);
+        const localAdmin = localPrincipal === "admin-token";
+        if (!localAdmin) {
+          const authError = requireMachineAuth(req, managementAuth, config);
+          if (authError) return authError;
+          if (localPrincipal || !req.headers.get("x-opencodex-api-key")) {
+            return Response.json({ error: "caller hub credential required" }, { status: 401 });
+          }
+        }
+        const suffix = hubRelayRequestTarget(req);
+        if (!hubRelayReadAllowed(req.method, suffix)) return json404(req);
+        const readCredential = localAdmin
+          ? (method: string, target: string) => currentHubRelayAdmission(connection, method, target)
+          : undefined;
+        const response = await relayHubManagementRequest(req, suffix, {
+          managementUrl: connection.managementUrl,
+          browserOrigin: req.headers.get(MACHINE_GUI_ORIGIN_HEADER) ?? req.headers.get("Origin") ?? "",
+        }, { fetchImpl: deps.fetchImpl, readCredential });
         if (response.status === 401) hubReachability = "unauthorized";
         else if (response.status >= 500) hubReachability = "offline";
         else hubReachability = "online";
@@ -273,8 +356,19 @@ export function startMachineListener(
         if (url.pathname === LINK_DIAGNOSTICS_ROUTE) return linkDiagnosticsResponse(url);
         if (url.pathname === "/api/link/status") {
           // A Child never joins again from here, so the dashboard reads `joinAvailable: false`.
-          const status = projectClientLinkChild(readSidecarSafely(readSidecar), deps.linkStatus?.() ?? { kind: "stopped" }, Date.now());
-          return Response.json({ ...status, joinAvailable: false }, { headers: { "Cache-Control": "no-store" } });
+          const sidecar = readSidecarSafely(readSidecar);
+          const status = projectClientLinkChild(sidecar, deps.linkStatus?.() ?? { kind: "stopped" }, Date.now());
+          // Opt-in (#3023): this Child's link as a row, with the bytes its link transport carried.
+          if (url.searchParams.get("traffic") === "1" && connection.link) {
+            // One sidecar read per status read: the Home's name is needed only when there is none,
+            // and then only from the Home's published settings.
+            status.links = [projectClientLinkRow({ ...connection, link: connection.link }, sidecar, status.child, Date.now(),
+              undefined, sidecar === null ? linkHomeName(connection, () => null) : null)];
+            attachLinkTraffic(status, id => childLinkTraffic.snapshot(id));
+          }
+          // Opt-in (design 9.3): this Child's own link WebSocket counters.
+          const transport = url.searchParams.get("transport") === "1" && linkWebsocket ? { websocket: linkWebsocket.counters() } : {};
+          return Response.json({ ...status, joinAvailable: false, ...transport }, { headers: { "Cache-Control": "no-store" } });
         }
         return await handleMachineApi(req, url, connection, machineApiDeps) ?? json404(req);
       }
@@ -305,6 +399,13 @@ export function startMachineListener(
       return json404(req);
     },
   } as Parameters<typeof Bun.serve>[0]);
+  if (linkWebsocket) {
+    // Any stop, graceful or forced, closes the link sockets first (1001 on both legs): Codex reconnects
+    // to whatever serves next, and a graceful drain never waits on an idle Codex socket.
+    const stop = server.stop.bind(server);
+    server.stop = ((closeActiveConnections?: boolean) => { linkWebsocket.closeAll(); return stop(closeActiveConnections); }) as typeof server.stop;
+  }
+  return server;
 }
 
 /**

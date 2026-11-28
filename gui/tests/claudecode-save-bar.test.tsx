@@ -86,6 +86,44 @@ test("a refused user-settings apply reports failure, not success", async () => {
   }
 });
 
+test("copying the manual launch script ignores the daemon's automatic Fable fill even while editing the slot", async () => {
+  globalThis.fetch = (async () => Response.json({
+    ...SERVER,
+    authMode: "subscription",
+    tierModels: {},
+    effectiveModelEnv: { ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-2[1m]" },
+    modelMap: {},
+  })) as typeof fetch;
+  const page = await mount();
+  const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  let copied = "";
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async (value: string) => { copied = value; } },
+  });
+  try {
+    await page.click(page.container.querySelector<HTMLElement>(".claude-quickstart-manual summary")!);
+    const copy = page.container.querySelector<HTMLButtonElement>(".claude-quickstart-manual button")!;
+    await page.click(copy);
+    expect(copied).toEndWith("\nclaude");
+    expect(copied).not.toContain("ANTHROPIC_DEFAULT_FABLE_MODEL");
+
+    await page.click(page.button("Fable"));
+    const model = page.testWindow.document.querySelector<HTMLElement>('[role="option"][data-value="mock/model"]')!;
+    await page.click(model);
+    expect(page.barState()).toBe("Unsaved changes");
+    copied = "";
+    await page.click(copy);
+    expect(copied).toEndWith("\nclaude");
+    expect(copied).not.toContain("ANTHROPIC_DEFAULT_FABLE_MODEL");
+  } finally {
+    if (originalClipboard) Object.defineProperty(navigator, "clipboard", originalClipboard);
+    else Reflect.deleteProperty(navigator, "clipboard");
+    await act(async () => page.root.unmount());
+    page.testWindow.close();
+  }
+});
+
 beforeEach(() => {
   clearClientResourceStoresForTests();
   const language = Object.getOwnPropertyDescriptor(globalThis.navigator, "language");
@@ -545,6 +583,13 @@ async function settle(testWindow: Window) {
 }
 
 async function mount() {
+  // The first-party switch previews before its PUT; an empty preview has nothing to confirm, so
+  // these Save-race tests keep exercising the PUT and its reread (the dialog is covered in
+  // claude-toggle-race.test.tsx).
+  const served = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => String(input).includes("/api/claude-code/first-party/preview")
+    ? Response.json({ enabled: true, path: "~/.claude/settings.json", changes: [], applyChecks: [] })
+    : served(input, init)) as typeof fetch;
   const testWindow = new Window({ url: "http://localhost/" });
   const container = testWindow.document.createElement("div");
   testWindow.document.body.appendChild(container);

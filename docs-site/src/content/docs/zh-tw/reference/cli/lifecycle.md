@@ -30,6 +30,8 @@ ocx start --socks5-off
 
 無人監督的 Link Child 處理結束訊號時，會在每次寫入前核對連線，並在關閉接聽器前還原 Codex 原生設定及受管理的 Grok。服務/Desktop、sibling、重新啟動交接和父程序 stop 收據會保留設定。結束中的重新啟動要求回傳 `409 runtime_stopping`。強制終止可能略過訊號處理，仍需父程序 `ocx stop` 的還原路徑。
 
+在 Windows x64 上，若 WMI 未傳回相符服務包裝程序的擁有者，OpenCodex 可透過執行中程序的控制代碼確認 Windows 帳戶與程序建立時間。若無法確認擁有者，該程序會繼續執行。若錯誤明確指出工作排程器的註冊問題，請用 `ocx service status` 檢查註冊狀態。
+
 停止執行中的代理（依 PID）、移除 PID 檔案，並還原原生 Codex。若已安裝受管背景服務，`ocx stop` 也會先停止它，使其無法重新生成代理。網頁儀表板側欄的代理拉桿拉到底時，在多數後端執行相同動作（`POST /api/stop`），但 Windows 工作排程器除外：工作結束後包裝程序仍可能重新啟動 Proxy，因此儀表板會以 `respawnable_service` 拒絕、不做任何變更，並請你改用 `ocx stop`。
 
 對已連線的 hub 用戶端，`ocx stop`（包括成功的 API 停止）會保留連線擁有的 Codex 路由、目錄和 Grok 設定，`ocx start` 會再次提供服務。明確停止 Remote Link Child 時，若共用設定還原成功，則會還原原生 Codex 路由、目錄與已備份的續接歷程中繼資料，並移除受管理的 Grok 設定。已儲存的 Home 連線會保留，可用 `ocx disconnect` 移除。
@@ -150,6 +152,16 @@ ocx status --json
 
 透過免認證的 `GET /readyz` 端點檢查同步後的就緒狀態。就緒時回傳 `200`，或 `pending` 與終端 `failed` 時回傳附帶 `Retry-After: 1` 的 `503`。其淨化的 HTTP 身分為 `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl, features}`。`protocol` 是 Hub 目前的遠端協定版本，`minimumClientProtocol` 是相容的最低用戶端協定版本，`managementUrl` 是瀏覽器可見的標準管理 origin。沒有 `/readyz` 的舊代理會以 `unreachable` 方式 fail closed；`/healthz` 是分開的存活檢查，而非就緒檢查。此指令預設執行一次探測；`--wait` 輪詢直到就緒或逾時，但在觀察到終端 `failed` 狀態時立即退出。預設逾時為 45 秒；`--timeout <seconds>` 需要 `--wait`，接受 1–300 的正整數秒。CLI JSON 輸出 `{ready, status, pid, port}`，其中 `status` 為 `ready`、`pending`、`failed` 或 `unreachable`。離開碼為：就緒 0；未就緒、pending、failed、逾時或 unreachable 1；無效引數 64。
 
+如果代理啟動時顯示找不到 Codex 家目錄，請先啟動一次 Codex，或將 `CODEX_HOME` 指向 Codex 已初始化的目錄，然後執行 `ocx sync`。同步成功後即可恢復路由，但 `failed` 仍反映目前程序啟動時的結果。請重新啟動代理，再執行 `ocx ready` 確認新程序是否就緒。
+
+對於由 CLI 管理的服務，請使用登記時的 `CODEX_HOME` 和 `OPENCODEX_HOME`。如果舊版服務定義缺少這些路徑，請使用相同設定執行一次 `ocx service repair`。視需要初始化 Codex 家目錄，執行 `ocx sync`，再重新啟動服務。如果代理由桌面應用程式管理，請在應用程式中重新啟動。
+
+如要將 CLI 服務移至另一個現有的 Codex 家目錄，請先用原本的設定執行 `ocx service uninstall`。若服務已移除，但還原原生 Codex 設定失敗，請修正提示的錯誤，並以相同設定執行 `ocx restore`。
+
+在 Windows 上，若還原失敗後留下待清理紀錄，請在切換家目錄前，從原本管理服務的安裝實例使用原本的家目錄設定執行 `ocx stop`。紀錄仍存在時，`ocx update` 會拒絕替換套件。
+
+移除和還原都成功後，保留 `OPENCODEX_HOME`，選擇新的 `CODEX_HOME`，再以原本的後端和選項執行 `ocx service install`。使用新設定執行 `ocx sync`，並以 `ocx ready` 確認狀態。若啟動失敗，請依照上方步驟復原。
+
 ### `ocx doctor`
 
 執行唯讀環境與連線診斷：狀態路徑與檔案系統類型、WSL 雙重安裝、代理環境／設定、ChatGPT 可達性、Codex plugin 與專案設定警告，以及待處理的歷史遷移。Codex app-home 定向區段也會偵測窄義的 Windows Orca runtime-home 不符，並在適用時說明服務遷移。此診斷顯示的路徑會遮罩 OS 使用者名稱。Doctor 印出修復提示但不套用它們。
@@ -210,7 +222,7 @@ macOS 代理使用 `ProcessType=Interactive`，避免預設 daemon 類別的 CPU
 
 若定義的載入尚未確認，即使權杖變更，此狀態也會保留到下次修復。僅在最初的 launchd 狀態探測可用時才重試註冊；可能需要圖形登入工作階段。成功建立的原始備份會保留到 bootstrap 獲接受且探測確認工作相符。備份建立採盡力而為方式；新安裝沒有先前的定義。
 
-若最初的 launchd 狀態探測無法使用，repair 會在寫入新 plist 或備份之前拒絕操作。若變更後定義的 bootstrap 遭拒絕且狀態可檢查，repair 會嘗試還原先前定義。若 bootstrap 後狀態變得無法檢查，則不會再次移除工作或回復：bootstrap 獲接受時會警告重新載入尚未驗證，遭拒絕時則失敗。重試前請執行 `launchctl print gui/$(id -u)/com.opencodex.proxy` 檢查工作。新安裝會移除孤立的復原檔案，完整解除安裝也會在 plist 不存在時移除它們。新安裝的復原檔案清理、待確認標記刪除及解除安裝清理只忽略檔案已不存在的情況。這些步驟的其他錯誤會回報失敗，且不會刪除安裝狀態。經過驗證的修復寫入安裝狀態後，`.prev` 備份的刪除採盡力而為方式；此刪除失敗不會改變修復成功的結果。
+若最初的 launchd 狀態探測無法使用，repair 會在寫入新 plist 或備份之前拒絕操作。若變更後定義的 bootstrap 遭拒絕且狀態可檢查，repair 會嘗試還原先前定義。若 bootstrap 後的立即探測無法檢查狀態，則不會再次移除工作或回復：bootstrap 獲接受時會警告重新載入尚未驗證，遭拒絕時則失敗。對於未變更的定義，如果復原 kickstart 成功但隨後無法探測狀態，仍可能再次移除工作。重試前請執行 `launchctl print gui/$(id -u)/com.opencodex.proxy` 檢查工作。新安裝會移除孤立的復原檔案，完整解除安裝也會在 plist 不存在時移除它們。新安裝的復原檔案清理、待確認標記刪除及解除安裝清理只忽略檔案已不存在的情況。這些步驟的其他錯誤會回報失敗，且不會刪除安裝狀態。經過驗證的修復寫入安裝狀態後，`.prev` 備份的刪除採盡力而為方式；此刪除失敗不會改變修復成功的結果。
 
 在此變更之前安裝的定義仍帶有舊的帶版本路徑，且無法自行遷移——一旦舊執行檔被刪除，就不會有 opencodex 程式碼執行來修復它。升級後請執行一次 `ocx service repair`。之後 Linux 服務啟動會跟隨啟動器；macOS 的 repair 會將新的套件路徑寫入 launchd 定義。外部升級不會取代已在執行的代理：當已安裝的 CLI 比執行中的代理更新時，執行 `ocx service restart` 讓新組建提供服務。在 macOS 上，此情況下 `repair` 並不足夠：定義沒有改變，而不改變任何內容的 repair 不會重新載入任何內容。反之若代理較新，請依 [`ocx status`](#ocx-status---json) 的說明檢查 CLI 安裝與 `PATH`。
 
@@ -317,6 +329,8 @@ Unix 解除安裝後，請從 shell 啟動檔移除載入行，並重新啟動 s
 
 從 npm 自我更新 opencodex。穩定安裝使用 `@latest`；預覽安裝停留在 `@preview`，除非你傳入 `--tag latest|preview`。它偵測原始碼 checkout 並告訴你改用
 `git pull && bun install`，且若你已是該 tag 的最新版本則為 no-op。執行中的代理會在檔案被替換前停止；已安裝的服務會自動重建並啟動，而前景安裝會印出 `ocx start` 作為下一步。
+
+預覽版的命名為 `X.Y.Z-preview.<date>` 或 `X.Y.Z-preview.<date>.<attempt>`，例如 `2.100.6-preview.20261119.1`；次數是該日期的發布序號。在 preview 通道中，預覽版依序按基礎版本、日期、次數比較，沒有次數的版本視為次數 0。在任一通道中，只有當穩定版的基礎版本高於預覽版時，才會向預覽版安裝提供該穩定版；穩定通道從不提供預覽版。這些規則適用於更新檢查、通知和儀表板的更新提示。`ocx update` 本身只要所選標籤指向的版本與已安裝版本不同就會安裝它，因此在預覽版安裝上執行 `ocx update --tag latest` 會切換到目前的穩定版，即使其基礎版本並不更高。
 
 ```bash
 ocx update

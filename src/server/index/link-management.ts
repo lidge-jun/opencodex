@@ -9,10 +9,12 @@
  * They run as passive reads (`src/lib/passive-read.ts`): no discovery, config write or diagnostic (#6959).
  */
 import type { OcxConfig } from "../../types";
-import { handleManagementAPI, type ManagementApiDeps } from "../management-api";
+import type { ManagementApiDeps } from "../management-api";
 import type { ManagementSessionControl } from "../management-auth";
-import { runPassiveRead } from "../../lib/passive-read";
-import { LINK_CODEX_SETTINGS_PATH, linkManagementRouteAllowed, linkManagementTarget } from "../../link/management-routes";
+import { dispatchPassiveManagementRead } from "./passive-management-read";
+import { LINK_CODEX_SETTINGS_PATH, LINK_ROUTE_INTENT_PATH, LINK_ROUTE_CATALOG_PATH, linkManagementRouteAllowed, linkManagementTarget } from "../../link/management-routes";
+import { projectRouteCatalogFacts } from "../../integrations/route-intent-catalog";
+import { readLinkRouteIntent } from "./route-intent-watch";
 import { projectHomeCodexSettings } from "../../link/codex-settings";
 import { homeLinkChildParity, LINK_CHILD_PARITY_MAX_BYTES, LINK_CHILD_PARITY_PATH, parseLinkChildParityReport } from "../../link/child-parity";
 import { linkStorePath } from "../../link/paths";
@@ -22,7 +24,6 @@ import { packageVersion } from "../../lib/package-version";
 import { parseUsageSource } from "../../usage/source-filter";
 
 const VERSION = packageVersion("0.0.0");
-const KEPT_RESPONSE_HEADERS = ["content-type", "content-language", "etag", "last-modified"];
 const REPORT_READ_TIMEOUT_MS = 5_000;
 
 function notFound(): Response {
@@ -76,9 +77,21 @@ export async function handleLinkManagementRequest(
   deps: ManagementApiDeps,
   sessionControl?: ManagementSessionControl,
   admittedKeyId?: string,
+  /** Repeats link-key admission for a request that waited; see readLinkRouteIntent. */
+  readmit?: () => string | undefined,
 ): Promise<Response> {
   if (url.pathname === LINK_CHILD_PARITY_PATH) return handleChildParityReport(req, url, admittedKeyId);
   if (!linkManagementRouteAllowed(url, req)) return notFound();
+  if (url.pathname === LINK_ROUTE_CATALOG_PATH) {
+    if (!admittedKeyId) return refused(403, "link_key_required");
+    try {
+      if (readLinkStore(linkStorePath()).links.filter(link => link.apiKeyId === admittedKeyId).length !== 1) return refused(403, "link_mismatch");
+      return Response.json(projectRouteCatalogFacts(config), { headers: { "cache-control": "no-store" } });
+    } catch { return refused(503, "route_catalog_unavailable"); }
+  }
+  if (url.pathname === LINK_ROUTE_INTENT_PATH) {
+    return readLinkRouteIntent(req, config, VERSION, admittedKeyId, readmit);
+  }
   if (url.pathname === LINK_CODEX_SETTINGS_PATH) {
     return Response.json(projectHomeCodexSettings(config, VERSION), { headers: { "cache-control": "no-store" } });
   }
@@ -91,23 +104,5 @@ export async function handleLinkManagementRequest(
       return refused(403, "link_usage_scope_refused");
     }
   }
-  const local = new URL(`${target.pathname}${target.search}`, "http://127.0.0.1");
-  // The handlers branch on GET; an admitted HEAD runs as GET and its body is dropped below.
-  const inner = new Request(local.href, {
-    method: "GET",
-    headers: { accept: "application/json", host: "127.0.0.1" },
-  });
-  const response = await runPassiveRead(() =>
-    handleManagementAPI(inner, local, config, deps, undefined, sessionControl, { trustedLoopback: false }));
-  if (!response) return notFound();
-  const headers = new Headers({ "cache-control": "no-store" });
-  for (const name of KEPT_RESPONSE_HEADERS) {
-    const value = response.headers.get(name);
-    if (value) headers.set(name, value);
-  }
-  if (req.method === "HEAD") {
-    try { await response.body?.cancel(); } catch { /* best effort */ }
-    return new Response(null, { status: response.status, headers });
-  }
-  return new Response(response.body, { status: response.status, headers });
+  return dispatchPassiveManagementRead(req.method, target.pathname + target.search, config, deps, sessionControl);
 }

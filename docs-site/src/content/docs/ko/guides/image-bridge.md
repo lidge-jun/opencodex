@@ -10,7 +10,7 @@ Codex를 Claude, Gemini, Grok 같은 OpenAI가 아닌 모델로 라우팅하면 
 ## 사전 조건
 
 - 구성에서 `images.bridgeEnabled: true`로 설정해 브리지를 켭니다. 예상치 못한 xAI 요금을 피하려고 기본값은 꺼져 있습니다. 아래 [Configuration](#설정)을 참고합니다.
-- API 키가 있는 `xai` provider 항목이 필요합니다. 브리지는 처리를 레지스트리의 xAI Images endpoint (`https://api.x.ai/v1`)에 고정하며, 이미지 호출에서는 설정된 `baseUrl` override를 무시합니다. OAuth / `ocx login xai`만으로는 이 sidecar 루프가 켜지지 않습니다. 같은 `bridgeEnabled` 플래그는 별도의 Codex `/v1/images` relay를 켜서, 내장 `image_gen` 클라이언트가 Grok CLI grant로 Imagine을 호출할 수 있게 합니다. 그 grant(또는 xAI API key)가 없으면 `/v1/images`는 ChatGPT로 넘어가지 않고 오류를 반환합니다. 이 relay가 경로를 맡는 건 `images.bridgeEnabled`가 `true`이고 `images.provider`를 비워둔 경우뿐입니다. `images.provider`를 지정하면 `/v1/images`는 그 provider가 담당하고, 그쪽 검증 오류는 xAI로 재시도하지 않고 그대로 반환합니다. [Built-in image generation](/guides/codex-integration/#built-in-image-generation-image_gen)을 참고하세요.
+- API 키가 있는 `xai` provider 항목이 필요합니다. 브리지는 처리를 레지스트리의 xAI Images endpoint (`https://api.x.ai/v1`)에 고정하며, 이미지 호출에서는 설정된 `baseUrl` override를 무시합니다. OAuth / `ocx login xai`만으로는 이 sidecar 루프가 켜지지 않습니다. 같은 `bridgeEnabled` 플래그는 별도의 Codex `/v1/images` relay를 켜서, 내장 `image_gen` 클라이언트가 Grok CLI grant로 Imagine을 호출할 수 있게 합니다. xAI provider가 있지만 grant와 API key가 모두 없으면 `/v1/images`는 ChatGPT로 넘어가지 않고 오류를 반환합니다. xAI provider 자체가 없으면 relay는 요청을 처리하지 않으며, 일반 선택 과정에서 설정된 ChatGPT 이미지 provider를 사용할 수 있습니다. 이 relay가 경로를 맡는 건 `images.bridgeEnabled`가 `true`이고 `images.provider`를 비워둔 경우뿐입니다. `images.provider`를 지정하면 `/v1/images`는 그 provider가 담당하고, 그쪽 검증 오류는 xAI로 재시도하지 않고 그대로 반환합니다. [Built-in image generation](/guides/codex-integration/#built-in-image-generation-image_gen)을 참고하세요.
 
   ```json
   {
@@ -30,7 +30,7 @@ Image Bridge 옵션은 `~/.opencodex/config.json`의 `images` 아래에 있습�
 {
   "images": {
     "bridgeEnabled": true,
-    "bridgeModel": "grok-imagine-image-quality",
+    "bridgeModel": "grok-imagine-image-2.0",
     "maxRounds": 3,
     "timeoutMs": 60000
   }
@@ -40,7 +40,7 @@ Image Bridge 옵션은 `~/.opencodex/config.json`의 `images` 아래에 있습�
 | 옵션 | 기본값 | 설명 |
 | --- | --- | --- |
 | `bridgeEnabled` | `false` | 마스터 스위치입니다. 브리지를 켜려면 `true`로 설정합니다. 예상치 못한 xAI 요금을 막기 위해 기본값은 꺼져 있습니다. |
-| `bridgeModel` | `grok-imagine-image-quality` | 프롬프트를 보낼 xAI 이미지 모델 ID입니다. |
+| `bridgeModel` | `grok-imagine-image-2.0` | 프롬프트를 보낼 xAI 이미지 모델 ID입니다. |
 | `maxRounds` | `3` | 턴당 이미지 생성 루프의 최대 반복 횟수입니다. 정수로 내림한 뒤 `[0, 10]` 범위로 제한합니다. 유한하지 않은 값은 `3`으로 돌아갑니다. |
 | `timeoutMs` | `60000` | 호출당 xAI 마감 시간(밀리초)입니다. 유한한 양수 값은 내림한 뒤 xAI 요청에 전달합니다. |
 | `artifactsKeepCount` | `200` | `artifacts/` 아래에 유지할 최대 파일 수입니다. 이를 넘으면 각 완료된 호출 뒤에 가장 오래된 파일부터 삭제합니다. `0` 이하로 설정하면 정리를 비활성화합니다. |
@@ -67,3 +67,5 @@ Image Bridge는 선택된 모델이 OpenAI가 아닌 상태에서, `/v1/response
 - 웹 검색 sidecar 루프를 지원하는 adapter에서는 웹 검색이 우선합니다. 같은 턴에서 웹 검색과 이미지 생성이 동시에 요청되면 웹 검색이 먼저 실행되고 이미지 생성은 건너뜁니다. 다만 현재 Cursor/`runTurn` adapter는 그 sidecar를 사용할 수 없어서, 이런 dual-tool 턴에서는 image bridge가 여전히 실행될 수 있습니다.
 - xAI 요금이 발생합니다. xAI를 통한 이미지 생성에는 활성 xAI 구독이나 API 크레딧이 필요합니다.
 - 스트리밍 전용입니다. 브리지는 SSE response stream을 가로채서 동작하므로 `stream: false` 요청은 400 오류로 거절됩니다.
+
+기본 모델은 `grok-imagine-image-2.0`입니다. `quality`는 `low`, `medium`, `auto`를 지원하며 OpenAI의 `high`와 `hd`는 `medium`으로 변환됩니다. 종료된 `grok-imagine-image-quality`와 2026-05-15부터 그 모델로 연결된 `grok-imagine-image-pro`는 2.0의 낮은 품질로 제공됩니다. 가격은 품질과 해상도에 따라 달라지며, 편집은 입력 이미지당 $0.01이 추가됩니다. `/v1/images/edits` 릴레이는 중복을 먼저 제거한 뒤 입력 이미지를 최대 5개까지 전달하고, `image_gen` 브리지 도구는 1개를 보냅니다.

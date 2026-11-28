@@ -1,3 +1,5 @@
+import { readFileSync, statSync, type Stats } from "node:fs";
+import { validReplayOwnerKey } from "./replay-owner";
 import type {
   ResidentInput,
   ResidentResponseState,
@@ -9,17 +11,83 @@ import type { ResponseSpillRef } from "../spill-store";
 import type { OcxProviderContinuationState } from "../../types";
 
 export interface SnapshotLoadStore {
-  replaceMapEntry(id: string, next: StoredResponseState, expected?: StoredResponseState): boolean;
+  replaceMapEntry(id: string, next: StoredResponseState): void;
   stubSize(id: string, entry: Omit<SpilledResponseState, "sizeBytes">): number;
   tombstone(id: string, createdAt: number): SpillFailedResponseState;
   measureResidentEntry(id: string, entry: ResidentInput): ResidentResponseState | null;
-  admitOversizedCandidate(id: string, candidate: ResidentResponseState, expected?: StoredResponseState): void;
-  byteCap(): number;
+  admitResident(id: string, candidate: ResidentResponseState): void;
+}
+
+interface SnapshotLoadResult {
+  oversized: boolean;
+  failed: boolean;
+  fingerprint?: string;
+}
+
+function fileFingerprint(stat: Stats | undefined): string | undefined {
+  return stat === undefined ? "absent" : stat.isFile()
+    ? `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}` : undefined;
+}
+
+function missingFile(error: unknown): boolean {
+  const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/** A content-free stamp; an unreadable or non-regular file cannot validate cached admission. */
+export function snapshotFileFingerprint(path: string): string | undefined {
+  try { return fileFingerprint(statSync(path, { throwIfNoEntry: false })); }
+  catch (error) { return missingFile(error) ? "absent" : undefined; }
+}
+
+/** Read failures are distinct from confirmed absence: neither callers nor cleanup may finalize them. */
+export function loadSnapshotEntries(path: string, maxBytes: number, store: SnapshotLoadStore, cutoff = -Infinity): SnapshotLoadResult {
+  let fingerprint: string | undefined;
+  let text: string;
+  try {
+    // stat and read both follow symlinks. A FIFO or device could block or supply unbounded input.
+    const stat = statSync(path, { throwIfNoEntry: false });
+    fingerprint = fileFingerprint(stat);
+    // Confirmed absent/non-regular targets retain the existing empty-snapshot behavior.
+    // A failed stat/read is different: the catch below leaves a later load possible.
+    if (!stat?.isFile()) return { oversized: false, failed: false, fingerprint };
+    if (stat.size > maxBytes) return { oversized: true, failed: false, fingerprint };
+    text = readFileSync(path, "utf-8");
+  } catch (error) {
+    return missingFile(error) ? { oversized: false, failed: false, fingerprint: "absent" }
+      : { oversized: false, failed: true };
+  }
+  let raw: { version?: unknown; states?: unknown };
+  try { raw = JSON.parse(text); }
+  catch { return { oversized: false, failed: false, fingerprint }; }
+  if (raw && (raw.version === 1 || raw.version === 2) && Array.isArray(raw.states)) {
+    for (const entry of raw.states) {
+      if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") continue;
+      loadSnapshotEntry(entry[0], entry[1], store, cutoff);
+    }
+  }
+  return { oversized: false, failed: false, fingerprint };
+}
+
+/** Decode and account live cold rows without running admission or disk maintenance. */
+export function stageSnapshotEntries(path: string, maxBytes: number, store: SnapshotLoadStore, cutoff: number) {
+  const entries = new Map<string, StoredResponseState>();
+  let bytes = 0;
+  const stage = (id: string, entry: StoredResponseState): void => {
+    bytes += entry.sizeBytes - (entries.get(id)?.sizeBytes ?? 0);
+    entries.delete(id);
+    entries.set(id, entry);
+  };
+  const result = loadSnapshotEntries(path, maxBytes, { ...store, replaceMapEntry: stage, admitResident: stage }, cutoff);
+  let oldestCreatedAt = Infinity;
+  for (const entry of entries.values()) oldestCreatedAt = Math.min(oldestCreatedAt, entry.createdAt);
+  return { path, entries, bytes, oldestCreatedAt, ...result };
 }
 
 interface LegacySnapshotState {
   createdAt?: unknown;
   clientThreadId?: unknown;
+  replayOwnerKey?: unknown;
   items?: unknown;
   providers?: OcxProviderContinuationState;
   conversationId?: unknown;
@@ -29,18 +97,25 @@ interface LegacySnapshotState {
 
 function isSpillRef(value: unknown): value is ResponseSpillRef {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const ref = value as ResponseSpillRef;
+  const ref = value as Record<string, unknown>;
   return ref.version === 1
     && typeof ref.fileName === "string"
+    && typeof ref.digest === "string"
     && /^[0-9a-f]{64}$/.test(ref.digest)
+    && typeof ref.payloadBytes === "number"
     && Number.isSafeInteger(ref.payloadBytes)
     && ref.payloadBytes >= 0;
 }
 
-export function loadSnapshotEntry(id: string, value: unknown, store: SnapshotLoadStore): void {
+function loadSnapshotEntry(id: string, value: unknown, store: SnapshotLoadStore, cutoff: number): void {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
   const rec = value as LegacySnapshotState & { kind?: unknown; spill?: unknown };
-  if (typeof rec.createdAt !== "number" || !Number.isFinite(rec.createdAt)) return;
+  if (typeof rec.createdAt !== "number" || !Number.isFinite(rec.createdAt) || rec.createdAt < cutoff) return;
+  if (rec.replayOwnerKey !== undefined && !validReplayOwnerKey(rec.replayOwnerKey)) {
+    store.replaceMapEntry(id, store.tombstone(id, rec.createdAt));
+    return;
+  }
+  const replayOwnerKey = rec.replayOwnerKey;
   const clientThreadId = typeof rec.clientThreadId === "string" && rec.clientThreadId.trim().length > 0
     ? rec.clientThreadId.trim()
     : undefined;
@@ -61,6 +136,7 @@ export function loadSnapshotEntry(id: string, value: unknown, store: SnapshotLoa
       kind: "spill",
       createdAt: rec.createdAt,
       ...(clientThreadId ? { clientThreadId } : {}),
+      ...(replayOwnerKey ? { replayOwnerKey } : {}),
       // Item count is unknown until materialization, so accept any non-negative integer
       // here; the spill payload validator re-checks it against the real array.
       ...(anchorFor(Number.MAX_SAFE_INTEGER) !== undefined ? { providerOutputStart: anchorFor(Number.MAX_SAFE_INTEGER) } : {}),
@@ -90,6 +166,7 @@ export function loadSnapshotEntry(id: string, value: unknown, store: SnapshotLoa
   const resident = store.measureResidentEntry(id, {
     createdAt: rec.createdAt,
     ...(clientThreadId ? { clientThreadId } : {}),
+    ...(replayOwnerKey ? { replayOwnerKey } : {}),
     items: rec.items,
     ...(anchorFor(rec.items.length) !== undefined ? { providerOutputStart: anchorFor(rec.items.length) } : {}),
     ...(providers ? { providers } : {}),
@@ -99,12 +176,5 @@ export function loadSnapshotEntry(id: string, value: unknown, store: SnapshotLoa
     store.replaceMapEntry(id, store.tombstone(id, rec.createdAt));
     return;
   }
-  // Same admission boundary as live writes: an oversized snapshot row goes
-  // straight to spill (or tombstone above the payload ceiling) instead of
-  // entering the resident map and demoting unrelated rows on the first prune.
-  if (resident.sizeBytes > store.byteCap()) {
-    store.admitOversizedCandidate(id, resident, undefined);
-    return;
-  }
-  store.replaceMapEntry(id, resident);
+  store.admitResident(id, resident);
 }

@@ -5,7 +5,7 @@ import { SshRunnerError, type SshRunResult } from "./ssh-runner";
 import { classifySyncResult, childSkipHint } from "./sync-fanout-classify";
 import { parseStrictSemver } from "../lib/strict-semver";
 import type { LinkRecord } from "./store";
-import { RESTART_SKIPPED, type ChildJobItem, type ChildOpsEnv, type ChildRestart, type ItemOutcome,
+import { RESTART_SKIPPED, type ChildJob, type ChildJobItem, type ChildOpsEnv, type ChildRestart, type ItemOutcome,
   type ItemRunner } from "./child-ops-types";
 import { withoutCarriedFields } from "./child-observations";
 import { pinnedSyncRanNothing, RESTART_RESULT_UNKNOWN, syncThenRestart } from "./sync-then-restart";
@@ -39,7 +39,7 @@ function unreachable(record: LinkRecord, env: ChildOpsEnv): ItemOutcome | null {
 
 async function platformOf(record: LinkRecord, env: ChildOpsEnv): Promise<Platform | ItemOutcome> {
   if (record.remotePlatform) return record.remotePlatform;
-  try { return await requireRemotePlatform(env.runner, record.alias, env.knownHostsFile); }
+  try { return await requireRemotePlatform(env.runner, record.alias, record.explicitRoute ?? null, env.knownHostsFile); }
   catch (error) {
     return error instanceof SshRunnerError && error.code === "timeout"
       ? { state: "offline", reason: "ssh-timeout" } : { state: "failed", reason: "platform-probe-failed" };
@@ -49,6 +49,17 @@ async function platformOf(record: LinkRecord, env: ChildOpsEnv): Promise<Platfor
 /** A2 / M8: read when the item runs, not when the job was queued. Unknown activity counts as in flight (020). */
 function linkBusy(record: LinkRecord, env: ChildOpsEnv): boolean {
   return (env.activity(record.id)?.inFlight ?? 1) > 0;
+}
+
+/**
+ * D8: the operator's explicit restart past activity (--ignore-activity): a manual job only, never an automatic one.
+ * It overrides the activity gate alone; platform, Child kind and sync refusals still apply. Logged with counts only.
+ */
+function ignoresActivity(record: LinkRecord, job: Readonly<Pick<ChildJob, "trigger" | "ignoreActivity">>, env: ChildOpsEnv): boolean {
+  if (job.ignoreActivity !== true || job.trigger !== "manual") return false;
+  const inFlight = env.activity(record.id)?.inFlight;
+  console.log(`[link] restart past activity by the operator linkId=${record.id} inFlight=${inFlight ?? "unknown"}`);
+  return true;
 }
 
 /**
@@ -70,7 +81,7 @@ export function postUpdateSyncHint(linkId: string): string {
 async function runPinnedSync(record: LinkRecord, platform: Platform, restart: ChildRestart, env: ChildOpsEnv): Promise<PinnedSyncRun> {
   let argv: string[];
   try {
-    argv = buildExecArgv({ alias: record.alias, knownHostsFile: env.knownHostsFile,
+    argv = buildExecArgv({ alias: record.alias, knownHostsFile: env.knownHostsFile, route: record.explicitRoute ?? null,
       argv: remotePinnedSyncArgv(record.id, platform, restart === "none" ? {} : { restart }) });
   } catch (error) {
     if (error instanceof LinkSshArgumentError) return { sync: { state: "failed", reason: "ssh-argument-invalid" }, notRun: true };
@@ -106,12 +117,14 @@ export async function pinnedSync(record: LinkRecord, platform: Platform, restart
  * sequence lives in sync-then-restart.ts, shared with ocx sync --restart-children.
  */
 async function syncWithRestart(record: LinkRecord, platform: Platform, requested: ChildRestart,
-  env: ChildOpsEnv, idleGate?: { idleAtStart: boolean }): Promise<{ sync: SyncResult; restart?: RestartReport; restartUnknown?: true }> {
+  env: ChildOpsEnv, idleGate?: { idleAtStart: boolean }, ignoreActivity = false): Promise<{ sync: SyncResult; restart?: RestartReport; restartUnknown?: true }> {
   const { sync, restart, restartUnknown } = await syncThenRestart({ requested, platform, childKind: record.childKind,
     runPinned: next => runPinnedSync(record, platform, next, env),
     // linkBusy's rule: unknown (null) counts as in flight. An automatic restart (050 Revision 6) also needs the idle
     // window, both when its item started and just before the restart goes out; a link short of it reads as active.
+    // The operator's explicit override (manual only) reads as idle.
     readActivity: async () => {
+      if (ignoreActivity) return { inFlight: 0 };
       const activity = env.activity(record.id);
       if (!idleGate || activity === null) return activity;
       return idleGate.idleAtStart && activity.idle ? activity : { inFlight: Math.max(1, activity.inFlight) };
@@ -157,7 +170,8 @@ export const runSyncItem: ItemRunner = async (record, job, env) => {
   if (offline) return offline;
   const platform = await platformOf(record, env);
   if (typeof platform !== "string") return platform;
-  const { sync, restart, restartUnknown } = await syncWithRestart(record, platform, job.restart, env, idleGate);
+  const ignore = job.restart !== "none" && ignoresActivity(record, job, env);
+  const { sync, restart, restartUnknown } = await syncWithRestart(record, platform, job.restart, env, idleGate, ignore);
   if (restartUnknown) return { state: "uncertain", reason: RESTART_RESULT_UNKNOWN, sync, restart };
   const outcome = syncOutcome(sync);
   if (restart) outcome.restart = restart;
@@ -183,9 +197,10 @@ export const runRestartCodexItem: ItemRunner = async (record, job, env) => {
     return outcome.state === "succeeded" ? { ...refused("ephemeral-restart"), sync } : { ...outcome, restart: { requested, outcome: "not-run" } };
   }
   // A2 / M8: the restart is the purpose of this op, so a busy link runs nothing (no SSH) and reports partial (exit 6).
-  if (linkBusy(record, env)) return { state: "busy", reason: RESTART_SKIPPED, restart: { requested, outcome: "skipped" } };
+  const ignore = ignoresActivity(record, job, env);
+  if (!ignore && linkBusy(record, env)) return { state: "busy", reason: RESTART_SKIPPED, restart: { requested, outcome: "skipped" } };
   // Revision 4: same two-step path as sync with a restart, so activity is read again just before the restart goes out.
-  const { sync, restart, restartUnknown } = await syncWithRestart(record, platform, requested, env);
+  const { sync, restart, restartUnknown } = await syncWithRestart(record, platform, requested, env, undefined, ignore);
   if (restartUnknown) return { state: "uncertain", reason: RESTART_RESULT_UNKNOWN, sync, restart };
   if (restart!.outcome === "unsupported") return syncOutcome(sync).state === "succeeded"
     ? { ...refused("ephemeral-restart"), sync } : { ...syncOutcome(sync), restart: { requested, outcome: "not-run" } };
@@ -245,7 +260,7 @@ export const runUpdateItem: ItemRunner = async (record, job, env) => {
   let argv: string[];
   try {
     if (plan.planToken === null) throw new LinkSshArgumentError("invalid plan token");
-    argv = buildExecArgv({ alias: record.alias, knownHostsFile: env.knownHostsFile,
+    argv = buildExecArgv({ alias: record.alias, knownHostsFile: env.knownHostsFile, route: record.explicitRoute ?? null,
       argv: remoteUpdateApplyArgv({ homeVersion: target, planToken: plan.planToken, notAfter, viaLauncher }, "posix") });
   } catch (error) {
     if (error instanceof LinkSshArgumentError) return { state: "failed", reason: "ssh-argument-invalid", ...versions };

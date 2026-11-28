@@ -15,6 +15,39 @@ Ceci est utile lorsque vous souhaitez :
 Les combos interviennent en amont du routage normal des fournisseurs. Consultez d’abord [Routage des modèles](/fr/guides/model-routing/)
 si vous ne connaissez pas encore les sélecteurs `provider/model`.
 
+## Basculer quand le quota est épuisé
+
+Dans **Modèles → Combinaisons**, choisissez **OpenAI en premier** ou **Claude en premier** lorsque
+les quatre fournisseurs sont disponibles. Chaque modèle de configuration prépare l’abonnement
+choisi et sa clé API, puis l’autre abonnement et sa clé API. Réordonnez les cibles avec leur
+poignée ou les boutons fléchés. L’**Aperçu de la bascule** indique la première étape bloquée
+et les cibles qui suivent. L’interrupteur des appels payants se trouve sous l’état de l’aperçu.
+Il est désactivé par défaut dans les deux parcours. À la création, **Abonnements uniquement**
+retire les deux cibles API. Sélectionnez `combo/openai-first` ou
+`combo/claude-first` dans votre client pour utiliser la combinaison enregistrée.
+
+**Basculer uniquement si le quota est épuisé** (`quotaOnlyFallback`) suit l’ordre déclaré après
+confirmation d’un quota ou d’un crédit épuisé. Quand la cible essayée échoue sur une limite temporaire, un
+quota inconnu, une erreur d’authentification ou une requête incompatible, la chaîne s’arrête là. Une cible
+sans relevé de quota est quand même essayée dans l’ordre déclaré. Les règles de bascule, la rotation des comptes, les limites d’envoi et l’autorisation des appels
+payants continuent de s’appliquer. Une cible servie par plusieurs clés API bascule une fois que
+chaque clé active signale un quota ou un crédit épuisé. La bascule par quota exige un consentement pour toute destination
+hors abonnement reconnu ou route locale explicite en boucle locale. Les clés personnalisées, la
+facturation inconnue et les redirections sont couvertes. Un appel refusé renvoie
+`combo_metered_consent_required`. Si la cible retenue pour la conversation, celle de son dernier tour servi par la Combo, est
+inconnue ou indisponible, la continuation d’un appel d’outil renvoie `409 combo_tool_target_unavailable`. Un plafond de sortie laisse le modèle
+disponible au tour suivant.
+
+**Garder le même modèle lors de la bascule** (`preserveFallbackModel`) exige le même identifiant de
+modèle résolu entre deux cibles, même lorsque le fournisseur change. Un changement de modèle
+renvoie `409 combo_model_change_refused`. Laissez cette option décochée
+pour basculer entre familles de modèles.
+
+```bash
+ocx combo set openai-first --quota-only-fallback on
+ocx combo set exact-model --preserve-fallback-model on
+```
+
 ## Démarrage rapide en 60 secondes
 
 Cet exemple crée `combo/main`, avec Anthropic en premier et OpenAI en second. Les deux fournisseurs doivent
@@ -387,3 +420,7 @@ Exception aux erreurs 400 terminales : l'enveloppe opaque d'OpenRouter (`Provide
 ## Réservation d’une tentative de récupération
 
 Une tentative de récupération activée par `cooldownReprobe: { enabled: true }` appartient uniquement à la requête qui l’a réservée ; les autres requêtes restent soumises aux délais de refroidissement enregistrés. La réservation est conservée pendant l’attente et la sélection JEV. Une cible redevenue utilisable pendant l’attente peut être réessayée si son délai enregistré n’a pas changé. Un nouvel enregistrement annule la réservation de cette cible. Un succès ne supprime que le délai inchangé de la cible ayant répondu ; les cibles non essayées et les nouveaux échecs conservent leurs délais. La désactivation du fournisseur, les quotas, l’admissibilité de la requête et l’annulation restent vérifiés. Voir les [réglages et limites](/guides/combos/#retry-all-cooled-targets-opt-in).
+
+## Combos suggérés
+
+Dans l’espace Combos, générez un brouillon de basculement pour un modèle partagé ou ajoutez une cible manquante à un combo existant. Les cartes ignorées restent masquées dans ce navigateur. Excluez des fournisseurs des suggestions via `comboSuggestionExcludedProviders` dans `config.json`. Les membres existants sont conservés. Les cibles facturées à l’usage suivent les règles de consentement.

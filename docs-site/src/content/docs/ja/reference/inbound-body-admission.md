@@ -36,7 +36,7 @@ description: リクエスト本文の上限引き上げが、同時 HTTP リク�
 
 減量後の予約は、非同期処理やプロバイダーの応答待ちの間も保持され、レスポンスストリームの EOF、エラー、またはキャンセル処理の完了時に解放されます。解析だけでは解放されません。クライアントが切断しても、生成側のキャンセル処理が完了するまで保持されます。エラー、中断、キャンセルが競合しても、解放は正確に 1 回だけ行われます。
 
-対象となる POST エンドポイントは `/v1/responses`、`/v1/responses/compact`、`/v1/chat/completions`、`/v1/messages`、`/v1/messages/count_tokens`、`/v1/images/generations`、`/v1/images/edits`、`/v1/alpha/search` です。画像、検索、トークン計数には、従来の設定可能な本文ごとの上限も適用されます。内部の直接変換やコンボ呼び出しは、HTTP の許容量を二重に予約しません。管理、音声、コンテキスト履歴、WebSocket の制限は変わりません。
+対象となる POST エンドポイントは `/v1/responses`、`/v1/responses/compact`、`/v1/chat/completions`、`/v1/messages`、`/v1/messages/count_tokens`、`/v1/images/generations`、`/v1/images/edits`、`/v1/alpha/search` です。画像、検索、トークン計数には、従来の設定可能な本文ごとの上限も適用されます。xAI ブリッジ経由の画像編集には 1 リクエストあたり 100 MiB の固定上限もあり、小さい方の上限が適用されます。内部の直接変換やコンボ呼び出しは、HTTP の許容量を二重に予約しません。管理、音声、コンテキスト履歴、WebSocket の制限は変わりません。
 
 この追加の同時実行ゲートは、適用される `maxInboundBodyBytes` が 256 MiB を超える場合にのみ有効です。このリクエスト単位の設定を省略するか `0` にすると、デフォルトの 256 MiB が使われ、ゲートは無効のままです。一方、`maxConcurrentInboundBodyBytes` を省略または `0` にすると共有予算のデフォルト 512 MiB が選ばれ、有効なゲートを無効にはしません。既存のリクエスト件数やその他のリソース制限は引き続き適用されます。
 

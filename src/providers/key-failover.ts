@@ -9,9 +9,15 @@
  * Modelled after src/codex/routing.ts cooldown logic but scoped to plain API-key pools.
  */
 import { isKeyInCooldown, getKeyCooldownUntil, setKeyCooldown } from "./api-key-cooldowns";
-export { clearKeyCooldowns, getKeyCooldownUntil, sweepExpiredApiKeyCooldowns } from "./api-key-cooldowns";
-import { commitProviderApiKeySelection, providerApiKeySelectionIsCurrent } from "./api-key-selection";
-import { RequestPacingQueueOverloadError } from "./request-pacing";
+export {
+  clearKeyCooldowns,
+  getKeyCooldownUntil,
+  sweepExpiredApiKeyCooldowns,
+} from "./api-key-cooldowns";
+import { affinitySelectionIsCurrent, commitProviderApiKeySelection, providerApiKeySelectionIsCurrent } from "./api-key-selection";
+import { currentCacheAffinityIdentity } from "./cache-affinity-identity";
+import { providerRequestPacingStatus, REQUEST_PACING_MAX_QUEUE_AGE_MS, RequestPacingQueueOverloadError } from "./request-pacing";
+import { isCanonicalOpenAiForwardProvider } from "./openai-tiers-destination";
 import { isCanonicalMistralChat } from "./mistral-transport";
 import type { ProviderApiKeySelection } from "../types/provider";
 import { routedProviderConfig } from "./routed-config";
@@ -21,6 +27,7 @@ import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, ResetReplayPol
 import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
+import { cacheAffinityApplies, consultProviderCacheAffinity, releaseProviderCacheAffinity } from "./cache-affinity";
 import { ProviderApiKeyPausedError } from "./api-key-pause-state";
 // quota-key-accounts imports only node:crypto, the key store and the quota types -- NOT
 // providers/quota.ts -- so the cached reader reaches the dispatch path without dragging the
@@ -28,7 +35,7 @@ import { ProviderApiKeyPausedError } from "./api-key-pause-state";
 import { cachedApiKeyQuota } from "./quota-key-accounts";
 import { isDisplayOnlyQuota } from "./quota-types";
 
-// ---- cooldown state (in-memory, same as codex/routing.ts) ----
+// ---- cooldown state (api-key-cooldowns.ts; a running server persists it until expiry) ----
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 10 * 60_000; // cap at 10 min for api-key rotation
@@ -38,8 +45,8 @@ const MAX_COOLDOWN_MS = 10 * 60_000; // cap at 10 min for api-key rotation
  * ten-minute credential cap would hand a dead key back to rotation six times an hour. One hour
  * keeps it out of replacement and proactive selection while a funded sibling exists, and still
  * notices a top-up without a restart. When every key is held, requests keep using the active
- * key and return Anthropic's original refusal. The hold is in memory; dashboard key management
- * clears it.
+ * key and return Anthropic's original refusal. The hold survives a restart until it expires
+ * while the key is unchanged; dashboard key management clears it.
  */
 export const ANTHROPIC_BILLING_COOLDOWN_MS = 60 * 60_000;
 
@@ -97,19 +104,20 @@ function replayOnlyResponse(response: Response, chunks: readonly Uint8Array[]): 
  * before streaming the unread remainder. A rotation storm must not be gated on
  * reading N full error payloads. Any failure — no body, already consumed, slow,
  * malformed — returns undefined and leaves the `Retry-After` path in charge.
+ * `text` is the decoded prefix, so a caller can classify the refusal without a second read.
  */
 export async function readQuotaResetAt(
   response: Response,
   nowOrOptions: number | QuotaResetReadOptions = {},
-): Promise<{ at: number | undefined; response: Response }> {
-  if (!response.body) return { at: undefined, response };
+): Promise<{ at: number | undefined; response: Response; text: string }> {
+  if (!response.body) return { at: undefined, response, text: "" };
   const options = typeof nowOrOptions === "number" ? { now: nowOrOptions } : nowOrOptions;
   const now = options.now ?? Date.now();
   let reader: ReadableStreamDefaultReader<Uint8Array>;
   try {
     reader = response.body.getReader();
   } catch {
-    return { at: undefined, response };
+    return { at: undefined, response, text: "" };
   }
   const chunks: Uint8Array[] = [];
   let transferred = false;
@@ -185,14 +193,14 @@ export async function readQuotaResetAt(
       },
     });
     transferred = true;
-    return { at: parseQuotaResetAt(text, now), response: rebuiltResponse(response, rest) };
+    return { at: parseQuotaResetAt(text, now), response: rebuiltResponse(response, rest), text };
   } catch (error) {
     const clientAborted = options.signal?.aborted === true;
     void reader.cancel(error).catch(() => {}).finally(() => {
       try { reader.releaseLock(); } catch { /* already released */ }
     });
     if (clientAborted) throw options.signal!.reason ?? error;
-    return { at: undefined, response: replayOnlyResponse(response, chunks) };
+    return { at: undefined, response: replayOnlyResponse(response, chunks), text: "" };
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     if (!transferred) {
@@ -461,7 +469,6 @@ function rankKeysByHeadroom(
     .map(row => row.entry);
 }
 
-
 /**
  * Pick a better key BEFORE the first attempt when the committed one is already cooling.
  *
@@ -542,6 +549,49 @@ export function selectProactiveApiKey(
   return structuredClone(committed);
 }
 
+/** Conversation context for the cache-affinity preference inside proactive selection. */
+export interface ProactiveKeyAffinityContext {
+  /** Explicit session lane of the request; absent lanes never bind or consult. */
+  lane?: string;
+  model?: string;
+  /** The request continues the lane's in-progress turn (tool results being returned). */
+  continuation?: boolean;
+  /** Decision sink (the request log context); only bounded enum strings are written. */
+  log?: {
+    cacheAffinity?: string;
+    cacheAffinityReason?: string;
+    cacheAffinityApplicable?: boolean;
+    affinityModel?: string;
+    affinityKeptEntryId?: string;
+  };
+}
+
+/**
+ * Whether the bound entry is pacing-limited right now: its per-key
+ * concurrency bucket is full, or its next permitted start (minimum interval
+ * or per-minute cap, as the pacer computes it) is further out than the send
+ * queue tolerates before expiring a waiter. Below that bound, queueing is
+ * pacing working as designed — ordinary selection queues too — so affinity
+ * stands. Only the provider-level keys rule is consulted here; per-model
+ * caps still apply at the send queue exactly as they do for ordinary
+ * selection.
+ */
+function affinityPacingSaturated(
+  providerName: string,
+  configured: OcxProviderConfig,
+  entryId: string,
+  now: number,
+): boolean {
+  const pacing = configured.requestPacing;
+  if (!pacing?.enabled) return false;
+  const key = providerRequestPacingStatus(providerName, configured, now).keys
+    ?.find(candidate => candidate.id === entryId);
+  if (!key) return false;
+  if (key.nextSlotInMs > REQUEST_PACING_MAX_QUEUE_AGE_MS) return true;
+  const cap = pacing.keys?.maxConcurrentRequests;
+  return cap !== undefined && cap > 0 && key.inFlight >= cap;
+}
+
 /**
  * Pre-dispatch twin of `rotateProviderTransportOn429`: pick a warm key, then rebuild the
  * active route from the committed row through the same seam the 429 path uses, so the
@@ -557,11 +607,76 @@ export function selectProactiveApiKeyTransport(
   routedProvider: OcxProviderTransport,
   promptCacheKey?: string,
   now = Date.now(),
+  affinity?: ProactiveKeyAffinityContext,
 ): OcxProviderTransport | null {
   const configured = config.providers[providerName];
-  if (configured?.requestPacing?.enabled && configured.requestPacing.keySelection === "round-robin"
-    && hasKeyPoolFailover(configured)) {
-    return applyRotatedTransport(providerName, routedProvider, allocateDistributedKey(providerName, configured, now), promptCacheKey);
+  // Cache affinity first: a conversation stays on the credential whose upstream
+  // prompt cache it built, while that credential is still eligible. The
+  // preference never commits a global selection — it rebuilds this request's
+  // transport only — and it yields to every eligibility rule the normal paths
+  // enforce (entry removed or disabled releases the binding; a cooling or
+  // pacing-saturated entry falls through to ordinary selection, and whoever
+  // ultimately serves is who the binding is refreshed to at finalization).
+  if (affinity?.lane && configured) {
+    if (affinity.log) {
+      affinity.log.cacheAffinityApplicable = cacheAffinityApplies(configured);
+      affinity.log.affinityModel = affinity.model;
+    }
+    const hit = consultProviderCacheAffinity({
+      lane: affinity.lane,
+      providerName,
+      provider: configured,
+      model: affinity.model ?? "",
+      continuation: affinity.continuation === true,
+      now,
+    });
+    if (hit) {
+      const entry = configured.apiKeyPool?.find((candidate) => candidate.id === hit.entryId);
+      if (!entry || entry.disabled) {
+        releaseProviderCacheAffinity(affinity.lane, providerName, hit.entryId);
+      } else if (
+        !isKeyInCooldown(providerName, entry.id, now) &&
+        !affinityPacingSaturated(providerName, configured, entry.id, now) &&
+        !(configured.apiKeyPoolStrategy === "quota" &&
+          (keyHeadroom(providerName, configured, entry) ?? 1) <= 0 &&
+          configured.apiKeyPool?.some(candidate => !candidate.disabled &&
+            !isKeyInCooldown(providerName, candidate.id, now) &&
+            (keyHeadroom(providerName, configured, candidate) ?? 0) > 0))
+      ) {
+        if (affinity.log) {
+          affinity.log.cacheAffinity = "kept";
+          affinity.log.cacheAffinityReason = hit.reason;
+          affinity.log.affinityKeptEntryId = entry.id;
+        }
+        const affinityTransport = applyRotatedTransport(
+          providerName,
+          routedProvider,
+          { ...configured, apiKey: entry.key },
+          promptCacheKey,
+        );
+        // Mark the pick as request-local affinity so selection re-reads keep it
+        // while the entry stays live, without committing a global selection.
+        affinityTransport._apiKeyAttempt = {
+          ...affinityTransport._apiKeyAttempt!,
+          cacheAffinity: true,
+          cacheAffinityGeneration: currentCacheAffinityIdentity(providerName, configured, entry.id),
+          distributed: configured.requestPacing?.enabled === true && configured.requestPacing.keySelection === "round-robin",
+        };
+        return affinityTransport;
+      }
+    }
+  }
+  if (
+    configured?.requestPacing?.enabled &&
+    configured.requestPacing.keySelection === "round-robin" &&
+    hasKeyPoolFailover(configured)
+  ) {
+    return applyRotatedTransport(
+      providerName,
+      routedProvider,
+      allocateDistributedKey(providerName, configured, now),
+      promptCacheKey,
+    );
   }
   const committed = selectProactiveApiKey(config, providerName, now);
   if (!committed) return null;
@@ -636,30 +751,24 @@ export function rateLimitRetryPolicyFor(
   return null;
 }
 
-/**
- * Normalize a provider's `transientRetryOn5xx` policy, or return null when it is absent,
- * explicitly disabled, not key-auth, or not an adapter this policy governs.
- *
- * The adapter gate is part of the accepted scope, not incidental: it names the adapters whose
- * lanes actually read this policy, so no generic key-auth adapter can opt in by accident.
- * Auth mode follows the same fail-closed rule as `rateLimitRetryPolicyFor` —
- * explicit `key` or the documented omitted default, never OAuth, forward, local, or an
- * unknown value.
- */
-export function transientRetryPolicyFor(
-  provider: Pick<OcxProviderConfig, "transientRetryOn5xx" | "authMode" | "adapter">,
-): Required<TransientRetryPolicy> | null {
+/** Configured total sends for key-auth OpenAI adapters and explicitly opted-in ChatGPT subscriptions. */
+export function transientRetryPolicyFor(provider: OcxProviderConfig): Required<TransientRetryPolicy> | null {
   const policy = provider.transientRetryOn5xx;
-  if (!policy || policy.enabled === false) return null;
-  // Both adapters this policy governs. The first version covered chat only, which left a
-  // key-auth Responses provider unable to tune its ladder in either direction, because the
-  // Responses passthrough lane hard-coded TRANSIENT_RETRY_MAX_ATTEMPTS (#4893). Widening this
-  // gate is necessary and not sufficient: the lane also has to call this function, which it
-  // now does. Still an explicit list, so no generic key-auth adapter opts in by accident, and
-  // the auth check below keeps the ChatGPT forward pool out -- those providers are
-  // `authMode: "forward"` and keep the default ladder they have always had.
-  if (provider.adapter !== "openai-chat" && provider.adapter !== "openai-responses") return null;
-  if (provider.authMode !== undefined && provider.authMode !== "key") return null;
+  if (!policy || policy.enabled === false) {
+    return null;
+  }
+  // Keep the adapter allowlist aligned with the lanes that consume this policy.
+  // Responses passthrough and native compact read it alongside Chat Completions (#4893).
+  if (provider.adapter !== "openai-chat" && provider.adapter !== "openai-responses") {
+    return null;
+  }
+  // Like retryOn429, auth fails closed: explicit key or the documented omitted key default.
+  // The only exception is canonical ChatGPT forward auth with an explicit total. An empty
+  // block must not activate the hold or change the historical Pool allowance.
+  if (provider.authMode !== undefined && provider.authMode !== "key"
+    && (policy.attempts === undefined || !isCanonicalOpenAiForwardProvider(provider))) {
+    return null;
+  }
   return {
     enabled: policy.enabled ?? DEFAULT_TRANSIENT_RETRY.enabled,
     attempts: policy.attempts ?? DEFAULT_TRANSIENT_RETRY.attempts,
@@ -721,15 +830,17 @@ export function rateLimitRetryDelayMs(
 export function recordDistributedKeyFailure(
   config: OcxConfig, providerName: string, selection: ProviderApiKeySelection | undefined,
   status: 401 | 429 | "billing", now = Date.now(), retryAfter?: string | null, quotaResetAt?: number,
+  quotaExhausted = false,
 ): boolean {
   const provider = config.providers[providerName];
   if (!selection?.distributed || !provider || provider.authMode === "oauth" || provider.authMode === "forward") return false;
+  if (selection.cacheAffinity && (!cacheAffinityApplies(provider) || !affinitySelectionIsCurrent(providerName, provider, selection))) return false;
   const failed = provider.apiKeyPool?.find(entry => entry.id === selection.entryId && entry.key === selection.reference);
-  if (!failed || failed.disabled || provider.apiKeySelectionRevision !== selection.revision) return false;
+  if (!failed || failed.disabled || (!selection.cacheAffinity && provider.apiKeySelectionRevision !== selection.revision)) return false;
   const delay = status === "billing" ? ANTHROPIC_BILLING_COOLDOWN_MS : status === 401 ? MAX_COOLDOWN_MS : quotaResetAt !== undefined
     ? Math.max(1, quotaResetAt - now) : parseRetryAfterMs(retryAfter, now) ?? DEFAULT_COOLDOWN_MS;
   for (const entry of provider.apiKeyPool ?? []) if (entry.key === failed.key) {
-    setKeyCooldown(providerName, entry.id, now + delay);
+    setKeyCooldown(providerName, entry.id, now + delay, status === "billing" || quotaExhausted, entry.key);
   }
   sweepExpiredOnWrite(now);
   return true;
@@ -745,6 +856,8 @@ function rotateKeyAfterFailure(
   attemptedSelection?: ProviderApiKeySelection,
   quotaResetAt?: number,
   acceptsFreshProvider?: (provider: OcxProviderConfig) => boolean,
+  /** The refusal body proved the key's quota spent. A credit refusal (`billing`) always does. */
+  quotaExhausted = false,
 ): OcxProviderConfig | null {
   const provider = config.providers[providerName];
   if (!provider) return null;
@@ -752,7 +865,7 @@ function rotateKeyAfterFailure(
 
   if (attemptedSelection?.distributed) {
     if (acceptsFreshProvider && !acceptsFreshProvider(provider)) return null;
-    if (!recordDistributedKeyFailure(config, providerName, attemptedSelection, failureStatus, now, retryAfterHeader, quotaResetAt)) return null;
+    if (!recordDistributedKeyFailure(config, providerName, attemptedSelection, failureStatus, now, retryAfterHeader, quotaResetAt, quotaExhausted)) return null;
     if (!(provider.apiKeyPool ?? []).some(entry => !entry.disabled && !isKeyInCooldown(providerName, entry.id, now))) return null;
     return allocateDistributedKey(providerName, provider, now);
   }
@@ -805,6 +918,7 @@ function rotateKeyAfterFailure(
   }, attemptedSelection);
   if (outcome.status === "unavailable") return null;
   if (outcome.status === "superseded") {
+    if (attemptedSelection?.cacheAffinity) return null;
     // Billing authority is bound to the sent selection; a newer manual choice grants no replay.
     if (acceptsFreshProvider) return null;
     // A newer manual selection (including A→B→A) owns subsequent dispatch. Reusing the
@@ -826,7 +940,7 @@ function rotateKeyAfterFailure(
       : quotaResetAt !== undefined
         ? Math.max(quotaResetAt - now, 1)
         : parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
-    setKeyCooldown(providerName, outcome.value.failedId, now + cooldownMs);
+    setKeyCooldown(providerName, outcome.value.failedId, now + cooldownMs, failureStatus === "billing" || quotaExhausted, failedKey);
     sweepExpiredOnWrite(now);
   }
   if ("exhaustedCount" in outcome.value) {
@@ -857,8 +971,10 @@ export function rotateKeyOn429(
   attemptedKey?: string,
   attemptedSelection?: ProviderApiKeySelection,
   quotaResetAt?: number,
+  quotaExhausted?: boolean,
 ): OcxProviderConfig | null {
-  return rotateKeyAfterFailure(config, providerName, 429, retryAfterHeader, now, attemptedKey, attemptedSelection, quotaResetAt);
+  return rotateKeyAfterFailure(config, providerName, 429, retryAfterHeader, now, attemptedKey, attemptedSelection, quotaResetAt,
+    undefined, quotaExhausted);
 }
 
 /**
@@ -883,6 +999,8 @@ interface RotateProviderTransportOptions {
   retryAfter?: string | null;
   /** Epoch ms from `parseQuotaResetAt`, when the upstream dated the reset in its body. */
   quotaResetAt?: number;
+  /** The 429 body proved the key's quota or credit spent, so a quota-only Combo may leave the pool. */
+  quotaExhausted?: boolean;
   now?: number;
   attemptedKey?: string;
   attemptedSelection?: ProviderApiKeySelection;
@@ -909,6 +1027,7 @@ export function rotateProviderTransportOn429(
     options.attemptedKey,
     options.attemptedSelection ?? routedProvider._apiKeyAttempt,
     options.quotaResetAt,
+    options.quotaExhausted,
   );
   if (!rotated) return null;
   return applyRotatedTransport(providerName, routedProvider, rotated, options.promptCacheKey);

@@ -3,10 +3,13 @@ import { withCors, type RequestPolicyView } from "./auth-cors";
 import { runAdmittedBodyWork } from "./inbound-body-admission";
 import { tryAdmitTurn, type ActiveTurnLease } from "./lifecycle";
 import { addFinalRequestLog } from "./request-log";
+import { requestBodyFactsHolder } from "./request-body-facts";
 import { sessionLaneIdFromRequest } from "./request-log-conversation";
 import { admitHttpWorkflowTurn, workflowDecisionRefusalResponse, type WorkflowRefusalLog } from "./workflow-refusal";
 
 export interface AdmittedHttpTurnOptions {
+  /** Polling or downloading a previously created job uses listener capacity without starting model work. */
+  existingJobRead?: boolean;
   mapRefusal?: (response: Response) => Response;
   onAdmissionError?: (error: unknown) => Response;
 }
@@ -23,13 +26,16 @@ export function createAdmittedHttpTurn(
     options?: AdmittedHttpTurnOptions,
   ): Promise<Response> {
     const map = (response: Response) => options?.mapRefusal ? options.mapRefusal(response) : response;
+    // The row carries the size and encoding of the body this turn's handler reads from `req` (#3023).
+    if (refusalLog) refusalLog.logCtx.requestBodyHolder ??= requestBodyFactsHolder(req);
     const lease = tryAdmitTurn(sessionLaneIdFromRequest(req.headers), req.signal);
     if (!lease) {
       const response = serverBusyResponse(req, "active turns", policy);
       return options?.mapRefusal ? withCors(map(response), req, policy) : response;
     }
     let workflow: ReturnType<typeof admitHttpWorkflowTurn>;
-    try { workflow = admitHttpWorkflowTurn(req.headers); }
+    const existingJobRead = req.method === "GET" && options?.existingJobRead;
+    try { workflow = existingJobRead ? undefined : admitHttpWorkflowTurn(req.headers); }
     catch (error) { lease.release(); throw error; }
     if (workflow && !workflow.admitted) {
       lease.release();

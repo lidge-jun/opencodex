@@ -7,6 +7,7 @@ import {
 import type { useDashboardData } from "./use-dashboard-data";
 import { shadowSourceModelLabel } from "./shadow-call-source";
 import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningModal";
+import PlaintextV2ConsentModal from "../components/PlaintextV2ConsentModal";
 import { SUBAGENT_SURFACE_GUIDE_URL } from "../subagent-surface";
 
 type Dash = ReturnType<typeof useDashboardData>;
@@ -41,7 +42,7 @@ export function DashboardDialogs(d: Dash) {
               <IconX />
             </button>
           </div>
-          <div className="modal-desc">{t("dash.updateDesc")}</div>
+          {updateCheck?.reason !== "managed_release" && <div className="modal-desc">{t("dash.updateDesc")}</div>}
           <div className="update-row">
             <label className="field-label" htmlFor="update-channel">{t("dash.updateChannel")}</label>
             <Select
@@ -68,15 +69,20 @@ export function DashboardDialogs(d: Dash) {
                   <div className="muted text-label">{t("dash.updateLatest")}</div>
                   <div className="mono">{updateCheck.latestVersion ?? "—"}</div>
                 </div>
-                <span className={`badge ${updateCheck.updateAvailable ? "badge-green" : "badge-muted"}`}>
-                  {updateCheck.updateAvailable ? t("dash.updateAvailable") : t("dash.updateCurrent")}
-                </span>
+                {updateCheck.reason !== "latest_unavailable" && (
+                  <span className={`badge ${updateCheck.updateAvailable ? "badge-green" : "badge-muted"}`}>
+                    {updateCheck.updateAvailable ? t("dash.updateAvailable") : t("dash.updateCurrent")}
+                  </span>
+                )}
               </div>
               {updateCheck.command && (
                 <div className="muted update-command">{t("dash.updateCommand")} <code className="chip">{updateCheck.command}</code></div>
               )}
               {updateCheck.reason === "source_checkout" && (
                 <div className="notice-warn" role="status"><IconAlert /> {t("dash.updateSource")}</div>
+              )}
+              {updateCheck.reason === "managed_release" && (
+                <div className="notice notice-ok mb-0" role="status">{t("dash.updateManaged")}</div>
               )}
               {updateCheck.reason === "latest_unavailable" && (
                 <div className="notice-warn" role="status">
@@ -92,7 +98,7 @@ export function DashboardDialogs(d: Dash) {
                   </button>
                 </div>
               )}
-              {!updateCheck.canUpdate && updateCheck.reason !== "latest_unavailable" && updateCheck.reason !== "source_checkout" && (
+              {!updateCheck.canUpdate && updateCheck.reason !== "latest_unavailable" && updateCheck.reason !== "source_checkout" && updateCheck.reason !== "managed_release" && (
                 <div className="update-recheck">
                   <span className="muted update-recheck-reason">
                     {t("dash.updateCannotAuto", { reason: updateReasonLabel(updateCheck.reason, t) })}
@@ -213,7 +219,15 @@ export function DashboardDialogs(d: Dash) {
           </div>
         </div>
       </dialog>
-      {(pendingMaMode || maAdvisoryOpen) && (
+      {pendingMaMode === "v2-plaintext" ? (
+        // Dedicated consent: one checkbox-gated PUT covers the experimental plaintext notice
+        // and the mode write; the generic advisory warning stays for every other reason.
+        <PlaintextV2ConsentModal
+          busy={maBusy}
+          onConfirm={() => { void keepMaMode(); }}
+          onDismiss={dismissMaSurfaceDialog}
+        />
+      ) : (pendingMaMode || maAdvisoryOpen) && (
         <SubagentSurfaceWarningModal
           reason={pendingMaMode ? "selection" : "advisory"}
           mode={pendingMaMode ?? maAdvisory?.mode ?? "default"}

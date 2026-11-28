@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
+import { bindStoredCodexPoolRoutingForTests } from "../helpers/codex-pool-routing";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { captureCatalogAdmissionSnapshot } from "../../src/codex/catalog-admission";
 import { loadBundledCodexCatalog, resetCatalogRuntimeStateForTests, syncCatalogModels } from "../../src/codex/catalog";
-import { applyNativeAccessPrograms } from "../../src/codex/catalog/access-programs";
+import { applyNativeAccessPrograms, applyNativeRosterMetadata } from "../../src/codex/catalog/access-programs";
+import { buildCodexModelList } from "../../src/server/codex-model-list";
 import { CODEX_ACCOUNT_BOUND_CATALOG_KIND } from "../../src/codex/catalog/account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "../../src/codex/catalog/kinds";
 import type { RawCatalog, RawEntry } from "../../src/codex/catalog/parsing";
@@ -50,7 +52,7 @@ async function snapshot(main: unknown[], pool: unknown[] = [], mainFails = false
   });
 }
 
-beforeEach(() => resetCodexModelEntitlementCacheForTests());
+beforeEach(() => { resetCodexModelEntitlementCacheForTests(); bindStoredCodexPoolRoutingForTests(["synthetic-pool"]); });
 
 test("confirmed main roster projects only its bounded message onto a bare native row", async () => {
   const result = await snapshot([rosterRow(MODEL, { message: `  ${"M".repeat(2_100)}  `, extra: "ignored" })],
@@ -122,6 +124,70 @@ test("hidden rows and failed or unlisted main rosters cannot retain a prompt", a
 });
 
 let home: TempHome | undefined;
+
+test.each([
+  ["gpt-5.5", 840_000, 272_000],
+  ["gpt-5.5", 200_000, 200_000],
+  ["gpt-5.6-sol", 840_000, 840_000],
+  ["gpt-6-astra", 840_000, 840_000],
+] as const)("roster window for %s respects its opt-in policy with cap %d", async (slug, cap, expected) => {
+  const result = await snapshot([{ ...rosterRow(slug), context_window: 272_000, max_context_window: 872_000 }]);
+  const row: RawEntry = { slug, context_window: 272_000, auto_compact_token_limit: 244_800 };
+  applyNativeRosterMetadata([row], result, new Map(), { cap });
+  expect(row.context_window).toBe(expected);
+  expect(row.max_context_window).toBe(Math.min(cap, 872_000));
+  expect(row.auto_compact_token_limit).toBeLessThanOrEqual(expected);
+  if (slug === "gpt-5.5" && cap > 272_000) expect(row.auto_compact_token_limit).toBe(244_800);
+});
+
+test.each([
+  [undefined, 1_000_000], [950_000, 950_000], [1_100_000, 1_000_000],
+] as const)("confirmed default above the shipped opt-in ceiling respects cap %p", async (cap, expected) => {
+  const result = await snapshot([{
+    ...rosterRow(WRITER_MODEL), context_window: 1_000_000, max_context_window: 1_100_000,
+  }]);
+  const row: RawEntry = { slug: WRITER_MODEL, context_window: 272_000 };
+  applyNativeRosterMetadata([row], result, new Map(), { cap });
+  expect(row.context_window).toBe(expected);
+  expect(row.max_context_window).toBe(cap ?? 1_100_000);
+  expect(row.auto_compact_token_limit).toBe(Math.floor(expected * 0.9));
+});
+
+test("exact native capabilities respect configured limits and exclude routed and alias rows", async () => {
+  const luna = "gpt-6-luna";
+  const daybreak = "gpt-daybreak-blue-latest";
+  const result = await snapshot([
+    { ...rosterRow(luna, { message: "Local account notice" }), supports_reasoning_effort_updates: true, supports_experimental_context: true },
+    { ...rosterRow(daybreak), max_context_window: 872_000 },
+  ]);
+  const lunaRow: RawEntry = { slug: luna, context_window: 272_000 };
+  const blueRow: RawEntry = { slug: daybreak, context_window: 272_000, max_context_window: 922_000 };
+  const routed: RawEntry[] = [
+    { slug: `other/${luna}` }, { slug: luna, owned_by: "combo" },
+    { slug: luna, opencodex_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND },
+  ];
+  applyNativeRosterMetadata([lunaRow, blueRow, ...routed], result, new Map(), {
+    providerWindow: 900_000, modelWindows: { [daybreak]: 860_000 }, cap: 840_000,
+    modelAutoCompactTokenLimits: { [daybreak]: 111_000 },
+  });
+  expect(lunaRow).toMatchObject({ supports_reasoning_effort_updates: true, supports_experimental_context: true });
+  expect(blueRow).toMatchObject({ context_window: 840_000, max_context_window: 840_000, auto_compact_token_limit: 111_000 });
+  for (const row of routed) {
+    expect(row).not.toHaveProperty("supports_reasoning_effort_updates");
+    expect(row).not.toHaveProperty("supports_experimental_context");
+  }
+  applyNativeRosterMetadata([blueRow], result, new Map(), { providerWindow: 1_000_000 });
+  expect(blueRow).toMatchObject({ context_window: 872_000, max_context_window: 872_000 });
+
+  const live = buildCodexModelList({
+    config: writerConfig(), nativeSlugs: [luna, daybreak], availableAccountNativeSlugs: [], accountNativeSlugs: [],
+    accountNativeSlugsBySelector: new Map(), goOrdered: [], exactComboSlugs: new Set(), accountSelectors: [],
+    suppressedBareNativeSlugs: new Set(), disabledModels: new Set(), roster: { snapshot: result, accountTargets: new Map() },
+  });
+  expect(live.models.find(row => row.slug === luna)).toMatchObject({ supports_reasoning_effort_updates: true, supports_experimental_context: true });
+  expect(live.models.find(row => row.slug === daybreak)?.max_context_window).toBe(872_000);
+  expect(JSON.stringify(live)).not.toContain("Local account notice");
+});
 let previousCliPath: string | undefined;
 let previousFetch: typeof fetch;
 let mainPrompt: unknown;
@@ -178,7 +244,15 @@ async function writeWith(writer: "retained" | "convergence", config: OcxConfig):
   return writtenRows();
 }
 
-test.each(["retained", "convergence"] as const)("%s writes and later clears main-only NUX in the on-disk catalog", async writer => {
+test.each(["retained", "convergence"] as const)("%s projects fresh per-account roster metadata into the on-disk catalog", async writer => {
+  let mainCapabilities: Record<string, unknown> = {
+    supports_reasoning_effort_updates: true, supports_experimental_context: true,
+    context_window: 300_000, max_context_window: 872_000,
+  };
+  const poolCapabilities = {
+    supports_reasoning_effort_updates: false, supports_experimental_context: false,
+    context_window: 200_000, max_context_window: 600_000,
+  };
   previousCliPath = process.env.CODEX_CLI_PATH;
   previousFetch = globalThis.fetch;
   home = createTempHome("ocx-native-nux-");
@@ -194,8 +268,11 @@ test.each(["retained", "convergence"] as const)("%s writes and later clears main
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input : input.url);
     if (url.hostname === "chatgpt.com" && url.pathname.endsWith("/models")) {
       const id = new Headers(init?.headers).get("chatgpt-account-id");
-      return Response.json({ models: [rosterRow(WRITER_MODEL,
-        id === "synthetic-main-account" ? mainPrompt : poolPrompt)] });
+      const isMain = id === "synthetic-main-account";
+      return Response.json({ models: [{
+        ...rosterRow(WRITER_MODEL, isMain ? mainPrompt : poolPrompt),
+        ...(isMain ? mainCapabilities : poolCapabilities),
+      }] });
     }
     return previousFetch(input, init);
   }) as typeof fetch;
@@ -210,14 +287,53 @@ test.each(["retained", "convergence"] as const)("%s writes and later clears main
     }));
     const config = writerConfig();
     let rows = await writeWith(writer, config);
+    for (const slug of [WRITER_MODEL, `desktop/${WRITER_MODEL}`]) {
+      expect(rows.find(row => row.slug === slug)).toMatchObject({ ...mainCapabilities, auto_compact_token_limit: 270_000 });
+    }
+    expect(rows.find(row => row.slug === `team/${WRITER_MODEL}`))
+      .toMatchObject({ ...poolCapabilities, auto_compact_token_limit: 180_000 });
     expect(rows.find(row => row.slug === WRITER_MODEL)?.availability_nux).toEqual({ message: "Main trial" });
     expect(JSON.stringify(rows)).not.toContain("Pool trial");
     for (const slug of [`desktop/${WRITER_MODEL}`, `team/${WRITER_MODEL}`]) {
       expect(rows.find(row => row.slug === slug)).not.toHaveProperty("availability_nux");
     }
+    // Compare the persisted window with the final roster projection, not the
+    // temporary pinned value used during the observed-state merge.
+    for (const slug of [WRITER_MODEL, `desktop/${WRITER_MODEL}`, `team/${WRITER_MODEL}`]) {
+      rows.find(row => row.slug === slug)!.auto_compact_token_limit = 100_000;
+    }
+    writeFileSync(join(home.codexHome, "opencodex-catalog.json"), JSON.stringify({ models: rows }));
+    for (let pass = 0; pass < 2; pass++) {
+      rows = await writeWith(writer, config);
+      for (const slug of [WRITER_MODEL, `desktop/${WRITER_MODEL}`, `team/${WRITER_MODEL}`]) {
+        expect(rows.find(row => row.slug === slug)?.auto_compact_token_limit).toBe(100_000);
+      }
+    }
+    // The first duplicate survives publication, whether its budget is lower or
+    // higher than the later row. Projection must use that same incoming row.
+    for (const [firstBudget, laterBudget] of [[100_000, 150_000], [150_000, 100_000]]) {
+      const duplicates = [WRITER_MODEL, `desktop/${WRITER_MODEL}`, `team/${WRITER_MODEL}`].map(slug => {
+        const first = rows.find(row => row.slug === slug)!;
+        first.auto_compact_token_limit = firstBudget;
+        return { ...first, auto_compact_token_limit: laterBudget };
+      });
+      writeFileSync(join(home.codexHome, "opencodex-catalog.json"), JSON.stringify({ models: [...rows, ...duplicates] }));
+      for (let pass = 0; pass < 2; pass++) {
+        rows = await writeWith(writer, config);
+        for (const duplicate of duplicates) {
+          const matching = rows.filter(row => row.slug === duplicate.slug);
+          expect(matching).toHaveLength(1);
+          expect(matching[0]?.auto_compact_token_limit).toBe(firstBudget);
+        }
+      }
+    }
     mainPrompt = undefined;
+    mainCapabilities = { max_context_window: -1, supports_experimental_context: "true" };
     resetCodexModelEntitlementCacheForTests();
     rows = await writeWith(writer, config);
+    const fallback = rows.find(row => row.slug === WRITER_MODEL);
+    expect(fallback).toMatchObject({ context_window: 272_000, max_context_window: 922_000, auto_compact_token_limit: 244_800 });
+    expect(fallback?.supports_experimental_context).not.toBe(true);
     expect(rows.find(row => row.slug === WRITER_MODEL)?.availability_nux).toBeNull();
     for (const slug of [`desktop/${WRITER_MODEL}`, `team/${WRITER_MODEL}`]) {
       expect(rows.find(row => row.slug === slug)).not.toHaveProperty("availability_nux");

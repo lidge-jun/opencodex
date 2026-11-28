@@ -34,6 +34,11 @@
   max-width: 1200px;
 }
 
+/* Overall lists the catalog's rows, so it keeps the catalog's column. */
+.main-inner:has(#models-panel-overall:not([hidden])) {
+  max-width: 1200px;
+}
+
 .models-workspace-shell {
   width: 100%;
   min-width: 0;

@@ -13,7 +13,9 @@ import { credentialDomainFor } from "../protocols/opaque-state";
 import { resolveProtocolSettings } from "../protocols/settings";
 import type { RouteResult } from "../router";
 import type { OcxConfig } from "../types";
+import { isAdvisorDestination } from "./advisor-destination";
 import { configuredAnthropicInstance } from "../providers/anthropic-instance";
+import { isCommandCodeDecisionRoute } from "../providers/command-code-decision-models";
 import { requiresVisionPreprocessing } from "../vision";
 import { resolvePinnedEffort } from "./effort-policy";
 
@@ -29,6 +31,7 @@ export type NativeMessagesDeclineReason = Extract<
   | "fast-row"
   | "vision-preprocessing"
   | "bridge-only-policy"
+  | "compatibility-reject"
 >;
 
 /** Request facts the body cannot carry. */
@@ -90,6 +93,11 @@ function bridgeOnlyPolicyApplies(
 ): boolean {
   if (resolvePinnedEffort(route, selector.routeSelector, config) !== undefined) return true;
   if (anthropicBodyElidesBlockedSkill(body, selector.claudeCode ?? config.claudeCode)) return true;
+  const advisorModel = typeof config.advisor?.model === "string" ? config.advisor.model.trim() : "";
+  const isSelfAdvisorRoute = advisorModel !== "" && isAdvisorDestination(route, config, advisorModel);
+  // Preserve explicit managedMessagesNativeOAuth first-party OAuth wire fidelity; only decline
+  // native Messages for advisor on API-key / local routes (OAuth default already uses the bridge).
+  if (route.provider.authMode !== "oauth" && config.advisor?.enabled === true && advisorModel !== "" && !isSelfAdvisorRoute) return true;
   return selector.webSearchBackendAvailable !== false && webSearchSidecarMayEngage(body, config);
 }
 
@@ -137,6 +145,8 @@ export function nativeMessagesDeclineReason(
   if (!resolveProtocolSettings(config, route.providerName).rollout.managedMessagesNative) return "rollout-disabled";
   const provider = route.provider;
   if (provider.adapter !== "anthropic") return "cross-wire-ir";
+  // Command Code decision models are not chat models (#8997); the bridged path refuses them.
+  if (isCommandCodeDecisionRoute(provider, route.modelId)) return "compatibility-reject";
   const credentialDecline = credentialDeclineReason(route, config, selector);
   if (credentialDecline) return credentialDecline;
   if (route.combo || route.routeKind === "combo" || route.routeKind === "policy") return "combo-or-policy-route";

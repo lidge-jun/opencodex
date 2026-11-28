@@ -18,7 +18,9 @@ import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { linkStorePath } from "../../src/link/paths";
 import { writeLinkStore } from "../../src/link/store";
 import { parseHomeCodexSettingsDocument } from "../../src/link/codex-settings";
-import { LINK_MANAGEMENT_READ_PATHS } from "../../src/link/management-routes";
+import { LINK_MANAGEMENT_READ_PATHS, linkChildManagementRefusal } from "../../src/link/management-routes";
+import { hubRelayDigest, hubRelayEnrollmentProof } from "../../src/remote/hub-management-relay";
+import { admitHubRelayRead, HUB_RELAY_IDLE_TTL_MS, issueHubRelayCredential } from "../../src/server/hub-relay-auth";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -98,6 +100,15 @@ function opensForWrite(args: unknown[]): boolean {
   return !["r", "rs", "sr"].includes(String(flags));
 }
 
+test("a Windows Child's update refusal gives local-update guidance; other refusals and platforms are unchanged (#9172)", () => {
+  const win = linkChildManagementRefusal("Home home-mac", "lnk_0123456789abcdef", "GET /api/update/check", "win32");
+  expect(win).toContain("Remote Link Child managed by Home home-mac (link lnk_0123456789abcdef)");
+  expect(win).toContain("Remote updates aren't supported for this Windows device. Update OpenCodex directly on the Windows computer.");
+  expect(win).toContain("No request was sent.");
+  expect(win).not.toContain("runs on the Home");
+  expect(linkChildManagementRefusal("Home home-mac", "lnk_0123456789abcdef", "GET /api/update/check", "linux")).toContain("runs on the Home, not on this Child");
+  expect(linkChildManagementRefusal("Home home-mac", "lnk_0123456789abcdef", "PUT /api/settings", "win32")).toContain("runs on the Home, not on this Child");
+});
 test("the passive effect watcher classifies opens by their write capability", () => {
   const { O_RDONLY, O_NONBLOCK, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND } = fs.constants;
   for (const flags of [undefined, "r", "rs", "sr", O_RDONLY, O_RDONLY | O_NONBLOCK]) {
@@ -239,6 +250,162 @@ afterEach(async () => {
 });
 
 describe("Remote Link management relay on the Home", () => {
+  test("Hub relay credentials are enrollment-bound, read-only, and revocable", async () => {
+    const base = `http://127.0.0.1:${server!.url.port}`;
+    const issuePath = "/api/hub-relay/credential";
+    const enrollment = (key: string, operation: "issue" | "read" | "revoke", credential = "") => ({
+      "x-opencodex-hub-enrollment-id": "other-key",
+      "x-opencodex-hub-enrollment-proof": hubRelayEnrollmentProof(key, "other-key", operation, credential),
+    });
+    const issue = (key: string) => get(base, issuePath, ADMIN_KEY, { method: "POST", headers: enrollment(key, "issue") });
+    expect((await get(base, issuePath, ADMIN_KEY, {
+      method: "POST", headers: enrollment(LINKED_KEY, "issue"),
+    })).status).toBe(401);
+    expect((await get(base, issuePath, undefined, {
+      method: "POST", headers: enrollment(OTHER_KEY, "issue"),
+    })).status).toBe(401);
+    const first = await issue(OTHER_KEY);
+    expect(first.status).toBe(201);
+    const { token } = await first.json() as { token: string };
+    const read = (path: string, credential = token, key = OTHER_KEY, method = "GET") => {
+      const at = String(Date.now());
+      return get(base, path, credential, { method, headers: {
+        "x-opencodex-hub-enrollment-id": "other-key",
+        "x-opencodex-hub-proof-time": at,
+        "x-opencodex-hub-enrollment-proof": hubRelayEnrollmentProof(key, "other-key", "read", credential, { at, method, target: path }),
+      } });
+    };
+    const quotas = "/api/hub-relay/read/api/provider-quotas";
+    externalCalls.length = 0;
+    expect((await read(quotas)).status).toBe(200);
+    expect(await (await read(quotas, token, OTHER_KEY, "HEAD")).text()).toBe("");
+    expect(externalCalls).toEqual([]);
+    expect((await read(quotas, token, LINKED_KEY)).status).toBe(401);
+    expect((await get(base, quotas, token)).status).toBe(401);
+    expect((await read("/api/settings")).status).toBe(401);
+    expect((await read("/api/provider-quotas")).status).toBe(401);
+    expect((await read("/api/keys/reveal", token, OTHER_KEY, "POST")).status).toBe(401);
+    expect((await read("/api/session/logout", token, OTHER_KEY, "POST")).status).toBe(401);
+    expect((await read("/api/hub-relay/read/api/session/logout", token, OTHER_KEY, "POST")).status).toBe(401);
+    expect((await read(`${quotas}?refresh=1`)).status).toBe(401);
+
+    const keys = "/api/hub-relay/read/api/providers/keys?name=mock";
+    const safeKeys = { activeId: "relay-key-1", keys: [{ id: "relay-key-1", active: true }] };
+    expect(await (await read(keys)).json()).toEqual(safeKeys);
+    expect(await (await get(base, keys, ADMIN_KEY)).json()).toEqual(safeKeys);
+    const head = await read(keys, token, OTHER_KEY, "HEAD");
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+    expect((await read(`${keys}&quota=1`)).status).toBe(401);
+
+    const now = Date.now();
+    const usage = (requestId: string, apiKeyId: string, timestamp: number) => ({
+      requestId, apiKeyId, timestamp, provider: "mock", model: "test-model",
+      status: 200, durationMs: 1, usageStatus: "unreported",
+    });
+    writeFileSync(join(testHome, "usage.jsonl"), [
+      usage("another-client", LINKED_ID, now - 1_000), usage("this-client", "other-key", now),
+    ].map(row => JSON.stringify(row)).join("\n") + "\n");
+    const usagePath = "/api/hub-relay/read/api/usage?range=all";
+    const scopedUsage = await (await read(usagePath)).json();
+    expect(scopedUsage).toMatchObject({ source: "hub", scope: "client", summary: { requests: 1 } });
+    for (const field of ["snapshotWindowStart", "snapshotWindowEnd", "accounts"]) expect(scopedUsage).not.toHaveProperty(field);
+    expect((await read(`${usagePath}&apiKeyId=${LINKED_ID}`)).status).toBe(401);
+
+    const reissue = await issue(OTHER_KEY);
+    expect(reissue.status).toBe(201);
+    const { token: preRotation } = await reissue.json() as { token: string };
+    expect((await read(quotas)).status).toBe(401);
+    expect((await read(quotas, preRotation)).status).toBe(200);
+    const start = await get(base, "/api/keys/rotate", ADMIN_KEY, {
+      method: "POST", body: JSON.stringify({ id: "other-key" }),
+    });
+    expect(start.status).toBe(201);
+    const { rotationId, key } = await start.json() as { rotationId: string; key: string };
+    expect((await get(base, "/api/keys/rotate/commit", ADMIN_KEY, {
+      method: "POST", body: JSON.stringify({ id: "other-key", rotationId }),
+    })).status).toBe(200);
+    expect((await read(quotas, preRotation)).status).toBe(401);
+    expect((await read(quotas, preRotation, key)).status).toBe(401);
+    const replacement = await issue(key);
+    expect(replacement.status).toBe(201);
+    const { token: rotated } = await replacement.json() as { token: string };
+    expect(rotated).not.toBe(token);
+    expect((await read(quotas)).status).toBe(401);
+    expect((await read(quotas, rotated, key)).status).toBe(200);
+    const staleDigest = hubRelayDigest(preRotation);
+    expect((await get(base, issuePath, undefined, {
+      method: "DELETE",
+      headers: { ...enrollment(key, "revoke", staleDigest), "x-opencodex-hub-relay-revoke": staleDigest },
+    })).status).toBe(204);
+    expect((await read(quotas, rotated, key)).status).toBe(200);
+    const digest = hubRelayDigest(rotated);
+    expect((await get(base, issuePath, undefined, {
+      method: "DELETE", headers: { ...enrollment(key, "revoke", digest), "x-opencodex-hub-relay-revoke": digest },
+    })).status).toBe(204);
+    expect((await read(quotas, rotated, key)).status).toBe(401);
+  });
+
+  test("an authenticated relay read renews the idle lease and expiry fences an offline disconnect", async () => {
+    const owner = {};
+    const live = config();
+    const enrollment = (operation: "issue" | "read", credential = "") => ({
+      "x-opencodex-hub-enrollment-id": "other-key",
+      "x-opencodex-hub-enrollment-proof": hubRelayEnrollmentProof(OTHER_KEY, "other-key", operation, credential),
+    });
+    const response = issueHubRelayCredential(owner, new Request("http://hub.test/api/hub-relay/credential", {
+      method: "POST", headers: enrollment("issue"),
+    }), live, 0);
+    expect(response.status).toBe(201);
+    const { token } = await response.json() as { token: string };
+    const target = "/api/hub-relay/read/api/usage";
+    const signedRead = (wallTime: number) => {
+      const at = String(wallTime);
+      return new Request("http://hub.test" + target, { headers: {
+        "x-opencodex-hub-enrollment-id": "other-key",
+        "x-opencodex-hub-proof-time": at,
+        "x-opencodex-hub-enrollment-proof": hubRelayEnrollmentProof(OTHER_KEY, "other-key", "read", token, { at, method: "GET", target }),
+      } });
+    };
+    const wallTime = 1_780_000_000_000;
+    const captured = signedRead(wallTime);
+    const otherTarget = new Request("http://hub.test/api/hub-relay/read/api/provider-quotas", { headers: captured.headers });
+    expect(admitHubRelayRead(owner, otherTarget, live, token, 1, wallTime)).toBeNull();
+    expect(admitHubRelayRead(owner, new Request(captured, { method: "HEAD" }), live, token, 1, wallTime)).toBeNull();
+    const renewedAt = HUB_RELAY_IDLE_TTL_MS - 1;
+    expect(admitHubRelayRead(owner, captured, live, token, renewedAt, wallTime + renewedAt)).toBeNull();
+    const renewed = signedRead(wallTime + renewedAt);
+    expect(admitHubRelayRead(owner, renewed, live, token, renewedAt, wallTime + renewedAt)).toBe("other-key");
+    expect(admitHubRelayRead({}, renewed, live, token, renewedAt, wallTime + renewedAt)).toBeNull();
+    const expiredAt = renewedAt + HUB_RELAY_IDLE_TTL_MS;
+    expect(admitHubRelayRead(owner, signedRead(wallTime + expiredAt), live, token, expiredAt, wallTime + expiredAt)).toBeNull();
+  });
+
+  test("Hub dashboard relay reads a cold quota cache without starting a provider probe", async () => {
+    const base = `http://127.0.0.1:${server!.url.port}`;
+    externalCalls.length = 0;
+    const response = await get(base, "/api/hub-relay/read/api/provider-quotas", ADMIN_KEY);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toHaveProperty("reports");
+    expect(externalCalls).toEqual([]);
+    expect(passiveEffects).toEqual([]);
+  });
+
+  test("the linked account list omits the Anthropic organization name", async () => {
+    writeFileSync(join(testHome, "auth.json"), JSON.stringify({ anthropic: {
+      activeAccountId: "fixture-row",
+      accounts: [{ id: "fixture-row", credential: {
+        access: "fixture-access", refresh: "fixture-refresh", expires: Date.now() + 3600_000,
+        organizationName: "Synthetic Workspace",
+      } }],
+    } }), { mode: 0o600 });
+    const response = await get(await linkBase(), "/v1/link-management/api/oauth/accounts?provider=anthropic", LINKED_KEY);
+    expect(response.status).toBe(200);
+    const body = await response.json() as { accounts: Array<{ id: string }> };
+    expect(body.accounts.map(account => account.id)).toEqual(["fixture-row"]);
+    expect(body.accounts[0]).not.toHaveProperty("organizationName");
+  });
+
   test("new source filters stay bound to the admitted link key for GET and HEAD", async () => {
     const base = await linkBase();
     const now = Date.now();

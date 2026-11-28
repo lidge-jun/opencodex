@@ -420,10 +420,12 @@ async function fetchOpenRouterQuota(provider: string, config: OcxProviderConfig)
 /**
  * DeepSeek `GET /user/balance` — the account's granted + topped-up credit
  * balance. The payload places `total_balance` / `granted_balance` inside
- * entries of `balance_infos` (one row per currency); the row for the account's
- * currency is selected by preference. `granted_balance` is a CURRENT balance
- * component, not the original grant ceiling, so no consumed percentage is
- * fabricated — the balance is reported as a balance-only window.
+ * entries of `balance_infos` (one row per currency); every positive-balance
+ * currency wallet is reported (ordered USD, CNY, then others), falling back
+ * to the highest-priority row when all valid wallets are zero.
+ * `granted_balance` is a CURRENT balance component, not the original grant
+ * ceiling, so no consumed percentage is fabricated — each wallet is reported
+ * as a balance-only window.
  */
 async function fetchDeepSeekQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   if (!isCanonicalDeepSeekBaseUrl(config.baseUrl)) return null;
@@ -441,31 +443,48 @@ async function fetchDeepSeekQuota(provider: string, config: OcxProviderConfig): 
   }
   const body = asRecord(await readQuotaJson(response));
   // The payload nests balances under `balance_infos` rows keyed by currency;
-  // prefer a USD row, then CNY, then the first row that parses.
+  // parse every valid currency row, display all non-zero wallets (USD before
+  // CNY before others), and fall back to the top-priority row when all are zero.
   const infos = Array.isArray(body?.balance_infos) ? body.balance_infos as unknown[] : null;
-  const rows = infos
-    ? infos.map((raw): Record<string, unknown> | null => asRecord(raw)).filter((r): r is Record<string, unknown> => r !== null)
-    : [];
-  const pick = (currency: string): Record<string, unknown> | null =>
-    rows.find(row => String(row.currency ?? "").toUpperCase() === currency) ?? null;
-  const preferred = pick("USD") ?? pick("CNY") ?? rows[0] ?? null;
-  if (!preferred) return null;
-  const totalBalance = toFiniteNumber(preferred.total_balance);
-  const grantedBalance = toFiniteNumber(preferred.granted_balance);
-  const toppedUp = toFiniteNumber(preferred.topped_up_balance);
-  const balance = totalBalance ?? grantedBalance ?? toppedUp;
-  if (balance === undefined || balance < 0) return null;
-  // The rows are currency-scoped, so the symbol has to follow the row that was
-  // picked: the two glyph currencies keep their sign, any other ISO code
-  // prefixes the amount, and a row without one keeps the legacy dollar.
-  const currency = String(preferred.currency ?? "").trim().toUpperCase();
-  const sign = currency === "CNY" ? "¥" : currency === "" || currency === "USD" ? "$" : `${currency} `;
-  const amount = (value: number) => `${sign}${value.toFixed(2)}`;
-  const label = grantedBalance !== undefined && grantedBalance > 0
-    ? `API balance (${amount(balance)} total, ${amount(grantedBalance)} granted)`
-    : `API balance (${amount(balance)})`;
+  if (!infos) return null;
+  type DeepSeekWallet = { currency: string; balance: number; grantedBalance?: number };
+  const wallets: DeepSeekWallet[] = [];
+  const seenCurrencies = new Set<string>();
+  for (const raw of infos) {
+    const row = asRecord(raw);
+    if (!row) continue;
+    const totalBalance = toFiniteNumber(row.total_balance);
+    const grantedBalance = toFiniteNumber(row.granted_balance);
+    const toppedUp = toFiniteNumber(row.topped_up_balance);
+    const balance = totalBalance ?? grantedBalance ?? toppedUp;
+    if (balance === undefined || balance < 0) continue;
+    const currency = typeof row.currency === "string" ? row.currency.trim().toUpperCase() : "";
+    if (seenCurrencies.has(currency)) continue;
+    seenCurrencies.add(currency);
+    wallets.push({
+      currency,
+      balance,
+      ...(grantedBalance !== undefined ? { grantedBalance } : {}),
+    });
+  }
+  if (wallets.length === 0) return null;
+  const currencyRank = (currency: string): number => (currency === "USD" ? 0 : currency === "CNY" ? 1 : 2);
+  wallets.sort((a, b) => currencyRank(a.currency) - currencyRank(b.currency));
+  const nonZero = wallets.filter(wallet => wallet.balance > 0);
+  const selected = nonZero.length > 0 ? nonZero : wallets.slice(0, 1);
+  // The rows are currency-scoped, so the symbol has to follow each row:
+  // the two glyph currencies keep their sign, any other ISO code prefixes
+  // the amount, and a row without one keeps the legacy dollar.
+  const customWindows = selected.map(wallet => {
+    const sign = wallet.currency === "CNY" ? "¥" : wallet.currency === "" || wallet.currency === "USD" ? "$" : `${wallet.currency} `;
+    const amount = (value: number) => `${sign}${value.toFixed(2)}`;
+    const label = wallet.grantedBalance !== undefined && wallet.grantedBalance > 0
+      ? `API balance (${amount(wallet.balance)} total, ${amount(wallet.grantedBalance)} granted)`
+      : `API balance (${amount(wallet.balance)})`;
+    return { label, percent: 0 };
+  });
   return report(provider, "deepseek:balance", {
-    customWindows: [{ label, percent: 0 }],
+    customWindows,
     updatedAt: Date.now(),
   });
 }

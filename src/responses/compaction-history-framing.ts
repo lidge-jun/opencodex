@@ -45,7 +45,11 @@ function isCheckpoint(item: unknown): boolean {
  */
 export function frameCompactionHistory<T extends { input?: unknown; instructions?: unknown }>(body: T): T {
   const input = body.input;
-  if (!Array.isArray(input) || input.some(item => isRecord(item) && item.type === "compaction_trigger")) return body;
+  if (!Array.isArray(input)) return body;
+  // A remote compaction_trigger summary gets the same historical framing as the ordinary request
+  // it extends, so its history keeps that request's prompt-cache prefix (#7307). It gets no
+  // continuation note here; only a prefix-preserving route adds it (response-effects.ts).
+  const remoteSummary = input.some(item => isRecord(item) && item.type === "compaction_trigger");
   // Codex local compaction appends this user prompt without a compaction_trigger.
   // Keep that summarizer turn free of generation-only continuation instructions.
   if (isLocalCompactionCheckpoint(input)) return body;
@@ -74,7 +78,7 @@ export function frameCompactionHistory<T extends { input?: unknown; instructions
   });
   if (!changed) return body;
   // Portable decoders already append the note; keep their existing instruction layout.
-  return plainUserText(input[checkpointIndex])?.startsWith(SUMMARY_PREFIX)
+  return !remoteSummary && plainUserText(input[checkpointIndex])?.startsWith(SUMMARY_PREFIX)
     ? { ...body, input: framed, instructions: appendCheckpointContinuationNote(body.instructions) }
     : { ...body, input: framed };
 }

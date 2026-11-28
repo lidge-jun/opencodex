@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { ANTIGRAVITY_RISK_WARNING } from "../../src/oauth/antigravity-risk";
 
 const marker = "oauth-cli-provider-response-marker";
 const moduleUrl = (...name: string[]) => JSON.stringify(pathToFileURL(repoPath("src", ...name)).href);
@@ -97,11 +98,38 @@ for (const scenario of [
   });
 }
 
+test("a refused xAI redirect is a definitive failure, not network_error", async () => {
+  // `redirect: "error"` makes fetch throw instead of returning a response. That throw carries no
+  // HTTP status, so the status-less branch used to label it `network_error` — advice to retry a
+  // request the client will always refuse. The message and cause must stay off the terminal: Bun's
+  // TypeError embeds the target URL, and the device-poll body carries the `device_code`.
+  const { stdout, stderr, code } = await runLoginChild(`
+    import { handleLogin } from ${moduleUrl("oauth", "login-cli.ts")};
+    import { OAUTH_PROVIDERS } from ${moduleUrl("oauth", "index.ts")};
+    import { XaiRedirectRefusedError } from ${moduleUrl("oauth", "xai.ts")};
+    const url = "https://auth.x.ai/oauth2/token?device_code=${marker}";
+    OAUTH_PROVIDERS.xai.login = async () => {
+      const error = new XaiRedirectRefusedError();
+      // A cause the public reporter must never echo, mirroring the runtime's redirect TypeError.
+      Object.defineProperty(error, "cause", { value: new TypeError(\`UnexpectedRedirect fetching "\${url}"\`) });
+      throw error;
+    };
+    await handleLogin("xai", { ask: async () => "" });
+  `);
+  expect(code).toBe(1);
+  expect(stderr.trim()).toBe(`❌ OAuth login failed (oauth_authentication_failed): ${publicMessage}`);
+  expect(stderr).not.toContain(marker);
+  expect(stderr).not.toContain("UnexpectedRedirect");
+  expect(stderr).not.toContain("network_error");
+  expect(stdout).not.toContain("Logged in");
+});
+
 test("Antigravity discovery diagnostics survive CLI reporting without provider text", async () => {
   const { stdout, stderr, code } = await runLoginChild(`
     import { handleLogin } from ${moduleUrl("oauth", "login-cli.ts")};
     ${antigravityFailureSetup}
-    await handleLogin("google-antigravity", { ask: async () => "", openUrl: async () => ({ status: "started" }) });
+    // The Antigravity risk gate is covered in oauth-antigravity-risk.test.ts; this case is about discovery.
+    await handleLogin("google-antigravity", { ask: async () => "", openUrl: async () => ({ status: "started" }), agentDriven: () => false }, { acceptAntigravityRisk: true });
   `);
   expect(code).toBe(1);
   expect(stderr).toContain("Antigravity login could not discover a Cloud Code Assist project");
@@ -149,11 +177,12 @@ test("a plain Error cannot impersonate Antigravity diagnostics in CLI or settled
     await startLoginFlow("google-antigravity", { forceLogin: true });
     if (!await waitForLoginSettled("google-antigravity", 5000)) throw new Error("login did not settle");
     console.log(JSON.stringify(getLoginStatus("google-antigravity")));
-    await handleLogin("google-antigravity", { ask: async () => "", runLogin: async () => { throw error; } });
+    await handleLogin("google-antigravity", { ask: async () => "", runLogin: async () => { throw error; }, agentDriven: () => false }, { acceptAntigravityRisk: true });
   `);
   expect(code).toBe(1);
   expect(JSON.parse(stdout.trim())).toMatchObject({ error: publicMessage, loggedIn: false, done: true, status: "error" });
-  expect(stderr.trim()).toBe(`❌ OAuth login failed (oauth_authentication_failed): ${publicMessage}`);
+  // The Antigravity risk warning always prints first; nothing else may reach stderr.
+  expect(stderr.replace(ANTIGRAVITY_RISK_WARNING, "").trim()).toBe(`❌ OAuth login failed (oauth_authentication_failed): ${publicMessage}`);
   expect(stdout + stderr).not.toContain(marker);
 });
 

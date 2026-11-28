@@ -1,5 +1,5 @@
 import { classifyUpdatePlanProbe, remoteUpdatePlanArgv, type SshResult } from "./child-gated-ocx";
-import type { PlanClassification } from "./child-update-contract";
+import type { PlanClassification, UpdateRoute } from "./child-update-contract";
 import type { ChildObservation } from "./child-observations";
 import type { LinkPeerEntry } from "./peer-report";
 import type { inspectRemoteChildRuntime } from "./remote-plant";
@@ -31,7 +31,7 @@ export interface ObserveOutcome {
 }
 
 type ObservedFields = Pick<ChildObservation, "source" | "installedVersion" | "installKind" | "runtimeOwner" | "updateRoute" | "updateReason"
-  | "targetVersion" | "updateInFlight">;
+  | "targetVersion" | "updateInFlight"> & Pick<Partial<ChildObservation>, "platform">;
 
 function observation(fields: ObservedFields, now: Date): ChildObservation {
   return {
@@ -41,6 +41,17 @@ function observation(fields: ObservedFields, now: Date): ChildObservation {
   };
 }
 
+/**
+ * The Home never applies an orchestrated update on Windows (runUpdateItem refuses windows-apply, D20), so the dashboard
+ * must not offer one (#9172): a Windows Child with that route is told to update locally. Applied when observing and
+ * again when projecting status, so an observation cached before this rule existed reads the same way. When neither the
+ * link record nor the observation names the platform, a cached orchestrated route may be a Windows Child: it is
+ * withheld until a fresh check records the platform (`recheck-required`).
+ */
+export function windowsLocalUpdateRoute(platform: "posix" | "windows" | null | undefined, updateRoute: UpdateRoute, updateReason: string | null): { updateRoute: UpdateRoute; updateReason: string | null } {
+  if (updateRoute !== "orchestrated" || platform === "posix") return { updateRoute, updateReason };
+  return { updateRoute: "owner-action", updateReason: platform === "windows" ? "windows-apply" : "recheck-required" };
+}
 const strictVersion = (value: string | null | undefined): string | null => typeof value === "string" && parseStrictSemver(value) ? value : null;
 const peerVersion = (deps: ObserveDeps, record: LinkRecord): string | null => strictVersion(deps.peer(record.id).observed?.version);
 const outcome = (state: ObserveOutcome["state"], reason: string | null, value: ChildObservation | null = null): ObserveOutcome =>
@@ -74,7 +85,7 @@ export async function observeChild(record: LinkRecord, deps: ObserveDeps): Promi
   try { platform = record.remotePlatform ?? await deps.platformOf(record); } catch { return outcome("offline", "platform-unknown"); }
   let argv: string[];
   try {
-    argv = buildExecArgv({ alias: record.alias, knownHostsFile: deps.knownHostsFile, argv: remoteUpdatePlanArgv(deps.homeVersion, platform) });
+    argv = buildExecArgv({ alias: record.alias, knownHostsFile: deps.knownHostsFile, argv: remoteUpdatePlanArgv(deps.homeVersion, platform), route: record.explicitRoute ?? null });
   } catch (error) {
     if (error instanceof LinkSshArgumentError && error.message === "windows-command-too-long") return outcome("failed", "windows-command-too-long");
     if (error instanceof LinkSshArgumentError && error.message === "invalid Home version") return outcome("failed", "home-version-invalid");
@@ -91,11 +102,13 @@ export async function observeChild(record: LinkRecord, deps: ObserveDeps): Promi
   switch (verdict.kind) {
     case "plan": {
       const { classification } = verdict;
+      // The probe keeps the plan's own route for the runner; the observation the dashboard reads gets the local route.
+      const route = windowsLocalUpdateRoute(platform, classification.updateRoute, classification.updateReason);
       return { state: "succeeded", reason: null, probe: { classification, childNowMs: verdict.childNowMs, startedAt, platform },
         observation: observation({ source: "plan", installedVersion: strictVersion(classification.installedVersion),
-          installKind: classification.installKind, runtimeOwner: classification.runtimeOwner, updateRoute: classification.updateRoute,
-          updateReason: classification.updateReason, targetVersion: strictVersion(classification.targetVersion),
-          updateInFlight: classification.updateInFlight }, deps.now()) };
+          installKind: classification.installKind, runtimeOwner: classification.runtimeOwner,
+          updateRoute: route.updateRoute, updateReason: route.updateReason, targetVersion: strictVersion(classification.targetVersion),
+          updateInFlight: classification.updateInFlight, platform }, deps.now()) };
     }
     case "ephemeral": return ephemeral(deps.now());
     case "legacy": {
@@ -104,7 +117,7 @@ export async function observeChild(record: LinkRecord, deps: ObserveDeps): Promi
       if (platform === "posix") {
         source = "inspect";
         try {
-          const inspected = await deps.inspect(deps.runner, record.alias, deps.knownHostsFile, "posix");
+          const inspected = await deps.inspect(deps.runner, record.alias, record.explicitRoute ?? null, deps.knownHostsFile, "posix");
           installedVersion = parseOcxVersion(inspected?.ocxVersionLine ?? "");
         } catch { installedVersion = null; }
       } else {

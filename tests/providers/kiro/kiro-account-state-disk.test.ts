@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,9 +12,10 @@ import { cancelPendingAccountQuotaPersist, readPersistedAccountQuotas,
 import { kiroEvidenceIdentity } from "../../../src/providers/kiro-account-state-disk";
 import { kiroAccountEvidence, getKiroAccountExhaustion } from "../../../src/providers/kiro-usage";
 import { clearAccountQuotaCache, fetchProviderAccountQuotas, getCachedProviderAccountQuota } from "../../../src/providers/quota";
-import { accountCacheKey, accountQuotaCache, persistAccountQuotaCache,
+import { accountCacheKey, accountQuotaCache, getCredentialOwnedAccountQuota, persistAccountQuotaCache,
   reconcileProviderAccountQuotaRows, resetProviderQuotaReconcileStateForTests } from "../../../src/providers/quota/account-cache";
 import { ACCOUNT_QUOTA_TTL_MS } from "../../../src/providers/quota-wire";
+import { markDisplayOnlyQuota } from "../../../src/providers/quota-types";
 import type { OcxConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
@@ -65,7 +66,35 @@ function response(status = "DISABLED", used = 100) {
     nextDateReset: Math.floor(Date.now() / 1000) + 3600 }), { status: 200 });
 }
 
+test("Kiro client quota expires at the observation TTL even when the cache entry is newer", async () => {
+  const account = await login("active");
+  const now = Date.now();
+  const quota = { monthlyPercent: 42, monthlyResetAt: now + 3600_000, updatedAt: now - ACCOUNT_QUOTA_TTL_MS + 1 };
+  accountQuotaCache.set(key(account), { ts: now, identity: kiroEvidenceIdentity(account), quota });
+  const clock = spyOn(Date, "now").mockReturnValue(now);
+  try {
+    expect(getCredentialOwnedAccountQuota("kiro", account.id)).toEqual(quota);
+    clock.mockReturnValue(now + 2);
+    expect(getCredentialOwnedAccountQuota("kiro", account.id)).toBeNull();
+    expect(getCachedProviderAccountQuota("kiro", account.id)).toEqual(quota);
+  } finally {
+    clock.mockRestore();
+  }
+});
+
 describe("Kiro account evidence on disk", () => {
+  test("display-only rows cannot return from disk as routing evidence", async () => {
+    const account = await login("active");
+    accountQuotaCache.set(key(account), { ts: Date.now(), identity: kiroEvidenceIdentity(account),
+      quota: markDisplayOnlyQuota({ monthlyPercent: 100, updatedAt: Date.now() }) });
+    accountQuotaCache.set("cursor\0other", { ts: Date.now(), quota: { monthlyPercent: 30, updatedAt: Date.now() } });
+    persistAccountQuotaCache();
+    await flush();
+    expect(readPersistedAccountQuotas().has(key(account))).toBe(false);
+    expect(readPersistedAccountQuotas().has("cursor\0other")).toBe(true);
+    restart();
+    expect(kiroAccountEvidence(account).quotaPercent).toBeUndefined();
+  });
   test("first routing request hydrates exhausted evidence without probing", async () => {
     const active = await login("active");
     const alternate = await login("alternate");

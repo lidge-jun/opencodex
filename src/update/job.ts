@@ -22,7 +22,7 @@ import {
   type HealthzIdentity,
 } from "../server/proxy-liveness";
 import { isServiceInstalled, isServiceViable } from "../service";
-import { stopWindowsServiceWrappersBestEffort } from "./job-windows-restart";
+import { stopWindowsServiceForRestart, WINDOWS_SERVICE_STOP_ABORT } from "./job-windows-restart";
 import { createUpdateServiceHomePolicy, inspectUpdateServiceHome, type UpdateServiceHomeInspector } from "./service-home-authority";
 import { runUpdateRestartWithOwnershipLease, type ServiceOwnershipResolution } from "./restart-ownership";
 import { restartServiceManagerAfterUpdate, unsettledManagerRestartFailure, unsupervisedRestartFailure, type ManagerRestartFn } from "./job-supervised-restart";
@@ -42,6 +42,7 @@ import {
   resolvePnpmActiveLauncher,
 } from "./index";
 import type { UpdateCheckDeps } from "./check-types";
+import { managedReleaseDirectory } from "./managed-release";
 export type { UpdateCheckDeps } from "./check-types";
 import type { PnpmGlobalOwner } from "./pnpm-global-install.mjs";
 import { isNewer } from "./notify";
@@ -136,6 +137,7 @@ const defaultCheckDeps: UpdateCheckDeps = {
   detectInstall,
   detectInstallOwnership,
   latestVersion,
+  managedReleaseDirectory,
   miseUpdateCommand,
 };
 
@@ -396,6 +398,10 @@ export function readUpdateJob(jobId?: string | null): UpdateJobState | null {
 function updateJob(job: UpdateJobState, patch: Partial<UpdateJobState>, logLine?: string): UpdateJobState {
   const next = prepareUpdateJob(job, patch, logLine); writeJob(next); return next;
 }
+/** A Windows service that could not be proven stopped aborts the restart (#7771). */
+function windowsServiceStopAborted(job: UpdateJobState): false {
+  updateJob(job, { status: "failed", restarted: false, error: WINDOWS_SERVICE_STOP_ABORT }, WINDOWS_SERVICE_STOP_ABORT); return false;
+}
 function prepareUpdateJob(job: UpdateJobState, patch: Partial<UpdateJobState>, logLine?: string): UpdateJobState {
   const current = readUpdateJob(job.id) ?? job;
   const next = {
@@ -466,16 +472,19 @@ export function checkForUpdate(
   const ownership = deps.detectInstallOwnership?.();
   const installer = ownership?.installer ?? deps.detectInstall();
   const channel = requestedChannel ?? normalizeUpdateChannel(null, current);
-  const latest = installer === "source" || installer === "standalone" ? null : deps.latestVersion(channel);
+  const managedRelease = installer === "source" && deps.managedReleaseDirectory?.() === true;
+  const latest = (installer === "source" && !managedRelease) || installer === "standalone" ? null : deps.latestVersion(channel);
   const updateAvailable = !!latest && isNewer(latest, current, channel);
   let reason: string | undefined;
-  let command = installer === "standalone" ? STANDALONE_UPDATE_HINT : installer === "source"
+  let command = installer === "standalone" ? STANDALONE_UPDATE_HINT : managedRelease ? "" : installer === "source"
     ? manualSourceCommand()
     : installer === "mise"
       ? (ownership && deps.miseUpdateCommand?.(ownership)) ?? ""
       : updateExecutionCommand(installer, channel).display;
 
-  if (installer === "source" || installer === "standalone") {
+  if (managedRelease) {
+    reason = latest ? "managed_release" : "latest_unavailable";
+  } else if (installer === "source" || installer === "standalone") {
     reason = installer === "source" ? "source_checkout" : "standalone_install";
   } else if (installer === "mise") {
     reason = command ? "externally_managed" : "external_ownership_invalid";
@@ -954,7 +963,8 @@ export interface RestartIo {
   serviceInstalledFn?: () => boolean;
   serviceHomeAuthorityFn?: UpdateServiceHomeInspector;
   serviceHomeBaseline?: ReturnType<UpdateServiceHomeInspector>; // Worker delegation pins its original authority.
-  stopServiceWrappersFn?: (authorizeMutation: UpdateMutationAuthorizer) => void;
+  /** Windows service stop before a restart; an explicit false aborts the restart (#7771). */
+  stopServiceWrappersFn?: (authorizeMutation: UpdateMutationAuthorizer) => boolean | void | Promise<boolean | void>;
   readPidFn?: typeof readPid;
   /**
    * After a service reinstall exits 0, only trust the service path when this is true.
@@ -1121,7 +1131,7 @@ async function restartAfterUpdate(
     if (!homePolicy.authorizeMutation("runtime")) return false; // a home change during the service-args import refuses before stop/reclaim
     // schtasks /end often leaves the hidden wrapper alive; its :loop respawns
     // `ocx start` and races reclaim, so end wrappers before the socket.
-    if (homePolicy.authorizeMutation("service")) (io.stopServiceWrappersFn ?? stopWindowsServiceWrappersBestEffort)(homePolicy.authorizeMutation);
+    if (homePolicy.authorizeMutation("service") && await (io.stopServiceWrappersFn ?? stopWindowsServiceForRestart)(homePolicy.authorizeMutation) === false) return windowsServiceStopAborted(job);
     const preServiceAllow = reclaimKillAllowlist();
     const freed = await waitFn(port, hostname, reclaimOptsFor(preServiceAllow));
     if (!freed && !reclaimGate()) return false; // a latched denial already refused the job
@@ -1249,7 +1259,7 @@ async function restartAfterUpdate(
       // below are the path that repairs stuck Windows listeners.
     }
   }
-  if (serviceInstalled && homePolicy.authorizeMutation("service")) (io.stopServiceWrappersFn ?? stopWindowsServiceWrappersBestEffort)(homePolicy.authorizeMutation);
+  if (serviceInstalled && homePolicy.authorizeMutation("service") && await (io.stopServiceWrappersFn ?? stopWindowsServiceForRestart)(homePolicy.authorizeMutation) === false) return windowsServiceStopAborted(job);
   // Reclaim before the pinned start: a busy old socket used to hop ports or fail health.
   const directAllow = reclaimKillAllowlist();
   const freed = await waitFn(port, hostname, reclaimOptsFor(directAllow));
@@ -1348,7 +1358,9 @@ async function restartAfterUpdate(
       lastChild = null;
     }
     if (!homePolicy.authorizeMutation("runtime")) return false;
-    if (preparePort(job, port, listPids, aliveFn, verifyOcx, () => { if (serviceInstalled && homePolicy.authorizeMutation("service")) (io.stopServiceWrappersFn ?? stopWindowsServiceWrappersBestEffort)(homePolicy.authorizeMutation); }, reclaimGate) === false) return false;
+    // #7771: the service stop runs before the synchronous preparation so its outcome can abort.
+    if (serviceInstalled && homePolicy.authorizeMutation("service") && await (io.stopServiceWrappersFn ?? stopWindowsServiceForRestart)(homePolicy.authorizeMutation) === false) return windowsServiceStopAborted(job);
+    if (preparePort(job, port, listPids, aliveFn, verifyOcx, undefined, reclaimGate) === false) return false;
     const ready = await waitForGhost(
       port,
       hostname,

@@ -1,6 +1,7 @@
 import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile } from "../../config/atomic-write";
+import { readBoundedRegularFileSync } from "../../lib/bounded-file-read";
 import { assertNotRealClaudeConfigUnderTest } from "../../lib/test-home-guard";
 
 /**
@@ -98,11 +99,21 @@ export function setNoProxyReceiptIoForTests(io: Partial<ReceiptIo>): () => void 
 }
 
 /** The receipt, or null when it is missing or malformed (both mean: no provenance). */
-export function readNoProxyReceipt(configDir: string): NoProxyReceipt | null {
+export function readNoProxyReceipt(configDir: string, maxBytes?: number): NoProxyReceipt | null {
+  const path = noProxyReceiptPath(configDir);
+  let raw: string;
+  try {
+    raw = maxBytes === undefined ? readFileSync(path, "utf8")
+      : readBoundedRegularFileSync(path, maxBytes, { followFinalSymlink: true }).toString("utf8");
+  } catch (error) {
+    // The preview cannot predict a restoration from a receipt it could not safely read.
+    if (maxBytes !== undefined && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return null;
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(noProxyReceiptPath(configDir), "utf8"));
-  } catch { // no-excuse-ok: catch -- a missing or corrupt receipt is the no-provenance state.
+    parsed = JSON.parse(raw);
+  } catch { // no-excuse-ok: catch -- a corrupt receipt is the no-provenance state.
     return null;
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;

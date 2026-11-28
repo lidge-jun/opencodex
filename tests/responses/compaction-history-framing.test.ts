@@ -8,7 +8,7 @@ import { CHECKPOINT_CONTINUATION_NOTE, COMPACT_PROMPT, SUMMARY_PREFIX, encodeCom
 import { frameCompactionHistory, HISTORICAL_REQUEST_START, HISTORICAL_REQUEST_END } from "../../src/responses/compaction-history-framing";
 import { parseRequest } from "../../src/responses/parser";
 import { clearResponseStateForTests, expandPreviousResponseInput, previousResponseReplayPrefixLength, rememberResponseState } from "../../src/responses/state";
-import { handleResponses } from "../../src/server/responses";
+import { handleOwnedResponses as handleResponses } from "../helpers/response-replay-owner";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -86,17 +86,26 @@ describe("plaintext checkpoint historical framing", () => {
     kept.forEach((item, index) => expect(after.input[index]).toBe(item));
   });
 
-  test("no-op controls: no readable checkpoint, opaque state, summarizer, empty candidates", () => {
+  test("no-op controls: no readable checkpoint, opaque state, local summarizer, empty candidates", () => {
     for (const input of [
       "direct input", [user(completed)], [checkpoint, later],
       [user(completed), { type: "compaction", encrypted_content: "gAAAA-native" }],
-      [user(completed), checkpoint, { type: "compaction_trigger" }],
+      [user(completed), checkpoint, user(COMPACT_PROMPT)],
       [user("<environment_context/>"), checkpoint],
       [user(completed), { role: "assistant", content: `${SUMMARY_PREFIX}\nnot a checkpoint` }],
     ]) {
       const body = { input };
       expect(frameCompactionHistory(body)).toBe(body);
     }
+  });
+
+  test("a remote compaction_trigger summary is framed like its ordinary request but gets no note (#7307)", () => {
+    const ordinary = frameCompactionHistory({ instructions: "base", input: [user(completed), checkpoint] });
+    const summary = frameCompactionHistory({ instructions: "base", input: [user(completed), checkpoint, { type: "compaction_trigger" }] });
+    expect(JSON.stringify(summary.input[0])).toContain(HISTORICAL_REQUEST_START);
+    expect(summary.input.slice(0, -1)).toEqual(ordinary.input);
+    expect(ordinary.instructions).toContain(CHECKPOINT_CONTINUATION_NOTE);
+    expect(summary.instructions).toBe("base");
   });
 
   test("translated parser changes only context; raw body and continuation positions stay canonical", () => {

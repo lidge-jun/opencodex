@@ -2,6 +2,7 @@
 import type { ExportClientId } from "../client-ids";
 export type { ExportClientId } from "../client-ids";
 import { canonicalizeReasoningEfforts } from "../../reasoning-effort";
+import { providerCodexAccountMode } from "../../providers/registry";
 import type { OcxConfig } from "../../types";
 import type { ConfigFormat } from "../../integrations/serialize";
 import type { ExportModelNames } from "./model-names";
@@ -84,6 +85,8 @@ export interface ExportModel {
   namespaced: string;
   /** Provider-qualified alias proven equivalent by the shared management row loader. */
   aliasNamespaced?: string;
+  /** Raw nested upstream selector the serving proxy proved equivalent (#8172); Pi only. */
+  nestedNamespaced?: string;
   /** Hub-resolved Fast availability; exporters never infer it from local config. */
   fastRowAvailable?: boolean;
   provider: string;
@@ -193,6 +196,46 @@ export function knownReasoningSupport(evidence: ExportCapabilityEvidence): boole
   return undefined;
 }
 
+/**
+ * A native row addressed by its bare `gpt-*` slug, as opposed to an account-qualified
+ * `<namespace>/<gpt-*>` row. Bare rows require a caller-owned bearer in Codex Direct and 401
+ * for proxy-key / loopback clients. Account-qualified rows route with `codexAccountMode: "pool"`
+ * and a fixed account: non-main namespaces always use that exact stored pool account, and the
+ * `__main__` namespace uses stored `main-pool` for proxy-key / loopback clients (while preserving
+ * the existing caller-owned `main` context when a caller supplies its own Codex JWT).
+ *
+ * A row is account-qualified when its first path segment is a configured Codex account
+ * namespace — the same spelling `routeModelInternal` uses to resolve
+ * `config.codexAccountNamespaces` — so this tracks the router rather than guessing from a
+ * slash that a routed row could also carry.
+ */
+export function isBareNativeRow(
+  model: { native?: boolean; namespaced: string },
+  config?: Pick<OcxConfig, "codexAccountNamespaces">,
+): boolean {
+  if (model.native !== true) return false;
+  const slash = model.namespaced.indexOf("/");
+  if (slash <= 0) return true;
+  const namespace = model.namespaced.slice(0, slash);
+  return !Object.keys(config?.codexAccountNamespaces ?? {}).includes(namespace);
+}
+
+/**
+ * Drop bare native OpenAI `gpt-*` rows when the serving config runs canonical `openai` in
+ * Codex Direct mode. Managed/exported clients send loopback placeholders or proxy admission
+ * keys rather than caller-owned OpenAI bearers, so bare Direct rows cannot run while
+ * account-qualified `<namespace>/gpt-*` rows remain servable.
+ */
+export function filterDirectModeBareNative<T extends { native?: boolean; namespaced: string }>(
+  models: readonly T[],
+  config?: OcxConfig,
+): T[] {
+  if (providerCodexAccountMode("openai", config?.providers?.openai) !== "direct") {
+    return [...models];
+  }
+  return models.filter(model => !isBareNativeRow(model, config));
+}
+
 export interface ExportContext {
   modelNames?: ExportModelNames;
   /** `http://host:port/v1` — the OpenAI-compatible surface the client dials. */
@@ -203,6 +246,13 @@ export interface ExportContext {
    * admission from `apiKey` to the `x-opencodex-api-key` header.
    */
   config?: OcxConfig;
+  /**
+   * `baseUrl` is this Home's unauthenticated loopback listener, so inference needs no
+   * admission key. Set only where the serving config selected the listener itself (the
+   * managed-integration context and `/api/client-config`). Never inferred from the URL: an
+   * SSH forward can look like loopback and still lead to an authenticated listener.
+   */
+  keylessInference?: boolean;
   droidReasoningDefaults?: DroidReasoningDefaults;
   /**
    * The parsed target document, when the caller has one in hand.

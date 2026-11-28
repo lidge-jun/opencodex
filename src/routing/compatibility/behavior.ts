@@ -2,6 +2,7 @@ import { modelRecordValue } from "../../reasoning-effort";
 import { modelInList } from "../../types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { PROVIDER_REGISTRY } from "../../providers/registry";
+import type { InboundWire } from "../../providers/registry";
 import { fastPolicyForModel, serviceTierSupportFromPolicy } from "../../providers/service-tier";
 import { resolveProviderAuthTransport } from "../../providers/fastwire";
 import { defaultAnthropicCacheRetention } from "../../adapters/anthropic/cache-retention";
@@ -25,6 +26,8 @@ export function upstreamProtocolForAdapter(adapter: string): string {
       return "anthropic-messages";
     case "google":
       return "google-generate";
+    case "agy-acp":
+      return "agent-client-protocol";
     default:
       return "openai-responses";
   }
@@ -33,7 +36,7 @@ export function upstreamProtocolForAdapter(adapter: string): string {
 export function surfaceForProtocols(inboundProtocol: string, upstreamProtocol: string): string {
   if (inboundProtocol === "anthropic-messages") return "anthropic-messages-http";
   if (upstreamProtocol === "anthropic-messages") return "responses-http";
-  if (upstreamProtocol === "openai-chat") return "responses-sse";
+  if (upstreamProtocol === "openai-chat" || upstreamProtocol === "agent-client-protocol") return "responses-sse";
   return "responses-http";
 }
 
@@ -125,6 +128,7 @@ export function resolveProductionBehaviorValues(
   modelId: string,
   effective: OcxProviderConfig,
   installationSalt: Uint8Array | string,
+  wire?: { inbound: InboundWire; adapter: string },
 ): LabBehaviorValues | null {
   const provider = config.providers[providerName];
   if (!provider || provider.disabled === true) return null;
@@ -143,7 +147,7 @@ export function resolveProductionBehaviorValues(
   const project = typeof effective.project === "string" && effective.project ? effective.project : null;
   const location = typeof effective.location === "string" && effective.location ? effective.location : null;
   const nativeLocalExec = effective.nativeLocalExec === "on" || effective.unsafeAllowNativeLocalExec === true;
-  const fastPolicy = fastPolicyForModel(effective, modelId, providerName, "responses", provider);
+  const fastPolicy = fastPolicyForModel(effective, modelId, providerName, wire?.inbound, provider, wire?.adapter);
 
   const values: LabBehaviorValues = {
     "wire.adapter": behaviorRow("provider_config", adapter),

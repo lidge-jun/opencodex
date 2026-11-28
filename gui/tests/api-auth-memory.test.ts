@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { bootstrapApiSession, configureApiTargets, fetchAudioUpload, installApiAuthFetch, installApiSessionFromHtml, resetApiAuthFetchForTests } from "../src/api";
+import { bootstrapApiSession, configureApiTargets, fetchAudioUpload, fetchDesktopSession, installApiAuthFetch, installApiSessionFromHtml, resetApiAuthFetchForTests } from "../src/api";
 import { targetsFromMachineStatus, type MachineStatusV1 } from "../src/api-targets";
 
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
@@ -52,6 +52,16 @@ async function installMockAuthFetch(handler: typeof fetch): Promise<void> {
   // installApiAuthFetch replaces window.fetch — keep globalThis in sync for bare `fetch()`.
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: window.fetch });
 }
+
+test("Desktop POST receives a single 401 without bootstrap, admin prompt or replay", async () => {
+  const requests: string[] = []; let prompts = 0;
+  resetApiAuthFetchForTests(async () => { prompts++; return "fixture-admin"; });
+  await installMockAuthFetch((async input => { requests.push(String(input)); return Response.json({ error: "unauthorized" }, { status: 401 }); }) as typeof fetch);
+  const response = await fetchDesktopSession("/api/codex/desktop-compatibility/runtime", { method: "POST", body: "{}" });
+  expect(response.status).toBe(401); expect(requests).toEqual(["/api/codex/desktop-compatibility/runtime"]); expect(prompts).toBe(0);
+  await expect(fetchDesktopSession("http://other.example.test/api/codex/desktop-compatibility/runtime", { method: "POST" })).rejects.toThrow("desktop_target_changed");
+  expect(requests).toHaveLength(1);
+});
 
 /**
  * Declare a bind that requires a typed credential, as `serveGuiFile` does from
@@ -658,4 +668,30 @@ test("a missing event constructor does not turn a successful key mutation into f
     if (descriptor) Object.defineProperty(window, "CustomEvent", descriptor);
     else Reflect.deleteProperty(window, "CustomEvent");
   }
+});
+
+test("a Remote Link Child sends its own link status and diagnostics reads with its machine session (#8985)", async () => {
+  injectSessionMeta("ocx_session_child", "child-csrf", "http://localhost");
+  const childStatus = (link: boolean): MachineStatusV1 => ({
+    mode: "client", connected: true, machineBase: "http://localhost", sharedBase: "http://localhost/api/machine/hub-relay",
+    sharedServerOrigin: "http://localhost", managementTransport: "relay", apiKeyId: "child-key", protocolVersion: 1,
+    connectedAt: "2026-11-21T00:00:00.000Z", hubReachability: "online",
+    ...(link ? { link: { linkId: "lnk_0123456789abcdef", home: "studio", readOnly: true as const } } : {}),
+  });
+  configureApiTargets(targetsFromMachineStatus("", childStatus(true)));
+  const seen: [string, string | null][] = [];
+  await installMockAuthFetch((async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost/");
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    seen.push([url.pathname, headers.get("X-OpenCodex-API-Key")]);
+    return Response.json({});
+  }) as typeof fetch);
+  await fetch("/api/link/status?children=1");
+  await fetch("/api/link/diagnostics?limit=100");
+  expect(seen).toEqual([["/api/link/status", "ocx_session_child"], ["/api/link/diagnostics", "ocx_session_child"]]);
+  // A hub client has no link of its own on this listener; its classification is unchanged.
+  configureApiTargets(targetsFromMachineStatus("", childStatus(false)));
+  seen.length = 0;
+  await fetch("/api/link/status");
+  expect(seen).toEqual([["/api/link/status", null]]);
 });

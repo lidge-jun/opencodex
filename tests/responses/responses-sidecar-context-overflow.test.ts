@@ -168,3 +168,35 @@ describe("isSidecarContextOverflow", () => {
     expect(isSidecarContextOverflow(413, "translator", "translation_buffer_limit")).toBe(false);
   });
 });
+
+for (const stream of [true, false]) {
+  test(`hosted media retry policy and stream requirement (stream=${stream})`, async () => {
+    let count = 0;
+    const remote = upstream(() => {
+      if (++count <= 4) return new Response("busy", { status: 429, headers: { "retry-after": "0" } });
+      return new Response([
+        'data: {"choices":[{"index":0,"delta":{"content":"media retry answer"},"finish_reason":"stop"}]}',
+        'data: [DONE]',
+        '',
+      ].join("\n\n"), { headers: { "content-type": "text/event-stream" } });
+    });
+    const config = sidecarConfig("images", remote.server);
+    config.images!.maxRounds = 2;
+    config.providers.relay!.retryOn429 = { attempts: 4, intervalMs: 100, respectRetryAfter: true };
+    saveConfig(config);
+    const proxy = startServer(0);
+    try {
+      const response = await send(String(proxy.url), "images", stream);
+      if (stream) {
+        expect(remote.hits()).toBe(5);
+        expect(await response.text()).toContain("media retry answer");
+      } else {
+        expect(response.status).toBe(400);
+        expect(await response.text()).toContain("image bridge requires stream=true");
+        expect(remote.hits()).toBe(0);
+      }
+    } finally {
+      await proxy.stop();
+    }
+  });
+}

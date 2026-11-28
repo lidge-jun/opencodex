@@ -148,21 +148,39 @@ export function writePid(pid: number): void {
   atomicWriteFile(getPidPath(), String(pid));
 }
 
+export type ClientStopOwner = { nonce: string; pid: number; startTime: string };
+
 export type RuntimePortState = {
   pid: number;
   port: number;
   hostname?: string;
+  role?: string;
+  /** OS creation identity of a standalone owner, when available. */
+  startTime?: string;
   /** Absolute relaunch prefix written by runtimes that identify their serving install. */
   command?: string[];
   /** Per-process proof key; protected by the config directory and never served. */
   attestationSecret?: string;
   /** A Link runtime is draining; new and in-flight sync commits must stand down. */
   clientStopping?: true;
+  /** Parent stop: true while active, false after it finishes with this runtime still fenced. */
+  clientStopRequested?: boolean;
+  /** This stop's exact deferred-teardown nonce and OS process incarnation. */
+  clientStopOwner?: ClientStopOwner;
+  /** Stable serving Link fingerprint, or null for a native Hub client. */
+  clientLinkOwner?: string | null;
+  /**
+   * Fresh for every publication of a client runtime, including the rollback of a failed restart.
+   * A sync compares the whole record before each commit, so one captured before a restart cannot
+   * commit into the runtime that serves again afterwards (src/client/sync-runtime.ts).
+   */
+  servingGeneration?: string;
   /**
    * The owner a client runtime classified from positive evidence (src/client/runtime-restart.ts
-   * restartOwnerEvidence: desktop, service-manager or none). Absent for a bare OCX_SERVICE=1 and for
-   * runtimes older than this field; `ocx disconnect` restarts only a runtime whose record states a
-   * value it recognises. Any string is accepted here so a later value never invalidates the record.
+   * recordedRestartOwner: desktop, service-manager or none), or legacy-flag for a bare OCX_SERVICE=1
+   * (#8545). Absent for runtimes older than this field; `ocx disconnect` restarts only a runtime whose
+   * record states a proven owner, and gives the re-register advice for legacy-flag. Any string is
+   * accepted here so a later value never invalidates the record.
    */
   restartOwner?: string;
   /**
@@ -195,6 +213,8 @@ export function isValidRuntimePortState(value: unknown): value is RuntimePortSta
     && hostnameOk
     && attestationOk
     && (state.clientStopping === undefined || state.clientStopping === true)
+    && (state.clientStopRequested === undefined || (typeof state.clientStopRequested === "boolean" && state.clientStopping === true))
+    && (state.servingGeneration === undefined || (typeof state.servingGeneration === "string" && state.servingGeneration.length <= 64))
     && (state.restartOwner === undefined || (typeof state.restartOwner === "string" && state.restartOwner.length <= 64))
     && siblingOk;
 }
@@ -487,10 +507,19 @@ function readNativeWindowsCommandLine(pid: number): string | undefined {
   }
 }
 
-export function readProcessCommandLine(pid: number): string | undefined {
+/** A caller with a deadline can share its remaining time across all subprocess fallbacks. */
+export function readProcessCommandLine(pid: number, remainingMs: () => number = () => Infinity): string | undefined {
   if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
+  const run = (executable: string, args: string[], capMs: number): string | undefined => {
+    const timeout = Math.floor(Math.min(capMs, remainingMs()));
+    if (timeout <= 0) return undefined;
+    return processCommandLineExec(executable, args, {
+      encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout, windowsHide: true,
+    });
+  };
   const platform = processCommandLinePlatformForTests ?? process.platform;
   try {
+    if (remainingMs() <= 0) return undefined;
     if (platform === "linux") {
       try {
         const output = readFileSync(`/proc/${pid}/cmdline`, "utf-8");
@@ -510,9 +539,10 @@ export function readProcessCommandLine(pid: number): string | undefined {
       // the trusted fixed PowerShell binary without consulting PATH or env roots.
       const wmic = join(resolveTrustedWindowsSystemDirectory(), "wbem", "WMIC.exe");
       try {
-        const output = processCommandLineExec(wmic, [
+        const output = run(wmic, [
           "process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/VALUE",
-        ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
+        ], 3000);
+        if (output === undefined) return undefined;
         const match = /^CommandLine=(.*)$/m.exec(output.replace(/\r/g, ""));
         const value = match?.[1]?.trim();
         if (value) return value;
@@ -523,14 +553,14 @@ export function readProcessCommandLine(pid: number): string | undefined {
       // unchanged process and turns a guarded stop into a false approval-changed.
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          const output = processCommandLineExec(resolveTrustedWindowsPowerShellExe(), [
+          const output = run(resolveTrustedWindowsPowerShellExe(), [
             "-NoProfile",
             "-NoLogo",
             "-NonInteractive",
             "-Command",
             `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`,
-          ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
-          return output.trim() || undefined;
+          ], 3000);
+          return output?.trim() || undefined;
         } catch {
           /* timed out or CIM unavailable — try once more, then unreadable */
         }
@@ -539,12 +569,8 @@ export function readProcessCommandLine(pid: number): string | undefined {
     }
     for (const ps of ["/bin/ps", "/usr/bin/ps"]) {
       try {
-        const output = processCommandLineExec(ps, ["-p", String(pid), "-o", "command="], {
-          encoding: "utf-8",
-          stdio: ["ignore", "pipe", "ignore"],
-          timeout: 1000,
-          windowsHide: true,
-        });
+        const output = run(ps, ["-p", String(pid), "-o", "command="], 1000);
+        if (output === undefined) return undefined;
         const value = output.trim();
         if (value) return value;
       } catch {

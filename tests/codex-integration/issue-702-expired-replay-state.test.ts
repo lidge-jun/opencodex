@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import {
+  noteSubagentModelFailure,
   resetSubagentModelFallbackStateForTests,
   setSubagentQuotaPrimeForTests,
 } from "../../src/codex/subagent-model-fallback";
@@ -11,21 +12,30 @@ import {
   clearResponseStateForTests,
   clearResponseStateMemoryForTests,
   flushPendingResponseSpillsForTests,
-  rememberResponseState,
   responseStateMetrics,
   RESPONSE_TTL_MS,
   setResponseStateByteCapForTests,
   type ResponseStateMetrics,
 } from "../../src/responses/state";
 import { responseSpillDirectory } from "../../src/responses/spill-store";
+import { PLAINTEXT_V2_COLLABORATION_NAMESPACE } from "../../src/responses/plaintext-v2-agent-messages";
 import { startServer } from "../../src/server";
+import { aggregateTelemetryForDay } from "../../src/telemetry/aggregate";
+import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 import type { OcxConfig } from "../../src/types";
+import { readRecentUsageEntries } from "../../src/usage/log";
+import { computeEntryCost, summarizeUsage } from "../../src/usage/summary";
+import { codexHeaders, encryptedInput } from "../helpers/agent-task-recovery";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { redirectCanonicalCodexTo } from "../helpers/pool-retry-harness";
 import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { rememberOwnedResponseState as rememberResponseState, responseReplayFixtureApiKeys,
+  responseReplayFixtureHeaders } from "../helpers/response-replay-owner";
 
 const originalFetch = globalThis.fetch;
+const originalWebSocket = globalThis.WebSocket;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const REPLAY_TTL_MS = RESPONSE_TTL_MS;
@@ -70,6 +80,7 @@ function forwardConfig(): OcxConfig {
   return {
     port: 0,
     hostname: "127.0.0.1",
+    apiKeys: responseReplayFixtureApiKeys,
     defaultProvider: "openai",
     openaiProviderTierVersion: 2,
     providers: {
@@ -206,9 +217,10 @@ async function runForwardScenario(
     }) as typeof fetch;
 
     saveConfig(forwardConfig());
-    server = startServer(0);
+    server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
     const token = fakeChatGptJwt({ chatgpt_account_id: "acct-issue-702" });
     const requestHeaders = {
+      ...(mode === "ordinary" ? {} : responseReplayFixtureHeaders()),
       "content-type": "application/json",
       authorization: `Bearer ${token}`,
       "chatgpt-account-id": "acct-issue-702",
@@ -277,6 +289,8 @@ async function runForwardScenario(
 }
 
 beforeEach(() => {
+  // Native WSS must fall back to each test's HTTP fetch stub, never the network.
+  redirectCanonicalCodexTo("http://127.0.0.1");
   testHome = mkdtempSync(join(tmpdir(), "ocx-issue-702-"));
   process.env.OPENCODEX_HOME = testHome;
   delete process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -287,6 +301,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  globalThis.WebSocket = originalWebSocket;
   clearResponseStateForTests();
   setResponseStateByteCapForTests(null);
   resetSubagentModelFallbackStateForTests();
@@ -353,7 +368,7 @@ describe("routed replay recovery", () => {
         Date.now = realNow;
       }
       saveConfig({
-        port: 0, hostname: "127.0.0.1", websockets: true, defaultProvider: "routed-test",
+        port: 0, hostname: "127.0.0.1", apiKeys: responseReplayFixtureApiKeys, websockets: true, defaultProvider: "routed-test",
         providers: {
           "routed-test": {
             adapter: "adapter" in scenario ? scenario.adapter : "openai-responses",
@@ -364,19 +379,19 @@ describe("routed replay recovery", () => {
           },
         },
       } as OcxConfig);
-      server = startServer(0);
+      server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
       const deltaRequest = {
         model: "routed-test/test-model", previous_response_id: FIRST_RESPONSE_ID,
         input: [toolResult], tools, store: false,
       };
       const httpRejected = await originalFetch(new URL("/v1/responses", server.url), {
-        method: "POST", headers: { "content-type": "application/json" },
+        method: "POST", headers: { "content-type": "application/json", ...responseReplayFixtureHeaders() },
         body: JSON.stringify(deltaRequest),
       });
       expect(httpRejected.status).toBe(400);
       expect(await httpRejected.json()).toMatchObject({ error: { code: "previous_response_not_found" } });
       expect(upstreamRequests).toHaveLength(0);
-      socket = await openResponseSocket(server.url, {});
+      socket = await openResponseSocket(server.url, responseReplayFixtureHeaders());
       const rejected = await sendSocketTurn(socket, deltaRequest);
       expect(rejected).toMatchObject({
         type: "error", status: 400,
@@ -385,7 +400,7 @@ describe("routed replay recovery", () => {
       expect(upstreamRequests).toHaveLength(0);
 
       socket.close();
-      socket = await openResponseSocket(server.url, {});
+      socket = await openResponseSocket(server.url, responseReplayFixtureHeaders());
       const recovered = await sendSocketTurn(socket, {
         model: "routed-test/test-model", input: [...history, toolResult], tools, store: false,
       });
@@ -465,6 +480,7 @@ describe("routed replay recovery", () => {
       saveConfig({
         port: 0,
         hostname: "127.0.0.1",
+        apiKeys: responseReplayFixtureApiKeys,
         defaultProvider: "chat-test",
         providers: {
           "chat-test": {
@@ -478,11 +494,11 @@ describe("routed replay recovery", () => {
           },
         },
       } as OcxConfig);
-      server = startServer(0);
+      server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
 
       const refused = await originalFetch(new URL("/v1/responses", server.url), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...responseReplayFixtureHeaders() },
         body: JSON.stringify({
           model: "chat-test/test-model",
           previous_response_id: FIRST_RESPONSE_ID,
@@ -499,7 +515,7 @@ describe("routed replay recovery", () => {
       // What the client does next: resend the whole conversation without the id.
       const recovered = await originalFetch(new URL("/v1/responses", server.url), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...responseReplayFixtureHeaders() },
         body: JSON.stringify({
           model: "chat-test/test-model",
           input: [inputMessage(HISTORICAL_USER_SENTINEL), inputMessage(CURRENT_USER_SENTINEL)],
@@ -545,6 +561,7 @@ describe("routed replay recovery", () => {
         saveConfig({
           port: 0,
           hostname: "127.0.0.1",
+          apiKeys: responseReplayFixtureApiKeys,
           defaultProvider: "wire-test",
           providers: {
             "wire-test": {
@@ -557,10 +574,10 @@ describe("routed replay recovery", () => {
             },
           },
         } as OcxConfig);
-        server = startServer(0);
+        server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
         const response = await originalFetch(new URL("/v1/responses", server.url), {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", ...responseReplayFixtureHeaders() },
           body: JSON.stringify({
             model: "wire-test/test-model",
             previous_response_id: FIRST_RESPONSE_ID,
@@ -612,6 +629,7 @@ describe("Issue #702 expired forward replay state", () => {
         config: {
           port: 0,
           hostname: "127.0.0.1",
+          apiKeys: responseReplayFixtureApiKeys,
           openaiProviderTierVersion: 2,
           defaultProvider: "kiro-test",
           providers: {
@@ -630,6 +648,7 @@ describe("Issue #702 expired forward replay state", () => {
         config: {
           port: 0,
           hostname: "127.0.0.1",
+          apiKeys: responseReplayFixtureApiKeys,
           openaiProviderTierVersion: 2,
           defaultProvider: "test-openai",
           providers: {
@@ -649,11 +668,11 @@ describe("Issue #702 expired forward replay state", () => {
     try {
       for (const routeClass of routeClasses) {
         saveConfig(routeClass.config);
-        const server = startServer(0);
+        const server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
         try {
           const response = await originalFetch(new URL("/v1/responses", server.url), {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: { "content-type": "application/json", ...responseReplayFixtureHeaders() },
             body: JSON.stringify({
               model: routeClass.model,
               previous_response_id: responseId,
@@ -733,8 +752,9 @@ describe("Issue #702 expired forward replay state", () => {
         return originalFetch(input, init);
       }) as typeof fetch;
       saveConfig({ ...forwardConfig(), websockets: true });
-      server = startServer(0);
+      server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
       const headers = {
+        ...responseReplayFixtureHeaders(),
         authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "acct-issue-702" })}`,
         "chatgpt-account-id": "acct-issue-702",
       };
@@ -771,6 +791,180 @@ describe("Issue #702 expired forward replay state", () => {
     }
   }, SERVER_BUDGET_MS);
 
+  test.each(["high", "max"] as const)("keyless native Sol in v2-plaintext logs its local continuation refusal (%s)", async effort => {
+    const upstreamRequests: Record<string, unknown>[] = [];
+    const config = forwardConfig();
+    config.apiKeys = [];
+    config.websockets = true;
+    config.multiAgentMode = "v2-plaintext";
+    config.plaintextV2AgentMessages = false;
+    config.providers.openai!.upstreamWebsocket = false;
+    saveConfig(config);
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname === "127.0.0.1") return originalFetch(input, init);
+      expect(url.href).toBe("https://chatgpt.com/backend-api/codex/responses");
+      upstreamRequests.push(JSON.parse(String(init?.body)));
+      return new Response(completedSse(`resp_sol_${upstreamRequests.length}`, HISTORICAL_ASSISTANT_SENTINEL), {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+    const server = startServer(0);
+    let socket: WebSocket | undefined;
+    try {
+      const headers = {
+        "thread-id": "native-sol-plaintext-fixture",
+        originator: "Codex Desktop",
+        authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "acct-sol-plaintext-fixture" })}`,
+        "chatgpt-account-id": "acct-sol-plaintext-fixture",
+      };
+      const turn = { model: "gpt-6.1-sol", reasoning: { effort }, store: false, tools: [{
+        type: "namespace", name: "collaboration", tools: [{ type: "function", name: "spawn_agent",
+          parameters: { type: "object", properties: { message: { type: "string", encrypted: true } } } }],
+      }] };
+      const history = [inputMessage(HISTORICAL_USER_SENTINEL), {
+        type: "agent_message", author: "earlier-child", recipient: "main-task",
+        content: [{ type: "encrypted_content", encrypted_content: "Earlier plaintext agent reply." }],
+      }, { type: "reasoning", summary: [], encrypted_content: "fixture-opaque-reasoning" }];
+      const delta = [inputMessage(CURRENT_USER_SENTINEL)];
+      socket = await openResponseSocket(server.url, headers);
+      const first = await sendSocketTurn(socket, { ...turn, input: history });
+      expect(first).toMatchObject({ type: "response.completed", response: { id: "resp_sol_1" } });
+      // Evict the retained history while the same socket still owns its replay scope.
+      expect(responseStateMetrics().count).toBe(1);
+      clearResponseStateMemoryForTests();
+      const refused = await sendSocketTurn(socket, { ...turn, previous_response_id: "resp_sol_1", input: delta });
+      expect(refused).toMatchObject({ type: "error", status: 400, error: LOCAL_REPLAY_UNAVAILABLE });
+      expect(upstreamRequests).toHaveLength(1);
+
+      socket.close();
+      socket = await openResponseSocket(server.url, headers);
+      const recovered = await sendSocketTurn(socket, { ...turn, input: [...history, ...delta] });
+      expect(recovered).toMatchObject({ type: "response.completed", response: { id: "resp_sol_2" } });
+      expect(upstreamRequests).toHaveLength(2);
+      expect(upstreamRequests[1]!.previous_response_id).toBeUndefined();
+      expect(upstreamRequests[1]).toMatchObject({
+        model: "gpt-6.1-sol",
+        reasoning: { effort },
+        tools: [{ name: PLAINTEXT_V2_COLLABORATION_NAMESPACE }],
+      });
+      // The proxy may prepend catalog guidance before the client's conversation.
+      expect((upstreamRequests[1]!.input as unknown[]).slice(-4)).toEqual([
+        history[0], inputMessage("Earlier plaintext agent reply."), history[2], ...delta,
+      ]);
+
+      const rows = readRecentUsageEntries(3, testHome);
+      expect(rows.map(row => row.status)).toEqual([200, 400, 200]);
+      const refusalRow = rows[1]!;
+      expect(refusalRow).toMatchObject({
+        client: "codex_desktop", admissionKind: "loopback", inboundProtocol: "responses",
+        requestedModel: "gpt-6.1-sol", requestedEffort: effort,
+        model: "gpt-6.1-sol", provider: "openai", errorCode: "previous_response_not_found",
+        terminalSource: "synthetic", failureStage: "headers-only", failureCause: "local-refusal", usageStatus: "unreported",
+        routeDecision: { routeKind: "native", selected: { provider: "openai", model: "gpt-6.1-sol", reason: "native-family" } },
+      });
+      expect(refusalRow.attempts ?? []).toEqual([]);
+      expect(refusalRow.usage).toBeUndefined();
+      expect(rows[2]!.attempts).toMatchObject([{ sendCount: 1, recoveryKinds: [] }]);
+    } finally {
+      socket?.close();
+      await server.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
+
+  test.each(["single send", "ambiguous retry"] as const)("native fallback continuation refusal accounts for recovery usage: %s", async scenario => {
+    const retry = scenario === "ambiguous retry";
+    const primary = "routed/test-model";
+    const native = "gpt-6.1-sol";
+    const recoveryModel = "gpt-5.6-sol";
+    const upstreamRequests: { url: string; model: string; tool_choice?: { name: string } }[] = [];
+    const config = forwardConfig();
+    config.apiKeys = [];
+    config.websockets = true;
+    config.agentTaskRecovery = { enabled: true, model: recoveryModel, retries: retry ? 1 : 0 };
+    config.subagentModelFallback = [native];
+    config.providers.routed = {
+      adapter: "openai-chat", baseUrl: "https://example.invalid/v1", authMode: "key",
+      apiKey: "synthetic-key", models: ["test-model"],
+    };
+    saveConfig(config);
+    setSubagentQuotaPrimeForTests(async () => {});
+    noteSubagentModelFailure(native, "429", config);
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname === "127.0.0.1") return originalFetch(input, init);
+      const { model, tool_choice } = JSON.parse(String(init?.body));
+      upstreamRequests.push({ url: url.href, model, tool_choice });
+      if (retry && upstreamRequests.length === 1) throw new TypeError("connection lost before headers");
+      // The native fallback is unavailable on the ciphertext-only pass. Swap availability
+      // while recovery is in flight so route selection runs again and picks the native model.
+      resetSubagentModelFallbackStateForTests();
+      noteSubagentModelFailure(primary, "429", config);
+      return new Response(`data: ${JSON.stringify({
+        type: "response.completed",
+        response: {
+          status: "completed",
+          output: [{ type: "function_call", name: "capture_assignment", arguments: '{"assignment":"Recovered task"}' }],
+          usage: { input_tokens: 30, output_tokens: 5, total_tokens: 35 },
+        },
+      })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    const server = startServer(0);
+    let socket: WebSocket | undefined;
+    try {
+      const account = retry ? "acct-recovery-retry-refusal" : "acct-recovery-refusal";
+      const headers = codexHeaders(account, { "thread-id": "recovery-refusal-fixture" });
+      socket = await openResponseSocket(server.url, Object.fromEntries(headers));
+      const refused = await sendSocketTurn(socket, {
+        model: primary, previous_response_id: FIRST_RESPONSE_ID, input: encryptedInput(), store: false,
+      });
+      expect(refused).toMatchObject({ type: "error", status: 400, error: LOCAL_REPLAY_UNAVAILABLE });
+      const recoverySend = {
+        url: "https://chatgpt.com/backend-api/codex/responses",
+        model: recoveryModel, tool_choice: expect.objectContaining({ name: "capture_assignment" }),
+      };
+      expect(upstreamRequests).toEqual(retry ? [recoverySend, recoverySend] : [recoverySend]);
+
+      const row = readRecentUsageEntries(1, testHome)[0]!;
+      expect(row).toMatchObject({
+        status: 400, provider: "openai", model: native, errorCode: "previous_response_not_found",
+        terminalSource: "synthetic", spend: { sends: retry ? 2 : 1 },
+      });
+      const measured = {
+        provider: "openai", model: recoveryModel, status: 200, sendCount: 1,
+        usage: { inputTokens: 30, outputTokens: 5, totalTokens: 35 },
+      };
+      expect(row.attempts).toMatchObject(retry ? [{
+        provider: "openai", model: recoveryModel, status: 502, sendCount: 1,
+        failureStage: "pre-header", failureCause: "transport-ambiguous", usageStatus: "unreported",
+      }, measured] : [measured]);
+      expect(row.failureCause).not.toBe("local-refusal");
+
+      const { summary, models } = summarizeUsage([row], "30d", Date.now());
+      const { costTotal } = computeEntryCost(row);
+      expect(costTotal).toBeGreaterThan(0);
+      const telemetry = await aggregateTelemetryForDay(new Date(row.timestamp).toISOString().slice(0, 10));
+      expect({ summary, models, telemetry }).toMatchObject({
+        summary: {
+          requests: 1, inputTokens: 30, outputTokens: 5, totalTokens: 35,
+          pricedRequests: retry ? 0 : 1, unpricedRequests: retry ? 1 : 0,
+          estimatedCostUsd: retry ? 0 : costTotal,
+        },
+        models: [{ provider: "openai", model: recoveryModel, totalTokens: 35,
+          pricedRequests: retry ? 0 : 1, unpricedRequests: retry ? 1 : 0 }],
+        telemetry: {
+          requests: { completed: 0, failed: 1, incomplete: 0, aborted: 0 },
+          models: [{ providerKind: "openai", modelFamily: "gpt-5", requests: 1, inputTokens: 30, outputTokens: 5 }],
+        },
+      });
+      expect(row).toMatchObject({ usageStatus: retry ? "unreported" : "reported", totalTokens: 35 });
+    } finally {
+      socket?.close();
+      await server.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
+
   test("forward mode expands fresh replay state before continuing upstream", async () => {
     const scenario = await runForwardScenario("fresh");
 
@@ -796,19 +990,19 @@ describe("Issue #702 expired forward replay state", () => {
     expect(scenario.secondStatus).toBe(400);
     expect(JSON.parse(scenario.secondResponseText)).toEqual({ error: LOCAL_REPLAY_UNAVAILABLE });
     expect(scenario.upstreamRequests).toHaveLength(1);
-  });
+  }, SERVER_BUDGET_MS);
 
   test("missing, corrupt and mismatched local state answer identically on one route", async () => {
     // All three mean the same thing to a client: replay in full. Each is produced for real here
     // rather than inferred from the source strings - one spill deleted, one overwritten with
     // bytes that do not parse, and one entry retained under a different task.
     setResponseStateByteCapForTests(1_024);
-    const stored = async (id: string, threadId?: string): Promise<string> => {
+    const stored = async (id: string, threadId = "task-a"): Promise<string> => {
       rememberResponseState(
         { model: "gpt-5.5", input: "x".repeat(8_000), store: false },
         { id, status: "completed", output: [{ role: "assistant", content: "done" }] },
         undefined,
-        { force: true, ...(threadId ? { clientThreadId: threadId } : {}) },
+        { force: true, clientThreadId: threadId },
       );
       await flushPendingResponseSpillsForTests();
       const spillDir = responseSpillDirectory(testHome);
@@ -829,7 +1023,7 @@ describe("Issue #702 expired forward replay state", () => {
       throw new Error("upstream must not be called");
     }) as typeof fetch;
     saveConfig(forwardConfig());
-    const server = startServer(0);
+    const server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
     const token = fakeChatGptJwt({ chatgpt_account_id: "acct-issue-702" });
     const ask = async (previousResponseId: string, threadId: string): Promise<{ status: number; body: string }> => {
       const response = await originalFetch(new URL("/v1/responses", server.url), {
@@ -838,7 +1032,7 @@ describe("Issue #702 expired forward replay state", () => {
           "content-type": "application/json",
           authorization: `Bearer ${token}`,
           "chatgpt-account-id": "acct-issue-702",
-          "x-codex-parent-thread-id": threadId,
+          ...responseReplayFixtureHeaders(threadId),
         },
         body: JSON.stringify({
           model: "gpt-5.5",
@@ -893,7 +1087,7 @@ describe("Issue #702 expired forward replay state", () => {
         { force: true, clientThreadId: "task-a" },
       );
       saveConfig({
-        port: 0, hostname: "127.0.0.1", websockets: true, defaultProvider: "routed-test",
+        port: 0, hostname: "127.0.0.1", apiKeys: responseReplayFixtureApiKeys, websockets: true, defaultProvider: "routed-test",
         providers: {
           "routed-test": {
             adapter: "openai-responses", baseUrl: upstream.url.toString(), allowPrivateNetwork: true,
@@ -901,8 +1095,8 @@ describe("Issue #702 expired forward replay state", () => {
           },
         },
       } as OcxConfig);
-      server = startServer(0);
-      socket = await openResponseSocket(server.url, { "x-codex-parent-thread-id": "task-b" });
+      server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
+      socket = await openResponseSocket(server.url, responseReplayFixtureHeaders("task-b"));
       const refused = await sendSocketTurn(socket, {
         model: "routed-test/test-model", previous_response_id: FIRST_RESPONSE_ID,
         input: [inputMessage(CURRENT_USER_SENTINEL)], store: false,
@@ -959,6 +1153,7 @@ describe("Issue #702 expired forward replay state", () => {
       saveConfig({
         port: 0,
         hostname: "127.0.0.1",
+        apiKeys: responseReplayFixtureApiKeys,
         defaultProvider: "test-openai",
         providers: {
           "test-openai": {
@@ -971,7 +1166,7 @@ describe("Issue #702 expired forward replay state", () => {
           },
         },
       } as OcxConfig);
-      server = startServer(0);
+      server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
       rememberResponseState(
         { input: [inputMessage(HISTORICAL_USER_SENTINEL)], store: false },
         { id: FIRST_RESPONSE_ID, status: "completed", output: [] },
@@ -982,7 +1177,7 @@ describe("Issue #702 expired forward replay state", () => {
         new URL("/v1/responses", server!.url),
         {
           method: "POST",
-          headers: { "content-type": "application/json", "x-codex-parent-thread-id": threadId },
+          headers: { "content-type": "application/json", ...responseReplayFixtureHeaders(threadId) },
           body: JSON.stringify({
             model: "test-openai/gpt-5.5",
             previous_response_id: previousResponseId,
@@ -1028,6 +1223,7 @@ describe("Issue #702 expired forward replay state", () => {
       saveConfig({
         port: 0,
         hostname: "127.0.0.1",
+        apiKeys: responseReplayFixtureApiKeys,
         defaultProvider: "test-openai",
         providers: {
           "test-openai": {
@@ -1040,11 +1236,11 @@ describe("Issue #702 expired forward replay state", () => {
           },
         },
       } as OcxConfig);
-      server = startServer(0);
+      server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
 
       const response = await originalFetch(new URL("/v1/responses", server.url), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...responseReplayFixtureHeaders() },
         body: JSON.stringify({
           model: "test-openai/gpt-5.5",
           previous_response_id: "resp_upstream_native_state",

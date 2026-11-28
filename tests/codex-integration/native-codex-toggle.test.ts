@@ -20,6 +20,8 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import type { ManagementApiDeps } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import * as serviceManagerProbe from "../../src/service-manager-probe";
+import * as codexSync from "../../src/codex/sync";
+import { injectCodexConfig } from "../../src/codex/inject";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let fixtureRoot = "";
@@ -27,6 +29,9 @@ let codexHome = "";
 let previousOpencodexHome: string | undefined;
 let previousCodexHome: string | undefined;
 let restoreServiceManagerProbe = () => {};
+let restoreSyncDiscovery = () => {};
+let catalogReads = 0;
+const realSyncModelsToCodex = codexSync.syncModelsToCodex;
 const cleanup: string[] = [];
 
 function baseConfig(): OcxConfig {
@@ -75,6 +80,19 @@ function persistedCodexIntent(): unknown {
 }
 
 beforeEach(() => {
+  catalogReads = 0;
+  // This route test exercises real gate/injection/restore, with catalog discovery owned by
+  // the fixture. The native route's standalone sync does not consume fetchAllModels above.
+  const sync = spyOn(codexSync, "syncModelsToCodex").mockImplementation((port, config, log) =>
+    realSyncModelsToCodex(port, config, log, {
+      injectCodexConfig,
+      refreshCodexModelCatalog: async () => {
+        catalogReads++;
+        return { added: 0, path: "", catalogExists: false, catalogWritten: false, cacheSynced: false } as never;
+      },
+      refreshReasoningMetadata: async () => {},
+    }));
+  restoreSyncDiscovery = () => sync.mockRestore();
   // The route fixture owns no service, and HOME cannot redirect launchctl/systemctl.
   // Without this the host's own opencodex registration decides the case.
   const probe = spyOn(serviceManagerProbe, "inspectServiceManagerInstallation")
@@ -100,6 +118,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  restoreSyncDiscovery();
   restoreServiceManagerProbe();
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
@@ -168,6 +187,7 @@ describe("turning Codex off", () => {
     const serverConfig = baseConfig();
     await put(serverConfig, { enabled: false });
     await put(serverConfig, { enabled: true });
+    expect(catalogReads).toBe(1);
     expect(persistedCodexIntent()).not.toBe(false);
 
     const response = await dispatch(serverConfig, "/api/native-integrations");

@@ -5,13 +5,20 @@ import { buildAdvisorTool } from "../../src/advisor/synthetic-tool";
 import {
   ADVISOR_SYSTEM_INSTRUCTION,
   ADVISOR_TRANSPORT_INSTRUCTION,
+  ADVISOR_WORKER_NOTICE_MARKER,
+  buildAdvisorWorkerNotice,
   advisorResultIsAdvice,
   advisorTranscript,
   buildAdvisorUserPrompt,
+  findExternalAdvisorMcpToolName,
   formatAdvisorAdvice,
   advisorPreflightMessages,
   formatAdvisorUnavailable,
+  hasAdvisorWorkerNotice,
+  hasExternalAdvisorMcpTool,
+  injectAdvisorWorkerNotice,
   neutralizeAdvisorMarkers,
+  stripHarnessSystemReminders,
 } from "../../src/advisor/context";
 
 function parsedWithHistory() {
@@ -209,5 +216,201 @@ describe("advice formatting", () => {
     const hostile = neutralizeAdvisorMarkers("body says <opencodex_advisor> and <opencodex_advisor_preflight>");
     expect(hostile).not.toContain("<opencodex_advisor>");
     expect(hostile).not.toContain("<opencodex_advisor_preflight>");
+  });
+});
+
+describe("worker notice and external MCP detection", () => {
+  test("injectAdvisorWorkerNotice inserts developer notice before the latest user turn once", () => {
+    const parsed = parseRequest({
+      model: "deepseek-chat",
+      stream: false,
+      input: [
+        { role: "user", content: "First question" },
+        { role: "assistant", content: [{ type: "output_text", text: "Answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "Latest task" }] },
+      ],
+    });
+    expect(injectAdvisorWorkerNotice(parsed)).toBe(true);
+    const devIdx = parsed.context.messages.findIndex(
+      m => m.role === "developer" && typeof m.content === "string" && m.content.includes(ADVISOR_WORKER_NOTICE_MARKER),
+    );
+    const lastUserIdx = parsed.context.messages.findLastIndex(m => m.role === "user");
+    expect(devIdx).toBe(lastUserIdx - 1);
+    expect(hasAdvisorWorkerNotice(parsed)).toBe(true);
+    expect(injectAdvisorWorkerNotice(parsed)).toBe(false);
+  });
+
+  test("hasAdvisorWorkerNotice detects marker inside content part arrays", () => {
+    const parsed = parseRequest({ model: "deepseek-chat", stream: false, input: [{ role: "user", content: "hi" }] });
+    parsed.context.messages.unshift({
+      role: "developer",
+      content: [{ type: "text", text: `${ADVISOR_WORKER_NOTICE_MARKER}\nAlready injected` }],
+      timestamp: Date.now(),
+    });
+    expect(hasAdvisorWorkerNotice(parsed)).toBe(true);
+    expect(injectAdvisorWorkerNotice(parsed)).toBe(false);
+  });
+
+  test("detects external consult_advisor MCP tool names cleanly", () => {
+    const parsed = parsedWithHistory();
+    expect(hasExternalAdvisorMcpTool(parsed)).toBe(false);
+    expect(findExternalAdvisorMcpToolName(parsed)).toBeUndefined();
+
+    parsed.context.tools = [
+      ...(parsed.context.tools ?? []),
+      { name: "mcp__opencodex-advisor__consult_advisor", description: "advisor", parameters: { type: "object" } },
+    ];
+    expect(hasExternalAdvisorMcpTool(parsed)).toBe(true);
+    expect(findExternalAdvisorMcpToolName(parsed)).toBe("mcp__opencodex-advisor__consult_advisor");
+    expect(injectAdvisorWorkerNotice(parsed)).toBe(true);
+    const notice = parsed.context.messages.find(m => m.role === "developer");
+    expect(String(notice?.content)).toContain("mcp__opencodex-advisor__consult_advisor");
+  });
+});
+
+describe("full contextMode and system-reminder stripping", () => {
+  test("stripHarnessSystemReminders removes client system-reminder boilerplate and unwraps user_query", () => {
+    const raw = [
+      '<system-reminder data-role="user-context">',
+      "huge workspace metadata",
+      "</system-reminder>",
+      '<user_query>Fix the SQLite token refresh race</user_query>',
+    ].join("\n");
+    expect(stripHarnessSystemReminders(raw)).toBe("Fix the SQLite token refresh race");
+  });
+
+  test("full contextMode retains >10k tool output and strips system-reminder before clipping", () => {
+    const largeLog = `START_${"x".repeat(12_000)}_END`;
+    const parsed = parseRequest({
+      model: "deepseek-chat",
+      stream: false,
+      input: [
+        { role: "user", content: '<system-reminder>ignore</system-reminder>\n<user_query>Diagnose this 12k log</user_query>' },
+        { type: "function_call", call_id: "c1", name: "shell", arguments: "{}" },
+        { type: "function_call_output", call_id: "c1", output: largeLog },
+      ],
+    });
+    const boundedPrompt = buildAdvisorUserPrompt({
+      parsed, workerIdentity: "w", advisorModel: "a", reason: "manual", contextMode: "context",
+    });
+    expect(boundedPrompt).toContain("[truncated");
+    expect(boundedPrompt).not.toContain("_END");
+
+    const fullPrompt = buildAdvisorUserPrompt({
+      parsed, workerIdentity: "w", advisorModel: "a", reason: "manual", contextMode: "full",
+    });
+    expect(fullPrompt).toContain("Diagnose this 12k log");
+    expect(fullPrompt).not.toContain("<system-reminder>");
+    expect(fullPrompt).toContain(largeLog);
+    expect(fullPrompt).not.toContain("[truncated");
+  });
+
+  test("re-anchors advisor notice without duplication after a long tool loop", () => {
+    const input: Array<Record<string, unknown>> = [
+      { role: "user", content: "Investigate intermittent failure" },
+    ];
+    for (let i = 1; i <= 4; i++) {
+      input.push(
+        { type: "function_call", call_id: `c${i}`, name: "shell", arguments: `{"step":${i}}` },
+        { type: "function_call_output", call_id: `c${i}`, output: `step ${i} ok` },
+      );
+    }
+    const parsed = parseRequest({ model: "deepseek-chat", stream: false, input });
+    parsed.context.messages.unshift({
+      role: "developer",
+      content: buildAdvisorWorkerNotice("advisor"),
+      timestamp: Date.now(),
+    });
+    expect(hasAdvisorWorkerNotice(parsed)).toBe(false);
+    expect(injectAdvisorWorkerNotice(parsed, "mcp__opencodex-advisor__consult_advisor")).toBe(true);
+
+    const notices = parsed.context.messages.filter(
+      message => message.role === "developer"
+        && typeof message.content === "string"
+        && message.content.includes(ADVISOR_WORKER_NOTICE_MARKER),
+    );
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.content).toContain("mcp__opencodex-advisor__consult_advisor");
+    expect(notices[0]!.content).toContain("URGENT:");
+    // Placed after the final tool_result so tool_call -> tool_result pairs are never split.
+    expect(parsed.context.messages.at(-1)?.role).toBe("developer");
+    expect(hasAdvisorWorkerNotice(parsed)).toBe(true);
+    expect(injectAdvisorWorkerNotice(parsed, "mcp__opencodex-advisor__consult_advisor")).toBe(false);
+  });
+
+  test("ignores compaction summary user messages that mention ## Advisor", () => {
+    const parsed = parseRequest({
+      model: "deepseek-chat",
+      stream: false,
+      input: [
+        { role: "user", content: "This session was compacted.\n\n## Advisor\nEarlier notes about advisor consultation." },
+        { role: "user", content: "Continue implementing the fix." },
+      ],
+    });
+    expect(hasAdvisorWorkerNotice(parsed)).toBe(false);
+    expect(injectAdvisorWorkerNotice(parsed)).toBe(true);
+    const tailDev = parsed.context.messages.filter(m => m.role === "developer");
+    expect(tailDev).toHaveLength(1);
+  });
+
+  test("preserves application-owned developer messages headed ## Advisor across long tool loops", () => {
+    const input: Array<Record<string, unknown>> = [
+      { role: "user", content: "Investigate intermittent failure" },
+    ];
+    for (let i = 1; i <= 4; i++) {
+      input.push(
+        { type: "function_call", call_id: `a${i}`, name: "shell", arguments: `{"step":${i}}` },
+        { type: "function_call_output", call_id: `a${i}`, output: `step ${i} ok` },
+      );
+    }
+    const parsed = parseRequest({ model: "deepseek-chat", stream: false, input });
+    const appNotice = `${ADVISOR_WORKER_NOTICE_MARKER}\nApplication-owned policy: never skip migrations.`;
+    parsed.context.messages.unshift({
+      role: "developer",
+      content: appNotice,
+      timestamp: Date.now(),
+    });
+    expect(hasAdvisorWorkerNotice(parsed)).toBe(false);
+    expect(injectAdvisorWorkerNotice(parsed)).toBe(true);
+
+    const devTexts = parsed.context.messages
+      .filter(m => m.role === "developer")
+      .map(m => String(m.content));
+    expect(devTexts).toContain(appNotice);
+    expect(devTexts.length).toBe(2);
+  });
+
+  test("findExternalAdvisorMcpToolName and hasExternalAdvisorMcpTool respect tool_choice", () => {
+    const makeParsed = (toolChoice?: Record<string, unknown> | string) => parseRequest({
+      model: "deepseek-chat",
+      stream: false,
+      input: [{ role: "user", content: "Check advisor choice filtering" }],
+      tools: [
+        {
+          type: "function",
+          name: "mcp__opencodex-advisor__consult_advisor",
+          description: "External MCP advisor",
+          parameters: { type: "object", properties: { question: { type: "string" } } },
+        },
+      ],
+      ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
+    });
+
+    const autoReq = makeParsed();
+    expect(hasExternalAdvisorMcpTool(autoReq)).toBe(true);
+    expect(findExternalAdvisorMcpToolName(autoReq)).toBe("mcp__opencodex-advisor__consult_advisor");
+
+    expect(hasExternalAdvisorMcpTool(makeParsed("none"))).toBe(false);
+    expect(hasExternalAdvisorMcpTool(makeParsed({ type: "function", name: "advisor" }))).toBe(false);
+    expect(hasExternalAdvisorMcpTool(makeParsed({
+      type: "allowed_tools",
+      mode: "required",
+      tools: [{ type: "function", name: "advisor" }],
+    }))).toBe(false);
+    expect(hasExternalAdvisorMcpTool(makeParsed({
+      type: "allowed_tools",
+      mode: "auto",
+      tools: [{ type: "function", name: "mcp__opencodex-advisor__consult_advisor" }],
+    }))).toBe(true);
   });
 });

@@ -28,6 +28,22 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ```
 
+Bare native OpenAI `gpt-*` rows appear only while the canonical `openai` provider is enabled and not
+in Codex Direct mode; usable account-qualified `<namespace>/gpt-*` rows stay in the export while
+Codex Direct mode is on. Direct mode forwards each caller's own OpenAI credential while opencode
+sends the proxy's key, and a disabled `openai` provider makes the proxy refuse every bare `gpt-*`
+selector; in both states the launcher, the managed integration and `ocx export` leave bare `gpt-*`
+rows out rather than offering a model that cannot run.
+
+## Protocol per model
+
+Both blocks send requests to `/v1/responses` by default: V1 through `@ai-sdk/openai`, V2 through
+`@opencode/ai/providers/openai-compatible-responses`. A model routed directly to a Chat Completions
+provider that uses key or local auth gets a per-model override back to `/v1/chat/completions`
+(`provider.npm` in V1, `package` in V2), so its turns keep that provider's own wire. Native
+OpenAI models, combos, routing policies and models whose route cannot be resolved use Responses.
+Refresh a managed integration or re-export a manual snapshot to pick up a protocol change.
+
 ## Reasoning effort
 
 opencode exposes reasoning effort as model *variants*. opencodex writes one variant per
@@ -141,8 +157,8 @@ catalog. Re-run `ocx export` after you add a provider or change model visibility
 Alternatively, [enable the managed integration](/guides/integrations/): `ocx sync` safely
 refreshes its already-owned blocks, leaving hand-edited or removed blocks untouched.
 
-Once merged, export the admission key before launching opencode — unless the proxy is on loopback,
-where none is needed:
+Once merged, export the admission key before launching opencode. A listener bound only to loopback
+does not check it, but OpenCode still refuses an unset key, so any nonempty value works there:
 
 ```bash
 export OPENCODEX_OPENCODE_API_KEY=<your key>
@@ -166,9 +182,11 @@ Loopback example:
 
 Non-loopback example:
 
+This is a manually configured remote-client example. Configure a TLS frontend first, then use its HTTPS URL; OpenCodex does not terminate TLS or discover that URL for `ocx opencode`. Plain LAN HTTP exposes the admission credential in transit. Alternatively, keep the proxy on loopback and use a local SSH tunnel. See [TLS for the data listener](/guides/remote-hub/#giving-the-data-listener-tls).
+
 ```json
 "options": {
-  "baseURL": "http://192.168.1.10:10100/v1",
+  "baseURL": "https://proxy.example.com/v1",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }
@@ -179,9 +197,18 @@ The real value is passed only through the child process environment.
 `OPENCODEX_API_AUTH_TOKEN` takes precedence, then the hardened service token file, then
 a configured API key — which is what a non-loopback bind requires.
 
-A loopback bind (`127.0.0.1`, the default) authenticates nothing, so the `{env:…}` reference is
-inert and you can leave the variable unset. It matters only when `hostname` is set beyond loopback;
-see [Remote access](/reference/configuration/server/#remote-access). This admission key is opencodex's
+A listener bound to loopback (`127.0.0.1`, the default) does not require a data-plane key, even
+when client API keys are configured. OpenCode itself still needs a nonempty `apiKey`: it refuses an
+unset `{env:…}` reference with `Missing auth credential: apiKey` before sending the request. When the
+[managed integration](/guides/integrations/) or the dashboard's client config targets the
+[unauthenticated loopback listener](/reference/configuration/server/), it writes the non-secret
+`opencodex-loopback` placeholder as `apiKey`, so nothing has to be exported. Other paths, including
+`ocx export` and a loopback bind without that listener, keep the reference, so export
+`OPENCODEX_OPENCODE_API_KEY` for them: the admission key where one is required, or any nonempty
+value on a loopback bind, which does not check it. A loopback URL alone does not establish that no
+key is checked: a public listener bound to `0.0.0.0` still requires an accepted key when reached
+through `127.0.0.1`, and so does an authenticated listener reached through an SSH forward. Export the key whenever the destination checks it, for example when `hostname` is set beyond
+loopback and the client does not target the unauthenticated loopback listener; see [Remote access](/reference/configuration/server/#remote-access). This admission key is opencodex's
 own, and is unrelated to the upstream provider keys configured under
 [Providers](/guides/providers/).
 

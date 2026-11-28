@@ -42,13 +42,14 @@ import {
   markCursorOverflowSurfaced,
   recordCursorIncompleteToolRemint,
   recordCursorEnvelopeEchoRemint,
+  CURSOR_OVERFLOW_REMINT_MAX,
   recordCursorOverflowRemint,
   rememberCursorConversationRewrite,
   rememberCursorThreadConversation,
   shouldSkipCursorOverflowRemint,
   shouldSurfaceCursorOverflowFirst,
 } from "./cursor/thread-continuity";
-import { runCursorTurnWithRetry } from "./cursor/transport-retry";
+import { CURSOR_RETRY_ATTEMPTS, runCursorTurnWithRetry } from "./cursor/transport-retry";
 import { cursorRequestHasShellAlias, cursorRequestUsesCodeMode } from "./cursor/tool-definitions";
 import {
   CURSOR_OUTPUT_GUARD_MAX_HOLD_BYTES,
@@ -131,6 +132,9 @@ function cursorRequestSizeContext(request: {
 export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAdapterDeps = {}): ProviderAdapter {
   return {
     name: "cursor",
+    // Initial turn, bounded overflow remints, and one terminal corrective retry.
+    hostedIterationSendLimit: (2 + CURSOR_OVERFLOW_REMINT_MAX) * CURSOR_RETRY_ATTEMPTS,
+    reportsPhysicalSends: true,
 
     // Cursor emits Fast as a model variant, so the generic "no field emitted" fallback in
     // adapters/registry.ts would report every Fast turn as downgraded. This recomputes the
@@ -173,6 +177,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
       let requestSizeContext: CursorSizeContext | undefined;
       try {
         const makeTransport = deps.createTransport ?? createLiveCursorTransport;
+        let physicalSends = 0;
         const kv = deps.kv ?? createCursorKvStore({}, incoming.translatorBudget);
         const rekeyContextUsage = deps.rekeyContextUsage ?? rekeyCursorContextUsage;
         // Namespace thread→conversation derivation by the authenticated Cursor credential so
@@ -512,7 +517,8 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             // Cursor's retry ladder re-sends the WHOLE turn, so each attempt is a physical send
             // the enclosing request pays for. A meta without a budget -- every adapter unit test,
             // and any caller predating this -- keeps the adapter's own three attempts (#4546).
-            incoming.sendBudget ? { sendBudget: incoming.sendBudget } : {},
+            { sendBudget: incoming.sendBudget, beforePhysicalSend: incoming.beforePhysicalSend,
+              onPhysicalSend: send => incoming.onPhysicalSend?.({ ...send, ordinal: ++physicalSends }) },
           );
         };
 

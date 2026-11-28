@@ -52,7 +52,7 @@ const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
 const previousHome = process.env.OPENCODEX_HOME;
 const ADMIN = "admin-secret";
-const STATUS = "/api/link/status?compatibility=1&diagnostics=1&children=1";
+const STATUS = "/api/link/status?compatibility=1&diagnostics=1&children=1&transport=1&traffic=1&routes=1&relayHealth=1";
 const unixSupported = process.platform !== "win32";
 /**
  * sun_path is 103 bytes, and os.tmpdir() on macOS is /var/folders/..., which pushes
@@ -275,8 +275,9 @@ describe("local control socket route table", () => {
   });
 
   test("is wanted only when the public listener is not loopback", () => {
-    expect(localControlSocketWanted({ hostname: "0.0.0.0" })).toBe(unixSupported);
-    expect(localControlSocketWanted({ hostname: "10.0.0.5" })).toBe(unixSupported);
+    // Every platform, Windows included since #8998.
+    expect(localControlSocketWanted({ hostname: "0.0.0.0" })).toBe(true);
+    expect(localControlSocketWanted({ hostname: "10.0.0.5" })).toBe(true);
     for (const hostname of ["127.0.0.1", "localhost", "::1", undefined]) {
       expect(localControlSocketWanted({ hostname } as Pick<OcxConfig, "hostname">)).toBe(false);
     }

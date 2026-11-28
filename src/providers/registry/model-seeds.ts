@@ -102,7 +102,22 @@ export const ANTHROPIC_MODEL_REASONING_EFFORTS: Record<string, string[]> = Objec
 // disappears.
 export const ZAI_GLM_53_MODELS = ["glm-5.3", "glm-5.3[1m]", "glm-5.3-flash"];
 export const ZAI_GLM_52_MODELS = ["glm-5.2", "glm-5.2[1m]"];
-export const ZAI_GLM_5X_MODELS = [...ZAI_GLM_53_MODELS, ...ZAI_GLM_52_MODELS];
+// 261126 GLM-5.4: on every GLM Coding Plan tier (docs.z.ai/devpack/latest-model.md,
+// docs.bigmodel.cn/cn/coding-plan/latest-model.md); the pay-as-you-go Model API is still pending.
+// docs.z.ai/guides/llm/glm-5.4.md: 1M context, 128K output, video/image/text/file input, and the
+// same low/high/max effort fold (default max) as GLM-5.3.
+export const ZAI_GLM_54_MODELS = ["glm-5.4", "glm-5.4[1m]"];
+export const ZAI_GLM_5X_MODELS = [...ZAI_GLM_54_MODELS, ...ZAI_GLM_53_MODELS, ...ZAI_GLM_52_MODELS];
+/** 5.x members whose effort ladder, default effort and output cap follow the 5.3 contract. */
+export const ZAI_GLM_53_CONTRACT_MODELS = [...ZAI_GLM_54_MODELS, ...ZAI_GLM_53_MODELS];
+/** Native VLMs in the 5.x family: images go straight to the model, never through the sidecar. */
+export const ZAI_GLM_5X_NATIVE_VISION_MODELS = ["glm-5.3-flash", ...ZAI_GLM_54_MODELS];
+/** Static roster of the Z.ai and BigModel Chat Coding Plan rows (one list, two hosts). */
+export const ZAI_CODING_PLAN_MODELS = [...ZAI_GLM_54_MODELS, "glm-5.3", "glm-5.3[1m]", "glm-5.3-flash", "glm-5.2", "glm-5.2[1m]", "glm-5.1", "glm-5", "glm-4.6"];
+/** Static roster of the BigModel Coding Plan Responses row. */
+export const BIGMODEL_RESPONSES_MODELS = ["glm-5.4", "glm-5.3", "glm-5.3-flash", "glm-5-turbo"];
+/** Static Gemini API (AI Studio) roster; see the google entry for the 2026-11-26 sources. */
+export const GOOGLE_GEMINI_API_MODELS = ["gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview"];
 /**
  * The 5.x rows whose images the PROXY has to describe, which is NOT the same set as
  * the 5.x rows themselves.
@@ -117,7 +132,7 @@ export const ZAI_GLM_5X_MODELS = [...ZAI_GLM_53_MODELS, ...ZAI_GLM_52_MODELS];
  * constant also drives `modelSupportsReasoningSummaries` and
  * `preserveReasoningContentModels`, where flash DOES belong.
  */
-export const ZAI_GLM_5X_SIDECAR_VISION_MODELS = ZAI_GLM_5X_MODELS.filter(id => id !== "glm-5.3-flash");
+export const ZAI_GLM_5X_SIDECAR_VISION_MODELS = ZAI_GLM_5X_MODELS.filter(id => !ZAI_GLM_5X_NATIVE_VISION_MODELS.includes(id));
 /**
  * Positive input-modality declaration for the Chat-path GLM rows.
  *
@@ -140,7 +155,7 @@ export const ZAI_GLM_5X_SIDECAR_VISION_MODELS = ZAI_GLM_5X_MODELS.filter(id => i
  */
 export const ZAI_GLM_5X_INPUT_MODALITIES: Record<string, string[]> = {
   ...Object.fromEntries(ZAI_GLM_5X_SIDECAR_VISION_MODELS.map(id => [id, ["text"]])),
-  "glm-5.3-flash": ["text", "image"],
+  ...Object.fromEntries(ZAI_GLM_5X_NATIVE_VISION_MODELS.map(id => [id, ["text", "image"]])),
 };
 export const ZAI_GLM_52_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 /**
@@ -153,7 +168,7 @@ export const ZAI_GLM_52_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "
 export const ZAI_GLM_53_REASONING_EFFORTS = ["low", "high", "max"];
 /** Per-model ladders for the Coding Plan rows: 5.3 gets its three effective tiers, 5.2 keeps five. */
 export const ZAI_GLM_5X_REASONING_EFFORTS: Record<string, string[]> = {
-  ...Object.fromEntries(ZAI_GLM_53_MODELS.map(id => [id, ZAI_GLM_53_REASONING_EFFORTS])),
+  ...Object.fromEntries(ZAI_GLM_53_CONTRACT_MODELS.map(id => [id, ZAI_GLM_53_REASONING_EFFORTS])),
   ...Object.fromEntries(ZAI_GLM_52_MODELS.map(id => [id, ZAI_GLM_52_REASONING_EFFORTS])),
 };
 // 260710 MiniMax models and context windows: Tier-2 evidence in
@@ -226,7 +241,8 @@ export const OPENAI_API_GPT56_REASONING_EFFORTS = ["low", "medium", "high", "xhi
  * (https://developers.openai.com/api/docs/models/gpt-6.1-sol, checked 2026-09-30).
  */
 // GPT-6.1 Terra (2026-10-26): same API limits; its none..max ladder is set per model.
-export const OPENAI_GPT6_MODELS = ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"];
+// GPT-6.2 Sol and Astra publish the same API limits and disallow none.
+export const OPENAI_GPT6_MODELS = ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"];
 /*
  * Meta Model API (https://api.meta.ai/v1) — published ladder, deliberately NOT the
  * house set. dev.meta.ai/docs/reasoning lists "none", "minimal", "low", "medium",
@@ -310,7 +326,9 @@ export const OPENAI_DAYBREAK_MAX_INPUT_TOKENS: Record<string, number> = {
 export const OPENAI_DAYBREAK_REASONING_EFFORTS: Record<string, string[]> = Object.fromEntries(
   OPENAI_DAYBREAK_MODELS.map(id => [id, [] as string[]]),
 );
-export const OPENROUTER_GPT56_MODELS = OPENAI_GPT56_MODELS.map(id => `openai/${id}`);
+// OpenAI documents bare `gpt-5.6` as an alias of GPT-5.6 Sol; OpenRouter's public catalog lists
+// only the tier slugs (openrouter.ai/api/v1/models, 2026-11-26), so the alias is not seeded there.
+export const OPENROUTER_GPT56_MODELS = OPENAI_GPT56_MODELS.filter(id => id !== "gpt-5.6").map(id => `openai/${id}`);
 export const XAI_MODELS = [
   "grok-4.7",
   "grok-4.6",
@@ -334,6 +352,8 @@ export const OPENROUTER_GPT56_CONTEXT_WINDOWS = {
   "openai/gpt-6-luna": OPENROUTER_GPT56_CONTEXT_WINDOW,
   // Live /api/v1/models on 2026-09-30: context_length 1,050,000, max_completion_tokens 128,000.
   "openai/gpt-6.1-sol": OPENROUTER_GPT56_CONTEXT_WINDOW,
+  "openai/gpt-6.2-sol": 1_050_000,
+  "openai/gpt-6.2-astra": 1_050_000,
   // OpenRouter listing checked 2026-10-27: context_length 1,050,000.
   "openai/gpt-6.1-terra": OPENROUTER_GPT56_CONTEXT_WINDOW,
 };
@@ -378,6 +398,11 @@ export const THINKING_BUDGET_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 // Qwen3.8-Max is the first Qwen3.x model with official direct `reasoning_effort` support.
 // Evidence: https://qwen.ai/blog?id=qwen3.8
 export const QWEN38_REASONING_EFFORTS = ["low", "medium", "xhigh"];
+// Qwen4-Max takes direct `reasoning_effort` low/high/xhigh (default high; minimal->low,
+// medium->high, max->xhigh) on Chat Completions, Responses and Anthropic Messages.
+// Evidence: https://www.alibabacloud.com/help/en/model-studio/qwen4-max (2026-11-26).
+export const QWEN4_MAX = "qwen4-max";
+export const QWEN4_MAX_REASONING_EFFORTS = ["low", "high", "xhigh"];
 export const THINKING_BUDGET_MODELS = [
   "qwen3.5-397b", "qwen3.6-35b",
   "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus",
@@ -590,10 +615,15 @@ export const deepseekReasoningMapFor = (modelId: string): Record<string, string>
 // untested on this exact id. Published 1M context and 393K output use 393216 here,
 // consistent with the existing plan budget convention, not a measured boundary;
 // the lab's 384000 precision differs. Do not inherit the bare model's JSON fallback.
-export const ALIBABA_TOKEN_PLAN_MODELS = [
+export const ALIBABA_TOKEN_PLAN_MODELS_BEFORE_QWEN4 = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
   "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "glm-5.2", "glm-5.3",
 ];
+// 261126: qwen4-max is on the Personal Edition supported list
+// (https://help.aliyun.com/en/model-studio/token-plan-personal-quick-start). The International
+// Team overview publishes no equivalent, so it is Beijing-only: its window and output ceiling live
+// in the BEIJING maps below, not in the maps the International row shares.
+export const ALIBABA_TOKEN_PLAN_MODELS = [QWEN4_MAX, ...ALIBABA_TOKEN_PLAN_MODELS_BEFORE_QWEN4];
 export const ALIBABA_TOKEN_PLAN_QWEN_MODELS = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
 ];
@@ -736,6 +766,11 @@ export const ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "glm-5.2": 131_072, "glm-5.3": 131_072, "glm-5.1": 128_000, "glm-5": 16_384,
   "MiniMax-M2.5": 32_768,
 };
+// qwen4-max model page: text/image/video input, 1,000,000 context, 131,072 maximum output (non-thinking).
+// The International modality map spreads the shared Beijing one, so qwen4-max gets its own map.
+export const ALIBABA_TOKEN_PLAN_BEIJING_INPUT_MODALITIES: Record<string, string[]> = { ...ALIBABA_TOKEN_PLAN_INPUT_MODALITIES, [QWEN4_MAX]: ["text", "image"] };
+export const ALIBABA_TOKEN_PLAN_BEIJING_CONTEXT_WINDOWS: Record<string, number> = { ...ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS, [QWEN4_MAX]: 1_000_000 };
+export const ALIBABA_TOKEN_PLAN_BEIJING_MAX_OUTPUT_TOKENS: Record<string, number> = { ...ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS, [QWEN4_MAX]: 131_072 };
 export const ALIBABA_TOKEN_PLAN_NO_VISION = [
   "qwen3.7-max", "deepseek-v4-pro", "deepseek-v4-pro-0813",
   "deepseek-v4-flash-0731", "glm-5.2", "glm-5.3", "glm-5.1", "glm-5", "MiniMax-M2.5",
@@ -844,8 +879,12 @@ export const KIMI_AUTO_TOOL_CHOICE_ONLY_MODELS = ["kimi-for-coding"];
 export const KIMI_API_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
   KIMI_API_MODELS.map(id => [id, KIMI_API_K3_SERIES_MODELS.includes(id) ? KIMI_K3_1M_CONTEXT_WINDOW : 262_144]),
 );
+// "kimi-k3.1-pro and kimi-k3 support text, image, and video input" (Kimi vision guide,
+// platform.moonshot.ai/docs/guide/use-kimi-vision-model, read 2026-11-25). Video rides the Chat
+// `video_url` part as base64 or an ms:// file id. Only the two documented ids declare it.
+const KIMI_API_VIDEO_INPUT_MODELS = ["kimi-k3", "kimi-k3.1-pro"];
 export const KIMI_API_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
-  KIMI_API_K3_SERIES_MODELS.map(id => [id, ["text", "image"]]),
+  KIMI_API_K3_SERIES_MODELS.map(id => [id, KIMI_API_VIDEO_INPUT_MODELS.includes(id) ? ["text", "image", "video"] : ["text", "image"]]),
 );
 
 // 260715 NVIDIA NIM kimi family (issue #126): documented served ids on integrate
@@ -935,12 +974,68 @@ export const KIMI_CODING_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.
 export const KIMI_CODING_MODEL_INPUT_MODALITIES = Object.fromEntries(
   KIMI_CODING_ADJUSTABLE_THINKING_MODELS.map(id => [id, ["text", "image"]]),
 );
-export const NEURALWATT_REASONING_HISTORY_MODELS = [
-  "glm-5.3", "glm-5.3-short", "glm-5.3-flash",
-  "glm-5.2", "glm-5.2-short",
-  "kimi-k2.6", "kimi-k2.7-code",
-  "qwen3.5-397b", "qwen3.6-35b",
+// 2026-11-20 live /v1/models: offline fallback for Neuralwatt's chat models.
+// mammoth-1 is a decision model, not a chat completion model, and is excluded.
+// Live discovery stays authoritative for the roster and its limits.
+// Evidence: https://api.neuralwatt.com/v1/models and https://docs.neuralwatt.com/api/chat-completions
+const NEURALWATT_FAMILIES: {
+  models: string[]; context: number; output?: number; efforts: string[];
+  defaultEffort?: string; textOnly?: boolean; replay?: boolean; fixedSampling?: boolean;
+}[] = [
+  { models: ["glm-5.3", "glm-5.3-flex"], context: 1_048_560, efforts: ["low", "high", "max"],
+    defaultEffort: "max", textOnly: true, replay: true },
+  { models: ["glm-5.3-flash", "glm-5.3-flash-flex"], context: 1_048_560, efforts: ["low", "high", "max"],
+    defaultEffort: "max", replay: true },
+  { models: ["deepseek-v4.1-flash", "deepseek-v4.1-flash-flex", "deepseek-v4.1-flash-speed", "nw-flash", "nw-flash-flex"],
+    context: 1_048_560, output: 393_216, efforts: ["none", "low", "high", "xhigh", "max"], defaultEffort: "high", replay: true },
+  // Moonshot fixes Kimi K3.1 sampling: https://platform.kimi.ai/docs/guide/use-kimi-k2-thinking-model
+  { models: ["kimi-k3.1-pro", "kimi-k3.1-pro-flex", "nw-large", "nw-large-flex"],
+    context: 1_048_560, efforts: ["none", "low", "medium", "high", "max"], defaultEffort: "max", replay: true, fixedSampling: true },
+  { models: ["mimo-v2.6-pro", "mimo-v2.6-pro-flex"], context: 1_048_560, output: 393_216,
+    efforts: ["none", "high"], defaultEffort: "high", replay: true },
+  { models: ["qwen-3.8-27b", "qwen-3.8-27b-flex", "nw-small", "nw-small-flex"],
+    context: 262_128, output: 131_072, efforts: ["none", "low", "medium", "xhigh"], defaultEffort: "xhigh", replay: true },
+  // qwen3.6-35b keeps the thinking_budget ladder from the earlier seed (THINKING_BUDGET_MODELS).
+  { models: ["qwen3.6-35b"], context: 262_128, efforts: THINKING_BUDGET_EFFORTS, replay: true },
+  { models: ["qwen3.6-35b-flex"], context: 262_128, efforts: ["none", "high"], defaultEffort: "high", replay: true },
+  { models: ["qwen3.6-35b-fast"], context: 262_128, efforts: [], defaultEffort: "none" },
+  { models: ["gemma-4-31b"], context: 262_128, output: 16_384, efforts: ["none", "max"], defaultEffort: "none" },
 ];
+
+// kimi-k2.7-code keeps its earlier rules; Neuralwatt now serves it with Kimi K3.1 Pro.
+const NEURALWATT_FIXED_SAMPLING_MODELS = [
+  ...NEURALWATT_FAMILIES.filter(family => family.fixedSampling).flatMap(family => family.models), "kimi-k2.7-code",
+];
+
+function neuralwattModelMap<T>(value: (family: typeof NEURALWATT_FAMILIES[number]) => T | undefined): Record<string, T> {
+  return Object.fromEntries(NEURALWATT_FAMILIES.flatMap(family => {
+    const hint = value(family);
+    return hint === undefined ? [] : family.models.map(id => [id, hint] as const);
+  }));
+}
+
+export const NEURALWATT_MODEL_HINTS = {
+  models: NEURALWATT_FAMILIES.flatMap(family => family.models),
+  modelContextWindows: neuralwattModelMap(family => family.context),
+  modelMaxOutputTokens: neuralwattModelMap(family => family.output),
+  modelInputModalities: neuralwattModelMap(family => family.textOnly ? ["text"] : ["text", "image"]),
+  modelReasoningEfforts: {
+    ...neuralwattModelMap(family => family.efforts),
+    "qwen3.5-397b": THINKING_BUDGET_EFFORTS, // Legacy explicit routes, not part of the seed roster.
+  },
+  modelDefaultReasoningEfforts: neuralwattModelMap(family => family.defaultEffort),
+  noReasoningModels: NEURALWATT_FAMILIES.filter(family => !family.efforts.length).flatMap(family => family.models),
+  noTemperatureModels: NEURALWATT_FIXED_SAMPLING_MODELS,
+  noTopPModels: NEURALWATT_FIXED_SAMPLING_MODELS,
+  noPenaltyModels: NEURALWATT_FIXED_SAMPLING_MODELS,
+  autoToolChoiceOnlyModels: ["kimi-k2.7-code"],
+  // https://docs.neuralwatt.com/api/chat-completions#preserving-reasoning-across-turns
+  // Keep replay for unlisted legacy ids still used by existing Chat clients.
+  preserveReasoningContentModels: [
+    ...NEURALWATT_FAMILIES.filter(family => family.replay).flatMap(family => family.models),
+    "glm-5.3-short", "glm-5.2", "glm-5.2-short", "kimi-k2.6", "kimi-k2.7-code", "qwen3.5-397b",
+  ],
+};
 
 // 260728 Baseten Model APIs: `/v1/models` owns the live lineup, while these hints
 // describe only capabilities that Baseten documents per slug. Unlisted live models
@@ -1218,6 +1313,48 @@ export const OPPER_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fro
   OPPER_MODELS.map(id => [id, OPPER_TEXT_ONLY_MODELS.includes(id) ? ["text"] : ["text", "image"]]),
 );
 
+/**
+ * Step Plan catalog as the StepCode CLI serves it (`GET {step_plan}/v1/models`, 2026-10-17).
+ *
+ * Verified against a signed-in `step_plan` login, including `max_input_tokens` and the per-model
+ * `reasoning_effort_support_list`. The four `stepaudio-*` entries the same endpoint returns are
+ * deliberately absent: they are speech models, they hold no chat tools, and a row that routes a text
+ * turn into them answers `model_invalid`. `liveModels` stays false on the registry row for the same
+ * reason Claude Code's row does — the CLI, not the adapter's own HTTP path, owns discovery.
+ */
+export const STEP_CLI_MODELS = [
+  "step-5-preview",
+  "step-3.7-flash",
+  "step-3.5-flash",
+  "step-3.5-flash-2603",
+  "step-router-v1",
+];
+
+export const STEP_CLI_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "step-5-preview": 1_024_000,
+  "step-3.7-flash": 262_144,
+  "step-3.5-flash": 262_144,
+  "step-3.5-flash-2603": 262_144,
+  "step-router-v1": 262_144,
+};
+
+/**
+ * Every published model is text-only for this route.
+ *
+ * `step-5-preview` and `step-3.7-flash` do accept images upstream, but nothing verifies that a
+ * headless StepCode turn hands those bytes to the model, and the adapter refuses image input for the
+ * same reason the Qoder and Claude Code rows do. Advertising a modality the route cannot honour makes
+ * route selection pick this row for a picture it then answers blind; the vision sidecar still
+ * captions images into text before they arrive.
+ */
+export const STEP_CLI_NO_VISION_MODELS = [...STEP_CLI_MODELS];
+
+/**
+ * The three档 Step advertises. `xhigh` and `max` are not advertised and must not be offered: the
+ * service maps them onto `high` server-side, so publishing them would let the client believe it chose
+ * a depth it did not.
+ */
+export const STEP_CLI_REASONING_EFFORTS = ["low", "medium", "high"];
 // AI Stupid Level routing modes, as listed by the authenticated GET /v1/models on 2026-10-26
 // (https://aistupidlevel.info/router/docs#strategies). Each mode picks a model per request, so it
 // declares conservative limits that hold for any pick: a 262,144-token window (the pool's smallest,
@@ -1260,3 +1397,89 @@ export const STEPFUN_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
 export const STEPFUN_NO_VISION_MODELS = ["step-3.5-flash"];
 
 export const STEPFUN_REASONING_EFFORTS = ["low", "medium", "high"];
+
+/*
+ * Morph Ultra plan (https://www.morphllm.com/products/ultra, verified 2026-11-13). Ultra is one
+ * subscription with no token meter on Kimi K3.1 and DeepSeek V4.1 Flash; every other Morph model
+ * bills per token, and `morph-dsv41flash-abliterated` is Ultra-covered only for accounts approved
+ * for privileged access (403 otherwise). Only the covered rows are seeded, so the picker cannot
+ * offer a model the subscription does not include. Per docs.morphllm.com/sdk/components/fast-models
+ * all of them are 1,048,576-token, text+image, tool- and reasoning-capable.
+ */
+export const MORPH_ULTRA_MODELS = ["morph-kimik31", "morph-dsv41flash-1017"];
+export const MORPH_ULTRA_CONTEXT_WINDOW = 1_048_576;
+export const MORPH_ULTRA_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
+  MORPH_ULTRA_MODELS.map(id => [id, MORPH_ULTRA_CONTEXT_WINDOW]),
+);
+export const MORPH_ULTRA_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
+  MORPH_ULTRA_MODELS.map(id => [id, ["text", "image"]]),
+);
+/*
+ * Kimi K3.1 documents none/low/medium/high/xhigh/max. DeepSeek V4.1 Flash documents
+ * none/low/high/xhigh/max and folds medium into high; `minimal` is a Codex-side sentinel that
+ * requestToCodexEffort maps to `low`, so it needs no wire entry there.
+ *
+ * `none` needs an explicit identity entry on both models. Without one, mapReasoningEffort turns
+ * `none` into `undefined` (requestToCodexEffort) and the adapter omits `reasoning_effort`
+ * entirely — which Morph reads as "reasoning on by default", the opposite of what the picker
+ * promised. The identity entry sends `reasoning_effort: "none"` and actually disables it.
+ */
+export const MORPH_ULTRA_REASONING_EFFORTS: Record<string, string[]> = {
+  "morph-kimik31": ["none", "low", "medium", "high", "xhigh", "max"],
+  "morph-dsv41flash-1017": ["none", "low", "high", "xhigh", "max"],
+};
+export const MORPH_ULTRA_REASONING_EFFORT_MAPS: Record<string, Record<string, string>> = {
+  "morph-kimik31": { none: "none" },
+  "morph-dsv41flash-1017": { none: "none", medium: "high" },
+};
+
+/*
+ * AbliteratedLLM catalog as listed by the public GET https://api.abliteratedllm.dev/v1/models on
+ * 2026-11-14 (https://abliteratedllm.dev/docs/models). glm-5.3-flash-abliterated is the service's
+ * abliterated model and the default; every other row is a stock model (the vendor's original
+ * weights). Windows are each row's `context_length`. Modalities are each row's `input_modalities`:
+ * glm-5.3 and glm-5.3-fast are text only, and the gateway answers an image part sent to a model
+ * that does not list images with 400 `unsupported_content`. glm-5.3-flash also lists video, which
+ * the Codex catalog cannot carry, so it is seeded as text and image. The preset uses this seeded
+ * list (liveModels: false): the public model list answers without a key and cannot validate one.
+ */
+export const ABLITERATEDLLM_MODELS = [
+  "glm-5.3-flash-abliterated",
+  "deepseek-v4.1-flash-1017",
+  "deepseek-v4.1-flash-1017-ultrafast",
+  "deepseek-v4.1-flash-original",
+  "glm-5.3-flash",
+  "glm-5.3",
+  "glm-5.3-fast",
+  "kimi-k3",
+  "kimi-k3.1-pro",
+  "kimi-k3-fast",
+  "ember-1",
+  "muse-spark-open",
+  "qwen3.8-max",
+  "qwen3.8-2.4t-a95b",
+  "minimax-m3",
+];
+export const ABLITERATEDLLM_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "glm-5.3-flash-abliterated": 1_048_576,
+  "deepseek-v4.1-flash-1017": 1_048_576,
+  "deepseek-v4.1-flash-1017-ultrafast": 1_048_576,
+  "deepseek-v4.1-flash-original": 1_048_576,
+  "glm-5.3-flash": 1_048_576,
+  "glm-5.3": 1_048_576,
+  "glm-5.3-fast": 1_048_576,
+  "kimi-k3": 1_048_576,
+  "kimi-k3.1-pro": 1_048_576,
+  "kimi-k3-fast": 1_048_576,
+  "ember-1": 1_048_576,
+  "muse-spark-open": 1_048_576,
+  "qwen3.8-max": 262_144,
+  "qwen3.8-2.4t-a95b": 262_144,
+  "minimax-m3": 512_000,
+};
+const ABLITERATEDLLM_TEXT_ONLY_MODELS = ["glm-5.3", "glm-5.3-fast"];
+export const ABLITERATEDLLM_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
+  ABLITERATEDLLM_MODELS.map(id => [
+    id, ABLITERATEDLLM_TEXT_ONLY_MODELS.includes(id) ? ["text"] : ["text", "image"],
+  ]),
+);

@@ -106,6 +106,7 @@ export function intersectComboEfforts(
 }
 
 export interface ComboTarget {
+  metered?: boolean;
   provider: string;
   model: string;
   weight?: number;
@@ -127,6 +128,7 @@ let comboTargetKeySeq = 0;
 
 export function newComboTarget(partial: Partial<ComboTarget> = {}): ComboTarget {
   return {
+    ...(partial.metered !== undefined ? { metered: partial.metered } : {}),
     provider: partial.provider ?? "",
     model: partial.model ?? "",
     ...(partial.weight !== undefined ? { weight: partial.weight } : {}),
@@ -149,6 +151,7 @@ function normalizeReasoningEffortMode(value: unknown): "strict" | "adaptive" {
 
 export interface ComboItem {
   id: string;
+  revision?: string;
   /** Wire id shown to clients, e.g. combo/free */
   model: string;
   /** Optional public model name replacing the default combo/<id> slug; null = default. */
@@ -174,6 +177,9 @@ export interface ComboItem {
   decisionTimeoutMs?: number | null;
   /** `jev` only: undefined preserves an omitted setting; null explicitly turns the pin off. */
   sessionPin?: JevSessionPinConfig | null;
+  allowMeteredTargets?: boolean;
+  quotaOnlyFallback?: boolean;
+  preserveFallbackModel?: boolean;
   targets: ComboTarget[];
 }
 
@@ -295,6 +301,7 @@ export function parseComboList(payload: unknown): ComboItem[] {
       targets.push(newComboTarget({
         provider,
         model,
+        ...(tr.metered === true ? { metered: true } : {}),
         ...(weight !== undefined ? { weight } : {}),
         ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
         ...(typeof tr.modelProfile === "string" ? { modelProfile: tr.modelProfile } : {}),
@@ -306,11 +313,15 @@ export function parseComboList(payload: unknown): ComboItem[] {
     const sessionPin = r.sessionPin === null ? null : normalizeJevSessionPin(r.sessionPin);
     out.push({
       id,
+      ...(typeof r.revision === "string" ? { revision: r.revision } : {}),
       model: typeof r.model === "string" && r.model.trim()
         ? r.model.trim()
         : comboPublicModelId(id, normalizeAlias(r.alias)),
       alias: normalizeAlias(r.alias),
       nativeAlias: r.nativeAlias === true,
+      ...(r.allowMeteredTargets === true ? { allowMeteredTargets: true } : {}),
+      ...(r.quotaOnlyFallback === true ? { quotaOnlyFallback: true } : {}),
+      ...(r.preserveFallbackModel === true ? { preserveFallbackModel: true } : {}),
       displayName: normalizeAlias(r.displayName),
       strategy: normalizeStrategy(r.strategy),
       stickyLimit: normalizeStickyLimit(r.stickyLimit),
@@ -487,6 +498,9 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
     || a.nativeAlias !== b.nativeAlias
     || a.displayName !== b.displayName
     || a.strategy !== b.strategy
+    || Boolean(a.allowMeteredTargets) !== Boolean(b.allowMeteredTargets)
+    || (a.strategy === "failover" && (Boolean(a.quotaOnlyFallback) !== Boolean(b.quotaOnlyFallback)
+      || Boolean(a.preserveFallbackModel) !== Boolean(b.preserveFallbackModel)))
     || a.stickyLimit !== b.stickyLimit
     || a.defaultEffort !== b.defaultEffort
     || (a.imageInput ?? "auto") !== (b.imageInput ?? "auto")
@@ -498,6 +512,7 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
       || (a.decisionTimeoutMs ?? null) !== (b.decisionTimeoutMs ?? null)
       || (a.sessionPin === undefined) !== (b.sessionPin === undefined)
       || (a.sessionPin?.ttlMs ?? null) !== (b.sessionPin?.ttlMs ?? null)
+      || (a.sessionPin?.effort ?? null) !== (b.sessionPin?.effort ?? null)
     ))
   ) return false;
   if (a.targets.length !== b.targets.length) return false;
@@ -505,6 +520,7 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
     const o = b.targets[i]!;
     return t.provider === o.provider
       && t.model === o.model
+      && Boolean(t.metered) === Boolean(o.metered)
       && (t.weight ?? 1) === (o.weight ?? 1)
       && targetReasoningEffortsEqual(t, o)
       && (t.modelProfile ?? "") === (o.modelProfile ?? "");
@@ -513,9 +529,24 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
 
 export function toPutBody(
   item: ComboItem,
-  options: { renameFrom?: string; visionSidecarTargets?: Array<{ provider: string; model: string }> } = {},
+  options: {
+    renameFrom?: string;
+    visionSidecarTargets?: Array<{ provider: string; model: string }>;
+    /**
+     * The combo as stored when this edit began, or null for a new combo. The server keeps an
+     * omitted target `metered`, `allowMeteredTargets`, `quotaOnlyFallback` or
+     * `preserveFallbackModel` and clears an explicit false, so only the settings that differ
+     * from `stored` are sent. Without it none are sent, and a stale editor cannot restore a
+     * value the CLI or API changed in the meantime.
+     */
+    stored?: ComboItem | null;
+    /** Create only: the server refuses when a combo with this id exists. */
+    ifAbsent?: true;
+  } = {},
 ): {
   id: string;
+  ifRevision?: string;
+  ifAbsent?: true;
   renameFrom?: string;
   visionSidecarTargets?: Array<{ provider: string; model: string }>;
   combo: {
@@ -527,6 +558,9 @@ export function toPutBody(
     reasoningEffortMode: "strict" | "adaptive";
     alias?: string;
     nativeAlias?: true;
+    allowMeteredTargets?: boolean;
+    quotaOnlyFallback?: boolean;
+    preserveFallbackModel?: boolean;
     displayName?: string;
     decisionProvider?: string | null;
     decisionModel?: string | null;
@@ -535,14 +569,26 @@ export function toPutBody(
   };
 } {
   const weighted = item.strategy === "round-robin" || item.strategy === "random";
+  const failover = item.strategy === "failover";
+  const { stored } = options;
+  const changed = (value: boolean | undefined, before: boolean | undefined) =>
+    stored !== undefined && Boolean(value) !== Boolean(before);
+  // The server carries an omitted flag over per target, matched on trimmed provider+model.
+  const storedMetered = new Map(stored?.targets.map(target =>
+    [`${target.provider.trim()}/${target.model.trim()}`, target.metered]));
   return {
     id: item.id.trim(),
+    ...(stored?.revision !== undefined ? { ifRevision: stored.revision } : {}),
+    ...(options.ifAbsent ? { ifAbsent: true as const } : {}),
     ...(options.renameFrom ? { renameFrom: options.renameFrom } : {}),
     ...(options.visionSidecarTargets?.length ? { visionSidecarTargets: options.visionSidecarTargets } : {}),
     combo: {
       targets: item.targets.map((target) => ({
         provider: target.provider.trim(),
         model: target.model.trim(),
+        ...(changed(target.metered, storedMetered.get(`${target.provider.trim()}/${target.model.trim()}`))
+          ? { metered: Boolean(target.metered) }
+          : {}),
         ...(weighted ? { weight: target.weight ?? 1 } : {}),
         ...(target.reasoningEfforts !== undefined
           ? { reasoningEfforts: [...target.reasoningEfforts] }
@@ -552,6 +598,15 @@ export function toPutBody(
           : {}),
       })),
       strategy: item.strategy,
+      ...(changed(item.allowMeteredTargets, stored?.allowMeteredTargets)
+        ? { allowMeteredTargets: Boolean(item.allowMeteredTargets) }
+        : {}),
+      ...(failover && changed(item.quotaOnlyFallback, stored?.quotaOnlyFallback)
+        ? { quotaOnlyFallback: Boolean(item.quotaOnlyFallback) }
+        : {}),
+      ...(failover && changed(item.preserveFallbackModel, stored?.preserveFallbackModel)
+        ? { preserveFallbackModel: Boolean(item.preserveFallbackModel) }
+        : {}),
       defaultEffort: item.defaultEffort,
       // The server preserves an omitted field from the stored combo (#5687), so the dashboard
       // must send both explicitly or switching back to auto/strict would never take effect.

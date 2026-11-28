@@ -48,14 +48,14 @@ Bun.plugin({ name: "Messages refusal boundary fixture", setup(build) {
   build.onLoad({ filter: filters.upstream }, ({ path }) => {
     hooks.upstreamLoads++;
     return { loader: "ts", contents: replaceOnce(readOriginal(path),
-      "const upstream = await handleResponses(internalReq, {",
-      "const upstream = globalThis.__localRefusalReply ? (globalThis.__fixtureHooks.upstreamHits++, globalThis.__localRefusalReply) : await handleResponses(internalReq, {") };
+      "const upstream = await handleResponses(internalReq, ",
+      "const upstream = globalThis.__localRefusalReply ? (globalThis.__fixtureHooks.upstreamHits++, globalThis.__localRefusalReply) : await handleResponses(internalReq, ") };
   });
   build.onLoad({ filter: filters.native }, ({ path }) => {
     hooks.nativeLoads++;
     return { loader: "ts", contents: replaceOnce(readOriginal(path),
-      "const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);",
-      "const proactiveKeyProvider = globalThis.__nativePacingPreflight ? (() => { globalThis.__fixtureHooks.nativeHits++; throw globalThis.__nativePacingPreflight; })() : selectProactiveApiKeyTransport(config, route.providerName, route.provider);") };
+      "const proactiveKeyProvider = selectProactiveApiKeyTransport(",
+      "if (globalThis.__nativePacingPreflight) { globalThis.__fixtureHooks.nativeHits++; throw globalThis.__nativePacingPreflight; }\n      const proactiveKeyProvider = selectProactiveApiKeyTransport(") };
   });
   build.onLoad({ filter: filters.verdict }, ({ path }) => {
     hooks.verdictLoads++;
@@ -161,7 +161,8 @@ if (kind.startsWith("native-pacing")) {
   produced = admissionModelDeniedResponse(new AdmissionModelDeniedError(clientFacingModelLabel(KEY), { providerName: "fixture", modelId: "model" }));
 } else if (kind === "combo-count") {
   const { comboUnavailable } = await import("../../src/server/responses/core-errors");
-  produced = comboUnavailable(KEY, Date.now(), "provider disabled: 3" as never); absent = "3";
+  produced = comboUnavailable(KEY, Date.now(), { reasons: "provider disabled: 3" as never,
+    diagnostics: { cause: "unavailable", targets: 3, attempted: 0, causes: { unavailable: 3 } } }); absent = "3";
 } else if (kind === "combo") {
   const { comboUnavailable } = await import("../../src/server/responses/core-errors"); produced = comboUnavailable(KEY);
 } else if (kind === "config") {

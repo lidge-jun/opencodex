@@ -29,6 +29,13 @@ describe("oauth health badge helpers", () => {
     expect(formatOAuthHealthSummary(t, "codex", "acct_pending", health)).toBe("pws.healthSummary.validationPending");
     expect(accountNeedsReauth({ needsReauth: false, health })).toBe(false);
   });
+  test("a suspended account shows a suspension badge and a provider appeal summary", () => {
+    const health = { status: "reauth_required" as const, reason: "tos_violation" };
+    expect(formatOAuthHealthLabel(t, health)).toBe("pws.healthLabel.accountSuspended");
+    expect(formatOAuthHealthSummary(t, "Antigravity", "acct_abcd1234", health)).toBe("pws.healthSummary.accountSuspended");
+    expect(accountNeedsReauth({ needsReauth: false, health })).toBe(true);
+  });
+
   test("maps statuses to badge tones and classes", () => {
     expect(oauthHealthBadgeTone("healthy")).toBe("ok");
     expect(oauthHealthBadgeTone("cooldown")).toBe("muted");

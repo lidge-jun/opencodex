@@ -348,7 +348,7 @@ export function classifyIntegration(input: {
    * sibling edit harmless. Like `format`, it belongs to the target; omitted, the
    * client's config-file declaration answers.
    */
-  sourcePreservingYaml?: boolean;
+  sourcePreserving?: boolean;
 }): { state: IntegrationState; reason?: StateReason } {
   if (input.fileText !== null && !input.fileIsRegular) {
     return { state: "unsafe", reason: "not-regular-file" };
@@ -454,7 +454,8 @@ export function classifyIntegration(input: {
     && !isHermesAffinityUpgrade(input.parsed, input.record, input.contribution)) {
     return { state: "conflict", reason: "foreign-edit" };
   }
-  if (!(input.sourcePreservingYaml ?? INTEGRATION_CLIENTS[clientId].sourcePreservingYaml !== undefined)
+  if (!(input.sourcePreserving ?? (INTEGRATION_CLIENTS[clientId].sourcePreservingYaml !== undefined
+      || INTEGRATION_CLIENTS[clientId].sourcePreservingToml === true))
     && fingerprint(input.fileText ?? "") !== input.record.fileFingerprint
     && !droidNormalizedFileMatchesRecord(input.parsed, input.record)) {
     /*
@@ -519,7 +520,8 @@ export function exportContextOf(input: {
   port: number;
   droidReasoningDefaults?: Record<string, string>;
   document?: unknown;
-}): { baseUrl: string; models: readonly ExportModel[]; config: OcxConfig; droidReasoningDefaults?: Record<string, string>; document?: unknown } {
+}): { baseUrl: string; models: readonly ExportModel[]; config: OcxConfig; keylessInference?: boolean; droidReasoningDefaults?: Record<string, string>; document?: unknown } {
+  const keylessListener = input.config.unauthenticatedLoopbackListener?.enabled === true;
   return {
     /*
      * Composed through the SAME helper `ocx export` uses. Interpolating the
@@ -533,6 +535,8 @@ export function exportContextOf(input: {
     baseUrl: opencodeProxyBaseUrl(input.port, input.config.hostname, input.config),
     models: input.models,
     config: input.config,
+    // `opencodeProxyBaseUrl` above dials the keyless listener whenever it is enabled.
+    ...(keylessListener ? { keylessInference: true } : {}),
     ...(input.droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: input.droidReasoningDefaults }),
     // Forwarded only when the caller parsed a target: a client that resolves
     // between two document roots (Command Code) needs the bytes on disk.
@@ -734,7 +738,7 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
     configPath,
     clientId: input.clientId,
     format: effective.format,
-    sourcePreservingYaml: effective.sourcePreservingYaml !== null,
+    sourcePreserving: effective.sourcePreservingYaml !== null || effective.sourcePreservingToml,
   });
   if (input.clientId === "droid" && record && (state === "current" || state === "stale")) {
     try { assertDroidRecordedSettingsUnambiguous(spec.detectDir(input.env, input.home), parsed, record); }

@@ -1,10 +1,11 @@
 // Holds INV-LINK-CHILD-01 from structure/overview.md; shared TypeScript/Rust golden conformance suite for native/ocx-child.
 import { createHash, createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { fixturePath, repoPath } from "../helpers/repo-root";
 import { rustToolchainEnv } from "../helpers/rust-toolchain-env";
+import { OCX_CHILD_CONFORMANCE_BUILD_MS, OCX_CHILD_CONFORMANCE_RUN_MS } from "../../scripts/test";
 import { linkRouteAllowed } from "../../src/link/routes";
 import { linkManagementRouteAllowed } from "../../src/link/management-routes";
 import { isDetachedEphemeralChildConfig, isEphemeralChildHealth } from "../../src/link/ephemeral-child";
@@ -22,12 +23,13 @@ import {
   ensureFastModeFeature,
   ensureRootWebSearchDisabled,
   externalCodexModelProvider,
-  setRootModelCatalogPath,
   setRootOpenaiBaseUrlForTarget,
   setRootRealtimeWsBaseUrl,
   stripOpencodexCatalogPath,
+  updateRootModelCatalogPath,
 } from "../../src/codex/inject/config-toml";
 import { stripJournaledOpenaiBaseUrl } from "../../src/codex/injected-marker";
+import { codexCatalogBindingForPath } from "../../src/codex/paths";
 import { MANAGED_AGENTS_TABLE_MARKER, transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "../../src/codex/subagent-defaults";
 import { rootAssignmentKey, rootSourceLines, sourceText, splitSourceLines, type SourceLine } from "../../src/codex/toml-source-lines";
 
@@ -310,6 +312,8 @@ function runReferenceJournalCase(row: ConformanceSuite["journalRoundtripCases"][
     requiresAdmissionToken: false,
     tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
   };
+  const configPath = resolve(row.catalogPath, "../config.toml");
+  const catalogBinding = codexCatalogBindingForPath(configPath, row.catalogPath);
   let replacedUserWebSearch: string | null = null;
   let wroteWebSearch: string | null = null;
   let wroteFastMode: boolean | null = null;
@@ -328,7 +332,7 @@ function runReferenceJournalCase(row: ConformanceSuite["journalRoundtripCases"][
     lf = ws.content;
     replacedUserWebSearch = ws.replacedUserLine;
     wroteWebSearch = ws.wroteValue;
-    lf = setRootModelCatalogPath(lf, row.catalogPath);
+    lf = updateRootModelCatalogPath(lf, catalogBinding, { configPath }).content;
     lf = setRootOpenaiBaseUrlForTarget(lf, target).content;
     lf = setRootRealtimeWsBaseUrl(lf, target).content;
     if (settings.fastMode !== null) {
@@ -450,7 +454,7 @@ function runReferenceJournalCase(row: ConformanceSuite["journalRoundtripCases"][
   let surgical = applyEol(currentToml, "\n");
   surgical = surgical.replace(/^# Auto-injected by opencodex(?: \(undo: ocx restore\))?\n(?=\s*openai_base_url\s*=)/gm, "");
   surgical = stripJournaledOpenaiBaseUrl(surgical, target.baseUrl, target.baseUrl);
-  surgical = stripOpencodexCatalogPath(surgical);
+  surgical = stripOpencodexCatalogPath(surgical, { configPath });
   surgical = ensureRootWebSearchDisabled(surgical, false, {
     injectedValue: wroteWebSearch,
     replacedUserLine: replacedUserWebSearch ? replacedUserWebSearch.replace(/(?:\r?\n)+$/, "") : null,
@@ -635,20 +639,24 @@ describe("ocx-child shared golden conformance vectors (INV-LINK-CHILD-01)", () =
 
   const cargo = rustToolchainEnv("cargo");
   const cargoAvailable = cargo.bin !== null;
+  // The build and the run get separate bounds. This is the only test that builds and runs ocx-child on Windows, and the
+  // hosted runner builds it cold every time (crates.io index, 23 crates, then the crate): the whole run took 29 s and
+  // 41 s in earlier dev batches and was cut at 90 s, still compiling, in 43483630535. One shared 90 s bound reported
+  // that cold build as a failed conformance run. The file runs alone (SERIAL_FULL_SUITE_FILES), inside the shard's
+  // process deadline (300 s Linux, 480 s Windows), and the run itself keeps its 90 s bound.
+  const CONFORMANCE_BUILD_MS = OCX_CHILD_CONFORMANCE_BUILD_MS;
+  const CONFORMANCE_RUN_MS = OCX_CHILD_CONFORMANCE_RUN_MS;
 
   test.skipIf(!cargoAvailable)("Rust conformance runner passes against the identical shared fixture", () => {
-    const run = Bun.spawnSync(
-      [cargo.bin!, "test", "--locked", "--manifest-path", repoPath("native", "ocx-child", "Cargo.toml"), "--test", "conformance"],
-      {
-        env: cargo.env,
-        stdout: "pipe",
-        stderr: "pipe",
-        timeout: 90_000,
-      },
-    );
-    if (run.signalCode) {
-      throw new Error(`cargo test conformance terminated by signal ${run.signalCode} (90s timeout check):\n${run.stderr.toString()}`);
-    }
-    expect(run.exitCode, `${run.stderr.toString()}\ntoolchain: ${cargo.describe()}`).toBe(0);
-  }, 90_000);
+    const args = [cargo.bin!, "test", "--locked", "--manifest-path", repoPath("native", "ocx-child", "Cargo.toml"), "--test", "conformance"];
+    const step = (label: string, argv: string[], timeout: number) => {
+      const run = Bun.spawnSync(argv, { env: cargo.env, stdout: "pipe", stderr: "pipe", timeout });
+      if (run.signalCode) {
+        throw new Error(`cargo test conformance ${label} terminated by signal ${run.signalCode} (${timeout / 1000}s bound):\n${run.stderr.toString()}\nstdout:\n${run.stdout.toString()}`);
+      }
+      expect(run.exitCode, `${label}: ${run.stderr.toString()}\ntoolchain: ${cargo.describe()}`).toBe(0);
+    };
+    step("build", [...args, "--no-run"], CONFORMANCE_BUILD_MS);
+    step("run", args, CONFORMANCE_RUN_MS);
+  }, CONFORMANCE_BUILD_MS + CONFORMANCE_RUN_MS);
 });

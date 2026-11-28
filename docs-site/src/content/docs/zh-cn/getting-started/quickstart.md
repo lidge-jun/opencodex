@@ -18,7 +18,7 @@ ocx init
 
 `ocx init` 会引导你完成：
 
-1. **选择 provider** — 从内置 registry 的 107 个预设中选择一个，或选择 `custom` 手动输入 base URL 和 adapter。
+1. **选择 provider** — 从内置 registry 的 114 个预设中选择一个，或选择 `custom` 手动输入 base URL 和 adapter。
 2. **API key** — 粘贴一个 key，或引用一个环境变量，例如 `${ANTHROPIC_API_KEY}`。
 
    **TRAE CN** 使用已登录的官方 CLI，无需 API 密钥。请先安装 CLI 并登录；向导若提示输入密钥，可直接留空。详见 [TRAE CN 配置说明（英文）](/guides/providers/#trae-cn-official-acp)。
@@ -36,10 +36,19 @@ ocx init
 
 ## 2. 启动代理
 
+运行以下两种方式之一；代理会保持在前台运行：
+
 ```bash
 ocx start            # defaults to port 10100
+```
+
+也可以改用其他端口：
+
+```bash
 ocx start --port 8080
 ```
+
+保持此终端打开。后续状态检查和仪表板命令需在另一个设置相同 `OPENCODEX_HOME` 的终端中运行。
 
 启动时，opencodex 会：
 
@@ -47,7 +56,7 @@ ocx start --port 8080
 - 在 provider 支持时发现实时模型，并**把原生与已路由条目同步进 Codex 的模型目录**；
 - 监听 `http://localhost:<port>/v1`。
 
-如果请求的端口已被占用，`ocx start` 会停止并告知你是什么占用了该端口：如果那里响应的是 opencodex，请先运行 `ocx stop`；也可以使用 `ocx start --port <port>` 在空闲端口上启动。它不会自行切换到其他端口；旧行为会让两个代理同时运行，并将 Codex 重新指向后启动的代理。
+使用同一 `OPENCODEX_HOME` 的 opencodex 正在运行时，即使端口空闲，也无法再次启动。请先用 `ocx stop` 停止所属实例，或选择另一个 `OPENCODEX_HOME`。兄弟实例在自己的端口处理直接请求，不会改变 Codex、Grok 或 Claude 的共享路由。若无关进程占用端口，`ocx start` 会说明情况；请用 `ocx start --port <port>` 选择空闲端口。它不会自动切换端口。
 
 检查它：
 

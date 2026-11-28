@@ -477,6 +477,12 @@ ocx models new-arrivals --json
 
 The provider read may report `inherit`; omission of `--provider` selects global
 policy. Recent arrivals show recorded discovery state, not a fresh upstream probe.
+For a missing model, start with `ocx models list --provider <provider> --json`
+for the local view and `ocx models new-arrivals --json` for recorded discoveries.
+If you need to compare the live selection and available catalogue, use
+`ocx models selected <provider> --json`. This may fetch upstream and reconcile
+discovery state; it is not a passive snapshot. An available model is not proof
+that the intended client has synced it or that a completion will succeed.
 
 ## 12. Inspect and dry-run an existing routing profile
 
@@ -705,8 +711,12 @@ ocx account pool anthropic --json
 The target's `supported` list decides which fields can be written. Preserve null,
 `enabledEffective`, and optional `inert`: null is not false, stored policy is not
 proof of an available account, and threshold zero is not the pool enable switch.
-OpenAI has no pool `--enabled` or `--quota-window` writer. `reset-first` strategy
-is for OpenAI and generic OAuth pools, never Anthropic; `least-loaded` is Kiro-only. Anthropic pool windows are
+For the OpenAI roster and observed selection, read `ocx account list openai --json`
+separately; the pool policy read does not report which account a bound conversation
+will use. Do not add `--quota --refresh` merely to verify a policy setting.
+OpenAI has no pool `--enabled` or `--quota-window` writer. `reset-first` is for OpenAI
+and generic OAuth pools. `reset-near-weighted` is for Codex and Anthropic pools and
+weights new assignments toward the nearest qualifying weekly reset. `least-loaded` is Kiro-only. Anthropic pool windows are
 `five-hour`, `weekly`, `max-utilization`. For a requested supported policy edit:
 
 ```bash
@@ -822,7 +832,8 @@ ocx agent sidecar status --json
 ```
 
 System boolean options are `--show-codex-credits`, `--account-picker`,
-`--main-account-hard-lock`, `--ultra-fast-tier`, `--fast-rows`, each on/off.
+`--main-account-hard-lock`, `--ultra-fast-tier`, `--fast-rows`, `--reserve`, each on/off.
+`--reserve` is Luna Reserve compatibility, independent of `--desktop-authless`.
 Credit display does not authorize paid use, and system Ultra Fast is separate
 from provider Fast. New-option writes report only observed task fields;
 Ultra Fast requires the command's same-target GET read-back. Pending catalog,
@@ -1075,8 +1086,10 @@ ocx link revoke --link-id lnk_0123456789abcdef --force --yes --json
 The link ID is fictional; use the selected actual ID. A successful forced revoke
 reports `remoteCleanup:"skipped"`, derived from force intent. Idempotent not-found
 reports `remoteCleanup:"unverified"`; neither proves a remote disconnect attempt.
-Both can exit 0. Follow the receipt's `ocx disconnect` recovery on the remote
-client when authorized. `--force` requires `--yes`; `--yes` alone is invalid.
+Both can exit 0. Follow the receipt's recovery when authorized: for a full Child,
+`ocx disconnect --expect-link <id>` there (an OpenCodex older than that flag refuses it;
+then `ocx disconnect` only if `ocx connect status --json` shows this link's id or no
+connection); for a lightweight Child, `ocx link recover --link-id <id>` on the Home. `--force` requires `--yes`; `--yes` alone is invalid.
 Ordinary revoke remains unchanged.
 
 ## 25. Follow observed windows without claiming lossless history

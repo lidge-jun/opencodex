@@ -71,7 +71,7 @@ const POLICY =
 const STRUCTURE_DOC = "structure/providers/chat-compat.md";
 const ENGLISH_REFERENCE = "docs-site/src/content/docs/reference/configuration/providers.md";
 const ENGLISH_GUIDE = "docs-site/src/content/docs/guides/claude-code.md";
-const LOCALES = ["fr", "ja", "ko", "ru", "tr", "zh-cn", "zh-tw"] as const;
+const LOCALES = ["es", "fr", "ja", "ko", "ru", "tr", "zh-cn", "zh-tw"] as const;
 
 const referencePage = (locale: string): string =>
   "docs-site/src/content/docs/" + locale + "/reference/configuration/providers.md";
@@ -146,6 +146,16 @@ describe("translated pages do not contradict the English source", () => {
       expect(await referenceRow(path)).toMatch(/singleLeadingSystemMessage|single-leading-system compatibility/);
     });
   }
+
+  test("the English save paragraph and table state the carried-setting count the list has", async () => {
+    // Translations restate the same number, so a drifted English count is the one to catch first.
+    const words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
+      "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"];
+    const word = words[PROVIDER_COMPAT_CARRY_FIELDS.length]!;
+    const doc = await read(ENGLISH_REFERENCE);
+    expect(doc).toContain(word[0]!.toUpperCase() + word.slice(1) + " of them record how one upstream behaves");
+    expect(doc).toContain("| Save | The " + word + " settings |");
+  });
 
   test("the English pages carry roles worth comparing", async () => {
     expect(roleSpans(await referenceRow(ENGLISH_REFERENCE)).length).toBeGreaterThan(0);

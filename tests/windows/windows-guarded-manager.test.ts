@@ -104,6 +104,29 @@ describe("windows process-chain helpers", () => {
     expect(wrapperProcessesAlive(SUPERVISED, [VBS, CMD]).sort()).toEqual([20, 30]);
     expect(wrapperProcessesAlive([proc(9, 2, "calc.exe")], [VBS, CMD])).toEqual([]);
   });
+
+  test("foreign owners do not become guarded wrapper candidates and unknown owners still do", () => {
+    const foreign = { ...proc(60, 2, `cmd.exe /d /k rem "${CMD}"`, "cmd.exe"), foreignOwner: true };
+    const snapshot = [foreign, proc(42, 60, "ocx start", "ocx.exe")];
+    expect(wrapperProcessesAlive(snapshot, [VBS, CMD])).toEqual([]);
+    expect(ancestorWrapperPids(42, snapshot, [VBS, CMD])).toEqual([]);
+    const hidden = [{ ...foreign, commandLine: null }, snapshot[1]!];
+    expect(unreadableAncestorWrapperPids(42, hidden)).toEqual([]);
+    expect(unreadableWrappersOfManager(60, hidden)).toEqual([]);
+    for (const foreignOwner of [false, null, undefined]) {
+      expect(wrapperProcessesAlive([{ ...foreign, foreignOwner }], [VBS, CMD])).toEqual([60]);
+    }
+    // The guarded path has always matched every image, so owner filtering must cover its
+    // path matches too without narrowing that existing conservative rule.
+    expect(wrapperProcessesAlive([{ ...foreign, name: "powershell.exe" }], [VBS, CMD])).toEqual([]);
+    expect(wrapperProcessesAlive([{ ...foreign, name: "powershell.exe", foreignOwner: null }], [VBS, CMD])).toEqual([60]);
+    expect(inspectGuardedManagerTarget(42, 10100, schedulerDeps({ scheduler: schedulerAbsent, win: { winProcs: () => snapshot } })))
+      .toMatchObject({ kind: "absent" });
+    expect(observeWindowsGuardedManagerStopped({
+      scheduler: schedulerAbsent, winsw: winswAbsent, winProcs: () => snapshot,
+      winScriptPath: () => CMD, winLauncherPath: () => VBS,
+    }, false)).toBe("inactive");
+  });
 });
 
 describe("windows guarded manager target", () => {
@@ -240,6 +263,24 @@ describe("windows guarded manager target", () => {
       win: { winTaskState: () => "not-running" as const },
     }));
     expect(target.kind).toBe("unknown");
+  });
+
+  test("a not-running task only promotes its survivors to bound-stray when the registration is provably ours", () => {
+    // #7771: the not-running state alone does not make the registration this
+    // installation's. The definition has to be read and recognised before its
+    // surviving wrappers may be bound — otherwise any foreign task of the same
+    // name would turn this home's stray wrappers into terminable ones.
+    const inertTask = { winTaskState: () => "not-running" as const, winProcs: () => SUPERVISED };
+    expect(inspectGuardedManagerTarget(42, 10100, schedulerDeps({
+      win: { ...inertTask, winRegistrationOurs: () => false },
+    }))).toMatchObject({ kind: "unknown" });
+    expect(inspectGuardedManagerTarget(42, 10100, schedulerDeps({
+      win: { ...inertTask, winTaskXml: () => { throw new Error("denied"); } },
+    }))).toMatchObject({ kind: "unknown", stopReason: "evidence-unreadable" });
+    // Provably ours: the binding rule decides as before. These fixtures carry no creation
+    // times, so it stops at the unreadable-evidence refusal rather than the definition one.
+    expect(inspectGuardedManagerTarget(42, 10100, schedulerDeps({ win: inertTask })))
+      .toMatchObject({ kind: "unknown", stopReason: "evidence-unreadable" });
   });
 
   test("two registered managers stay unknown", () => {

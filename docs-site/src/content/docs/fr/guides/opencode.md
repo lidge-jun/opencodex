@@ -26,6 +26,8 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ```
 
+Les lignes natives OpenAI `gpt-*` nues n'apparaissent que tant que le fournisseur canonique `openai` est activé et que le mode Codex Direct est désactivé ; les lignes `<namespace>/gpt-*` qualifiées par compte et utilisables restent dans l'export lorsque le mode Codex Direct est actif. Le mode Direct transmet la propre clé OpenAI de chaque appelant alors qu'opencode envoie la clé du proxy, et un fournisseur `openai` désactivé fait que le proxy refuse tous les sélecteurs `gpt-*` nus ; dans ces deux états, le lanceur, l'intégration gérée et `ocx export` omettent les lignes `gpt-*` nues plutôt que de proposer un modèle qui ne peut pas s'exécuter.
+
 ## Votre propre configuration n'est jamais modifiée
 
 Le lanceur ne copie ni ne réécrit `~/.config/opencode/opencode.json`,
@@ -77,8 +79,8 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 Contrairement au bloc d'exécution du lanceur, un bloc fusionné est un instantané statique : il ne suit pas votre
 catalogue. Réexécutez `ocx export` après avoir ajouté un fournisseur ou modifié la visibilité du modèle.
 
-Une fois fusionné, exportez la clé d'admission avant de lancer l'opencode — sauf si le proxy est en bouclage,
-là où aucun n'est nécessaire :
+Une fois fusionné, exportez la clé d'admission avant de lancer opencode. Une liaison limitée au bouclage ne la
+vérifie pas, mais OpenCode refuse une clé non définie ; toute valeur non vide convient alors :
 
 ```bash
 export OPENCODEX_OPENCODE_API_KEY=<your key>
@@ -102,9 +104,11 @@ Exemple de bouclage :
 
 Exemple sans bouclage :
 
+Cet exemple se configure manuellement sur le client distant. Configurez d’abord un frontal TLS, puis utilisez son URL HTTPS ; OpenCodex ne termine pas TLS et ne découvre pas cette URL pour `ocx opencode`. Le HTTP en clair sur le réseau local expose l’identifiant pendant le transport. Vous pouvez aussi garder le proxy sur l’interface de bouclage et utiliser un tunnel SSH local. Voir [TLS pour le listener de données](/fr/guides/remote-hub/#giving-the-data-listener-tls).
+
 ```json
 "options": {
-  "baseURL": "http://192.168.1.10:10100/v1",
+  "baseURL": "https://proxy.example.com/v1",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }
@@ -115,8 +119,15 @@ La valeur réelle est transmise uniquement via l'environnement du processus enfa
 `OPENCODEX_API_AUTH_TOKEN` est prioritaire, puis le fichier de jeton de service renforcé, puis
 une clé API configurée — ce qui est ce qu'exige une liaison sans bouclage.
 
-Une liaison de bouclage (`127.0.0.1`, la valeur par défaut) n'authentifie rien, donc la référence `{env:…}` est
-inerte et vous pouvez laisser la variable non définie. Cela n'a d'importance que lorsque `hostname` est défini au-delà du bouclage ;
+Une liaison de bouclage (`127.0.0.1`, la valeur par défaut) n'exige pas de clé du plan de données. OpenCode exige
+toutefois un `apiKey` non vide : il refuse une référence `{env:…}` non définie avec `Missing auth credential: apiKey`
+avant d'envoyer la requête. Lorsque l'intégration gérée ou la configuration client du tableau de bord cible l'écouteur
+de bouclage sans authentification, elle écrit l'espace réservé non secret `opencodex-loopback` comme `apiKey` ; il n'y a
+rien à exporter. Les autres chemins, dont `ocx export`, conservent la référence : exportez `OPENCODEX_OPENCODE_API_KEY`
+avec la clé d'admission là où elle est exigée, ou avec n'importe quelle valeur non vide sur une liaison de bouclage, qui ne la vérifie pas. Une URL de
+bouclage ne suffit pas à établir qu'aucune clé n'est vérifiée : un écouteur public lié à `0.0.0.0` exige toujours une
+clé acceptée lorsqu'on l'atteint via `127.0.0.1`, tout comme un écouteur authentifié atteint par une redirection SSH. Exportez la clé dès que la destination la vérifie, par exemple lorsque `hostname` est défini au-delà du bouclage
+et que le client ne cible pas l'écouteur de bouclage sans authentification ;
 voir [Accès à distance](/fr/reference/configuration/server/#accès-à-distance). Cette clé d'admission est celle de opencodex
 propre et n'est pas lié aux clés du fournisseur en amont configurées sous
 [Prestataires](/fr/guides/providers/).

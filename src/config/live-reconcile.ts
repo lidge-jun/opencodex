@@ -2,7 +2,8 @@ import { observeAccountAutoPauseRevisions, snapshotAutoPauseFingerprints } from 
 import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../types";
 import { configReasoningPinsConfigError } from "./provider-validation";
 import { carryPersistedTelemetry } from "./telemetry-carry";
-import { adoptCustomModelCatalogMigration, projectCustomModelCatalogMigration } from "../codex/custom-model-catalog-migration";
+import { adoptPersistedConfigMigrations, projectPersistedConfigMigrations } from "./persisted-projections";
+import { RESERVE_CAPABILITY_KEYS } from "./reserve-capability";
 import { refreshPreservedProviderOwner } from "../usage/user-cost-overlays";
 import { refreshConfigDerivedRegistries } from "./derived-registries";
 import {
@@ -127,6 +128,25 @@ export function adoptPersistedAdvisor(config: OcxConfig, persisted: OcxConfig["a
   if (baseline) baseline.advisor = structuredClone(persisted);
   clearConfigTopLevelDeletionIntent(config, ["advisor"]);
   if (baseline) clearConfigTopLevelDeletionIntent(baseline, ["advisor"]);
+}
+
+/**
+ * Adopt stored combos into the live config and its rebase baseline together. Changing only the
+ * live rows would make a later save treat them as pending live edits and overwrite a newer disk edit.
+ */
+export function adoptPersistedCombos(
+  config: OcxConfig,
+  persisted: Readonly<Record<string, NonNullable<OcxConfig["combos"]>[string]>>,
+  ids: Iterable<string>,
+): void {
+  const baseline = liveConfigBaseline.get(config);
+  for (const id of ids) {
+    const stored = Object.hasOwn(persisted, id) ? persisted[id] : undefined;
+    for (const target of baseline ? [config, baseline] : [config]) {
+      if (stored !== undefined) (target.combos ??= {})[id] = structuredClone(stored);
+      else if (target.combos) delete target.combos[id];
+    }
+  }
 }
 
 /** Adopt the committed telemetry consent subtree without advancing unrelated pending live intent. */
@@ -598,6 +618,8 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
             ...(provenanceExists
               ? Object.keys(persistedDiagnostics.config as unknown as Record<string, unknown>)
               : []),
+            // An absent Reserve value reads as off, so a disk-only value is never left behind.
+            ...RESERVE_CAPABILITY_KEYS,
           ]);
           for (const key of Object.keys(persistedDiagnostics.config as unknown as Record<string, unknown>)) {
             if (!rebaseableKeys.has(key)) skipped.add(key);
@@ -640,7 +662,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
     if (diskDeletedKeys.size) durableProjection.configRebaseProvenance = { version: 1,
       deletedTopLevelKeys: [...new Set([...configRebaseDeletionKeys(durableProjection), ...diskDeletedKeys])].sort() };
     const provenanceProjection = projectConfigRebaseProvenance(durableProjection);
-    const projectedConfig = projectCustomModelCatalogMigration(
+    const projectedConfig = projectPersistedConfigMigrations(
       onDisk,
       durableProjection,
     );
@@ -661,7 +683,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
     } else {
       persist(projectedConfig);
     }
-    adoptCustomModelCatalogMigration(config, projectedConfig);
+    adoptPersistedConfigMigrations(config, projectedConfig);
     captureLiveTopologyBaseline(config);
     if (claudeCodeBaseline.has(config)) {
       claudeCodeBaseline.set(config, structuredClone(config.claudeCode));

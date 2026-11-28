@@ -26,6 +26,8 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ```
 
+접두사가 없는 네이티브 OpenAI `gpt-*` 행은 정규 `openai` provider가 활성화되어 있고 Codex Direct 모드가 아닐 때만 나타납니다. Codex Direct 모드가 켜져 있어도 사용 가능한 계정 한정 `<namespace>/gpt-*` 행은 내보내기에 유지됩니다. Direct 모드에서는 각 호출자의 OpenAI 자격 증명을 전달하지만 opencode는 프록시의 키를 보냅니다. 또한 `openai` provider가 비활성화되면 프록시는 접두사가 없는 모든 `gpt-*` 선택자를 거부합니다. 두 상태 모두에서 런처, 관리형 통합 및 `ocx export`는 실행할 수 없는 모델을 제공하는 대신 접두사가 없는 `gpt-*` 행을 생략합니다.
+
 ## 사용자 구성은 절대 수정되지 않습니다
 
 런처는 `~/.config/opencode/opencode.json`, 프로젝트의 `opencode.json` /
@@ -82,8 +84,8 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 않습니다. provider를 추가하거나 모델 노출을 바꾼 뒤에는 `ocx export`를 다시
 실행하세요.
 
-병합한 뒤에는 opencode를 실행하기 전에 인증 키를 export하세요. 단, 프록시가
-loopback에 바인딩되어 있으면 필요하지 않습니다:
+병합한 뒤에는 opencode를 실행하기 전에 인증 키를 export하세요. loopback에만 바인딩된
+리스너는 키를 검사하지 않지만 OpenCode가 설정되지 않은 키를 거부하므로, 그때는 비어 있지 않은 아무 값이면 됩니다:
 
 ```bash
 export OPENCODEX_OPENCODE_API_KEY=<your key>
@@ -107,9 +109,11 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 루프백이 아닌 예시:
 
+원격 클라이언트에서 수동으로 설정하는 예시입니다. 먼저 TLS 프런트엔드를 구성하고 해당 HTTPS URL을 사용하세요. OpenCodex는 TLS를 종료하지 않으며 `ocx opencode`가 이 URL을 자동으로 찾지도 않습니다. LAN에서도 평문 HTTP는 전송 중 자격 증명을 노출합니다. 대신 프록시를 루프백에 바인딩하고 로컬 SSH 터널을 사용할 수 있습니다. [데이터 리스너 TLS](/ko/guides/remote-hub/#giving-the-data-listener-tls)를 참고하세요.
+
 ```json
 "options": {
-  "baseURL": "http://192.168.1.10:10100/v1",
+  "baseURL": "https://proxy.example.com/v1",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }
@@ -121,9 +125,16 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 그다음에 구성된 API 키가 옵니다. 루프백이 아닌 바인드에는 바로 이 API 키가
 필요합니다.
 
-루프백 바인드(`127.0.0.1`, 기본값)는 아무 인증도 하지 않으므로 `{env:…}` 참조는
-아무 효과가 없고, 변수를 비워 둬도 됩니다. 이것이 중요해지는 것은 `hostname`이
-루프백을 벗어날 때뿐입니다. [원격 접속](/ko/reference/configuration/server/#remote-access)을
+루프백 바인드(`127.0.0.1`, 기본값)는 데이터 플레인 키를 요구하지 않습니다. 하지만
+OpenCode는 비어 있지 않은 `apiKey`가 필요해, 설정되지 않은 `{env:…}` 참조를 요청 전에
+`Missing auth credential: apiKey`로 거부합니다. 관리형 통합이나 대시보드 클라이언트 설정이 인증 없는
+loopback 리스너를 대상으로 하면 비밀이 아닌 자리표시자 `opencodex-loopback`을 `apiKey`로 기록하므로
+따로 export할 필요가 없습니다. `ocx export` 등 다른 경로는 참조를 유지하므로, 키가 필요한 곳에서는
+인증 키를, 키를 검사하지 않는 loopback 바인드에서는 비어 있지 않은 아무 값을 `OPENCODEX_OPENCODE_API_KEY`로
+export하세요. loopback URL만으로는 키를 검사하지 않는다고 단정할 수 없습니다. `0.0.0.0`에 바인드된 공개 리스너는
+`127.0.0.1`로 접근해도 허용된 키를 요구하며, SSH 포워드로 접근하는 인증 리스너도 마찬가지입니다.
+대상이 키를 검사하면 인증 키를 export하세요. 예를 들어 `hostname`이 루프백을 벗어나고 클라이언트가 인증 없는
+loopback 리스너를 대상으로 하지 않는 경우입니다. [원격 접속](/ko/reference/configuration/server/#remote-access)을
 보세요. 이 인증 키는 opencodex 전용이며, [공급자](/guides/providers/) 아래에
 설정한 upstream provider 키와는 무관합니다.
 

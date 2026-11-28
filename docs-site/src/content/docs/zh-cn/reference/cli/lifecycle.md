@@ -30,6 +30,8 @@ ocx start --socks5-off
 
 无人监督的 Link Child 处理退出信号时，会在每次写入前核对连接，并在关闭监听器前恢复 Codex 原生配置及受管理的 Grok。服务/Desktop、sibling、重启交接和父进程 stop 收据会保留配置。退出中的重启请求返回 `409 runtime_stopping`。强制终止可能跳过信号处理，仍需父进程 `ocx stop` 的恢复路径。
 
+在 Windows x64 上，如果 WMI 未返回匹配的服务包装进程的所有者，OpenCodex 可以通过运行中进程的句柄核实 Windows 帐户和进程创建时间。无法确认所有者时，该进程将继续运行。如果错误明确指出任务计划程序的注册问题，请用 `ocx service status` 查看注册状态。
+
 停止正在运行的代理（按 PID），移除 PID 文件；独立运行的所有者还会恢复原生 Codex。如果安装了受管后台服务，`ocx stop` 还会先停止该服务，这样它就无法重新拉起代理。Web 仪表盘侧栏的代理拉杆拉到底时，在多数后端执行同样的操作（`POST /api/stop`），但 Windows 任务计划程序除外：任务结束后包装器仍可能重新拉起代理，只有运行在代理之外的 stop 才能在恢复客户端配置前确认这个重启窗口，因此仪表盘会以 `respawnable_service` 拒绝、不做任何更改，并提示改用 `ocx stop`。
 
 对于已连接的 hub 客户端，`ocx stop`（包括成功的 API 停止）会保留连接所拥有的 Codex 路由、模型目录和 Grok 配置。`ocx start` 使用这些保留的配置恢复服务，不会重新注入路由。要让 Codex 回到自己的账户，请运行 `ocx disconnect`；若已恢复为原生路由，要重新应用连接路由，请运行 `ocx sync --restart-codex`。
@@ -158,6 +160,16 @@ ocx status --json
 输出 `{ready, status, pid, port}`，其中 `status` 为 `ready`、`pending`、`failed` 或
 `unreachable`。退出码：就绪为 0；未就绪、pending、failed、超时或无法连接为 1；参数无效为 64。
 
+如果代理启动时提示找不到 Codex 主目录，请先启动一次 Codex，或将 `CODEX_HOME` 指向 Codex 已初始化的目录，然后运行 `ocx sync`。同步成功后路由会恢复，但 `failed` 仍表示当前进程启动时的结果。请重启代理，再运行 `ocx ready` 检查新进程是否就绪。
+
+对于由 CLI 管理的服务，请使用注册时的 `CODEX_HOME` 和 `OPENCODEX_HOME`。如果旧版服务定义中缺少这些路径，请使用相同设置运行一次 `ocx service repair`。按需初始化 Codex 主目录，运行 `ocx sync`，再重启服务。如果代理由桌面应用管理，请在应用中重启。
+
+如需将 CLI 服务迁移到另一个已有的 Codex 主目录，请先使用原设置运行 `ocx service uninstall`。如果服务已卸载，但恢复原生 Codex 配置失败，请解决提示的错误，再用相同设置运行 `ocx restore`。
+
+在 Windows 上，如果恢复失败后留下了待清理记录，请在切换主目录前，从原先管理服务的安装实例使用原主目录设置运行 `ocx stop`。记录仍存在时，`ocx update` 会拒绝替换软件包。
+
+卸载和恢复都成功后，保留 `OPENCODEX_HOME`，选择新的 `CODEX_HOME`，再使用原后端和选项运行 `ocx service install`。使用新设置运行 `ocx sync`，并用 `ocx ready` 检查状态。如果启动失败，请按上文步骤恢复。
+
 ### `ocx doctor`
 
 运行只读的环境与连通性诊断：状态路径和文件系统类型、WSL 双重安装、代理环境/配置、ChatGPT 可达性、Codex 插件和项目配置警告，以及待处理的历史迁移。Codex app-home 定位部分也会检测狭义的 Windows Orca 运行时 home 不匹配，并在适用时解释服务迁移。此诊断展示的路径会对操作系统用户名进行脱敏。Doctor 会输出修复提示，但不会自动应用。
@@ -218,7 +230,7 @@ macOS 代理使用 `ProcessType=Interactive`，以避免默认 daemon 类别的 
 
 若定义的加载尚未确认，即使令牌发生变化，该状态也会保留到下次修复。仅在最初的 launchd 状态探测可用时才重试注册；可能需要图形登录会话。成功创建的原始备份会保留到 bootstrap 被接受且探测确认任务匹配。备份创建是尽力而为的；新安装没有先前的定义。
 
-若最初的 launchd 状态探测不可用，repair 会在写入新 plist 或备份之前拒绝操作。若更改后定义的 bootstrap 被拒绝且状态可检查，repair 会尝试恢复先前定义。若 bootstrap 后状态变得不可检查，则不会再次移除任务或回滚：bootstrap 被接受时会警告重载尚未验证，被拒绝时则失败。重试前请运行 `launchctl print gui/$(id -u)/com.opencodex.proxy` 检查任务。新安装会移除孤立的恢复文件，完整卸载也会在 plist 不存在时移除它们。新安装的恢复文件清理、待确认标记删除及卸载清理仅忽略文件已不存在的情况。这些步骤的其他错误会报告失败，且不会删除安装状态。经过验证的修复写入安装状态后，`.prev` 备份的删除是尽力而为的；该删除失败不会改变修复成功的结果。
+若最初的 launchd 状态探测不可用，repair 会在写入新 plist 或备份之前拒绝操作。若更改后定义的 bootstrap 被拒绝且状态可检查，repair 会尝试恢复先前定义。若 bootstrap 后的立即探测无法检查状态，则不会再次移除任务或回滚：bootstrap 被接受时会警告重载尚未验证，被拒绝时则失败。对于未更改的定义，如果恢复 kickstart 成功但随后无法探测状态，仍可能再次移除任务。重试前请运行 `launchctl print gui/$(id -u)/com.opencodex.proxy` 检查任务。新安装会移除孤立的恢复文件，完整卸载也会在 plist 不存在时移除它们。新安装的恢复文件清理、待确认标记删除及卸载清理仅忽略文件已不存在的情况。这些步骤的其他错误会报告失败，且不会删除安装状态。经过验证的修复写入安装状态后，`.prev` 备份的删除是尽力而为的；该删除失败不会改变修复成功的结果。
 
 在此变更之前安装的定义仍带有旧的带版本路径，无法自行迁移——一旦旧可执行文件被删除，就没有 opencodex 代码运行来修复它。升级后请运行一次 `ocx service repair`。之后 Linux 服务启动会跟随启动器；macOS 的 repair 会把新的包路径写入 launchd 定义。外部升级不会替换已在运行的代理：当已安装的 CLI 比运行中的代理更新时，运行 `ocx service restart` 让新构建提供服务。在 macOS 上，此处的 `repair` 并不够：定义没有变化，而不改变任何内容的 repair 不会重新加载任何内容。反之若代理更新，请按 [`ocx status`](#ocx-status---json) 中的说明检查 CLI 安装与 `PATH`。
 
@@ -331,6 +343,8 @@ Unix 包管理器升级保留私有 wrapper；未激活时，请加载输出的�
 在 Linux 上，如果后台服务记录的启动器是 mise 的包启动器（`<tool>/latest/node_modules/.bin/ocx`，而不是 mise shim），服务会自动跟随 `mise upgrade`：新版本稳定后约十秒内，它会排空进行中的请求并在新版本上重启；如果 mise 之后清理了它正在运行的版本，也会以同样方式恢复。在 macOS 上、通过 mise shim 安装的服务以及前台代理，请在升级后自行重启（macOS 上先运行 `ocx service repair`）。
 
 从 npm 自更新 opencodex。稳定版安装使用 `@latest`；预览版安装保持在 `@preview`，除非你传入 `--tag latest|preview`。它会检测源码检出，并提示你改为运行 `git pull && bun install`；如果你已经是该标签的最新版本，则不会执行任何操作。对于 npm 安装，它会在停止任何进程之前，对 Unix 缓存的所有权和访问权限执行有界检查。嵌套符号链接会通过 `lstat` 检查但不会跟随；Windows 会明确跳过这项仅适用于 Unix 的检查。检查失败时，更新会在托盘和代理仍运行的情况下中止。随后才会在替换文件之前停止正在运行的代理；已安装的服务会自动重建并启动，而前台安装则会打印 `ocx start` 作为下一步。持久化前，仪表板更新记录会隐去用户配置文件/缓存路径以及 UID/GID 值。
+
+预览版的命名为 `X.Y.Z-preview.<date>` 或 `X.Y.Z-preview.<date>.<attempt>`，例如 `2.100.6-preview.20261119.1`；次数是该日期的发布序号。在 preview 通道中，预览版依次按基础版本、日期、次数比较，没有次数的版本视为次数 0。在任一通道中，只有当稳定版的基础版本高于预览版时，才会向预览版安装提供该稳定版；稳定通道从不提供预览版。这些规则适用于更新检查、通知和仪表盘的更新提示。`ocx update` 本身只要所选标签指向的版本与已安装版本不同就会安装它，因此在预览版安装上运行 `ocx update --tag latest` 会切换到当前稳定版，即使其基础版本并不更高。
 
 ```bash
 ocx update

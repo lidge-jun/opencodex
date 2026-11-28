@@ -27,6 +27,7 @@ import { PROXY_ENV_KEYS, proxyEnvPresent } from "../lib/proxy-env";
 import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
 import { readCodexTokens } from "../codex/auth-collision";
 import { withNativeMainSharedClaim } from "../codex/native-main-claim";
+import { inspectNativeCodexOwnership, type OwnershipInspection } from "../integrations/native/ownership-preflight";
 import { probeNativeProfileRecoveryState, resolveNativeProfileContext } from "../codex/native-profile-store";
 import { NativeProfileError } from "../codex/native-profile-types";
 import { collectOrcaCodexHomeDiagnostic, resolveCodexHomeDir as resolveCodexHomeDirImpl, isWslRuntime, listWslWindowsCodexHomes, wslAutomountRoot, type CodexHomeDeps } from "../codex/home";
@@ -36,6 +37,7 @@ import {
 } from "../codex/subagent-model-fallback";
 import { readCatalog, readCodexCatalogPath, readConfiguredDefaultModel } from "../codex/catalog/parsing";
 import { diagnoseCodexShim, findCodexOnPath, isWindowsInteropDir, type CodexShimDiagnostic } from "../codex/shim";
+import { findFirstCodexOnPath, type CodexPathCandidate } from "../codex/shim-path-resolution";
 import { overlayActivationHint } from "../codex/shim-overlay";
 import { providerTableString, rootTomlString } from "../codex/injected-marker";
 import { countPendingOpencodexHistory } from "../codex/history-provider";
@@ -137,7 +139,21 @@ export async function fetchNativeMainAdmission(
   return { status: "blocked", reason: row.admissionBlockReason };
 }
 
-export function formatNativeMainAdmissionLines(report: NativeMainAdmissionReport): string[] {
+/** Ownership fences whose cause a local, read-only re-inspection can name. */
+export function isOwnershipFence(report: NativeMainAdmissionReport): boolean {
+  return report.status === "blocked" && (report.reason === "ownership-unknown" || report.reason === "foreign-ownership");
+}
+
+/**
+ * The proxy reports only the fence category (its admission route stays free of paths), so
+ * repeat the same read-only inspection here to say which file or registration failed.
+ */
+export function localOwnershipRecheck(inspect = inspectNativeCodexOwnership): OwnershipInspection {
+  try { return inspect(); }
+  catch (error) { return { ownership: "unknown", reason: `inspection failed: ${error instanceof Error ? error.message : String(error)}` }; }
+}
+
+export function formatNativeMainAdmissionLines(report: NativeMainAdmissionReport, recheck?: OwnershipInspection): string[] {
   if (report.status === "blocked") {
     const homeGuidance = report.reason === "foreign-ownership"
       ? "Repair the service definition and restart the proxy so it uses the recorded CODEX_HOME."
@@ -151,6 +167,7 @@ export function formatNativeMainAdmissionLines(report: NativeMainAdmissionReport
     return [
       `  !!  native-main admission is fenced (reason: ${report.reason})`,
       `       Native model requests return 503 until this clears. ${homeGuidance}`,
+      ...(recheck ? [`       Local re-check (${recheck.ownership}): ${recheck.reason}`] : []),
     ];
   }
   if (report.status === "unavailable") {
@@ -568,6 +585,12 @@ export type CodexEnvKeyReadinessDiagnostic = {
   action: string;
 };
 
+export type CodexDesktopEnvKeyNotice = {
+  envName: string;
+  detail: string;
+  action: string;
+};
+
 /** Shell activation and legacy migration are independent of admission-token readiness. */
 export function formatCodexShimDoctorLines(shim: CodexShimDiagnostic, platform = process.platform): string[] {
   if (platform === "win32" || !shim.installed) return [];
@@ -583,11 +606,23 @@ export function collectCodexEnvKeyReadiness(
   shim: CodexShimDiagnostic,
   serviceTokenPresent: boolean,
   shimActivationShown = false,
+  firstPathCommand?: CodexPathCandidate | null,
 ): CodexEnvKeyReadinessDiagnostic | null {
   if (!configText || rootTomlString(configText, "model_provider") !== "opencodex") return null;
   const envName = providerTableString(configText, "opencodex", "env_key")?.trim();
   const envValue = envName ? ownEnvValue(env, envName) : undefined;
-  if (!envName || envValue?.trim() || shim.healthy || !serviceTokenPresent) return null;
+  if (!envName || envValue?.trim() || !serviceTokenPresent) return null;
+  const legacyPathShadowed = shim.healthy && shim.runnable === undefined
+    && firstPathCommand !== undefined && firstPathCommand !== null && !firstPathCommand.isShim;
+  if (shim.healthy && !legacyPathShadowed) return null;
+  if (legacyPathShadowed) {
+    return {
+      envName,
+      shimState: "inactive",
+      detail: `Codex uses env_key ${envName}, but that variable is unset and PATH resolves 'codex' to ${firstPathCommand.path} instead of the OpenCodex shim; the service token file exists but plain Codex does not load it`,
+      action: `Put the OpenCodex shim ahead of ${firstPathCommand.path} on PATH, run 'ocx codex-shim install' to migrate to the overlay shim, or export ${envName} in the process that starts Codex`,
+    };
+  }
   const shimState = shim.runnable && shim.active === false ? "inactive" : shim.installed ? "unhealthy" : "missing";
   return {
     envName,
@@ -598,6 +633,28 @@ export function collectCodexEnvKeyReadiness(
         ? `Activate the PATH shim as shown under Codex restart safety, or export ${envName} in the process that starts Codex`
         : `${overlayActivationHint()} Or export ${envName} in the process that starts Codex`
       : `Run 'ocx codex-shim install' to repair launch-time token injection, or export ${envName} in the process that starts Codex`,
+  };
+}
+
+/**
+ * Conditional notice for GUI/direct-binary launchers (such as Codex Desktop) whenever
+ * `config.toml` selects `model_provider = "opencodex"` with `env_key` (#9171). Doctor's own
+ * shell environment and CLI shim state cannot establish whether an independently launched GUI
+ * app inherits the variable.
+ */
+export function collectCodexDesktopEnvKeyNotice(
+  configText: string | null,
+  clientRole = false,
+): CodexDesktopEnvKeyNotice | null {
+  if (!configText || rootTomlString(configText, "model_provider") !== "opencodex") return null;
+  const envName = providerTableString(configText, "opencodex", "env_key")?.trim();
+  if (!envName) return null;
+  return {
+    envName,
+    detail: `Codex uses env_key ${envName}; independently launched GUI apps such as Codex Desktop bypass the CLI shim and do not inherit a shell-only ${envName}, so they fail with "Missing environment variable: ${envName}" unless that app's environment provides it`,
+    action: clientRole
+      ? `Supply ${envName} in the GUI launcher's environment (from service-api-token), or connect via Remote Link (local loopback relay with no env var; --desktop-authless is inert on a connected client)`
+      : `Supply ${envName} in the GUI launcher's environment (from service-api-token), or keep Codex on a loopback listener so no env_key is required`,
   };
 }
 
@@ -1463,12 +1520,20 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   const serviceTokenPresent = Boolean(readInstalledServiceToken()?.trim());
   const codexShim = diagnoseCodexShim();
   const codexShimLines = formatCodexShimDoctorLines(codexShim);
+  const legacyPathCommand = codexShim.healthy && codexShim.runnable === undefined
+    ? (() => { try { return findFirstCodexOnPath(); } catch { return null; } })()
+    : undefined;
   const codexEnvKeyReadiness = collectCodexEnvKeyReadiness(
     codexConfigText,
     process.env,
     codexShim,
     serviceTokenPresent,
     codexShimLines.length > 0,
+    legacyPathCommand,
+  );
+  const codexDesktopEnvKeyNotice = collectCodexDesktopEnvKeyNotice(
+    codexConfigText,
+    doctorConfig.runtimeRole === "client",
   );
   // Use the same attested live startup verdict as `ocx status` when the proxy is already
   // identity-verified. A shell-local systemd probe can be a false negative for a system-wide
@@ -1529,7 +1594,8 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   const admission = live
     ? await fetchNativeMainAdmission(live)
     : { status: "unavailable" as const, reason: "proxy-not-found" };
-  for (const line of formatNativeMainAdmissionLines(admission)) console.log(line);
+  const recheck = isOwnershipFence(admission) ? localOwnershipRecheck() : undefined;
+  for (const line of formatNativeMainAdmissionLines(admission, recheck)) console.log(line);
 
   // Mirrors `ocx status` through the same comparison rather than a second implementation:
   // two diagnostics disagreeing about whether an install is stale is worse than one (#2701).
@@ -1583,6 +1649,10 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     console.log(`         Action: ${codexEnvKeyReadiness.action}`);
   } else {
     console.log("  ok     no broken OpenCodex env_key launch path detected");
+  }
+  if (codexDesktopEnvKeyNotice) {
+    console.log(`  note   ${codexDesktopEnvKeyNotice.detail}`);
+    console.log(`         Action: ${codexDesktopEnvKeyNotice.action}`);
   }
 
   console.log("\nRunning proxy process proxy env (presence only)");

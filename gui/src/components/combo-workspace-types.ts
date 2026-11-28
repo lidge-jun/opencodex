@@ -1,7 +1,10 @@
 import type { ComboItem, ProviderQuotaStates } from "../combo-workspace-data";
+import type { ComboProviderBilling } from "../../../src/combos/suggestion-channel";
 
 export type ProviderOption = {
   name: string;
+  alias?: string;
+  comboBilling?: ComboProviderBilling;
   disabled?: boolean;
   hiddenFromPicker?: boolean;
   authMode?: string;
@@ -23,11 +26,16 @@ export type ModelOption = {
   visionSidecarConsumer?: boolean;
 };
 
-export type ComboAddIntent = "blank" | "jev-auto";
+export type QuotaComboPreset = "openai-first" | "claude-first";
+export type ComboAddIntent = "blank" | "jev-auto" | QuotaComboPreset;
+
+import type { ReactNode } from "react";
 
 export interface ComboWorkspaceProps {
+  renderSuggestions?: (lockedComboId: string | null) => ReactNode;
   /** Management API target; enables the per-candidate path preview and JEV stats in the detail panel. */
   apiBase?: string;
+  routingRevision?: string;
   combos: ComboItem[];
   providerQuotaStates: ProviderQuotaStates;
   providers: ProviderOption[];
@@ -40,7 +48,8 @@ export interface ComboWorkspaceProps {
   visionEnabled?: boolean;
   loading?: boolean;
   onRefresh: () => void;
-  onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string) => Promise<{ ok: boolean; error?: string }>;
+  /** `stored` is the combo as loaded when editing began, or null for a new combo (see `toPutBody`). */
+  onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string, stored?: ComboItem | null) => Promise<{ ok: boolean; error?: string; item?: ComboItem }>;
   onRemove: (id: string) => Promise<{ ok: boolean; error?: string }>;
   onAdd: (intent?: ComboAddIntent) => void;
   adding: boolean;

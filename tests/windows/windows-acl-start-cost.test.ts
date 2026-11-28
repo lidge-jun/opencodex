@@ -23,6 +23,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  hardenElevatedStageDir,
+  hardenSecretDir,
   hardenSecretPath,
   hardenedSecretPathCountForTests,
   reattributeHardenedSecretPath,
@@ -44,6 +46,8 @@ import {
   setWindowsHardeningForTests,
 } from "../../src/config/atomic-write";
 
+import { setWindowsOwnerAclRunnerForTests } from "../../src/lib/windows-owner-acl";
+
 const OK: IcaclsResult = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 const PRINCIPAL = {
   success: true,
@@ -63,12 +67,15 @@ let testDir = "";
 let commands: string[][] = [];
 let previousAclTimeout: string | undefined;
 let previousVerifyExisting: string | undefined;
+let previousBatchRestrictions: string | undefined;
 
 beforeEach(() => {
   previousAclTimeout = process.env.OPENCODEX_ACL_TIMEOUT_MS;
   previousVerifyExisting = process.env.OPENCODEX_ACL_VERIFY_EXISTING;
+  previousBatchRestrictions = process.env.OPENCODEX_ACL_BATCH_RESTRICTIONS;
   delete process.env.OPENCODEX_ACL_TIMEOUT_MS;
   delete process.env.OPENCODEX_ACL_VERIFY_EXISTING;
+  delete process.env.OPENCODEX_ACL_BATCH_RESTRICTIONS;
   testDir = mkdtempSync(join(tmpdir(), "ocx-acl-cost-"));
   commands = [];
   setPlatformForTests("win32");
@@ -94,6 +101,8 @@ afterEach(() => {
   else process.env.OPENCODEX_ACL_TIMEOUT_MS = previousAclTimeout;
   if (previousVerifyExisting === undefined) delete process.env.OPENCODEX_ACL_VERIFY_EXISTING;
   else process.env.OPENCODEX_ACL_VERIFY_EXISTING = previousVerifyExisting;
+  if (previousBatchRestrictions === undefined) delete process.env.OPENCODEX_ACL_BATCH_RESTRICTIONS;
+  else process.env.OPENCODEX_ACL_BATCH_RESTRICTIONS = previousBatchRestrictions;
   if (testDir && existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
   testDir = "";
 });
@@ -206,6 +215,48 @@ describe("harden memo attribution across a content write", () => {
 });
 
 describe("atomicWriteFile Windows ACL cost", () => {
+  for (const mode of ["sync", "async"]) test(`opted-in ${mode} write grants its owner before one restriction command`, async () => {
+    process.env.OPENCODEX_ACL_BATCH_RESTRICTIONS = "1";
+    setWindowsHardeningForTests(true);
+    setStatForTests(sizeAsFreshness);
+    const destination = join(testDir, "config.json");
+    if (mode === "sync") atomicWriteFile(destination, "new");
+    else await atomicWriteFileAsync(destination, "new");
+    const target = commands[0]?.[0];
+    expect(commands).toEqual([
+      [target, "/grant:r", "*S-1-5-21-9-9-9-1001:(F)"],
+      [target, "/inheritance:r", "/remove:g", "*S-1-1-0", "*S-1-5-11", "*S-1-5-32-545"],
+    ]);
+    expect(readFileSync(destination, "utf8")).toBe("new");
+  });
+
+  for (const mode of ["sync", "async"]) test(`ambiguous compound failure preserves the previous destination (${mode})`, async () => {
+    process.env.OPENCODEX_ACL_BATCH_RESTRICTIONS = "1";
+    setWindowsHardeningForTests(true);
+    const destination = join(testDir, "config.json");
+    writeFileSync(destination, "previous");
+    const runner = (args: string[]): IcaclsResult => {
+      commands.push(args);
+      if (args.includes("/inheritance:r") && args.includes("/remove:g")) return { ...OK, success: false, exitCode: 1 };
+      return OK;
+    };
+    setIcaclsRunnerForTests(runner);
+    setAsyncIcaclsRunnerForTests(async args => runner(args));
+    if (mode === "sync") expect(() => atomicWriteFile(destination, "replacement")).toThrow();
+    else await expect(atomicWriteFileAsync(destination, "replacement")).rejects.toThrow();
+    expect(commands.some(args => args.includes("/inheritance:r") && args.includes("/remove:g"))).toBe(true);
+    expect(steps()).not.toContain("/findsid");
+    expect(readFileSync(destination, "utf8")).toBe("previous");
+    expect(hardenedSecretPathCountForTests()).toBe(0);
+  });
+
+  test("opted-in elevated staging keeps its separate ACL sequence", () => {
+    process.env.OPENCODEX_ACL_BATCH_RESTRICTIONS = "1";
+    expect(hardenElevatedStageDir(testDir, { required: true }).ok).toBe(true);
+    expect(steps()).toEqual(["/grant:r", "/inheritance:r", "/remove:g"]);
+    expect(commands[0]).toContain("*S-1-5-32-544:(OI)(CI)(RX)");
+  });
+
   test("a secret write performs one ACL mutation sequence, not two", () => {
     setWindowsHardeningForTests(true);
     setStatForTests(sizeAsFreshness);
@@ -243,4 +294,42 @@ describe("atomicWriteFile Windows ACL cost", () => {
     expect(() => atomicWriteFile(destination, '{"token":"secret"}')).toThrow(/EICACLS/);
     expect(existsSync(destination)).toBe(false);
   });
+});
+
+test("runtime directory ACL proof is reused only while its object and metadata match", () => {
+  const testDir = mkdtempSync(join(tmpdir(), "ocx-runtime-directory-acl-"));
+  const owner = "S-1-5-21-100-200-300-1001";
+  let observation = { dev: 1n, ino: 2n, ctimeNs: 3n };
+  let verified = true;
+  let reads = 0;
+  const options = { required: true, verifyExistingRuntimeDirectory: true };
+  setPlatformForTests("win32");
+  setStatForTests(() => observation);
+  setWindowsOwnerAclRunnerForTests(() => {
+    reads++;
+    return { success: verified, timedOut: false, stdout: `U|${owner}|${owner}|False\nE|0|${owner}|4100|1\nA|0|0|3|2032127|${owner}|False\nEND\n` };
+  });
+  setWindowsPrincipalRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: `${owner}\nfixture-user\n` }));
+  setIcaclsRunnerForTests(() => ({ success: false, exitCode: 1, timedOut: false, stdout: "" }));
+  try {
+    expect(hardenSecretDir(testDir, options)).toEqual({ ok: true });
+    expect(hardenSecretDir(testDir, options)).toEqual({ ok: true });
+    expect(reads).toBe(1);
+    observation = { ...observation, ctimeNs: 4n };
+    expect(hardenSecretDir(testDir, options)).toEqual({ ok: true });
+    expect(reads).toBe(2);
+    observation = { ...observation, ino: 5n };
+    verified = false;
+    expect(() => hardenSecretDir(testDir, options)).toThrow();
+    expect(reads).toBe(3);
+  } finally {
+    setPlatformForTests(null);
+    setStatForTests(null);
+    setWindowsOwnerAclRunnerForTests(null);
+    setWindowsPrincipalRunnerForTests(null);
+    setIcaclsRunnerForTests(null);
+    resetWindowsPrincipalForTests();
+    resetHardenedStateForTests();
+    rmSync(testDir, { recursive: true, force: true });
+  }
 });

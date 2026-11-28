@@ -1,6 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { foldForMatching } from "../../src/lib/redact-folding";
+import * as folding from "../../src/lib/redact-folding";
 import { repoPath } from "../helpers/repo-root";
 import {
   REDACTED_SECRET,
@@ -11,6 +12,57 @@ import {
 } from "../../src/lib/redact";
 
 describe("redactSecretString", () => {
+  test("does not request offset arrays before an ASCII credential label matches", () => {
+    const original = folding.foldForMatching;
+    let mappedChars = 0;
+    const fold = spyOn(folding, "foldForMatching").mockImplementation((value, decodeEscapes) => {
+      const view = original(value, decodeEscapes);
+      let requested = false;
+      return { folded: view.folded, get map() {
+        if (!requested) mappedChars += value.length + 1;
+        requested = true;
+        return view.map;
+      } };
+    });
+    try {
+      const text = "status: unavailable " + "z".repeat(100_000);
+      expect(redactSecretString(text)).toBe(text);
+      expect(mappedChars).toBe(0);
+      expect(redactSecretString(`${text} authorization: fixture-value`)).toBe(`${text} authorization: ${REDACTED_SECRET}`);
+      expect(mappedChars).toBeGreaterThan(0);
+    } finally {
+      fold.mockRestore();
+    }
+    const view = foldForMatching("ASCII offsets");
+    expect(view.map).toBe(view.map);
+    expect(view.map).toEqual(Array.from({ length: 14 }, (_, i) => i));
+  });
+
+  test("unframed ASCII skips label folds but retains token-pattern redaction", () => {
+    const fold = spyOn(folding, "foldForMatching");
+    try {
+      const plain = "ordinary output ".repeat(1_000);
+      expect(redactSecretString(plain)).toBe(plain);
+      expect(redactSecretString("Bearer access-token-value-123456")).toBe(`Bearer ${REDACTED_SECRET}`);
+      expect(fold).not.toHaveBeenCalled();
+    } finally {
+      fold.mockRestore();
+    }
+  });
+
+  test("unframed ASCII still masks minted OpenCodex credentials", () => {
+    const fold = spyOn(folding, "foldForMatching");
+    try {
+      for (const token of ["ocx_admin_" + "a".repeat(43), "ocx_data_" + "0".repeat(40), "ocxrw_" + "B".repeat(43)]) {
+        expect(redactSecretString(token)).toBe(REDACTED_SECRET);
+        expect(redactSecretString(`token ${token} leaked`)).toBe(`token ${REDACTED_SECRET} leaked`);
+      }
+      expect(fold).not.toHaveBeenCalled();
+    } finally {
+      fold.mockRestore();
+    }
+  });
+
   test("ASCII folding preserves every byte and original offset, including literal escape syntax (#7846)", () => {
     const ascii = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code)).join("");
     for (const decode of [true, false]) {
@@ -50,6 +102,21 @@ describe("redactSecretString", () => {
 
   test("preserves non-secret diagnostic text", () => {
     expect(redactSecretString("status=429 model=gpt-5.5")).toBe("status=429 model=gpt-5.5");
+  });
+
+  test("masks Hub relay leases even when a bare token ends in a dash", () => {
+    const token = "ocx_hub_relay_" + "A".repeat(42) + "-";
+    expect(redactSecretString(`lease ${token} expired`)).toBe(`lease ${REDACTED_SECRET} expired`);
+    expect(redactSecretString(`Bearer ${token}`)).toBe(`Bearer ${REDACTED_SECRET}`);
+    expect(redactUrlForLog(`https://hub.example.test/path/${token}`)).not.toContain(token);
+  });
+
+  test("masks the management credential header in strings, headers, and objects", () => {
+    const header = "x-opencodex-api-key";
+    const value = "opaque-fixture-credential";
+    expect(redactSecretString(`${header}: ${value}`)).toBe(`${header}: ${REDACTED_SECRET}`);
+    expect(redactHeaders(new Headers({ [header]: value }))).toEqual({ [header]: REDACTED_SECRET });
+    expect(redactSecrets({ [header]: value })).toEqual({ [header]: REDACTED_SECRET });
   });
 
   test("masks colon-labelled credentials echoed back by an upstream error", () => {
@@ -428,6 +495,27 @@ describe("redactSecretString", () => {
       expect(redacted).not.toContain("dXNlcjpwYXNz");
       expect(redacted).not.toContain("credential-suffix-123456");
     }
+  });
+
+  test("multipart part headers on an unterminated line are rejected in linear time", () => {
+    // As one regex, every `name=token` candidate on a line with no line break rescanned the rest
+    // of that line: 16,000 of them in one 176 KB message took seconds.
+    const unterminated = "name=token ".repeat(16_000);
+    const startedAt = performance.now();
+    expect(redactSecretString(unterminated)).toBe(unterminated);
+    expect(redactSecretString(`${unterminated}\rname=authorization\r\nsecret-body-123456`))
+      .toBe(`${unterminated}\rname=authorization\r\n${REDACTED_SECRET}`);
+    expect(performance.now() - startedAt).toBeLessThan(1_500);
+  });
+
+  test("JWT candidates inside one long token run are rejected in linear time", () => {
+    // As one regex, every `eyJ` in a run of token characters with no dot after it rescanned the
+    // rest of the run: tens of thousands of them took seconds. A real three-segment JWT is still masked.
+    const run = "eyJabcdefgh-".repeat(32_000);
+    const startedAt = performance.now();
+    expect(redactSecretString(run)).toBe(run);
+    expect(redactSecretString(`${run} eyJhbGciOiJIUzI1.eyJzdWIiOiIx.sig_-x`)).toBe(`${run} ${REDACTED_SECRET}`);
+    expect(performance.now() - startedAt).toBeLessThan(1_500);
   });
 
   test("a quoted form value is masked too", () => {

@@ -10,6 +10,7 @@ import type { CatalogLoginHint } from "../components/provider-catalog/login-hint
 import type { ProvidersConfig } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
+import type { OAuthLoginCaptureOwner } from "../components/use-add-provider-oauth";
 
 export function ProvidersPageModals({
   apiBase,
@@ -22,6 +23,7 @@ export function ProvidersPageModals({
   addModalAccountRows,
   accountLoginStatus,
   accountLoginHint,
+  accountLoginCaptures,
   removeConfirmName,
   removeDefaultProvider,
   codexLoginOpen,
@@ -55,6 +57,7 @@ export function ProvidersPageModals({
   addModalAccountRows: AccountLoginRow[];
   accountLoginStatus: Record<string, AccountLoginStatus>;
   accountLoginHint?: CatalogLoginHint | null;
+  accountLoginCaptures?: OAuthLoginCaptureOwner;
   removeConfirmName: string | null;
   removeDefaultProvider: string | null;
   codexLoginOpen: boolean;
@@ -104,11 +107,14 @@ export function ProvidersPageModals({
           accountStatus={accountLoginStatus}
           accountBusy={busy}
           accountLoginHint={accountLoginHint ?? null}
+          accountLoginCaptures={accountLoginCaptures}
           onAccountLogin={onAccountLogin}
           onAccountCancelLogin={onAccountCancelLogin}
           onAccountLogout={onAccountLogout}
           onAccountManage={onAccountManage}
           onOpen={onOpenAdd}
+          // Every dialog this page renders below opens above Add Provider; one Escape closes one layer (#8849).
+          stackedOverlayOpen={oauthTosPending !== null || codexLoginOpen || removeConfirmName !== null || jsonLeaveOpen === true}
         />
       )}
       {codexLoginOpen && (

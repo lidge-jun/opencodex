@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { atomicWriteFile } from "../../config/atomic-write";
+import { readBoundedRegularFileSync } from "../../lib/bounded-file-read";
 import { assertNotRealClaudeConfigUnderTest } from "../../lib/test-home-guard";
 import { claudeConfigDir } from "../auth-detect";
 import { invalidateClaudeCodeServedCatalog } from "./cli-catalog";
@@ -70,15 +71,20 @@ export type ClaudeInterceptSettingsState =
   | { kind: "unreadable"; path: string };
 
 type SettingsDoc = Record<string, unknown> & { env?: Record<string, unknown> };
+interface SettingsReadOptions { maxBytes?: number }
 
 function settingsPath(configDir: string): string {
   return join(configDir, "settings.json");
 }
 
-function readSettings(path: string): { doc: SettingsDoc } | { error: "missing" | "unreadable" } {
+function readSettings(
+  path: string,
+  options: SettingsReadOptions = {},
+): { doc: SettingsDoc } | { error: "missing" | "unreadable" } {
   let raw: string;
   try {
-    raw = readFileSync(path, "utf8");
+    raw = options.maxBytes === undefined ? readFileSync(path, "utf8")
+      : readBoundedRegularFileSync(path, options.maxBytes, { followFinalSymlink: true }).toString("utf8");
   } catch (error) { // no-excuse-ok: catch -- an absent settings file is the fresh-install state.
     return { error: (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unreadable" };
   }
@@ -93,6 +99,38 @@ function readSettings(path: string): { doc: SettingsDoc } | { error: "missing" |
 
 function envRecord(doc: SettingsDoc): Record<string, unknown> {
   return doc.env && typeof doc.env === "object" && !Array.isArray(doc.env) ? doc.env : {};
+}
+
+export type ClaudeSettingsEnvRead =
+  | { kind: "missing" }
+  | { kind: "unreadable" }
+  | { kind: "env"; env: Readonly<Record<string, unknown>> };
+
+export const MAX_STATUS_SETTINGS_BYTES = 1024 * 1024;
+
+/**
+ * Read-only status guard for a settings.json a status GET is about to read: `unsafe` for a
+ * FIFO, device, directory or oversized file, which the synchronous read would block on or
+ * buffer without bound. `stat` follows a symlink, as Claude Code does, and never opens the file.
+ */
+export function claudeSettingsFileState(configDir = claudeConfigDir()): "missing" | "regular" | "unsafe" {
+  try {
+    const stats = statSync(settingsPath(configDir));
+    return stats.isFile() && stats.size <= MAX_STATUS_SETTINGS_BYTES ? "regular" : "unsafe";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "missing" : "unsafe";
+  }
+}
+
+/** Read-only: the settings.json env block the writers below start from. Never writes. */
+export function readClaudeSettingsEnv(
+  configDir = claudeConfigDir(),
+  options: SettingsReadOptions = {},
+): ClaudeSettingsEnvRead {
+  const read = readSettings(settingsPath(configDir), options);
+  if ("error" in read) return { kind: read.error };
+  return { kind: "env", env: { ...envRecord(read.doc) } };
 }
 
 /** Loopback proxy URLs are the only shape opencodex ever writes. */
@@ -113,9 +151,10 @@ function setOrDelete(env: Record<string, unknown>, key: string, value: unknown):
 export function inspectClaudeInterceptSettings(
   expected: ClaudeInterceptEnv,
   configDir = claudeConfigDir(),
+  options: SettingsReadOptions = {},
 ): ClaudeInterceptSettingsState {
   const path = settingsPath(configDir);
-  const read = readSettings(path);
+  const read = readSettings(path, options);
   if ("error" in read) return read.error === "missing" ? { kind: "absent" } : { kind: "unreadable", path };
   const env = envRecord(read.doc);
   const proxy = env.HTTPS_PROXY;

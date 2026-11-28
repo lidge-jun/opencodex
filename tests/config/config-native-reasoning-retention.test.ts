@@ -8,6 +8,7 @@ import { configSchema } from "../../src/config/schema/config-schema";
 import { resolveNativeReasoningRetention } from "../../src/config/schema/native-reasoning-retention";
 import { warnDegradedTopLevelOptIns } from "../../src/config/load-degrade";
 import { codexWsReuseAcrossTurnsEnabled, setCodexWsReuseAcrossTurns } from "../../src/config/codex-ws-reuse-setting";
+import { bindCodexWsIncrementalConfig, codexWsIncrementalUploadEnabled, setCodexWsIncrementalUpload } from "../../src/config/codex-ws-incremental-setting";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const off = { modelSwitch: false, accountSwitch: false };
@@ -56,21 +57,26 @@ describe("native reasoning retention configuration", () => {
     { label: "explicit false", value: false, enabled: false },
     { label: "absent", value: undefined, enabled: false },
     { label: "invalid", value: "true", enabled: false },
-  ])("invalid retention still warns while WS reuse honors $label", ({ value, enabled }) => {
+  ])("invalid retention still warns; only the live bind applies WS reuse $label", ({ value, enabled }) => {
     const previousReuse = codexWsReuseAcrossTurnsEnabled();
+    const previousIncremental = codexWsIncrementalUploadEnabled();
     const warning = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      // Start opposite the expected value so this proves live application, including resets.
+      // Start opposite the expected value: the load-time degrade pass must leave the live flag
+      // alone, and the live bind must then apply it, including resets.
       setCodexWsReuseAcrossTurns(!enabled);
       const raw = { ...getDefaultConfig(), nativeReasoningRetention: { modelSwitch: "true" },
         ...(value === undefined ? {} : { codexWsReuseAcrossTurns: value }) };
       const validated = configSchema.parse(raw);
       warnDegradedTopLevelOptIns(raw, validated);
+      expect(codexWsReuseAcrossTurnsEnabled()).toBe(!enabled);
+      bindCodexWsIncrementalConfig(validated);
       expect(codexWsReuseAcrossTurnsEnabled()).toBe(enabled);
       expect(resolveNativeReasoningRetention(validated)).toEqual(off);
       expect(validated.providers).toEqual(raw.providers);
       expect(warning.mock.calls.some(call => String(call[0]).includes("invalid nativeReasoningRetention"))).toBe(true);
     } finally {
+      setCodexWsIncrementalUpload(previousIncremental);
       setCodexWsReuseAcrossTurns(previousReuse);
       warning.mockRestore();
     }

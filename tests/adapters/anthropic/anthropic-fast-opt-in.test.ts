@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,7 @@ import { startServer } from "../../../src/server";
 import { catalogFastRowEligible } from "../../../src/server/fast-row";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
 import { managementFetch as fetch } from "../../helpers/management-auth";
+import * as destinationPolicy from "../../../src/lib/destination-policy";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
 /**
@@ -124,6 +125,8 @@ describe("Anthropic Fast switch over the management API", () => {
       },
     } as OcxConfig);
     const server = startServer(0);
+    // Configuration persistence is independent of the host DNS resolver.
+    const resolvedDestination = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
     const patch = (body: unknown) => fetch(new URL("/api/providers?name=anthropic-apikey", server.url), {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -162,6 +165,7 @@ describe("Anthropic Fast switch over the management API", () => {
       expect(loadConfig().providers["anthropic-apikey"]).not.toHaveProperty("fastEnabled");
       expect((await summary("anthropic-apikey"))?.fastOptIn).toEqual({ enabled: false });
     } finally {
+      resolvedDestination.mockRestore();
       await server.stop(true);
     }
   });

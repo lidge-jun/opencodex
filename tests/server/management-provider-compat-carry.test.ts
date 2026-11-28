@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { planAnthropicServerTools } from "../../src/adapters/anthropic/advisor-tool";
+import { videoWireFor } from "../../src/images/video-wire";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 import { loadConfig, saveConfig } from "../../src/config";
 import * as destinationPolicy from "../../src/lib/destination-policy";
@@ -216,6 +217,11 @@ const CASES: Record<ProviderCompatCarryField, CarryCase> = {
     probe: provider => planAnthropicServerTools({ ...provider, adapter: "anthropic" },
       [{ type: "advisor_20260301", name: "advisor", model: "claude-opus-4-8" }], undefined, new Set(), false).declared,
   },
+  videoApi: {
+    seed: { videoApi: "openai" },
+    // The bridge wire this row's video jobs use: the OpenAI wire finishes from /content, not a URL.
+    probe: provider => videoWireFor(provider).requireUrl,
+  },
 };
 
 function withoutField(provider: OcxProviderConfig, field: ProviderCompatCarryField): OcxProviderConfig {
@@ -334,6 +340,111 @@ describe("an overwrite that moves the provider carries none of it", () => {
 });
 
 describe("PATCH and POST validate the settings they name", () => {
+  test("canonical OpenAI POST accepts timeout overrides and validates each before saving", async () => {
+    const provider = {
+      adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward", codexAccountMode: "direct",
+    } as const;
+    await withServer({ openai: provider }, async url => {
+      for (const overrides of [
+        { connectTimeoutMs: 0, stallTimeoutSec: 600 },
+        { connectTimeoutMs: 420_000, stallTimeoutSec: 0 },
+      ]) {
+        const response = await send(url, "/api/providers", "POST", { name: "openai", provider: { ...provider, ...overrides } });
+        expect(response.status).toBe(200);
+        expect(loadConfig().providers.openai).toMatchObject({ ...provider, ...overrides });
+      }
+      for (const field of ["connectTimeoutMs", "stallTimeoutSec"] as const) {
+        const response = await send(url, "/api/providers", "POST", { name: "openai", provider: { ...provider, [field]: -1 } });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({ error: expect.stringContaining(field) });
+        expect(loadConfig().providers.openai).toMatchObject({ connectTimeoutMs: 420_000, stallTimeoutSec: 0 });
+      }
+    });
+  });
+
+  test("canonical OpenAI POST reports invalid timeout overrides before a seed mismatch", async () => {
+    const provider = {
+      adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward", codexAccountMode: "direct",
+    } as const;
+    await withServer({ openai: provider }, async url => {
+      const noncanonical = { ...provider, baseUrl: BASE_URL };
+      const timeoutFields = ["connectTimeoutMs", "stallTimeoutSec"] as const;
+      const errors = [];
+      for (const field of timeoutFields) {
+        const response = await send(url, "/api/providers", "POST", { name: "openai", provider: { ...noncanonical, [field]: -1 } });
+        expect(response.status).toBe(400);
+        errors.push(await response.json());
+      }
+      expect(errors).toEqual(timeoutFields.map(field => ({ error: expect.stringContaining(field) })));
+      const response = await send(url, "/api/providers", "POST", {
+        name: "openai", provider: { ...noncanonical, connectTimeoutMs: 0, stallTimeoutSec: 600 },
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: expect.stringContaining("canonical built-in provider seed") });
+      expect(loadConfig().providers.openai?.baseUrl).toBe(provider.baseUrl);
+    });
+  });
+
+  test("POST retains omitted provider timeout overrides and honors an explicit replacement", async () => {
+    const provider = { adapter: "openai-chat", baseUrl: BASE_URL, apiKey: "sk-relay" } as const;
+    await withServer({ relay: { ...provider, connectTimeoutMs: 0, stallTimeoutSec: 600 } }, async url => {
+      const save = await send(url, "/api/providers", "POST", {
+        name: "relay",
+        provider: { ...provider, defaultModel: MODEL },
+      });
+      expect(save.status).toBe(200);
+      expect(loadConfig().providers.relay).toMatchObject({ defaultModel: MODEL, connectTimeoutMs: 0, stallTimeoutSec: 600 });
+
+      const replace = await send(url, "/api/providers", "POST", {
+        name: "relay",
+        provider: { ...provider, connectTimeoutMs: 420_000 },
+      });
+      expect(replace.status).toBe(200);
+      expect(loadConfig().providers.relay).toMatchObject({ connectTimeoutMs: 420_000, stallTimeoutSec: 600 });
+    });
+  });
+
+  for (const [field, positive, max, otherField] of [
+    ["connectTimeoutMs", 420_000, 2_147_483_647, "stallTimeoutSec"],
+    ["stallTimeoutSec", 600, 2_147_483, "connectTimeoutMs"],
+  ] as const) {
+    test(`PATCH sets provider timeout override ${field} independently`, async () => {
+      await withServer({ relay: { adapter: "openai-chat", baseUrl: BASE_URL, [otherField]: 123 } }, async url => {
+        for (const value of [positive, max, 0]) {
+          const set = await send(url, "/api/providers?name=relay", "PATCH", { [field]: value });
+          expect(set.status).toBe(200);
+          expect(loadConfig().providers.relay).toMatchObject({ [field]: value, [otherField]: 123 });
+        }
+      });
+    });
+
+    test(`PATCH clears provider timeout override ${field} independently`, async () => {
+      await withServer({ relay: { adapter: "openai-chat", baseUrl: BASE_URL, [field]: positive, [otherField]: 123 } }, async url => {
+        const clear = await send(url, "/api/providers?name=relay", "PATCH", { [field]: null });
+        expect(clear.status).toBe(200);
+        expect(loadConfig().providers.relay).not.toHaveProperty(field);
+        expect(loadConfig().providers.relay?.[otherField]).toBe(123);
+      });
+    });
+
+    test(`PATCH rejects invalid provider timeout override ${field} without saving other edits`, async () => {
+      await withServer({ relay: { adapter: "openai-chat", baseUrl: BASE_URL, [field]: positive } }, async url => {
+        for (const value of [-1, 1.5, String(positive), max + 1]) {
+          const bad = await send(url, "/api/providers?name=relay", "PATCH", {
+            [field]: value,
+            defaultModel: MODEL,
+          });
+          expect(bad.status).toBe(400);
+          expect(await bad.json()).toEqual({ error: `${field} must be an integer from 0 to ${max}` });
+          expect(loadConfig().providers.relay?.[field]).toBe(positive);
+          expect(loadConfig().providers.relay?.defaultModel).toBeUndefined();
+        }
+      });
+    });
+  }
+
   test("PATCH writes and clears promoteAdditionalTools", async () => {
     await withServer({ relay: { adapter: "openai-responses", baseUrl: BASE_URL } }, async url => {
       const set = await send(url, "/api/providers?name=relay", "PATCH", { promoteAdditionalTools: true });
@@ -423,6 +534,27 @@ describe("PATCH and POST validate the settings they name", () => {
       });
       expect(good.status).toBe(200);
       expect(loadConfig().providers.relay?.unsupportedHostedToolsWithClientTools).toEqual(["web_search_preview"]);
+    });
+  });
+
+  test("canonical ChatGPT retry settings survive a dashboard save and reload", async () => {
+    await withServer({ openai: { adapter: "openai-responses", authMode: "forward",
+      baseUrl: "https://chatgpt.com/backend-api/codex", codexAccountMode: "direct" } }, async url => {
+      const path = "/api/providers?name=openai";
+      const policy = { attempts: 6 };
+      expect((await send(url, path, "PATCH", { transientRetryOn5xx: policy })).status).toBe(200);
+      expect(loadConfig().providers.openai?.transientRetryOn5xx).toEqual(policy);
+      const rows = await (await fetch(new URL("/api/providers", url))).json() as Array<Record<string, unknown>>;
+      expect(rows.find(row => row.name === "openai")?.transientRetryOn5xx).toEqual(policy);
+      for (const invalid of [
+        { attempts: 0 }, { attempts: 11 }, { attempts: 1.5 },
+        { enabled: "true", attempts: 3 }, { attempts: 3, surprise: true },
+      ]) {
+        expect((await send(url, path, "PATCH", { transientRetryOn5xx: invalid })).status).toBe(400);
+        expect(loadConfig().providers.openai?.transientRetryOn5xx).toEqual(policy);
+      }
+      expect((await send(url, path, "PATCH", { transientRetryOn5xx: null })).status).toBe(200);
+      expect(loadConfig().providers.openai?.transientRetryOn5xx).toBeUndefined();
     });
   });
 

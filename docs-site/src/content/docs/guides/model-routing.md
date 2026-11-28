@@ -15,6 +15,10 @@ through to one another.
 
 ## Precedence
 
+Before these model rules, an explicit `policy/<id>` or configured routing-profile alias
+evaluates the policy and routes its selected concrete candidate. An unknown reserved
+policy selector fails instead of falling through to provider or default routing.
+
 1. **Exact Codex account selector** — if the id is
    `<selector>/<native-openai-model>` and the selector is configured in `codexAccountNamespaces`,
    the request uses only the mapped stored account and sends the bare native model upstream.
@@ -57,8 +61,8 @@ through to one another.
    | `claude-`, `claude-sonnet-`, `claude-opus-`, `claude-haiku-` | `anthropic` |
    | `llama-`, `mixtral-`, `gemma-` | `groq` |
 
-   This matcher is name-based and, unlike the `defaultModel` / `models[]` scans, currently does not
-   filter a matching provider whose `disabled` flag is true.
+   This matcher is name-based; like the `defaultModel` / `models[]` scans, it skips a matching
+   provider whose `disabled` flag is true.
 
 7. **A provider's `models[]`** — if no prefix rule won and an active provider lists the id in its
    `models[]`, that provider is used. Rule 4 already sends a bare `gpt-*` id to the canonical enabled
@@ -96,6 +100,11 @@ Routing and catalog visibility are separate controls:
   Enabling an arrival manually keeps it enabled on later refreshes and exports.
   If the running provider configuration differs from disk, model lists still apply the policy
   using a temporary projection; they leave the running configuration and saved choices untouched.
+  If a newer discovery supersedes a successful response, the dashboard and ordinary model
+  listings can still show the older request's models under the visibility policy for that response.
+  When discovery is superseded or uses a temporary projection, the hub's Desktop configuration
+  endpoint returns a retryable HTTP 503 and connected apply keeps the current profile in place.
+  Anthropic listings using Desktop IDs show the visible aliases that already route to the same models.
   Use `ocx models new-policy off` globally, add `--provider <name>` for an override, and inspect
   `ocx models new-arrivals [--json]`. Failed/degraded fetches never change the baseline. Providers
   with a non-empty `selectedModels` (including preset mode) are already curated, so `on` and `off`

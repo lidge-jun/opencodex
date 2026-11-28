@@ -1,12 +1,14 @@
+import { sealCredentialRefusal } from "./credential-recovery-attempt";
 import { MessagesSseFrameContext, messagesSseEchoRenamedError, messagesSseFrameHooks } from "../lib/messages-sse-error-presentation";
 import { createMessagesSseErrorFilter } from "./messages-sse-error-filter";
 import type { MessagesFailureVerdictSink } from "../claude/failure-verdict";
 import { upstreamErrorIsLocal } from "./request-log-failure-detail";
 import { boundedMessagesDisplayCount, ownedAnthropicErrorPayload, ownedAnthropicErrorResponse, messagesOverflowPresentation, messagesRelayedOverflowPresentation } from "../lib/messages-error-body";
-import { attachComboFailureEvidence, isProxyError, markProxyError } from "../lib/client-error-body";
+import { attachComboFailureEvidence, isProxyError, markProxyError, markProxyQuotaExhaustion } from "../lib/client-error-body";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../oauth/account-auto-pause";
 import { createPhysicalSendReporter, reportDispatchSends, type RequestExecutionBudget, type SingleUseDispatchPermit } from "../lib/request-execution-budget";
-import { createInferenceSendBudget } from "./inference/context";
+import { createInferenceSendBudget, expandInferenceOAuthSendBudget } from "./inference/context";
+import { GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST } from "../oauth/generic-account-failover";
 /**
  * Managed native Messages lane (PF-08, behind `protocols.rollout.managedMessagesNative`).
  *
@@ -27,7 +29,7 @@ import { createInferenceSendBudget } from "./inference/context";
  * Loaded lazily by `claude-messages.ts` only when the switch is on and a route is eligible.
  */
 import { resolveAnthropicModelRouteForInstance } from "../oauth/anthropic-model-routes";
-import { bindAnthropicRefusalCredentialForSend, rotateAnthropicAccountOnResponseForInstance } from "../oauth/anthropic-account-refusal";
+import { anthropicRefusalCredentialChanged, bindAnthropicRefusalCredentialForSend, rotateAnthropicAccountOnResponseForInstance } from "../oauth/anthropic-account-refusal";
 import { captureAnthropicPhysicalSendOwnership, anthropicPhysicalSendOwnershipIsCurrent,
   type AnthropicPhysicalSendOwnership } from "../oauth/anthropic-send-ownership";
 import { anthropicModelQuotaFor } from "../oauth/anthropic-model-quota";
@@ -49,6 +51,7 @@ import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { classifyError } from "../lib/errors";
 import { relaySseWithPayloadRewrite } from "./sse-payload-rewrite";
+import { EMPTY_BYTES, joinSseFrameBytes, sseDelimiterLengthAt } from "./sse-frame-buffer";
 import { redactSecretString } from "../lib/redact";
 import { formatClientRetryAfter, resolveClientRetryAfter } from "../lib/retry-after";
 import { enrichOpenCodeZenUpstreamMessage } from "../providers/opencode-zen-rate-limit";
@@ -72,8 +75,9 @@ import {
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
 import { distributedKeyPhysicalFetch, distributedKeyResponseOwner, recordDistributedResponseFailure } from "../providers/api-key-response-ownership";
+import { passiveKeyPhysicalFetch } from "../providers/passive-key-observation";
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
-import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
+import { providerAffinityGenerationIsCurrent, providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import {
   hasKeyPoolFailover,
@@ -85,6 +89,7 @@ import {
   transientRetryPolicyFor,
 } from "../providers/key-failover";
 import { stampApiKeyAccountLabel } from "../providers/label";
+import { affinityLaneFromRequest } from "./request-log-conversation";
 import { publicOAuthErrorPresentation, OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../oauth";
 import { AnthropicAccountCooldownError, formatAnthropicProviderForLog, anthropicRoutingFor } from "../oauth/anthropic-routing";
 import { configuredAnthropicInstance } from "../providers/anthropic-instance";
@@ -126,13 +131,12 @@ import {
 } from "./messages-native-oauth";
 import {
   noteProviderAttemptSend,
-  recordAttemptCredentialSource,
   recordAttemptRequestedEffort,
   recordFirstOutput,
-  recordKeyAttemptFailure,
   recordKeyWireAttemptUsage,
   type RequestLogContext,
 } from "./request-log";
+import { recordKeyAttemptFailure } from "./request-log-key-failure";
 import { fetchWithHeaderTimeout, physicalSendObserverInit, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
 import { isLocalUpstream } from "../lib/local-upstream";
 import { resolveConnectTimeoutMs, resolveJsonBodyReadTimeoutMs } from "../stall-timeout";
@@ -184,6 +188,7 @@ export interface HandleNativeMessagesOptions {
   req: Request;
   config: OcxConfig;
   logCtx: RequestLogContext;
+  admission?: import("./auth-cors").DataPlaneAdmission;
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease };
   /** The settled, eligible route (see `isNativeMessagesRouteEligible`). */
   route: RouteResult;
@@ -239,8 +244,10 @@ export function createNativeMessagesComboSource(input: Omit<HandleNativeMessages
   };
 }
 
-/** Relay an upstream body unchanged, recording first output on its first non-empty chunk once `ready`. */
-function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void, ready = () => true): ReadableStream<Uint8Array> {
+/** Relay bytes unchanged, observing raw progress and recording first output once `ready`. */
+function observeNativeMessagesChunks(
+  body: ReadableStream<Uint8Array>, onFirst?: () => void, ready = () => true, onChunk?: () => void,
+): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let seen = false;
   return new ReadableStream<Uint8Array>({
@@ -250,9 +257,12 @@ function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void
         controller.close();
         return;
       }
-      if (!seen && value.byteLength > 0 && ready()) {
-        seen = true;
-        onFirst();
+      if (value.byteLength > 0) {
+        onChunk?.();
+        if (!seen && onFirst && ready()) {
+          seen = true;
+          onFirst();
+        }
       }
       controller.enqueue(value);
     },
@@ -266,18 +276,34 @@ function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void
 const MODEL_ECHO_SCAN_BYTES = 64 * 1024;
 
 /** The `message_start` frame with `message.model` set to `model`, or undefined for any other frame. */
-function messageStartWithModel(frame: string, model: string): string | undefined {
-  const data = frame
-    .split("\n")
+function messageStartWithModel(frame: string, model: string): { text: string; canonicalError: boolean } | undefined {
+  const lines = frame.split(/\r\n|\r|\n/);
+  const data = lines
     .map(line => sseFieldValue(line, "data"))
     .filter((value): value is string => value !== null)
-    .join("");
+    .join("\n");
   if (!data) return undefined;
   let parsed: unknown;
   try { parsed = JSON.parse(data); } catch { return undefined; }
   if (!isRec(parsed) || parsed.type !== "message_start" || !isRec(parsed.message)) return undefined;
   parsed.message.model = model;
-  return `event: message_start\ndata: ${JSON.stringify(parsed)}\n\n`;
+  const replacement = `data: ${JSON.stringify(parsed)}`;
+  // Keep the original canonical framing for error-tagged starts. The final filter
+  // separately determines whether the upstream error tag qualifies for normalization.
+  const event = lines.map(line => sseFieldValue(line, "event")).findLast(value => value !== null);
+  if (event === "error") {
+    return { text: `event: message_start\n${replacement}\n\n`, canonicalError: true };
+  }
+  let replaced = false;
+  const text = frame.replace(/[^\r\n]*(?:\r\n|\r|\n)/g, line => {
+    const ending = line.match(/(?:\r\n|\r|\n)$/)![0];
+    if (sseFieldValue(line.slice(0, -ending.length), "data") === null) return line;
+    // Retain a field on this line so adjacent CR and LF terminators cannot fuse.
+    if (replaced) return "data:" + ending;
+    replaced = true;
+    return replacement + ending;
+  });
+  return { text, canonicalError: false };
 }
 
 /**
@@ -285,56 +311,119 @@ function messageStartWithModel(frame: string, model: string): string | undefined
  * (`responsesSseToAnthropicSse` is given the requested model). Works on bytes: frames before and
  * including `message_start` are split on the blank line, and everything after is relayed as is.
  */
-function echoRequestedModel(body: ReadableStream<Uint8Array>, model: string, frames: MessagesSseFrameContext): ReadableStream<Uint8Array> {
+export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: string, frames: MessagesSseFrameContext): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
-  let pending = new Uint8Array(0);
+  let carry = EMPTY_BYTES;
+  let carryLength = 0;
+  let scanFrom = 0;
   let scanning = true;
   let scanned = 0;
-  const frameEnd = (bytes: Uint8Array): number => {
-    for (let i = 0; i + 1 < bytes.length; i++) if (bytes[i] === 10 && bytes[i + 1] === 10) return i + 2;
-    return -1;
+  let pendingLf: "relay" | "drop" | undefined;
+  const take = (suffix: Uint8Array): Uint8Array => {
+    if (carryLength === 0) return suffix;
+    const frame = joinSseFrameBytes([carry.subarray(0, carryLength), suffix]);
+    carry = EMPTY_BYTES;
+    carryLength = 0;
+    return frame;
+  };
+  const retain = (suffix: Uint8Array): void => {
+    if (suffix.byteLength === 0) return;
+    const nextLength = carryLength + suffix.byteLength;
+    if (nextLength > carry.byteLength) {
+      const grown = new Uint8Array(Math.min(MODEL_ECHO_SCAN_BYTES, Math.max(1024, nextLength, carry.byteLength * 2)));
+      grown.set(carry.subarray(0, carryLength));
+      carry = grown;
+    }
+    carry.set(suffix, carryLength);
+    carryLength = nextLength;
   };
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        if (pending.length > 0) controller.enqueue(pending);
-        pending = new Uint8Array(0);
-        controller.close();
-        return;
-      }
-      if (!scanning) {
-        controller.enqueue(value);
-        return;
-      }
-      scanned += value.byteLength;
-      const joined = new Uint8Array(pending.length + value.byteLength);
-      joined.set(pending);
-      joined.set(value, pending.length);
-      pending = joined;
-      let end: number;
-      while (scanning && (end = frameEnd(pending)) !== -1) {
-        const frame = pending.subarray(0, end);
-        pending = pending.subarray(end);
-        const rewritten = messageStartWithModel(decoder.decode(frame), model);
-        if (rewritten !== undefined) {
-          const bytes = encoder.encode(rewritten);
-          if (messagesSseEchoRenamedError(decoder.decode(frame))) frames.register(bytes, { echoRenamedError: true });
+      // Keep reading until there is something to enqueue or the upstream closes.
+      while (true) {
+        const { done, value: chunk } = await reader.read();
+        if (done) {
+          if (carryLength > 0) controller.enqueue(take(EMPTY_BYTES));
+          controller.close();
+          return;
+        }
+        if (chunk.byteLength === 0) continue;
+        const scanBytes = Math.min(chunk.byteLength, MODEL_ECHO_SCAN_BYTES - scanned);
+        if (scanning) scanned += scanBytes;
+        let continuationBytes = 0;
+        let value = chunk;
+        let relayedLf = false;
+        if (pendingLf && chunk[0] === 10) {
+          relayedLf = pendingLf === "relay";
+          if (relayedLf) controller.enqueue(chunk.subarray(0, 1));
+          continuationBytes = 1;
+          value = chunk.subarray(1);
+        }
+        pendingLf = undefined;
+        if (value.byteLength === 0) {
+          if (scanned === MODEL_ECHO_SCAN_BYTES) scanning = false;
+          if (relayedLf) return;
+          continue;
+        }
+        if (!scanning) {
+          controller.enqueue(value);
+          return;
+        }
+        const carried = carryLength;
+        const length = carried + Math.max(0, scanBytes - continuationBytes);
+        const byteAt = (index: number): number => index < carried ? carry[index]! : value[index - carried]!;
+        let start = 0;
+        let index = scanFrom;
+        while (index < length) {
+          const delimiter = sseDelimiterLengthAt(index, length, byteAt);
+          if (delimiter === undefined) break;
+          if (delimiter === 0) {
+            index += 1;
+            continue;
+          }
+          const end = index + delimiter;
+          const endsOnCr = end === length && byteAt(end - 1) === 13;
+          const frame = take(value.subarray(Math.max(0, start - carried), end - carried));
+          start = end;
+          index = end;
+          const decoded = decoder.decode(frame);
+          const rewritten = messageStartWithModel(decoded, model);
+          // A bare CR completes the frame now. A later LF belongs to that same delimiter.
+          if (endsOnCr) {
+            if (end - carried === value.byteLength) {
+              pendingLf = rewritten?.canonicalError ? "drop" : "relay";
+            } else if (rewritten?.canonicalError && value[end - carried] === 10) {
+              start += 1;
+            }
+          }
+          if (rewritten === undefined) {
+            controller.enqueue(frame);
+            continue;
+          }
+          const bytes = encoder.encode(rewritten.text);
+          if (rewritten.canonicalError && messagesSseEchoRenamedError(decoded)) frames.register(bytes, { echoRenamedError: true });
           controller.enqueue(bytes);
           scanning = false;
-        } else {
-          controller.enqueue(frame);
+          break;
         }
-      }
-      if (scanning && scanned > MODEL_ECHO_SCAN_BYTES) scanning = false;
-      if (!scanning && pending.length > 0) {
-        controller.enqueue(pending);
-        pending = new Uint8Array(0);
+        const suffix = value.subarray(Math.max(0, start - carried));
+        if (!scanning || scanned === MODEL_ECHO_SCAN_BYTES) {
+          scanning = false;
+          const remaining = take(suffix);
+          if (remaining.byteLength > 0) controller.enqueue(remaining);
+          if (relayedLf || start > 0 || remaining.byteLength > 0) return;
+          continue;
+        }
+        scanFrom = index - start;
+        retain(suffix);
+        if (relayedLf || start > 0) return;
       }
     },
     cancel(reason) {
+      carry = EMPTY_BYTES;
+      carryLength = 0;
       return reader.cancel(reason);
     },
   });
@@ -457,7 +546,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   };
   // After preflight, first output waits for a content frame the log tap has seen.
   const watchFirstOutput = (body: ReadableStream<Uint8Array>) => onFirstOutput
-    ? observeFirstChunk(body, onFirstOutput, () => logCtx.generationStartedAt !== undefined) : body;
+    ? observeNativeMessagesChunks(body, onFirstOutput, () => logCtx.generationStartedAt !== undefined) : body;
   const localOAuthFailure = (error: unknown): Response | null => {
     if (error instanceof AnthropicAccountCooldownError) {
       const scope = error.routePosition === undefined ? "All Anthropic OAuth accounts" : "Anthropic OAuth accounts for this model route";
@@ -470,7 +559,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       const response = markProxyError(fail(429, message, "rate_limit_error"), date === undefined ? undefined : "usage");
       const advice = error.retryAfterSeconds !== null ? formatClientRetryAfter(error.retryAfterSeconds) : undefined;
       if (advice !== undefined) response.headers.set("retry-after", advice);
-      return response;
+      return error.usageLimit !== null && logCtx.comboQuotaOnlyFallback ? markProxyQuotaExhaustion(response) : response;
     }
     if (error instanceof OAuthAccountPausedError) return markProxyError(fail(403, publicOAuthAuthenticationErrorMessage(error), "permission_error"), publicOAuthErrorPresentation(error));
     if (error instanceof OAuthLoginRequiredError) return markProxyError(fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error"), publicOAuthErrorPresentation(error));
@@ -538,7 +627,12 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   } else {
     // Same pre-dispatch key preference every direct send path applies (see chat-native.ts).
     try {
-      const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
+      const affinityLane = affinityLaneFromRequest(req, logCtx, config, options.admission);
+      if (affinityLane) logCtx.affinityLane = affinityLane;
+      const lastMessage = Array.isArray(body.messages) ? body.messages.at(-1) : undefined;
+      const continuation = Array.isArray(lastMessage?.content)
+        && lastMessage.content.some((block: unknown) => !!block && typeof block === "object" && (block as { type?: unknown }).type === "tool_result");
+      const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider, undefined, Date.now(), { lane: affinityLane, model: route.modelId, log: logCtx, continuation });
       if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
       if (isProviderApiKeyPaused(route.provider)) throw new ProviderApiKeyPausedError();
     } catch (error) {
@@ -546,6 +640,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       const localRefusal = localOAuthFailure(error);
       if (localRefusal) return localRefusal;
       if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
+      logCtx.terminalSource = "synthetic";
       const refusal = markProxyError(fail(429, error.message, "rate_limit_error"), error.reason === "keys_exhausted" ? undefined : "pacing");
       const advice = formatClientRetryAfter(error.retryAfterSeconds);
       if (advice !== undefined) refusal.headers.set("Retry-After", advice);
@@ -557,7 +652,15 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   if (oauthBinding) logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
   const spendTracker = options.sendBudget ? undefined : attachRequestSpendTracker(req, logCtx);
   const physicalBudget = options.sendBudget ?? createInferenceSendBudget(req, logCtx);
+  // Freeze funding before any refusal cools an account; selection still checks live eligibility.
+  const fundedAccounts = oauthBinding ? Math.min(new Set([
+    oauthBinding.snapshot.accountId,
+    ...anthropicRoutingFor(oauthBinding.instance).getEligibleAnthropicAccounts(Date.now(), route.modelId),
+  ]).size, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST) : 0;
+  const oauthFailoverLimit = Math.max(ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST, fundedAccounts - 1);
+  if (oauthBinding) expandInferenceOAuthSendBudget(physicalBudget, fundedAccounts);
   // Observe-only spend is already booked by the tracker; count billing sends without booking again.
+  const priorSends = Math.max(0, physicalBudget.used - (options.comboDispatchPermit ? 1 : 0));
   let physicalSendsUsed = 0;
   let activeRequest: AnthropicMessagesPassthroughRequest;
   let retainedRequestBytes = 0;
@@ -576,7 +679,6 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   // for another credential domain decides opaque state from the full source again.
   const rejectUnrepresentable = resolveProtocolSettings(config).unrepresentable === "reject";
   const buildActiveRequest = () => {
-    recordAttemptCredentialSource(attempt, route.providerName, activeProvider, "anthropic");
     // Exact combo replay preserves TTL-less breakpoints; an explicit operator TTL still wins.
     const wireConfig = options.sendBudget && config.cacheRetention === undefined ? { ...config, cacheRetention: "short" as const } : config;
     const built = buildAnthropicMessagesPassthroughRequest(activeProvider, route.modelId, body, wireConfig, {
@@ -629,6 +731,10 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
     options.sendBudget ? Math.min(sharedSendCap, options.sendBudget.remainingBaseSends(sharedSendCap)
       + (!initialSendStarted && options.comboDispatchPermit ? 1 : 0)) : Number.POSITIVE_INFINITY,
   );
+  const oauthPhysicalSendAvailable = (): boolean =>
+    Math.max(priorSends + physicalSendsUsed, physicalBudget.used, physicalBudget.physicalStarted ?? 0)
+      < Math.min(physicalBudget.policy.maxTotalModelSends, physicalBudget.physicalLimit ?? Number.POSITIVE_INFINITY)
+        + (!initialSendStarted && options.comboDispatchPermit ? 1 : 0);
   const transientSendAvailable = (): boolean => remainingTransientSends() > 0;
   const selector: NativeMessagesSelector = options.selector ?? {};
   const nativeOAuthRouteIsCurrent = (binding: NativeOAuthBinding): boolean => {
@@ -653,6 +759,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   /** Send the native Messages request under the transient retry policy, re-validating the selected OAuth account or API key at the dispatch boundary. */
   const send = async (recovery?: "rate-limit-429" | "oauth-401" | "oauth-account-403" | "key-429" | "key-401"): Promise<Response> => {
     const remaining = remainingTransientSends();
+    if (oauthBinding && !oauthPhysicalSendAvailable()) throw new SendBudgetExhaustedError();
     if (options.sendBudget && remaining <= 0) throw new SendBudgetExhaustedError();
     if (requestTransientPolicy && remaining <= 0) {
       throw markProxyError(new Error("native Messages transient send budget exhausted before recovery dispatch"));
@@ -695,6 +802,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
               }
             } else {
               for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider); attempt++) {
+                if (!providerAffinityGenerationIsCurrent(config, route.providerName, activeProvider)) throw markProxyError(new Error("Provider affinity selection is no longer available"));
                 if (attempt >= 3) throw markProxyError(new Error("Provider key selection changed repeatedly before native Messages dispatch"));
                 let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
                 if (!current && activeProvider.requestPacing?.enabled
@@ -752,22 +860,25 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
               } else if (spendTracker) {
                 if (!physicalBudget.spendEnforced && !spendTracker.charge({ workflowAlreadyCounted: true })) throw new NativeMessagesSpendRefusal();
               }
-              noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
               // Last synchronous ownership reservation before the physical fetch. Retain this
               // exact incarnation across its await; a returned response can never reserve one.
               sendOwner = snapshot ? captureAnthropicPhysicalSendOwnership(snapshot) : null;
               if (snapshot && !sendOwner) throw new NativeOAuthSelectionChangedError();
-              physicalSendsUsed++;
               const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
-                distributedKeyPhysicalFetch(
+                passiveKeyPhysicalFetch(distributedKeyPhysicalFetch(
                   anthropicBillingPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute, route.providerName, activeProvider),
-                  route.providerName, activeProvider, wire.url, activeProvider.apiKeyTransport === "bearer" ? "authorization" : "x-api-key"),
+                  route.providerName, activeProvider, wire.url, activeProvider.apiKeyTransport === "bearer" ? "authorization" : "x-api-key"), config, route.providerName, activeProvider),
                 String(input), physicalInit, { providerName: route.providerName, provider: activeProvider },
               )) as typeof fetch;
               localUpstream = isLocalUpstream(wire.url);
               dispatched = await fetchWithHeaderTimeout(
                 wire.url,
-                applyUpstreamRecoveryInit({ ...init, method: "POST", headers, body: wire.body, ...physicalSendObserverInit(observeAutoPause, wire.url) }, transportRecovery),
+                applyUpstreamRecoveryInit({ ...init, method: "POST", headers, body: wire.body,
+                  ...physicalSendObserverInit(observeAutoPause, wire.url, () => {
+                    noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
+                    physicalSendsUsed++;
+                  }),
+                }, transportRecovery),
                 init.signal ?? upstream.signal,
                 resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream }),
                 requestedStream, physicalFetch,
@@ -787,7 +898,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
                   && credentialGeneration(current.credential) === snapshot.generation
                   && current.credential.accountId === providerAccountUuid) {
                   bindAnthropicRefusalCredentialForSend(dispatched, sendOwner, providerAccountUuid);
-                  recordAnthropicAccountQuotaFromHeadersForInstance(nativeInstance!, snapshot.accountId, dispatched.headers, writerGeneration, dispatched.status, route.modelId, snapshot.generation);
+                  recordAnthropicAccountQuotaFromHeadersForInstance(nativeInstance!, snapshot.accountId, dispatched.headers, writerGeneration, dispatched.status, route.modelId, snapshot.generation, sendOwner.credentialKey);
                 }
               } catch { /* Passive observation must not fail the response. */ }
             }
@@ -836,6 +947,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...activeProvider, _apiKeyAttempt: undefined });
         const next = fresh && (selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh);
         if (!next) break;
+        sealCredentialRefusal(logCtx, response.status, "key-401");
         try { void response.body?.cancel().catch(() => {}); } catch { /* closed */ }
         rebuildFor(next);
         response = await send("key-401");
@@ -850,6 +962,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         });
         pendingDistributedFailure = undefined; // Rotation already records this physical failure.
         if (!rotated) break;
+        sealCredentialRefusal(logCtx, response.status, "key-401");
         discard(response);
         rebuildFor(rotated);
         response = await send("key-401");
@@ -859,6 +972,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         if (!rotated) break;
         billingRecoveryActive = true;
         if (!keySendAvailable()) break;
+        sealCredentialRefusal(logCtx, response.status, "key-401");
         discard(response);
         rebuildFor(rotated);
         response = await send("key-401");
@@ -869,7 +983,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         response.status === 429
         && distributedResponseOwnsKey
         && !isNonReplayableResponse(response)
-        && retryPolicy
+        && retryPolicy && providerAffinityGenerationIsCurrent(config, route.providerName, activeProvider)
         && retries < retryPolicy.attempts
         && keySendAvailable()
       ) {
@@ -893,6 +1007,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         if (!rotated) break;
         // Rotation already recorded the cooldown; keep the terminal 429 when no send remains.
         if (!keySendAvailable()) break;
+        sealCredentialRefusal(logCtx, response.status, "key-429");
         discard(response);
         rebuildFor(rotated);
         response = await send("key-429");
@@ -927,7 +1042,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
           return resolved.decision;
         },
         signal: upstream.signal, requestKey: oauthRetryKey,
-        canRetry: transientSendAvailable() && oauthFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
+        canRetry: transientSendAvailable() && oauthFailovers < oauthFailoverLimit && oauthPhysicalSendAvailable(),
       });
       if (!nextAccountId) break;
       const recovery = response.status === 401 ? "oauth-401" : response.status === 403 ? "oauth-account-403" : "rate-limit-429";
@@ -936,10 +1051,12 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         sessionKey: options.sessionKey, model: route.modelId, candidateAccountId: nextAccountId,
         expectedRecoverySelection, expectedRecoveryRouteDecision: sendingBinding.routeDecision,
       });
+      const changed = anthropicRefusalCredentialChanged(response, oauthBinding.snapshot);
+      if (changed) sealCredentialRefusal(logCtx, response.status, recovery);
       oauthFailovers++;
       rebuildFor(oauthProvider(oauthBinding));
       logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
-      response = await send(recovery);
+      response = await send(changed ? recovery : "rate-limit-429");
     }
   } catch (error) {
     releaseRetainedRequest();
@@ -949,12 +1066,14 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
     settleDistributedFailure();
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
     if (sendError instanceof RequestPacingQueueOverloadError) {
+      logCtx.terminalSource = "synthetic";
       const refusal = markProxyError(fail(429, sendError.message, "rate_limit_error"), sendError.reason === "keys_exhausted" ? undefined : "pacing");
       const advice = formatClientRetryAfter(sendError.retryAfterSeconds);
       if (advice !== undefined) refusal.headers.set("Retry-After", advice);
       return refusal;
     }
     if (sendError instanceof SendBudgetExhaustedError) {
+      logCtx.terminalSource = "synthetic";
       const refusal = workflowSendCeilingRefusalResponse(logCtx, req.headers.get("x-codex-parent-thread-id")?.trim() || undefined);
       if (refusal) { finishLog(429); return nativeWorkflowRefusalResponse(refusal); }
       return fail(429, sendError.message, "send_budget_exhausted", "send_budget_exhausted");
@@ -1010,13 +1129,17 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   if (contentType.includes("text/event-stream") && response.body) {
     // `upstream` follows req.signal and is also what shutdown and turn release abort, so both
     // the client leaving and this lane's own abort read as a cancel, not as a failed stream.
+    const rawActivity: { refresh?: () => void } = {};
     const bodyGuard = {
       ...resolvePassthroughBodyGuard(config, upstream.signal),
       ...(activeProvider.anthropicEofTolerance === true ? { eofTolerant: true } : {}),
+      rawActivity,
     };
     const replay = { committed: false, pending: false };
     const raw = options.sendBudget ? observeNativeMessagesReplayBoundary(response.body, logCtx, replay) : response.body;
-    const observed = logIds && onFirstOutput ? observeFirstChunk(raw, onFirstOutput) : raw;
+    const firstOutput = logIds ? onFirstOutput : undefined;
+    const observed = firstOutput || bodyGuard.stallMs > 0
+      ? observeNativeMessagesChunks(raw, firstOutput, undefined, () => rawActivity.refresh?.()) : raw;
     const renamed = activeRequest.oauthToolNames
       ? restoreOAuthToolNamesInSse(observed, activeRequest.oauthToolNames, translatorBudget)
       : observed;
@@ -1046,8 +1169,8 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       }, bodyGuard, frames, nativeInstance ? clientFilter : undefined);
       // A configured Messages provider words an oversized-input refusal its own way; Claude Code
       // compacts only on Anthropic's wording (devlog/_plan/261009_claude_1m_default/010). The
-      // rewrite buffers whole frames, so it sits after the tap: stall detection keeps timing raw
-      // upstream bytes. Real Anthropic pools refuse pre-stream in that wording and keep one relay.
+      // rewrite buffers whole frames, so it sits after the tap. The raw observer feeds the tap's
+      // stall deadline before any frame buffering. Real Anthropic pools keep one client relay.
       const clientStream = nativeInstance ? relayed : relaySseWithPayloadRewrite(relayed, claudeOverflowSsePayload, translatorBudget, messagesSseFrameHooks(frames), clientFilter);
       let delivered = retainUpstreamMessagesRequestId(new Response(clientStream, {
         status: 200,

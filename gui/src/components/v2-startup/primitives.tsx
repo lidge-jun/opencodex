@@ -22,15 +22,17 @@ const BADGE_TONE: Record<Tone, string> = {
 };
 
 /** A state word in a soft pill with a dot (`integrations-6` status words). */
-export function StateBadge({ tone, children, className }: { tone: Tone; children: ReactNode; className?: string }) {
+/** `wrap` lets a sentence-long badge break across lines instead of truncating, so every pointer and keyboard user can read it. */
+export function StateBadge({ tone, children, className, wrap = false }: { tone: Tone; children: ReactNode; className?: string; wrap?: boolean }) {
   return (
     <span className={cn(
-      "startup-badge inline-flex h-[22px] max-w-full shrink-0 items-center gap-1.5 rounded-full px-2 text-[12px] leading-4 font-semibold whitespace-nowrap",
+      "startup-badge inline-flex max-w-full shrink-0 items-center gap-1.5 px-2 text-[12px] leading-4 font-semibold",
+      wrap ? "min-h-[22px] rounded-[11px] py-[3px] whitespace-normal" : "h-[22px] rounded-full whitespace-nowrap",
       BADGE_TONE[tone],
       className,
     )}>
       <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-current" />
-      <span className="truncate">{children}</span>
+      <span className={wrap ? "min-w-0" : "truncate"}>{children}</span>
     </span>
   );
 }

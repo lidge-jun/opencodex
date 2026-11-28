@@ -1,3 +1,4 @@
+import { createAgyAcpAdapter } from "./agy-acp/adapter";
 import { createAnthropicAdapter } from "./anthropic";
 import { createWorkBuddyAdapter } from "./workbuddy";
 import { createDshAccountAdapter } from "./dsh-account";
@@ -9,12 +10,14 @@ import { withUniqueToolCallIds } from "./unique-tool-call-ids";
 import { createCodeBuddyAdapter } from "./codebuddy/adapter";
 import { createQoderAdapter } from "./qoder/adapter";
 import { createTraeCnAdapter } from "./trae-cn/adapter";
+import { createStepCliAdapter } from "./step-cli/adapter";
 import { createCommandCodeAdapter } from "./command-code";
 import { createCursorAdapter } from "./cursor";
 import { createDevinAdapter } from "./devin";
 import { createGoogleAdapter } from "./google";
 import { createKiroAdapter } from "./kiro";
 import { createMimoFreeAdapter } from "./mimo-free";
+import { createM365CopilotAdapter } from "./m365-copilot";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { createOllamaNativeAdapter } from "./ollama-native";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
@@ -22,6 +25,7 @@ import { createZedAdapter } from "./zed";
 import type { OcxProviderConfig } from "../types";
 import { createAdapterTierMetadata } from "../providers/fastwire";
 import { withInputMediaGuard } from "./input-media-guard";
+import { withCommandCodeDecisionModelGuard } from "./command-code-decision-guard";
 
 export type AdapterCacheRetention = "none" | "short" | "long";
 
@@ -42,6 +46,7 @@ export interface AdapterFactoryContext {
 export type AdapterWire =
   | "codebuddy"
   | "trae-cn"
+  | "step-cli"
   | "command-code"
   | "openai-chat"
   | "ollama-native"
@@ -51,7 +56,8 @@ export type AdapterWire =
   | "kiro"
   | "cursor"
   | "devin"
-  | "zed";
+  | "zed"
+  | "agy-acp";
 
 export type AdapterMutationContract =
   | "codex-owned"
@@ -77,6 +83,10 @@ type InheritedAdapterDefinition = {
 type AdapterDefinition = DirectAdapterDefinition | InheritedAdapterDefinition;
 
 export const ADAPTER_REGISTRY = {
+  "m365-copilot": {
+    contractParent: "openai-chat",
+    create: (provider: OcxProviderConfig) => withUniqueToolCallIds(createM365CopilotAdapter(provider)),
+  },
   "workbuddy-ai": {
     contractParent: "openai-chat",
     create: (provider: OcxProviderConfig) => withUniqueToolCallIds(createWorkBuddyAdapter(provider)),
@@ -155,6 +165,13 @@ export const ADAPTER_REGISTRY = {
     contractParent: "codebuddy",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createQoderAdapter(provider),
   },
+  "agy-acp": {
+    // The official Antigravity CLI over the Agent Client Protocol (`agy acp`): one local child per
+    // turn, the CLI owns its sign-in, and the adapter is runTurn-only (plan 080, #8480).
+    wire: "agy-acp",
+    mutation: "codex-owned",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createAgyAcpAdapter(provider),
+  },
   "claude-cli": {
     // Claude Code speaks the same stream-json contract this repo already parses for CodeBuddy and
     // Qoder, so the contract is inherited rather than restated. The family owns its args and env,
@@ -166,6 +183,15 @@ export const ADAPTER_REGISTRY = {
     wire: "trae-cn",
     mutation: "codex-owned",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createTraeCnAdapter(provider),
+  },
+  "step-cli": {
+    // StepCode's SDK stdio host speaks its own length-prefixed envelope rather than the Anthropic
+    // stream-json this repo parses for CodeBuddy, Qoder and Claude Code, so it states its own wire
+    // contract. The family owns its args, env and framing, and the CLI owns the credential: the
+    // adapter stores and injects none.
+    wire: "step-cli",
+    mutation: "codex-owned",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createStepCliAdapter(provider),
   },
   "dsh-account": {
     contractParent: "anthropic",
@@ -216,8 +242,9 @@ export function createRegisteredAdapter(
   const adapter = definition.create(provider, context);
   const wire = effectiveAdapterContract(provider.adapter).wire;
   if (wire !== "openai-responses") {
-    withInputMediaGuard(adapter, wire);
+    withInputMediaGuard(adapter, wire, provider);
   }
+  withCommandCodeDecisionModelGuard(adapter, provider);
   const buildRequest = adapter.buildRequest.bind(adapter);
   adapter.buildRequest = (parsed, incoming) => {
     const attachTierMetadata = (request: Awaited<ReturnType<ProviderAdapter["buildRequest"]>>) => {

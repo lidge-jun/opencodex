@@ -1,4 +1,5 @@
-import { readCodexWsUpgradeHeaders } from "./codex-ws-metadata";
+import { codexWsIncrementalUploadEnabled, forgetIncrementalSession } from "./codex-ws-incremental";
+import { readCodexWsAdvertisedMessageLimit, readCodexWsUpgradeHeaders } from "./codex-ws-metadata";
 
 export const MAX_CODEX_WS_SESSION_EXCHANGES = 32;
 export const CODEX_WS_SESSION_CLOSE_GRACE_MS = 1_000;
@@ -47,8 +48,11 @@ export class CodexWsSession {
   busy = false;
   private owner?: (reason: Error) => void;
   private readonly completedIds = new Set<string>();
+  private idlePing?: ReturnType<typeof setInterval>;
   private pendingUpgradeHeaders?: Headers;
   private connectionHeaders?: Headers;
+  private pendingMessageLimit?: number;
+  private messageLimit?: number;
 
   constructor(url: string, headers: Record<string, string>, readonly retainable = false,
     private readonly changed: () => void = () => {}, proxy?: string) {
@@ -63,9 +67,12 @@ export class CodexWsSession {
   get reused(): boolean { return this.completedIds.size > 0; }
   hasCompleted(id: string): boolean { return this.completedIds.has(id); }
   upgradeHeaders(): Headers { return new Headers(this.opened && !this.closed ? this.connectionHeaders : undefined); }
+  /** The upload ceiling this connection's 101 advertised, if any; Codex refuses a frame strictly larger. */
+  advertisedMessageLimit(): number | undefined { return this.opened && !this.closed ? this.messageLimit : undefined; }
 
   reserve(): boolean {
     if (this.closed || this.busy || (this.opened && this.socket.readyState !== undefined && this.socket.readyState !== 1)) return false;
+    clearInterval(this.idlePing); this.idlePing = undefined;
     this.busy = true;
     const socket = this.socket as WebSocket & { ref?: () => void };
     try { socket.ref?.(); } catch { /* optional keepalive hint */ }
@@ -92,6 +99,15 @@ export class CodexWsSession {
       return;
     }
     this.busy = false;
+    if (codexWsIncrementalUploadEnabled()) {
+      clearInterval(this.idlePing);
+      this.idlePing = setInterval(() => {
+        if (!codexWsIncrementalUploadEnabled()) { clearInterval(this.idlePing); this.idlePing = undefined; return; }
+        if (this.busy || this.closed) return;
+        try { (this.socket as WebSocket & { ping?: () => void }).ping?.(); } catch { this.dispose(); }
+      }, 15_000);
+      this.idlePing.unref?.();
+    }
     const socket = this.socket as WebSocket & { unref?: () => void };
     try { socket.unref?.(); } catch { /* optional hint; shutdown/expiry still owns cleanup */ }
     this.changed();
@@ -113,13 +129,17 @@ export class CodexWsSession {
 
   private onHandshake = (event: Event): void => {
     if (this.opened || this.closed) return;
-    this.pendingUpgradeHeaders = readCodexWsUpgradeHeaders((event as MessageEvent<unknown>).data);
+    const payload = (event as MessageEvent<unknown>).data;
+    this.pendingUpgradeHeaders = readCodexWsUpgradeHeaders(payload);
+    this.pendingMessageLimit = readCodexWsAdvertisedMessageLimit(payload);
   };
   private onOpen = (): void => {
     if (this.closed) return;
     // A 101 payload alone is not proof that Bun accepted the handshake.
     this.connectionHeaders = this.pendingUpgradeHeaders;
     this.pendingUpgradeHeaders = undefined;
+    this.messageLimit = this.pendingMessageLimit;
+    this.pendingMessageLimit = undefined;
     this.socket.removeEventListener("handshake", this.onHandshake);
     this.opened = true;
   };
@@ -136,8 +156,12 @@ export class CodexWsSession {
     // The active exchange's close listener retains pre-send fallback semantics.
   };
   private detach(): void {
+    clearInterval(this.idlePing); this.idlePing = undefined;
+    forgetIncrementalSession(this);
     this.pendingUpgradeHeaders = undefined;
     this.connectionHeaders = undefined;
+    this.pendingMessageLimit = undefined;
+    this.messageLimit = undefined;
     this.socket.removeEventListener("handshake", this.onHandshake);
     this.socket.removeEventListener("open", this.onOpen);
     this.socket.removeEventListener("message", this.onIdleMessage);

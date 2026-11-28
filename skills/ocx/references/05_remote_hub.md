@@ -10,10 +10,15 @@ answers that are easy to guess wrong.
 [access/remote chapter](01_surface_access-remote.md) are offline discovery.
 `ocx connect status --json` reports the local connection. Before live management,
 run readiness and version checks on the machine serving the management API.
-A connected client's machine listener does not serve ordinary management routes;
-the CLI refuses that target rather than automatically forwarding the operation.
-Run management commands on the hub or use its dashboard (which supports relay).
+A connected Hub client can relay allowlisted account, cached quota and usage reads. The
+local admin token admits the CLI read, and the Hub verifies the enrolled relay credential.
+The relayed dashboard can sign out its own Hub GUI session. Use the Hub dashboard
+directly for other management writes and reads outside the allowlist.
 Local config and local Lab commands still refer to this machine's files.
+`ocx config show --source` explains the local config load. Check `source`,
+`error`, and `warnings` rather than treating exit 0 as validation success;
+it is not a dump of effective live settings on the Home. Use the feature's own
+read command on the intended management host for that question.
 
 Read connection status again after an authorized connect, rotation or disconnect.
 A saved connection, completed catalog transfer, client-file rewrite and healthy
@@ -369,6 +374,12 @@ taken back from the Home. A restart is withheld while the Home is relaying a mod
 Child (`restart-skipped:link-active`, exit 6); try again when the Child is idle. A Child older than 2.69
 is seen as busy only once its response starts for a non-streaming request, so a restart sent while such
 a request is still running can end it.
+
+A link Responses WebSocket that closed while Codex was busy, or a Home that stopped uncleanly, can leave the Child
+held: `ocx link status` shows `child.holds` with each hold's reasons, and restarts are withheld the same way.
+`--ignore-activity` on a one-link `ocx link sync ... --restart-*` or `ocx link restart-codex` restarts past
+that check and ends the running work; `ocx link activity clear --link-id <id>` forgets one link's holds. Both are
+the operator's decision: never pass them on your own initiative, and nothing applies them automatically.
 
 Windows Children take `sync` only: restarts are `unsupported` (`windows-restart`) and orchestrated updates
 `unsupported` (`windows-apply`). `ocx-child` Children report restart and update `unsupported`. The CLI

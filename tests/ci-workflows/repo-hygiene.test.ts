@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { repositoryGitEnv } from "../helpers/git-fixture";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
 
 const repoRoot = resolveRepoRoot();
@@ -62,7 +63,7 @@ const RETIRED_TRACKED_FILES = [
 ];
 
 function trackedFiles(): string[] {
-  const result = Bun.spawnSync(["git", "ls-files"], { cwd: repoRoot });
+  const result = Bun.spawnSync(["git", "ls-files"], { cwd: repoRoot, env: repositoryGitEnv() });
   if (result.exitCode !== 0) {
     throw new Error(`git ls-files failed: ${new TextDecoder().decode(result.stderr)}`);
   }
@@ -74,7 +75,7 @@ function trackedFiles(): string[] {
 }
 
 function trackedEntries(): { mode: string; path: string }[] {
-  const result = Bun.spawnSync(["git", "ls-files", "-s"], { cwd: repoRoot });
+  const result = Bun.spawnSync(["git", "ls-files", "-s"], { cwd: repoRoot, env: repositoryGitEnv() });
   if (result.exitCode !== 0) {
     throw new Error(`git ls-files -s failed: ${new TextDecoder().decode(result.stderr)}`);
   }
@@ -89,11 +90,30 @@ function trackedEntries(): { mode: string; path: string }[] {
     });
 }
 
+/**
+ * Bun's on-disk build cache. Bun writes `<hash>-00000000.bun-build` into whichever
+ * directory it runs in — here, the repository root — and a broad `git add -A` swept
+ * two 59.8 MB copies of it into this branch. They are pure machine-local cache:
+ * nothing in the build, the typecheck, or the test path reads them, and the same file
+ * reappears under a new hash on the next run, so committing one only ever adds weight.
+ *
+ * The ignore rule alone would not have caught the second copy, for the same reason it
+ * does not catch `go/` or `.codexclaw/`: an already-tracked path stops consulting
+ * `.gitignore` entirely.
+ */
+const BUILD_CACHE_SUFFIX = ".bun-build";
+
 describe("repository hygiene", () => {
   test("no local agent or session state is tracked", () => {
     const offenders = trackedFiles().filter((path) =>
       path.split("/").some((segment) => FORBIDDEN_TRACKED_DIRS.includes(segment)),
     );
+
+    expect(offenders).toEqual([]);
+  });
+
+  test("no Bun build cache is tracked", () => {
+    const offenders = trackedFiles().filter((path) => path.endsWith(BUILD_CACHE_SUFFIX));
 
     expect(offenders).toEqual([]);
   });
@@ -137,6 +157,8 @@ describe("repository hygiene", () => {
     for (const dir of RETIRED_TRACKED_DIRS) {
       expect(ignore).toContain(`${dir}/`);
     }
+
+    expect(ignore).toContain(`*${BUILD_CACHE_SUFFIX}`);
   });
 });
 
@@ -254,7 +276,7 @@ describe("devlog is tracked, with no submodule left behind", () => {
   });
 
   test("no workflow checks out submodules", async () => {
-    const listing = Bun.spawnSync(["git", "ls-files", ".github/workflows"], { cwd: repoRoot });
+    const listing = Bun.spawnSync(["git", "ls-files", ".github/workflows"], { cwd: repoRoot, env: repositoryGitEnv() });
     const workflows = new TextDecoder()
       .decode(listing.stdout)
       .split("\n")

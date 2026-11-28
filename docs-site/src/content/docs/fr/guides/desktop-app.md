@@ -57,7 +57,7 @@ L’application demande à son CLI intégré d’exécuter `ocx resolve --json` 
 
 Utilisez l’action **Open dashboard** ou **Open in browser** de la zone de notification pour passer du tableau de bord intégré à votre navigateur habituel. Le menu permet aussi de rechercher les mises à jour.
 
-Sur macOS, fermer le tableau de bord laisse l’application active dans la barre des menus. Ouvrez à nouveau OpenCodex depuis le Dock ou le Finder pour réafficher le tableau de bord sans redémarrer le proxy.
+Sur macOS, fermer le tableau de bord laisse l’application active dans la barre des menus. Choisissez **Open Dashboard** dans la barre des menus ou rouvrez OpenCodex depuis le Finder pour réafficher le tableau de bord sans redémarrer le proxy. Activez **Hide Dock icon** dans le même menu pour masquer l’icône du Dock même lorsque le tableau de bord est ouvert.
 
 ## Utilisation dans la zone de notification
 
@@ -80,6 +80,8 @@ Quand l’updater Tauri trouve une version plus récente, un point bleu apparaî
 Dans l’application de bureau, le bouton de mise à jour du tableau de bord ouvre la page de mise à jour de l’application. Vous pouvez y vérifier à nouveau, installer une mise à jour signée en attente ou revenir au tableau de bord. La même installation est disponible dans le menu de la zone de notification. En cas d’échec, la mise à jour reste disponible pour une nouvelle tentative. Cette page fonctionne aussi sous Linux lorsque le bureau n’a pas d’icône de tray. Un tableau de bord ouvert dans un navigateur gère à la place l’installation du paquet sur ce proxy.
 
 Les mises à jour sont vérifiées avec la clé publique signée de l’outil de mise à jour du projet avant installation. Sur macOS, les mises à jour intégrées téléchargent `OpenCodex-<version>-macos.app.tar.gz` ; le DMG sert à la première installation. Le manifeste de publication n’est généré que si le secret de la clé de mise à jour est configuré ; les quatre plateformes doivent alors être signées.
+
+Sous Windows, vous pouvez aussi mettre à jour sans la fenêtre de l'application, par exemple via SSH. Exécutez le `ocx.exe` de l'installation depuis un terminal administrateur ouvert avec le compte Windows qui exécute OpenCodex : `"C:\Program Files\OpenCodex\ocx.exe" update --desktop` (adaptez le dossier si vous avez installé ailleurs). Un service, une tâche planifiée SYSTEM ou un autre compte a son propre répertoire OpenCodex, ne trouve pas ce proxy et le laisserait sur l'ancienne version. La commande vérifie la même version publiée que la barre d'état, contrôle le MSI avec la même clé de mise à jour et refuse toute incohérence, l'installe sans interface, puis redémarre le proxy qui exécute encore l'ancienne version pour que la nouvelle réponde. `--check` se contente de signaler l'état et `--json` produit un résultat lisible par une machine. Le code de sortie 0 signifie terminé ou déjà à jour ; 1, rien n'a été installé ; 2, la mise à jour est installée mais l'ancien proxy tourne encore (ou Windows doit d'abord redémarrer) ; 3, l'installateur n'a pas terminé à temps. Un proxy lancé depuis une autre installation n'est jamais arrêté. Si vous avez installé un MSI à la main, `ocx status` indique que la version installée est plus récente que le proxy en cours et affiche cette commande.
 
 ## Widget
 

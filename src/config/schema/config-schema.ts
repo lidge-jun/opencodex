@@ -1,3 +1,4 @@
+import { poolAccountEgressConfigError } from "../../lib/provider-egress";
 import { dashboardTrustedProxySchema } from "../dashboard-trusted-proxy";
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
 import { validRemainingQuotaAccountIds } from "../../codex/account-use-remaining";
@@ -8,10 +9,12 @@ import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
 import { nativeReasoningRetentionSchema } from "./native-reasoning-retention";
 import { workflowBudgetSchema } from "./workflow-budget";
+import { routedCatalogDefaultsSchema } from "./routed-catalog-defaults";
 import { desktopCompatibilitySchema } from "./desktop-compatibility";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
 import { mainAccountHardLockFallbackSchema } from "./main-account-hard-lock-fallback";
 import { fallbackPolicySchema } from "./fallback-policy";
+import { subscriptionReserveSchema } from "./subscription-reserve";
 import {
   agentTaskRecoverySchema,
   catalogAutoRefreshSchema,
@@ -19,6 +22,7 @@ import {
   CODEX_ACCOUNT_PIN_PATTERN,
   codexAccountPrioritiesSchema,
   salvageCodexAccountAutoSwitchThresholds,
+  codexAuthMethodSchema,
   codexPoolSchema,
   codexQuotaAutoRefreshSchema,
   credentialGroupsSchema,
@@ -48,7 +52,9 @@ import {
   modelPreferHostedToolsConfigError,
   providerModelCostsConfigError,
   providerRelativeSendPathConfigError,
+  isValidCreditPriceUsd,
 } from "./leaf-validators";
+import { MAX_CREDIT_PRICE_USD } from "../../usage/credit-billing";
 import { isValidProviderName, hasOwnProvider } from "../provider-name";
 import {
   apiKeyTransportConfigError,
@@ -78,6 +84,7 @@ import { MIN_USAGE_LEDGER_MAX_BYTES } from "../../usage/retention-contract";
 // parser here would cycle back through config loading and run Cursor detection during validation.
 import { COMBO_NAMESPACE, comboConfigIssues, lexicalDecisionModelBase } from "../../combos/types";
 import { routingProfileIssues } from "../../routing/profile";
+import { agyAcpConfigIssues } from "./agy-acp-references";
 import { POLICY_NAMESPACE } from "../../routing/profile-namespace";
 import { providerDestinationConfigError } from "../../lib/destination-policy";
 import { providerTlsProfileConfigError } from "../../lib/provider-tls-profile";
@@ -102,11 +109,14 @@ export const protocolConfigSchema = z.object({
     managedMessagesNativeOAuth: z.boolean().optional(),
     directEncoders: z.boolean().optional(),
     antigravityDirect: z.boolean().optional(),
+    geminiNativeAntigravity: z.boolean().optional(),
     shadowPlan: z.boolean().optional(),
   }).strict().optional(),
 }).strict();
 
 export const configSchema = z.object({
+  // Malformed hand edits disable only this opt-in. Candidate writes reject them.
+  subscriptionReserve: subscriptionReserveSchema.optional().catch(undefined),
   chatgptDesktop: chatgptDesktopSchema.optional().catch(undefined),
   codexNativeSteering: z.boolean().optional().catch(false),
   codexNativeInjection: z.boolean().optional().catch(false),
@@ -148,6 +158,7 @@ export const configSchema = z.object({
         managedMessagesNativeOAuth: false,
         directEncoders: fields.directEncoders === true,
         antigravityDirect: fields.antigravityDirect === true,
+        geminiNativeAntigravity: false,
         shadowPlan: fields.shadowPlan === true,
       },
     };
@@ -181,6 +192,7 @@ export const configSchema = z.object({
   // Opt-in outbound request compression (#7247). An unknown codec degrades to identity, matching
   // the guards above: a hand-edit typo must not change what the proxy sends or refuse traffic.
   upstreamRequestCompression: z.enum(["off", "gzip", "zstd"]).optional().catch(undefined),
+  upstreamHistorySlim: z.enum(["off", "codex"]).optional().catch(undefined),
   // Opt-in inbound body ceiling (#3573). An invalid hand edit degrades to the 256 MiB default
   // rather than failing the parse, matching the outbound guard above: a malformed number must
   // not change what the proxy admits. The hard ceiling is NOT enforced here — because of that
@@ -193,6 +205,8 @@ export const configSchema = z.object({
   // Match the per-body load/degrade contract: malformed hand edits retain providers.
   // The shared resolver clamps runtime admission to 512 MiB..2 GiB even when the
   // caller bypasses this schema; omission and zero retain the 512 MiB default.
+  // Home-side per-body zstd advertisement on Remote Links (#3023); anything but a boolean reads as unset, which is on.
+  linkRequestCompression: z.boolean().optional().catch(undefined),
   maxConcurrentInboundBodyBytes: z.number().int()
     .min(0)
     .optional()
@@ -232,6 +246,8 @@ export const configSchema = z.object({
   nativeReasoningRetention: nativeReasoningRetentionSchema.optional().catch(undefined),
   // A bad hand edit falls back to the built-in ceilings; it never turns the guard off.
   workflowBudget: workflowBudgetSchema.optional().catch(undefined),
+  // A bad hand edit drops the whole block, so routed rows keep today's derivation (#6872).
+  routedCatalogDefaults: routedCatalogDefaultsSchema.optional().catch(undefined),
   desktopCompatibility: desktopCompatibilitySchema.optional().catch(undefined),
   // A hand-edited malformed phase disables only that phase instead of rejecting
   // providers/apiKeys, matching the load-time degradation notice; the management write
@@ -281,6 +297,9 @@ export const configSchema = z.object({
   // A malformed hand edit must not silently stop opening the browser: fall back
   // to undefined, which resolves to the historical auto-open behavior.
   oauthOpenBrowser: z.boolean().optional().catch(undefined),
+  // A malformed hand edit falls back to the historical behavior rather than
+  // discarding the config; diagnostics still report it as invalid.
+  codexAuthMethod: codexAuthMethodSchema.catch(undefined),
   showCodexCredits: z.boolean().optional().catch(false),
   openaiProviderTierVersion: z.union([z.literal(1), z.literal(2)]).optional(),
   // Invalid hand edits must not discard an otherwise usable config.
@@ -342,6 +361,9 @@ export const configSchema = z.object({
   }).strict().optional().catch(undefined)),
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
+  codexReserveEnabled: z.boolean().optional().catch(undefined),
+  // A malformed marker degrades to unmigrated, which reseeds from the persisted authless flag.
+  codexReserveMigration: z.number().int().positive().optional().catch(undefined),
   codexClientCompaction: z.boolean().optional().catch(undefined),
   // Presentation-only label for the injected provider. A malformed value degrades to undefined
   // and the default label is emitted, rather than failing the parse or writing a config Codex
@@ -384,6 +406,7 @@ export const configSchema = z.object({
   codexFailureWindow: z.boolean().optional().catch(undefined),
   codexPinnedTransientPolicy: z.enum(["hold", "detour-new-threads"]).optional().catch("hold"),
   codexWsReuseAcrossTurns: z.boolean().optional().catch(false),
+  codexWsIncrementalUpload: z.boolean().optional().catch(false),
   activeCodexAccountPinned: z.string().regex(CODEX_ACCOUNT_PIN_PATTERN).optional().catch(undefined),
   // A malformed hand edit must degrade to false without discarding providers, accounts,
   // or the exact selector map. Live writes remain strict.
@@ -406,6 +429,9 @@ export const configSchema = z.object({
   }).optional().catch(undefined),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
+  // Providers the dashboard's suggested combos leave out (Combos page).
+  comboSuggestionExcludedProviders: z.array(z.string().trim().min(1).max(256)).max(256)
+    .transform((names) => [...new Set(names)]).optional().catch(undefined),
   // Invalid values degrade to undefined ("auto") instead of failing the whole
   // parse: a hand-edited typo must never trip the backup-and-defaults repair
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
@@ -509,6 +535,12 @@ export const configSchema = z.object({
     }
   }
 
+  // A pool account's own route follows the provider egress rules (src/lib/provider-egress.ts).
+  if (Array.isArray(config.codexAccounts)) config.codexAccounts.forEach((account: unknown, index: number) => {
+    const { id, egress } = (account ?? {}) as { id?: unknown; egress?: unknown };
+    const error = poolAccountEgressConfigError(`codexAccounts.${typeof id === "string" ? id : index}.egress`, egress);
+    if (error) ctx.addIssue({ code: "custom", path: ["codexAccounts", index, "egress"], message: error });
+  });
   const accountNamespaces = config.codexAccountNamespaces;
   if (accountNamespaces) {
     const configuredAccountIds = configuredCodexPoolAccountIds(config.codexAccounts);
@@ -809,6 +841,14 @@ export const configSchema = z.object({
         message: minMaxOutputError,
       });
     }
+    const creditPrice = (provider as { creditPriceUsd?: unknown }).creditPriceUsd;
+    if (creditPrice !== undefined && !isValidCreditPriceUsd(creditPrice)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "creditPriceUsd"],
+        message: `creditPriceUsd must be a finite number between 0 and ${MAX_CREDIT_PRICE_USD}`,
+      });
+    }
     const defaultMaxOutputError = positiveIntegerConfigError(
       (provider as { defaultMaxOutputTokens?: unknown }).defaultMaxOutputTokens,
       "defaultMaxOutputTokens",
@@ -930,6 +970,13 @@ export const configSchema = z.object({
         }
       }
     }
+  }
+  for (const issue of agyAcpConfigIssues(config as Parameters<typeof agyAcpConfigIssues>[0])) {
+    // Preserve non-provider identifiers for load-time salvage; diagnostics mask them at serialization.
+    const path = issue.path[0] === "providers"
+      ? issue.path.map(segment => typeof segment === "string" ? redactSecretString(segment) : segment)
+      : issue.path;
+    ctx.addIssue({ code: "custom", path, message: issue.message });
   }
   const routingProfiles = (config as { routingProfiles?: unknown }).routingProfiles;
   if (routingProfiles !== undefined) {

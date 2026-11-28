@@ -1,7 +1,6 @@
-import { beginCodexWriteSection, publishCodexArtifact, removeCodexProfileEntry } from "./config-write-section";
+import { beginCodexWriteSection, publishCodexConfigIfUnchanged, removeCodexProfileEntry } from "./config-write-section";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { normalizeStructuralWhitespace, rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText } from "../toml-source-lines";
-import { atomicWriteFile } from "../../config";
 import { ConfigWriteLockRefusal, configWriteLockFailureMessage, withConfigWriteLockHeld, withConfigWriteRecovery } from "../config-write-lock";
 import type { LockHandle } from "../config-write-lock";
 import {
@@ -12,10 +11,10 @@ import {
 } from "../injected-marker";
 import { HISTORY_RELABEL_STANDS_DOWN, preflightCodexHistoryInjection } from "../history-provider";
 import {
-  journaledInjectedOpenaiBaseUrl,
-  journaledInjectedRealtimeWsBaseUrl,
+  journaledInjectedRootValues,
   journaledInjectedRootWebSearch,
   journaledInjectedSubagentDefaults,
+  journaledOwnedCatalogBinding,
   journaledReplacedRootWebSearch,
 } from "../journal";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "../paths";
@@ -62,7 +61,7 @@ export function retainOcxProviderTableOnDisk(block: string, heldConfigWriteLock?
     const eol = dominantEol(rawContent);
     const content = applyEol(rawContent, "\n");
     const next = appendOcxProviderTableBlock(content, block);
-    if (next !== content) publishCodexArtifact(CODEX_CONFIG_PATH, held, (path, hooks) => atomicWriteFile(path, applyEol(next, eol), undefined, hooks));
+    if (next !== content) publishCodexConfigIfUnchanged(held, "retain", rawContent, applyEol(next, eol));
     return block.replace(/\n+$/, "").split("\n");
   });
   if (!locked.ok) throw new ConfigWriteLockRefusal(locked);
@@ -90,20 +89,21 @@ function hasRootOcxProvider(content: string): boolean {
  */
 function stripOpencodexConfigResult(
   content: string,
-  journaledBaseUrl: string | null = null,
-  journaledRealtimeWsBaseUrl: string | null = null,
+  journaledBaseUrls: readonly string[] = [],
+  journaledRealtimeWsBaseUrls: readonly string[] = [],
   journaledRootWebSearch: string | null = null,
   journaledReplacedWebSearch: string | null = null,
   journaledSubagentDefaults: WrittenSubagentDefaults | null = null,
+  journaledCatalogBinding: string | null = null,
 ): StripOpencodexConfigResult {
   let out = content;
   const hadRootOcxProvider =
     hasRootOcxProvider(out);
   // #1798: marker adjacency is FORMATTING evidence, and a Codex app rewrite keeps values
   // while dropping comments. Fall back to VALUE evidence -- the exact URL we recorded
-  // writing -- so an app-rewritten config is still recognized as ours.
-  const hadInjectedBaseUrl = hasInjectedOpenaiBaseUrl(out)
-    || (journaledBaseUrl !== null && rootTomlString(out, "openai_base_url") === journaledBaseUrl);
+  // writing, any injection under this journal -- so an app-rewritten config is still recognized as ours.
+  const rootBaseUrl = rootTomlString(out, "openai_base_url");
+  const hadInjectedBaseUrl = hasInjectedOpenaiBaseUrl(out) || (rootBaseUrl !== null && journaledBaseUrls.includes(rootBaseUrl));
   out = stripInjectedOpenaiBaseUrl(out); // before removeOcxSection — it keys on the marker line too
   // The enabled direction of the web-search transform is also the purge: it drops our pair, drops a
   // marker-less `disabled` the journal proves we wrote, and puts back the operator line we had to
@@ -112,7 +112,8 @@ function stripOpencodexConfigResult(
     injectedValue: journaledRootWebSearch,
     replacedUserLine: journaledReplacedWebSearch,
   }).content;
-  out = stripJournaledOpenaiBaseUrl(out, journaledBaseUrl, journaledRealtimeWsBaseUrl);
+  for (const url of journaledBaseUrls) out = stripJournaledOpenaiBaseUrl(out, url, null);
+  for (const url of journaledRealtimeWsBaseUrls) out = stripJournaledOpenaiBaseUrl(out, null, url);
   if (hasOcxProviderTable(out)) {
     out = removeOcxSection(out);
   }
@@ -134,7 +135,7 @@ function stripOpencodexConfigResult(
   // A marked value the user edited after injection is theirs (#7425) and survives restore.
   const managedDefaults = transformManagedSubagentDefaults(out, null, journaledSubagentDefaults);
   if (managedDefaults.ok) out = managedDefaults.content;
-  out = stripOpencodexCatalogPath(out);
+  out = stripOpencodexCatalogPath(out, { journaledPath: journaledCatalogBinding });
   return {
     content: normalizeStructuralWhitespace(out),
     managedDefaultsError: !managedDefaults.ok ? managedDefaults.error : null,
@@ -233,34 +234,9 @@ export function removeCodexConfig(
   // The unchanged fast path compares in LF space so an untouched file is never rewritten.
   const eol = dominantEol(rawContent);
   const content = applyEol(rawContent, "\n");
-  // Read the recorded injection once: the strip below consumes it, and so does the
-  // ownership verdict, which must agree with what was actually removed.
-  const journaledBaseUrl = journaledInjectedOpenaiBaseUrl();
-  const journaledRealtimeWsBaseUrl = journaledInjectedRealtimeWsBaseUrl();
-  const journaledRootWebSearch = journaledInjectedRootWebSearch();
-  const journaledReplaced = journaledReplacedRootWebSearch();
-  const had = hasOpencodexRouting(content)
-    || (journaledBaseUrl !== null && rootTomlString(content, "openai_base_url") === journaledBaseUrl)
-    || (journaledRealtimeWsBaseUrl !== null
-      && rootTomlString(content, REALTIME_WS_BASE_URL_KEY) === journaledRealtimeWsBaseUrl);
-  const stripped = stripOpencodexConfigResult(
-    content,
-    journaledBaseUrl,
-    journaledRealtimeWsBaseUrl,
-    journaledRootWebSearch,
-    journaledReplaced,
-    journaledInjectedSubagentDefaults(),
-  );
-  // Captured from the pre-strip bytes: the strip is what removes the table, so reading it
-  // afterwards would find nothing.
-  const retainedBlock = historyDisposition === "stand-down-retain"
-    ? extractOcxProviderTableBlock(content)
-    : null;
-  const finalContent = retainedBlock === null
-    ? stripped.content
-    : appendOcxProviderTableBlock(stripped.content, retainedBlock);
+  const { had, stripped, retainedBlock, finalContent } = planCodexConfigRemoval(content, historyDisposition);
   if (had || finalContent !== content) {
-    publishCodexArtifact(CODEX_CONFIG_PATH, held, (path, hooks) => atomicWriteFile(path, applyEol(finalContent, eol), undefined, hooks));
+    publishCodexConfigIfUnchanged(held, "remove", rawContent, applyEol(finalContent, eol));
   }
   if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH))
     removeCodexProfileEntry(held);
@@ -291,4 +267,70 @@ export function removeCodexConfig(
   });
   if (!locked.ok) return { success: false, retryable: locked.error === "locked", message: configWriteLockFailureMessage(locked) };
   return locked.value;
+}
+
+interface CodexConfigRemovalPlan {
+  had: boolean;
+  stripped: StripOpencodexConfigResult;
+  retainedBlock: string | null;
+  finalContent: string;
+}
+
+/**
+ * The removal transform for one LF-normalized config.toml text. Shared by the write path below
+ * and by the read-only Connections restore preview, so the preview shows what restore writes.
+ */
+function planCodexConfigRemoval(
+  content: string,
+  historyDisposition: RemoveCodexConfigHistoryDisposition,
+): CodexConfigRemovalPlan {
+  // Read the recorded injection once: the strip below consumes it, and so does the
+  // ownership verdict, which must agree with what was actually removed.
+  const journaledBaseUrls = journaledInjectedRootValues("openai_base_url");
+  const journaledRealtimeWsBaseUrls = journaledInjectedRootValues(REALTIME_WS_BASE_URL_KEY);
+  const journaledRootWebSearch = journaledInjectedRootWebSearch();
+  const journaledReplaced = journaledReplacedRootWebSearch();
+  const ownedRoot = (key: string, owned: readonly string[]) => {
+    const value = rootTomlString(content, key);
+    return value !== null && owned.includes(value);
+  };
+  const had = hasOpencodexRouting(content)
+    || ownedRoot("openai_base_url", journaledBaseUrls)
+    || ownedRoot(REALTIME_WS_BASE_URL_KEY, journaledRealtimeWsBaseUrls);
+  const stripped = stripOpencodexConfigResult(
+    content,
+    journaledBaseUrls,
+    journaledRealtimeWsBaseUrls,
+    journaledRootWebSearch,
+    journaledReplaced,
+    journaledInjectedSubagentDefaults(),
+    journaledOwnedCatalogBinding(),
+  );
+  // Captured from the pre-strip bytes: the strip is what removes the table, so reading it
+  // afterwards would find nothing.
+  const retainedBlock = historyDisposition === "stand-down-retain"
+    ? extractOcxProviderTableBlock(content)
+    : null;
+  const finalContent = retainedBlock === null
+    ? stripped.content
+    : appendOcxProviderTableBlock(stripped.content, retainedBlock);
+  return { had, stripped, retainedBlock, finalContent };
+}
+
+/**
+ * Read-only: the config.toml text `removeCodexConfig` would publish for `rawContent`, or the
+ * managed-defaults error that makes it fail. No lock, no write.
+ */
+export function previewRemovedCodexConfig(
+  rawContent: string,
+  historyDisposition: RemoveCodexConfigHistoryDisposition,
+): { content: string; managedDefaultsError: string | null } {
+  const eol = dominantEol(rawContent);
+  const content = applyEol(rawContent, "\n");
+  const plan = planCodexConfigRemoval(content, historyDisposition);
+  const published = plan.had || plan.finalContent !== content;
+  return {
+    content: published ? applyEol(plan.finalContent, eol) : rawContent,
+    managedDefaultsError: plan.stripped.managedDefaultsError,
+  };
 }

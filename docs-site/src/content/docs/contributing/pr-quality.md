@@ -32,7 +32,7 @@ on your behalf.
 
 ## Automated gates
 
-Three deterministic checks run before human review, and each failure message
+Deterministic checks run before human review, and each failure message
 tells you exactly what to change:
 
 - **PR quality (`enforce-target`).** Pull requests must target `dev` and carry

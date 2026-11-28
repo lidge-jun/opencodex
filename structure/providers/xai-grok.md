@@ -29,6 +29,10 @@ merely starts with a result or error marker, such as `[Tool Result] shows the bu
 answer and reaches the client whole (`tests/adapters/tool-envelope-echo-whole-line.test.ts`). The same filter preserves leading prose and
 normalizes text-done events, completed snapshots, non-streaming JSON, and the stored
 continuation snapshot. It does not rotate an xAI upstream conversation.
+The shared [pending-line bound](../transports/byte-accounting.md#stream-buffer-accounting) fails
+with `translation_buffer_limit` before a refused turn enters continuation state. Buffered JSON
+returns 502 instead of falling back to the original body; an SSE rewrite propagates the budget
+failure to the relay's failed terminal. First turns that do not arm the filter remain untouched.
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
@@ -71,6 +75,27 @@ API) and the 2026-09-30 probe confirmed identical capabilities
 `modelSupportsServiceTier`, and it is not published as a row of its own; see "Grok 4.7 Fast lane" below.
 Regression coverage: `tests/providers/xai/grok-47-build-fast-metadata.test.ts`.
 
+### Legacy privacy mode 403
+
+`src/providers/xai-privacy-mode.ts` recognizes HTTP 403 with the exact
+`[WKE=privacy-mode:legacy]` marker in a bounded JSON error from the built-in xAI OAuth lane.
+Inference classifies the full error body up to its 64 KiB read limit. Model and quota probes use
+a 16 KiB read limit. The fixed guidance tells the user to switch from Legacy (no storage) to
+Privacy Mode.
+Chat and Responses preserve the 403 permission envelope and record an upstream account-policy
+refusal. The refusal leaves pause and reauthentication state intact. A 403 with the exact marker
+on an operator-granted reset replacement also returns the fixed guidance on both Responses paths
+and keeps the response non-replayable. An exact upstream `x-should-retry: false` survives the
+fixed response and combo reconstruction. Cancellation during the replacement body read returns
+a non-replayable 499. Replayable Responses combo refusals use the existing HTTP 403 failover
+eligibility with no cooldown from the account's privacy setting. On exhaustion, confirmed
+context-window and applicable quota verdicts take precedence over the fixed guidance. Wrapped,
+bare-string and provider-test error bodies all use proxy-owned copy when the marker matches.
+Catalog discovery logs the guidance alongside its normal fallback. The billing probe logs the
+same guidance, drops the stale quota
+row and stops before the monthly fallback when the weekly endpoint proves the account setting.
+Coverage: `tests/server/server-xai-oauth-401-replay.test.ts`.
+
 ### Policy-refusal 403
 
 xAI sometimes refuses a turn with HTTP 403 and a bare refusal sentence (`I can't help with that
@@ -98,6 +123,13 @@ Other destinations retain their existing item-id behavior, including OpenAI `sto
 
 ## xAI Grok hardening (official Grok Build contract parity)
 
+`grokEffortFields` in `src/server/models-capabilities.ts` projects Grok Build reasoning fields
+for the raw `/v1/models` list. It preserves the supplied ladder and labels, selecting the
+configured default when present and otherwise medium, high, then the first tier. An empty ladder
+emits no Grok effort fields; native and routed rows use this same projection from
+`src/server/index/serve-options.ts`. `tests/providers/xai/grok-models-effort-list.test.ts`
+covers the HTTP discovery contract.
+
 Grok's Responses path shares `src/responses/apply-patch-envelope.ts` for freeform restoration.
 The declared `input` field remains authoritative; alternate-field and outer-fence recovery is
 limited to unambiguous bare or `default.`-prefixed `exec` and `apply_patch` calls and does not rewrite foreign grammars.
@@ -124,6 +156,49 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
   Provider token-body budgets are separate from this shared callback lifetime. The
   [OrcaRouter bounded key-exchange contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login)
   is owned by its login consumer and does not impose that budget on Grok token grants.
+- **Device login:** `loginXaiDevice` (`src/oauth/xai.ts`) runs the RFC 8628 device grant against
+  the discovered `device_authorization_endpoint`, for hosts whose browser cannot reach the
+  127.0.0.1:56121 callback. It shows the `accounts.x.ai` verification URL and user code, polls
+  the token endpoint once per provider interval, keeps polling
+  through `authorization_pending`, timeouts, network failures, 429 and 5xx, and ends on denial,
+  expiry or cancellation. A retryable response's `Retry-After` (delta-seconds or HTTP-date, parsed
+  by the same helper the refresh path uses) raises that one wait above the interval, floored at the
+  interval (including `slow_down` on HTTP 400 or 429) and bounded by the grant deadline. Numeric
+  delays beyond the representable range saturate before that bound, so the client honours the throttle without
+  polling past expiry or handing an oversized delay to a timer. It never imports the local Grok CLI
+  token. `ocx login xai --headless`,
+  `ocx account login xai --device` and `POST /api/oauth/login` with `device: true` select it
+  (`supportsDeviceLoginMode` in `src/oauth/index.ts`).
+  Both poll bounds come from the authorization response, so both are clamped before they reach a
+  timer: `interval` into `[1s, lifetime]` and `expires_in` into `(0, 30m]`. RFC 8628 §3.2 makes
+  `expires_in` required and sets no ceiling, so the 30-minute bound is this client's policy: an
+  issuer grant longer than that ends at the ceiling. Pending approval at the deadline reports `expired_token`; the last transport or server failure instead reports `provider_unreachable`. A delay above 2^31-1 ms
+  overflows `setTimeout` into a next-tick fire, which is a hot loop against the auth endpoint, and
+  a `0`, negative or fractional `interval` is the same loop from below; an uncapped `expires_in`
+  would make the deadline meaningless. `slow_down` still adds 5s, now under the same ceiling, and
+  every poll is cut off at the (bounded) deadline. Both the authorization request and each token
+  poll use `redirect: "error"`: a 307/308 preserves the method and body, so the client id and the
+  bearer-equivalent `device_code` must not follow a hop to a host `validateXaiEndpoint` never
+  approved. Discovery already refuses a non-x.ai endpoint, so a redirect here can only be a
+  downgrade. That refusal is deterministic and terminal: `fetch` throws instead of returning, and
+  both runtime shapes are recognized — Bun's `TypeError` with `code: "UnexpectedRedirect"` and
+  Node/undici's `TypeError("fetch failed")` whose cause is `Error("unexpected redirect")` — so the
+  poll fails after one request as `XaiRedirectRefusedError` rather than being retried as a network
+  failure until the grant reports `expired_token`. The refusal carries a fixed message and no cause,
+  because Bun's text embeds the URL and the poll body carries the `device_code`. The CLI reports it
+  as `oauth_authentication_failed`, not `network_error`, on both CLI surfaces: the callback
+  reporter (`src/oauth/login-cli-errors.ts`) and the headless device branch of
+  `src/oauth/login-cli.ts`. The machine-readable reason is owned by
+  `classifyLoginCodeError` in `src/oauth/login-flow-state.ts`, which the headless CLI, the
+  code-mode paste response and `GET /api/oauth/status` all read, so the refusal reaches API
+  callers as `oauth_authentication_failed` rather than the `invalid_or_expired_code` fallthrough
+  that would tell them their device code was bad. A plain `TypeError` and a real connection
+  failure carry neither marker and stay retriable. Device starts return a flow ID; the account CLI
+  polls that ID and requires its own successful completion. Cancellation with an xAI flow ID targets only that attempt; malformed IDs are rejected and unknown or successfully completed IDs do not affect a later flow. Discovery HTTP 429/5xx and network failures classify as `provider_unreachable`. An older proxy without an ID cannot
+  safely support the waiting CLI path. The inherited browser-callback, code-exchange
+  and refresh requests keep the runtime's default redirect policy. Regression coverage:
+  `tests/providers/xai/xai-device-login.test.ts`, `tests/oauth/oauth-login-cli-errors.test.ts`,
+  `tests/oauth/oauth-code-login.test.ts`.
 - **Two-lock refresh transaction:** per-provider+account intent lock held across the IdP
   exchange plus a short global store-write lock + async mutation funnel around every
   `auth.json` load-merge-persist (`src/oauth/store.ts`); generation-guarded persist
@@ -297,3 +372,5 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 Routed Grok compaction uses the existing adapter and summary contract after a same-provider
 [compaction routing model override](../transports/responses-failover.md#compaction-routing-overrides); a
 cross-provider override runs the portable summarizer on the selected provider instead.
+
+For device poll expiry, HTTP 400 `slow_down` remains an expired grant; HTTP 429 or server failure retains the provider failure classification even when it carries `slow_down`.
