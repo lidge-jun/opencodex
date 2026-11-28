@@ -392,6 +392,8 @@ The credits module beside `src/codex/quota-types.ts` retains validated WHAM cred
 
 `src/codex/auth-api/account-list.ts` exposes optional `credits` only when `showCodexCredits === true` and the current identity has an observation. Decimal balances remain strings. Boolean flags and approximate local/cloud message ranges are allowlisted. The main and pool probes share the [WHAM group balance fallback](openai-tiers.md#spendable-codex-credits) with quota parsing. The display cache stays in process memory and serves the account DTO. The [config surface](../config.md#config-surface) owns the display switch.
 
+The stored-account probe and its credential-refresh replay share the Team workspace balance fallback in `src/codex/workspace-credit-balance.ts`. Both check publication authority and credential generation after the additional read, before updating routing or the account DTO. Coverage: `tests/codex-integration/codex-credits-probes.test.ts`.
+
 ## Quota history publication identity
 
 `src/codex/account-store.ts` assigns each explicit pool credential publication a private random `quotaHistoryIdentity`. Same-account token refresh preserves it, including each alias record's own identity; replacement or deletion retires it. A refresh CAS with a changed upstream account identity rotates the tag and does not propagate that changed identity to old aliases. Credential-only projections omit this metadata.

@@ -1457,6 +1457,8 @@ authenticated usage response confirms a long window has replaced the five-hour w
 opencodex removes the old five-hour reading from both request admission and account selection.
 An allowed response with primary and secondary windows can omit the optional tertiary window.
 This recovery uses your included plan allowance and does not require enabling **Use credits**.
+
+For stored ChatGPT Team accounts, OpenCodex checks the workspace balance when the usage API reports credits but leaves the balance blank. This check does not enable spending or redeem a reset.
 Partial or invalid usage data retains the previous block until recovery is confirmed.
 
 Stored accounts with **Use credits after limit** enabled renew their credit evidence on the existing background cycle once an included usage window is exhausted and the credit observation is at least three minutes old. In **Direct** mode this also covers stored accounts explicitly bound in `codexAccountNamespaces`, such as a sub-account selector. You can keep Direct mode and separate main/sub identities; this does not enable Pool routing or refresh unbound accounts. Paused and reauthentication-required accounts are skipped. Metadata reads do not validate pending accounts or send model requests. Failed reads retain backoff and requests still need fresh spendable credits; ordinary response usage headers do not renew the credit balance timestamp.

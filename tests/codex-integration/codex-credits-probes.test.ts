@@ -7,7 +7,8 @@ import { capturePoolQuotaWriter, poolQuotaHistoryIdentity, readCodexAccountRecor
 import { codexCreditsFor, rememberCodexCredits, resetCodexCreditsForTests } from "../../src/codex/credits";
 import { listCodexAuthAccounts, poolAccountDto } from "../../src/codex/auth-api/account-list";
 import { fetchMainAccountInfoSnapshot } from "../../src/codex/auth-api/main-account-probe";
-import { commitPoolQuotaResponse } from "../../src/codex/auth-api/pool-quota-probe";
+import { commitPoolQuotaResponse, fetchFreshPoolAccountQuota } from "../../src/codex/auth-api/pool-quota-probe";
+import { isCodexAccountHeldForCredits } from "../../src/codex/account-credit-use";
 import { clearMainAccountInfoCache } from "../../src/codex/main-account-cache";
 import { resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import { applyAccountQuotaFromUpstreamHeaders, clearAccountQuota, getAccountQuota, parseUsageQuota, poolWhamPolicyObservation, type WhamUsageResponse } from "../../src/codex/quota";
@@ -128,6 +129,71 @@ describe("main credits publication", () => {
 });
 
 describe("pool credits publication", () => {
+  test.each(["25000.0000000000", "0", "-10.14", "invalid", "unavailable"])(
+    "Team quota probe checks a missing workspace balance (%s) without granting consent",
+    async balance => {
+      savePool();
+      const paths: string[] = [];
+      globalThis.fetch = (async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        paths.push(path);
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-pool-bearer");
+        expect(new Headers(init?.headers).get("chatgpt-account-id")).toBe("fixture-pool-identity");
+        if (path === "/backend-api/wham/usage") return Response.json({
+          plan_type: "team",
+          credits: { has_credits: true, unlimited: false, overage_limit_reached: false, balance: null },
+          spend_control: { reached: false, individual_limit: null },
+          rate_limit: { allowed: true, limit_reached: false, primary_window: {
+            used_percent: 100, limit_window_seconds: 18000, reset_at: Math.floor(Date.now() / 1000) + 3600,
+          } },
+        });
+        expect(init?.redirect).toBe("error");
+        return balance === "unavailable" ? new Response(null, { status: 401 }) : Response.json({ balance });
+      }) as typeof fetch;
+      const result = await fetchFreshPoolAccountQuota(account.id, null);
+      expect(paths).toEqual(["/backend-api/wham/usage", "/backend-api/accounts/fixture-pool-identity/remaining_balance"]);
+      expect(result.needsReauth).toBe(false);
+      expect(result.quota?.shortPercent).toBe(100);
+      const positive = balance === "25000.0000000000";
+      expect(result.quota?.credits?.balance).toBe(positive ? 25000 : balance === "0" ? 0 : undefined);
+      expect(isCodexAccountHeldForCredits({}, account.id, result.quota, "team", Date.now())).toBe(true);
+      expect(isCodexAccountHeldForCredits({ creditCodexAccountIds: [account.id] }, account.id, result.quota, "team", Date.now())).toBe(!positive);
+      if (positive) {
+        const dto = poolAccountDto({ ...config(), showCodexCredits: true }, account, result, true, false, 0, false);
+        expect(dto.credits?.balance).toBe(balance);
+      }
+    },
+  );
+
+  test("the workspace balance cannot override a WHAM spending veto", async () => {
+    savePool();
+    globalThis.fetch = (async input => String(input).endsWith("/remaining_balance")
+      ? Response.json({ balance: "25000" })
+      : Response.json({
+        plan_type: "team", credits: { has_credits: true, balance: null }, spend_control: { reached: true },
+        rate_limit: { primary_window: {
+          used_percent: 100, limit_window_seconds: 18000, reset_at: Math.floor(Date.now() / 1000) + 3600,
+        } },
+      })) as typeof fetch;
+    const result = await fetchFreshPoolAccountQuota(account.id, null);
+    expect(result.quota?.credits).toMatchObject({ balance: 25000, allowed: false });
+    expect(isCodexAccountHeldForCredits({ creditCodexAccountIds: [account.id] }, account.id, result.quota, "team", Date.now())).toBe(true);
+  });
+
+  test("a workspace balance from a retired credential is not published", async () => {
+    savePool();
+    globalThis.fetch = (async input => {
+      if (String(input).endsWith("/remaining_balance")) {
+        savePool("fixture-replacement-identity");
+        return Response.json({ balance: "25000" });
+      }
+      return Response.json({ plan_type: "team", credits: { has_credits: true, balance: null } });
+    }) as typeof fetch;
+    const result = await fetchFreshPoolAccountQuota(account.id, null);
+    expect(result.freshQuota).toBeUndefined();
+    expect(getAccountQuota(account.id)?.credits).toBeUndefined();
+  });
+
   test("pool account DTO reports the Business group's remaining credits using the configured plan fallback", async () => {
     savePool();
     const ctx = { ...poolContext(), configuredPlan: "business" };
