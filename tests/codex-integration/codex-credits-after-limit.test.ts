@@ -8,8 +8,9 @@ import {
   pickLowestUsageCodexAccount,
   previewCodexAccountForRequest,
   resolveCodexAccountForThread,
+  resolveCodexAccountForThreadDetailed,
 } from "../../src/codex/routing";
-import { codexAccountBlockReason } from "../../src/codex/routing/selection";
+import { codexAccountBlockReason, pickAlternateCodexAccount } from "../../src/codex/routing/selection";
 import {
   codexAccountUsesCreditsAfterLimit,
   forgetCodexAccountCreditUse,
@@ -126,6 +127,90 @@ describe("codex credits after the usage limit", () => {
     expect(resolveCodexAccountForThread("default", config)).toBe("saver");
     expect(previewCodexAccountForRequest("default", config)).toBe("saver");
     expect(codexAccountBlockReason(config, "spender", Date.now())).toBe("credits_off");
+  });
+
+  test.each(["fill-first", "round-robin", "reset-first", "quota"] as const)(
+    "credits last crosses the billing boundary between turns under %s",
+    accountPoolStrategy => {
+      const now = Date.now() + 1_000;
+      const reset = now + DAY_MS;
+      const config = makeConfig({ accountPoolStrategy, codexPool: { creditsLast: true },
+        codexAccountPriorities: { spender: 2 }, creditCodexAccountIds: ACCOUNT_IDS });
+      recordWeekly("spender", 60, reset);
+      recordWeekly("saver", 99, reset);
+      expect(resolveCodexAccountForThread("billing", config, now)).toBe("spender");
+
+      recordWeekly("spender", 100, now + 60_000);
+      expect(previewCodexAccountForRequest("billing", config, now)).toBe("saver");
+      expect(resolveCodexAccountForThread("billing", config, now)).toBe("saver");
+      expect(previewCodexAccountForRequest(null, config, now)).toBe("saver");
+
+      recordWeekly("saver", 100, reset);
+      expect(previewCodexAccountForRequest("billing", config, now)).toBe("saver");
+      expect(resolveCodexAccountForThread("billing", config, now)).toBe("saver");
+      expect(previewCodexAccountForRequest(null, config, now)).toBe("spender");
+
+      const afterReset = now + 60_000;
+      expect(previewCodexAccountForRequest("billing", config, afterReset)).toBe("spender");
+      expect(resolveCodexAccountForThread("billing", config, afterReset)).toBe("spender");
+    },
+  );
+
+  test("credits last remains an ordering preference, not a spending grant or account entitlement", () => {
+    const now = Date.now() + 1_000;
+    const config = makeConfig({ accountPoolStrategy: "fill-first", codexPool: { creditsLast: true },
+      codexAccountPriorities: { spender: 2 }, creditCodexAccountIds: ACCOUNT_IDS });
+    recordWeekly("spender", 100, now + DAY_MS);
+    recordWeekly("saver", 40, now + DAY_MS);
+    expect(previewCodexAccountForRequest(null, config, now)).toBe("saver");
+    expect(previewCodexAccountForRequest(null, config, now, undefined, {
+      deniedModelAccountIds: new Set(["saver"]),
+    })).toBe("spender");
+    expect(pickAlternateCodexAccount(config, "saver", now)).toBe("spender");
+    recordWeekly("saver", 100, now + DAY_MS);
+    expect(previewCodexAccountForRequest(null, { ...config, creditCodexAccountIds: [] }, now)).toBeNull();
+  });
+
+  test("credits last does not override a manual pin or break a conversation with account-owned files", () => {
+    const now = Date.now() + 1_000;
+    const config = makeConfig({ accountPoolStrategy: "fill-first", codexPool: { creditsLast: true },
+      codexAccountPriorities: { spender: 2 }, creditCodexAccountIds: ACCOUNT_IDS });
+    recordWeekly("spender", 40, now + DAY_MS);
+    recordWeekly("saver", 20, now + DAY_MS);
+    expect(resolveCodexAccountForThread("with-files", config, now)).toBe("spender");
+    recordWeekly("spender", 100, now + DAY_MS);
+    const options = { retainAccountForUploadedFiles: true };
+    expect(previewCodexAccountForRequest("with-files", config, now, undefined, options)).toBe("spender");
+    expect(resolveCodexAccountForThreadDetailed("with-files", config, now, undefined, options)).toMatchObject({
+      status: "selected", accountId: "spender",
+    });
+    expect(previewCodexAccountForRequest(null, { ...config, activeCodexAccountPinned: "spender" }, now)).toBe("spender");
+  });
+
+  test("a retry prefers included usage over a higher-priority credit account", () => {
+    const now = Date.now() + 1_000;
+    const config = makeConfig({ accountPoolStrategy: "fill-first", codexPool: { creditsLast: true },
+      codexAccountPriorities: { spender: 2 }, creditCodexAccountIds: ACCOUNT_IDS });
+    config.codexAccounts!.push({ id: "refused", email: "refused@test", isMain: false, plan: "pro" });
+    saveTestCredential("refused");
+    recordWeekly("spender", 100, now + DAY_MS);
+    recordWeekly("saver", 99, now + DAY_MS);
+    expect(pickAlternateCodexAccount(config, "refused", now)).toBe("saver");
+    expect(pickAlternateCodexAccount({ ...config, codexPool: { creditsLast: false } }, "refused", now)).toBe("spender");
+    expect(pickAlternateCodexAccount(config, "refused", now, undefined, {
+      modelEligibleAccountIds: new Set(["spender"]),
+    })).toBe("spender");
+  });
+
+  test("quota steering does not move included usage to credits just to satisfy a threshold", () => {
+    const now = Date.now() + 1_000;
+    const config = makeConfig({ codexPool: { creditsLast: true }, autoSwitchThreshold: 90,
+      pool: { cacheAffinity: false }, codexAccountPriorities: { saver: 2 }, creditCodexAccountIds: ACCOUNT_IDS });
+    recordWeekly("spender", 99, now + DAY_MS);
+    recordWeekly("saver", 100, now + DAY_MS);
+    expect(previewCodexAccountForRequest(null, config, now)).toBe("spender");
+    expect(resolveCodexAccountForThread("at-threshold", config, now)).toBe("spender");
+    expect(resolveCodexAccountForThread("at-threshold", config, now + 1)).toBe("spender");
   });
 
   test("an account allowed to use credits keeps serving at 100%", () => {

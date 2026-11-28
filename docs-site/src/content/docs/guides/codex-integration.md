@@ -1461,6 +1461,24 @@ Partial or invalid usage data retains the previous block until recovery is confi
 
 Stored accounts with **Use credits after limit** enabled renew their credit evidence on the existing background cycle once an included usage window is exhausted and the credit observation is at least three minutes old. In **Direct** mode this also covers stored accounts explicitly bound in `codexAccountNamespaces`, such as a sub-account selector. You can keep Direct mode and separate main/sub identities; this does not enable Pool routing or refresh unbound accounts. Paused and reauthentication-required accounts are skipped. Metadata reads do not validate pending accounts or send model requests. Failed reads retain backoff and requests still need fresh spendable credits; ordinary response usage headers do not renew the credit balance timestamp.
 
+### Use credits last across the pool
+
+If you don't have a `codexPool` section yet, create it with
+`ocx config set codexPool '{"creditsLast":true}'`. If it already exists, use
+`ocx config set codexPool.creditsLast true` to preserve the other pool settings.
+
+This optional setting is off by default. With it on, automatic Pool routing prefers accounts
+that have not reached a known included usage limit before it considers spending credits.
+For example, if two accounts both allow credit spending, a higher-priority account at its
+limit waits while the other account has included usage. The configured order and strategy still
+apply within each group. Unmeasured accounts are not assumed to be exhausted.
+
+An existing conversation can move on its next turn if its current account would spend credits
+and another eligible account can serve without doing so. This can cost a warm prompt cache.
+Active responses aren't interrupted. Exact account routes, an effective manual selection,
+Direct mode, and account-owned attachments keep their existing behavior. The setting does not
+enable credit spending on any account or redeem usage resets.
+
 ### Cancelling main-account device reauthentication
 
 When cancelling main-account device reauthentication, a temporary DELETE or network failure, or a response with an unknown or nonterminal status, keeps the active flow and the cancellation-failure indication so cancellation can be retried. Status polling normally continues so a login that completes can still be detected. If a retryable cancellation failure overlaps a non-2xx GET status response while the flow is `pending` or `committing`, either response order preserves cancellation retry on that same flow, with its last server-provided device code, verification URL, and phase. The GET HTTP failure still stops polling, but cancellation can be retried without starting a second login POST. A terminal `failed` response releases the flow and displays the normalized failure reason; only `succeeded` reports login success. A confirmed `cancelled` response releases the flow so a new device login can be started. A definitive HTTP 404 response with code `unknown_flow` also releases the expired flow ID so a new device login can be started, but does not report a successful login or confirmed cancellation. Late POST, GET, or DELETE responses from an earlier flow cannot change the new flow or report login success for it.

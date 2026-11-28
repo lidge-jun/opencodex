@@ -110,23 +110,23 @@ test("config validation accepts only safe provider model display names", () => {
   if (!invalid.ok) expect(invalid.error).toContain("modelDisplayNames");
 });
 
-test("config validation accepts the optional codex pool idle-window setting", () => {
+test.each(["startIdleWindows", "creditsLast"] as const)("config validation accepts optional codexPool.%s", key => {
   const defaults = getDefaultConfig();
   const enabled = validateConfigCandidate({
     ...defaults,
-    codexPool: { startIdleWindows: true },
+    codexPool: { [key]: true },
   });
   expect(enabled).toMatchObject({
     ok: true,
-    config: { codexPool: { startIdleWindows: true } },
+    config: { codexPool: { [key]: true } },
   });
 
   const invalid = validateConfigCandidate({
     ...defaults,
-    codexPool: { startIdleWindows: "true" },
+    codexPool: { [key]: "true" },
   });
   expect(invalid.ok).toBe(false);
-  if (!invalid.ok) expect(invalid.error).toContain("codexPool.startIdleWindows");
+  if (!invalid.ok) expect(invalid.error).toContain(`codexPool.${key}`);
 });
 
 test("load keeps a provider and valid labels when one hand edited label is invalid", () => {

@@ -1796,6 +1796,8 @@ export interface OcxWebSearchSidecarConfig {
  * explicit account selection. Only automatic rotation skips it.
  */
 export interface OcxCodexPoolConfig {
+  /** Prefer accounts not at their included usage limit before spending credits. Defaults off. */
+  creditsLast?: boolean;
   /** Start idle Codex windows when the pool is initialized. */
   startIdleWindows?: boolean;
   /** Enable process-local affinity for caller-owned credentials; defaults off. */
