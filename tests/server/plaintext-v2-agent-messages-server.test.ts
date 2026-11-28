@@ -168,6 +168,46 @@ function overLimitResponsePayload(id = "resp-plaintext-v2-overflow") {
 }
 
 describe("plaintext v2 agent messages at the Responses server boundary", () => {
+  test("a per-model entry compiles that model's requests and leaves the others encrypted (#8953)", async () => {
+    takeInheritedSpendHome();
+    const sent: Array<{ model: string; namespace: string }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.origin !== "https://chatgpt.com" || !url.pathname.endsWith("/responses")) {
+        throw new Error("Unexpected destination in per-model fixture");
+      }
+      const body = JSON.parse(String(init?.body));
+      sent.push({ model: body.model, namespace: body.tools[0].name });
+      const response = completedResponsePayload(`resp-by-model-${sent.length}`);
+      if (body.tools[0].name !== PLAINTEXT_V2_COLLABORATION_NAMESPACE) {
+        Object.assign(response.output[0]!, { namespace: "collaboration", name: "spawn_agent" });
+      }
+      return new Response(`event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response })}\n\ndata: [DONE]\n\n`,
+        { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const dispatch = async (cfg: OcxConfig, model: string) => {
+      const response = await handleResponses(collaborationRequest({ model }), cfg, { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain('"name":"spawn_agent"');
+    };
+
+    // v1 is the install default: one native model opts in, its sibling does not.
+    const optIn = { ...config(false), multiAgentMode: "v1", multiAgentModeByModel: { "native/gpt-5.6-sol": "v2-plaintext" } } as OcxConfig;
+    await dispatch(optIn, "native/gpt-5.6-sol");
+    await dispatch(optIn, "native/gpt-5.6-terra");
+    // Under the plaintext mode, a model moved to encrypted v2 is left alone.
+    const optOut = { ...config(false), multiAgentMode: "v2-plaintext", multiAgentModeByModel: { "native/gpt-5.6-terra": "v2" } } as OcxConfig;
+    await dispatch(optOut, "native/gpt-5.6-sol");
+    await dispatch(optOut, "native/gpt-5.6-terra");
+
+    expect(sent).toEqual([
+      { model: "gpt-5.6-sol", namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE },
+      { model: "gpt-5.6-terra", namespace: "collaboration" },
+      { model: "gpt-5.6-sol", namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE },
+      { model: "gpt-5.6-terra", namespace: "collaboration" },
+    ]);
+  });
+
   test("the same existing V2 request follows the current compiler setting without deleting retained messages", async () => {
     takeInheritedSpendHome();
     const existingMessage = { type: "agent_message", author: "prior-child", recipient: "existing-parent",

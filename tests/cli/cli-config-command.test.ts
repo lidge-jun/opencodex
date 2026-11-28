@@ -293,6 +293,34 @@ test.each(["set", "normalized set", "import"])("config %s cannot enter plaintext
   } finally { removeTreeWithRetry(dir); }
 });
 
+test("config import cannot add a plaintext model entry without the dedicated transition (#8953)", () => {
+  const dir = freshConfig();
+  const configPath = join(dir, "config.json");
+  const importPath = join(dir, "restore.json");
+  try {
+    const before = readFileSync(configPath, "utf8");
+    const candidate = { ...JSON.parse(before), multiAgentModeByModel: { "gpt-6.2-sol": "v2-plaintext", "xai/grok-4.7": "v1" } };
+    writeFileSync(importPath, JSON.stringify(candidate));
+    const refused = runCli(["config", "import", importPath, "--yes", "--json"], { OPENCODEX_HOME: dir });
+    expect(refused.status).toBe(2);
+    expect(refused.stdout + refused.stderr).toContain("ocx v2 model-mode <model> v2-plaintext --acknowledge-plaintext-agent-messages");
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+
+    // Entries that carry no plaintext consent restore as they are, and so does one already stored.
+    writeFileSync(importPath, JSON.stringify({ ...JSON.parse(before), multiAgentModeByModel: { "xai/grok-4.7": "v1" } }));
+    expect(runCli(["config", "import", importPath, "--yes", "--json"], { OPENCODEX_HOME: dir }).status).toBe(0);
+    writeFileSync(configPath, JSON.stringify(candidate));
+    writeFileSync(importPath, JSON.stringify(candidate));
+    expect(runCli(["config", "import", importPath, "--yes", "--json"], { OPENCODEX_HOME: dir }).status).toBe(0);
+
+    // A value the map cannot hold is refused by the write path rather than dropped.
+    writeFileSync(importPath, JSON.stringify({ ...JSON.parse(before), multiAgentModeByModel: { "xai/grok-4.7": "default" } }));
+    const invalid = runCli(["config", "import", importPath, "--yes", "--json"], { OPENCODEX_HOME: dir });
+    expect(invalid.status).not.toBe(0);
+    expect(invalid.stdout + invalid.stderr).toContain("multiAgentModeByModel");
+  } finally { removeTreeWithRetry(dir); }
+});
+
 test("ocx config validates, stores and displays the subscription reserve policy", () => {
   const dir = freshConfig();
   try {

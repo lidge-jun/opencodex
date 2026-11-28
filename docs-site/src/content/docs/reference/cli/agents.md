@@ -172,7 +172,7 @@ An ignored subagent field does not remove a valid main cap. `ocx effort clear` c
 while retaining the separate injection-effort setting. See [Sub-agent surfaces](/guides/sub-agent-surface/)
 for the request surfaces where caps apply.
 
-### `ocx v2 <status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2|v2-plaintext>|model-mode <model> <v1|v2|v2-plaintext|default>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
 
 Manage the Codex `multi_agent_v2` feature flag and the multi-agent surface mode.
 These operate locally by default. `--live` uses the selected running proxy with no
@@ -188,6 +188,8 @@ after a change and distinguish stored settings from new-session behavior.
 | `mode default` | Respect upstream model surface pins. |
 | `mode v2` | Force models to v2 and preserve the active thread limit. With `keep-native-v1` off, enable global native v2; with it on, disable the global override and use catalog pins. |
 | `mode v2-plaintext` | Force models to v2 through catalog pins with the global override off and enable experimental plaintext task delivery. Requires `--acknowledge-plaintext-agent-messages`. |
+| `model-mode <model> v1\|v2\|v2-plaintext` | Give one catalog model its own surface; every other model keeps following `mode`. `v1` also turns the global V2 override off (refused under `mode default` while that override is on). `v2-plaintext` requires `--acknowledge-plaintext-agent-messages`. |
+| `model-mode <model> default` | Remove the model's entry so it follows `mode` again. |
 | `keep-native-v1 on\|off` | Under `mode v2`, keep ChatGPT-native models on v1 and routed models on v2. Enabling it disables the global V2 override before catalog sync. |
 | `threads <n>` | Set the active v1/v2 thread limit to an integer of at least 1. |
 | `mode-hint <text>` | Set the Proactive delegation hint (Ultra mode) for every model and effort. |
@@ -199,6 +201,8 @@ ocx v2 mode v1
 ocx v2 mode default
 ocx v2 on
 ocx v2 threads 16
+ocx v2 model-mode opencode-go/deepseek-v4.1-flash v2
+ocx v2 model-mode opencode-go/deepseek-v4.1-flash default
 ocx v2 mode-hint "Proactive multi-agent delegation is active."
 ocx v2 mode-hint --clear
 ```
@@ -211,6 +215,10 @@ running sessions keep their pinned surface.
 Codex resolves an enabled global `multi_agent_v2` override before the selected model's catalog
 pin. The hybrid `keep-native-v1` contract therefore keeps that global override off; otherwise a
 native row stamped `v1` would still start on V2 and produce backend-encrypted child tasks.
+A `model-mode` entry set to `v1` is the same kind of pin and follows the same rule: `on` is rejected
+while one is stored, and `status` lists every entry. Model ids are catalog ids, matched exactly or,
+for a routed id, in its raw or encoded spelling; an id that matches no catalog model is stored and
+reported, since it changes nothing until that model appears.
 
 `mode-hint` writes `features.multi_agent_v2.multi_agent_mode_hint_text` in Codex's
 `$CODEX_HOME/config.toml` even when `multi_agent_v2` is currently disabled. The

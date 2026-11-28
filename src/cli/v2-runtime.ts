@@ -1,4 +1,4 @@
-import { SUBAGENT_SURFACE_GUIDE_URL } from "../config/multi-agent-surface";
+import { SUBAGENT_SURFACE_GUIDE_URL, isMultiAgentModelKey, isMultiAgentModelMode } from "../config/multi-agent-surface";
 import { printCatalogResult, runCatalogAction } from "./catalog-command-result";
 import { serializeManagementJson } from "./json-input";
 import { RuntimeApiError, printData, runtimeBaseUrl, runtimeRequest, type RuntimeApiDeps } from "./runtime-api";
@@ -24,6 +24,12 @@ function stateDto(value: unknown): Record<string, unknown> {
   for (const key of ["enabled", "agentsMaxThreadsConflict", "keepNativeChatGptOnV1", "agentsMaxDepthAppliesWhenV2Disabled"] as const) {
     if (typeof value[key] !== "boolean") throw new Error("Invalid v2 boolean");
     result[key] = value[key];
+  }
+  // Absent on a runtime that predates per-model modes; present, it must be exactly a model -> mode map.
+  if (value.multiAgentModeByModel !== undefined) {
+    if (!record(value.multiAgentModeByModel) || !Object.entries(value.multiAgentModeByModel)
+      .every(([model, entry]) => isMultiAgentModelKey(model) && isMultiAgentModelMode(entry))) throw new Error("Invalid per-model mode state");
+    result.multiAgentModeByModel = { ...value.multiAgentModeByModel };
   }
   if (value.agentsEnabled !== null && typeof value.agentsEnabled !== "boolean") throw new Error("Invalid agents state");
   if (value.maxConcurrentThreadsPerSession !== null && !(typeof value.maxConcurrentThreadsPerSession === "number"
@@ -54,6 +60,8 @@ function bodyFor(parsed: V2ParsedCommand): Record<string, unknown> {
       ...(parsed.plaintextAcknowledged ? { plaintextAgentMessagesAcknowledged: true } : {}),
       ...(parsed.acknowledge ? { multiAgentSurfaceAdvisoryAcknowledged: true } : {}) };
     case "keep-native-v1": return { keepNativeChatGptOnV1: parsed.value };
+    case "model-mode": return { multiAgentModeByModel: { [parsed.model]: parsed.value },
+      ...(parsed.plaintextAcknowledged ? { plaintextAgentMessagesAcknowledged: true } : {}) };
     case "threads": return { maxConcurrentThreadsPerSession: parsed.value };
     case "mode-hint": return { multiAgentModeHintText: parsed.value };
     case "status": return {};
@@ -77,8 +85,12 @@ export async function handleV2RuntimeCommand(parsed: V2ParsedCommand, deps: Runt
     }
     const state = stateDto(response);
     if (parsed.verb === "mode" && parsed.value === "v2-plaintext" && state.multiAgentMode !== "v2-plaintext") throw new Error("Plaintext V2 mode was not confirmed by the selected runtime");
+    const modelModes = record(state.multiAgentModeByModel) ? state.multiAgentModeByModel : undefined;
+    // An older runtime accepts the PUT body it does not understand and changes nothing.
+    if (parsed.verb === "model-mode" && (modelModes && Object.hasOwn(modelModes, parsed.model) ? modelModes[parsed.model] : null) !== parsed.value) throw new Error("The per-model mode was not confirmed by the selected runtime");
     const lines = [`multi_agent_v2: ${state.enabled ? "ON" : "OFF"}`, `multi_agent_mode: ${state.multiAgentMode}`,
       `keep_native_chatgpt_on_v1: ${state.keepNativeChatGptOnV1 ? "ON" : "OFF"}`,
+      ...(modelModes ? [`multi_agent_mode_by_model: ${Object.entries(modelModes).map(([model, entry]) => `${model}=${entry}`).join(", ") || "none"}`] : []),
       `max_threads: ${state.maxConcurrentThreadsPerSession ?? "unset"}`,
       `agents.enabled: ${state.agentsEnabled ?? "unset (upstream default)"}`,
       `agents.max_depth: ${state.agentsMaxDepth ?? "unset"}${state.enabled || state.multiAgentMode === "v2-plaintext" ? " (V1-only — ignored by V2 sessions)" : ""}`,

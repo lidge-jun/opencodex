@@ -61,6 +61,7 @@ import {
   isValidCreditPriceUsd,
 } from "./schema/leaf-validators";
 import { hasWarnedInheritedFastWireConflict, markWarnedInheritedFastWireConflict } from "./warn-memo";
+import { multiAgentModeByModelProblem } from "./multi-agent-surface";
 
 export function hardenExistingSecret(path: string): void {
   if (existsSync(path) && !isPassiveRead()) {
@@ -851,6 +852,16 @@ export function malformedPlaintextV2AgentMessagesWarning(value: unknown): string
 
 export function warnDegradedPlaintextV2AgentMessages(value: unknown): void {
   const warning = malformedPlaintextV2AgentMessagesWarning(value);
+  if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
+}
+
+export function malformedMultiAgentModeByModelWarning(value: unknown): string | null {
+  const problem = multiAgentModeByModelProblem(rawConfigRecord(value)?.multiAgentModeByModel);
+  return problem ? `multiAgentModeByModel partly ignored: ${problem}` : null;
+}
+
+export function warnDegradedMultiAgentModeByModel(value: unknown): void {
+  const warning = malformedMultiAgentModeByModelWarning(value);
   if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
 }
 

@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 72.
+Declared capabilities: 73.
 
 ### `ocx agent subagents force`
 
@@ -895,6 +895,28 @@ State-changing: yes. JSON mode: `envelope`.
 | `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
 | `--acknowledge-surface-advisory` | boolean | Explicit live mode only; never implicitly acknowledged. |
+| `--acknowledge-plaintext-agent-messages` | boolean | Required when entering v2-plaintext; task text may remain in history, provider requests and debug state. |
+
+- Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
+- Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
+- Live writes use actual post-write state and full catalog outcomes; a502 can mean partial native changes. Read back before retrying; no rollback is implied.
+
+### `ocx v2 model-mode`
+
+Usage: `ocx v2 model-mode <model> <v1|v2|v2-plaintext|default> [--live] [--json] [--acknowledge-plaintext-agent-messages]`
+
+Give one catalog model its own multi-agent surface; default removes the entry.
+
+State-changing: yes. JSON mode: `envelope`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/v2` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
+| `--json` | boolean | Emit the validated task result as one JSON document. |
 | `--acknowledge-plaintext-agent-messages` | boolean | Required when entering v2-plaintext; task text may remain in history, provider requests and debug state. |
 
 - Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.

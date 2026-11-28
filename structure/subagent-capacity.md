@@ -47,8 +47,9 @@ asked once. `multiAgentSurfaceAdvisoryRequired()` is true while the resolved mod
 the stored `multiAgentSurfaceAdvisoryVersion` is below `MULTI_AGENT_SURFACE_ADVISORY_VERSION`, and
 only the operator answering the dashboard notice writes that version.
 
-CLI: `ocx v2 mode v1|default|v2|v2-plaintext` (plaintext entry requires the acknowledgement above). GUI: segmented control on the Models page. API: `GET/PUT /api/v2`
-with `multiAgentMode` field.
+CLI: `ocx v2 mode v1|default|v2|v2-plaintext` (plaintext entry requires the acknowledgement above) and
+`ocx v2 model-mode <model> <v1|v2|v2-plaintext|default>`, where `default` removes the entry. GUI: segmented control on the Models page; per-model entries have no dashboard control. API: `GET/PUT /api/v2`
+with the `multiAgentMode` field and the `multiAgentModeByModel` patch.
 
 The `multi_agent_v2` feature flag and the logical maximum thread count are separate from
 `multiAgentMode` (`src/codex/features.ts`): the mode decides which surface Codex advertises, while
@@ -63,6 +64,33 @@ the rest of injection, so a later refusal rolls the flag back with the files.
 `multi_agent_v2` override because codex-rs resolves that override before a model row's explicit
 `multi_agent_version`. Native ChatGPT rows then select v1 from the catalog and routed rows select
 v2. An explicit attempt to enable the global flag while the hybrid pin is active is rejected.
+
+`multiAgentModeByModel` gives one catalog row its own surface under any mode (#8953). Keys are
+catalog slugs, matched exactly or in the raw or encoded spelling `slugEquivalenceKey` relates; values
+are `v1`, `v2` and `v2-plaintext`, and a model without an entry follows `multiAgentMode`.
+`applyMultiAgentMode` applies the entries after the mode pass through `MultiAgentModeOptions.modelModes`,
+so a listed row keeps its pin under the hybrid too, and records the pre-override value like any other
+forced stamp. `v2-plaintext` is stamped `v2`. `src/config/multi-agent-surface.ts` owns resolution:
+unusable keys or values drop only their own entry on load, while the write paths refuse the candidate.
+
+A `v1` entry is a catalog pin the global override would outrank, so it follows the hybrid's contract.
+`multiAgentPinsRequireGlobalV2Disabled` is the shared predicate. Writing a `v1` entry under mode `v1`,
+`v2` or `v2-plaintext` disables the override in the same transition, and selecting mode `v2` while one
+is stored keeps the surface pin-driven. Under `default` the override is the operator's own setting, and
+turning it off would move every unpinned model from v2 to v1, so a `v1` entry is refused while it is
+on. Enabling the override while a `v1` entry is stored is rejected. `v2` and `v2-plaintext` entries
+never change the override.
+
+A `v2-plaintext` entry requires the same acknowledgement as the mode, once per model. The
+[plaintext V2 compiler](subagents.md#plaintext-v2-agent-messages) then follows
+`isPlaintextV2AgentMessagesEnabledForModel` for the request's client selector: a model moved to `v1`
+or `v2` is not compiled under mode `v2-plaintext`, and one model can opt in under any other mode. The
+legacy `plaintextV2AgentMessages` field still covers every model. `isPlaintextV2AgentMessagesEnabled`
+remains the install-wide answer that scopes replay and raises the startup warning. Effort caps stay off
+under mode `v1` only while no entry selects v2. A Remote Link Child takes the pins from its Home's
+catalog; like the hybrid, it does not receive the entries in the Home settings document.
+`tests/codex-integration/multi-agent-mode-by-model.test.ts`, `tests/cli/cli-v2-model-mode.test.ts` and
+the per-model case in `tests/server/plaintext-v2-agent-messages-server.test.ts` cover these rules.
 
 ### Concurrent child limit
 

@@ -20,6 +20,11 @@ import { catalogModelSlug, filterCatalogVisibleModels, invalidateCodexModelsCach
 import { mergeModelPinnedEfforts, modelPinnedEffortsConfigError } from "../../config/provider-validation";
 import { MULTI_AGENT_SURFACE_ADVISORY_VERSION, multiAgentSurfaceAdvisory, resolveMultiAgentMode } from "../../config/multi-agent-surface";
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
+import {
+  MULTI_AGENT_MODE_BY_MODEL_LIMIT, mergeMultiAgentModeByModel, multiAgentModeByModelPatchProblem, resolveMultiAgentModeByModel,
+  unmatchedMultiAgentModelModes,
+} from "../../config/multi-agent-surface";
+import type { MultiAgentModelMode } from "../../types/multi-agent";
 import { captureConfigTopLevelRollback, parsedConfigRebaseDeletionKeys, projectConfigRebaseProvenance } from "../../config/rebase-provenance";
 import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
@@ -298,6 +303,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       multiAgentMode: resolveMultiAgentMode(config),
       multiAgentSurfaceAdvisory: multiAgentSurfaceAdvisory(config),
       keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
+      multiAgentModeByModel: Object.fromEntries(resolveMultiAgentModeByModel(config)),
       plaintextAgentMessagesEnabled: isPlaintextV2AgentMessagesEnabled(config),
       supportsPlaintextV2Mode: true,
       agentsEnabled: getAgentsEnabled(),
@@ -318,6 +324,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       maxConcurrentThreadsPerSession?: unknown;
       multiAgentMode?: unknown;
       keepNativeChatGptOnV1?: unknown;
+      multiAgentModeByModel?: unknown;
       agentsEnabled?: unknown;
       agentsMaxDepth?: unknown;
       subagentDeveloperInstructions?: unknown;
@@ -330,14 +337,15 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const wantsThreads = body.maxConcurrentThreadsPerSession !== undefined;
     const wantsMode = body.multiAgentMode !== undefined;
     const wantsKeepNative = body.keepNativeChatGptOnV1 !== undefined;
+    const wantsModelModes = body.multiAgentModeByModel !== undefined;
     const wantsAgentsEnabled = body.agentsEnabled !== undefined;
     const wantsMaxDepth = body.agentsMaxDepth !== undefined;
     const wantsSubagentInstructions = body.subagentDeveloperInstructions !== undefined;
     const wantsModeHintText = body.multiAgentModeHintText !== undefined;
     const wantsAdvisoryAck = body.multiAgentSurfaceAdvisoryAcknowledged !== undefined;
     const wantsPlaintextAck = body.plaintextAgentMessagesAcknowledged !== undefined;
-    if (!wantsFlag && !wantsThreads && !wantsMode && !wantsKeepNative && !wantsAgentsEnabled && !wantsMaxDepth && !wantsSubagentInstructions && !wantsModeHintText && !wantsAdvisoryAck) {
-      return jsonResponse({ error: "body must set enabled, multiAgentMode, keepNativeChatGptOnV1, maxConcurrentThreadsPerSession, agentsEnabled, agentsMaxDepth, subagentDeveloperInstructions, multiAgentModeHintText, and/or multiAgentSurfaceAdvisoryAcknowledged" }, 400);
+    if (!wantsFlag && !wantsThreads && !wantsMode && !wantsKeepNative && !wantsModelModes && !wantsAgentsEnabled && !wantsMaxDepth && !wantsSubagentInstructions && !wantsModeHintText && !wantsAdvisoryAck) {
+      return jsonResponse({ error: "body must set enabled, multiAgentMode, keepNativeChatGptOnV1, multiAgentModeByModel, maxConcurrentThreadsPerSession, agentsEnabled, agentsMaxDepth, subagentDeveloperInstructions, multiAgentModeHintText, and/or multiAgentSurfaceAdvisoryAcknowledged" }, 400);
     }
     if (wantsFlag && typeof body.enabled !== "boolean") return jsonResponse({ error: "body.enabled must be a boolean" }, 400);
     if (wantsMode && body.multiAgentMode !== "v1" && body.multiAgentMode !== "default" && body.multiAgentMode !== "v2" && body.multiAgentMode !== "v2-plaintext") {
@@ -346,6 +354,11 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     if (wantsKeepNative && typeof body.keepNativeChatGptOnV1 !== "boolean") {
       return jsonResponse({ error: "body.keepNativeChatGptOnV1 must be a boolean" }, 400);
     }
+    if (wantsModelModes) {
+      const problem = multiAgentModeByModelPatchProblem(body.multiAgentModeByModel);
+      if (problem) return jsonResponse({ error: `body.multiAgentModeByModel ${problem}` }, 400);
+    }
+    const modelModePatch = wantsModelModes ? body.multiAgentModeByModel as Record<string, MultiAgentModelMode | null> | null : undefined;
     if (wantsThreads && (typeof body.maxConcurrentThreadsPerSession !== "number" || !Number.isSafeInteger(body.maxConcurrentThreadsPerSession) || body.maxConcurrentThreadsPerSession < 1)) {
       return jsonResponse({ error: "body.maxConcurrentThreadsPerSession must be a safe integer >= 1" }, 400);
     }
@@ -381,29 +394,52 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       return jsonResponse({ error: "body.plaintextAgentMessagesAcknowledged must be a boolean" }, 400);
     }
     const mode = wantsMode ? body.multiAgentMode as "v1" | "default" | "v2" | "v2-plaintext" : undefined;
+    const { isMultiAgentV2Enabled: globalV2Enabled } = await import("../../codex/features");
     const readModePlan = () => {
-      const effectiveMode = mode ?? config.multiAgentMode ?? "default";
+      const effectiveMode = mode ?? resolveMultiAgentMode(config);
       const effectiveKeepNative = wantsKeepNative
         ? body.keepNativeChatGptOnV1 === true
         : config.keepNativeChatGptOnV1 === true;
+      const storedModelModes = resolveMultiAgentModeByModel(config);
+      const modelModes = modelModePatch === undefined ? storedModelModes : mergeMultiAgentModeByModel(storedModelModes, modelModePatch);
+      if (modelModes.size > MULTI_AGENT_MODE_BY_MODEL_LIMIT) {
+        return jsonResponse({ error: `body.multiAgentModeByModel would exceed ${MULTI_AGENT_MODE_BY_MODEL_LIMIT} entries` }, 400);
+      }
+      // A v1 entry is a catalog pin like the hybrid's, and the global override outranks it the same way.
+      const v1ModelPin = [...modelModes.values()].includes("v1");
       const hybridPinActive = effectiveMode === "v2" && effectiveKeepNative;
       const pinDrivenV2 = hybridPinActive || effectiveMode === "v2-plaintext";
       const pinConflict = effectiveMode === "v2-plaintext"
         ? "body.enabled=true conflicts with multiAgentMode 'v2-plaintext': Codex's global multi_agent_v2 override outranks catalog pins"
-        : "body.enabled=true conflicts with keepNativeChatGptOnV1: Codex's global multi_agent_v2 override outranks catalog pins";
-      const modeFlag = mode === "v2" ? !hybridPinActive : mode === "v1" || mode === "v2-plaintext" ? false : undefined;
+        : hybridPinActive
+        ? "body.enabled=true conflicts with keepNativeChatGptOnV1: Codex's global multi_agent_v2 override outranks catalog pins"
+        : "body.enabled=true conflicts with a 'v1' entry in multiAgentModeByModel: Codex's global multi_agent_v2 override outranks catalog pins";
+      const modeFlag = mode === "v2" ? !hybridPinActive && !v1ModelPin : mode === "v1" || mode === "v2-plaintext" ? false : undefined;
       if (wantsFlag && modeFlag !== undefined && body.enabled !== modeFlag) {
         return jsonResponse({
-          error: pinDrivenV2
+          error: pinDrivenV2 || v1ModelPin
             ? pinConflict
             : `body.enabled conflicts with multiAgentMode '${mode}'`,
         }, 400);
       }
-      if (wantsFlag && body.enabled === true && pinDrivenV2) {
+      if (wantsFlag && body.enabled === true && (pinDrivenV2 || v1ModelPin)) {
         return jsonResponse({
           error: pinConflict,
         }, 400);
       }
+      const newPlaintextModel = Object.entries(modelModePatch ?? {})
+        .find(([model, modelMode]) => modelMode === "v2-plaintext" && storedModelModes.get(model) !== "v2-plaintext");
+      if (newPlaintextModel && body.plaintextAgentMessagesAcknowledged !== true) {
+        return jsonResponse({ error: "body.multiAgentModeByModel 'v2-plaintext' requires plaintextAgentMessagesAcknowledged === true: that model's native v2 collaboration messages are delivered as plaintext on the canonical ChatGPT route" }, 400);
+      }
+      // Adding a v1 entry turns the override off, as the hybrid does. Base mode is the exception:
+      // there the override is the operator's own setting, and turning it off would move every
+      // unpinned model from v2 to v1 along with the one that was named.
+      const overrideDefeatsNewPin = Object.values(modelModePatch ?? {}).includes("v1") && !wantsFlag && globalV2Enabled();
+      if (overrideDefeatsNewPin && effectiveMode === "default") {
+        return jsonResponse({ error: "body.multiAgentModeByModel 'v1' needs Codex's global multi_agent_v2 override off, and base mode leaves that override to you: send enabled=false with it, or select multiAgentMode 'v1', 'v2' or 'v2-plaintext' first" }, 400);
+      }
+      const modelPinFlag = overrideDefeatsNewPin ? false : undefined;
       // Recheck consent against the admitted state as well as the initial snapshot.
       if (mode === "v2-plaintext" && resolveMultiAgentMode(config) !== "v2-plaintext"
           && body.plaintextAgentMessagesAcknowledged !== true) {
@@ -411,7 +447,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       }
       const requestedFlag = wantsFlag
         ? body.enabled as boolean
-        : modeFlag ?? (wantsKeepNative && hybridPinActive ? false : undefined);
+        : modeFlag ?? (wantsKeepNative && hybridPinActive ? false : undefined) ?? modelPinFlag;
       return { effectiveMode, requestedFlag };
     };
     const initialPlan = readModePlan();
@@ -453,7 +489,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const heldWriteLock = configWriteLock !== null && configWriteLock.ok ? configWriteLock.handle : undefined;
     let selectionWrite: CodexCliSelectionAsyncParentWrite | undefined;
     try {
-      if (wantsFlag || wantsMode || wantsThreads || wantsKeepNative || (wantsModeHintText && body.multiAgentModeHintText !== null)) {
+      if (wantsFlag || wantsMode || wantsThreads || wantsKeepNative || wantsModelModes || (wantsModeHintText && body.multiAgentModeHintText !== null)) {
         selectionWrite = await beginCodexCliSelectionParentWriteAsync({ signal: req.signal });
         if (!selectionWrite.entered) return jsonResponse({ error: "codex_cli_selection_busy", retryable: true }, 503);
       }
@@ -494,6 +530,15 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
               ? "keepNativeChatGptOnV1 is stored but inactive under 'v2-plaintext': ChatGPT-native rows are pinned on v2. Applies to new sessions."
               : "keepNativeChatGptOnV1 is stored but inactive until multi-agent mode is v2. Applies to new sessions.")
             : "ChatGPT-native models follow the selected v1/v2/base surface. Applies to new sessions.");
+        }
+        if (modelModePatch !== undefined) {
+          const next = mergeMultiAgentModeByModel(resolveMultiAgentModeByModel(config), modelModePatch);
+          if (next.size > 0) config.multiAgentModeByModel = Object.fromEntries(next);
+          else deleteConfigTopLevelKey(config, "multiAgentModeByModel");
+          saveConfigPreservingClaudeCode(config);
+          warnings.push(next.size > 0
+            ? "Per-model multi-agent modes saved. A listed model uses its own surface; every other model follows the multi-agent mode. Applies to new sessions."
+            : "Per-model multi-agent modes cleared. Every model follows the multi-agent mode. Applies to new sessions.");
         }
         // Written after the mode, so a landed acknowledgement implies the mode write it was
         // sent with already landed. The converse does not hold: this writer throws rather than
@@ -545,6 +590,16 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     }
     const catalogRefresh = await convergeCodexCatalog();
     if (requestedFlag !== undefined) warnings.push("Applies to new sessions; restart the Codex app or wait out its picker cache to see the ladder change.");
+    if (modelModePatch) {
+      const { readCatalog, readCodexCatalogPath } = await import("../../codex/catalog");
+      const rows = readCatalog(readCodexCatalogPath())?.models;
+      const named = Object.entries(modelModePatch).filter(([, modelMode]) => modelMode !== null).map(([model]) => model);
+      if (rows) {
+        for (const model of unmatchedMultiAgentModelModes(named, rows.flatMap(row => typeof row.slug === "string" ? [row.slug] : []))) {
+          warnings.push(`No catalog model matches '${model}'. The entry is stored and applies if that model appears; check the id against the model list.`);
+        }
+      }
+    }
     const enabled = isMultiAgentV2Enabled();
     return jsonResponse({
       ok: true,
@@ -554,6 +609,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       multiAgentMode: resolveMultiAgentMode(config),
       multiAgentSurfaceAdvisory: multiAgentSurfaceAdvisory(config),
       keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
+      multiAgentModeByModel: Object.fromEntries(resolveMultiAgentModeByModel(config)),
       plaintextAgentMessagesEnabled: isPlaintextV2AgentMessagesEnabled(config),
       supportsPlaintextV2Mode: true,
       agentsEnabled: getAgentsEnabled(),

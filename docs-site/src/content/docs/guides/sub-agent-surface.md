@@ -27,6 +27,12 @@ are plaintext. OpenCodex disables the global `multi_agent_v2` override for this 
 Codex applies that override before per-model catalog pins. This is a switch *inside* v2, not a
 fourth catalog mode.
 
+A single model can also take its own surface, whatever the mode:
+`ocx v2 model-mode <model> <v1|v2|v2-plaintext>` sets it and `default` removes it. Every model
+without an entry keeps following the mode. The entry decides which tools that model gets when it
+starts a session, and whether it can delegate further when a v2 parent spawns it: a v1 child runs
+as a leaf worker. A v1 entry needs the global override off, like the switch above.
+
 :::tip[Not sure?]
 Stay on **v1**, the shipped default. Choose **base** or **v2** only when your parent and child models
 sit on the same side of the provider boundary — on both, a task handed from a ChatGPT model to a

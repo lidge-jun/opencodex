@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { compareCatalogHealPaths } from "./catalog/heal-observation";
 
 import { getConfigDir, saveConfigPreservingClaudeCode, ultraFastTierEnabled, websocketsEnabled, withExpectedConfigGenerationSync } from "../config";
-import { resolveMultiAgentMode } from "../config/multi-agent-surface";
+import { resolveMultiAgentMode, resolveMultiAgentModeByModel } from "../config/multi-agent-surface";
 import { reconcileSuccessfulModelDiscoveries } from "../providers/new-model-policy";
 import { pendingModelSelectionProviders } from "../providers/initial-model-selection";
 import { COMBO_NAMESPACE } from "../combos";
@@ -371,6 +371,7 @@ function prepareCatalog(
       disabledNativeAccountSlugs: new Set([...disabledNative].filter(slug => suppressedBareNativeSlugs.has(slug))),
       multiAgentV2Enabled,
       keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
+      multiAgentModeByModel: resolveMultiAgentModeByModel(config),
       openaiContextCap,
       accountNativeSlugs,
       accountNativeSlugsBySelector,
@@ -405,6 +406,7 @@ function prepareCatalog(
     multiAgentMode,
     multiAgentV2Enabled,
     keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
+    multiAgentModeByModel: resolveMultiAgentModeByModel(config),
     exactComboSlugs,
     comboDescriptions: comboCatalogDescriptions(config),
     hasPhysicalComboProvider,

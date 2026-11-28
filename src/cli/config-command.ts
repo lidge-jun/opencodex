@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { clearCodexAccountPin } from "../codex/account-priority";
 import { getConfigPath, mutatePersistedConfig, readConfigDiagnostics, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate, withConfigMutationLockSync } from "../config";
 import { MALFORMED_CODEX_AUTH_METHOD_WARNING } from "../config/load-degrade";
+import { resolveMultiAgentModeByModel } from "../config/multi-agent-surface";
 import { readClientConnectionState } from "../client/state";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import { readCliConfigForMutation } from "./config-mutation";
@@ -240,6 +241,12 @@ function validate(value: unknown): OcxConfig {
 function requireDedicatedPlaintextTransition(current: OcxConfig, candidate: OcxConfig): void {
   if (candidate.multiAgentMode === "v2-plaintext" && current.multiAgentMode !== "v2-plaintext") {
     throw new CliUsageError("Entering v2-plaintext requires ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages. Task text may remain in history, provider requests and debug state. Complete that transition before restoring a config with this mode.");
+  }
+  const stored = resolveMultiAgentModeByModel(current);
+  for (const [model, mode] of resolveMultiAgentModeByModel(candidate)) {
+    if (mode === "v2-plaintext" && stored.get(model) !== "v2-plaintext") {
+      throw new CliUsageError("A v2-plaintext model entry requires ocx v2 model-mode <model> v2-plaintext --acknowledge-plaintext-agent-messages. Task text may remain in history, provider requests and debug state. Complete that transition before restoring a config with this entry.");
+    }
   }
 }
 

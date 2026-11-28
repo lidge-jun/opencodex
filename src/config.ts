@@ -193,6 +193,7 @@ import {
   warnDegradedCodexAccountPicker,
   warnDegradedUpstreamHostCircuitThreshold,
   warnDegradedPlaintextV2AgentMessages,
+  warnDegradedMultiAgentModeByModel,
   warnDegradedAgentTaskRecovery,
   warnDegradedRuntimeRole,
   warnDegradedOptionalRemoteBlocks,
@@ -255,6 +256,7 @@ function loadConfigUnobserved(): OcxConfig {
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
       warnDegradedPlaintextV2AgentMessages(parsed);
+      warnDegradedMultiAgentModeByModel(parsed);
       warnDegradedAgentTaskRecovery(parsed);
       warnDegradedRuntimeRole(parsed);
       warnDegradedOptionalRemoteBlocks(parsed);
@@ -292,6 +294,7 @@ function loadConfigUnobserved(): OcxConfig {
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
       warnDegradedPlaintextV2AgentMessages(parsed);
+      warnDegradedMultiAgentModeByModel(parsed);
       warnDegradedAgentTaskRecovery(parsed);
       warnDegradedRuntimeRole(parsed);
       warnDegradedOptionalRemoteBlocks(parsed);
@@ -322,6 +325,7 @@ function loadConfigUnobserved(): OcxConfig {
         warnDegradedCodexAccountPicker(parsed);
         warnDegradedUpstreamHostCircuitThreshold(parsed);
         warnDegradedPlaintextV2AgentMessages(parsed);
+        warnDegradedMultiAgentModeByModel(parsed);
         warnDegradedAgentTaskRecovery(parsed);
         warnDegradedRuntimeRole(parsed);
         warnDegradedOptionalRemoteBlocks(parsed);

@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { initializeConfigOwnership } from "../../lib/config-ownership";
 import { getConfigDir, loadConfig, ultraFastTierEnabled, websocketsEnabled, withConfigMutationLockSync } from "../../config";
-import { resolveMultiAgentMode } from "../../config/multi-agent-surface";
+import { resolveMultiAgentMode, resolveMultiAgentModeByModel } from "../../config/multi-agent-surface";
 import { resolveRoutedCatalogDefaults } from "../../config/schema/routed-catalog-defaults";
 import { shouldSyncCodexOnStart } from "../desired-state";
 import { legacyCustomModelCatalogSlugs } from "../custom-model-catalog-migration";
@@ -514,6 +514,7 @@ function writeRetainedCatalogSync({
       disabledNativeAccountSlugs: new Set([...disabledNativeSlugs(config)].filter(slug => suppressedBareNativeSlugs.has(slug))),
       multiAgentV2Enabled,
       keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
+      multiAgentModeByModel: resolveMultiAgentModeByModel(config),
       openaiContextCap,
       accountNativeSlugs,
       accountNativeSlugsBySelector,
@@ -542,6 +543,7 @@ function writeRetainedCatalogSync({
     multiAgentMode,
     multiAgentV2Enabled,
     keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
+    multiAgentModeByModel: resolveMultiAgentModeByModel(config),
     exactComboSlugs,
     comboDescriptions: comboCatalogDescriptions(config),
     hasPhysicalComboProvider,

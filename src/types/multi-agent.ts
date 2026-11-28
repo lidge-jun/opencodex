@@ -11,3 +11,9 @@
  * whose values Codex validates.
  */
 export type MultiAgentMode = "v1" | "default" | "v2" | "v2-plaintext";
+
+/**
+ * What one model may select instead of the global mode (#8953). There is no "default":
+ * a model without an entry follows the global mode, so absence already says it.
+ */
+export type MultiAgentModelMode = Exclude<MultiAgentMode, "default">;
