@@ -1,4 +1,5 @@
 import { readBoundedResponseBody } from "../lib/bounded-body";
+import { isCodexTerminalAuthCode } from "./quota-refresh-outcome";
 
 const RESET_ELIGIBLE_CODE_VALUES = [
   "usage_limit_exceeded",
@@ -50,6 +51,8 @@ export type CodexPreStreamRejectionKind =
   | "permission-error"
   | "other";
 
+export type CodexForbiddenDenial = "workspace" | "entitlement" | "authentication";
+
 export interface CodexPreStreamRejection {
   kind: CodexPreStreamRejectionKind;
   status: number;
@@ -63,11 +66,9 @@ export interface CodexPreStreamRejection {
    */
   scopedExhaustionCode?: CodexScopedExhaustionCode;
   /**
-   * Structured denial evidence for a 403. Present only when the upstream body names a
-   * workspace/entitlement denial, which proves the CREDENTIAL is valid and the account
-   * simply lacks access here (#1789). Status alone can never set this.
+   * Structured denial evidence for a 403. Status alone supplies no credential evidence.
    */
-  denial?: "workspace" | "entitlement";
+  denial?: CodexForbiddenDenial;
 }
 
 /**
@@ -92,7 +93,7 @@ const ENTITLEMENT_DENIAL_CODES: ReadonlySet<string> = new Set([
 async function denialFromResponse(
   response: Response,
   signal?: AbortSignal,
-): Promise<"workspace" | "entitlement" | undefined> {
+): Promise<CodexForbiddenDenial | undefined> {
   try {
     const body = await readBoundedResponseBody(response.clone(), { signal, fatalUtf8: true });
     if (!body.displaySafe || body.truncated || !body.text.trim()) return undefined;
@@ -102,10 +103,8 @@ async function denialFromResponse(
     if (code === undefined) return undefined;
     if (WORKSPACE_DENIAL_CODES.has(code)) return "workspace";
     if (ENTITLEMENT_DENIAL_CODES.has(code)) return "entitlement";
-    return undefined;
+    return isCodexTerminalAuthCode(code) ? "authentication" : undefined;
   } catch {
-    // Same fail-closed rule as the exhaustion classifier: an unreadable body must not
-    // downgrade a credential failure into a workspace one.
     return undefined;
   }
 }
@@ -117,22 +116,22 @@ function ownStringField(container: Record<string, unknown>, field: string): stri
     : undefined;
 }
 
-/** Own-property `code` lookup at the top level or under `error` / `detail`. No coercion or accessors. */
+/** Require a consistent own-property code across the supported envelopes. */
 function structuredDenialCode(payload: unknown): string | undefined {
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return undefined;
   const record = payload as Record<string, unknown>;
-  const direct = ownStringField(record, "code");
-  if (direct !== undefined) return direct;
-
+  let code = ownStringField(record, "code");
   for (const field of ["error", "detail"] as const) {
     const descriptor = Object.getOwnPropertyDescriptor(record, field);
     if (!descriptor || !("value" in descriptor)) continue;
     const nested = descriptor.value;
     if (nested === null || typeof nested !== "object" || Array.isArray(nested)) continue;
-    const code = ownStringField(nested as Record<string, unknown>, "code");
-    if (code !== undefined) return code;
+    const nestedCode = ownStringField(nested as Record<string, unknown>, "code");
+    if (nestedCode === undefined) continue;
+    if (code !== undefined && code !== nestedCode) return undefined;
+    code = nestedCode;
   }
-  return undefined;
+  return code;
 }
 
 const RESET_ELIGIBLE_CODES: ReadonlySet<string> = new Set(RESET_ELIGIBLE_CODE_VALUES);

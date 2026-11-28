@@ -1425,6 +1425,7 @@
   "responses-native-main-refresh.test.ts": "responses", "responses-opaque-blob-recovery.test.ts": "responses", "responses-cold-opaque-recovery.test.ts": "responses",
   "responses-parser-agent-message.test.ts": "responses", "responses-parser-malformed-content.test.ts": "responses",
   "responses-parser.test.ts": "responses", "responses-passthrough-transient-policy.test.ts": "responses",
+  "responses-pinned-http-403.test.ts": "responses",
   "responses-pool-401-refresh.test.ts": "responses", "responses-pool-refresh-attribution.test.ts": "responses",
   "responses-preview-main-read-fence.test.ts": "responses", "responses-reasoning-effort-diagnostics.test.ts": "responses", "responses-reasoning-effort-downgrade.test.ts": "responses", "responses-native-ultra-effort-wire.test.ts": "responses",
   "responses-url-citation-title-repair.test.ts": "responses", "responses-reasoning-summary-passthrough.test.ts": "responses", "responses-reset-replay.test.ts": "responses", "responses-reset-replay-chained.test.ts": "responses",

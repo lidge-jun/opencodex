@@ -400,6 +400,10 @@ ocx service install    # persistent: auto-starts on login and respawns on crash
 
 `ocx status`는 proxy가 실행 중인지 보여주고, 실행 중이 아닐 때는 같은 restart 힌트를 출력합니다. `ocx doctor`는 restart safety(service/shim coverage)를 보고합니다.
 
+## 응답 시작 전 HTTP 403
+
+ChatGPT Responses에서 확인 가능한 인증 오류 코드 없이 HTTP 403을 반환하면 해당 요청은 실패합니다. 본문이 비어 있거나 알 수 없는 거부 응답만으로는 계정이 **재인증 필요** 상태로 바뀌지 않습니다. 계정을 지정한 요청은 해당 계정으로 고정됩니다. ChatGPT가 현재 저장된 자격 증명의 무효화를 명시적으로 알리면 OpenCodex는 다시 로그인하도록 안내합니다.
+
 ## 서브에이전트 선택기
 
 catalog sync는 선택된 서브에이전트 모델을 Codex가 쓸 수 있게 합니다. picker 순서는 [Codex App model picker](/guides/codex-app-models/#subagent-selection)에서, v1/base/v2 위임과 fallback 동작은 [Sub-agent Surface](/guides/sub-agent-surface/)에서 확인하세요.
