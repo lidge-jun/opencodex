@@ -459,7 +459,15 @@ Vertex the daily-quota prose still decides. `src/adapters/google-http.ts` valida
 once per retryable response. RFC 9110 delta-seconds (including zero) and HTTP-date forms take precedence.
 On a 429, an invalid or missing header falls back to the body delay. The effective delay supplies replay evidence
 and a floor for the next send.
-If it exceeds the retry ceiling, the request ends with the 429 carrying that advice as Retry-After. AI Studio keeps
+For Vertex with same-target `retryOn429` enabled and `respectRetryAfter: true`, an effective
+429 delay above `maxIntervalMs` stops the adapter retry and marks the returned response with the
+existing same-target hold. The Responses and hosted-search loops skip same-key replay and may
+still rotate to an eligible key. Hosted search includes the formatted advice on its initial
+HTTP 429 and uses its existing terminal stream error after response headers are committed.
+The shared send budget and header and body deadlines apply independently. Coverage:
+`tests/server/server-rate-limit-retry-e2e.test.ts`.
+If the delay exceeds the adapter's retry ceiling, the adapter returns the 429 carrying that advice
+as Retry-After. AI Studio keeps
 Google's body and status on raw 429s, including quota exhaustion. A 403 whose body is an object with code 403, `PERMISSION_DENIED`
 and a typed `ErrorInfo` `TOS_VIOLATION` entry becomes the fixed message
 `Antigravity account suspended (TOS_VIOLATION): ...`, which never echoes Google's appeal text; dispatch trusts only

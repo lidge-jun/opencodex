@@ -21,6 +21,7 @@ import {
   SendBudgetExhaustedError,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
   isConnectionResetError,
+  markSameTargetRetryHold,
 } from "../lib/upstream-retry";
 
 const GOOGLE_RETRY_BASE_MS = 250;
@@ -41,6 +42,8 @@ export interface GoogleRetryOptions {
   repairInvalid400?: boolean;
   toolSchemaProfile?: GoogleToolSchemaProfile;
   toolSchemaPolicy?: GoogleToolSchemaPolicy;
+  /** Same-target wait ceiling for a Vertex 429 carrying provider retry advice. */
+  rateLimitRetryMaxWaitMs?: number;
 }
 
 async function normalizeFinalGoogleError(label: string, res: Response, request: AdapterRequest, signal?: AbortSignal): Promise<Response> {
@@ -161,11 +164,19 @@ export async function fetchGoogleWithRetry(
           if (seconds !== undefined) retryAfterMs = Number(seconds) * 1000;
           res = replaceGoogleRetryAfter(res, seconds);
         }
-        if (!lastAttempt && isQuotaExhaustedBody(peek, label)) {
-          if (ctx.returnRawErrors) return res;
-          return normalizeUpstreamHttpErrorResponse(res, {
+        const quotaExhausted = !lastAttempt && isQuotaExhaustedBody(peek, label);
+        const hold = opts.rateLimitRetryMaxWaitMs !== undefined && retryAfterMs !== undefined
+          && retryAfterMs > opts.rateLimitRetryMaxWaitMs;
+        if (quotaExhausted || hold) {
+          const answer = ctx.returnRawErrors ? res : normalizeUpstreamHttpErrorResponse(res, {
             signal: ctx.abortSignal,
             formatMessage: payloadText => safeGoogleHttpErrorMessage(label, res.status, payloadText || peek),
+          });
+          if (!hold) return answer;
+          // The marker belongs on the returned response. Key rotation can still use the refusal.
+          return Promise.resolve(answer).then(response => {
+            markSameTargetRetryHold(response);
+            return response;
           });
         }
         // #8897: replaying the same bytes requires evidence that the next send could succeed.
@@ -265,11 +276,11 @@ export const GOOGLE_HOSTED_ITERATION_SEND_LIMIT = TRANSIENT_RETRY_MAX_ATTEMPTS +
 export function fetchVertexWithRetry(
   request: AdapterRequest,
   ctx: AdapterFetchContext = {},
-  schemaPolicy: Pick<GoogleRetryOptions, "toolSchemaProfile" | "toolSchemaPolicy"> = {},
+  options: Pick<GoogleRetryOptions, "toolSchemaProfile" | "toolSchemaPolicy" | "rateLimitRetryMaxWaitMs"> = {},
 ): Promise<Response> {
   return fetchGoogleWithRetry("Vertex AI", request, ctx, {
     toolSchemaProfile: { endpointClass: "vertex" },
-    ...schemaPolicy,
+    ...options,
   });
 }
 

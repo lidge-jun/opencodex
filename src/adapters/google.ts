@@ -21,6 +21,7 @@ import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, too
 import type { OcxTool } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
 import { bindVertexRequestAuthority, GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessTokenWithAuthority } from "../lib/gcp-adc";
+import { rateLimitRetryPolicyFor } from "../providers/key-failover";
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry, GOOGLE_HOSTED_ITERATION_SEND_LIMIT } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
@@ -961,6 +962,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     }
   }
 
+  const vertexRateLimitPolicy = provider.googleMode === "vertex" ? rateLimitRetryPolicyFor(provider) : null;
+  const rateLimitRetryMaxWaitMs = vertexRateLimitPolicy?.respectRetryAfter ? vertexRateLimitPolicy.maxIntervalMs : undefined;
   return {
     name: "google",
 
@@ -975,7 +978,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             const res = await (provider.googleMode === "cloud-code-assist" ? fetchAntigravityWithRetry : fetchVertexWithRetry)(
               request,
               ctx,
-              { toolSchemaProfile, toolSchemaPolicy },
+              { toolSchemaProfile, toolSchemaPolicy, rateLimitRetryMaxWaitMs },
             );
             // A rejected replay usually arrives as a real HTTP 400, and the dispatcher reports a
             // non-ok response without ever calling parseStream/parseResponse — the only other
