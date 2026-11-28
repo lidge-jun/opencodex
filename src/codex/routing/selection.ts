@@ -1,3 +1,7 @@
+import {
+  preserveLongQuotaCandidates,
+  preserveLongQuotaShortUsage,
+} from "./preserve-long-quota";
 import { getEffectiveCodexAutoSwitchThreshold } from "../account-auto-switch";
 import { codexAccountUsesCreditsAfterLimit, isCodexAccountHeldForCredits } from "../account-credit-use";
 import { isCodexAccountPaused } from "../account-pause";
@@ -263,7 +267,9 @@ export function getEligiblePoolAccounts(
   return selectPriorityTier(
     withoutModelDeniedAccounts(ids, selectionOptions?.deniedModelAccountIds, pinned),
     codexSelectionPriorityLookup(config),
-    id => hasCodexQuotaHeadroom(config, id, selectionOptions, now),
+    id => accountPoolStrategyForScope(config, quotaScope) === "preserve-long-quota"
+      ? hasPreserveLongQuotaHeadroom(config, id, selectionOptions, now)
+      : hasCodexQuotaHeadroom(config, id, selectionOptions, now),
     pinned,
   );
 }
@@ -281,7 +287,7 @@ function listEligibleCodexAccountIds(
 export function accountPoolStrategyForScope(config: OcxConfig, quotaScope?: CodexQuotaScope) {
   const strategy = normalizeCodexAccountPoolStrategy(config.accountPoolStrategy);
   if (!isIndependentCodexQuotaScope(quotaScope)) return strategy;
-  if (strategy === "reset-first") return "quota";
+  if (strategy === "reset-first" || strategy === "preserve-long-quota") return "quota";
   return strategy === "reset-near-weighted" ? "round-robin" : strategy;
 }
 
@@ -330,6 +336,19 @@ export function hasCodexQuotaHeadroom(
   );
   if (isUnknownUsage(usage)) return true;
   return usage < threshold;
+}
+
+function hasPreserveLongQuotaHeadroom(
+  config: OcxConfig,
+  accountId: string,
+  selectionOptions: CodexAccountUsabilityOptions | undefined,
+  now: number,
+): boolean {
+  if (!hasCodexQuotaHeadroom(config, accountId, selectionOptions, now)) return false;
+  const threshold = getEffectiveCodexAutoSwitchThreshold(config, accountId);
+  if (threshold <= 0) return true;
+  const usage = preserveLongQuotaShortUsage(getAccountQuota(accountId), now);
+  return usage === undefined || usage < threshold;
 }
 
 /**
@@ -413,6 +432,15 @@ export function hasCodexSharedStateQuotaHeadroom(
     codexAccountUsesCreditsAfterLimit(config, accountId),
   );
   return isUnknownUsage(usage) || usage < 100;
+}
+
+export function pickPreserveLongQuotaCodexAccount(
+  config: OcxConfig, ids: readonly string[], now: number,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): string | null {
+  const available = ids.filter(id => hasPreserveLongQuotaHeadroom(config, id, selectionOptions, now));
+  const candidates = available.length === 0 ? ids : preserveLongQuotaCandidates(available, getAccountQuota, now);
+  return pickLowestUsageAmong(config, candidates, selectionOptions, now, preserveLongQuotaShortUsage);
 }
 
 /** Earliest future shared short/weekly reset; missing evidence and ties use usage order. */
@@ -563,10 +591,12 @@ export function pickUnboundStrategyAccount(
     return picked;
   }
 
-  if (strategy === "fill-first" || strategy === "reset-first") {
-    picked = strategy === "reset-first"
-      ? pickResetFirstCodexAccount(config, listEligibleCodexAccountIds(config, now, quotaScope, selectionOptions), now, selectionOptions)
-      : pickFillFirstCodexAccount(config, now, quotaScope, selectionOptions);
+  if (strategy === "fill-first" || strategy === "reset-first" || strategy === "preserve-long-quota") {
+    picked = strategy === "preserve-long-quota"
+      ? pickPreserveLongQuotaCodexAccount(config, listEligibleCodexAccountIds(config, now, quotaScope, selectionOptions), now, selectionOptions)
+      : strategy === "reset-first"
+        ? pickResetFirstCodexAccount(config, listEligibleCodexAccountIds(config, now, quotaScope, selectionOptions), now, selectionOptions)
+        : pickFillFirstCodexAccount(config, now, quotaScope, selectionOptions);
     if (!picked) return null;
     if (commitSharedActive && sharesActiveSelection(picked, selectionOptions)) {
       if (!isIndependentCodexQuotaScope(quotaScope)
@@ -679,12 +709,16 @@ export function pickLowestUsageAmong(
   ids: readonly string[],
   selectionOptions?: CodexAccountUsabilityOptions,
   now: number = Date.now(),
+  shortOnlyUsage?: typeof preserveLongQuotaShortUsage,
 ): string | null {
   let best: string | null = null;
   let bestUsage = Number.POSITIVE_INFINITY;
   for (const id of ids) {
-    const usage = computeCodexUsageScore(
-      getAccountQuota(id),
+    const quota = getAccountQuota(id);
+    const short = shortOnlyUsage?.(quota, now);
+    // Keep the shared terminal-window and credit handling at exhaustion.
+    const usage = short !== undefined && short < 100 ? short : computeCodexUsageScore(
+      quota,
       getPoolAccountPlanForSelection(config, id, selectionOptions),
       now,
       codexAccountUsesCreditsAfterLimit(config, id),
@@ -737,6 +771,9 @@ export function pickAlternateCodexAccount(
   if (strategy === "fill-first") {
     const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
     return pickNextFillFirstCodexAccount(config, excludeId, eligible, now, selectionOptions);
+  }
+  if (strategy === "preserve-long-quota") {
+    return pickPreserveLongQuotaCodexAccount(config, getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions), now, selectionOptions);
   }
   if (strategy === "reset-first") {
     return pickResetFirstCodexAccount(config, getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions), now, selectionOptions);

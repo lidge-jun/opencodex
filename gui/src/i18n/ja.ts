@@ -2843,6 +2843,9 @@ export const ja: Record<TKey, string> = {
 
   "accountPool.strategy": "ローテーション戦略",
   "accountPool.strategyDesc": "OpenCodex が新規/未紐付けタスクへアカウントを割り当てる方法です。",
+  "accountPool.strategyPreserveLongQuota": "長期クォータを温存",
+  "accountPool.strategyHintPreserveLongQuota": "短期枠のみと確認できたアカウント、週次枠、月次枠の順に優先します。同じグループでは最長枠のリセットが近い順です。不明な枠は予備扱いです。紐付け済みタスクのアフィニティ方針を維持し、独立モデル枠は使用率順に扱います。",
+  "accountPool.preserveBelowThreshold": "使用率{threshold}%未満で長期枠を温存",
   "accountPool.strategyResetFirst": "リセットが近い順",
   "accountPool.strategyResetNearWeighted": "最も近いリセットを重み付け",
   "accountPool.strategyHintResetFirst": "使用率のしきい値未満から、次の5時間枠または週次枠のリセットが最も近いアカウントを選びます。紐付け済みタスクは設定されたアフィニティ方針に従います。独立したモデル枠は使用率順です。",

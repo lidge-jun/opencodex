@@ -5697,9 +5697,9 @@ describe("codex-auth API", () => {
   });
 
   test.each([
-    ["legacy manual map", undefined, false],
-    ["dashboard-managed hidden picker", false, true],
-  ] as const)("OAuth creation preserves namespace ownership for %s", async (_case, enabled, expectedBinding) => {
+    ["legacy manual map", undefined, false, false], ["legacy manual map / null WHAM", undefined, false, true],
+    ["dashboard-managed hidden picker", false, true, false], ["dashboard-managed hidden picker / null WHAM", false, true, true],
+  ] as const)("OAuth creation preserves namespace ownership for %s", async (_case, enabled, expectedBinding, nullUsage) => {
     const accountId = enabled === undefined ? "oauth-manual-map" : "oauth-hidden-picker";
     const config = makeConfig({
       codexAccountNamespaces: { desktop: "@main" },
@@ -5712,7 +5712,7 @@ describe("codex-auth API", () => {
       requestBody: { id: accountId },
       oauthAccountId: `acct-${accountId}`,
       email: `${accountId}@example.test`,
-      onWarmup: () => {},
+      onWarmup: () => {}, usageResponse: nullUsage ? () => Response.json(null) : undefined,
       convergeCodexCatalog: async () => {
         convergenceCalls += 1;
         return { status: "committed", changed: false, degraded: false, notices: [] };
@@ -5832,7 +5832,7 @@ describe("codex-auth API", () => {
     expect(getCodexAccountCredential("shared-account-id")).toBeNull();
   });
 
-  test("OAuth reauth preserves the stored plan when the usage probe fails", async () => {
+  test.each(["null", "503"])("OAuth reauth preserves the stored plan when the usage probe returns %s", async response => {
     const config = makeConfig({
       codexAccounts: [{
         id: "reauth-plan",
@@ -5855,7 +5855,7 @@ describe("codex-auth API", () => {
       oauthAccountId: "acct-reauth-plan",
       email: "reauth-plan@example.test",
       onWarmup: () => {},
-      usageResponse: () => new Response("unavailable", { status: 503 }),
+      usageResponse: () => response === "null" ? Response.json(null) : new Response("unavailable", { status: 503 }),
     });
 
     expect(result.state).toMatchObject({ status: "done" });

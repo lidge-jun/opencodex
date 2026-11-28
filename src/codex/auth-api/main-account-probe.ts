@@ -439,9 +439,7 @@ export async function fetchMainAccountInfoWhileOwned(
       // Mirror main quota + plan into the shared stores so the rotation engine can
       // score and auto-switch the main account exactly like a pool account (Option A).
       setMainAccountPlan(result.plan);
-      if (result.quota) {
-        setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, result.quota, writerGeneration, mainQuotaWriter, policyQuota, undefined, false, false, isValidWhamHistoryObservation(usage) ? quota : null);
-      }
+      setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, result.quota, writerGeneration, mainQuotaWriter, policyQuota, undefined, false, false, isValidWhamHistoryObservation(usage) ? quota : null, { data: usage });
       publishQuotaDispatch(dispatchSequence);
       readState.usable = quota !== null;
       return {

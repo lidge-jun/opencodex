@@ -385,7 +385,7 @@ export async function handleCodexAuthAPI(
     if (body.strategy !== undefined) {
       const parsed = parseCodexAccountPoolStrategy(body.strategy);
       if (parsed === null) {
-        return jsonResponse({ error: 'strategy must be one of: quota, round-robin, fill-first, reset-first, reset-near-weighted' }, 400);
+        return jsonResponse({ error: 'strategy must be one of: quota, round-robin, fill-first, reset-first, reset-near-weighted, preserve-long-quota' }, 400);
       }
       nextStrategy = parsed;
     }

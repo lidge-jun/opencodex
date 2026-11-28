@@ -4,6 +4,7 @@ export const ACCOUNT_POOL_STRATEGIES = [
   "fill-first",
   "reset-first",
   "reset-near-weighted",
+  "preserve-long-quota",
 ] as const;
 
 export type AccountPoolStrategy = typeof ACCOUNT_POOL_STRATEGIES[number];

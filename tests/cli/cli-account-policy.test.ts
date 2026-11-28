@@ -202,6 +202,18 @@ describe("policy tasks and safe receipts", () => {
 });
 
 describe("pool field masks and actual policy projection", () => {
+  test("Codex preserve-long-quota is saved and survives the receipt DTO", async () => {
+    const dto = unifiedPoolSettingsDto({ port: 10100, providers: {}, defaultProvider: "openai" }, "openai", "codex");
+    const f = fixture(c => c.method === "GET" ? dto : { ...dto, ...c.body });
+    expect(await policy("pool", ["openai", "--strategy", "preserve-long-quota", "--json"], f.deps)).toBe(0);
+    expect(f.calls[1]!.body).toEqual({ provider: "openai", strategy: "preserve-long-quota" });
+    expect(result()).toMatchObject({ kind: "codex", strategy: "preserve-long-quota" });
+  });
+  test.each(["anthropic", "kiro", "gemini"])("%s rejects preserve-long-quota before discovery", async provider => {
+    const f = fixture();
+    expect(await policy("pool", [provider, "--strategy", "preserve-long-quota"], f.deps)).toBe(2);
+    expect(f.probes()).toBe(0);
+  });
   for (const [provider, kind] of [["openai", "codex"], ["anthropic", "anthropic"], ["kiro", "generic"], ["gemini", "generic"]] as const) {
     test(`${provider} read preserves null/effective without account availability guesses`, async () => {
       const config: OcxConfig = { port: 10100, defaultProvider: provider, providers: { [provider]: { adapter: "openai-chat", baseUrl: "https://example.test" } }, oauthAccountFailover: { enabled: true } };

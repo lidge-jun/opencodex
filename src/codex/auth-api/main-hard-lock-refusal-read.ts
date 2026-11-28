@@ -151,10 +151,10 @@ async function readCallerMainUsage(
     if (!isMainQuotaDispatchLive(dispatch) || !matchesMainQuotaCredential(caller.bearer, caller.accountId)
       || writerGeneration !== captureConfigGeneration() || !isQuotaDispatchCurrent(sequence)) return;
     const quota = parseUsageQuota(data);
+    const acceptedTopology = setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, quota, writerGeneration, dispatch.writer, parseMainPolicyUsageQuota(data),
+      undefined, false, false, isValidWhamHistoryObservation(data) ? quota : null, { data });
+    if (quota || acceptedTopology) publishQuotaDispatch(sequence);
     if (!quota) return;
-    setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, quota, writerGeneration, dispatch.writer, parseMainPolicyUsageQuota(data),
-      undefined, false, false, isValidWhamHistoryObservation(data) ? quota : null);
-    publishQuotaDispatch(sequence);
     usable = true;
   } finally {
     admission.settle(usable);

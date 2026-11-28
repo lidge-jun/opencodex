@@ -113,6 +113,7 @@ import {
   isUnknownUsage,
   pickAlternateCodexAccount,
   pickLowerUsageAccount,
+  pickPreserveLongQuotaCodexAccount,
   pickLowestUsageAmong,
   pickLowestUsageCodexAccount,
   pickPriorityPreemption,
@@ -573,7 +574,7 @@ function previewReusableAffinityAccount(
     }
     return null;
   }
-  if (accountPoolStrategyForScope(config, quotaScope) === "reset-first") {
+  if (["reset-first", "preserve-long-quota"].includes(accountPoolStrategyForScope(config, quotaScope))) {
     return resetFirstAffinityReplacement(entry, config, now, quotaScope, selectionOptions) ?? entry.accountId;
   }
   const recovered = pickAffinityPriorityFailback(config, entry.accountId, now, quotaScope, selectionOptions);
@@ -632,7 +633,9 @@ function resetFirstAffinityReplacement(
         now, codexAccountUsesCreditsAfterLimit(config, id),
       ));
     });
-  return pickResetFirstCodexAccount(config, candidates, now, selectionOptions);
+  return accountPoolStrategyForScope(config, quotaScope) === "preserve-long-quota"
+    ? pickPreserveLongQuotaCodexAccount(config, candidates, now, selectionOptions)
+    : pickResetFirstCodexAccount(config, candidates, now, selectionOptions);
 }
 
 /**
@@ -695,7 +698,7 @@ function reevaluateAffinityQuota(
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | null {
   const strategy = accountPoolStrategyForScope(config, quotaScope);
-  if (strategy === "reset-first") {
+  if (strategy === "reset-first" || strategy === "preserve-long-quota") {
     const replacement = resetFirstAffinityReplacement(entry, config, now, quotaScope, selectionOptions);
     if (replacement || now - entry.lastReevalAt >= CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS) entry.lastReevalAt = now;
     return replacement;

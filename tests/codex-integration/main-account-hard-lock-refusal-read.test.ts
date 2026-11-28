@@ -11,12 +11,12 @@ import {
   resetMainHardLockRefusalReadForTests,
 } from "../../src/codex/auth-api/main-hard-lock-refusal-read";
 import { advanceCodexCredentialMutationEpoch } from "../../src/codex/credential-mutation-epoch";
-import { nextQuotaDispatchSequence, publishQuotaDispatch } from "../../src/codex/auth-api/pool-quota-probe";
+import { isQuotaDispatchCurrent, nextQuotaDispatchSequence, publishQuotaDispatch } from "../../src/codex/auth-api/pool-quota-probe";
 import { CodexMainAccountHardLockError, resolveCodexAuthContext } from "../../src/codex/auth-context";
 import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaCredential } from "../../src/codex/main-account-cache";
 import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
 import { setMainAccountPlan } from "../../src/codex/main-account";
-import { clearAccountQuota, getMainPolicyUsageObservedAt, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { clearAccountQuota, getAccountQuota, getMainPolicyUsageObservedAt, parseMainPolicyUsageQuota, parseUsageQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { resetQuotaQueryBackoffForTests } from "../../src/codex/quota-query-backoff";
 import { clearCodexUpstreamHealth } from "../../src/codex/routing";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
@@ -227,6 +227,28 @@ test("a caller-owned main bearer refusal gets the same fresh read", async () => 
   expect(physicalReads).not.toHaveBeenCalled();
   physicalReads.mockRestore();
 });
+test.each([false, true])("a null-quota caller read advances dispatch ordering only for accepted contradictory topology=%s", async contradictory => {
+  observeMainQuotaCredential(mainToken, accountId);
+  const writer = captureMainQuotaWriter(accountId)!;
+  const complete = { rate_limit: { allowed: true,
+    primary_window: { used_percent: 20, limit_window_seconds: 18_000, reset_at: Math.floor(clock / 1000) + 3600 },
+    secondary_window: null, tertiary_window: null,
+  } };
+  setAccountQuotaFromParsed(MAIN, parseUsageQuota(complete), undefined, writer, parseMainPolicyUsageQuota(complete));
+  block();
+  expect(getAccountQuota(MAIN)?.shortOnlyObservedAt).toBeNumber();
+  const observed = getAccountQuota(MAIN)?.shortOnlyObservedAt;
+  const olderDispatch = nextQuotaDispatchSequence();
+  expect(isQuotaDispatchCurrent(olderDispatch)).toBe(true);
+  wham(() => Response.json(contradictory
+    ? { rate_limit: { primary_window: { used_percent: "abc", limit_window_seconds: 604800 } } }
+    : { rate_limit: {} }), undefined, false);
+  age(MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS + 1);
+  expect(await refreshMainHardLockBeforeRefusal(config(), config(), undefined, { bearer: mainToken, accountId })).toBe(false);
+  expect(getAccountQuota(MAIN)?.shortOnlyObservedAt).toBe(contradictory ? undefined : observed);
+  expect(isQuotaDispatchCurrent(olderDispatch)).toBe(!contradictory);
+});
+
 test("a credential commit during a caller-owned read keeps the refusal", async () => {
   const gate = Promise.withResolvers<void>();
   const calls = wham(() => usage(0), gate.promise, false);
