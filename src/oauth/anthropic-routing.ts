@@ -120,6 +120,11 @@ interface AccountHealth {
   /** Windows a 429 reported as rejected, whatever set the deadline; empty when it named none. */
   refusedQuotaWindows: AnthropicQuotaWindow[];
   /**
+   * For a 429 that named no window: the windows the first fresh usage read after it found spent,
+   * or empty when that read found every window open. Undefined until such a read (#9032).
+   */
+  aggregateQuotaWindows?: AnthropicQuotaWindow[];
+  /**
    * When the rejected windows reopen according to upstream's reset headers, kept even when
    * Retry-After set the deadline. A usage-limit answer reports this, never an admission deadline.
    */
@@ -276,8 +281,6 @@ export type AnthropicCooldownRecoveryClaim = Readonly<{
   accountId: string;
   cooldownGeneration: number;
   claimedAt: number;
-  /** False for a reset-derived refusal that named no window: a usage read can only retain it. */
-  namesRejectedWindow: boolean;
 }>;
 
 export type AnthropicCooldownRecoverySettlement = "cleared" | "retained" | "superseded";
@@ -417,14 +420,17 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
    * The deadline source does not matter (#6989). Anthropic sends Retry-After on a spent window as
    * well, set to that window's reset, so a `retry-after` cooldown that named rejected windows
    * carries exactly the evidence a `reset-derived` one does; the read decides, not the header.
-   * A refusal that named no window can only be the aggregate unified status. It stays claimable
-   * when reset-derived, as before, but no usage reading covers it, so it is always retained.
+   * A refusal that named no window is the aggregate unified status (#9032). It is claimed with no
+   * window until the first fresh read after it: a window that read finds spent is the one that
+   * explains the refusal and must reopen, while a read that finds both open leaves the refusal
+   * unexplained, so no later read can lift it and it waits for its deadline.
    */
   function recoverableQuotaWindows(entry: AccountHealth): readonly AnthropicQuotaWindow[] | null {
     if (entry.refusalStatus !== 429) return null;
     if (entry.rejectedQuotaWindows?.length) return entry.rejectedQuotaWindows;
     if (entry.refusedQuotaWindows.length) return entry.refusedQuotaWindows;
-    return entry.cooldownSource === "reset-derived" ? [] : null;
+    if (entry.aggregateQuotaWindows) return entry.aggregateQuotaWindows.length ? entry.aggregateQuotaWindows : null;
+    return [];
   }
 
   /**
@@ -440,7 +446,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     const entry = upstreamHealth.get(accountId);
     const windows = entry && entry.cooldownUntil > now ? recoverableQuotaWindows(entry) : null;
     if (!entry || windows === null) return null;
-    return { instance, accountId, cooldownGeneration: entry.cooldownGeneration, claimedAt: now, namesRejectedWindow: windows.length > 0 };
+    return { instance, accountId, cooldownGeneration: entry.cooldownGeneration, claimedAt: now };
   }
 
   /**
@@ -459,11 +465,20 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
       || entry.cooldownGeneration !== claim.cooldownGeneration
       || anthropicCooldownGeneration(claim.accountId) !== claim.cooldownGeneration
       || !Number.isFinite(quota.updatedAt) || quota.updatedAt < claim.claimedAt) return "superseded";
-    if (!windows.length) return "retained";
-    const recovered = windows.every(window => {
+    const percentOf = (window: AnthropicQuotaWindow): number | undefined => {
       const percent = window === "five-hour" ? quota.fiveHourPercent : quota.weeklyPercent;
-      return typeof percent === "number" && Number.isFinite(percent) && percent >= 0 && percent < 100;
-    });
+      return typeof percent === "number" && Number.isFinite(percent) && percent >= 0 ? percent : undefined;
+    };
+    if (!windows.length) {
+      // First read after an aggregate refusal: record which window explains it. An incomplete
+      // read concludes nothing and leaves the claim open for the next one.
+      const all: readonly AnthropicQuotaWindow[] = ["five-hour", "weekly"];
+      if (all.every(window => percentOf(window) !== undefined)) {
+        entry.aggregateQuotaWindows = all.filter(window => percentOf(window)! >= 100);
+      }
+      return "retained";
+    }
+    const recovered = windows.every(window => (percentOf(window) ?? 100) < 100);
     if (!recovered) return "retained";
     upstreamHealth.delete(claim.accountId);
     noteAnthropicCooldownMutation(claim.accountId);

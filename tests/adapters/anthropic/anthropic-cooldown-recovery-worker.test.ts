@@ -99,15 +99,23 @@ test("a read that still shows a rejected window full keeps the cooldown and back
   }
 });
 
-test("a unified-rejected 429 that names no window keeps its Retry-After cooldown unread", async () => {
+test("#9032: an aggregate 429 is read until the window its first read found spent reopens", async () => {
   const routing = f.routing.anthropicRoutingFor("anthropic");
+  const id = f.ids[0];
   const now = Date.now();
-  routing.recordAnthropicAccount429(f.config, f.ids[0], String(4 * 24 * 3600), now,
+  routing.recordAnthropicAccount429(f.config, id, String(30 * 3600), now,
     new Headers({ "anthropic-ratelimit-unified-status": "rejected" }));
-  expect(routing.getAnthropicAccountHealthSnapshot(f.ids[0], now)).not.toBeNull();
-  const counter = usage(0, 0);
+  const spent = usage(0, 100);
   await runAnthropicCooldownRecoveryProbes(f.config, now);
-  expect(counter.reads).toBe(0);
+  expect(spent.reads).toBe(1);
+  expect(routing.getAnthropicAccountHealthSnapshot(id)).not.toBeNull();
+
+  // The weekly window is reset elsewhere; the next due sweep sees it and lifts the cooldown.
+  const reopened = usage(0, 0);
+  await runAnthropicCooldownRecoveryProbes(f.config, Date.now() + ANTHROPIC_COOLDOWN_RECOVERY_PROBE_MIN_MS + 1_000);
+  expect(reopened.reads).toBe(1);
+  expect(routing.getAnthropicAccountHealthSnapshot(id)).toBeNull();
+  expect(routing.getEligibleAnthropicAccounts()).toContain(id);
 });
 
 test("a newer refusal replaces the earned backoff and is read on the next sweep", async () => {
@@ -149,7 +157,7 @@ test("an entitlement 403 is never read for", async () => {
   await runAnthropicCooldownRecoveryProbes(f.config, now);
   expect(counter.reads).toBe(0);
 });
-test("a reset-derived 429 that names no window is never read for", async () => {
+test("an aggregate 429 whose first read finds every window open is not read again", async () => {
   const routing = f.routing.anthropicRoutingFor("anthropic");
   const now = Date.now();
   routing.recordAnthropicAccount429(f.config, f.ids[0], null, now, new Headers({
@@ -159,8 +167,12 @@ test("a reset-derived 429 that names no window is never read for", async () => {
   expect(routing.getAnthropicAccountHealthSnapshot(f.ids[0], now)).toMatchObject({ cooldownSource: "reset-derived" });
   const counter = usage(0, 0);
   await runAnthropicCooldownRecoveryProbes(f.config, now);
-  expect(counter.reads).toBe(0);
-  expect(dueAnthropicCooldownRecoveryProbes(f.config, now)).toEqual([]);
+  expect(counter.reads).toBe(1);
+  expect(routing.getAnthropicAccountHealthSnapshot(f.ids[0])).not.toBeNull();
+  const later = Date.now() + ANTHROPIC_COOLDOWN_RECOVERY_PROBE_MAX_MS + 1_000;
+  expect(dueAnthropicCooldownRecoveryProbes(f.config, later)).toEqual([]);
+  await runAnthropicCooldownRecoveryProbes(f.config, later);
+  expect(counter.reads).toBe(1);
 });
 
 test("a disabled or API-key instance is never read for", async () => {
