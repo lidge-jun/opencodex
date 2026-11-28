@@ -22,6 +22,7 @@ import type { OcxConfig, OcxProviderConfig, OcxWebSearchSidecarConfig } from "..
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { resolveDevinWebSearchSnapshot, runDevinWebSearch } from "./devin-executor";
 import { runExaWebSearch } from "./exa-executor";
+import { runKeenableWebSearch } from "./keenable-executor";
 import type { SidecarOutcome, SidecarSettings } from "./executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import {
@@ -58,6 +59,7 @@ const DEFAULT_BACKEND_MODELS = {
   gemini: "gemini-3.8-flash",
   // Exa ignores model; the placeholder only satisfies SidecarSettings.
   exa: "gpt-5.6-luna",
+  keenable: "gpt-5.6-luna",
 } as const;
 
 export type AlphaSearchSidecarBackend = keyof typeof DEFAULT_BACKEND_MODELS;
@@ -66,7 +68,8 @@ type ResolvedAlphaSearchSidecar =
   | { backend: "anthropic"; providerName: string; provider: OcxProviderConfig; config: OcxConfig }
   | { backend: "xai"; providerName: string; provider: OcxProviderConfig }
   | { backend: "gemini"; providerName: string; provider: OcxProviderConfig }
-  | { backend: "exa"; apiKey: string };
+  | { backend: "exa"; apiKey: string }
+  | { backend: "keenable"; apiKey?: string };
 
 /**
  * Why this path cannot serve the request, kept distinct from "nobody asked for it".
@@ -130,6 +133,8 @@ export function resolveAlphaSearchSidecar(config: OcxConfig): AlphaSearchSidecar
         ? { status: "ready", sidecar: { backend, apiKey } }
         : { status: "missing-credential", backend };
     }
+    case "keenable":
+      return { status: "ready", sidecar: { backend, apiKey: sidecar?.keenableApiKey } };
   }
 }
 
@@ -208,6 +213,8 @@ async function runAlphaSearchQuery(
       return runGeminiWebSearch(query, resolved.providerName, resolved.provider, settings, signal);
     case "exa":
       return runExaWebSearch(query, resolved.apiKey, settings, signal);
+    case "keenable":
+      return runKeenableWebSearch(query, resolved.apiKey, settings, signal);
   }
 }
 
@@ -315,6 +322,7 @@ function missingCredentialMessage(backend: AlphaSearchSidecarBackend): string {
     xai: "no usable stored Grok OAuth account was found",
     gemini: "no usable stored Antigravity OAuth account with a discovered project was found",
     exa: "webSearchSidecar.exaApiKey is not set",
+    keenable: "keenable backend is unavailable",
   };
   return "Built-in web search is configured to use the " + backend + " backend, but "
     + detail[backend] + ". Restore that backend's credential, or choose another "

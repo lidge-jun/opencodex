@@ -1759,6 +1759,7 @@ export interface OcxWebSearchSidecarConfig {
    * and src/lib/redact.ts strips it from any logged structure or error string.
    */
   exaApiKey?: string;
+  keenableApiKey?: string;
   /**
    * Opt-in X (Twitter) search for the xai backend: adds the hosted x_search tool next to
    * web_search. Limits are doc-validated at the management layer AND in the executor:

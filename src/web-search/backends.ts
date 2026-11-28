@@ -86,6 +86,12 @@ export const WEB_SEARCH_BACKENDS: readonly WebSearchBackendDescriptor[] = [
     isActive: (_auth, config) => !!config.webSearchSidecar?.exaApiKey,
     eligibleModel: () => false,
   },
+  {
+    backend: "keenable",
+    // Explicit-only non-LLM backend; works keyless or with an optional keenableApiKey.
+    isActive: (_auth, config) => config.webSearchSidecar?.backend === "keenable",
+    eligibleModel: () => false,
+  },
 ];
 
 /**

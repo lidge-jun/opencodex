@@ -10,7 +10,7 @@ import { getAccountSet } from "../oauth/store";
 import type { XaiSearchOptions } from "./xai-executor";
 
 /** Every backend id the config union admits. New ids are explicit-only and inert until their executor ships. */
-export type WebSearchBackendId = "openai" | "anthropic" | "xai" | "gemini" | "exa";
+export type WebSearchBackendId = "openai" | "anthropic" | "xai" | "gemini" | "exa" | "keenable";
 
 /**
  * Precedence: explicit config wins; unset defaults to "openai" (ChatGPT forward path). The
@@ -27,7 +27,15 @@ export type WebSearchBackendId = "openai" | "anthropic" | "xai" | "gemini" | "ex
 export function resolveSidecarBackend(
   explicit: WebSearchBackendId | undefined,
 ): WebSearchBackendId {
-  if (explicit === "anthropic" || explicit === "xai" || explicit === "gemini" || explicit === "exa") return explicit;
+  if (
+    explicit === "anthropic" ||
+    explicit === "xai" ||
+    explicit === "gemini" ||
+    explicit === "exa" ||
+    explicit === "keenable"
+  ) {
+    return explicit;
+  }
   return "openai";
 }
 

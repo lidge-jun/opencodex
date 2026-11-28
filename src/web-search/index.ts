@@ -27,6 +27,7 @@ export { runAnthropicWebSearch, parseAnthropicSidecarSSE } from "./anthropic-exe
 export { runXaiWebSearch, parseXaiResponsesSSE, validateXaiSearchOptions, type XaiSearchOptions } from "./xai-executor";
 export { runGeminiWebSearch, mapCcaGroundedResponse } from "./gemini-executor";
 export { runExaWebSearch, mapExaSearchResponse } from "./exa-executor";
+export { runKeenableWebSearch, mapKeenableSearchResponse } from "./keenable-executor";
 export {
   findAnthropicSidecarProvider,
   findGeminiSidecarProvider,
@@ -256,6 +257,18 @@ export function planWebSearch(
     return {
       backend: "exa",
       exaConfigured: true,
+      hostedTool: parsed._webSearch,
+      settings: { model: cfg.model ?? DEFAULT_SIDECAR_MODEL, reasoning, timeoutMs, describeImages },
+      maxSearches,
+      routedModelStallTimeoutMs,
+      stallTimeoutSec,
+      streamRoutedModelOutput,
+    };
+  }
+
+  if (backend === "keenable") {
+    return {
+      backend: "keenable",
       hostedTool: parsed._webSearch,
       settings: { model: cfg.model ?? DEFAULT_SIDECAR_MODEL, reasoning, timeoutMs, describeImages },
       maxSearches,
