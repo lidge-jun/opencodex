@@ -30,6 +30,7 @@ import {
 } from "../config";
 import { flushConfigDirHardeningAndReaps } from "../config/paths";
 import { trackBackgroundWork } from "../lib/background-work";
+import { setReplayRefusalRetryable } from "../lib/upstream-retry";
 import { migrateStartupSubagentModels } from "./subagent-models-startup";
 import { migrateStartupReserveCapability } from "./reserve-capability-startup";
 import { migrateStartupXaiResponses } from "./xai-responses-startup";
@@ -233,6 +234,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // an in-memory wire upgrade when that upgrade's persistence is temporarily unavailable.
   reconcileOAuthProviders(startupConfig);
   const config = migrateStartupZaiResponses(migrateStartupXaiResponses(startupConfig));
+  setReplayRefusalRetryable(config.replayRefusalRetryable === true);
   warnPlaintextV2AgentMessagesStartup(config);
   warnAgentTaskRecoveryStartup(config);
   setLiveStateStoreConfig(config);

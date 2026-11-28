@@ -3,7 +3,7 @@ import { mapToolChoice } from "../../responses/parser-tools";
 import { extractHostedWebSearch } from "../../web-search/synthetic-tool";
 import { modelInList, type OcxProviderConfig, type OcxTool } from "../../types";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
-import { applyReplayRefusalClientHeaders, isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
+import { applyTerminalRefusalClientHeaders, isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { clientWireOf } from "../inference/client-wire";
 import { isPreinspectedJsonResponse, markPreinspectedJsonResponse } from "../relay";
 import { isAuthorizedProviderExecutedCall } from "../responses-undeclared-tool-guard";
@@ -139,7 +139,7 @@ export async function judgeBufferedRequiredTool(response: Response, requirement:
       // but never buy another execution merely because the required client call is missing.
       if (hostedEffect) {
         markResponseNonReplayable(failure);
-        applyReplayRefusalClientHeaders(failure.headers);
+        applyTerminalRefusalClientHeaders(failure.headers);
       }
       return failure;
     }

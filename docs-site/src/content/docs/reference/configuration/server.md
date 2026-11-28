@@ -20,6 +20,7 @@ passthrough, including native WebSocket output, retain their existing stop behav
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `completeOnMaxOutputTokens?` | `boolean` | `false` | Opt in to completing eligible token-limited translated Responses text output. Text stays truncated; see the eligibility and exclusions above. |
+| `replayRefusalRetryable?` | `boolean` | `false` | Opt in to answering an ambiguous reset this proxy refuses to replay with HTTP 502 and `x-should-retry: true` instead of 429 and `false`. The request may already have run upstream, so enabling this can duplicate inference and billing. Use it for clients such as Codex that retry 5xx but never 429. Restart the proxy to apply. |
 | `port` | `number` | `10100` | Proxy listen port. |
 | `hostname?` | `string` | `"127.0.0.1"` | Bind address. A non-loopback bind requires a configured client key in `config.apiKeys` or a shared data token, resolved from `OPENCODEX_API_AUTH_TOKEN`, then `OCX_API_TOKEN_FILE`, then the installed owner-only `service-api-token`. See [Remote access](#remote-access). |
 | `proxy?` | `string` | — | Outbound HTTP(S) or SOCKS5 proxy URL (`socks5://host:port`), `${ENV_VAR}`, or `"auto"`. HTTP URLs apply to `HTTP_PROXY` / `HTTPS_PROXY` when those are unset. SOCKS5 URLs use OpenCodex's real SOCKS5 transport and are also exposed through `ALL_PROXY` (`ocx start --socks5`); inherited `HTTP(S)_PROXY` is cleared in this process. Loopback stays in `NO_PROXY`. `"auto"` reads Windows WinINET or macOS static HTTP/HTTPS settings once at startup. Inherited HTTP(S) proxy variables skip discovery; on macOS, inherited `ALL_PROXY`/`all_proxy` also skips it. Windows keeps separate `http=` and `https=` entries; a bare `ProxyServer` applies to both. macOS translates IP literals, `*`, and a valid `*.<domain>` glob to Bun's `.<domain>` bypass. That glob also bypasses the bare apex `<domain>`. The exact link-local ranges `169.254/16`, `169.254.0.0/16`, and `fe80::/10` are omitted with a diagnostic: link-local IP literals use the proxy. Other CIDRs, globs, and simple-host exceptions refuse discovery without changing the proxy environment. Disabled, malformed, PAC/WPAD, SOCKS-only, and live changes are not followed. Restart after changing system settings. |
@@ -155,6 +156,13 @@ performs no key rotation, account failover or same-target replay on it, nor does
 refusal as rate-limit or quota evidence against the credential it was holding. Tool-call side
 requests such as vision and web search are replayed normally, because repeating them cannot
 duplicate a turn.
+
+That terminal policy is the default. Set the top-level `replayRefusalRetryable` to `true`
+to answer the same refusal with HTTP 502 and `x-should-retry: true` instead. This is for
+clients such as Codex that retry 5xx but never 429; the upstream turn may already have run,
+so the option accepts a possible duplicate inference and billing. The default remains
+429/false, and deterministic contract errors keep their non-retryable headers regardless of
+this setting. Restart the proxy to apply.
 
 Native ChatGPT Responses and compact HTTP requests whose serialized JSON strings are at least
 1 MiB in UTF-8 use byte-buffer uploads to avoid Bun resetting a large string upload before response

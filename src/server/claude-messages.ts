@@ -58,7 +58,7 @@ import {
   carryReplayRefusal,
   isReplayRefusalResponse,
   isTransientUpstreamStatus,
-  REPLAY_REFUSED_STATUS,
+  replayRefusedStatus,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
 import { isClientClosedMessage, recognizedUpstreamError, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
@@ -1451,7 +1451,7 @@ async function handleClaudeMessagesWithBudget(
     const transient = !localComboUnavailable && !replayRefusal && !nativeMainFence && !contextError && !catalogRefusal
       && isTransientUpstreamStatus(response.status);
     const outStatus = replayRefusal
-      ? REPLAY_REFUSED_STATUS
+      ? replayRefusedStatus()
       : nativeMainFence ? 503 : contextError ? 400 : transient ? 529 : response.status;
     const outHeaders = new Headers({ "Content-Type": "application/json" });
     const clientRetryAfter = formatClientRetryAfter(retryAfter);

@@ -114,6 +114,25 @@ export function isReplayRefusalCode(code: unknown): boolean {
 
 /** Client-facing status for {@link UPSTREAM_RESET_REPLAY_REFUSED_CODE}. */
 export const REPLAY_REFUSED_STATUS = 429;
+/** Retryable client-facing status for the same refusal, used by the opt-in below. */
+export const REPLAY_REFUSED_STATUS_RETRYABLE = 502;
+
+let replayRefusalRetryable = false;
+
+/**
+ * Opt in to answering an ambiguous reset refusal with a retryable 502 instead of 429.
+ *
+ * Codex's client retries 5xx but never 429. The default stays 429 because the request
+ * may already have run upstream; an operator who accepts that duplicate-inference risk
+ * can make the refusal retryable. The proxy's own send/replay guards are unchanged.
+ */
+export function setReplayRefusalRetryable(value: boolean): void {
+  replayRefusalRetryable = value === true;
+}
+
+export function replayRefusedStatus(): number {
+  return replayRefusalRetryable ? REPLAY_REFUSED_STATUS_RETRYABLE : REPLAY_REFUSED_STATUS;
+}
 
 /**
  * The header every surface attaches to a replay refusal, and its only accepted value.
@@ -128,10 +147,14 @@ export const REPLAY_REFUSED_STATUS = 429;
 export const REPLAY_REFUSAL_NO_RETRY_HEADER = "x-should-retry";
 export const REPLAY_REFUSAL_NO_RETRY_VALUE = "false";
 
+export function replayRefusalNoRetryValue(): string {
+  return replayRefusalRetryable ? "true" : REPLAY_REFUSAL_NO_RETRY_VALUE;
+}
+
 /** Spreadable form for the surfaces that build their headers as an object literal. */
-export const REPLAY_REFUSAL_CLIENT_HEADERS: Readonly<Record<string, string>> = Object.freeze({
-  [REPLAY_REFUSAL_NO_RETRY_HEADER]: REPLAY_REFUSAL_NO_RETRY_VALUE,
-});
+export function replayRefusalClientHeaders(): Readonly<Record<string, string>> {
+  return { [REPLAY_REFUSAL_NO_RETRY_HEADER]: replayRefusalNoRetryValue() };
+}
 
 /**
  * Apply the one client-facing retry policy a refusal carries: no wait, and no automatic resend.
@@ -141,6 +164,18 @@ export const REPLAY_REFUSAL_CLIENT_HEADERS: Readonly<Record<string, string>> = O
  * hands a retrying client a turn it may already have run.
  */
 export function applyReplayRefusalClientHeaders(headers: Headers): void {
+  headers.delete("retry-after");
+  headers.set(REPLAY_REFUSAL_NO_RETRY_HEADER, replayRefusalNoRetryValue());
+}
+
+/**
+ * Headers for a deterministic contract error that must never be retried.
+ *
+ * Unlike a replay refusal, this is not an ambiguous transport outcome: another send
+ * cannot change the answer, and must not repeat a hosted effect. It therefore keeps
+ * the terminal x-should-retry value even when replayRefusalRetryable is enabled.
+ */
+export function applyTerminalRefusalClientHeaders(headers: Headers): void {
   headers.delete("retry-after");
   headers.set(REPLAY_REFUSAL_NO_RETRY_HEADER, REPLAY_REFUSAL_NO_RETRY_VALUE);
 }
@@ -691,8 +726,8 @@ export function replayRefusalResponse(): Response {
     code: UPSTREAM_RESET_REPLAY_REFUSED_CODE,
     message: "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.",
   } }), {
-    status: REPLAY_REFUSED_STATUS,
-    headers: { "content-type": "application/json", ...REPLAY_REFUSAL_CLIENT_HEADERS },
+    status: replayRefusedStatus(),
+    headers: { "content-type": "application/json", ...replayRefusalClientHeaders() },
   });
   return retainReplayRefusal(response);
 }
