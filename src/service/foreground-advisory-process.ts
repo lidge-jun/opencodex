@@ -42,7 +42,7 @@ export interface ContainedWindowsAdvisoryChild {
 }
 
 export interface ForegroundAdvisoryDeps {
-  /** POSIX probe launcher override for tests. */
+  /** Probe launcher override for tests, including on Windows. */
   launch?: () => ReturnType<typeof spawn>;
   /**
    * Windows pre-resume Job-contained launcher override for tests. Defaults to
@@ -352,7 +352,7 @@ export function startForegroundAdvisory(
   deps: ForegroundAdvisoryDeps = {},
 ): StopForegroundAdvisory {
   const platform = deps.platform ?? process.platform;
-  if (platform === "win32") {
+  if (platform === "win32" && !deps.launch) {
     return startWindowsContainedAdvisory(warn, deps);
   }
 
@@ -375,7 +375,7 @@ export function startForegroundAdvisory(
     if (!stopped) {
       stopped = true;
       const pid = child.pid;
-      if (pid && Number.isInteger(pid) && pid > 0) {
+      if (process.platform !== "win32" && pid && Number.isInteger(pid) && pid > 0) {
         // Detached POSIX process group `-pid` is assigned atomically before exec and is never
         // reused while any descendant remains alive, so this reaps exited-root descendants too.
         try { process.kill(-pid, "SIGKILL"); } catch {
