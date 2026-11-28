@@ -33,6 +33,7 @@ async function consentToRemoval(): Promise<void> {
 }
 let legacyApiPayload: unknown = null;
 let priorityWrites: { id: string; priority: number | null }[] = [];
+let resetConsumeCalls = 0;
 
 type LegacyCodexAccountEntry = Omit<CodexAccountEntry, "quotaAutoRefresh">;
 const legacyAccount: LegacyCodexAccountEntry = {
@@ -111,6 +112,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
 beforeEach(() => {
   legacyApiPayload = null;
   priorityWrites = [];
+  resetConsumeCalls = 0;
   previous = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previous;
   win = new Window({ url: "http://localhost/" });
   Object.defineProperty(win.navigator, "language", { configurable: true, value: "en-US" });
@@ -136,9 +138,13 @@ beforeEach(() => {
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "http://localhost");
       if (url.pathname === "/api/codex-auth/reset-credits" && !url.pathname.endsWith("/consume")) {
-        return Response.json({ credits: [] });
+        return Response.json({ credits: [
+          { granted_at: "2026-01-01T00:00:00Z", expires_at: null, title: "Redeemed reset fixture", status: "redeemed" },
+          { granted_at: "2026-01-02T00:00:00Z", expires_at: "2030-01-02T02:00:00Z", title: "Full reset (Weekly + 5 hr)", status: "available" },
+        ] });
       }
       if (url.pathname === "/api/codex-auth/reset-credits/consume" && (init?.method ?? "GET") === "POST") {
+        resetConsumeCalls++;
         return Response.json({ code: "already_redeemed", remaining: 2 });
       }
       if (url.pathname === "/api/codex-auth/accounts" && legacyApiPayload !== null) {
@@ -518,25 +524,31 @@ test("successful redeem clears a stale error toast tone", async () => {
   const errNotice = host.querySelector(".codex-auth-page-head__feedback.is-err");
   expect(errNotice).toBeTruthy();
 
-  const resetBtn = host.querySelector('button[aria-label="2 reset credit(s)"]') as HTMLButtonElement | null;
+  const resetBtn = [...host.querySelectorAll('button[aria-haspopup="dialog"]')].find(btn => btn.textContent === "Resets: 2");
   expect(resetBtn).toBeTruthy();
   await act(async () => { resetBtn!.dispatchEvent(new win.MouseEvent("click", { bubbles: true })); });
   await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
+  expect(host.querySelector("dialog")?.textContent).toContain("Viewing reset details does not use a reset.");
+  expect(host.querySelector("dialog")?.textContent).toContain("Full reset (Weekly + 5 hr)");
+  expect(host.querySelector("dialog")?.textContent).not.toContain("Redeemed reset fixture");
+  expect(resetConsumeCalls).toBe(0);
 
   const useCredit = [...host.querySelectorAll("button")].find((btn) =>
-    (btn.textContent ?? "").includes("Use 1 Credit"),
+    (btn.textContent ?? "").includes("Review reset"),
   );
   expect(useCredit).toBeTruthy();
   await act(async () => { useCredit!.dispatchEvent(new win.MouseEvent("click", { bubbles: true })); });
   await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  expect(resetConsumeCalls).toBe(0);
 
   const confirmReset = [...host.querySelectorAll("button")].find((btn) => {
     const text = (btn.textContent ?? "").trim();
-    return text === "Use Credit" || text.startsWith("Resetting");
+    return text === "Redeem 1 reset" || text.startsWith("Resetting");
   });
   expect(confirmReset).toBeTruthy();
   await act(async () => { confirmReset!.dispatchEvent(new win.MouseEvent("click", { bubbles: true })); });
   await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
+  expect(resetConsumeCalls).toBe(1);
 
   expect(host.querySelector(".codex-auth-page-head__feedback.is-err")).toBeNull();
   expect(host.querySelector(".codex-auth-page-head__feedback.is-ok")).toBeTruthy();

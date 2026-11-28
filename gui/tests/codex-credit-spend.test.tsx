@@ -52,7 +52,7 @@ function renderSwitch(summary: CreditSpendSummary): string {
 }
 
 function globalState(html: string): string | undefined {
-  const button = html.match(/<button[^>]*aria-label="Use ChatGPT credits after the usage limit"[^>]*>/)?.[0];
+  const button = html.match(/<button[^>]*aria-label="Allow all accounts to spend credits after the usage limit"[^>]*>/)?.[0];
   return button?.match(/aria-pressed="(true|false|mixed)"/)?.[1];
 }
 

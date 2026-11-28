@@ -31,6 +31,7 @@ const CREDIT_DATE_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
   year: "numeric",
   hour: "2-digit",
   minute: "2-digit",
+  timeZoneName: "shortOffset",
 };
 
 const dateFormatters = new Map<string, Intl.DateTimeFormat>();
