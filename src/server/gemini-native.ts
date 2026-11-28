@@ -26,6 +26,8 @@ import { noteCredentialAttemptSend, sealCredentialRefusal } from "./credential-r
 import { DEFAULT_STALL_TIMEOUT_SEC, resolveStallTimeoutMs } from "../stall-timeout";
 import { isLocalUpstream } from "../lib/local-upstream";
 import { assertProviderDestinationAllowed } from "../lib/destination-policy";
+import { InvalidProviderEgressError, markEgressTransparentExecutor, providerEgressSendInit } from "../lib/provider-egress";
+import { configuredOutboundFetch, ExplicitProxyExemptedError } from "../lib/proxy-env";
 import { clientFacingModelLabel, type ClientFacingModelLabel } from "../lib/error-destination";
 import { registerTurn, unregisterTurn, type ActiveTurnLease } from "./lifecycle";
 import { containsGeminiCredential, geminiNativeReasoningFields, geminiSseTransform, readGeminiText, validateGeminiObject, GEMINI_NATIVE_MAX_BYTES, GEMINI_NATIVE_ERROR_CODE, unwrapGeminiResponse, wrapGeminiRequest } from "./gemini-native-wire";
@@ -43,9 +45,10 @@ export function geminiNativeError(status: number, message: string, reason?: stri
 export interface GeminiNativeDeps {
   access: (config: OcxConfig, model: string, clientModel: ClientFacingModelLabel) => Promise<OAuthAccessSnapshot>;
   refresh: (snapshot: OAuthAccessSnapshot) => Promise<OAuthAccessSnapshot>;
-  fetch: typeof globalThis.fetch;
+  fetch?: typeof globalThis.fetch;
 }
-const defaults: Omit<GeminiNativeDeps, "fetch"> = {
+const nativeOutboundFetch = markEgressTransparentExecutor(((input, init) => configuredOutboundFetch(input, init)) as typeof fetch);
+const defaults: GeminiNativeDeps = {
   access: async (config, model, clientModel) => {
     const set = getAccountSet(GEMINI_NATIVE_PROVIDER);
     if (!set) throw new OAuthLoginRequiredError(GEMINI_NATIVE_PROVIDER);
@@ -61,7 +64,7 @@ const defaults: Omit<GeminiNativeDeps, "fetch"> = {
 /** Native leg using an account-scoped Antigravity token and project. */
 export async function handleGeminiNative(
   req: Request, config: OcxConfig, model: string, streamFormat: "sse" | "array" | undefined,
-  lease: ActiveTurnLease, deps: GeminiNativeDeps = { ...defaults, fetch: globalThis.fetch }, logCtx?: RequestLogContext, start?: number,
+  lease: ActiveTurnLease, deps: GeminiNativeDeps = defaults, logCtx?: RequestLogContext, start?: number,
 ): Promise<Response> {
   const rootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   if (!logCtx) {
@@ -88,6 +91,7 @@ export async function handleGeminiNative(
   if (req.signal.aborted) onAbort();
   registerTurn(ac, lease);
   const baseUrl = provider.baseUrl || getProviderRegistryEntry(GEMINI_NATIVE_PROVIDER)!.baseUrl;
+  const executor = deps.fetch ?? nativeOutboundFetch;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let bodyReadTimer: ReturnType<typeof setTimeout> | undefined;
   let finished = false;
@@ -175,6 +179,7 @@ export async function handleGeminiNative(
         if (base.username || base.password || base.search || base.hash) throw new NativeConfigurationInvalid();
       } catch { throw new NativeConfigurationInvalid(); }
       const method = streamFormat ? "streamGenerateContent?alt=sse" : "generateContent";
+      const url = `${baseUrl.replace(/\/$/, "")}/v1internal:${method}`;
       const slot = await waitForProviderRequestSlot(GEMINI_NATIVE_PROVIDER, provider, model, ac.signal);
       upstream = await sendTrackingRequestSlot(slot, async () => {
         ac.signal.throwIfAborted();
@@ -191,6 +196,7 @@ export async function handleGeminiNative(
           credential.refresh, credential.projectId, credential.accountId, credential.email]) {
           if (value) boundCredentials.add(value);
         }
+        const egress = providerEgressSendInit({ providerName: GEMINI_NATIVE_PROVIDER, provider }, executor, url);
         const body = wrapGeminiRequest(raw, model, access.projectId!);
         if (logCtx) stampOAuthAccountLabel(logCtx, GEMINI_NATIVE_PROVIDER, { authMode: "oauth" }, access.accountId);
         const report = physicalBudget && createPhysicalSendReporter(physicalBudget, () => ({
@@ -212,11 +218,12 @@ export async function handleGeminiNative(
             Object.assign(logCtx.activeAttempt!, reasoning);
           }
           dispatched = true;
-          return await fetchWithAttemptDeadline(`${baseUrl.replace(/\/$/, "")}/v1internal:${method}`, {
+          return await fetchWithAttemptDeadline(url, {
+            ...egress,
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${access.accessToken}`, "User-Agent": antigravityUserAgentForWireModel(model) },
             body,
-          }, config.connectTimeoutMs ?? 200_000, ac.signal, true, deps.fetch);
+          }, config.connectTimeoutMs ?? 200_000, ac.signal, true, executor);
         } finally {
           try { if (dispatched) report?.(1); }
           finally { report?.close?.(); }
@@ -288,6 +295,12 @@ export async function handleGeminiNative(
       const response = geminiNativeError(429, "Antigravity request queue is temporarily full; retry after the indicated delay");
       const seconds = Number.isFinite(error.retryAfterSeconds) ? Math.max(1, Math.ceil(error.retryAfterSeconds)) : 5;
       response.headers.set("Retry-After", String(seconds)); return response;
+    }
+    if (error instanceof ExplicitProxyExemptedError) {
+      return geminiNativeError(503, "Antigravity provider proxy conflicts with process NO_PROXY. Remove the destination from NO_PROXY to use the proxy, or add it to the provider's noProxy to connect directly.");
+    }
+    if (error instanceof InvalidProviderEgressError) {
+      return geminiNativeError(503, "Antigravity provider egress configuration is unavailable or invalid; check proxy and noProxy in OC settings");
     }
     if (error instanceof RequestPacingProviderRemovedError || error instanceof NativeConfigurationInvalid) {
       return geminiNativeError(503, "Antigravity provider configuration is unavailable or invalid; check its baseUrl and destination policy in OC settings");

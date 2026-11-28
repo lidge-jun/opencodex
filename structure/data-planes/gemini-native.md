@@ -29,8 +29,11 @@ JSON input and the supplied output ceiling per candidate. A 401 replay needs fre
 An applicable ceiling that cannot admit the reservation returns a Gemini-shaped 429 with
 `workflow_spend_exhausted`. The final request log settles reported input and output usage,
 including reasoning. Sends without final usage retain unresolved spend at the reservation size.
-The destination policy checks the base URL and redirects remain manual. Only proxy-constructed
-headers and the bound OAuth credential go upstream.
+The destination policy checks the base URL and redirects remain manual. Before reserving each
+physical send, the native leg applies the provider's `proxy` and `noProxy` policy to the final
+URL and executor. When an explicit HTTP(S) proxy conflicts with a process `NO_PROXY` exemption,
+the client receives a fixed 503 configuration error before the generation request is sent.
+Only proxy-constructed headers and the bound OAuth credential go upstream.
 
 `src/server/gemini-native-wire.ts` validates the JSON object and embeds the original request
 under the CCA `request` member. It extracts successful `response` members by source offsets
