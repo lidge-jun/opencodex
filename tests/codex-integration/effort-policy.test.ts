@@ -367,6 +367,18 @@ describe("effortCapAppliesTo (caps are a v2-feature gate)", () => {
     expect(effortCapAppliesTo("v1", new Headers(), makeConfig({ effortCap: "high" }))).toBe(false);
   });
 
+  test("mode v1 disables caps unless a per-model entry puts a model on v2 (#8953)", () => {
+    const v1 = makeConfig({ effortCap: "high", multiAgentMode: "v1" });
+    expect(effortCapAppliesTo("v2", new Headers(), v1)).toBe(false);
+    for (const mode of ["v2", "v2-plaintext"] as const) {
+      const mixed = makeConfig({ effortCap: "high", multiAgentMode: "v1", multiAgentModeByModel: { "gpt-5.6-sol": mode } });
+      expect(effortCapAppliesTo("v2", new Headers(), mixed)).toBe(true);
+      expect(effortCapAppliesTo("v1", new Headers(), mixed)).toBe(false);
+    }
+    const onlyV1 = makeConfig({ effortCap: "high", multiAgentMode: "v1", multiAgentModeByModel: { "xai/grok-4.7": "v1" } });
+    expect(effortCapAppliesTo("v2", new Headers(), onlyV1)).toBe(false);
+  });
+
   test("plain main turn (no collab tools, no child headers) — gate refuses", () => {
     const parsed = parsedWithTools([{ name: "shell" }], "max");
     expect(collabSurface(parsed)).toBeNull();

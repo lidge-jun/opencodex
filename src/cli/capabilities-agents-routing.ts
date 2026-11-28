@@ -360,6 +360,16 @@ export const AGENT_ROUTING_CAPABILITIES: readonly Capability[] = [
     details: ["Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.","Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.","Live writes use actual post-write state and full catalog outcomes; a502 can mean partial native changes. Read back before retrying; no rollback is implied."],
   },
   {
+    command: ["v2","model-mode"],
+    usage: "ocx v2 model-mode <model> <v1|v2|v2-plaintext|default> [--live] [--json] [--acknowledge-plaintext-agent-messages]",
+    summary: "Give one catalog model its own multi-agent surface; default removes the entry.",
+    routes: [{"method":"PUT","path":"/api/v2"}],
+    flags: [{"name":"--live","value":"boolean","summary":"Use the selected runtime; otherwise preserve the local native/config operation."},{"name":"--json","value":"boolean","summary":"Emit the validated task result as one JSON document."},{"name":"--acknowledge-plaintext-agent-messages","value":"boolean","summary":"Required when entering v2-plaintext; task text may remain in history, provider requests and debug state."}],
+    mutates: true,
+    json: "envelope",
+    details: ["Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.","Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.","Live writes use actual post-write state and full catalog outcomes; a502 can mean partial native changes. Read back before retrying; no rollback is implied."],
+  },
+  {
     command: ["v2","keep-native-v1"],
     usage: "ocx v2 keep-native-v1 <on|off> [--live] [--json]",
     summary: "Keep native ChatGPT on v1 while routed models use v2.",

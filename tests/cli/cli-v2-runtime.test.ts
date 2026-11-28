@@ -140,6 +140,25 @@ describe("live V2 fixed management operations", () => {
     expect(readFileSync(path, "utf8")).toBe(before); expect(readFileSync(ocxConfigPath(), "utf8")).toBe(cfg);
     expect(readdirSync(home.root)).toEqual(files); expect(readOutput().target).toBe("live");
   });
+  test("model-mode sends a one-entry patch and requires the runtime to echo it (#8953)", async () => {
+    const confirmed = transport(state({ ok: true, catalogRefresh: committed, multiAgentModeByModel: { "ZQ/gpt-6.2-sol": "v1" } }));
+    expect(await cmdV2(["model-mode", "ZQ/gpt-6.2-sol", "v1", "--live", "--json"], { runtimeApi: confirmed.runtimeApi })).toBe(0);
+    expect(JSON.parse(String(confirmed.calls[0]!.init.body))).toEqual({ multiAgentModeByModel: { "ZQ/gpt-6.2-sol": "v1" } });
+    expect(readOutput()).toMatchObject({ target: "live", multiAgentModeByModel: { "ZQ/gpt-6.2-sol": "v1" } });
+
+    out = [];
+    const removed = transport(state({ ok: true, catalogRefresh: committed, multiAgentModeByModel: {} }));
+    expect(await cmdV2(["model-mode", "ZQ/gpt-6.2-sol", "default", "--live", "--json"], { runtimeApi: removed.runtimeApi })).toBe(0);
+    expect(JSON.parse(String(removed.calls[0]!.init.body))).toEqual({ multiAgentModeByModel: { "ZQ/gpt-6.2-sol": null } });
+
+    // A runtime that predates the field accepts nothing and echoes nothing; that is not a success.
+    out = [];
+    for (const echoed of [{}, { multiAgentModeByModel: { "ZQ/gpt-6.2-sol": "v2" } }, { multiAgentModeByModel: { "ZQ/gpt-6.2-sol": "default" } }]) {
+      const unconfirmed = transport(state({ ok: true, catalogRefresh: committed, ...echoed }));
+      expect(await cmdV2(["model-mode", "ZQ/gpt-6.2-sol", "v1", "--live", "--json"], { runtimeApi: unconfirmed.runtimeApi })).toBe(1);
+      expect(out).toEqual([]);
+    }
+  });
   test.each([[404, 4], [409, 5], [400, 1], [502, 1], [503, 1], [401, 1]])("safe refusal HTTP %i exits %i", async (status, code) => {
     const live = transport({ error: privateText, token: privateText }, status);
     expect(await cmdV2(["on", "--live", "--json"], { runtimeApi: live.runtimeApi })).toBe(code);

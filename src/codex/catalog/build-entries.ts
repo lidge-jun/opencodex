@@ -16,6 +16,7 @@ import {
   normalizeServiceTiers,
 } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawEntry } from "./parsing";
+import type { MultiAgentModelMode } from "../../types/multi-agent";
 import {
   CODEX_NATIVE_ALIAS_CATALOG_KIND,
   NATIVE_OPENAI_MODELS,
@@ -69,6 +70,8 @@ export interface ObservedCatalogEntryBuildInput {
   readonly disabledNativeAccountSlugs: ReadonlySet<string>;
   readonly multiAgentV2Enabled: boolean;
   readonly keepNativeChatGptOnV1?: boolean;
+  /** Resolved `multiAgentModeByModel` entries; see MultiAgentModeOptions.modelModes. */
+  readonly multiAgentModeByModel?: ReadonlyMap<string, MultiAgentModelMode>;
   readonly openaiContextCap?: NativeContextLimitsInput;
   /** Additional native ids to clone under account selectors, without creating bare rows. */
   readonly accountNativeSlugs?: readonly string[];
@@ -100,6 +103,7 @@ export function buildCatalogEntries(
   modelPickerOrder: readonly string[] = [],
   nativeSource?: NativePrioritySource,
   routedCatalogDefaults?: Readonly<RoutedCatalogDefaults>,
+  multiAgentModeByModel?: ReadonlyMap<string, MultiAgentModelMode>,
 ): RawEntry[] {
   const entries = buildCatalogEntriesFromObservedState({
     template,
@@ -115,6 +119,7 @@ export function buildCatalogEntries(
     disabledNativeAccountSlugs,
     multiAgentV2Enabled: isMultiAgentV2Enabled(),
     keepNativeChatGptOnV1,
+    multiAgentModeByModel,
     openaiContextCap: contextCap,
     accountNativeSlugs,
     accountNativeSlugsBySelector,
@@ -148,6 +153,7 @@ export function buildCatalogEntriesFromObservedState({
   disabledNativeAccountSlugs,
   multiAgentV2Enabled,
   keepNativeChatGptOnV1,
+  multiAgentModeByModel,
   openaiContextCap,
   accountNativeSlugs,
   accountNativeSlugsBySelector,
@@ -337,6 +343,7 @@ export function buildCatalogEntriesFromObservedState({
   return applyMultiAgentMode(withCodexControlPlaneRows(out, template ? [template] : [], true, wsEnabled), multiAgentMode, multiAgentV2Enabled, {
     keepNativeChatGptOnV1,
     preserveDefaultMultiAgentVersion: isReserveCatalogProjection,
+    modelModes: multiAgentModeByModel,
   });
 }
 
@@ -520,6 +527,8 @@ export interface ObservedCatalogMergeInput {
   readonly multiAgentMode: MultiAgentMode;
   readonly multiAgentV2Enabled: boolean;
   readonly keepNativeChatGptOnV1?: boolean;
+  /** Resolved `multiAgentModeByModel` entries; see MultiAgentModeOptions.modelModes. */
+  readonly multiAgentModeByModel?: ReadonlyMap<string, MultiAgentModelMode>;
   readonly exactComboSlugs: ReadonlySet<string>;
   /**
    * Current combo row descriptions by public slug (#7229). When supplied, retained combo rows
@@ -568,6 +577,7 @@ export function mergeCatalogEntriesFromObservedState({
   multiAgentMode,
   multiAgentV2Enabled,
   keepNativeChatGptOnV1,
+  multiAgentModeByModel,
   exactComboSlugs,
   comboDescriptions,
   hasPhysicalComboProvider,
@@ -1008,7 +1018,8 @@ export function mergeCatalogEntriesFromObservedState({
     ),
     multiAgentMode,
     multiAgentV2Enabled,
-    { keepNativeChatGptOnV1, preserveDefaultMultiAgentVersion: isReserveCatalogProjection, nativeDefaults: nativeMultiAgentDefaults },
+    { keepNativeChatGptOnV1, preserveDefaultMultiAgentVersion: isReserveCatalogProjection, nativeDefaults: nativeMultiAgentDefaults,
+      modelModes: multiAgentModeByModel },
   );
   applyFullModelPickerOrder(versionedEntries, modelPickerOrder);
   for (const entry of versionedEntries) {

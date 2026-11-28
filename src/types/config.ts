@@ -3,7 +3,7 @@ import type { CodexAccount, CodexAccountLoginConfig } from "./accounts";
 import type { AnthropicAccountPoolConfig, OcxAccountPoolRotationStrategy } from "./anthropic-account-pool";
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { OcxFallbackConfig } from "./fallback";
-import type { MultiAgentMode } from "./multi-agent";
+import type { MultiAgentMode, MultiAgentModelMode } from "./multi-agent";
 import type { OcxTelemetryConfig } from "./telemetry";
 import type { OcxClaudeCodeToolLoadingConfig } from "./claude-tool-loading";
 import type { OcxLinkHomeConfig, OcxLinkTransportConfig } from "./link";
@@ -983,6 +983,14 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
    * Stored but inactive under `"v2-plaintext"`, which pins ChatGPT-native rows on v2.
    */
   keepNativeChatGptOnV1?: boolean;
+  /**
+   * Per-model surface, keyed by catalog slug (bare native or "provider/model"). A listed model
+   * uses its own value for new sessions; every other model follows `multiAgentMode`.
+   * `"v2-plaintext"` pins the row v2 and compiles that model's native v2 collaboration
+   * messages to plaintext, with the same consent as the global mode. A `"v1"` entry needs the
+   * global `multi_agent_v2` feature off, because Codex resolves that before catalog pins.
+   */
+  multiAgentModeByModel?: Record<string, MultiAgentModelMode>;
   /** Experimental plaintext delivery for native v2 collaboration messages; disabled unless true. */
   plaintextV2AgentMessages?: boolean;
   /** Experimental, default-off ChatGPT recovery for encrypted V2 routed tasks. */

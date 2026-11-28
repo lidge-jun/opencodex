@@ -19,7 +19,7 @@ import { prepareEffortNormalization, stripEmptyLadderEffort, supportedLadderFor 
 import { resolveOpenCodeGoTransport } from "../../providers/opencode-go-transport";
 import { getOrAllocateRequestSessionLane } from "../request-log-conversation";
 import { shouldPreparePlaintextV2AgentMessages } from "../../responses/plaintext-v2-agent-messages";
-import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
+import { isPlaintextV2AgentMessagesEnabledForModel } from "../../config/multi-agent-surface";
 import { hasValidatedActiveReasoningEffort } from "../../responses/parser";
 import { responseTierAuthorityForProvider } from "../../providers/openai-tiers-destination";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -214,7 +214,9 @@ export async function applyFinalRouteRequestNormalization(args: {
     args.claudeGoAffinity ? args.claudeGoAffinity.sessionLane : getOrAllocateRequestSessionLane(req),
     routedProvider);
   parsed._plaintextV2AgentMessages = shouldPreparePlaintextV2AgentMessages({
-    enabled: parsed._plaintextV2Decision === true && isPlaintextV2AgentMessagesEnabled(config),
+    // The client's selector, not the routed id: `multiAgentModeByModel` is keyed by catalog slug.
+    enabled: parsed._plaintextV2Decision === true
+      && isPlaintextV2AgentMessagesEnabledForModel(config, logCtx.requestedModel ?? responseModelId),
     inboundWire,
     canonicalChatGpt: isCanonicalOpenAiForwardProvider(route.provider),
     requestBody: parsed._rawBody,

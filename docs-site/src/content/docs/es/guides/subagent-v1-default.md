@@ -107,6 +107,8 @@ Además de `v2-plaintext`, hay cuatro opciones:
 3. **Confiar en un relay directo de Responses con clave API.** Un proveedor marcado explícitamente con `allowEncryptedV2AgentTasks: true` recibe la carga opaca en lugar de HTTP 400. Utilícelo únicamente con un destino que sepa que puede procesarla.
 4. **Activar `agentTaskRecovery`.** Es experimental y está desactivado de forma predeterminada. Recupera los elementos cifrados ilegibles `NEW_TASK`, `MESSAGE`, `FOLLOWUP_TASK` y `FINAL_ANSWER` mediante el backend de ChatGPT, con consumo de cuota, latencia y dependencia de un comportamiento no documentado. La recuperación de Combo sigue limitada a los turnos de subagentes creados; los fragmentos de tokens divididos no son compatibles.
 
+No tiene que ser todo o nada. `ocx v2 model-mode <model> <v1|v2|v2-plaintext>` da a un modelo su propia interfaz mientras los demás siguen el modo. Puede mantenerse en v1 y pasar a v2 un único agente principal enrutado, o usar v2 y devolver a v1 un agente principal cuyas tareas llegan cifradas a sus subagentes. Eso incluye un modelo GPT servido por un relay de Responses de terceros: sus tareas se cifran como las de un agente principal de ChatGPT y el compilador de texto sin cifrar no llega a esa ruta.
+
 Consulte [Interfaz de subagentes](/es/guides/sub-agent-surface/) para conocer su funcionamiento y [Configuración de agentes](/es/reference/configuration/agents/) para los ajustes.
 
 <a id="when-this-page-goes-away"></a>

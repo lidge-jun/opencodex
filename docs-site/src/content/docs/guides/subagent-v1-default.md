@@ -130,6 +130,12 @@ Four routes, in the order most people should try them:
    the cost of quota, latency and a dependency on undocumented behavior; combo recovery remains
    limited to spawned-child turns, and split-token fragments stay unsupported.
 
+None of this has to be all or nothing. `ocx v2 model-mode <model> <v1|v2|v2-plaintext>` gives one
+model its own surface while the rest follow the mode. You can stay on v1 and put a single routed
+parent on v2, or run v2 and move one parent whose child tasks arrive encrypted back to v1. That
+includes a GPT model served by a third-party Responses relay: its tasks are encrypted like a
+ChatGPT parent's, and the plaintext compiler does not reach that route.
+
 See [Sub-agent Surface](/guides/sub-agent-surface/) for the full mechanics of each, and
 [Agent configuration](/reference/configuration/agents/) for the settings themselves.
 

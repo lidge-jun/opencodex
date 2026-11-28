@@ -49,6 +49,7 @@ import {
   normalizeClaudeSubagentEffort,
   malformedUpstreamHostCircuitThresholdWarning,
   malformedPlaintextV2AgentMessagesWarning,
+  malformedMultiAgentModeByModelWarning,
   malformedAgentTaskRecoveryWarning,
   malformedRuntimeRoleWarning,
   malformedOptionalRemoteBlockWarning,
@@ -70,6 +71,7 @@ import {
   sanitizeModelDisplayNamesForLoad,
 } from "./load-degrade";
 import { configSchema } from "./schema/config-schema";
+import { multiAgentModeByModelProblem } from "./multi-agent-surface";
 import {
   agentTaskRecoverySchema,
   catalogAutoRefreshSchema,
@@ -200,6 +202,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown, repai
   }
   const plaintextWarning = malformedPlaintextV2AgentMessagesWarning(rawParsed);
   if (plaintextWarning) warnings.push(plaintextWarning);
+  const modelModeWarning = malformedMultiAgentModeByModelWarning(rawParsed);
+  if (modelModeWarning) warnings.push(modelModeWarning);
   if (syncDisabledReason) {
     warnings.push(`syncCodexSubagentDefaults ignored: ${syncDisabledReason}`);
   }
@@ -310,6 +314,11 @@ function plaintextV2AgentMessagesError(value: unknown): string | null {
   return malformedPlaintextV2AgentMessagesWarning(value)
     ? "schema_invalid: plaintextV2AgentMessages: must be a boolean or omitted"
     : null;
+}
+
+function multiAgentModeByModelError(value: unknown): string | null {
+  const problem = multiAgentModeByModelProblem(rawConfigRecord(value)?.multiAgentModeByModel);
+  return problem ? `schema_invalid: multiAgentModeByModel: ${problem}` : null;
 }
 
 function agentTaskRecoveryError(value: unknown): string | null {
@@ -814,6 +823,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? upstreamRequestCompressionError(value)
     ?? upstreamHistorySlimConfigError(value)
     ?? plaintextV2AgentMessagesError(value)
+    ?? multiAgentModeByModelError(value)
     ?? agentTaskRecoveryError(value)
     ?? quotaResetNotifyError(value)
     ?? catalogAutoRefreshError(value)

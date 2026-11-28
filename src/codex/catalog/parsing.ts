@@ -1,6 +1,7 @@
 import type { VendorContextInference } from "./vendor-context";
-import type { MultiAgentMode } from "../../types/multi-agent";
+import type { MultiAgentMode, MultiAgentModelMode } from "../../types/multi-agent";
 export type { MultiAgentMode } from "../../types/multi-agent";
+import { multiAgentModelModeMatcher } from "../../config/multi-agent-surface";
 import { retainedNativeInheritanceTemplate } from "./native-template";
 export { findSupportedNativeTemplate } from "./native-template";
 import { isCodexControlPlaneModel } from "../control-plane-models";
@@ -613,6 +614,11 @@ export interface MultiAgentModeOptions {
    * legitimate user- or provider-preserved pin, so the non-destructive read wins.
    */
   nativeDefaults?: ReadonlyMap<string, string | null>;
+  /**
+   * Per-model surfaces (`multiAgentModeByModel`, #8953), applied after the mode so a listed
+   * row keeps its own pin under every global mode, the native/routed hybrid included.
+   */
+  modelModes?: ReadonlyMap<string, MultiAgentModelMode>;
 }
 
 /** Catalog rows that run on the ChatGPT backend (encrypt v2 child tasks). */
@@ -668,12 +674,34 @@ export function applyRoutedCodexToolMode(
  *
  * `"v2-plaintext"` stamps every row v2, ChatGPT-native rows included -- the mode is
  * the plaintext-delivery opt-in, so no native/routed split applies.
+ *
+ * `modelModes` then replaces the pin on each row it names. The pre-override value is
+ * recorded like any forced stamp, so removing an entry under `"default"` restores the row.
  */
 export function applyMultiAgentMode(
   entries: RawEntry[],
   mode: MultiAgentMode,
   v2FeatureEnabled = false,
   options: MultiAgentModeOptions = {},
+): RawEntry[] {
+  applyGlobalMultiAgentMode(entries, mode, v2FeatureEnabled, options);
+  if (options.modelModes === undefined || options.modelModes.size === 0) return entries;
+  const modeOf = multiAgentModelModeMatcher(options.modelModes);
+  for (const entry of entries) {
+    const modelMode = typeof entry.slug === "string" ? modeOf(entry.slug) : undefined;
+    if (modelMode === undefined) continue;
+    recordMultiAgentOrigin(entry);
+    // The plaintext literal is an OpenCodex mode, never a value Codex validates.
+    entry.multi_agent_version = modelMode === "v1" ? "v1" : "v2";
+  }
+  return entries;
+}
+
+function applyGlobalMultiAgentMode(
+  entries: RawEntry[],
+  mode: MultiAgentMode,
+  v2FeatureEnabled: boolean,
+  options: MultiAgentModeOptions,
 ): RawEntry[] {
   if (mode === "v2" && options.keepNativeChatGptOnV1 === true) {
     for (const entry of entries) {

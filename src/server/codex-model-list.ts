@@ -8,7 +8,7 @@ import { applyNativeRosterCapabilities } from "../codex/catalog/access-programs"
 import type { CodexModelEntitlementSnapshot } from "../codex/model-entitlements";
 import { readCatalog, readCodexCatalogPath, type CatalogModel } from "../codex/catalog/parsing";
 import { readNativeBaseline, retainedNativeSourcePriorities } from "../codex/catalog/native-priority";
-import { resolveMultiAgentMode } from "../config/multi-agent-surface";
+import { resolveMultiAgentMode, resolveMultiAgentModeByModel } from "../config/multi-agent-surface";
 import { resolveRoutedCatalogDefaults } from "../config/schema/routed-catalog-defaults";
 
 interface CodexModelListInput {
@@ -47,7 +47,7 @@ export function buildCodexModelList({
     websocketsEnabled(config), maMode, exactComboSlugs, accountSelectors,
     suppressedBareNativeSlugs, new Set(), limits, accountNativeSlugs,
     accountNativeSlugsBySelector, config.keepNativeChatGptOnV1 === true, config.modelPickerOrder,
-    nativeSource, resolveRoutedCatalogDefaults(config),
+    nativeSource, resolveRoutedCatalogDefaults(config), resolveMultiAgentModeByModel(config),
   );
   if (roster) applyNativeRosterCapabilities(entries, roster.snapshot, roster.accountTargets, limits);
   return { models: omitDisabledNativeCatalogEntries(applyNativeVisibility(entries, disabledModels, accountSelectors.length > 0, new Set(accountNativeSlugs)), config) };

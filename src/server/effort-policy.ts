@@ -16,6 +16,7 @@ import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { modelInList } from "../types";
 import { codexEffortRank, configuredReasoningEfforts, isCodexReasoningEffort, isDeclaredReasoningEffort, modelRecordValue } from "../reasoning-effort";
 import { catalogModelEfforts } from "../codex/catalog/effort";
+import { multiAgentModelModesSelectV2 } from "../config/multi-agent-surface";
 
 /**
  * True when the request carries codex-rs's spawned-child markers, matched EXACTLY.
@@ -63,7 +64,9 @@ export function effortCapFor(config: OcxConfig, subagent: boolean): string | und
  *  - compaction turns are maintenance, not agent turns: they bypass caps entirely so
  *    native /v1/responses/compact (forwarded, never enters handleResponses) and routed
  *    compaction (synthesized internal request) get identical cap semantics.
- *  - multiAgentMode "v1" disables caps entirely (mirrors the GUI hiding the panel).
+ *  - multiAgentMode "v1" disables caps entirely (mirrors the GUI hiding the panel), unless a
+ *    `multiAgentModeByModel` entry puts some model on v2: that model's turns are v2-surface
+ *    turns and qualify like any other.
  *  - a main turn qualifies when its own tool list carries the v2 collab surface.
  *  - a CHILD turn is admitted by its spawned-child markers (isThreadSpawnRequest)
  *    REGARDLESS of tool surface: depth-limited leaves carry no collab tools (surface
@@ -78,7 +81,7 @@ export function effortCapAppliesTo(
   compaction = false,
 ): boolean {
   if (compaction) return false;
-  if (config.multiAgentMode === "v1") return false;
+  if (config.multiAgentMode === "v1" && !multiAgentModelModesSelectV2(config)) return false;
   return surface === "v2" || isThreadSpawnRequest(headers);
 }
 

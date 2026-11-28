@@ -20,6 +20,8 @@ import { getAgentsEnabled, getAgentsMaxDepth, getLogicalMaxThreads, getMultiAgen
 import type { ResolveDeps, SpawnInvocation } from "../lib/win-exec";
 import { validatedCodexExecInvocation } from "../codex/exec-boundary";
 import { deleteConfigTopLevelKey, loadConfig, saveConfig } from "../config";
+import { hasMultiAgentModelMode, resolveMultiAgentModeByModel, unmatchedMultiAgentModelModes } from "../config/multi-agent-surface";
+import type { OcxConfig } from "../types";
 import { resolveAndPersistCodexRuntime, type ResolveCodexRuntimeDeps } from "../codex/runtime";
 import { withCodexCliSelectionParentWriteAsync } from "../codex/cli-update-selection-gate";
 
@@ -140,6 +142,21 @@ function requiresGlobalV2Disabled(multiAgentMode: string | undefined, keepNative
   return multiAgentMode === "v2-plaintext" || (multiAgentMode === "v2" && keepNativeChatGptOnV1);
 }
 
+/** A per-model v1 entry is a catalog pin too, so the global override defeats it the same way. */
+function hasV1ModelPin(config: OcxConfig): boolean {
+  return hasMultiAgentModelMode(config, "v1");
+}
+
+const V2_ON_V1_MODEL_PIN = "v2 on: incompatible with a v1 model-mode entry. Codex's global multi_agent_v2 overrides that model's v1 catalog pin. Run 'ocx v2 model-mode <model> default' for each v1 entry first.";
+
+export function multiAgentModeByModelLines(config: OcxConfig, globalV2Enabled: boolean): string[] {
+  const entries = [...resolveMultiAgentModeByModel(config)];
+  if (entries.length === 0) return ["multi_agent_mode_by_model: (none: every model follows multi_agent_mode)"];
+  return ["multi_agent_mode_by_model:", ...entries.map(([model, mode]) => `  ${model}: ${mode}`),
+    ...(globalV2Enabled && hasV1ModelPin(config)
+      ? ["multi_agent_mode_by_model: CONFLICT (global multi_agent_v2 overrides the v1 entries); run 'ocx v2 off' to reconcile"] : [])];
+}
+
 function printLocalStatus(deps: V2CliDeps): number {
   const log = deps.log ?? console;
   const isEnabled = deps.isEnabled ?? isMultiAgentV2Enabled;
@@ -156,6 +173,7 @@ function printLocalStatus(deps: V2CliDeps): number {
         ? "keep_native_chatgpt_on_v1: CONFLICT — global multi_agent_v2 overrides the native v1 catalog pin; run 'ocx v2 keep-native-v1 on' to reconcile"
         : "keep_native_chatgpt_on_v1: ON — global V2 override is off; ChatGPT-native rows use v1 and routed rows use v2 when mode is v2"
       : "keep_native_chatgpt_on_v1: OFF");
+    for (const line of multiAgentModeByModelLines(cfg, isEnabled())) log.log(line);
     const threads = getLogicalMaxThreads();
     log.log(`max_threads: ${threads ?? "(unset — codex default)"}`);
     const v2Active = isEnabled() || mode === "v2-plaintext";
@@ -249,7 +267,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
             acknowledgmentRequired = true;
             return { ok: true as const, changed: false };
           }
-          const target = parsed.value === "v2" && config.keepNativeChatGptOnV1 !== true;
+          const target = parsed.value === "v2" && config.keepNativeChatGptOnV1 !== true && !hasV1ModelPin(config);
           const result = transitionMultiAgentV2(target, (next, env, validate) => runCodexFeatures(next ? "enable" : "disable", deps, env, validate));
           if (result.ok) modeChanged = persistMode();
           return result;
@@ -262,6 +280,46 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
       }
       successLines = [multiAgentModeLine(parsed.value, config.keepNativeChatGptOnV1 === true),
         "Catalog pins apply to NEW sessions; running sessions keep their pinned multi-agent version. Plaintext compilation follows the current setting for subsequent eligible canonical ChatGPT requests, including existing V2 sessions. Existing ciphertext is not decrypted, stored history is not rewritten, and disabling does not delete retained copies."];
+    } else if (parsed.verb === "model-mode") {
+      const stored = () => resolveMultiAgentModeByModel(config).get(parsed.model);
+      const needsPlaintextAcknowledgment = () => parsed.value === "v2-plaintext"
+        && stored() !== "v2-plaintext" && !parsed.plaintextAcknowledged;
+      const refuseUnacknowledgedPlaintext = () => emit(false, ["A v2-plaintext model-mode entry requires --acknowledge-plaintext-agent-messages. That model's eligible canonical ChatGPT requests are compiled to plaintext, including existing V2 sessions. Task text can remain in Codex history, provider requests and local response/debug state; existing ciphertext is not decrypted."]);
+      if (needsPlaintextAcknowledgment()) return refuseUnacknowledgedPlaintext();
+      let unchangedModel = false;
+      const persistModelMode = (): void => {
+        unchangedModel = stored() === (parsed.value ?? undefined);
+        const next = new Map(resolveMultiAgentModeByModel(config));
+        if (parsed.value === null) next.delete(parsed.model);
+        else next.set(parsed.model, parsed.value);
+        if (next.size > 0) config.multiAgentModeByModel = Object.fromEntries(next);
+        else deleteConfigTopLevelKey(config, "multiAgentModeByModel");
+        saveConfig(config);
+      };
+      if (parsed.value === "v1") {
+        // A v1 pin needs the global override off. Every explicit mode turns it off here, as
+        // keep-native-v1 does; base mode leaves the override to the operator and refuses instead.
+        let baseModeConflict = false;
+        const transition = await withCodexCliSelectionParentWriteAsync(() => {
+          config = loadConfig();
+          const baseMode = (config.multiAgentMode ?? "default") === "default";
+          if (baseMode && (deps.isEnabled ?? isMultiAgentV2Enabled)()) { baseModeConflict = true; return { ok: true as const, changed: false }; }
+          const result = baseMode ? { ok: true as const, changed: false }
+            : transitionMultiAgentV2(false, (next, env, validate) => runCodexFeatures(next ? "enable" : "disable", deps, env, validate));
+          if (result.ok) persistModelMode();
+          return result;
+        });
+        if (baseModeConflict) return emit(false, ["model-mode v1: needs Codex's global multi_agent_v2 override off, and base mode leaves that override to you. Run 'ocx v2 off', or select a mode with 'ocx v2 mode <v1|v2|v2-plaintext>' first."]);
+        if (!transition.ok) { changed = false; return emit(false, ["Native model-mode transition failed. Read ocx v2 status before retrying."]); }
+        changed = !unchangedModel || transition.changed;
+      } else {
+        persistModelMode();
+        changed = !unchangedModel;
+      }
+      successLines = [parsed.value === null
+        ? `multi_agent_mode_by_model: ${parsed.model} removed. It follows multi_agent_mode again (new sessions).`
+        : `multi_agent_mode_by_model: ${parsed.model} = ${parsed.value} (new sessions).`,
+        ...(parsed.value === "v2-plaintext" ? ["Plaintext compilation follows this entry for that model's subsequent eligible canonical ChatGPT requests, including existing V2 sessions."] : [])];
     } else if (parsed.verb === "keep-native-v1") {
       const persistKeep = (): void => {
         unchangedKeep = (config.keepNativeChatGptOnV1 === true) === parsed.value;
@@ -294,12 +352,18 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
         if (config.multiAgentMode === "v2-plaintext") return emit(false, ["v2 on: incompatible with v2-plaintext. Its catalog selects V2 for new sessions while the global override stays OFF. Select another mode explicitly first."]);
         return emit(false, ["v2 on: incompatible with keep-native-v1 while mode is v2 — Codex's global multi_agent_v2 overrides the native v1 catalog pin. Run 'ocx v2 keep-native-v1 off' first."]);
       }
+      if (want && hasV1ModelPin(config)) return emit(false, [V2_ON_V1_MODEL_PIN]);
       let incompatible = false;
+      let v1ModelPin = false;
       const transition = await withCodexCliSelectionParentWriteAsync(() => {
         // Revalidated once admitted: keep-native-v1 or mode v2 may have been set meanwhile.
         config = loadConfig();
         if (want && requiresGlobalV2Disabled(config.multiAgentMode, config.keepNativeChatGptOnV1 === true)) {
           incompatible = true;
+          return { ok: true as const, changed: false };
+        }
+        if (want && hasV1ModelPin(config)) {
+          v1ModelPin = true;
           return { ok: true as const, changed: false };
         }
         return transitionMultiAgentV2(want, (next, env, validate) => runCodexFeatures(next ? "enable" : "disable", deps, env, validate));
@@ -308,6 +372,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
         if (config.multiAgentMode === "v2-plaintext") return emit(false, ["v2 on: incompatible with v2-plaintext. Its catalog selects V2 for new sessions while the global override stays OFF. Select another mode explicitly first."]);
         return emit(false, ["v2 on: incompatible with keep-native-v1 while mode is v2 — Codex's global multi_agent_v2 overrides the native v1 catalog pin. Run 'ocx v2 keep-native-v1 off' first."]);
       }
+      if (v1ModelPin) return emit(false, [V2_ON_V1_MODEL_PIN]);
       if (!transition.ok) return emit(false, ["Native feature transition failed. Read ocx v2 status before retrying."]);
       changed = transition.changed;
       if (!changed) return emit(true, [`multi_agent_v2 already ${want ? "ON" : "OFF"} — nothing to do.`]);
@@ -321,6 +386,17 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
         : await (await import("../codex/sync")).syncModelsToCodex(port, undefined, parsed.json ? null : log);
       sync = v2LocalSyncResult(result);
     } catch { sync = { status: "failed", ok: false }; }
+    if (sync.ok && parsed.verb === "model-mode" && !changed) {
+      successLines = [`multi_agent_mode_by_model: ${parsed.model} already ${parsed.value ?? "following multi_agent_mode"}, nothing to do.`];
+    }
+    if (sync.ok && parsed.verb === "model-mode" && parsed.value !== null) {
+      // After the sync, so the catalog read is the one this entry was just applied to.
+      const { readCatalog, readCodexCatalogPath } = await import("../codex/catalog");
+      const rows = readCatalog(readCodexCatalogPath())?.models;
+      if (rows && unmatchedMultiAgentModelModes([parsed.model], rows.flatMap(row => typeof row.slug === "string" ? [row.slug] : [])).length > 0) {
+        successLines.push(`No catalog model matches '${parsed.model}'. The entry is stored and applies if that model appears; check the id with 'ocx models list'.`);
+      }
+    }
     if (sync.ok && parsed.verb === "keep-native-v1" && unchangedKeep) {
       const outcome = sync.status !== "skipped" && "catalog" in sync && sync.catalog?.converged
         ? "catalog re-synced." : "catalog sync skipped by policy.";

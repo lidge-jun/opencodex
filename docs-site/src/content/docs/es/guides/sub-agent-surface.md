@@ -25,6 +25,8 @@ Elija el modo para **Nuevas sesiones**. Las sesiones existentes mantienen la sup
 
 En **v2**, la opción **Mantener ChatGPT en v1** (`keepNativeChatGptOnV1`) conserva Sol/Terra en v1 para que puedan crear subagentes Grok o Claude. Los agentes principales nativos de ChatGPT cifran el cuerpo de las tareas `NEW_TASK` en v2 y los modelos enrutados no pueden leerlo. Los agentes principales enrutados permanecen en v2, donde las tareas de sus subagentes son texto plano. Para este modo híbrido, OpenCodex desactiva la anulación global `multi_agent_v2`, porque Codex la aplica antes que los ajustes por modelo del catálogo. Es una opción de v2 independiente del modo `v2-plaintext`.
 
+Un modelo concreto también puede tener su propia interfaz, sea cual sea el modo: `ocx v2 model-mode <model> <v1|v2|v2-plaintext>` la establece y `default` la elimina. Los modelos sin entrada siguen el modo. La entrada decide qué herramientas recibe ese modelo al iniciar una sesión y si puede seguir delegando cuando lo crea un agente principal v2: un subagente v1 trabaja sin poder delegar. Una entrada v1 necesita la anulación global desactivada, igual que la opción anterior.
+
 :::tip[¿Tienes dudas?]
 Usa **v1**, el modo predeterminado. Elige **base** o **v2** solo si el modelo principal y el subagente están del mismo lado del límite de proveedores: en ambos modos, una tarea enviada desde un modelo nativo de ChatGPT a uno enrutado llega cifrada y falla. La opción híbrida de v2 descrita arriba evita ese cruce conservando los modelos nativos en v1. El dashboard pide confirmación antes de elegir base o v2 y enlaza a [Por qué v1 es el valor predeterminado](/es/guides/subagent-v1-default/).
 :::
