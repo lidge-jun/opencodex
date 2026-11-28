@@ -1388,6 +1388,11 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
    * and every other destination are unchanged. Compression runs synchronously on the event loop.
    */
   upstreamRequestCompression?: "off" | "gzip" | "zstd";
+  /**
+   * Answer an ambiguous reset this proxy refuses to replay with a retryable 502 instead of 429.
+   * Codex retries 5xx but never 429; enabling this accepts a possible duplicate inference.
+   */
+  replayRefusalRetryable?: boolean;
   /** Optional lossy shortening of historical native Codex images/tool text. */
   upstreamHistorySlim?: "off" | "codex";
   /**

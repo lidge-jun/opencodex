@@ -47,8 +47,8 @@ import {
   applyReplayRefusalClientHeaders,
   isReplayRefusalCode,
   isReplayRefusalResponse,
-  REPLAY_REFUSAL_CLIENT_HEADERS,
-  REPLAY_REFUSED_STATUS,
+  replayRefusalClientHeaders,
+  replayRefusedStatus,
   retainReplayRefusal,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
@@ -739,7 +739,7 @@ async function handleChatCompletionsWithBudget(
       classified.code = upstreamCode;
     }
     const status = isCyberPolicyCode(classified.code) ? 400
-      : replayRefusal ? REPLAY_REFUSED_STATUS
+      : replayRefusal ? replayRefusedStatus()
       : upstream.status;
     const retryAfter = isCyberPolicyCode(classified.code) || replayRefusal
       ? undefined
@@ -766,7 +766,7 @@ async function handleChatCompletionsWithBudget(
       headers: {
         "Content-Type": "application/json",
         ...(formatClientRetryAfter(retryAfter) ? { "Retry-After": formatClientRetryAfter(retryAfter)! } : {}),
-        ...(replayRefusal ? REPLAY_REFUSAL_CLIENT_HEADERS : {}),
+        ...(replayRefusal ? replayRefusalClientHeaders() : {}),
       },
     });
     if (replayRefusal) retainReplayRefusal(rewritten);
@@ -851,7 +851,7 @@ async function handleChatCompletionsWithBudget(
     }
     if (isReplayRefusalCode(classified.code)) {
       const refusal = ownedChatErrorResponse(
-        REPLAY_REFUSED_STATUS, message, classified.type, classified.code,
+        replayRefusedStatus(), message, classified.type, classified.code,
       );
       const headers = new Headers(refusal.headers);
       applyReplayRefusalClientHeaders(headers);

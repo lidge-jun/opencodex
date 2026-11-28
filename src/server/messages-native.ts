@@ -67,7 +67,7 @@ import {
   isTransientUpstreamStatus,
   markResponseNonReplayable,
   prepareSameTarget429Wait,
-  REPLAY_REFUSED_STATUS,
+  replayRefusedStatus,
   retainReplayRefusal,
   UpstreamRetryEvidenceError,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
@@ -1388,7 +1388,7 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
   const safeMessage = redactSecretString(classified.message);
   const replayRefusal = isReplayRefusalResponse(response);
   const transient = !replayRefusal && isTransientUpstreamStatus(response.status);
-  const status = replayRefusal ? REPLAY_REFUSED_STATUS : transient ? 529 : response.status;
+  const status = replayRefusal ? replayRefusedStatus() : transient ? 529 : response.status;
   const upstreamRetryAfter = response.headers.get("retry-after");
   const retryAfter = replayRefusal
     ? undefined

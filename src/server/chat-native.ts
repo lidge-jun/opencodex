@@ -44,8 +44,8 @@ import {
   isReplayRefusalCode,
   isReplayRefusalResponse,
   prepareSameTarget429Wait,
-  REPLAY_REFUSAL_CLIENT_HEADERS,
-  REPLAY_REFUSED_STATUS,
+  replayRefusalClientHeaders,
+  replayRefusedStatus,
   retainReplayRefusal,
   SendBudgetExhaustedError, errorDestinationLabel,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
@@ -814,7 +814,7 @@ export async function runNativeChatAttempt(
       classified.code = upstreamCode;
     }
     const status = isCyberPolicyCode(classified.code) ? 400
-      : replayRefusal ? REPLAY_REFUSED_STATUS
+      : replayRefusal ? replayRefusedStatus()
       : response.status;
     // A refusal this proxy made has no wait to report. Synthesizing one here would hand the
     // client the default two-second retry for a rate limit that never happened, which is the
@@ -834,7 +834,7 @@ export async function runNativeChatAttempt(
       headers: {
         "Content-Type": "application/json",
         ...(formatClientRetryAfter(retryAfter) ? { "Retry-After": formatClientRetryAfter(retryAfter)! } : {}),
-        ...(replayRefusal ? REPLAY_REFUSAL_CLIENT_HEADERS : {}),
+        ...(replayRefusal ? replayRefusalClientHeaders() : {}),
       },
     });
     attachComboFailureEvidence(rewritten, JSON.stringify(chatCompletionsErrorBody(status, classified.message, classified.type, classified.code)));

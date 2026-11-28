@@ -3,7 +3,7 @@ import {
   isNonReplayableUpstreamCode,
   isReplayRefusalCode,
   markResponseNonReplayable,
-  REPLAY_REFUSED_STATUS,
+  replayRefusedStatus,
   retainReplayRefusal,
 } from "../lib/upstream-retry";
 import { formatClientRetryAfter } from "../lib/client-retry-after";
@@ -98,7 +98,7 @@ export function formatErrorResponse(
   const finalStatus = error.code === CYBER_POLICY_ERROR_CODE
     ? 400
     : error.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE ? 503
-      : isReplayRefusalCode(error.code) ? REPLAY_REFUSED_STATUS : status;
+      : isReplayRefusalCode(error.code) ? replayRefusedStatus() : status;
   const headers = new Headers({ "Content-Type": "application/json" });
   // Re-emitted as an integer this proxy formats; the incoming text is never echoed.
   const retryAfter = formatClientRetryAfter(options?.retryAfter);
