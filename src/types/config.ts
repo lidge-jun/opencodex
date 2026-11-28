@@ -543,7 +543,7 @@ export interface OcxClientConnectionConfig {
 
 export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
   /** Experimental macOS app-server stdout shim; absent or false disables it. */
-  chatgptDesktop?: { appServerShim?: boolean };
+  chatgptDesktop?: { appServerShim?: boolean; spendCredits?: boolean };
   port: number;
   /** Runtime topology role. Absence preserves the historical standalone behavior. */
   runtimeRole?: OcxRuntimeRole;

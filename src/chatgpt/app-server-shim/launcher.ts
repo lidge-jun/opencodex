@@ -97,13 +97,14 @@ export function writeChatgptShimLauncher(
   configDir = getConfigDir(), real = CHATGPT_APP_CODEX_BINARY,
   bundleRoot = /^(.*?\.app)\/Contents\//i.exec(real)?.[1],
   filesystem: Pick<BundleTrustDeps, "uid" | "stat" | "adminGroupId"> | undefined = process.platform === "darwin" ? defaultBundleTrustDeps() : undefined,
+  spendCredits = false,
 ): string {
   if (!bundleRoot || !posix.isAbsolute(bundleRoot) || !real.startsWith(bundleRoot + "/Contents/")) {
     throw new Error("the app-server launcher requires its discovered bundle root");
   }
   mkdirSync(configDir, { recursive: true });
   const path = chatgptShimLauncherPath(configDir);
-  const argv = [process.execPath, ...selfLaunchArgv(["internal", "chatgpt-app-server-filter"])];
+  const argv = [process.execPath, ...selfLaunchArgv(["internal", "chatgpt-app-server-filter", ...(spendCredits ? ["--spend-credits"] : [])])];
   const temp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   let created = false;
   const assertFilesystem = (file: string, existing: boolean) => {

@@ -51,8 +51,13 @@ are eligible. Plain `rate_limit_reached` markers are cleared; known quota gate
 flags (`allowed`, `limit_reached` / `limitReached`, `ordinaryUsageAllowed`) are
 opened only with plain-quota evidence (a cleared plain reached type or a window at
 100%). A flag closed for a reason the payload does not show stays closed. Workspace,
-credit, unknown reached-type and spend-control
-restrictions keep the usage gate closed.
+unknown reached-type and spend-control
+restrictions keep the usage gate closed. With
+`chatgptDesktop.spendCredits: true` the credit variants
+(`workspace_member_credits_depleted`, `workspace_owner_usage_limit_reached`) are
+lifted like the plain quota, so the desktop can draw on credits when the
+subscription quota is exhausted — credits are billed by OpenAI, and the default
+keeps a credit-limited composer locked.
 
 Displayed usage stays honest: percentages, reset times, window durations, plan
 information and other display fields stay as received. Unrelated JSON-RPC

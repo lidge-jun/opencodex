@@ -137,7 +137,9 @@ export async function runStdoutFilter(
 }
 
 /** Hidden CLI entry; the self-test emits no stdout so the launcher can probe it safely. */
-export async function runChatgptAppServerFilter({ selfTest = false }: { selfTest?: boolean } = {}): Promise<number> {
+export async function runChatgptAppServerFilter(
+  { selfTest = false, spendCredits = false }: { selfTest?: boolean; spendCredits?: boolean } = {},
+): Promise<number> {
   if (selfTest) {
     try {
       const fixture = JSON.stringify({ id: 1, result: {
@@ -152,6 +154,6 @@ export async function runChatgptAppServerFilter({ selfTest = false }: { selfTest
         && result.rateLimits.primary.usedPercent === 100 ? 0 : 1;
     } catch { return 1; }
   }
-  await runStdoutFilter(Bun.stdin.stream(), bytes => Bun.write(Bun.stdout, bytes));
+  await runStdoutFilter(Bun.stdin.stream(), bytes => Bun.write(Bun.stdout, bytes), line => rewriteAppServerLine(line, spendCredits));
   return 0;
 }

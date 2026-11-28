@@ -1,29 +1,41 @@
-/** Plain-quota gate rewriting; usage display and non-quota restrictions are preserved. */
+/** Reached types that describe a billing state. The plain subscription quota is always lifted;
+ *  the credit variants are lifted only when the operator opts in (`chatgptDesktop.spendCredits`)
+ *  — the desktop may then draw on credits rather than lock the composer. Spend control and any
+ *  other unknown reached type still block (see hasNonQuotaBlock). */
 const PLAIN_QUOTA_REACHED_TYPE = "rate_limit_reached";
+const CREDIT_REACHED_TYPES = new Set([
+  "workspace_member_credits_depleted",
+  "workspace_owner_usage_limit_reached",
+]);
+
+function isLiftedReachedType(type: string, liftCredits: boolean): boolean {
+  return type === PLAIN_QUOTA_REACHED_TYPE || (liftCredits && CREDIT_REACHED_TYPES.has(type));
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function hasNonQuotaBlock(node: unknown): boolean {
-  if (Array.isArray(node)) return node.some(hasNonQuotaBlock);
+function hasNonQuotaBlock(node: unknown, liftCredits: boolean): boolean {
+  if (Array.isArray(node)) return node.some(item => hasNonQuotaBlock(item, liftCredits));
   if (!isRecord(node)) return false;
   if (node.spendControlReached !== undefined && node.spendControlReached !== null && node.spendControlReached !== false) return true;
   if (isRecord(node.spend_control) && node.spend_control.reached === true) return true;
   const reached = node.rate_limit_reached_type;
-  if (isRecord(reached) && typeof reached.type === "string" && reached.type !== PLAIN_QUOTA_REACHED_TYPE) return true;
+  if (isRecord(reached) && typeof reached.type === "string" && !isLiftedReachedType(reached.type, liftCredits)) return true;
   const rpcReached = node.rateLimitReachedType;
   const rpcType = typeof rpcReached === "string" ? rpcReached : isRecord(rpcReached) ? rpcReached.type : undefined;
-  if (typeof rpcType === "string" && rpcType !== PLAIN_QUOTA_REACHED_TYPE) return true;
-  return Object.values(node).some(hasNonQuotaBlock);
+  if (typeof rpcType === "string" && !isLiftedReachedType(rpcType, liftCredits)) return true;
+  return Object.values(node).some(child => hasNonQuotaBlock(child, liftCredits));
 }
 
-export function unlockRateLimitGate(value: unknown): boolean {
+export function unlockRateLimitGate(value: unknown, opts: { liftCredits?: boolean } = {}): boolean {
+  const liftCredits = opts.liftCredits === true;
   let changed = false;
-  const payloadBlocked = hasNonQuotaBlock(value);
-  // A subtree shows the plain quota as the reason when a plain-quota reached type was removed in
-  // it or a usage window reads 100%; it stays "blocked" when a non-quota reason (workspace or
-  // credit reached type, spend control) is still standing in it.
+  const payloadBlocked = hasNonQuotaBlock(value, liftCredits);
+  // A subtree shows the plain quota as the reason when a lifted reached type was removed in
+  // it or a usage window reads 100%; it stays "blocked" when a reason that is not liftable
+  // (spend control, an unknown reached type) is still standing in it.
   const visit = (node: unknown): { cleared: boolean; exhausted: boolean; blocked: boolean } => {
     let cleared = false;
     let exhausted = false;
@@ -45,7 +57,7 @@ export function unlockRateLimitGate(value: unknown): boolean {
     if (node.spendControlReached !== undefined && node.spendControlReached !== null && node.spendControlReached !== false) blocked = true;
     if (isRecord(node.spend_control) && node.spend_control.reached === true) blocked = true;
     const reachedType = node.rate_limit_reached_type;
-    if (isRecord(reachedType) && reachedType.type === PLAIN_QUOTA_REACHED_TYPE) {
+    if (isRecord(reachedType) && typeof reachedType.type === "string" && isLiftedReachedType(reachedType.type, liftCredits)) {
       delete node.rate_limit_reached_type;
       changed = true;
       cleared = true;
@@ -55,7 +67,7 @@ export function unlockRateLimitGate(value: unknown): boolean {
     // The app-server's JSON-RPC spelling of the same field: a nullable string.
     const rpcReached = node.rateLimitReachedType;
     const rpcType = typeof rpcReached === "string" ? rpcReached : isRecord(rpcReached) ? rpcReached.type : undefined;
-    if (rpcType === PLAIN_QUOTA_REACHED_TYPE) {
+    if (typeof rpcType === "string" && isLiftedReachedType(rpcType, liftCredits)) {
       node.rateLimitReachedType = null;
       changed = true;
       cleared = true;
@@ -68,9 +80,10 @@ export function unlockRateLimitGate(value: unknown): boolean {
       exhausted ||= r.exhausted;
       blocked ||= r.blocked;
     }
-    // The rate-limit flags are opened only when the plain quota is the visible reason in this
-    // subtree and no workspace, credit or spend-control reason stands anywhere in the payload.
-    // A flag closed for a reason the payload does not show stays as the server sent it.
+    // The rate-limit flags are opened when a lifted reached type is the visible reason in this
+    // subtree (plain quota, or a credit variant the operator has opted to spend) and no
+    // spend-control or unknown reason stands anywhere in the payload. A flag closed for a
+    // reason the payload does not show stays as the server sent it.
     const plainQuotaShown = (cleared || exhausted) && !blocked && !payloadBlocked;
     if (plainQuotaShown) {
       for (const key of ["rate_limit", "rateLimit"] as const) {

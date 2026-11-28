@@ -53,12 +53,13 @@ export async function handleInternalCommand(args: readonly string[], execBoundar
     }
   }
   if (sub === "chatgpt-app-server-filter") {
-    if (args.length > 2 || (args[1] !== undefined && args[1] !== "--self-test")) {
+    const known = ["--self-test", "--spend-credits"];
+    if (args.length > known.length || args.some(arg => arg !== undefined && !known.includes(arg))) {
       console.error(USAGE);
       return 2;
     }
     const { runChatgptAppServerFilter } = await import("../chatgpt/app-server-shim/filter");
-    return await runChatgptAppServerFilter({ selfTest: args[1] === "--self-test" });
+    return await runChatgptAppServerFilter({ selfTest: args.includes("--self-test"), spendCredits: args.includes("--spend-credits") });
   }
   if (sub !== "desktop-restart-handoff") {
     console.error(`Unknown internal command: ${sub ?? "(none)"}. ${USAGE}`);
