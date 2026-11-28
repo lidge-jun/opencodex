@@ -283,6 +283,19 @@ describe("routed compaction emergency integration", () => {
     },
   );
 
+  test("a history with Codex agent or effort records is not sent to another provider to summarize (#9185)", async () => {
+    for (const record of [
+      { type: "agent_message", author: "/root", recipient: "/root/reader", content: [{ type: "input_text", text: "read it" }] },
+      { type: "configuration_update", reasoning: { effort: "low" } },
+    ]) {
+      calls = [];
+      const payload = body(false);
+      (payload.input as unknown[]).splice(2, 0, record);
+      await handleResponses(request(payload), settings(), { model: "", provider: "" });
+      expect(calls.map(call => call.model)).toEqual(["swe-2"]);
+    }
+  });
+
   test("a failed fallback returns and logs the original failure", async () => {
     fallbackEvents = [{ type: "error", status: 503, code: "server_is_overloaded", message: "Emergency overloaded fixture" }];
     const log: RequestLogContext = { model: "", provider: "" };
