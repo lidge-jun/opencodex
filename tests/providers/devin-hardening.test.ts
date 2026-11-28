@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { normalizeDevinModelId } from "../../src/adapters/devin";
 import { mapOcxMessagesToDevin } from "../../src/adapters/devin";
-import { parseDevinAuthPaste, refreshDevinToken } from "../../src/oauth/devin";
+import { buildSignInUrl, parseDevinAuthPaste, refreshDevinToken } from "../../src/oauth/devin";
+import { DEFAULT_REGION } from "../../src/oauth/devin/types";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiBaseUrl, validateDevinApiBaseUrl } from "../../src/oauth/devin/api-base";
 import { registerUser } from "../../src/oauth/devin/register-user";
 import { anySignal } from "../../src/lib/abort";
@@ -84,6 +85,22 @@ describe("devin auth paste", () => {
     expect(() => parseDevinAuthPaste("this is not a token")).toThrow(/not a Devin auth token/i);
     expect(() => parseDevinAuthPaste("short")).toThrow(/not a Devin auth token/i);
     expect(() => parseDevinAuthPaste("   ")).toThrow(/No auth token pasted/i);
+  });
+});
+
+describe("devin browser sign-in URL", () => {
+  test("opts out of windsurf.com's hand-off to the Devin account page", () => {
+    // Without no_redirect=true, windsurf.com/windsurf/signin rewrites itself in
+    // the browser to app.devin.ai/auth/windsurf/continue, which drops client_id
+    // and response_type and never shows the token this login asks to paste.
+    const url = new URL(buildSignInUrl(DEFAULT_REGION));
+    expect(url.origin + url.pathname).toBe("https://windsurf.com/windsurf/signin");
+    expect(url.searchParams.get("no_redirect")).toBe("true");
+    expect(url.searchParams.get("response_type")).toBe("token");
+    expect(url.searchParams.get("client_id")).toBe(DEFAULT_REGION.oauthClientId);
+    expect(url.searchParams.get("redirect_uri")).toBe("show-auth-token");
+    expect(url.searchParams.get("prompt")).toBe("login");
+    expect(url.searchParams.get("state")).toMatch(/^[0-9a-f-]{36}$/);
   });
 });
 
