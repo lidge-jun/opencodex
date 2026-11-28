@@ -757,6 +757,27 @@ function fakeProbe(body: string) {
   });
 }
 
+test("an injected probe launcher is honored on Windows and its child is stopped", async () => {
+  let child: ChildProcess | undefined;
+  let windowsLaunches = 0;
+  const stop = startForegroundAdvisory(() => {}, {
+    platform: "win32",
+    launch: () => (child = fakeProbe("setInterval(() => {}, 60000)")),
+    launchWindows: () => { windowsLaunches++; throw new Error("unexpected contained launcher"); },
+  });
+  try {
+    expect(child).toBeDefined();
+    expect(windowsLaunches).toBe(0);
+  } finally {
+    const closed = child ? once(child, "close") : undefined;
+    stop();
+    if (closed) {
+      const [code, signal] = await closed;
+      expect(code !== 0 || signal !== null).toBe(true);
+    }
+  }
+});
+
 test("the listening proxy can answer a request while the advisory child is still probing", async () => {
   const previousHome = process.env.OPENCODEX_HOME;
   const home = mkdtempSync(join(tmpdir(), "ocx-advisory-"));
